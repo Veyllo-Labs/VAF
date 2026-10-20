@@ -1548,6 +1548,16 @@ The contract:
   input is left to the model like any other text, and no workflow or skill
   suggestion is added. Without this, the prefix ran the workflow on its own
   engine, built from the whole registry, with no model call in between.
+- **A turn under the set is not your user answering.** The set is for an agent
+  that answers somebody else under your user's identity, and the engine reads it
+  that way: the turn neither answers nor clears a question the agent has open on
+  its user (the ask-first latch, a background or automation question and its
+  handoff, all keyed on the user's scope), does not latch one itself, and the
+  system prompt carries no `last_interaction` or `prior_topic` line, which would
+  show your customer what your user last wrote elsewhere. The customer's words
+  still become the goal of the chat they wrote in. If you narrow an agent that
+  talks to your own user, its turns stop answering those questions too: lift the
+  set (`None`) for the turns your user sends.
 - **Not inherited by what a tool starts.** The set binds the agent's own calls.
   A sub-agent, or a workflow a tool in the set starts (inline or in a process of
   its own), runs its steps without it, so a set meant to contain an agent should
@@ -2174,9 +2184,12 @@ Stable public surface (safe to build on):
   is waiting for a reply) - unless the agent was constructed with
   `run_kind="automation"` or `"thinking"` (see [CORE_AGENT.md](CORE_AGENT.md)),
   which is how a scheduler of your own keeps its prompts from being filed as the
-  user's answers. A per-call origin parameter does not exist yet; that is a named
-  boundary, not an oversight - VAF's own runner marks its synthetic turns with two
-  attributes on the agent, and one public value replacing them is a facade decision.
+  user's answers, or while an allowed set holds (`set_allowed_tools`), which is how
+  a turn that answers somebody else on the user's behalf is kept from it. A per-call
+  origin parameter does not exist yet; that is a named boundary, not an oversight -
+  VAF's own runner marks its synthetic turns with two attributes on the agent, one
+  public value replacing them is a facade decision, and the one origin an embedder
+  needs today, a third party speaking, is the allowed set.
 - `Agent.on_compaction(cb)` / `CoreAgent.set_compaction_hook(hook)` - the seam after a
   structural compaction, on both paths that compact. `hook(info)` gets `{"before",
   "after", "tokens", "session_id"}` and may return one string, appended as one system
@@ -2283,7 +2296,7 @@ Stable public surface (safe to build on):
 - `set_allowed_tools(names)` on both `Agent` and `CoreAgent`, and `ToolCaller(allowed_tools=)` -
   the agent's allowed tool set, with the contract its section documents (offering and
   execution, no identity exempt, `None` lifts, empty allows nothing, no workflow router while
-  it holds, not inherited by what a tool starts).
+  it holds, a turn under it is not the user's answer, not inherited by what a tool starts).
 - `vaf.set_account_allowlist_resolver(fn)` - the per-account tool allowlist hook,
   with the contract its section documents (None/unregistered = unrestricted,
   empty = nothing, exemptions framework-side, raising = refusal, and the

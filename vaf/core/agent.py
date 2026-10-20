@@ -5486,7 +5486,7 @@ class Agent:
             current_source=getattr(self, "_current_chat_source", None),
             last_interaction=(
                 None if getattr(self, "_is_new_session", False)
-                else get_last_interaction(getattr(self, "_current_user_scope_id", None))
+                else self._last_interaction_for_prompt()
             ),
             front_office=getattr(self, "_front_office_mode", False),
             # Session-derived prompt content (workspace line) must key on THIS
@@ -9488,13 +9488,11 @@ class Agent:
     # the user's reply to whatever question is open on that user's scope.
     _BACKGROUND_RUN_KINDS = ("thinking", "automation")
 
-    def _turn_is_from_the_user(self, user_input, skip_input: bool = False) -> bool:
-        """Is this turn the user speaking to the agent in their own chat?
+    def _turn_is_from_a_person(self, user_input, skip_input: bool = False) -> bool:
+        """Did a person send this turn, rather than VAF?
 
-        The one answer both "the user replied" latches read: the ask-first latch
-        (`_pending_user_question`) and the thinking-mode reply pickup
-        (`waiting_for_reply`). Three lanes reach chat_step with real text that is
-        NOT the user answering, and each one has been an incident:
+        Three lanes reach chat_step with real text that no person sent, and each
+        one has been an incident:
 
         - a synthetic drain turn (the runner delivering sub-agent results, an A2A
           room wake): the ROOM PROMPT was recorded as the user's reply to an open
@@ -9513,11 +9511,10 @@ class Agent:
         (`run_kind`). A lane that sets no marker at all - the terminal, an
         embedder calling chat_step directly - is a person typing, and stays one.
 
-        Named boundary: a public chat_step parameter for the turn's origin would
-        replace two harness-set attributes with one value. That is an API decision
-        for the facade (docs/EMBEDDING.md), not a side effect of this fix; until it
-        is taken, the three markers are the contract and this method their only
-        reader.
+        The intent lock reads this: a person's words are the goal of the chat they
+        wrote in, whoever that person is. The two "the user replied" latches read
+        `_turn_is_from_the_user`, which narrows it to the agent's own user. This
+        method is the one place the markers are read.
         """
         if not user_input or skip_input:
             return False
@@ -9528,6 +9525,43 @@ class Agent:
         if getattr(self, "_run_kind", None) in self._BACKGROUND_RUN_KINDS:
             return False
         return True
+
+    def _turn_is_from_the_user(self, user_input, skip_input: bool = False) -> bool:
+        """Is this turn the user speaking to the agent in their own chat?
+
+        The one answer both "the user replied" latches read: the ask-first latch
+        (`_pending_user_question`) and the thinking-mode reply pickup
+        (`waiting_for_reply`). The user is the agent's OWN person, so this is a
+        turn a person sent (`_turn_is_from_a_person`) AND no allowed set holds.
+        A turn under a set (`set_allowed_tools`) answers somebody else under the
+        user's identity: it is a person, but never the user, so neither latch may
+        read it as an answer. Both latches are keyed on the user's scope, and a
+        contact's turn runs under it. Measured before this test read the set: a
+        contact's "ja" was filed as the owner's answer to a background question,
+        the owner's question, the proposal and the findings behind it reached the
+        contact's prompt, and the next background run could close the request on
+        the contact's words.
+
+        Named boundary: a public chat_step parameter for the turn's origin would
+        replace two harness-set attributes with one value. That is an API decision
+        for the facade (docs/EMBEDDING.md); until it is taken, the three markers
+        and the allowed set are the contract. The one origin an embedder reaches,
+        a third party speaking, is the allowed set, which every such lane already
+        applies.
+        """
+        return (self._turn_is_from_a_person(user_input, skip_input)
+                and getattr(self, "_allowed_tools", None) is None)
+
+    def _last_interaction_for_prompt(self):
+        """The user's last-interaction record for the system prompt, or None.
+
+        None while an allowed set holds: the record is the user's own (when, where
+        and, from another chat, the last 80 characters they wrote), and a turn
+        under a set answers somebody else, who must not read it as `prior_topic`.
+        """
+        if getattr(self, "_allowed_tools", None) is not None:
+            return None
+        return get_last_interaction(getattr(self, "_current_user_scope_id", None))
 
     def chat_step(
         self,
@@ -9616,10 +9650,11 @@ class Agent:
         # Ask-first invariant: a REAL user message clears the pending-question latch; synthetic
         # background turns (runner drain sets _synthetic_drain_turn) must NOT clear it - that is
         # exactly the window in which new write actions stay blocked until the user answers.
-        # The latch means "the agent asked its user something and is waiting". Only a
-        # PERSON answering may clear it - `_turn_is_from_the_user` is the one place that
-        # decides what counts as one (a timer, an automation, a room wake and a background
-        # run's own prompt all reach this line with real text, and none of them is the user).
+        # The latch means "the agent asked its user something and is waiting". Only the
+        # USER answering may clear it - `_turn_is_from_the_user` is the one place that
+        # decides what counts as one (a timer, an automation, a room wake, a background
+        # run's own prompt and a contact's turn under an allowed set all reach this line
+        # with real text, and none of them is the user).
         if self._turn_is_from_the_user(user_input, skip_input):
             self._pending_user_question = None
 
@@ -9648,7 +9683,8 @@ class Agent:
         # test as the ask-first latch above, and for the same reason: the waiting latch
         # lives on disk, keyed by the user's scope, so EVERY chat_step on that scope reads
         # it - the runner's room and drain turns, an automation run, the thinking run
-        # itself. Live 2026-09-02: an A2A room wake ran through here, the ROOM PROMPT was
+        # itself, a contact's turn (it runs under the user's scope, held to an allowed
+        # set). Live 2026-09-02: an A2A room wake ran through here, the ROOM PROMPT was
         # recorded as the user's reply and the latch was cleared, and the user's real
         # answer on Telegram an hour later met an agent with no idea what it had asked.
         if self._turn_is_from_the_user(user_input, skip_input):
@@ -9857,9 +9893,11 @@ class Agent:
         # every turn (measured: prompt built 14:43:29, intent written 14:43:32; once the request had
         # dropped out of a long turn, the model followed the stale block back to the previous task).
         # The person's own words (raw_user_input, never the lane's enrichment), and only for a turn a
-        # person sent: a wake, a timer, a drain turn or a background run is not the goal.
+        # person sent: a wake, a timer, a drain turn or a background run is not the goal. A person,
+        # not only the user: a contact's words are the goal of the contact's own chat (the store is
+        # bound per session), so this reads the wider predicate.
         if (not thinking_mode and getattr(self, "main_persistence", None)
-                and self._turn_is_from_the_user(user_input, skip_input)):
+                and self._turn_is_from_a_person(user_input, skip_input)):
             try:
                 self.main_persistence.update_user_intent(raw_user_input or user_input)
                 self.main_persistence.reset_validation_retry_count()
@@ -9887,7 +9925,7 @@ class Agent:
                 username=getattr(self, "_current_username", None),
                 user_scope_id=getattr(self, "_current_user_scope_id", None),
                 current_source=getattr(self, "_current_chat_source", None),
-                last_interaction=get_last_interaction(getattr(self, "_current_user_scope_id", None)),
+                last_interaction=self._last_interaction_for_prompt(),
                 front_office=getattr(self, "_front_office_mode", False),
                 session_id=getattr(self, "current_session_id", None),
             )
@@ -12912,7 +12950,12 @@ class Agent:
                 # background turns (runner drain) cannot launch new write actions meanwhile.
                 # Only SET here; cleared exclusively by a real user message at chat_step entry
                 # (a later non-question background reply does not mean the user answered).
-                if _ac_needs_user:
+                # Not under an allowed set: the latch is agent-wide and means the agent waits
+                # on its OWN user, while a turn under a set asked somebody else. One agent
+                # serves every chat of a runner worker, so a question to a contact would hold
+                # the user's drain turns and the runner's sub-agent retry until the user spoke.
+                # `_ac_needs_user` still brakes this turn's auto-continue below.
+                if _ac_needs_user and getattr(self, "_allowed_tools", None) is None:
                     try:
                         self._pending_user_question = {"preview": (history_content or "")[-160:]}
                     except Exception:
@@ -13908,10 +13951,16 @@ class Agent:
 
         No identity is exempt, unlike the account allowlist (which exempts admins and
         callers with no scope): the set exists for an agent that answers a third party
-        under its owner's identity. Nothing starts tools behind the model's back while a set
-        holds: ``chat_step`` skips the workflow router (whose explicit ``@workflow_id`` lane
-        runs a workflow with no model call in between) and handles ``thinking_done`` before
-        dispatch only when the set names it. Not inherited by what a tool starts: a sub-agent
+        under its owner's identity. For the same reason a turn under the set is never the
+        owner answering (``_turn_is_from_the_user``): it neither answers nor clears a
+        question the agent has open on its user (the ask-first latch, a background or
+        automation question and its handoff), does not latch one itself, and the system
+        prompt carries no line about the user's last interaction.
+
+        Nothing starts tools behind the model's back while a set holds: ``chat_step`` skips
+        the workflow router (whose explicit ``@workflow_id`` lane runs a workflow with no
+        model call in between) and handles ``thinking_done`` before dispatch only when the
+        set names it. Not inherited by what a tool starts: a sub-agent
         or a workflow started by a tool in the set runs without it, so a set meant to contain
         a turn should not name a tool that starts one.
 

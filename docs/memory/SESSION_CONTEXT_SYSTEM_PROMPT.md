@@ -91,7 +91,7 @@ If the user asks to keep attachment knowledge for future chats, the agent should
 | Store read/write | `vaf/core/last_interaction.py` | `update_last_interaction(..., session_id=)`, `get_last_interaction()`, JSON under data dir |
 | Prompt block text | `vaf/core/system_prompt.py` | `build_prompt(..., current_source=..., last_interaction=...)`, section "2b. LAST INTERACTION & CURRENT CHANNEL" |
 | Channel capabilities | `vaf/core/system_prompt.py` | Section "2c. CHANNEL CAPABILITIES" – added when `current_source` is telegram/whatsapp/discord/cli |
-| Passing data into prompt | `vaf/core/agent.py` | Both `build_prompt` calls pass `current_source` and `last_interaction` |
+| Passing data into prompt | `vaf/core/agent.py` | Both `build_prompt` calls pass `current_source` and `last_interaction`; the record comes from `_last_interaction_for_prompt()`, which is None while an allowed set holds (see User isolation) |
 | Set channel and write store | `vaf/core/headless_runner.py` | Before `chat_step`: set `_current_chat_source` from the task's `source`; after `chat_step`: call `update_last_interaction()` with the task's chat. The web server writes the record too, on a web message's arrival. The runner is the ONLY setter of the channel: a channel task (Discord, Telegram, WhatsApp) carries its source on the queued task, so no channel bridge sets the field itself. |
 
 ## User isolation
@@ -100,6 +100,7 @@ The store is **per user**: each user has their own last-interaction entry. User 
 
 - **Write:** The headless runner passes `user_scope_id` from the task metadata (from WebUI connection or Telegram whitelist). The store key is that scope (or `"default"` when there is no scope). So each user’s message updates only their own key.
 - **Read:** When building the system prompt, the agent passes its current `_current_user_scope_id` (set from the same session/task). So we only load the last interaction for the user who is chatting right now.
+- **Not on a turn that answers somebody else:** a contact's turn (Front Office) runs under the owner's scope, so the read above would load the OWNER's record and show the contact what the owner last wrote in another chat as `prior_topic`. While an allowed set holds (`set_allowed_tools`, which every Front Office turn applies), both `build_prompt` calls pass no record, and the `last_interaction` and `prior_topic` lines are left out; `current_channel` stays. Guard: `tests/test_contact_turn_leaves_owner_questions.py`.
 
 So the `last_interaction` / `current_channel` lines inside `<context>` always refer to the **same** user: their previous turn and their current channel. No cross-user data is shown.
 

@@ -150,12 +150,24 @@ def test_pending_latch_not_cleared_by_synthetic_turns():
                 and "Constant(value=None)" in ast.dump(ast.Module(body=n.body, type_ignores=[]))]
     assert clearing, "nothing clears the pending-question latch any more"
     # The condition is ONE predicate (`_turn_is_from_the_user`), shared with the
-    # thinking-mode reply pickup: the `if` reads it, the predicate carries the markers.
+    # thinking-mode reply pickup: the `if` reads it. It is the person predicate, which
+    # carries the markers, plus "no allowed set holds" (a contact's turn is not the user).
     for test in clearing:
         assert "_turn_is_from_the_user" in test, "the latch is cleared by a bare user_input test again"
-    predicate = src.split("def _turn_is_from_the_user(")[1].split("\n    def ")[0]
-    assert "_synthetic_drain_turn" in predicate, "the latch no longer survives drain turns"
-    assert "_turn_is_human" in predicate, "a timer or an automation can answer for the user"
+
+    def _code(name):
+        # The method's statements without its docstring, which names the markers too.
+        fn = [n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.FunctionDef) and n.name == name]
+        assert len(fn) == 1, name
+        body = fn[0].body[1:] if isinstance(fn[0].body[0], ast.Expr) else fn[0].body
+        return "\n".join(ast.get_source_segment(src, s) or "" for s in body)
+
+    person = _code("_turn_is_from_a_person")
+    assert "_synthetic_drain_turn" in person, "the latch no longer survives drain turns"
+    assert "_turn_is_human" in person, "a timer or an automation can answer for the user"
+    user = _code("_turn_is_from_the_user")
+    assert "self._turn_is_from_a_person(" in user and "_allowed_tools" in user, (
+        "a contact's turn under the Front Office set can answer for the user")
 
 
 def test_config_kill_switches_exist():

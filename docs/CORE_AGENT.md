@@ -233,7 +233,11 @@ the current step's tool scope. While a set holds, `chat_step` does not run the w
 router (an explicit `@workflow_id` would otherwise run a workflow past the set) and
 handles `thinking_done` inline only in a thinking turn and only when the set names it; a
 refused call is inert (the tool-learning lane neither re-feeds nor re-learns from it, see
-[WHARE_WANANGA.md](memory/WHARE_WANANGA.md)). Not inherited by a
+[WHARE_WANANGA.md](memory/WHARE_WANANGA.md)). A turn under the set is a person but never
+the agent's own user (`_turn_is_from_the_user`): it neither answers nor clears a question
+the agent has open on its user (the ask-first latch, a background or automation question
+and its handoff), does not set the ask-first latch itself, and `build_prompt` gets no
+last-interaction record, so the prompt has no `last_interaction` or `prior_topic` line. Not inherited by a
 sub-agent or a workflow that a tool in the set starts. Contract:
 [EMBEDDING.md](EMBEDDING.md), "Which tools this agent may use".
 

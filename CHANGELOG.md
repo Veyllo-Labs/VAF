@@ -15,7 +15,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 - **`Agent.set_allowed_tools(names)`** fixes which tools an agent offers and runs, for every
   identity, until lifted with `None`, so an agent that answers a stranger cannot use your
-  own tools; `ToolCaller(allowed_tools=)` is the same for a lane of your own. See "Which
+  own tools, and a turn under the set never answers a question the agent has open on your
+  own user; `ToolCaller(allowed_tools=)` is the same for a lane of your own. See "Which
   tools this agent may use" in `docs/EMBEDDING.md`.
 
 - **A restore shows in the security log.** `vaf backup restore` replaces every account, key
@@ -82,6 +83,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   note to you, web search, the contact's own history) and everything else is refused. The
   note to you about a contact now reaches you on the first try. Restart VAF after updating
   so the fix takes effect.
+
+- **A contact can no longer answer the agent's questions to you.** When the agent had asked
+  you something in the background and a contact wrote in on WhatsApp, Telegram, Discord or
+  mail before you answered, the contact's message counted as your answer: the contact's turn
+  saw your question, the action it proposed and what it had found, the question was marked
+  answered, and the agent stopped waiting for you. A contact's turn now leaves your open
+  questions alone and no longer sees what you last wrote in another chat. Restart VAF after
+  updating so the fix takes effect.
 
 - **Archived chats, agent rooms and word suggestions are encrypted on disk like the chats.**
   Their writers already encrypted every new file, but the start-up sweep that encrypts what

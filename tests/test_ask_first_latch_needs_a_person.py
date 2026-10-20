@@ -18,6 +18,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _method_code(source: str, name: str) -> str:
+    """The statements of an Agent method, its docstring left out: a docstring that names a
+    marker must not stand in for the code that reads it."""
+    found = [n for n in ast.walk(ast.parse(source))
+             if isinstance(n, ast.FunctionDef) and n.name == name]
+    assert len(found) == 1, f"{name} is defined {len(found)} times"
+    body = found[0].body
+    if body and isinstance(body[0], ast.Expr) and isinstance(getattr(body[0], "value", None), ast.Constant):
+        body = body[1:]
+    return "\n".join(ast.get_source_segment(source, stmt) or "" for stmt in body)
+
+
 class _Tool:
     def __init__(self, permission_level="write"):
         self.permission_level = permission_level
@@ -84,14 +96,18 @@ def test_the_latch_is_cleared_only_for_a_turn_a_person_sent():
 
     assert clearing, "nothing clears the latch any more"
     # The condition lives in ONE predicate now (`_turn_is_from_the_user`), shared
-    # with the thinking-mode reply pickup; the `if` must read it, and the
-    # predicate must still carry both markers.
+    # with the thinking-mode reply pickup; the `if` must read it. That predicate is
+    # "a person sent it" (`_turn_is_from_a_person`, where both markers live) and "no
+    # allowed set holds": a contact's turn is a person, never the user.
     for test in clearing:
         assert "_turn_is_from_the_user" in test, (
             "the latch is cleared by a condition a timer also satisfies")
-    predicate = source.split("def _turn_is_from_the_user(")[1].split("\n    def ")[0]
-    assert "_turn_is_human" in predicate
-    assert "_synthetic_drain_turn" in predicate
+    person = _method_code(source, "_turn_is_from_a_person")
+    assert "_turn_is_human" in person
+    assert "_synthetic_drain_turn" in person
+    user = _method_code(source, "_turn_is_from_the_user")
+    assert "self._turn_is_from_a_person(" in user
+    assert "_allowed_tools" in user, "a contact's turn clears the owner's latch again"
 
 
 def test_the_queue_boundary_decides_and_excludes_timers_and_automations():

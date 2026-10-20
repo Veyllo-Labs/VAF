@@ -330,9 +330,15 @@ def record_login_failure(ip: str) -> None:
 
 # ── the account window ───────────────────────────────────────────────────────────
 
+# Longer than any stored name (the column holds 50): a name typed longer cannot be an account,
+# and every failed login keeps its key for the window, so it is cut rather than kept whole.
+_ACCOUNT_KEY_MAX = 64
+
+
 def account_key(username: str) -> str:
-    """One account name, however it was typed: what the login looks it up by."""
-    return str(username or "").strip().lower()
+    """One account name, however it was typed: what the login looks it up by, cut to a length
+    no stored name exceeds."""
+    return str(username or "").strip().lower()[:_ACCOUNT_KEY_MAX]
 
 
 def reserve_account_attempt(username: str) -> Optional[float]:

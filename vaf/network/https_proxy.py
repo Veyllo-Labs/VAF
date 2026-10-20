@@ -40,11 +40,13 @@ def _access_log_path() -> Path:
 
 
 def _write_access(line: str) -> None:
-    """Append a timestamped line to the proxy access log."""
+    """Append a timestamped line to the proxy access log. One request is one line: the path
+    arrives percent-decoded, and GET /page%0a<text> wrote a forged second line."""
     try:
+        from vaf.core.security_events import one_line
         ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
         with open(_access_log_path(), "a", encoding="utf-8") as f:
-            f.write(f"{ts}  {line}\n")
+            f.write(f"{ts}  {one_line(line)}\n")
     except Exception:
         pass
 

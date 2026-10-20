@@ -44,7 +44,9 @@ class _FakeClient:
 def _client():
     app = FastAPI()
     app.include_router(ar.router)
-    return TestClient(app)
+    # The machine itself (the desktop wizard): a browser elsewhere needs the setup code,
+    # tests/test_first_run_setup_code.py.
+    return TestClient(app, client=("127.0.0.1", 50000))
 
 
 def _patch(monkeypatch, *, admin, http_code=200):

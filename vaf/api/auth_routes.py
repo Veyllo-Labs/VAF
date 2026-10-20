@@ -199,6 +199,8 @@ class ChangePasswordRequest(BaseModel):
 
 class TestVeylloKeyRequest(BaseModel):
     api_key: str
+    # Needed from a browser that is not on this machine, as for /bootstrap.
+    setup_code: Optional[str] = None
 
 
 # --- Endpoints ---
@@ -383,6 +385,17 @@ async def test_veyllo_key(body: TestVeylloKeyRequest, request: Request):
     except Exception:
         # If the DB can't be reached we can't prove first-run -> refuse (fail closed).
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Setup state unavailable")
+
+    # A browser that is not on this machine needs the setup code here as at /bootstrap: this
+    # route tests any key against the provider for whoever asks while no admin exists, which
+    # made it a key-validity oracle for every admitted address (security review). The wizard
+    # has the code from its first step. A wrong one is a 401 the address window counts.
+    if _setup_code_required(request):
+        import asyncio
+        from vaf.auth.user_admin import setup_code_matches
+        if not await asyncio.to_thread(setup_code_matches, body.setup_code or ""):
+            return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED,
+                                content={"detail": "The setup code is not right.", "code": "setup_code"})
 
     api_key = (body.api_key or "").strip()
     if not api_key:

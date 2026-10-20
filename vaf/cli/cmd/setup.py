@@ -378,7 +378,11 @@ def setup_code_command():
     try:
         code = first_run_setup_code()
     except Exception as e:
-        UI.error(f"The setup code could not be read or created (the keyring): {e}")
+        import logging
+        logging.getLogger(__name__).warning("vaf setup code: the keyring could not be read: %s", e)
+        UI.error("The setup code could not be shown: this installation's key store cannot be "
+                 "opened. Run the command as the user VAF runs as (on a server, the account "
+                 "that installed it), on the machine VAF runs on.")
         raise typer.Exit(EXIT_CODES[SetupOutcome.FAILED])
     if not code:
         UI.info("This machine already has an admin account, so there is no setup code. "

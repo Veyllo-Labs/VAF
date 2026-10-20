@@ -383,9 +383,17 @@ export default function LoginPage() {
             const res = await fetch(`${getApiBase()}/api/auth/test-veyllo-key`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ api_key: key }),
+                body: JSON.stringify({ api_key: key, ...(setupCodeRequired ? { setup_code: setupCode.trim() } : {}) }),
             });
             const data = await res.json().catch(() => ({}));
+            if (res.status === 401 && data?.code === 'setup_code') {
+                // Back to the step that asks for the code; everything typed after it stays.
+                setSetupCodeError(t('errSetupCode'));
+                setCreateAdminSubStep('setup_code');
+                setStep('create_admin');
+                setVeylloTesting(false);
+                return;
+            }
             if (res.ok && data.ok === true) {
                 // Use the Veyllo key as the default for chat AND vision: veyllo-chat is multimodal, so
                 // image analysis routes to the hosted API even if the user later switches chat to a local
@@ -429,7 +437,7 @@ export default function LoginPage() {
                     // An empty field takes the suggestion, exactly what the input's
                     // placeholder promised the whole time.
                     agent_name: (agentName.trim() || agentNameSuggestion || undefined),
-                    ...(setupCodeRequired ? { setup_code: setupCode } : {}),
+                    ...(setupCodeRequired ? { setup_code: setupCode.trim() } : {}),
                 }),
             });
             const bootstrapData = await bootstrapRes.json().catch(() => ({}));

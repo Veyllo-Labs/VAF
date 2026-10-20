@@ -180,8 +180,19 @@ _lock = threading.Lock()
 _LINE_BREAKERS = {c: " " for c in [*range(0x00, 0x20), 0x7F, *range(0x80, 0xA0), 0x2028, 0x2029]}
 
 
-def _one_line(value) -> str:
+def one_line(value) -> str:
+    """`value` as one line of a log: line breaks and other control characters become spaces."""
     return str(value or "").translate(_LINE_BREAKERS)
+
+
+def _field(value) -> str:
+    """A key=value field of the readable line. A value that could pose as more fields or
+    another event (a space, '=', a bracket or a quote in a username typed at the login) is
+    quoted, so "x ip=127.0.0.1 [password_changed]" stays one visibly quoted name."""
+    text = one_line(value)
+    if any(ch.isspace() or ch in '=[]"' for ch in text):
+        return json.dumps(text, ensure_ascii=False)
+    return text
 
 
 def log_security_event(kind: str, *, ip: str = "", username: str = "",
@@ -234,12 +245,12 @@ def log_security_event(kind: str, *, ip: str = "", username: str = "",
             # value as it was; JSON escapes it.
             human = " ".join(
                 x for x in (
-                    f"[{_one_line(kind)}]",
-                    f"channel={_one_line(entry.get('channel'))}" if channel else "",
-                    f"ip={_one_line(ip)}" if ip else "",
-                    f"user={_one_line(entry.get('username'))}" if username else "",
-                    f"path={_one_line(entry.get('path'))}" if path else "",
-                    _one_line(entry.get("detail", "")),
+                    f"[{one_line(kind)}]",
+                    f"channel={_field(entry.get('channel'))}" if channel else "",
+                    f"ip={_field(ip)}" if ip else "",
+                    f"user={_field(entry.get('username'))}" if username else "",
+                    f"path={_field(entry.get('path'))}" if path else "",
+                    one_line(entry.get("detail", "")),
                 ) if x
             )
             # ISO timestamp first: the Logs window's line parser renders it as the

@@ -80,7 +80,10 @@ def verify_password(password_hash: str, password: str) -> bool:
 _ARGON2_WORKERS = 2
 _pool = None
 _pool_lock = threading.Lock()
-_dummy_hash: Optional[str] = None
+# What a name without an account is verified against, so it costs exactly what a known name
+# costs. A fixed hash with _ph's parameters (a test pins that they match) of a random password
+# nobody kept: made lazily, the first unknown name paid for a hash AND a verification.
+_DUMMY_HASH = "$argon2id$v=19$m=65536,t=2,p=4$759DChOqZfhyd10WaiEu4g$6jwk2BU3gxe8fK8FXHd9a4Ge5tOV0jpEjnzZS794Nbs"
 
 
 def _argon2_pool() -> ThreadPoolExecutor:
@@ -96,11 +99,8 @@ def _verify_or_dummy(password_hash: Optional[str], password: str) -> bool:
     has no account, against a hash made once with the same parameters (always False). An
     unknown name used to answer before any hashing (measured: 3.5 ms against 28.6 ms for a
     known one), which listed the account names to anyone who timed the answer."""
-    global _dummy_hash
     if password_hash is None:
-        if _dummy_hash is None:
-            _dummy_hash = _ph.hash(secrets.token_urlsafe(24))
-        verify_password(_dummy_hash, password)
+        verify_password(_DUMMY_HASH, password)
         return False
     return verify_password(password_hash, password)
 

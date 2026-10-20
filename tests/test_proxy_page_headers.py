@@ -93,3 +93,13 @@ def test_the_backend_scopes_its_hsts_the_same_way():
         encoding="utf-8")
     assert "max-age=31536000; includeSubDomains" not in src
     assert "hsts_for_host(request.headers.get(\"x-forwarded-host\")" in src
+
+
+def test_the_access_log_keeps_one_request_on_one_line(monkeypatch):
+    """The path arrives percent-decoded: GET /page%0a<text> wrote a forged second line into
+    https_proxy_access_<date>.log. MUTATION: write the line unsanitized - red."""
+    # (the router answers 404 to a path with a newline; the access log is written before it)
+    _get(monkeypatch, "/page%0a2026-10-21T00:00:00.000  HTTP  10.0.0.9  GET /forged", {})
+    lines = proxy._access_log_path().read_text(encoding="utf-8").splitlines()
+    assert not any(ln.startswith("2026-10-21T00:00:00.000") for ln in lines)
+    assert any("GET /page 2026-10-21T00:00:00.000" in ln for ln in lines)

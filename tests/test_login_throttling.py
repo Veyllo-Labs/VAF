@@ -375,3 +375,20 @@ def test_an_address_is_known_for_thirty_days_only(h):
         s.execute(update(UserSession).values(created_at=datetime.utcnow() - timedelta(days=29)))
         s.commit()
     assert h.login(known, "alice", "alice-password-1").status_code == 200
+
+
+def test_a_long_name_is_kept_short():
+    """Every failed login keeps its name as a key for the window: a name typed longer than
+    any account can be is cut. MUTATION: drop the cut - red."""
+    from vaf.auth import rate_limit
+    assert len(rate_limit.account_key(" X" * 5000)) == 64
+    assert rate_limit.account_key("  Alice ") == "alice"
+
+
+def test_the_step_up_records_the_callers_address():
+    """The three step-up routes pass the real client to the check, so its security events name
+    the device. MUTATION: drop the address at a call site - red."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "api" / "security_routes.py").read_text(
+        encoding="utf-8")
+    assert src.count('await _verify_admin_totp(user, str(payload.get("code") or ""), ip=_caller_ip(request))') == 3

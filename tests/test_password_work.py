@@ -53,8 +53,11 @@ def test_unknown_names_cost_one_hash(h, argon2_threads):
     h.add_user("alice", "alice-password-1")
     c = h.client("192.168.10.1")
     argon2_threads["verify"].clear()
+    argon2_threads["hash"].clear()
     unknown = h.login(c, "mallory", "some-password")
     assert len(argon2_threads["verify"]) == 1
+    # Not even the first unknown name pays for a hash on top (the dummy is a fixed hash).
+    assert argon2_threads["hash"] == []
     argon2_threads["verify"].clear()
     known = h.login(h.client("192.168.10.2"), "alice", "some-password")
     assert len(argon2_threads["verify"]) == 1
@@ -121,3 +124,11 @@ def test_no_sync_password_work_in_async_routes():
     # The guard's floor: it sees the shape it forbids.
     assert _sync_password_calls_in_async_defs("async def f():\n    verify_password(a, b)\n")
     assert not _sync_password_calls_in_async_defs("def f():\n    verify_password(a, b)\n")
+
+
+def test_the_dummy_hash_costs_what_a_real_one_does():
+    """The fixed dummy must carry _ph's parameters, or an unknown name answers faster again.
+    MUTATION: change a parameter of _ph or of the dummy - red."""
+    from vaf.auth import crypto
+    assert crypto._ph.check_needs_rehash(crypto._DUMMY_HASH) is False
+    assert crypto._verify_or_dummy(None, "anything") is False

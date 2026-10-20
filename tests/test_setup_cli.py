@@ -264,3 +264,16 @@ def test_vaf_setup_code_prints_it():
     done = runner.invoke(setup_cmd.app, ["code"])
     assert done.exit_code == EXIT_CODES[SetupOutcome.ALREADY_EXISTS] == 3
     assert codes[0] not in done.output
+
+
+def test_vaf_setup_code_says_what_to_do_when_the_keyring_is_closed(monkeypatch):
+    """The usual cause is running it as another user. MUTATION: print the raw error only - red."""
+    import vaf.auth.user_admin as user_admin
+
+    def _closed():
+        raise RuntimeError("The data keyring cannot be opened while reading 'first_run_setup_code'.")
+
+    monkeypatch.setattr(user_admin, "first_run_setup_code", _closed)
+    r = runner.invoke(setup_cmd.app, ["code"])
+    assert r.exit_code == EXIT_CODES[SetupOutcome.FAILED] == 1
+    assert "as the user VAF runs as" in " ".join(r.output.split())

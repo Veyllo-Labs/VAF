@@ -810,6 +810,12 @@ async def _scope_username_map() -> Dict[str, str]:
         return {}
 
 
+def _caller_ip(request: Request) -> str:
+    """The real client of a step-up, for the security log (the resolver, never the peer)."""
+    from vaf.network.binding import connection_client_ip
+    return connection_client_ip(request)
+
+
 async def _verify_admin_totp(user: Dict[str, Any], code: str, ip: str = "") -> None:
     """Verify the CURRENT admin's TOTP code or raise (403 wrong code, 400 no 2FA, 429 held).
 
@@ -944,7 +950,7 @@ def threats_add(payload: Dict[str, Any] = Body(default={}),
 
 
 @router.post("/threats/{sha256}/remove")
-async def threats_remove(sha256: str, payload: Dict[str, Any] = Body(default={}),
+async def threats_remove(sha256: str, request: Request, payload: Dict[str, Any] = Body(default={}),
                          user: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Delist a digest. Requires the admin's TOTP: this is the one action that puts
     content back within reach of every upload lane at once."""
@@ -952,7 +958,7 @@ async def threats_remove(sha256: str, payload: Dict[str, Any] = Body(default={})
     digest = str(sha256 or "").strip().lower()
     if not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise HTTPException(status_code=400, detail="sha256 must be 64 hex characters")
-    await _verify_admin_totp(user, str(payload.get("code") or ""))
+    await _verify_admin_totp(user, str(payload.get("code") or ""), ip=_caller_ip(request))
     if not remove_threat(digest, by=str(user.get("username") or "")):
         raise HTTPException(status_code=404, detail="That digest is not listed")
     return {"ok": True, "delisted": digest}
@@ -988,7 +994,7 @@ def skill_scan_detail(skill_id: str,
 
 
 @router.post("/skills/{skill_id}/acknowledge")
-async def skill_acknowledge(skill_id: str,
+async def skill_acknowledge(skill_id: str, request: Request,
                             payload: Dict[str, Any] = Body(...),
                             user: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """Acknowledge a MEDIUM-risk skill (admin reviewed + keeps it). Requires the
@@ -1003,7 +1009,7 @@ async def skill_acknowledge(skill_id: str,
     level = str(((entry.get("scan") or {}).get("level")) or "clean")
     if level == "high":
         raise HTTPException(status_code=400, detail="High-risk skills cannot be acknowledged - delete or restore instead")
-    await _verify_admin_totp(user, str(payload.get("code") or ""))
+    await _verify_admin_totp(user, str(payload.get("code") or ""), ip=_caller_ip(request))
     set_skill_acknowledged(sid, by=str(user.get("username") or ""))
     return {"ok": True, "acknowledged": sid}
 
@@ -1028,7 +1034,7 @@ def skill_isolate(skill_id: str,
 
 
 @router.post("/skills/{skill_id}/restore")
-async def quarantined_skill_restore(skill_id: str,
+async def quarantined_skill_restore(skill_id: str, request: Request,
                                     payload: Dict[str, Any] = Body(...),
                                     user: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
     """False-positive resolution: lift the quarantine. Requires the admin's 2FA
@@ -1040,7 +1046,7 @@ async def quarantined_skill_restore(skill_id: str,
         raise HTTPException(status_code=404, detail="Unknown skill")
     if not entry.get("quarantined"):
         raise HTTPException(status_code=400, detail="Skill is not quarantined")
-    await _verify_admin_totp(user, str(payload.get("code") or ""))
+    await _verify_admin_totp(user, str(payload.get("code") or ""), ip=_caller_ip(request))
     clear_skill_quarantine(sid)
     try:
         from vaf.core.security_events import log_security_event

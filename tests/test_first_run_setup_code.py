@@ -142,3 +142,40 @@ def test_the_wizard_asks_for_the_code_first():
     assert re.search(r"setup_code:\s*setupCode", src)
     assert re.search(r"code === 'setup_code'", src)
     assert "createAdminSubStep === 'setup_code'" in src
+    # The key test sends it too, trimmed like the check that accepted it.
+    assert "body: JSON.stringify({ api_key: key, ...(setupCodeRequired ? { setup_code: setupCode.trim() } : {}) })" in src
+    assert "...(setupCodeRequired ? { setup_code: setupCode.trim() } : {})," in src
+
+
+def test_the_key_test_needs_the_code_from_elsewhere_too(h, monkeypatch):
+    """/test-veyllo-key tested any key against the provider for whoever asked while no admin
+    existed: a key-validity oracle for every admitted address. From elsewhere it needs the
+    setup code like the bootstrap. MUTATION: drop the check - red."""
+    import httpx
+
+    from vaf.auth import user_admin
+
+    class _Answer:
+        status_code = 200
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, *a, **k):
+            return _Answer()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    code = user_admin.first_run_setup_code()
+    stranger = h.client(STRANGER)
+    r = stranger.post("/api/auth/test-veyllo-key", json={"api_key": "vk-1"})
+    assert r.status_code == 401 and r.json()["code"] == "setup_code"
+    r = stranger.post("/api/auth/test-veyllo-key", json={"api_key": "vk-1", "setup_code": code})
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert h.client(None).post("/api/auth/test-veyllo-key", json={"api_key": "vk-1"}).json() == {"ok": True}

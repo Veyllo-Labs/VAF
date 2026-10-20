@@ -62,7 +62,7 @@ Every HTTP request passes through `IPValidationMiddleware` which validates the c
 - Active only in network mode (localhost mode skips this layer)
 - Named boundary: the check sits in the backend, so it covers `/api` and `/ws`. Page loads go from the proxy straight to the Next.js frontend and do not pass it; a client outside the allowed networks still receives the login screen, but every API call that screen makes is refused. The pages carry no data, only the fact that VAF runs there.
 
-`connection_client_ip` is the only place in `vaf/` that reads a connection's client address; the auth middleware, the rate limiter, the login routes, the WebSocket handshake, the OAuth callback and the security log entries all ask it. `tests/test_client_address_has_one_reader.py` refuses a direct read anywhere else (the proxy itself, which writes the header from the peer it sees, is the one exception).
+`connection_client_ip` is the only place in `vaf/` that reads a connection's client address; the auth middleware, the rate limiter, the login routes, the WebSocket handshake, the OAuth callback and the security log entries all ask it. `tests/test_client_address_has_one_reader.py` refuses a direct read anywhere else, the integrated proxy included: it writes `X-Forwarded-For` from the same resolver (a device that connects directly as itself, a relay on this machine as the client that relay named), after dropping every copy the client sent, and on its WebSocket relay it sends the header on every handshake (`unknown` when there is no client, which fails closed).
 
 #### Who the client is
 

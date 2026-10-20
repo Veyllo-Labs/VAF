@@ -61,7 +61,9 @@ It never dials loopback, where a tokenless request is the owner.
   no-new-privileges flag, or a user namespace without root, as in the server's
   systemd service), so no caller runs sudo there.
 - **https_proxy.py**: the integrated TLS entry point (`/api`, `/ws` to the backend,
-  everything else to the frontend); it writes `X-Forwarded-For` from its own peer.
+  everything else to the frontend); it writes `X-Forwarded-For` from `connection_client_ip`
+  (the device itself, or the client a relay on this machine named), on every HTTP request
+  and every WebSocket handshake.
 - **ssl_utils.py**: the local CA and the server certificate, re-issued when an address is
   missing from it.
 - **egress.py**: outbound fetches that never reach this machine.

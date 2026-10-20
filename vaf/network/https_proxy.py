@@ -56,21 +56,30 @@ class AccessLogMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        # The client as every other site resolves it (vaf.network.binding), so a device behind
+        # a relay on this machine is logged as itself and not as 127.0.0.1.
         if scope["type"] == "http":
-            client = scope.get("client") or ("?", 0)
             method = scope.get("method", "?")
             path = scope.get("path", "/")
-            _write_access(f"HTTP  {client[0]}:{client[1]}  {method} {path}")
+            _write_access(f"HTTP  {_logged_client(scope)}  {method} {path}")
         elif scope["type"] == "websocket":
-            client = scope.get("client") or ("?", 0)
             path = scope.get("path", "/ws")
-            _write_access(f"WS    {client[0]}:{client[1]}  {path}")
+            _write_access(f"WS    {_logged_client(scope)}  {path}")
         elif scope["type"] == "lifespan":
             _write_access("LIFESPAN event")
         else:
-            client = scope.get("client") or ("?", 0)
-            _write_access(f"OTHER type={scope['type']}  {client[0]}:{client[1]}")
+            _write_access(f"OTHER type={scope['type']}")
         await self.app(scope, receive, send)
+
+
+def _logged_client(scope: Scope) -> str:
+    from starlette.requests import HTTPConnection
+
+    from vaf.network.binding import connection_client_ip
+    try:
+        return connection_client_ip(HTTPConnection(scope))
+    except Exception:
+        return "?"
 
 FRONTEND_ORIGIN = "http://127.0.0.1:3000"
 # Internal HTTP channel (8005) is always running when this proxy runs (TLS on); 8001 is HTTPS-only
@@ -158,7 +167,13 @@ async def _forward_http(request: Request, target_origin: str) -> Response:
     # Set unconditionally: "no X-Forwarded-For" must reliably mean "not relayed by this proxy",
     # otherwise a relayed request without client info would be indistinguishable from genuine
     # internal loopback traffic. "unknown" is not a valid IP, so the backend fails closed.
-    headers["X-Forwarded-For"] = request.client.host if request.client else "unknown"
+    # The value is the resolver's (vaf.network.binding.connection_client_ip), not this proxy's
+    # own peer: a tunnel or reverse proxy on this machine connects from loopback, and writing
+    # that peer made every visitor it carried the machine owner. A non-loopback peer is
+    # written as itself; a loopback one as the client the relay in front of it named, else
+    # 127.0.0.1. The resolver reads the request as it arrived, before the strip above.
+    from vaf.network.binding import connection_client_ip
+    headers["X-Forwarded-For"] = connection_client_ip(request)
     try:
         body = await request.body()
     except Exception:
@@ -245,10 +260,13 @@ async def _forward_websocket(websocket: WebSocket) -> None:
     cookie = _get_cookie_header(websocket.scope)
     if cookie:
         extra_headers.append(("Cookie", cookie))
-    # Forward the REAL client IP so the backend's connection tracker (the network map) records the actual
-    # LAN device instead of 127.0.0.1 (this proxy). The backend reads X-Forwarded-For for the WS too.
-    if websocket.client and websocket.client.host:
-        extra_headers.append(("X-Forwarded-For", websocket.client.host))
+    # Forward the REAL client on EVERY handshake, as the HTTP half does: the backend reads
+    # X-Forwarded-For for the socket's admission, its token lane and the network map. It used
+    # to be sent only when a peer was known, and a relayed handshake without the header reads
+    # as the machine itself; "unknown" (no client) fails closed instead. The resolver's value,
+    # so a relay on this machine is not written as 127.0.0.1.
+    from vaf.network.binding import connection_client_ip
+    extra_headers.append(("X-Forwarded-For", connection_client_ip(websocket)))
     # What the backend's origin guard judges a browser handshake by (ForeignOriginGuard in
     # vaf/auth/middleware.py): the page's Origin, the host it dialled and its fetch metadata.
     # This relay used to carry only the cookie, so a relayed socket looked like a script and

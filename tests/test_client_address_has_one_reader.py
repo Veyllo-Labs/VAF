@@ -11,10 +11,11 @@ OAuth callback - and the next site was always one nobody had looked at yet: the 
 workspace upload, the room upload, the room workspace door) wrote the proxy into the security
 log instead of the device.
 
-So the rule is structural: outside the resolver, and outside the proxy itself (the hop that
-writes X-Forwarded-For FROM the peer it sees), nothing in vaf/ touches a connection's client
-address. Every site asks ``connection_client_ip(conn)``; a pure ASGI middleware wraps its scope
-in ``HTTPConnection(scope)`` first.
+So the rule is structural: outside the resolver, nothing in vaf/ touches a connection's client
+address - the integrated proxy included, which writes X-Forwarded-For from the resolver too (it
+wrote its own peer, and a tunnel on this machine connects from loopback). Every site asks
+``connection_client_ip(conn)``; a pure ASGI middleware wraps its scope in
+``HTTPConnection(scope)`` first.
 """
 from __future__ import annotations
 
@@ -23,8 +24,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# The resolver, and the proxy that authors the forwarding header from its own peer.
-ALLOWED = {"vaf/network/binding.py", "vaf/network/https_proxy.py"}
+# The resolver.
+ALLOWED = {"vaf/network/binding.py"}
 
 # The names Starlette connections go by in this tree (Request, WebSocket, HTTPConnection).
 # Named boundary: the detector recognises a connection by these names, as a bare name or as

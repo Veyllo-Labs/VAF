@@ -259,3 +259,104 @@ def test_proxy_strips_client_supplied_forwarding_headers():
     )
     assert headers["authorization"] == "Bearer keep-me"
     assert headers["Host"] == "127.0.0.1:8005"
+
+
+# --------------------------------------------------------------------------- the proxy writes it
+
+class _RecordingUpstream:
+    """Stands in for the proxy's pooled httpx client: records what reached the backend."""
+
+    def __init__(self):
+        self.headers = []
+
+    async def request(self, method, url, headers=None, content=None):
+        from types import SimpleNamespace
+        self.headers.append(dict(headers or {}))
+        return SimpleNamespace(status_code=200, headers={"content-type": "text/plain"},
+                               content=b"ok")
+
+
+@pytest.mark.parametrize("peer,incoming,written", [
+    # A tunnel on this machine names its visitor: the backend must hear the visitor.
+    ("127.0.0.1", "203.0.113.9", "203.0.113.9"),
+    # A LAN device cannot buy loopback with a header of its own.
+    ("192.168.1.20", "127.0.0.1", "192.168.1.20"),
+    # A browser on this machine, no relay in front: this machine.
+    ("127.0.0.1", None, "127.0.0.1"),
+])
+def test_the_proxy_writes_the_resolved_client(monkeypatch, peer, incoming, written):
+    """The proxy wrote its OWN peer into X-Forwarded-For, which is 127.0.0.1 for a tunnel or
+    reverse proxy on this machine, so every visitor such a relay carried became the owner.
+    It writes the resolver's answer now, once, after stripping the client's copies.
+    MUTATION: write request.client.host again - red for the first row."""
+    import vaf.network.https_proxy as proxy
+
+    upstream = _RecordingUpstream()
+
+    async def _client(_origin):
+        return upstream
+
+    monkeypatch.setattr(proxy, "_get_client", _client)
+    c = TestClient(proxy.create_proxy_app(), client=(peer, 40000))
+    hdrs = {"X-Forwarded-For": incoming} if incoming else {}
+    assert c.get("/api/users", headers=hdrs).status_code == 200
+    sent = upstream.headers[-1]
+    values = [v for k, v in sent.items() if k.lower() == "x-forwarded-for"]
+    assert values == [written]
+
+
+def test_the_socket_relay_always_names_the_client(monkeypatch):
+    """The WebSocket half sent the header only when a peer was known, and then the peer
+    itself. A relayed handshake without the header reads as the machine; with the peer,
+    a tunnel on this machine does. MUTATION: send the header only for a known client, or
+    send websocket.client.host - red."""
+    import contextlib
+
+    import websockets
+
+    import vaf.network.https_proxy as proxy
+
+    seen = []
+
+    class _Backend:
+        close_code = 1000
+        close_reason = ""
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+        async def send(self, _msg):
+            pass
+
+    @contextlib.asynccontextmanager
+    async def _connect(uri, additional_headers=None, **_kw):
+        seen.append(list(additional_headers or []))
+        yield _Backend()
+
+    monkeypatch.setattr(websockets, "connect", _connect)
+
+    for peer, incoming, written in (("127.0.0.1", "203.0.113.9", "203.0.113.9"),
+                                    ("192.168.1.20", "127.0.0.1", "192.168.1.20"),
+                                    ("127.0.0.1", None, "127.0.0.1"),
+                                    # No client at all: "unknown", which fails closed.
+                                    (None, None, "unknown")):
+        c = TestClient(proxy.create_proxy_app(), client=(peer, 40000) if peer else None)
+        hdrs = {"X-Forwarded-For": incoming} if incoming else {}
+        with contextlib.suppress(Exception):
+            with c.websocket_connect("/ws", headers=hdrs) as ws:
+                ws.receive()
+        forwarded = [v for k, v in seen[-1] if k.lower() == "x-forwarded-for"]
+        assert forwarded == [written], (peer, incoming, seen[-1])
+
+
+def test_the_proxy_reads_no_client_address_itself():
+    """AC: the proxy asks the resolver like every other site (the one-reader guard holds it
+    for all of vaf/; this pins the file the guard used to exempt)."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "network" / "https_proxy.py").read_text(
+        encoding="utf-8")
+    assert ".client.host" not in src
+    assert 'scope.get("client")' not in src

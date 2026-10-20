@@ -103,6 +103,8 @@ def test_forward_websocket_relays_large_frames_without_size_cap():
         url = type("U", (), {"query": ""})()
         scope = {"headers": []}
         client = type("C", (), {"host": "192.168.1.50"})()
+        # A real WebSocket carries its headers; the relay asks the resolver for the client.
+        headers: dict = {}
 
         accepted_subprotocol = "unset"
 

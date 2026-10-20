@@ -368,9 +368,13 @@ def _telegram_account_names(
 
     Without a scope the name asked with is the account, as the whitelist matcher has it. With
     one, the account's names are the ones its whitelist and relay entries are filed under,
-    plus the name asked with unless another account's entry is filed under it: a background
-    lane of account B that has no username passes the local admin's name, and the store keeps
-    the admin's chat under that key. Reading it as B's would discard the admin's chat."""
+    plus the name asked with unless somebody else holds it: an entry of another scope, an
+    entry without a scope (filed under its name for everybody), and for any scope but the
+    local admin's the local admin's name and "admin" (what a lane without a name is read
+    as), which are the admin's keys even after the admin's own pairing was removed. A
+    background lane of account B that has no username passes exactly those names, and the
+    store keeps the admin's chat under them: reading one as B's would discard the admin's
+    chat and record it under B's name."""
     uname = (username or "").strip() or "admin"
     scope = str(user_scope_id).strip() if user_scope_id is not None else ""
     if not scope:
@@ -384,7 +388,10 @@ def _telegram_account_names(
                 entries.extend(e for e in block if isinstance(e, dict))
     own = [_telegram_entry_name(e) for e in entries if str(e.get("user_scope_id") or "").strip() == scope]
     taken = {_telegram_entry_name(e).lower() for e in entries
-             if str(e.get("user_scope_id") or "").strip() not in ("", scope)}
+             if str(e.get("user_scope_id") or "").strip() != scope}
+    if not is_local_admin_lane(scope):
+        from vaf.core.config import get_local_admin_username
+        taken |= {get_local_admin_username().lower(), "admin"}
     names = {n.lower() for n in own}
     if uname.lower() not in taken:
         names.add(uname.lower())

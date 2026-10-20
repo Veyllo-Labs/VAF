@@ -255,6 +255,49 @@ def test_another_accounts_name_is_neither_read_as_this_ones_nor_overwritten(worl
     assert world.resets() == []
 
 
+@pytest.mark.parametrize("asked_with, admin_lane, stale", [
+    ("dana", (DANA, "dana"), {"by_scope": {DANA: CAROL_TG}, "by_username": {"dana": CAROL_TG}}),
+    (None, (None, None), {"by_username": {"admin": CAROL_TG}}),
+])
+def test_the_local_admins_name_is_never_another_accounts_key(world, asked_with, admin_lane, stale):
+    """A lane of Alice's that falls back to the local admin's name (or to "admin", the name a
+    lane without one is read as) must leave the admin's key alone even when the admin has
+    no Telegram entry to say whose name it is: the admin was paired, a contact wrote before
+    the fix, and the pairing was removed. The admin's own lane clears it, once, under the
+    admin's name. MUTATION: leave the local admin's names out of the ones another account
+    cannot claim -> Alice's lane clears it and records it under her name -> red."""
+    _add_carol()
+    world.seed(telegram_config={"enabled": True, "verified": True,
+                                "whitelist": [_owner_entry(ALICE_TG, ALICE, "alice")]})
+    world.stored(**stale)
+
+    assert mc.telegram_chat_id_of(ALICE, asked_with) == ALICE_TG
+    after = world.on_disk()
+    for key, value in stale.get("by_username", {}).items():
+        assert after["by_username"].get(key) == value, "Alice's lane cleared the admin's key"
+    assert world.resets() == []
+
+    assert mc.telegram_chat_id_of(*admin_lane) is None
+    assert [(r["username"], r["path"]) for r in world.resets()] == [(admin_lane[1] or "admin", CAROL_TG)]
+    assert mc.telegram_chat_id_of(*admin_lane) is None
+    assert len(world.resets()) == 1
+
+
+def test_a_name_on_an_entry_without_a_scope_is_not_a_scoped_callers_key(world):
+    """An entry without a scope (none has been written since the first release, the matcher
+    still reads one) is filed under its name for everybody, so that name is not a scoped
+    caller's own key. MUTATION: skip entries without a scope when collecting the names
+    another account holds -> Alice's lane clears Bob's key -> red."""
+    world.seed(telegram_config={"enabled": True, "verified": True,
+                                "whitelist": [_owner_entry(), _owner_entry(ALICE_TG, ALICE, "alice"),
+                                              {"telegram_user_id": "7000000601", "vaf_username": "bob"}]})
+    world.stored(by_scope={ALICE: ALICE_TG}, by_username={"bob": CAROL_TG})
+
+    assert mc.telegram_chat_id_of(ALICE, "bob") == ALICE_TG
+    assert world.on_disk()["by_username"] == {"bob": CAROL_TG}
+    assert world.resets() == []
+
+
 def test_the_reminder_reaches_the_owner_and_stays_out_of_the_contacts_chat(world, monkeypatch):
     """AC8: the delivery lane every reminder, automation and `send_to_user` takes. MUTATION:
     return the stored value without the paired-id check -> the reminder goes to Carol -> red."""

@@ -634,7 +634,11 @@ What an embedded agent can and cannot do on the host - the short version of
   socket peer is the proxy, so "is this client local" must be asked of the real
   client. `vaf.network.binding.connection_client_ip(conn)` takes a Starlette
   `Request` or `WebSocket` (a pure ASGI middleware wraps its scope in
-  `HTTPConnection(scope)`), and `is_allowed_ip(ip)` answers with the same policy
+  `HTTPConnection(scope)`). A relay of yours on the same machine must write
+  `X-Forwarded-For` with the client it saw: VAF reads that header only from a
+  loopback peer, and takes the rightmost hop that is not this machine, so a
+  client's own entries to the left are never read. A raw TCP forward writes no
+  header, and its clients are this machine. `is_allowed_ip(ip)` answers with the same policy
   VAF's own door and firewall use: this machine, the local networks, and what an
   admin admitted (`local_network_allowed_networks`, `local_network_vpn_only`).
   `inbound_policy()` returns that policy whole, `firewall_sources()` the networks

@@ -57,12 +57,24 @@ Implementation: `vaf/network/firewall.py`
 Every HTTP request passes through `IPValidationMiddleware` which validates the client IP against the networks `inbound_policy()` admits, at the application level: this machine, then by default the RFC 1918 ranges, or with "VPN only" the VPN networks instead, plus the private networks an admin added (which may lie outside RFC 1918, such as `100.64.0.0/10`). This acts as a second barrier if firewall rules are misconfigured or bypassed.
 
 - Rejects any IP outside the admitted networks with HTTP 403 (recorded as `ip_blocked` with the device's address); under "VPN only" that includes the home network
-- Judges the REAL client, not the socket peer: the integrated proxy relays every device over loopback, so the peer is `127.0.0.1` for all of them. The address comes from `connection_client_ip` in `vaf/network/binding.py`, which honors the proxy's `X-Forwarded-For` only when the peer is loopback. This check used to read the peer and therefore passed every relayed request, a public address on the proxy port included (measured: 200 through the proxy, 403 only on a direct connection), while the WebSocket handshake already refused it.
+- Judges the REAL client, not the socket peer: the integrated proxy relays every device over loopback, so the peer is `127.0.0.1` for all of them. The address comes from `connection_client_ip` in `vaf/network/binding.py`, which honors `X-Forwarded-For` only when the peer is loopback (see [Who the client is](#who-the-client-is)). This check used to read the peer and therefore passed every relayed request, a public address on the proxy port included (measured: 200 through the proxy, 403 only on a direct connection), while the WebSocket handshake already refused it.
 - Admitted are this machine, the local networks (RFC 1918) and the networks an admin added; with "VPN only" the networks of the detected VPN interfaces replace the local ones. WireGuard and OpenVPN clients (`10.x`) pass by default; mesh VPNs that hand out `100.64.0.0/10` (Tailscale, Headscale, NetBird) pass once that network is admitted. The decision is `inbound_policy()` in `vaf/network/binding.py`, read on every request, so a change applies without a restart - see [Remote access over a VPN](#remote-access-over-a-vpn).
 - Active only in network mode (localhost mode skips this layer)
 - Named boundary: the check sits in the backend, so it covers `/api` and `/ws`. Page loads go from the proxy straight to the Next.js frontend and do not pass it; a client outside the allowed networks still receives the login screen, but every API call that screen makes is refused. The pages carry no data, only the fact that VAF runs there.
 
 `connection_client_ip` is the only place in `vaf/` that reads a connection's client address; the auth middleware, the rate limiter, the login routes, the WebSocket handshake, the OAuth callback and the security log entries all ask it. `tests/test_client_address_has_one_reader.py` refuses a direct read anywhere else (the proxy itself, which writes the header from the peer it sees, is the one exception).
+
+#### Who the client is
+
+`effective_client_ip(peer, x_forwarded_for)` in `vaf/network/binding.py` decides it, for every reader above:
+
+- A peer that is not loopback is the client; any header it sends is ignored.
+- A loopback peer is a relay on this machine (the integrated proxy, the Next.js `/api` door, a tunnel or reverse proxy the owner put in front). Its `X-Forwarded-For` is walked from the RIGHT: each hop is normalized (spaces and brackets dropped, an IPv4-mapped `::ffff:a.b.c.d` read as `a.b.c.d`), a loopback hop is skipped because it names this machine, and the first hop that is not loopback is the client. A hop that is not an IP literal (a name such as `localhost`, an address with a port) ends the walk as `unknown`, which is neither local nor admitted.
+- No header, or only loopback hops: the peer, so internal IPC and the desktop stay local.
+
+Why the rightmost: a relay appends the address it saw, and a client can only write to the LEFT of that. The first hop, which VAF used to read, is whatever the client wrote, and a tunnel on this machine (cloudflared, Tailscale Serve, nginx in front of the access port) arrives from `127.0.0.1`: measured before the change, a tokenless request with `X-Forwarded-For: 127.0.0.1` or with no header at all was answered 200 as the machine owner. The polarity stays fail-safe: a hop can only make a client look more remote.
+
+A relay of your own in front of VAF must write `X-Forwarded-For` with the client it saw (nginx: `$remote_addr`, or `$proxy_add_x_forwarded_for`, which the rightmost rule makes safe as well; cloudflared and Tailscale Serve do it on their own). NAMED BOUNDARY: a raw TCP forward on this machine (`ssh -R`, socat, a port forward that is not an HTTP proxy) writes no header at all, so every client it carries is this machine to every check. Never put one in front of VAF; replacing the tokenless local trust with a per-start IPC token is the separate change Layer 3 names.
 
 Implementation: `vaf/auth/middleware.py` -> `IPValidationMiddleware`
 

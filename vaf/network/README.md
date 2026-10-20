@@ -10,9 +10,12 @@ themselves.
 
 `binding.connection_client_ip(conn)` takes a Starlette `Request` or `WebSocket` and returns
 the real client. The integrated HTTPS proxy relays every device to the backend over
-loopback, so the socket peer is `127.0.0.1` for all of them; the function honours the
-proxy's `X-Forwarded-For` only when the peer is loopback, so a client can make itself
-look more remote, never more local. It is the only reader of the socket peer in `vaf/`
+loopback, so the socket peer is `127.0.0.1` for all of them; the function honours
+`X-Forwarded-For` only when the peer is loopback, and reads the rightmost hop that is not
+loopback (a relay appends what it saw; a client can only write to the left of it), so a
+client can make itself look more remote, never more local. A hop that is not an IP literal
+reads as `unknown`. A raw TCP forward on this machine writes no header and its clients are
+this machine (named boundary, NETWORK_FEATURES.md). It is the only reader of the socket peer in `vaf/`
 (`tests/test_client_address_has_one_reader.py`). A pure ASGI middleware wraps its scope:
 `connection_client_ip(HTTPConnection(scope))`.
 

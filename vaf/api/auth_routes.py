@@ -555,8 +555,9 @@ async def login(body: LoginRequest, request: Request, response: Response):
         # their own desk, 24h expiry serves no security purpose there. This must key on the REAL
         # client: behind the integrated HTTPS proxy every LAN device also arrives as 127.0.0.1,
         # so the peer address handed a 30-day token to phones and laptops the rule never meant.
+        from vaf.network.binding import is_localhost
         client_ip = _client_ip(request)
-        _is_localhost = client_ip in ("127.0.0.1", "::1", "localhost")
+        _is_localhost = is_localhost(client_ip)
         _localhost_expiry_hours = 30 * 24  # 30 days
         access = create_access_token(
             str(user.id),

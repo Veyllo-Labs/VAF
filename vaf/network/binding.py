@@ -77,6 +77,10 @@ def is_localhost(ip: str) -> bool:
         if ip in ('localhost', '::1'):
             return True
         addr = ipaddress.ip_address(ip)
+        # A dual-stack listener reports an IPv4 client as ::ffff:a.b.c.d; the desktop's
+        # own 127.0.0.1 must not turn remote because of how the socket was opened.
+        if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+            addr = addr.ipv4_mapped
         return any(addr in net for net in LOCALHOST_RANGES)
     except ValueError:
         return False
@@ -337,28 +341,64 @@ def firewall_sources(*, narrow_lan: bool = False, cfg: Optional[dict] = None) ->
     return _without_contained(sources)
 
 
-def effective_client_ip(peer_ip: str | None, forwarded_for: str | None) -> str:
-    """Resolve who the client REALLY is, accounting for the integrated HTTPS proxy.
+def _forwarded_hop(value: str) -> Optional[str]:
+    """One ``X-Forwarded-For`` entry as an IP literal, or None when it is not one.
 
-    Why this exists: the proxy terminates TLS on 0.0.0.0 and relays every LAN device to the
-    backend over loopback, so the raw socket peer is 127.0.0.1 for remote users too. Trusting
-    the peer alone therefore treats the whole LAN as local.
+    Spaces and brackets around the entry are dropped; an IPv4-mapped IPv6 address
+    (``::ffff:a.b.c.d``, what a dual-stack listener reports for an IPv4 client) becomes the
+    IPv4 address, so the desktop's own 127.0.0.1 stays loopback whatever socket wrote it.
+    A name (``localhost``), an address with a port, or anything else is not an address.
+    """
+    hop = value.strip().strip("[]")
+    try:
+        addr = ipaddress.ip_address(hop)
+    except ValueError:
+        return None
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        return str(addr.ipv4_mapped)
+    return str(addr)
+
+
+def effective_client_ip(peer_ip: str | None, forwarded_for: str | None) -> str:
+    """Resolve who the client REALLY is, accounting for a relay on this machine.
+
+    Why this exists: the integrated HTTPS proxy terminates TLS on 0.0.0.0 and relays every
+    LAN device to the backend over loopback, so the raw socket peer is 127.0.0.1 for remote
+    users too. Trusting the peer alone therefore treats the whole LAN as local.
 
     The polarity is deliberately fail-safe: a forwarding hop REMOVES trust, it never grants it.
-    ``X-Forwarded-For`` is honoured only when the immediate peer is itself loopback (i.e. the
-    request was relayed by our own proxy, which strips any client-supplied copy before setting
-    its own - see vaf/network/https_proxy.py). A direct non-loopback peer keeps its socket
-    address no matter what it claims, so a client can only make itself look MORE remote,
-    never more local.
+    ``X-Forwarded-For`` is honoured only when the immediate peer is itself loopback (a relay
+    on this machine: the integrated proxy, the Next.js /api door, a tunnel or reverse proxy
+    the owner put in front). A direct non-loopback peer keeps its socket address no matter
+    what it claims.
 
-    Callers with no forwarding header (internal loopback IPC, the desktop via the Next.js
-    /api route) resolve to the peer unchanged.
+    Which hop: walk the header from the RIGHT and take the first hop that is not loopback.
+    A relay appends the address it saw, and a client can only write to the LEFT of that, so
+    the rightmost entries are the ones no client controls; a loopback hop names this machine
+    (one relay handing to the next) and is skipped. Reading the FIRST hop instead made a
+    tunnel on this machine (cloudflared, Tailscale Serve, nginx) hand every visitor the
+    owner's tokenless trust: the integrated proxy wrote the tunnel's own 127.0.0.1, and the
+    first hop of a chain is whatever the client wrote. A hop that is not an IP literal ends
+    the walk as "unknown", which is neither local nor admitted.
+
+    No hops, or only loopback hops (internal loopback IPC, the desktop through the Next.js
+    /api door, which forwards its own 127.0.0.1): the peer, unchanged.
+
+    NAMED BOUNDARY: a raw TCP forward on this machine (``ssh -R``, socat) writes no header at
+    all, so its clients ARE this machine to every check. Never put one in front of VAF.
     """
     peer = (peer_ip or "").strip() or "unknown"
     if not is_localhost(peer):
         return peer
-    first_hop = ((forwarded_for or "").split(",")[0] or "").strip()
-    return first_hop or peer
+    if not (forwarded_for or "").strip():
+        return peer
+    for raw in reversed(forwarded_for.split(",")):
+        hop = _forwarded_hop(raw)
+        if hop is None:
+            return "unknown"
+        if not is_localhost(hop):
+            return hop
+    return peer
 
 
 def connection_client_ip(conn) -> str:

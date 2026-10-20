@@ -24,6 +24,7 @@ What must keep working, and is pinned below: internal loopback IPC (no token, no
 header), the desktop via the Next.js /api route (same shape), and the same-host OAuth callback
 relayed by the proxy with a loopback hop.
 """
+import pytest
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
@@ -114,6 +115,14 @@ def _ip_checked_app():
     return app
 
 
+def _full_app():
+    """Auth outside the IP check, the order the network mode registers them in."""
+    app = Starlette(routes=[Route("/api/users", _ok)])
+    app.add_middleware(IPValidationMiddleware)
+    app.add_middleware(AuthMiddleware)
+    return app
+
+
 def test_ip_check_refuses_a_public_client_relayed_by_the_proxy():
     """THE Layer 2 regression. The check judged the socket peer, which is 127.0.0.1 for
     everything the proxy relays, so a public address that reached the proxy port passed on HTTP
@@ -168,10 +177,62 @@ def test_effective_client_ip_polarity():
     # No hop -> the peer, unchanged (internal IPC, desktop via the Next.js route).
     assert effective_client_ip("127.0.0.1", None) == "127.0.0.1"
     assert effective_client_ip("127.0.0.1", "") == "127.0.0.1"
-    # Chains: the first entry is the originating client.
-    assert effective_client_ip("127.0.0.1", f"{LAN_DEVICE}, 10.0.0.1") == LAN_DEVICE
+    # Chains: the rightmost hop that is not this machine is the client; whatever a client
+    # wrote sits to the LEFT of it and is never read.
+    assert effective_client_ip("127.0.0.1", f"{LAN_DEVICE}, 10.0.0.1") == "10.0.0.1"
     # Missing client info fails closed: "unknown" is not a valid IP, so is_localhost() is False.
     assert effective_client_ip(None, None) == "unknown"
+
+
+@pytest.mark.parametrize("peer,forwarded,client", [
+    ("192.168.1.5", "127.0.0.1", "192.168.1.5"),           # a direct peer ignores the header
+    ("127.0.0.1", None, "127.0.0.1"),                      # internal IPC
+    ("127.0.0.1", "203.0.113.9", "203.0.113.9"),           # one relay, one client
+    ("127.0.0.1", "192.168.1.66, 127.0.0.1", "192.168.1.66"),
+    ("127.0.0.1", "127.0.0.1, 192.168.1.66", "192.168.1.66"),
+    ("127.0.0.1", "203.0.113.9, 127.0.0.1, 127.0.0.1", "203.0.113.9"),
+    ("127.0.0.1", "127.0.0.1", "127.0.0.1"),               # the desktop through the Next door
+    ("127.0.0.1", "::ffff:192.168.1.7", "192.168.1.7"),    # a dual-stack listener's IPv4 client
+    ("127.0.0.1", "::ffff:127.0.0.1", "127.0.0.1"),        # ... and its loopback
+    ("127.0.0.1", "[::1]", "127.0.0.1"),
+    ("127.0.0.1", "localhost", "unknown"),                 # a name is not an address
+    ("127.0.0.1", "1.2.3.4:5678", "unknown"),
+    ("127.0.0.1", "garbage", "unknown"),
+    ("127.0.0.1", "192.168.1.66, garbage", "unknown"),     # the walk ends at the first non-IP
+    (None, None, "unknown"),
+])
+def test_the_client_is_the_rightmost_hop_no_client_wrote(peer, forwarded, client):
+    """A relay appends what it saw, and a client can only write to the LEFT of it, so the
+    rightmost hop that is not this machine is the nearest one no client controls.
+
+    The first-hop rule made a tunnel on this machine (cloudflared, Tailscale Serve, nginx in
+    front of the access port) hand every visitor the owner's tokenless trust.
+    MUTATIONS, each red here: take the first hop; stop skipping loopback hops; accept a
+    non-IP hop; drop the IPv4-mapped normalization."""
+    from vaf.network.binding import is_localhost
+    got = effective_client_ip(peer, forwarded)
+    if client == "127.0.0.1":
+        assert is_localhost(got), got
+    else:
+        assert got == client
+
+
+def test_mapped_loopback_is_this_machine():
+    from vaf.network.binding import is_localhost
+    assert is_localhost("::ffff:127.0.0.1")
+    assert not is_localhost("::ffff:192.168.1.7")
+
+
+def test_a_relay_on_this_machine_is_not_the_owner():
+    """THE finding: a tunnel or reverse proxy on this machine connects from loopback, so the
+    integrated proxy used to write 127.0.0.1 for it, and a tokenless request was the owner.
+    With the client the relay names on the right, it is a stranger (401 or 403).
+    MUTATION: read the first hop again - 200."""
+    c = TestClient(_full_app(), client=PROXY_PEER)
+    r = c.get("/api/users", headers={"X-Forwarded-For": f"127.0.0.1, {PUBLIC_DEVICE}"})
+    assert r.status_code in (401, 403)
+    # Internal IPC, no hop at all, is unchanged.
+    assert c.get("/api/users").status_code == 200
 
 
 def test_proxy_strips_client_supplied_forwarding_headers():

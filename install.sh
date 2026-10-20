@@ -1207,12 +1207,14 @@ EOF
                 systemctl --user list-units --type=service --state=exited --no-legend --plain 2>/dev/null; } \
                 | awk '{print $1}' | tr '\n' ' ' || true)"
             _restart=true
+            _inside=false
             # This run may itself live inside that manager: a terminal of a desktop session
             # does (measured: its shell sits in user@<uid>.service/app.slice), an SSH login
             # does not (session-N.scope). Restarting the manager would end the installer
             # before it starts anything again, so it then leaves the restart to the person.
             if grep -q "/user@${_uid}\.service/" "/proc/$$/cgroup" 2>/dev/null; then
                 _restart=false
+                _inside=true
             elif [[ -n "${_busy// /}" ]]; then
                 _restart=false
                 if [[ -t 0 ]]; then
@@ -1220,7 +1222,9 @@ EOF
                     [[ "$_answer" =~ ^[yYjJ] ]] && _restart=true
                 fi
             fi
-            if [[ "$_restart" != "true" ]]; then
+            if [[ "$_inside" == "true" ]]; then
+                print_warning "VAF reaches Docker after the next reboot, or after: sudo systemctl restart user@${_uid}.service from an SSH login or a text console (this terminal runs inside your user services, and restarting them here would close it)"
+            elif [[ "$_restart" != "true" ]]; then
                 print_warning "VAF reaches Docker after the next reboot, or after: sudo systemctl restart user@${_uid}.service (it stops your running user services: $_busy)"
             elif sudo systemctl restart "user@${_uid}.service" 2>/dev/null; then
                 print_success "User services restarted, so VAF gets the docker group now"

@@ -89,6 +89,10 @@ def create_access_token(
         "exp": int(exp.timestamp()),
         "type": "access",
         "is_2fa_verified": is_2fa_verified,
+        # Unique per mint: two sign-ins of one account in the same second minted byte-identical
+        # tokens, and the second session row failed on the unique token hash (a double-clicked
+        # code answered 500). It also makes every token its own session to end.
+        "jti": secrets.token_hex(16),
     }
     return jwt.encode(
         payload,

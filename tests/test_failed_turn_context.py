@@ -388,8 +388,11 @@ def test_model_text():
     clean = Message(role="assistant", content="Der Termin ist Montag.",
                     metadata=failed_turn_meta(False, _KEY_ERROR))
     assert model_text(clean) == "Der Termin ist Montag."
-    only = Message(role="assistant", content="  " + _KEY_ERROR + "\n",
-                   metadata=failed_turn_meta(False, _KEY_ERROR))
+    # A message that was the recorded failure alone. A failure that begins with a marker is
+    # caught before (`is_failed_turn`); one without a marker must not read as an empty answer,
+    # which `get_history` would replay as an empty assistant entry some providers reject.
+    only = Message(role="assistant", content="  timeout after 30s\n",
+                   metadata=failed_turn_meta(False, "timeout after 30s"))
     assert model_text(only) is None
     assert model_text(Message(role="assistant", content=_KEY_ERROR,
                               metadata=failed_turn_meta(True))) is None

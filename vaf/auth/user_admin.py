@@ -34,7 +34,7 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy import func, select
 
-from vaf.auth.crypto import hash_password
+from vaf.auth.crypto import hash_password, hash_password_async
 from vaf.auth.models import LocalUser
 
 logger = logging.getLogger(__name__)
@@ -124,7 +124,7 @@ async def create_local_user(
     if await username_taken(db, cleaned):
         raise UserAdminError("username_taken", "Username already taken", 409)
 
-    password_hash = hash_password(password)
+    password_hash = await hash_password_async(password)
     user = LocalUser(
         username=cleaned,
         password_hash=password_hash,
@@ -174,10 +174,10 @@ async def change_own_password(db, user: LocalUser, current_password: str, new_pa
     the account's window, spent once). The row must still verify (vaf/auth/account_seal.py);
     the write re-seals it. The owner's account also refreshes the terminal door's hash copy."""
     from vaf.auth import account_seal, second_factor
-    from vaf.auth.crypto import verify_password
+    from vaf.auth.crypto import verify_password_async
     if not account_seal.check(user, where="change own password"):
         raise UserAdminError("record_changed", account_seal.REFUSAL_LOGIN, 403)
-    if not verify_password(user.password_hash, current_password or ""):
+    if not await verify_password_async(user.password_hash, current_password or ""):
         raise UserAdminError("wrong_password", "The current password is not right", 401)
     if user.totp_secret and user.totp_nonce and not user.requires_2fa_setup:
         reason = second_factor.check_second_factor(user, code, ip=ip, where="change-password")
@@ -188,9 +188,9 @@ async def change_own_password(db, user: LocalUser, current_password: str, new_pa
         if reason is not None:
             raise UserAdminError("wrong_code", "The 2FA code is not right", 400)
     validate_password(new_password)
-    if verify_password(user.password_hash, new_password):
+    if await verify_password_async(user.password_hash, new_password):
         raise UserAdminError("same_password", "The new password is the current one", 400)
-    user.password_hash = hash_password(new_password)
+    user.password_hash = await hash_password_async(new_password)
     await db.commit()
     try:
         from vaf.cli.gate import is_local_admin_account, mirror_admin_password_hash

@@ -35,7 +35,7 @@ from vaf.auth.models import LocalUser, UserSession
 from vaf.auth.database import get_auth_db
 from vaf.auth import account_seal
 from vaf.auth.crypto import (
-    verify_password,
+    verify_password_async,
     create_access_token,
     create_refresh_token,
     decode_token,
@@ -567,11 +567,16 @@ async def login(body: LoginRequest, request: Request, response: Response):
             )
         )
         user = result.scalar_one_or_none()
+        # Exactly one Argon2 verification per login that passes the windows, a name without an
+        # account included (against a dummy hash), so the answer's timing does not say which
+        # names exist; on its own pool, so logins never stall the chats on this loop.
+        password_ok = await verify_password_async(user.password_hash if user else None,
+                                                  body.password or "")
         if not user:
             record_account_failure(username_clean)
             _log_auth_failure("login_failed", request, username=username_clean, detail="unknown user")
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
-        if not verify_password(user.password_hash, body.password or ""):
+        if not password_ok:
             record_account_failure(username_clean)
             _log_auth_failure("login_failed", request, username=username_clean, detail="wrong password")
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")

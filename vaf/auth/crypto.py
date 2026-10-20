@@ -7,8 +7,11 @@ Auth crypto: password hashing (Argon2), JWT, TOTP encryption.
 Uses local_network_jwt_secret from config; TOTP secrets encrypted with AES-256-GCM.
 """
 
+import asyncio
 import hashlib
 import secrets
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Any
 
@@ -52,12 +55,14 @@ def _get_totp_key() -> bytes:
 
 
 def hash_password(password: str) -> str:
-    """Hash password with Argon2id."""
+    """Hash password with Argon2id. Blocking (~25 ms, 64 MiB): from async code use
+    `hash_password_async`."""
     return _ph.hash(password)
 
 
 def verify_password(password_hash: str, password: str) -> bool:
-    """Verify password against Argon2 hash. Returns True if match."""
+    """Verify password against Argon2 hash. Returns True if match. Blocking: from async code
+    use `verify_password_async`."""
     try:
         _ph.verify(password_hash, password)
         return True
@@ -65,6 +70,52 @@ def verify_password(password_hash: str, password: str) -> bool:
         return False
     except Exception:
         return False
+
+
+# Argon2 off the event loop. Each check takes ~25 ms of CPU and 64 MiB, and it ran on the loop
+# that also carries every chat stream and socket: 40 concurrent wrong logins delayed an
+# unrelated request by about a second (measured, idle 1 ms). A pool of its own, two workers:
+# memory stays bounded (2 x 64 MiB) however many logins arrive, and hashes that wait never
+# occupy the default executor that other work (the room handshake) runs on.
+_ARGON2_WORKERS = 2
+_pool = None
+_pool_lock = threading.Lock()
+_dummy_hash: Optional[str] = None
+
+
+def _argon2_pool() -> ThreadPoolExecutor:
+    global _pool
+    with _pool_lock:
+        if _pool is None:
+            _pool = ThreadPoolExecutor(max_workers=_ARGON2_WORKERS, thread_name_prefix="vaf-argon2")
+        return _pool
+
+
+def _verify_or_dummy(password_hash: Optional[str], password: str) -> bool:
+    """One Argon2 verification either way: against the account's hash, or, for a name that
+    has no account, against a hash made once with the same parameters (always False). An
+    unknown name used to answer before any hashing (measured: 3.5 ms against 28.6 ms for a
+    known one), which listed the account names to anyone who timed the answer."""
+    global _dummy_hash
+    if password_hash is None:
+        if _dummy_hash is None:
+            _dummy_hash = _ph.hash(secrets.token_urlsafe(24))
+        verify_password(_dummy_hash, password)
+        return False
+    return verify_password(password_hash, password)
+
+
+async def verify_password_async(password_hash: Optional[str], password: str) -> bool:
+    """`verify_password` on the Argon2 pool. `password_hash=None` (no such account) does the
+    same work against a dummy hash and returns False."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_argon2_pool(), _verify_or_dummy, password_hash, password)
+
+
+async def hash_password_async(password: str) -> str:
+    """`hash_password` on the Argon2 pool."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(_argon2_pool(), hash_password, password)
 
 
 def create_access_token(

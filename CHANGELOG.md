@@ -99,7 +99,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   wrong codes hold the account's code wherever it is asked (sign-in, password change, an
   admin's confirmation), each time longer within a day. A held login answers "Too many
   failed attempts" and is recorded in the security log ("Too many login attempts"). The
-  step between password and code now lasts 15 minutes instead of a day.
+  step between password and code now lasts 15 minutes instead of a day. Known and unknown
+  account names now take the same time to answer, and password checks no longer stall
+  other chats while many logins arrive.
 
 - **Pages through the HTTPS port can no longer be framed by another site.** The login and
   the app served to other devices carried no anti-framing headers and no HSTS; they do now.

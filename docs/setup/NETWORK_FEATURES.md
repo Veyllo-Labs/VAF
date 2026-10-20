@@ -206,7 +206,7 @@ Rejections from the layers above are recorded in an always-on security event log
 
 ### Authentication Details
 
-- **Password Hashing**: Argon2id (time_cost=2, memory_cost=64MB)
+- **Password Hashing**: Argon2id (time_cost=2, memory_cost=64MB), run on a thread pool of its own (`vaf-argon2`, two workers, so at most 128 MB however many logins arrive) instead of the event loop that carries every chat and socket (measured before: 40 concurrent wrong logins delayed an unrelated request by about a second; after: under 0.1 s). Every login that passes the windows does exactly one verification, a name without an account against a dummy hash, so known and unknown names take the same time (measured before: 3.5 ms against 28.6 ms). `verify_password_async` / `hash_password_async` in `vaf/auth/crypto.py`; the blocking functions stay for the terminal.
 - **JWT Tokens**: HS256, configurable expiry (default 24h), refresh tokens (7 days). A valid
   signature is not enough: the HTTP middleware and the WebSocket handshake also check that the
   token's account still exists, is active and holds the token's role (cached a few seconds,

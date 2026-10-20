@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vaf.auth.models import LocalUser, UserRole
 from vaf.auth.database import get_auth_db
-from vaf.auth.crypto import hash_password
+from vaf.auth.crypto import hash_password_async
 from vaf.auth import account_seal
 from vaf.core.config import get_local_admin_scope_id, is_admin_identity
 
@@ -501,7 +501,7 @@ async def reset_password(user_id: str, _: Dict[str, Any] = Depends(require_admin
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
             _refuse_unsealed(user, "/api/users reset-password")
             new_password = secrets.token_urlsafe(12)
-            user.password_hash = hash_password(new_password)
+            user.password_hash = await hash_password_async(new_password)
             from vaf.cli.gate import is_local_admin_account, mirror_admin_password_hash
             if is_local_admin_account(username=str(user.username or ""),
                                       user_scope_id=str(user.user_scope_id or "")):

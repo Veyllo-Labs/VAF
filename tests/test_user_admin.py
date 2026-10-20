@@ -81,6 +81,11 @@ def _isolated(monkeypatch, tmp_path):
     saved = {}
     monkeypatch.setattr(user_admin, "hash_password", lambda p: f"hash:{p}")
 
+    async def _hash_async(p):
+        return f"hash:{p}"
+
+    monkeypatch.setattr(user_admin, "hash_password_async", _hash_async)
+
     from vaf.core import config as config_module
     monkeypatch.setattr(config_module.Config, "load", lambda: dict(saved))
     monkeypatch.setattr(config_module.Config, "save", lambda c: saved.update(c))

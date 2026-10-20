@@ -92,6 +92,15 @@ def _said(result) -> str:
     return " ".join(result.output.split())
 
 
+def test_an_admission_change_points_at_provision(settings):
+    """"A running VAF re-applies the firewall" was false on a server, whose service cannot
+    gain root; the note says where the step lives there. MUTATION: restore the old note - red."""
+    said = _said(runner.invoke(server_cmd.app, ["networks", "allow", "10.20.0.0/16"]))
+    assert "Admitted 10.20.0.0/16" in said
+    assert "sudo -v && vaf server provision" in said
+    assert "a running VAF re-applies the firewall within about 25 seconds. Nothing restarts." not in said
+
+
 def test_status_shows_the_interfaces_with_their_access_url(settings):
     result = runner.invoke(server_cmd.app, ["status"])
     assert result.exit_code == 0, result.output

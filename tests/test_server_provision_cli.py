@@ -37,6 +37,9 @@ def seams(monkeypatch):
     monkeypatch.setattr(firewall, "setup_firewall",
                         lambda p, pf: calls["firewall"].append((p, pf)) or "created")
     monkeypatch.setattr(server_cmd.platform, "system", lambda: "Linux")
+    # Whether this process could gain root is read from its own /proc; pinned so the
+    # warnings do not depend on where the suite runs.
+    monkeypatch.setattr(firewall, "elevation_unavailable", lambda: None)
     from vaf.core import db_credentials
     monkeypatch.setattr(db_credentials, "shipped_password_in_use", lambda: False)
     return calls
@@ -90,6 +93,21 @@ def test_the_manual_instructions_name_every_admitted_network(seams, monkeypatch)
     for source in ("10.8.0.0/24", "192.168.1.0/24"):
         assert f'source address="{source}" port port="8443"' in said
         assert f"sudo ufw allow from {source} to any port 8443 proto tcp" in said
+
+def test_provision_names_why_it_could_not_elevate(seams, monkeypatch):
+    """Run inside the service (through the agent's shell, for one), no setuid helper can
+    work: the warning says why instead of a bare "needs elevation", and the manual
+    instructions still follow. MUTATION: drop the reason clause - red."""
+    monkeypatch.setattr(firewall, "setup_firewall", lambda p, pf: False)
+    monkeypatch.setattr(firewall, "elevation_unavailable",
+                        lambda: "the no-new-privileges flag is set on this process, as systemd's NoNewPrivileges= sets it")
+    result = runner.invoke(server_cmd.app, ["provision"])
+    assert result.exit_code == 0, result.output
+    said = " ".join(result.output.split())
+    assert ("Could not open the OS firewall automatically (this process cannot gain root: "
+            "the no-new-privileges flag is set") in said
+    assert "firewall-cmd" in said and "sudo ufw allow" in said
+
 
 def test_a_dhcp_assigned_lan_ip_earns_a_static_ip_warning(seams, monkeypatch):
     monkeypatch.setattr(binding, "lan_ip_is_dhcp", lambda: True)

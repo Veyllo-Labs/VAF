@@ -219,7 +219,18 @@ def server_provision(
         elif outcome:
             UI.success(f"Firewall opened for port {access_port} (LAN subnet only).")
         else:
-            UI.warning("Could not open the OS firewall automatically (needs elevation).")
+            # Run from a login shell this is a refused or missing sudo; run inside the
+            # service (the agent's shell, for one) no setuid helper can work at all.
+            try:
+                from vaf.network.firewall import elevation_unavailable
+                no_root = elevation_unavailable()
+            except Exception:
+                no_root = None
+            if no_root:
+                UI.warning("Could not open the OS firewall automatically (this process "
+                           f"cannot gain root: {no_root}).")
+            else:
+                UI.warning("Could not open the OS firewall automatically (needs elevation).")
             try:
                 from vaf.network.binding import firewall_sources
                 sources = firewall_sources(narrow_lan=True)
@@ -268,8 +279,10 @@ def server_provision(
 #
 # The CLI half of the "Remote access (VPN)" settings. Both write the same two keys and
 # go through the same check (binding.normalize_allowed_networks). The access check reads
-# the file on every request; a running VAF re-applies the firewall within about 25
-# seconds (the tray polls the file), without a restart. Named boundary: like the rest of this group there is no
+# the file on every request, without a restart. A VAF in a desktop session re-applies the
+# OS firewall within about 25 seconds (the tray polls the file); the server's service
+# cannot gain root (vaf.network.firewall.elevation_unavailable), so there the operator
+# runs `vaf server provision`, which _applied_note says. Named boundary: like the rest of this group there is no
 # admin-password door, because install.sh runs it without a terminal, and the config
 # file is writable only by the same OS user anyway.
 
@@ -323,7 +336,12 @@ def _still_admitted(entry: str) -> list:
 
 
 def _applied_note() -> None:
-    UI.info("The access check uses this at once; a running VAF re-applies the firewall within about 25 seconds. Nothing restarts.")
+    # True on both kinds of install: this command runs in the operator's shell and cannot
+    # tell which VAF is running, and only a desktop session's VAF can gain root.
+    UI.info("The access check uses this at once; nothing restarts.")
+    UI.info("A VAF in a desktop session re-applies the OS firewall within about 25 seconds. "
+            "A server's service cannot gain root: if the server's own firewall guards the "
+            "access port, run `sudo -v && vaf server provision`.")
 
 
 @networks_app.command("list")

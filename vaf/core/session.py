@@ -142,9 +142,12 @@ def model_text(msg) -> Optional[str]:
     """What a model may read of a stored message, or None when it may read none of it.
 
     None for a failed turn's text (`is_failed_turn`). For an answer that a later round's
-    failure followed (`metadata.turn_failure`), the content without that failure; when the
-    failure is not found verbatim in the content, None, the safe side, since the text would
-    otherwise reach a model. Every other message: its content, as stored.
+    failure followed (`metadata.turn_failure`, the failure as streamed), the content without
+    that failure, and None when nothing else is left. A failure the content does not hold
+    verbatim leaves two cases: the content still carries a failure signature (the stored
+    text altered it, `completion.is_error_reply` or the loop-protection marker anywhere), and
+    the message is None, the safe side; or it carries none, and the content is already clean
+    and returned as it is. Every other message: its content, as stored.
 
     Asked by everything that builds a model's context, or a tool result a model reads, from
     a stored chat: the replay in `CoreAgent.load_session_context`, `Session.get_history`, the
@@ -163,9 +166,13 @@ def model_text(msg) -> Optional[str]:
     meta = get("metadata")
     failure = meta.get(TURN_FAILURE_KEY) if isinstance(meta, dict) else None
     if isinstance(failure, str) and failure:
-        if failure not in content:
+        if failure in content:
+            content = content.replace(failure, "").strip()
+            return content or None
+        from vaf.core.completion import is_error_reply
+        from vaf.markers import LOOP_PROTECTION
+        if is_error_reply(content) or LOOP_PROTECTION in content:
             return None
-        content = content.replace(failure, "").strip()
     return content
 
 

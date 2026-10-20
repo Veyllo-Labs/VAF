@@ -133,8 +133,10 @@ the real answer; the return value is a status:
   stop (`[Generation stopped by user]` - though a mid-stream stop returns the
   partial answer instead when text was already produced), loop protection
   (contains `[LOOP_PROTECTION]`, prefixed by a warning emoji - match by
-  substring, not prefix), async sub-agent acks (`[ASYNC_ACK]...`), and
-  handled degradations (`[SYSTEM_LOG_ONLY]...`).
+  substring, not prefix: the safe side, which also catches a reply that
+  quotes the marker; the engine's own `completion.is_stop_note` checks for
+  the marker at the start, after that emoji), async sub-agent acks
+  (`[ASYNC_ACK]...`), and handled degradations (`[SYSTEM_LOG_ONLY]...`).
 - A provider's own failure is not a return value: the backend yields it as a content
   chunk, `[API Error from <provider>: <raw answer>]`, so it reaches `stream_callback`
   and the stored answer, also after text an earlier round streamed. The `[Error] ...`
@@ -144,11 +146,13 @@ the real answer; the return value is a status:
 - A turn that ends without the model's answer, a backend failure (either shape above,
   the provider's sentinel arriving as its own chunk) or a loop-protection stop, commits
   NOTHING to the history: `history[-1]` is then not an answer, the failure or stop text
-  is the return value only, and the turn-local `_turn_failed` is True. When the turn had
-  already validated an answer in an earlier round (the pending-task auto-continue, a reply
-  kept under correction), it has answered: it returns that answer, `_turn_failed` stays
-  False, and the failure or stop text is in `_turn_failure` (and in the stream, where it
-  was streamed). The model never reads that text as its own words in a later turn. A
+  is the return value only, and the turn-local `_turn_failed` is True. When the turn's
+  newest kept answer had passed the final-answer path (the pending-task auto-continue
+  re-entered after it), it has answered: it returns its answers and `_turn_failed` stays
+  False. A turn whose newest kept reply was still under correction (a guard flagged it)
+  fails. `_turn_failure` holds the failure text when it was streamed (a backend failure);
+  a loop-protection note and the local server's statuses are never streamed, and leave it
+  empty. The model never reads that text as its own words in a later turn. A
   caller that stores the streamed text apart from the history marks its copy with
   `session.failed_turn_meta(_turn_failed, _turn_failure)`, and the readers that build a
   model's context from a stored chat read it through `session.model_text()`.

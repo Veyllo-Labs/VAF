@@ -256,12 +256,16 @@ returns the local server's `[Error] ...`, or a provider's `[API Error from <prov
 arrives as a content chunk of its own, `completion.is_failure_chunk`, also after text the
 round already streamed), or loop protection stops it (the spend cap, the wall clock, the
 hard stop, all carrying `[LOOP_PROTECTION]`). Every one of these exits returns through one
-closure, `_end_turn_without_answer`: NOTHING of the text is committed to the history (it is
-in the stream where it was streamed), the text is recorded in the turn-local
-`_turn_failure`, and the turn ends. What it returns depends on whether the turn had already
-answered. A turn that validated an answer in an earlier round (the pending-task
-auto-continue, a reply kept under correction) has answered: it returns that answer and is
-not failed. Any other turn failed: `_turn_failed` is set and the text is the return value.
+closure, `_end_turn_without_answer`: NOTHING of the text is committed to the history, and
+the turn ends. A backend failure is in the stream; a loop-protection note and the local
+server's statuses are not (they reach the person as the turn's text or an event), and only
+a streamed text is recorded in the turn-local `_turn_failure`, so a host takes off its stored
+copy exactly what that copy holds. What the turn returns depends on whether it had already
+answered. A turn whose newest kept answer passed the final-answer path (the pending-task
+auto-continue re-entered after it) has answered: it returns its answers and is not failed.
+Any other turn failed, `_turn_failed` is set and the text is the return value; that
+includes a turn whose newest kept reply a guard (false promise, result grounding) had sent
+back for correction, because that reply is an unchecked claim whose correction never came.
 Both flags are reset at the start of every `chat_step`, like `_turn_closed_by_tool`. A
 failed round's tool calls do not run: they are a stream cut off mid-way. The text is the
 engine's, not something the model said: in the next turn's context the model would repeat a
@@ -274,3 +278,11 @@ mark that copy (`session.failed_turn_meta`); every reader that builds a model's 
 from a stored chat reads it through `session.model_text` (SESSION_MANAGEMENT.md). The runner
 also answers a contact's failed turn with a fixed sentence, and a turn that answered first
 with that answer (FRONT_OFFICE.md). Guard: `tests/test_failed_turn_context.py`.
+
+Named boundary: five other returns end a turn early and keep the old shape (their text is
+committed to the history and returned, `_turn_failed` stays unset). Four are the user's stop
+(`[Generation stopped by user]` at the top of a round, between tools and after a tool round,
+and mid-stream, where the partial answer is kept): the person ended the turn, and what they
+see is what they asked for. The fifth is the emergency loop breaker (ten tool calls in under
+five seconds), whose note names no internals. None of them is a backend failure or a
+loop-protection stop.

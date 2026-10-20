@@ -104,15 +104,19 @@ def _answers():
 def test_a_failed_turn_is_not_in_the_next_turns_context(engine, failing, trace):
     """MUTATION: commit the failed round anyway (append `{"role": "assistant", "content":
     full_content}` in the round-failure exit of chat_step) - the next turn's messages carry
-    the key, red for the two sentinel cases."""
+    the key, red for the two sentinel cases. MUTATION: drop the reset of `_turn_failure` at
+    chat_step entry - the good second turn still carries the first turn's failure (a host
+    would mark its stored answer), red."""
     from vaf.core.completion import is_error_reply
     streamed, returned = engine.turn("Hallo", failing)
     assert trace in streamed                       # the person still sees what happened
     assert is_error_reply(returned) and engine._turn_failed is True
+    assert trace in engine._turn_failure           # it was streamed
     assert not any(trace in str(m.get("content")) for m in engine.history)
 
     streamed, _ = engine.turn("Was war los?", _answers)
-    assert engine._turn_failed is False            # reset for every turn
+    assert engine._turn_failed is False            # both reset for every turn
+    assert engine._turn_failure == ""
     assert "Alles in Ordnung" in streamed
     assert trace not in _context_of(engine.seen[2])
     assert "Hallo" in _context_of(engine.seen[2])  # the request itself is still there
@@ -170,6 +174,89 @@ def test_a_turn_that_answered_before_a_round_failed_keeps_its_answer(engine, mon
                      metadata=failed_turn_meta(engine._turn_failed, engine._turn_failure))
     assert model_text(stored).startswith("Ihr Termin ist am Montag um 10 Uhr.")
     assert trace not in model_text(stored)
+
+
+def test_a_stop_that_never_streamed_leaves_the_answer_readable(engine, monkeypatch):
+    """The spend stop ends a turn that had answered (auto-continue, then a tool round). The
+    note goes to an event, never to the stream, so the stored copy cannot hold it: nothing is
+    recorded for a host to take off, and the stored answer stays what every reader reads.
+    MUTATION: record the text whether or not it streamed - the copy gets a failure it does
+    not hold, red."""
+    import vaf.core.cost as cost
+    from vaf.core.session import Message, failed_turn_meta, model_text
+    over = {"v": False}
+    monkeypatch.setattr(cost, "budget_exceeded", lambda scope: (over["v"], float(_SPEND), 5.0))
+    calls = {"n": 0}
+
+    def answers_then_calls_a_tool():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            yield "Ihr Termin ist am Montag um 10 Uhr."
+            return
+        over["v"] = True
+        yield json.dumps({"tool_calls": [{"index": 0, "id": "call_1", "type": "function",
+                                          "function": {"name": "list_tools", "arguments": "{}"}}]})
+
+    monkeypatch.setattr(engine.main_persistence, "_current_step",
+                        lambda tasks: (0, "Termin bestätigen", 0, 2))
+    monkeypatch.setattr(engine, "_reply_needs_user", lambda text: False)
+    streamed, returned = engine.turn("Wann ist mein Termin?", answers_then_calls_a_tool)
+    # Two rounds at least: the tool-only round may be asked again without streaming.
+    assert calls["n"] >= 2 and over["v"] is True and _SPEND not in streamed
+    assert returned.strip() == "Ihr Termin ist am Montag um 10 Uhr."
+    assert engine._turn_failed is False and engine._turn_failure == ""
+    stored = Message(role="assistant", content=streamed,
+                     metadata=failed_turn_meta(engine._turn_failed, engine._turn_failure))
+    assert (model_text(stored) or "").startswith("Ihr Termin ist am Montag um 10 Uhr.")
+
+
+@pytest.mark.parametrize("answered_first", [False, True], ids=["flagged", "answer-then-flagged"])
+def test_a_reply_under_correction_does_not_count_as_the_answer(engine, monkeypatch,
+                                                              answered_first):
+    """The result-grounding guard keeps a flagged reply on screen and asks for a correction.
+    When the correction round fails, that reply is an unchecked claim: the turn has failed,
+    and a contact gets the fixed sentence, never the claim, also when a validated answer came
+    before it. MUTATION: count any kept reply as the answer (drop `and _last_kept_is_final`)
+    - the claim goes to the contact, red."""
+    from types import SimpleNamespace
+
+    import vaf.core.telegram_reply as tr
+    from vaf.core import headless_runner as hr
+    claim = "I have forwarded your request to Alice, she will call you back today."
+    judged = {"n": 0}
+
+    def judge(text, results):
+        judged["n"] += 1
+        return (judged["n"] == (2 if answered_first else 1), "forwarded your request to Alice")
+
+    monkeypatch.setattr(engine, "_detect_ungrounded_result_claim", judge)
+    monkeypatch.setattr(engine, "_guard_keeps_answer", lambda text: True)
+    if answered_first:
+        monkeypatch.setattr(engine.main_persistence, "_current_step",
+                            lambda tasks: (0, "Alice informieren", 0, 2))
+        monkeypatch.setattr(engine, "_reply_needs_user", lambda text: False)
+    calls = {"n": 0}
+    script = (["Ihr Termin ist am Montag.", claim] if answered_first else [claim])
+
+    def replies_then_fails():
+        calls["n"] += 1
+        if calls["n"] <= len(script):
+            yield script[calls["n"] - 1]
+            return
+        yield _KEY_ERROR
+
+    streamed, returned = engine.turn("Bitte sagen Sie Alice Bescheid.", replies_then_fails)
+    assert calls["n"] == len(script) + 1, "the correction round never ran"
+    assert claim in streamed                       # it stays on the owner's screen
+    assert engine._turn_failed is True and "sk-proj" in returned
+
+    sent = []
+    monkeypatch.setattr(tr, "send_telegram_reply", lambda chat_id, text, *a, **k: sent.append(text))
+    task = SimpleNamespace(source="telegram", session_id="s1",
+                           metadata={"telegram_chat_id": "1001", "from_contact": True})
+    hr._deliver_channel_reply(task, streamed, turn_failed=engine._turn_failed,
+                              turn_failure=engine._turn_failure, contact=None)
+    assert sent == ["Sorry, I can't reply right now. Please try again a little later."]
 
 
 def test_a_loop_protection_stop_is_not_in_the_next_turns_context(engine, monkeypatch):
@@ -281,8 +368,11 @@ def test_a_stop_note_is_one_that_begins_with_the_marker():
 
 
 def test_model_text():
-    """An answer that a later failure followed reads back without it; a failure the stored
-    text no longer holds verbatim drops the whole message, the safe side."""
+    """An answer that a later failure followed reads back without it. A recorded failure the
+    stored text does not hold verbatim: the message is dropped while the content still
+    carries a failure signature (the safe side), and read as it is when the content is clean.
+    MUTATION: drop every message whose failure is not found - the clean one is lost, red.
+    MUTATION: return "" for a message that was the failure alone - red."""
     from vaf.core.session import Message, failed_turn_meta, model_text
     assert failed_turn_meta(False, "x") == {"turn_failure": "x"}
     assert failed_turn_meta(True, "x") == {"turn_failed": True}
@@ -292,6 +382,15 @@ def test_model_text():
     altered = Message(role="assistant", content="Erledigt. [API Error from openai: gekürzt]",
                       metadata=failed_turn_meta(False, _KEY_ERROR))
     assert model_text(altered) is None
+    altered_stop = Message(role="assistant", content="Erledigt. [LOOP_PROTECTION] gekürzt",
+                           metadata=failed_turn_meta(False, "\u26a0\ufe0f [LOOP_PROTECTION] x"))
+    assert model_text(altered_stop) is None
+    clean = Message(role="assistant", content="Der Termin ist Montag.",
+                    metadata=failed_turn_meta(False, _KEY_ERROR))
+    assert model_text(clean) == "Der Termin ist Montag."
+    only = Message(role="assistant", content="  " + _KEY_ERROR + "\n",
+                   metadata=failed_turn_meta(False, _KEY_ERROR))
+    assert model_text(only) is None
     assert model_text(Message(role="assistant", content=_KEY_ERROR,
                               metadata=failed_turn_meta(True))) is None
     assert model_text(Message(role="user", content="Hallo")) == "Hallo"
@@ -335,14 +434,17 @@ def test_every_engine_failure_exit_goes_through_the_one_closure():
     `_end_turn_without_answer`, which alone sets `_turn_failed`, and none of them appends
     that text to the history. MUTATION: return one exit's text directly - red."""
     src = (ROOT / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
-    for exit_text in ("_end_turn_without_answer(_round_failure)",
-                      "_end_turn_without_answer(err_msg)",
+    for exit_text in ("_end_turn_without_answer(_round_failure, streamed=bool(stream_callback))",
+                      "_end_turn_without_answer(err_msg, streamed=bool(stream_callback))",
                       '_end_turn_without_answer("[Error] Server rejected the request',
                       '_end_turn_without_answer("[Error] Server unavailable after retries.',
-                      "_end_turn_without_answer(_sp_msg)", "_end_turn_without_answer(_wc_msg)",
-                      "_end_turn_without_answer(_kill_msg)"):
+                      "_end_turn_without_answer(_sp_msg, streamed=False)",
+                      "_end_turn_without_answer(_wc_msg, streamed=False)",
+                      "_end_turn_without_answer(_kill_msg, streamed=False)"):
         assert f"return {exit_text}" in src, exit_text
-    assert src.count("return _end_turn_without_answer(err_msg)") == 2
+    assert src.count("return _end_turn_without_answer(err_msg, streamed=bool(stream_callback))") == 2
+    # The local server's statuses are returned, never streamed.
+    assert src.count('", streamed=False)') == 2
     assert src.count("self._turn_failed = True") == 1
     for bare in ("return err_msg", "return _sp_msg", "return _wc_msg", "return _kill_msg",
                  'return "[Error] Server'):

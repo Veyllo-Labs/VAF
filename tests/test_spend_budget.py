@@ -140,7 +140,7 @@ def test_the_turn_boundary_carries_the_stop():
     # goes nowhere is the failure mode this pin exists for.
     assert "if _over:" in region, "the budget verdict is computed but not acted on"
     # The turn ends through the one exit every stop and backend failure takes.
-    assert "return _end_turn_without_answer(_sp_msg)" in region, \
+    assert "return _end_turn_without_answer(_sp_msg, " in region, \
         "reaching the cap no longer ends the turn"
     # Spend is no longer recorded here (the backend books every call as it
     # happens), so the boundary only READS the ledger - which is also why the

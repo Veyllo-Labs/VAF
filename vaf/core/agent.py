@@ -10239,15 +10239,23 @@ class Agent:
         # re-enters after an answer was already validated and committed - this
         # list is what keeps those answers part of the reply (_join_turn_answers).
         kept_turn_answers: list = []
+        # Whether the newest kept answer passed the final-answer path. A guard that keeps a
+        # flagged reply on screen and sends it back for correction (false promise, result
+        # grounding) keeps it too, unchecked, until a later round answers.
+        _last_kept_is_final = False
 
-        def _end_turn_without_answer(text):
+        def _end_turn_without_answer(text, *, streamed):
             """Every exit that ends the turn on the engine's own text (a backend failure, a
             loop-protection stop) goes through here. Nothing of it is committed to the
-            history. A turn that already validated an answer this turn (the auto-continue,
-            a kept reply under correction) has answered: it returns those answers, and the
-            text only marks where it ended. Otherwise the turn failed and returns the text."""
-            self._turn_failure = str(text or "")
-            if kept_turn_answers:
+            history. A turn whose newest kept answer passed the final-answer path (the
+            pending-task auto-continue re-entered after it) has answered: it returns its
+            answers and is not failed. Any other turn failed, a turn whose newest kept reply
+            was still under correction included: that reply is an unchecked claim, and the
+            correction that belonged under it never came. `_turn_failure` holds the text only
+            when `streamed`: a host takes it off the stream it stored and sends, and a note
+            that never reached the stream is in neither."""
+            self._turn_failure = str(text or "") if streamed else ""
+            if kept_turn_answers and _last_kept_is_final:
                 return _join_turn_answers(kept_turn_answers[:-1], kept_turn_answers[-1])
             self._turn_failed = True
             return text
@@ -10558,7 +10566,7 @@ class Agent:
                             stream_callback(_round_failure)
                         append_domain_log("backend", "round_failed: the backend's failure is "
                                                      "not committed to the history")
-                        return _end_turn_without_answer(_round_failure)
+                        return _end_turn_without_answer(_round_failure, streamed=bool(stream_callback))
 
                     # POST-LOOP: Convert accumulator to list
                     for idx, tc_data in sorted(tool_call_accumulator.items()):
@@ -10588,7 +10596,7 @@ class Agent:
                             UI.error(err_msg)
                             if stream_callback:
                                 stream_callback(err_msg)
-                            return _end_turn_without_answer(err_msg)
+                            return _end_turn_without_answer(err_msg, streamed=bool(stream_callback))
 
                     if stream_callback: stream_callback("\n")
                     
@@ -10597,7 +10605,7 @@ class Agent:
                     UI.error(err_msg)
                     if stream_callback:
                         stream_callback(err_msg)
-                    return _end_turn_without_answer(err_msg)
+                    return _end_turn_without_answer(err_msg, streamed=bool(stream_callback))
             
             elif self.use_server:
                 # Proactive Context Management: Compress before request to prevent overflow
@@ -10917,8 +10925,8 @@ class Agent:
                     status = getattr(response, 'status_code', None) if response else None
                     UI.error("Server unavailable after retries.")
                     if status == 400:
-                        return _end_turn_without_answer("[Error] Server rejected the request (HTTP 400). The context may be too large. Try closing the Document Editor or starting a new chat.")
-                    return _end_turn_without_answer("[Error] Server unavailable after retries. Try again or reduce context (e.g. close Document Editor, new chat).")
+                        return _end_turn_without_answer("[Error] Server rejected the request (HTTP 400). The context may be too large. Try closing the Document Editor or starting a new chat.", streamed=False)
+                    return _end_turn_without_answer("[Error] Server unavailable after retries. Try again or reduce context (e.g. close Document Editor, new chat).", streamed=False)
 
                 # DIAGNOSTIC: Check what the server actually gave us
                 # UI.event("Debug", f"Status: {response.status_code} | History: {len(self.history)}")
@@ -11239,6 +11247,7 @@ class Agent:
                             # Validated as shown, so the next round's buffer clear re-streams it
                             # instead of dropping the text the user is reading.
                             kept_turn_answers.append(self._clean_reasoning(full_content))
+                            _last_kept_is_final = False   # flagged: correction follows
                         else:
                             self._retract_streamed_reply(stream_callback, kept_turn_answers)
                         # Add error to history to force correction
@@ -11326,6 +11335,7 @@ class Agent:
                             # Validated as shown: a later round's buffer clear re-streams it, so
                             # the answer the user read cannot vanish from the bubble mid-turn.
                             kept_turn_answers.append(self._clean_reasoning(full_content))
+                            _last_kept_is_final = False   # flagged: correction follows
                             self.history.append({"role": "assistant", "content": full_content})
                             self.history.append({
                                 "role": "system",
@@ -12438,7 +12448,7 @@ class Agent:
                             # engine's note (this one names the owner's spend and a config
                             # key), and from the history the model would repeat it as its own
                             # words in the next turn, to whoever the chat is with.
-                            return _end_turn_without_answer(_sp_msg)
+                            return _end_turn_without_answer(_sp_msg, streamed=False)
                 except Exception:
                     pass  # accounting must never break a turn
 
@@ -12447,7 +12457,7 @@ class Agent:
                     _wc_msg = f"⚠️ [LOOP_PROTECTION] Wall-clock stop after ~{_wc_budget:.0f}s in a single turn ({tool_turn_count} tool turns) — task aborted to keep the agent responsive."
                     UI.event("Emergency", _wc_msg, style="bold red")
                     append_domain_log("backend", f"[LOOP_PROTECTION] wall-clock stop at {_wc_budget:.0f}s / turn {tool_turn_count}")
-                    return _end_turn_without_answer(_wc_msg)
+                    return _end_turn_without_answer(_wc_msg, streamed=False)
 
                 if not _unlimited_loop and tool_turn_count >= MAX_TOOL_TURNS_PER_STEP:
                     if _hard_stop_injected:
@@ -12455,7 +12465,7 @@ class Agent:
                         _kill_msg = f"⚠️ [LOOP_PROTECTION] Hard stop enforced after {MAX_TOOL_TURNS_PER_STEP} tool turns."
                         UI.event("Emergency", _kill_msg, style="bold red")
                         append_domain_log("backend", _kill_msg)
-                        return _end_turn_without_answer(_kill_msg)
+                        return _end_turn_without_answer(_kill_msg, streamed=False)
 
                     # First time hitting the limit: inject a message so the agent can inform the user.
                     _hard_stop_injected = True
@@ -12839,6 +12849,7 @@ class Agent:
             # The same expression the return uses, captured NOW: the auto-continue
             # below may loop again, and the next round's reset wipes full_response.
             kept_turn_answers.append(self._clean_reasoning(full_response))
+            _last_kept_is_final = True
             try:
                 append_domain_log("backend", f"after_history_append content_len={len(history_content)}")
             except Exception:

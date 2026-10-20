@@ -30,9 +30,13 @@ SYSTEM_LOG_ONLY = "[SYSTEM_LOG_ONLY]"
 # marker, but do not rely on it as the only stop signal.
 GENERATION_STOPPED = "[Generation stopped by user]"
 
-# Loop protection ended the turn (wall clock or tool-turn budget). The
-# returned string CONTAINS this marker with a warning-emoji prefix - match
-# by substring, never by prefix.
+# Loop protection ended the turn (wall clock, tool-turn budget or the daily
+# spend cap). The returned string is the marker behind a warning emoji, so a
+# plain startswith() misses it. Match by substring: that is the safe side for
+# a caller that only has the text, because it also catches a reply that quotes
+# the marker. The engine's own check is stricter, the marker at the start
+# after that emoji (vaf.core.completion.is_stop_note), since it must let an
+# answer that explains the marker through.
 LOOP_PROTECTION = "[LOOP_PROTECTION]"
 
 # A delegated sub-agent task was accepted and runs asynchronously; the rest

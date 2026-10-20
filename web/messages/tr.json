@@ -543,6 +543,7 @@
     "ovEvToken": "Geçersiz token reddedildi",
     "ovEvLogin": "Giriş başarısız",
     "ovEv2fa": "2FA başarısız",
+    "ovEvLoginThrottled": "Çok fazla giriş denemesi",
     "ovEvAccountSeal": "Hesap kaydı VAF dışında değiştirildi",
     "ovEvPasswordChanged": "Parola yeniden belirlendi",
     "ovEvBackupRestored": "Yedek geri yüklendi",

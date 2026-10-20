@@ -543,6 +543,7 @@
     "ovEvToken": "Ungültiger Token abgewiesen",
     "ovEvLogin": "Login fehlgeschlagen",
     "ovEv2fa": "2FA fehlgeschlagen",
+    "ovEvLoginThrottled": "Zu viele Login-Versuche",
     "ovEvAccountSeal": "Kontodaten außerhalb von VAF verändert",
     "ovEvPasswordChanged": "Passwort neu gesetzt",
     "ovEvBackupRestored": "Backup wiederhergestellt",

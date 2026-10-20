@@ -176,7 +176,7 @@ def collect_sandbox_status(
 # dashboard's firewall module (source: vaf/core/security_events.py contract).
 _BLOCKED_KINDS = ("ip_blocked", "unauthenticated_blocked", "token_rejected", "ws_rejected",
                   "foreign_origin_blocked")
-_LOGIN_KINDS = ("login_failed", "twofa_failed")
+_LOGIN_KINDS = ("login_failed", "twofa_failed", "login_throttled")
 
 # Per-module views of the one log, for a dashboard popup that explains a module's
 # own counter: the list it shows must be drawn from the same kinds the number

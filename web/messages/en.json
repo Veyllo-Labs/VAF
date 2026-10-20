@@ -543,6 +543,7 @@
     "ovEvToken": "Invalid token rejected",
     "ovEvLogin": "Login failed",
     "ovEv2fa": "2FA failed",
+    "ovEvLoginThrottled": "Too many login attempts",
     "ovEvAccountSeal": "Account record changed outside VAF",
     "ovEvPasswordChanged": "Password set anew",
     "ovEvBackupRestored": "Backup restored",

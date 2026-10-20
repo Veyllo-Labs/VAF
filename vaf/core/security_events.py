@@ -62,6 +62,9 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
     "token_rejected": "LAN request with an invalid or expired token (401)",
     "login_failed": "Wrong username or password on /api/auth/login",
     "twofa_failed": "Wrong or expired 2FA code or temp token",
+    "login_throttled": "Sign-ins were held after repeated failures (429): `detail` names the "
+                       "window that closed (address, account or second factor), `ip` the "
+                       "client refused first, `username` the account. Once per closure",
     "password_changed": "An account's password was set anew: by the account itself or by an "
                         "admin in Settings, or in a terminal on this machine (`vaf users "
                         "reset-password`, with the proof it took in `detail`)",

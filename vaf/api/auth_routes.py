@@ -54,6 +54,9 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 COOKIE_NAME = "vaf_token"
 
+# The life of the token /login answers a correct password with before the second factor.
+TEMP_TOKEN_HOURS = 0.25
+
 
 def _client_ip(request: Request) -> str:
     """Who this request REALLY comes from - the device, not the socket peer.
@@ -454,7 +457,10 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
 
         if not verify_totp(secret, code):
             _log_auth_failure("twofa_failed", request, username=user.username or "", detail="wrong code")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid code")
+            # 401 like a wrong password, so the address window counts it: as a 400 it was
+            # counted nowhere, and whoever had the password guessed the six digits without
+            # limit for the temp token's whole life (measured: 30 wrong codes, zero 429).
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid code")
 
         user.requires_2fa_setup = False
         user.last_login = datetime.utcnow()
@@ -493,13 +499,65 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
     return {"access_token": access, "refresh_token": refresh}
 
 
+# How long an address that completed a sign-in for an account stays exempt from that
+# account's window: the owner's own devices keep working while a stranger holds the name.
+_KNOWN_ADDRESS_DAYS = 30
+
+
+async def _signed_in_from(db, username: str, ip: str) -> bool:
+    """Whether `ip` completed a sign-in for this account name within _KNOWN_ADDRESS_DAYS.
+
+    One query keyed on the name, run the same way for a name that does not exist, so the
+    answer takes the same path for known and unknown names. A session row is written only
+    after the second factor, so a password alone never makes an address known."""
+    from vaf.auth.rate_limit import account_key
+    if not ip:
+        return False
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=_KNOWN_ADDRESS_DAYS)
+    rows = (await db.execute(
+        select(UserSession.device_info)
+        .join(LocalUser, LocalUser.id == UserSession.user_id)
+        .where(func.lower(LocalUser.username) == account_key(username),
+               UserSession.created_at >= cutoff)
+    )).all()
+    return any(isinstance(r[0], dict) and r[0].get("ip") == ip for r in rows)
+
+
+async def _account_window_refusal(db, request: Request, username: str):
+    """The account window's answer for this login, or None to go on. Asked BEFORE the
+    password, so a held account costs no hashing; the same for known and unknown names.
+
+    Not held: the machine itself, and an address that completed a sign-in for this account
+    before (vaf/auth/rate_limit.py). Both are still held by the address window."""
+    from vaf.auth.rate_limit import (account_refusal_is_new, account_window_closed,
+                                     announce_throttled, too_many_attempts)
+    from vaf.network.binding import is_localhost
+    if not account_window_closed(username):
+        return None
+    ip = _client_ip(request)
+    if is_localhost(ip):
+        return None
+    try:
+        if await _signed_in_from(db, username, ip):
+            return None
+    except Exception as e:
+        logger.warning("Known-address lookup failed, the account window holds: %s", e)
+    if account_refusal_is_new(username):
+        announce_throttled(ip, username, "account", "/api/auth/login")
+    return too_many_attempts()
+
+
 @router.post("/login")
 async def login(body: LoginRequest, request: Request, response: Response):
     """
     Username/password login. If user has 2FA, returns temp_token for verify-2fa.
     """
+    from vaf.auth.rate_limit import record_account_failure
     username_clean = (body.username or "").strip()
     async with get_auth_db() as db:
+        refusal = await _account_window_refusal(db, request, username_clean)
+        if refusal is not None:
+            return refusal
         result = await db.execute(
             select(LocalUser).where(
                 func.lower(LocalUser.username) == username_clean.lower(),
@@ -508,9 +566,11 @@ async def login(body: LoginRequest, request: Request, response: Response):
         )
         user = result.scalar_one_or_none()
         if not user:
+            record_account_failure(username_clean)
             _log_auth_failure("login_failed", request, username=username_clean, detail="unknown user")
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
         if not verify_password(user.password_hash, body.password or ""):
+            record_account_failure(username_clean)
             _log_auth_failure("login_failed", request, username=username_clean, detail="wrong password")
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
         # After the password, so a stranger learns nothing about a row; before the terminal
@@ -559,12 +619,18 @@ async def login(body: LoginRequest, request: Request, response: Response):
         client_ip = _client_ip(request)
         _is_localhost = is_localhost(client_ip)
         _localhost_expiry_hours = 30 * 24  # 30 days
+        if is_2fa_verified:
+            expires_hours = _localhost_expiry_hours if _is_localhost else None
+        else:
+            # The temp token only reaches /setup-2fa and /verify-2fa: a quarter of an hour
+            # for the code, not the day it used to live.
+            expires_hours = TEMP_TOKEN_HOURS
         access = create_access_token(
             str(user.id),
             user.username,
             user.role,
             str(user.user_scope_id),
-            expires_hours=_localhost_expiry_hours if _is_localhost else None,
+            expires_hours=expires_hours,
             is_2fa_verified=is_2fa_verified,
         )
         refresh = create_refresh_token(str(user.id))

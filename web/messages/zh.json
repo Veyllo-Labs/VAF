@@ -543,6 +543,7 @@
     "ovEvToken": "令牌无效，已拒绝",
     "ovEvLogin": "登录失败",
     "ovEv2fa": "两步验证失败",
+    "ovEvLoginThrottled": "登录尝试次数过多",
     "ovEvAccountSeal": "账户记录在 VAF 之外被修改",
     "ovEvPasswordChanged": "密码已重新设置",
     "ovEvBackupRestored": "已从备份恢复",

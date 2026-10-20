@@ -697,6 +697,7 @@ class Config:
         "local_network_jwt_expiry_hours": 24,                      # JWT token expiry in hours
         "local_network_rate_limit_attempts": 5,                    # Max failed login attempts
         "local_network_rate_limit_window_minutes": 15,             # Rate limit window in minutes
+        "local_network_rate_limit_account_attempts": 10,           # Failed logins per account name, any address
         "local_network_tls_enabled": False,                       # Serve backend over HTTPS/WSS (need cert + key)
         "local_network_ssl_cert": "",                             # Path to PEM certificate file (e.g. cert.pem)
         "local_network_ssl_key": "",                              # Path to PEM private key file (e.g. key.pem)

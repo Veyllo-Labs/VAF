@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (377 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (378 keys).
 
 ## How configuration is set
 
@@ -369,6 +369,7 @@ See [docs/setup/SERVER_MODE.md](SERVER_MODE.md) and
 | `local_network_require_2fa` | `True` | Require 2FA for network logins. |
 | `local_network_rate_limit_attempts` | `5` | Login attempts per window. |
 | `local_network_rate_limit_window_minutes` | `15` | Rate-limit window. |
+| `local_network_rate_limit_account_attempts` | `10` | Failed logins per account name in one window, from any number of addresses; a held name answers 429 to new addresses (the machine itself and addresses that signed in to the account within 30 days are not held). |
 
 ## Docker & system
 

@@ -2,21 +2,35 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
-Rate limiting middleware for login endpoints.
+Throttling for the sign-in doors: windows of failed attempts, each only emptied by time.
 
-Tracks failed login attempts per IP address and blocks IPs that exceed
-the configured threshold within a sliding time window.
+- ADDRESS window (`RateLimitMiddleware`): failed attempts per REAL client address on the
+  rate-limited paths; an address at the threshold gets 429 there. A correct password used to
+  clear it, and `/login` answers 200 for a correct password BEFORE the second factor, so any
+  account holder could put a login of their own between guesses at other accounts and guess
+  without limit (measured: 20 guesses, each 4 interleaved with an own login, zero 429).
+- ACCOUNT window (`account_window_closed`, asked by the login route BEFORE it checks the
+  password): failed logins per account NAME, from any number of addresses, so a guesser with
+  many addresses (a botnet, many VPN peers) is held as well (measured before: 24 guesses at
+  one account from 6 addresses, zero 429). Unknown names are held the same way, so the
+  answer says nothing about which names exist. The login route exempts the machine itself
+  and addresses that completed a sign-in for the account before, so a stranger who knows a
+  name cannot lock its owner out of their own devices.
+
+Each first refusal of a closure is the security event `login_throttled`.
 
 Config keys:
-  local_network_rate_limit_attempts       - max attempts (default 5)
-  local_network_rate_limit_window_minutes  - window in minutes (default 15)
+  local_network_rate_limit_attempts          - address window threshold (default 5)
+  local_network_rate_limit_account_attempts  - account window threshold (default 10)
+  local_network_rate_limit_window_minutes    - the windows' length (default 15)
+
+NAMED BOUNDARY: the windows live in this process; a restart empties them.
 """
 
 import logging
 import time
-from collections import defaultdict
 from threading import Lock
-from typing import Callable
+from typing import Callable, Optional
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -44,32 +58,123 @@ _RATE_LIMITED_PATHS: set[str] = {
 }
 
 
+def _now() -> float:
+    """The clock every window reads (a seam for tests)."""
+    return time.monotonic()
+
+
 class _AttemptTracker:
-    """Thread-safe tracker of failed login attempts per IP."""
+    """Thread-safe failure times per key, for a sliding window.
+
+    Memory is bounded without letting a flood reset anything: when a record finds more than
+    MAX_KEYS keys, it drops the keys whose failures all lie outside their window. A key with
+    a failure inside its window is never dropped, so filling the table with fresh addresses
+    cannot empty the window of the one being guessed at.
+    """
+
+    MAX_KEYS = 10_000
 
     def __init__(self):
         self._lock = Lock()
-        # ip -> list of timestamps of failed attempts
-        self._attempts: dict[str, list[float]] = defaultdict(list)
+        self._attempts: dict[str, list[float]] = {}
+        self._horizon: dict[str, float] = {}
+        # The newest failure a refusal was already announced for: during a closure no new
+        # failure is recorded (the refused request never reaches the check), so this names
+        # the closure, and its first refusal is announced once.
+        self._announced: dict[str, float] = {}
 
-    def record_failure(self, ip: str) -> None:
+    def record_failure(self, key: str) -> None:
+        window_seconds = _window_seconds()
         with self._lock:
-            self._attempts[ip].append(time.monotonic())
+            now = _now()
+            self._attempts.setdefault(key, []).append(now)
+            self._horizon[key] = max(window_seconds, self._horizon.get(key, 0.0))
+            if len(self._attempts) > self.MAX_KEYS:
+                self._sweep(now)
 
-    def is_blocked(self, ip: str, max_attempts: int, window_seconds: float) -> bool:
+    def _sweep(self, now: float) -> None:
+        for key in list(self._attempts):
+            horizon = self._horizon.get(key, 0.0)
+            live = [t for t in self._attempts[key] if t > now - horizon]
+            if live:
+                self._attempts[key] = live
+            else:
+                self._forget(key)
+
+    def _forget(self, key: str) -> None:
+        self._attempts.pop(key, None)
+        self._horizon.pop(key, None)
+        self._announced.pop(key, None)
+
+    def is_blocked(self, key: str, max_attempts: int, window_seconds: float) -> bool:
         with self._lock:
-            now = time.monotonic()
-            cutoff = now - window_seconds
-            # Prune old entries
-            self._attempts[ip] = [t for t in self._attempts[ip] if t > cutoff]
-            return len(self._attempts[ip]) >= max_attempts
+            cutoff = _now() - window_seconds
+            live = [t for t in self._attempts.get(key, ()) if t > cutoff]
+            if live:
+                self._attempts[key] = live
+            else:
+                self._forget(key)
+            return len(live) >= max_attempts
 
-    def clear(self, ip: str) -> None:
+    def first_refusal(self, key: str) -> bool:
+        """True once per closure: the first time a closed key is refused."""
         with self._lock:
-            self._attempts.pop(ip, None)
+            attempts = self._attempts.get(key)
+            if not attempts:
+                return False
+            newest = attempts[-1]
+            if self._announced.get(key) == newest:
+                return False
+            self._announced[key] = newest
+            return True
+
+    def keys(self) -> int:
+        with self._lock:
+            return len(self._attempts)
+
+    def clear(self, key: str) -> None:
+        with self._lock:
+            self._forget(key)
 
 
-_tracker = _AttemptTracker()
+_tracker = _AttemptTracker()           # per real client address
+_account_tracker = _AttemptTracker()   # per account name
+
+
+def _int_config(key: str, default: int) -> int:
+    try:
+        return int(Config.get(key, default))
+    except Exception:
+        return default
+
+
+def window_minutes() -> int:
+    return max(1, _int_config("local_network_rate_limit_window_minutes", 15))
+
+
+def _window_seconds() -> float:
+    return window_minutes() * 60.0
+
+
+def too_many_attempts(retry_after_seconds: Optional[float] = None) -> JSONResponse:
+    """The one 429 every window answers with: the same body for an address, an account or a
+    second factor, so the answer does not say which window closed."""
+    minutes = window_minutes()
+    retry = int(retry_after_seconds if retry_after_seconds is not None else minutes * 60)
+    return JSONResponse(
+        status_code=429,
+        content={"detail": f"Too many failed attempts. Try again in {max(1, -(-retry // 60))} minutes."},
+        headers={"Retry-After": str(max(1, retry))},
+    )
+
+
+def announce_throttled(ip: str, username: str, which: str, path: str = "") -> None:
+    """The security event for a closure's first refusal. Never raises."""
+    try:
+        from vaf.core.security_events import log_security_event
+        log_security_event("login_throttled", ip=ip, username=username, path=path, detail=which)
+    except Exception:
+        pass
 
 
 def client_key(request: Request) -> str:
@@ -89,7 +194,7 @@ def client_key(request: Request) -> str:
 
 
 def record_login_failure(ip: str) -> None:
-    """Record a failed login attempt (called from auth_routes on 401).
+    """Record a failed attempt in the address window (for a route whose failure is not a 401).
 
     Pass ``client_key(request)``, never the socket peer.
     """
@@ -97,17 +202,35 @@ def record_login_failure(ip: str) -> None:
     logger.info("Rate-limit: recorded failed attempt for %s", ip)
 
 
-def clear_login_failures(ip: str) -> None:
-    """Clear failure count after successful login."""
-    _tracker.clear(ip)
+# ── the account window ───────────────────────────────────────────────────────────
+
+def account_key(username: str) -> str:
+    """One account name, however it was typed: what the login looks it up by."""
+    return str(username or "").strip().lower()
+
+
+def account_window_closed(username: str) -> bool:
+    """Whether this account name has reached its threshold of failed logins in the window,
+    from any number of addresses. Asked BEFORE the password is checked."""
+    threshold = max(1, _int_config("local_network_rate_limit_account_attempts", 10))
+    return _account_tracker.is_blocked(account_key(username), threshold, _window_seconds())
+
+
+def record_account_failure(username: str) -> None:
+    """A login for this name failed on the password or on an unknown name."""
+    _account_tracker.record_failure(account_key(username))
+
+
+def account_refusal_is_new(username: str) -> bool:
+    return _account_tracker.first_refusal(account_key(username))
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """
-    Block login requests from IPs that have exceeded the failure threshold.
+    Block requests from addresses that reached the failure threshold (the address window).
 
-    Only applies to login-related endpoints.  Other paths pass through
-    unaffected.
+    Only applies to the rate-limited sign-in paths. Other paths pass through unaffected.
+    A failure is a 401 answer; nothing clears the window but time.
     """
 
     async def dispatch(self, request: Request, call_next: Callable):
@@ -122,31 +245,24 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         client_ip = client_key(request)
 
-        max_attempts = int(Config.get("local_network_rate_limit_attempts", 5))
-        window_minutes = int(Config.get("local_network_rate_limit_window_minutes", 15))
-        window_seconds = window_minutes * 60
+        max_attempts = _int_config("local_network_rate_limit_attempts", 5)
+        window_seconds = _window_seconds()
 
         if _tracker.is_blocked(client_ip, max_attempts, window_seconds):
             logger.warning(
                 "Rate-limit: blocked %s on %s (%d attempts in %d min)",
-                client_ip, path, max_attempts, window_minutes,
+                client_ip, path, max_attempts, window_minutes(),
             )
-            return JSONResponse(
-                status_code=429,
-                content={
-                    "detail": f"Too many failed attempts. Try again in {window_minutes} minutes.",
-                },
-                headers={"Retry-After": str(int(window_seconds))},
-            )
+            if _tracker.first_refusal(client_ip):
+                announce_throttled(client_ip, "", "address", path)
+            return too_many_attempts()
 
         response = await call_next(request)
 
-        # Record failure if the response was 401 (bad credentials)
+        # Record failure if the response was 401 (bad credentials, a wrong code). A success
+        # clears nothing: a correct password is not the end of a sign-in, and an account
+        # holder's own login must not empty the window of their guesses at other accounts.
         if response.status_code == 401:
             _tracker.record_failure(client_ip)
-
-        # Clear failures on successful login
-        if response.status_code == 200 and path == "/api/auth/login":
-            _tracker.clear(client_ip)
 
         return response

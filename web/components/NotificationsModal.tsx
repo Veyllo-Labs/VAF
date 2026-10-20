@@ -1438,6 +1438,7 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
       case 'token_rejected': return t('ovEvToken');
       case 'login_failed': return t('ovEvLogin');
       case 'twofa_failed': return t('ovEv2fa');
+      case 'login_throttled': return t('ovEvLoginThrottled');
       case 'account_seal_broken': return t('ovEvAccountSeal');
       case 'password_changed': return t('ovEvPasswordChanged');
       case 'backup_restored': return t('ovEvBackupRestored');

@@ -90,6 +90,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it on, and the desktop window stays your own as before. A raw port forward such as
   `ssh -R` names nobody: never put one in front of VAF. Restart VAF after updating.
 
+- **Sign-ins hold against guessing.** A wrong two-factor code now counts like a wrong
+  password, and your own correct login no longer resets the count for the address you sign
+  in from. An account is held after repeated failed logins from any number of addresses
+  (`local_network_rate_limit_account_attempts`, default 10 per window); the machine itself
+  and addresses that signed in to the account before are not held, so nobody who knows your
+  name can lock you out of your own devices. A held login answers "Too many failed attempts"
+  and is recorded in the security log ("Too many login attempts"). The step between password
+  and code now lasts 15 minutes instead of a day.
+
 - **Pages through the HTTPS port can no longer be framed by another site.** The login and
   the app served to other devices carried no anti-framing headers and no HSTS; they do now.
 

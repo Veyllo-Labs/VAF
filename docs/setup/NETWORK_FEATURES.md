@@ -138,22 +138,22 @@ Use the built-in doctor command to detect common security misconfigurations befo
 
 ### Layer 4: Rate Limiting
 
-The `RateLimitMiddleware` protects login endpoints against brute-force attacks:
+Failed sign-ins are held in windows that only empty by time. Every window answers a held request with HTTP 429, the same body and a `Retry-After` header, and its first refusal is the security event `login_throttled` (`detail`: which window).
 
-- Tracks failed login attempts per IP address
-- Blocks IPs after exceeding the threshold (default: 5 attempts)
-- Sliding time window (default: 15 minutes)
-- Applies to `/api/auth/login`, `/api/auth/bootstrap`, `/api/auth/verify-2fa`, and `/api/email/accounts/test` (the email credential-test endpoint shares the same per-IP limiter, so failed mailbox-login tests count toward the block)
-- Returns HTTP 429 with `Retry-After` header when blocked
-- Automatically clears failure count on successful login
+- **Address window** (`RateLimitMiddleware`): failed attempts per real client address (default 5 per 15 minutes) on `/api/auth/login`, `/api/auth/bootstrap`, `/api/auth/verify-2fa`, `/api/auth/change-password`, `/api/auth/test-veyllo-key` and `/api/email/accounts/test` (the credential tests record their own failures, since they answer 200). A failure is a 401: a wrong password, an unknown name, and a wrong 2FA code, which `/verify-2fa` answers with 401 (it was a 400, counted nowhere, measured: 30 wrong codes and no 429). A successful login clears nothing: `/login` answers 200 for a correct password before the second factor, so the clear let any account holder put a login of their own between guesses at other accounts (measured: 20 guesses, no 429).
+- **Account window** (asked by `/login` before it checks the password, so a held account costs no hashing): failed logins per account name from any number of addresses (`local_network_rate_limit_account_attempts`, default 10 per window), so a guesser with many addresses is held too (measured before: 24 guesses at one account from 6 addresses, no 429). Unknown names are held the same way. Not held, so a stranger who knows a name cannot lock its owner out: the machine itself, and an address that completed a sign-in for that account within the last 30 days (a session row with that address); both stay under the address window.
+- **The temp token** `/login` answers a correct password with before the second factor lives 15 minutes (it lived the full token lifetime, 24 hours).
 
 Configuration:
 | Key | Default | Description |
 |-----|---------|-------------|
-| `local_network_rate_limit_attempts` | `5` | Max failed attempts before blocking |
-| `local_network_rate_limit_window_minutes` | `15` | Sliding window in minutes |
+| `local_network_rate_limit_attempts` | `5` | Failed attempts per address before blocking |
+| `local_network_rate_limit_account_attempts` | `10` | Failed logins per account name, any address |
+| `local_network_rate_limit_window_minutes` | `15` | Window length in minutes |
 
-Implementation: `vaf/auth/rate_limit.py` -> `RateLimitMiddleware`
+NAMED BOUNDARY: the windows live in the backend process; a restart empties them.
+
+Implementation: `vaf/auth/rate_limit.py` (`RateLimitMiddleware`, the account window), the account window's exemptions in `vaf/api/auth_routes.py`
 
 ### Layer 5: Security Headers
 
@@ -196,7 +196,7 @@ Request -> SecurityHeaders -> ForeignOriginGuard -> AuthMiddleware -> IPValidati
 
 Rejections from the layers above are recorded in an always-on security event log (independent of `debug_logs_enabled`; the writer never raises and never slows the request path):
 
-- **Recorded kinds** (`vaf/core/security_events.py`): `ip_blocked` (Layer 2 403), `unauthenticated_blocked` and `token_rejected` (Layer 3 401s), `login_failed` and `twofa_failed` (failed login/2FA attempts), `ws_rejected` (rejected WebSocket handshakes), and `foreign_origin_blocked` (the origin guard, every mode). The messenger pairing kinds and the rest of the registry are listed in [SECURITY_DASHBOARD.md](../security/SECURITY_DASHBOARD.md); a messenger sender the agent refused to answer is channel traffic, recorded in that channel's inbound log, not here.
+- **Recorded kinds** (`vaf/core/security_events.py`): `ip_blocked` (Layer 2 403), `unauthenticated_blocked` and `token_rejected` (Layer 3 401s), `login_failed` and `twofa_failed` (failed login/2FA attempts), `login_throttled` (a window of Layer 4 closed, once per closure), `ws_rejected` (rejected WebSocket handshakes), and `foreign_origin_blocked` (the origin guard, every mode). The messenger pairing kinds and the rest of the registry are listed in [SECURITY_DASHBOARD.md](../security/SECURITY_DASHBOARD.md); a messenger sender the agent refused to answer is channel traffic, recorded in that channel's inbound log, not here.
 - **Sinks**: each event is appended to `security_events_<date>.jsonl` (structured) and mirrored human-readably to `security_<date>.log` (the "security" domain in the Logs file rail).
 - **Throttle**: a per-source throttle (kind + ip + username + channel, 5s) prevents floods without letting distinct sources swallow each other's events.
 - **Never logged**: passwords, 2FA codes, or tokens - only the event kind, source, and a short detail.
@@ -505,7 +505,8 @@ With this lock enabled, attempts to disable hosting in the UI/API are ignored an
 | `local_network_require_2fa` | `bool` | `true` | Enforce TOTP 2FA for network users |
 | `local_network_jwt_secret` | `string` | `""` | JWT signing secret. It lives in the data keyring, not here: a legacy config value is adopted byte-identically on first use and the plaintext copy is then blanked, so `""` is the normal state. Never regenerate it - the TOTP encryption key is derived from it (`vaf/auth/crypto.py`), so a new secret invalidates every stored second factor. |
 | `local_network_jwt_expiry_hours` | `int` | `24` | Access token TTL in hours |
-| `local_network_rate_limit_attempts` | `int` | `5` | Failed login attempts before blocking |
+| `local_network_rate_limit_attempts` | `int` | `5` | Failed login attempts per address before blocking |
+| `local_network_rate_limit_account_attempts` | `int` | `10` | Failed logins per account name from any address before new addresses are held (see Layer 4) |
 | `local_network_rate_limit_window_minutes` | `int` | `15` | Rate limit sliding window |
 | `local_network_tls_enabled` | `bool` | `false` | Enable HTTPS/WSS encryption |
 | `local_network_https_port` | `int` | `443` | HTTPS proxy listen port (falls back to 8443 automatically on any platform when 443 is privileged/unbindable) |

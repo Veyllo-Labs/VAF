@@ -67,6 +67,7 @@ import { cn } from '@/lib/utils';
 import { copyText } from '@/lib/clipboard';
 import { displayOAuthValue, BUILTIN_GOOGLE_CLIENT_ID } from '@/lib/oauth_defaults';
 import { useLocaleStore } from '@/lib/localeStore';
+import { veylloDashboardUrl } from '@/lib/veyllo';
 import { useCursorStore } from '@/lib/cursorStore';
 import { useThemeStore } from '@/lib/themeStore';
 import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, MailClient, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard, ContactsDashboard, FrontOfficeDashboard, CalendarSetupWizard, CalendarDashboard, GitHubSetupWizard, GitHubDashboard } from './connections';
@@ -2877,7 +2878,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         live). Scoped to the two key sections rather than fixed globally in
                                         Section - that would reflow every panel in Settings for one report. */}
                                     <div className="space-y-5">
-                                        {apiKeyField('veyllo', 'Veyllo Key', 'vaf_live_…', 'https://veyllo.app')}
+                                        {apiKeyField('veyllo', 'Veyllo Key', 'vaf_live_…', veylloDashboardUrl(uiLocale))}
                                         {apiKeyField('openai', tGeneral('openaiKey'), 'sk-...', 'https://platform.openai.com/api-keys')}
                                         {apiKeyField('anthropic', tGeneral('anthropicKey'), 'sk-ant-...', 'https://console.anthropic.com/settings/keys')}
                                         {apiKeyField('deepseek', tGeneral('deepseekKey'), '', 'https://platform.deepseek.com/api_keys')}

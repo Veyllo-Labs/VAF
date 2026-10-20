@@ -136,6 +136,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **"Create a Veyllo API key" opens the Veyllo dashboard in your language.** The button in
+  the first-run wizard and the link in Settings led to the start page of veyllo.app, where no
+  key is made; both open the dashboard now, after a sign-in there if needed.
 - **A fresh server install works without a reboot, and its web UI starts.** Measured on a
   new Ubuntu 24.04 server with the one-line install: every page answered 502, because the
   service did not find the portable Node.js the installer had placed in `~/.vaf/node`, and

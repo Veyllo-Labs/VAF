@@ -15,6 +15,7 @@ This directory contains utility functions, shared logic, and helper modules used
 - **authTab.ts**: `reserveAuthTab()` for a sign-in whose address the backend produces first: called in the click, before the first await, it takes the tab while the browser still allows one and sends it to the address later (or closes it); `open()` answers whether a tab got it, so the caller can offer a link instead. Used by the mail, calendar, cloud and MCP sign-ins.
 - **oauth_defaults.ts**: Built-in OAuth client IDs and a helper to hide the default value in the UI when the user hasn't set their own.
 - **sessionCache.ts**: Session cache persistence in `localStorage` with quota limits, trimming by session count, messages per session, and total bytes.
+- **veyllo.ts**: `veylloDashboardUrl(locale)`, the veyllo.app dashboard in the UI's language, where a Veyllo API key is created; the first-run wizard and Settings link to it.
 - **version.ts**: Helpers to parse and format the app version (`formatVersion`, `parseMajorMinor`, `compareMajorMinor`) for the version badge and changelog gating.
 
 ## Usage

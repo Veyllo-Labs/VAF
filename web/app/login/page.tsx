@@ -18,6 +18,7 @@ import { cn } from '@/lib/utils';
 import { getApiBase } from '@/lib/utils';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { useLocaleStore } from '@/lib/localeStore';
+import { veylloDashboardUrl } from '@/lib/veyllo';
 import { useThemeStore } from '@/lib/themeStore';
 import { languages } from '@/lib/languages';
 
@@ -37,7 +38,6 @@ function WakingAvatar() {
 }
 
 // Where users create a Veyllo API key (marketing site; the key is *validated* against veyllo_base_url).
-const VEYLLO_CREATE_URL = 'https://veyllo.app';
 
 // The progress bar alternates circle / connector / circle, so the circles sit in the ODD
 // grid columns and a label belongs under column 2*idx+1. Tailwind only emits classes it
@@ -1180,7 +1180,7 @@ export default function LoginPage() {
                                         <p className="text-sm text-amber-700 leading-relaxed mb-4">{t('veylloApiProfileNote')}</p>
                                     )}
                                     <a
-                                        href={VEYLLO_CREATE_URL}
+                                        href={veylloDashboardUrl(currentLocale)}
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         className="w-full mb-5 flex items-center justify-center gap-2 px-4 py-2.5 border border-gray-200 rounded-xl text-gray-700 hover:bg-gray-50 transition-colors text-sm font-medium"

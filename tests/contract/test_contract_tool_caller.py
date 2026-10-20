@@ -189,6 +189,22 @@ def test_failures_are_reported_on_tool_end_with_ok_false():
     assert events[-1]["ok"] is False
 
 
+def test_an_allowed_set_refuses_every_other_name_for_every_identity():
+    """Documented: a name outside `allowed_tools` is refused with `Security Error:` before
+    every other stage, registered or not, for admins and scope-less callers too, and
+    nothing is emitted."""
+    for identity in ({"user_scope_id": SCOPE, "user_role": "admin"}, {}):
+        events = []
+        echo = EchoTool()
+        caller = vaf.ToolCaller({"echo": echo, "admin": AdminOnlyTool()}, allowed_tools={"admin"},
+                                on_event=events.append, **identity)
+        for name in ("echo", "no_such_tool"):
+            assert caller.execute(name, {}).startswith("Security Error:"), (identity, name)
+        assert echo.calls == [] and events == [], identity
+    with pytest.raises(TypeError):
+        vaf.ToolCaller({"echo": EchoTool()}, allowed_tools="echo")
+
+
 def test_a_hard_policy_block_emits_no_events_at_all():
     """Documented: an observer never sees a blocked tool reported as run."""
     events = []

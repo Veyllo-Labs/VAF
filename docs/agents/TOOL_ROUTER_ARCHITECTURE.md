@@ -147,7 +147,7 @@ The declaration travels the WHOLE path, not just the funnel - exempting only the
 
 **Post-execution hook (`Agent._chat_post_dispatch`, wired into the pipeline as the chat lane's `after_dispatch`):** After `search_tools` returns, the discovered tool names are immediately added to `_active_tools` so the model can call them in the very **next turn** without another router round-trip.
 
-**Always available:** `search_tools` (and `list_tools`) are part of every tool set the chat turn narrows: the router's own set (pinned through the cap, below), the discovery-only fallback (router found no tools), CORE_TOOLS (tight context), the internal-step subset and the context-pressure subset of the local server lane (Section 7), so the model always has a discovery path. The Front Office allow-list is the deliberate exception (see [FRONT_OFFICE.md](FRONT_OFFICE.md#tool-restriction)). Guard: `tests/test_tool_router_cap_and_fallbacks.py`.
+**Always available:** `search_tools` (and `list_tools`) are part of every tool set the chat turn narrows: the router's own set (pinned through the cap, below), the discovery-only fallback (router found no tools), CORE_TOOLS (tight context), the internal-step subset and the context-pressure subset of the local server lane (Section 7), so the model always has a discovery path. An agent with an allowed set (`set_allowed_tools`) is the deliberate exception: the set is the turn's whole tool set and nothing is added to it, discovery included. The Front Office allow-list on a contact's turn is that case (see [FRONT_OFFICE.md](FRONT_OFFICE.md#tool-restriction)). Guard: `tests/test_tool_router_cap_and_fallbacks.py`.
 
 **Tool cap (`router_max_tools`):** After the router selects tools and the riders are added, the list is capped at `router_max_tools` (default: **12**). The cap counts the tools chosen for the turn and the riders. `list_tools` and `search_tools` are **always kept and come on top of it** (with the default, at most 14 tools), and so do a thinking run's exit tools (`_apply_tool_cap`). A pinned tool is the way out of a narrowed set, not a choice about the turn, so it takes no place from the turn's tools: counted against the cap, the two discovery tools left ten places, a one-tool weather turn already filled all twelve, and a turn whose router picked twelve tools lost the two that sort last (`send_mail`, `web_search`). The tool a suggestion note names (`execute_workflow`, `use_skill`) is added after the cap as well, and what `search_tools` discovers during the turn joins the set on top. The cap prevents context pollution when many tools are registered. Guard: `tests/test_tool_router_cap_and_fallbacks.py`.
 
@@ -172,19 +172,28 @@ Scoping (`_active_tools`) is what the router chose for this turn. Hiding (`_excl
 is a harder thing: a tool the model must not be offered at all, whatever the router says,
 the way the editor-write tools are hidden while no editor document is open. The one answer
 to "may the model see this tool" is `Agent.visible_tools()`, the registry minus the hidden
-set, and every model-facing surface reads it: the schema (`TOOLS`), `list_tools`,
+set and, while the agent has an allowed set (`set_allowed_tools`), inside that set. Every
+model-facing surface reads it: the schema (`TOOLS`, which passes every name of the turn's
+scope through it, so no pin, rider or narrowed subset can carry a tool past it), `list_tools`,
 `search_tools` (both handed the agent by the dispatcher), the router's own tool prompt, the
-system prompt's tool documentation and the `python_sandbox` tool bridge. Measured before
-it existed: the schema hid a tool while the other five still named it. Hidden is not
-forbidden: `execute_tool` still runs a hidden tool, which is what lets code call a tool the
-model is not offered.
+system prompt's tool documentation, its learned-pitfalls block, the false-promise correction
+and the `python_sandbox` tool bridge. Measured before it existed: the schema hid a tool while
+the other five still named it. Hidden is not forbidden: `execute_tool` still runs a hidden
+tool, which is what lets code call a tool the model is not offered. Outside the allowed set
+IS forbidden: the dispatch funnel refuses it for every caller (`ToolCaller(allowed_tools=)`,
+section 9).
 
 ### `_active_tools` state machine
 
 | Value | Meaning |
 |---|---|
-| `None` | Use ALL registered tools (router failure / retry / internal step) |
+| `None` | Use ALL visible tools (router failure / retry / internal step) |
 | `[list]` | Use only these tool names (normal operation, post-router) |
+
+With an allowed set the router is not asked: `_select_turn_tools` sets `_active_tools` to the
+set (sorted, registered tools only) and adds nothing. Every value above is read through
+`visible_tools()`, so `None` then means every tool inside the set. `set_allowed_tools` clears
+`_active_tools` on every call, so a step after it starts from the new set.
 
 **Visibility in the Web UI:** The selected tools (e.g. `LLM-based: list_calendar_events`, with `Keyword hints (not forced): ...` beside it, or `Script-based (router call failed): web_search` when the keyword matches had to answer) are shown in the chat as a Router system step so you can see which tools were chosen for each turn. See [WEB_UI.md](../web-ui/WEB_UI.md) → Workflow Steps / System Steps.
 
@@ -276,6 +285,8 @@ User: "What is the weather?"
 
 A failed router call never loads ALL tools. The keyword matches answer in its place; with none, the model gets the discovery path, finds the rest through `search_tools`, and the `search_tools` post-hook makes a found tool callable at the next step.
 
+Every row below is capped by the agent's allowed set when it has one: the schema passes every name through `visible_tools()`, so "ALL tools" means every tool inside the set, and a subset that names a tool outside it (`memory_search`, `coding_agent`) offers only what the set allows.
+
 | Situation | Behaviour |
 |---|---|
 | Router LLM call raises (provider error, local server unreachable) | The keyword matches are the answer (`Script-based (router call failed)`), handled as a normal turn; with no match the result is empty and the safety net applies. |
@@ -308,7 +319,7 @@ Use this to verify which user scope UUID is used for each tool call when debuggi
 
 Two properties are deliberate:
 
-- **Attempts, not executions.** The line is written by `ToolCaller._audit_log` as the first step of the funnel, before the policy check - so a call refused by the tool policy, the account allowlist, an embedder's authorizer or a cancelled confirmation gate still leaves a line. For a file whose purpose is tenant isolation, the rejected cross-tenant attempt is the most valuable entry it can hold. (The event stream behaves the opposite way on purpose: a blocked call emits nothing, so no consumer reports it as run.)
+- **Attempts, not executions.** The line is written by `ToolCaller._audit_log` as the first step of the funnel, before the policy check - so a call refused by the allowed set, the tool policy, the account allowlist, an embedder's authorizer or a cancelled confirmation gate still leaves a line. For a file whose purpose is tenant isolation, the rejected cross-tenant attempt is the most valuable entry it can hold. (The event stream behaves the opposite way on purpose: a blocked call emits nothing, so no consumer reports it as run.)
 - **Every lane that uses the funnel.** Chat, the workflow engine, the librarian, the training runner, and any tool an embedder registered through `add_tool()`. The coder's inner tools too (`_coder_funnel`), except the two calls it answers inline (`web_fetch`, `web_deep_search`), which run no tool object. `multi_tool_use.parallel` returns before the funnel, so its inner tool calls are logged individually and the wrapper itself is not.
 
 ---
@@ -371,6 +382,7 @@ never restricted, a raising registered resolver refuses). Guard:
 **The shared pipeline, in order:**
 
 0. **Arguments that are not a JSON object are refused.** `execute` also takes the arguments as the JSON text the model sent; text that is not an object (a string value left unquoted, a bare list) is answered with `Tool Error: the arguments of this '<tool>' call are not valid JSON (...), so nothing was run` right after the audit line, before any other stage, and the tool never runs. `decode_arguments` in `vaf/core/tool_dispatch.py` is the one decoder, and the chat loop, the librarian and the coder all use it: each used to fall back to `{}`, so a tool whose parameters are all optional ran as a no-op and reported success (live incident: `update_working_memory` answered "Working Memory updated." while the plan it carried was dropped). The prefix is `Tool Error:` and not `Error:` on purpose: the chat loop answers a result starting with "error" with "do not retry", and this is the one failure a retry fixes. Guard: `tests/test_tool_arguments_decode.py`.
+0a. **The caller's allowed set** - when the caller carries one (`ToolCaller(allowed_tools=)`; the chat lane hands over the agent's `set_allowed_tools` set), a name outside it is refused with `Security Error: ...` right after the audit line and the revocation check, before every stage below and with no exemption: an admin or a caller with no scope is refused like anyone else, because the set exists for an agent that answers a third party under its owner's identity. Registered or not, the name gets the refusal and never the unknown-tool hint, and nothing is emitted. Guard: `tests/test_allowed_tool_set.py`.
 1. **`admin_only` check** - if `admin_only == True` and the caller is not an admin, the tool is hard-blocked and **nothing is emitted**: no `tool_start`, no `tool_end`. A consumer must never see a blocked tool reported as having run. `is_admin` comes from the caller's role and scope through the shared `is_admin_identity` rule.
 2. **Channel check** - if the session source is in `channel_restrictions`, the tool is rejected immediately (regardless of user role) - **unless** `channel_tools_unrestricted` is set (default on), which grants messaging-channel sessions the same tools as the main agent (channel restrictions **and** the per-call confirmation gate are lifted; the `admin_only` check above still applies). **Except a tool that needs a person:** a `dangerous` tool with `"channel"` in its `channel_restrictions` (`host_bash`, `python_exec`) is refused on a channel BEFORE that lift, in the lane that would ask a person (`ToolCaller` with its gate on; `evaluate_tool_policy(..., gated_lane=...)`, section 1a), because the lift also takes the confirmation away and no channel can show one. Measured before the rule: `python_exec` ran from Telegram for anyone with a stored "always". The unattended lanes (the coder, workflow steps) are not refused by it. Like every hard block it emits nothing. Guard: `tests/test_dispatch_channel_context.py`, `tests/test_channel_session_resolution.py`.
 2a. **The account allowlist** - which tools this ACCOUNT may use, answered by the process-wide resolver the application registered with `set_account_allowlist_resolver` (the harness registers its auth-DB resolver, `vaf/auth/permissions.py`, at `vaf/main.py` import). Scopeless callers and admins are exempt and never reach the resolver; nothing registered means unrestricted; a RAISING registered resolver refuses (fail-closed, the authorizer's polarity - the harness resolver catches its own DB errors and stays fail-open internally). A blocked tool ends with `Security Error: ...` and **emits nothing**. Sits after the hard blocks and BEFORE the authorizer, so an account-level ban cannot be lifted by an `allow()`. A tool that declares `account_opt_in = True` is allowed for a regular account only when its list NAMES it; "no list" (unrestricted) does not include it (`host_bash`, `python_exec`, `ssh`, `ftp`). The rule itself is `allowlist_permits`, which the coder also asks with the answer it carries across its process boundary as data. Guard: `tests/test_tool_account_allowlist.py`, wiring: `tests/test_account_allowlist_wiring.py`.
@@ -397,6 +409,8 @@ update_working_memory, not a tool: call update_working_memory(mark_task_done=0) 
 several owners are listed, capped at three); `<name>` is a near miss of a tool name, so the
 closest names follow with the same `format_tool_signature` rendering `search_tools` gives a
 discovered tool; nothing is near, so the model is pointed at `search_tools` if registered.
+Under an allowed set the correction draws only from the registered tools inside it, so a
+misspelt name in the set is never answered with a tool the set leaves out.
 The live incident behind it: a model that had just been told by a tool result to "call
 mark_task_done on it" did exactly that, was refused twice with nothing else, and confirmed a
 wipe of its task list as the other way out. Every lane on the pipeline gets the hint,
@@ -404,7 +418,7 @@ embedders included. Guard: `tests/test_unknown_tool_hint.py`.
 
 **What the chat lane adds**, each at the position where it belongs:
 
-- After the policy check and **before** the confirmation gate, so a refusal cannot be replaced by a gate prompt: the **plan gate** (`write`/`dangerous` tools except `python_sandbox` need a plan in working memory first, answered with `[PLAN REQUIRED]`; skipped for sub-agents and non-interactive runs; the turn block's plan line reads the same state, `Agent._plan_gate_state` - see [CONTEXT_MANAGEMENT.md](../memory/CONTEXT_MANAGEMENT.md)), the **working-memory note firewall**, the **proactive-reply mutation gate** (`[CONFIRM REQUIRED]` for stored-state mutations and destructive delegation while the turn is a pickup of a reply that is not a clear affirmative; kill-switch `proactive_reply_mutation_gate_enabled`) and the **ask-first gate** (`[AWAITING USER]` for new `write`/`dangerous` tools and delegations on synthetic drain turns while a blocking question is pending; kill-switch `ask_first_drain_gate_enabled`).
+- After the policy check and **before** the confirmation gate, so a refusal cannot be replaced by a gate prompt: the **plan gate** (`write`/`dangerous` tools except `python_sandbox` need a plan in working memory first, answered with `[PLAN REQUIRED]`; skipped for sub-agents and non-interactive runs, and when `update_working_memory` is not among the tools the model may see, because a gate whose only exit is a refused tool is a lock - the Front Office's allowed set is that case; the turn block's plan line reads the same state, `Agent._plan_gate_state` - see [CONTEXT_MANAGEMENT.md](../memory/CONTEXT_MANAGEMENT.md)), the **working-memory note firewall**, the **proactive-reply mutation gate** (`[CONFIRM REQUIRED]` for stored-state mutations and destructive delegation while the turn is a pickup of a reply that is not a clear affirmative; kill-switch `proactive_reply_mutation_gate_enabled`) and the **ask-first gate** (`[AWAITING USER]` for new `write`/`dangerous` tools and delegations on synthetic drain turns while a blocking question is pending; kill-switch `ask_first_drain_gate_enabled`).
 - Before dispatch: **session plumbing** (`_session_id`, `_session_workspace`, `_agent` and the other per-tool runtime kwargs - these are plumbing, not identity, and are not part of the `identity_kwargs` declaration) and the **anti-re-delegation guard**. NAMED BOUNDARY: `write_file`, `document_writer` and `python_sandbox` keep `_session_id` by name although `session_id` can be declared. For them the chat decides WHERE files land (relative paths in the chat workspace, exports into it), and a declaration would hand the chat to every lane that has one, the coder included, whose relative paths belong to its project.
 - After dispatch and before truncation: the **`search_tools` post-hook** (discovered names join `_active_tools`) and the **`python_exec` fallback**.
 - After the events: **router bookkeeping** (`_record_tool_used`), which deliberately does not fire for a call that was blocked before dispatch.

@@ -8,7 +8,7 @@ control. Design map of the turn loop: [AGENT_LOOP.md](agents/AGENT_LOOP.md).
 
 Stability: `CoreAgent` is part of the declared stable surface at the level
 documented HERE (constructor, lifecycle, `chat_step`, `complete`, `execute_tool`,
-`set_tool_authorizer`, `set_event_sink`, `set_compaction_hook`, the accessors below). Underscore-prefixed attributes are
+`set_tool_authorizer`, `set_allowed_tools`, `set_event_sink`, `set_compaction_hook`, the accessors below). Underscore-prefixed attributes are
 internal; the ones listed at the end are known extension points that may
 change with a changelog note.
 
@@ -215,6 +215,23 @@ observer must not fail a run, a broken guard must not become no guard. In-proces
 only; it does not cross into the coder sub-agent. Semantics and the full request
 shape: [EMBEDDING.md](EMBEDDING.md).
 
+## Fixing which tools the agent uses
+
+```python
+set_allowed_tools(names: Iterable[str] | None) -> None
+```
+
+Holds the agent to a set of tool names, for offering AND execution, until lifted with
+`None`. `visible_tools()` becomes the registry inside the set, so the schema and every
+surface that names a tool to the model agree with it, and the tool router is not asked:
+the set is the turn's tool set, with nothing riding along. `execute_tool` hands the set to
+the dispatch funnel (`ToolCaller(allowed_tools=)`), which refuses any other name with
+`Security Error: ...` before the policy stage. No identity is exempt, unlike the account
+allowlist: the set exists for an agent that answers somebody else under its owner's
+identity. An empty set allows nothing; a bare string raises `TypeError`. Every call clears
+the current step's tool scope. In-process only, like the authorizer. Contract:
+[EMBEDDING.md](EMBEDDING.md), "Which tools this agent may use".
+
 ## Putting state back after a compaction
 
 ```python
@@ -228,9 +245,10 @@ note: the seam for what a summary loses. The hook cannot edit the history and ru
 the tool loop. Bounded by `COMPACTION_HOOK_SECONDS` (a timeout is "nothing to add") and
 forgiving: an exception is swallowed and logged, the event sink's polarity, because a
 broken observer must not fail a run. `visible_tools()` beside it is the one answer to
-"may the model see this tool": the registry minus `_excluded_tools`, read by the schema,
-`list_tools`, `search_tools`, the router prompt, the system prompt's tool documentation
-and the sandbox's tool bridge alike; `execute_tool` still runs a hidden tool.
+"may the model see this tool": the registry minus `_excluded_tools` and, while an allowed
+set holds, inside it; read by the schema, `list_tools`, `search_tools`, the router prompt,
+the system prompt's tool documentation and the sandbox's tool bridge alike. `execute_tool`
+still runs a hidden tool, but never one outside the allowed set.
 
 ## Observability and accessors
 

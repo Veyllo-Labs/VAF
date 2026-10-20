@@ -638,6 +638,11 @@ What an embedded agent can and cannot do on the host - the short version of
   consults no per-account tool list, because nothing is registered; a
   multi-tenant application registers one resolver process-wide with
   `set_account_allowlist_resolver` (its own section below).
+- **An agent that answers somebody else still acts as you.** Identity decides
+  what the gates above let through, and an agent answering a customer or a
+  stranger on your behalf runs under YOUR identity. Bound it by what it may
+  do instead: `Agent.set_allowed_tools(...)` (its own section below) holds
+  for offering and execution, with no identity exempt.
 
 ---
 
@@ -1207,7 +1212,8 @@ Runnable version, including the authorizer below:
 It is the one example that needs no provider and no network.
 
 What one `execute()` does, in order: write one audit line to
-`tool_use_<date>.log` (see below), evaluate policy (`admin_only`,
+`tool_use_<date>.log` (see below), refuse a name outside the allowed set if you
+passed one (`allowed_tools`), evaluate policy (`admin_only`,
 `channel_restrictions`), consult the account allowlist (the resolver you
 registered, if any - its own section below), consult your authorizer, consult
 the confirmation gate, emit `tool_start`, validate and repair the arguments
@@ -1228,7 +1234,8 @@ that until a tool whose parameters were all optional reported success for a call
 had never received. Handing the text over is how your loop gets that refusal for free.
 
 It never raises for a tool failure and never blocks on a human. Everything comes
-back as a string: `Security Error: ...` for a policy block, `Tool Error: ...`
+back as a string: `Security Error: ...` for a policy block or a name outside the
+allowed set, `Tool Error: ...`
 for malformed arguments, a schema failure or an exception inside the tool, `Error: Unknown tool
 '<name>'` for a name no registered tool carries, and the
 `vaf.markers.TOOL_CONFIRMATION_REQUIRED` marker when a gated tool had nobody to
@@ -1259,6 +1266,7 @@ The supported arguments:
 | `timeout_for` | `f(tool_name) -> seconds`, for your own timeout policy; it replaces the tool's own budget. Accept a `default` keyword instead (`f(tool_name, default=None)`) to ADJUST it: you receive the tool's own budget for this call and return yours. Left out, the tool's declared budget applies (`timeout_seconds` / `budget_seconds`), else `tool_timeout_seconds`. |
 | `stop_check` | `f() -> bool`, polled during the run so you can cancel from outside. |
 | `max_result_chars` | Result cut, `2000` like a chat turn. Pass `None` to switch it off - do that when you chain a result into something else, because a cut result can lose a trailing marker. |
+| `allowed_tools` | Which tools this caller may run at all: an iterable of names, `None` (the default) for no set. Any other name is refused with `Security Error: ...` before every other stage, registered or not, for every identity (admins and callers with no scope included), and nothing is emitted. An empty iterable allows nothing; a bare string raises `TypeError`. `ToolCaller(..., allowed_tools=names)` is the execution half of what `Agent.set_allowed_tools(names)` installs on an agent (its own section below). |
 | `authorize` | Your per-call decision hook, exactly as in the next section. `ToolCaller(..., authorize=fn)` is the same thing `Agent.set_tool_authorizer(fn)` installs. An account-level ban (the allowlist section below) is checked before it and cannot be lifted by an `allow()`. |
 | `on_event` | `f(dict)` for `tool_start` / `tool_end` / gate events. Same schema as `Agent.on_event` (`CoreAgent.set_event_sink`), documented in [OBSERVABILITY.md](OBSERVABILITY.md). A raising sink is swallowed: a broken observer must not fail a run. |
 
@@ -1397,8 +1405,10 @@ VAF answers three questions before a tool runs: may this caller use it at all
 (`admin_only`, `channel_restrictions`), does a person have to confirm it
 (`permission_level`), and who is calling (`identity_kwargs`). All three are
 answered from what the *tool* declares - plus a fourth, which tools this
-ACCOUNT may use, answered by the resolver your application registers (the next
-section). Your application also knows things no declaration can carry: which
+ACCOUNT may use, answered by the resolver your application registers (two
+sections down), and a fifth that comes before all of them, which tools this
+AGENT may use whoever it runs as (`set_allowed_tools`, the next section). Your
+application also knows things no declaration can carry: which
 paths this customer owns, that this account is thirty seconds from its quota,
 that THIS argument is the problem.
 
@@ -1478,6 +1488,69 @@ Four limits worth knowing before you rely on it:
   then (`vaf/workflows/background.py`, `enabled(..., authorizer=)`), where every
   non-spawn step is put to you - spawn-mode sub-agent steps stay the limit named
   above and do not consult your authorizer.
+
+---
+
+## Which tools this agent may use: `set_allowed_tools`
+
+The account allowlist below answers from WHO is calling, and so does every gate
+above it: an admin passes `admin_only`, and admins and callers with no scope are
+exempt from the allowlist. That is right for a person acting in their own
+account, and wrong for an agent that answers somebody else on their behalf - a
+customer, a stranger who wrote in - because that agent runs under the owner's
+identity and inherits everything the owner may do. What bounds it is not who it
+is but what it is for:
+
+```python
+agent = Agent(config={"provider": "deepseek"})
+agent.set_allowed_tools({"web_search", "send_telegram", "contact_history"})
+answer = agent.run(message_from_a_customer)
+agent.set_allowed_tools(None)            # lift it
+```
+
+The set holds on both halves of a tool call:
+
+- **Offering.** The model is offered the tools inside the set and nothing else:
+  the schema, `list_tools`, `search_tools`, the system prompt's tool
+  documentation and the sandbox's tool bridge all read the same answer
+  (`CoreAgent.visible_tools()`). The tool router is not asked - the set IS the
+  turn's tool set - and nothing a turn would otherwise add rides along: not the
+  discovery tools, not the tools the agent used in earlier turns, not the
+  narrower subsets of a tight context.
+- **Execution.** Any other name the model calls is refused with `Security
+  Error: ...` before the policy stage, whether the tool is registered or not, and
+  nothing is emitted. That includes a call recovered from the model's text, one
+  nested in `multi_tool_use.parallel` and one made from inside
+  `python_sandbox(with_vaf_tools=True)`: all of them dispatch through the agent.
+  `ToolCaller(allowed_tools=...)` is this half on its own, for a lane of yours.
+
+The contract:
+
+- **No identity is exempt.** Admins and callers with no scope are refused like
+  anyone else. That is the difference to the account allowlist, and the reason
+  this is its own primitive rather than an answer your resolver could give.
+- **An iterable of names; `None` lifts it.** An empty set allows nothing; a bare
+  string raises `TypeError` (`{"web_search"}` is a set of one). Names that no
+  registered tool carries are allowed and simply absent.
+- **The same name on both doors.** `vaf.Agent.set_allowed_tools` and
+  `CoreAgent.set_allowed_tools`; on the facade it is safe before the first run
+  and replayed onto the engine before its system prompt is built.
+- **It is checked before everything else,** so neither your authorizer's
+  `allow()` nor the account allowlist can widen it, and a refused call reaches
+  neither of them.
+- **The plan gate follows it.** VAF's chat lane holds a state-changing tool until
+  the model has written a plan with `update_working_memory`; a set without that
+  tool turns the gate off for the agent, because a gate whose only way out is a
+  refused tool would hold every write tool for good.
+- **In-process only, like the authorizer.** A sub-agent or a workflow process
+  started while the set holds does not inherit it, so a set meant to contain an
+  agent should not name a tool that starts one (`coding_agent`,
+  `execute_workflow`, ...).
+
+VAF's own product uses exactly this for its Front Office: when the agent answers
+a contact on WhatsApp, Telegram, Discord or mail, the queue runner calls
+`agent.set_allowed_tools(FRONT_OFFICE_ALLOWED_TOOLS)` for that turn and lifts it
+afterwards ([FRONT_OFFICE.md](agents/FRONT_OFFICE.md#tool-restriction)).
 
 ---
 
@@ -2081,7 +2154,7 @@ server is not supported today. See
 
 Stable public surface (safe to build on):
 
-- `from vaf import Agent` - the façade: `Agent(config=..., system_prompt=..., user_scope=..., session=...)`, `.run(prompt, on_token=...)`, `.run_async(...)`, `.complete(prompt, ...)`, `.add_tool(tool)`, `.on_event(cb)`, `.on_compaction(cb)`, `.save_session()`, `.core`.
+- `from vaf import Agent` - the façade: `Agent(config=..., system_prompt=..., user_scope=..., session=...)`, `.run(prompt, on_token=...)`, `.run_async(...)`, `.complete(prompt, ...)`, `.add_tool(tool)`, `.set_tool_authorizer(fn)`, `.set_allowed_tools(names)`, `.on_event(cb)`, `.on_compaction(cb)`, `.save_session()`, `.core`.
 - `vaf.markers` - the special-return-value constants.
 - `vaf.CoreAgent` - the engine, for advanced embedding.
 - `CoreAgent.chat_step(user_input, ..., memory_context=...)` - the documented turn
@@ -2200,6 +2273,9 @@ Stable public surface (safe to build on):
   not.
 - `set_tool_authorizer(fn)` on both `Agent` and `CoreAgent`, and `vaf.ToolRequest`
   with `deny()` / `ask()` / `allow()` and its context fields.
+- `set_allowed_tools(names)` on both `Agent` and `CoreAgent`, and `ToolCaller(allowed_tools=)` -
+  the agent's allowed tool set, with the contract its section documents (offering and
+  execution, no identity exempt, `None` lifts, empty allows nothing, in-process only).
 - `vaf.set_account_allowlist_resolver(fn)` - the per-account tool allowlist hook,
   with the contract its section documents (None/unregistered = unrestricted,
   empty = nothing, exemptions framework-side, raising = refusal, and the

@@ -98,6 +98,8 @@ class Agent:
         self._event_cb: Optional[Callable[[dict], None]] = None
         # Same, for the tool authorizer.
         self._authorize_cb: Optional[Callable[[Any], None]] = None
+        # Same, for the allowed tool set (None: no set).
+        self._allowed_tools: Optional[frozenset] = None
         self._compaction_cb: Optional[Callable[[dict], Optional[str]]] = None
         # Multi-tenant identity (docs/EMBEDDING.md "Multi-tenant embedding"):
         # user_scope is an ASSERTION by the embedder - the library performs no
@@ -215,6 +217,10 @@ class Agent:
                             agent.state_registry.register(f"tool_{tool.name}", provider)
                 except Exception:
                     pass
+            # The allowed set BEFORE init_chat too: the system prompt documents
+            # the tools the model may see, and the set decides which those are.
+            if self._allowed_tools is not None:
+                agent.set_allowed_tools(self._allowed_tools)
             # Identity BEFORE init_chat: the system prompt is built from it
             # (user context, memory seed, last interaction).
             if self._user_scope is not None:
@@ -272,6 +278,23 @@ class Agent:
         self._authorize_cb = authorize
         if self._agent is not None:
             self._agent.set_tool_authorizer(authorize)
+
+    def set_allowed_tools(self, names) -> None:
+        """Fix which tools this agent offers AND runs (or None to lift it).
+
+        ``names`` is an iterable of tool names; an empty one allows nothing, and a bare
+        string raises TypeError. The model is offered only these tools and the tool
+        router is not asked; any other name it calls is refused with ``Security
+        Error: ...``, for every identity, admins included. Full contract:
+        ``CoreAgent.set_allowed_tools`` and docs/EMBEDDING.md. Safe to call before or
+        after the first run; the same name as on the engine.
+        """
+        from vaf.core.tool_dispatch import normalize_allowed_tools
+
+        # Normalised here, so a bare string fails at this call and not at engine build.
+        self._allowed_tools = normalize_allowed_tools(names)
+        if self._agent is not None:
+            self._agent.set_allowed_tools(self._allowed_tools)
 
     def on_event(self, callback: Optional[Callable[[dict], None]]) -> None:
         """Attach a structured-event callback (or None to detach).

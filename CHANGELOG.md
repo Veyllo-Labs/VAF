@@ -13,6 +13,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **`Agent.set_allowed_tools(names)`** fixes which tools an agent offers and runs, for every
+  identity, until lifted with `None`; `ToolCaller(allowed_tools=)` is the same for a lane of
+  your own. See "Which tools this agent may use" in `docs/EMBEDDING.md`.
+
 - **A restore shows in the security log.** `vaf backup restore` replaces every account, key
   and chat of the machine; it is now the security event "Backup restored", with the backup,
   the proof the person gave in the terminal and whose backup it was. A restore that did not
@@ -68,6 +72,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   terminal or by an admin in Settings, now appears in the security log.
 
 ### Security
+
+- **Inbound answers contacts with their tools only.** When the agent answers a contact, the
+  tool router used to replace the Inbound tool list with the owner's memory, contact and
+  identity tools, and any other tool the model named still ran. A contact's turn now gets
+  exactly the Inbound tools (the send tools for the back-channel, web search, the contact's
+  own history), everything else is refused, and the note to the owner no longer waits for
+  a plan.
 
 - **Archived chats, agent rooms and word suggestions are encrypted on disk like the chats.**
   Their writers already encrypted every new file, but the start-up sweep that encrypts what

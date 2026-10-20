@@ -17,7 +17,7 @@ One file per contract module:
 | `test_contract_facade.py` | `vaf.__all__`, lazy exports, `__version__` |
 | `test_contract_agent.py` | `Agent` construction, signatures, eager validations, `VAF_NONINTERACTIVE` |
 | `test_contract_coreagent_surface.py` | `CoreAgent` documented signatures (subset pins) |
-| `test_contract_tool_caller.py` | `ToolCaller.execute()` pipeline, return prefixes, events, gate |
+| `test_contract_tool_caller.py` | `ToolCaller.execute()` pipeline, return prefixes, events, gate, the allowed set |
 | `test_contract_allowlist.py` | `set_account_allowlist_resolver` contract, and `account_allows_tool` (its read side, for surfaces that list tools) |
 | `test_contract_basetool_and_jail.py` | `BaseTool` declarations, `file_access` TypeError, `self.log`, `user_jail`, `jail_allows` |
 | `test_contract_markers_and_slim_import.py` | `vaf.markers` values, `import vaf` stays cheap |

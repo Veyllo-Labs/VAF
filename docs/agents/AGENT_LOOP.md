@@ -45,6 +45,8 @@ user input
 │ 4. TOOL ROUTER                                              │
 │    _route_tools(): pick the active tool set for this turn   │
 │    (capped at router_max_tools; safety-net fallback)        │
+│    skipped with an allowed set: the set is the turn's       │
+│    tools (set_allowed_tools)                                │
 └─────────────────────────────────────────────────────────────┘
     │
     ▼
@@ -110,7 +112,7 @@ grep the symbol names to find them.
 | 1b | Who is speaking: the two "the user replied" latches | `_turn_is_from_the_user` decides whether this turn is the user in their own chat; only then is the ask-first latch (`_pending_user_question`) cleared and a waiting background question (`thinking_mode.get_waiting_for_reply`) picked up as answered and cleared. A synthetic drain turn (`_synthetic_drain_turn`: runner drain, A2A room wake), a queue turn the harness marked as not a person (`_turn_is_human=False`: timer, automation) and a background run's own prompt (`run_kind` thinking/automation) fail the test. See [Thinking-Mode.md](Thinking-Mode.md) (Automatic Cleanup) |
 | 2 | Workflow / skill match | `_try_workflow` |
 | 3 | Record input | the user message is appended; the intent was recorded in phase 1 |
-| 4 | Tool router | `_route_tools` |
+| 4 | Tool router (not asked while the agent has an allowed set: the set is the turn's tool set and nothing rides along, see `set_allowed_tools`) | `_select_turn_tools`, `_route_tools` |
 | 5 | Adaptive temperature | `analyze_intent` |
 | 6 | LLM call (streaming) + parse tool calls | `_prepare_messages` runs on ALL THREE lanes (api_backend / local llama-server / llama-cpp-python in-process) before the call - it strips dangling `tool_calls`, drops orphaned `role:tool` messages, converts images to text and downgrades synthetic tool ids; the memory block is spliced into the first system message right after. The server lane re-prepares per retry attempt, because its 400/500 recovery rebinds the history between attempts. Then `api_backend.chat_completion`, `_parse_qwen_tool_calls`, `_parse_gemma4_tool_calls` |
 | 6b | Recover tool calls leaked as TEXT | `vaf/core/tool_call_recovery.py` - see below |

@@ -18,8 +18,8 @@ tool is here and send_to_user is not.
 
 from vaf.core.channels import ALL_SEND_TOOLS
 
-# Tool names that exist in agent.tools when loaded. At runtime the caller should
-# intersect with agent.tools.keys() so missing tools do not cause errors.
+# Applied by the headless runner with agent.set_allowed_tools(...), which holds for what
+# the model is offered AND for what runs; a name no loaded tool carries is simply absent.
 FRONT_OFFICE_ALLOWED_TOOLS = frozenset(ALL_SEND_TOOLS) | frozenset({
     "web_search",
     # The one read tool with no free argument: it reads the correspondence of the contact

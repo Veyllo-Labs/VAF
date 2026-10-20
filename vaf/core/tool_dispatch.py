@@ -1141,6 +1141,26 @@ def unknown_tool_hint(name, tools, args=None, *, limit: int = 3) -> str:
         return ""
 
 
+def normalize_allowed_tools(names):
+    """The allowed tool set as the funnel holds it: None, or a frozenset of names.
+
+    ``None`` means no set (every registered tool, subject to the other stages). Any other
+    iterable becomes a frozenset of its stripped, non-empty names; an EMPTY iterable allows
+    nothing, the account allowlist's rule. A bare string is refused with TypeError: it is
+    iterable, and ``"web_search"`` read as a set would be eleven one-letter names, a ceiling
+    that silently allows nothing the caller meant.
+
+    One home for the normalisation, because the same value reaches the funnel from two
+    doors (``ToolCaller(allowed_tools=)`` and ``CoreAgent.set_allowed_tools``).
+    """
+    if names is None:
+        return None
+    if isinstance(names, (str, bytes)):
+        raise TypeError("the allowed tools are an iterable of tool names, not one string: "
+                        f"pass {{{names!r}}} for a set of one")
+    return frozenset(s for s in (str(n).strip() for n in names) if s)
+
+
 class ToolCaller:
     """Run a tool through the full pipeline, configured for one caller.
 
@@ -1173,6 +1193,7 @@ class ToolCaller:
         trust_dir=None,
         decide=None,
         on_gate_required=None,
+        allowed_tools=None,
         # RUNTIME CONTROL
         timeout_for=None,
         self_supervised=None,
@@ -1202,6 +1223,11 @@ class ToolCaller:
         self.trust_dir = trust_dir
         self.decide = decide
         self.on_gate_required = on_gate_required
+        # Which tools THIS caller may run at all, whoever it is: None for no set, else a
+        # frozenset of names. A ceiling over identity rather than an answer from it - the
+        # account allowlist below exempts admins and scope-less callers, so it cannot bound
+        # an agent that answers a third party under its owner's identity; this does.
+        self.allowed_tools = normalize_allowed_tools(allowed_tools)
         self.timeout_for = timeout_for
         self.self_supervised = self_supervised
         self.stop_check = stop_check
@@ -1227,10 +1253,10 @@ class ToolCaller:
         The ORDER below is contract, not convenience, and three parts of it were only
         discovered by measuring (tests/test_dispatch_event_baseline.py):
 
-        - a hard policy block and a refused gate emit NOTHING onto the EVENT STREAM and
-          dispatch nothing, so a consumer never sees a blocked tool reported as run. The
-          audit line written by ``_audit_log`` is the deliberate exception and runs first,
-          for the reason given there;
+        - a hard policy block, a name outside the allowed set and a refused gate emit
+          NOTHING onto the EVENT STREAM and dispatch nothing, so a consumer never sees a
+          blocked tool reported as run. The audit line written by ``_audit_log`` is the
+          deliberate exception and runs first, for the reason given there;
         - a schema error is about THIS call while the duplicate-guard message is about
           another one already running, so the schema error wins;
         - the result is truncated LAST, after any hook has had its say, because
@@ -1259,6 +1285,16 @@ class ToolCaller:
         if is_revoked(self.user_scope_id):
             return ("Security Error: this account's access was changed by an administrator; "
                     "nothing more runs in this turn.")
+
+        # The caller's allowed set, BEFORE the policy and with no exemption: an admin or a
+        # scope-less caller passes `admin_only` and the account allowlist, and an agent that
+        # answers a stranger under its owner's identity is exactly such a caller. A name
+        # outside the set is refused whether or not it is registered (no unknown-tool hint
+        # pointing at a tool outside), and nothing after this line sees it: no account
+        # resolver, no authorizer, no hook, no event.
+        if self.allowed_tools is not None and name not in self.allowed_tools:
+            return (f"Security Error: '{name}' is not available here; only the tools this "
+                    "agent was given can run.")
 
         decision = self._policy(name, tool)
         if decision.blocked:
@@ -1462,7 +1498,11 @@ class ToolCaller:
             # The prefix is contract; the correction after it is what turns the refusal
             # into a retry the model can get right (see unknown_tool_hint).
             refusal = f"Error: Unknown tool '{name}'"
-            hint = unknown_tool_hint(name, self.tools, args)
+            # Under an allowed set the correction draws only from the tools inside it: a
+            # misspelt name in the set must not be answered with a tool the set leaves out.
+            candidates = self.tools if self.allowed_tools is None else {
+                n: t for n, t in (self.tools or {}).items() if n in self.allowed_tools}
+            hint = unknown_tool_hint(name, candidates, args)
             return f"{refusal}. {hint}" if hint else refusal
         tool_args = dict(args) if args else {}
         tool_args, errors = repair_arguments(tool, tool_args, tool_name=name,

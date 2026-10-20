@@ -11,6 +11,8 @@ Pattern: an executable contract, like tests/test_coder_provider_map.py.
 """
 import inspect
 
+import pytest
+
 import vaf
 from vaf import Agent, CoreAgent
 from vaf.tools.base import BaseTool
@@ -142,6 +144,53 @@ def test_detaching_an_authorizer_reaches_a_live_engine():
     engine.set_tool_authorizer.assert_called_with(None)
 
 
+def test_the_allowed_set_has_the_same_name_on_the_facade_and_the_engine():
+    assert callable(Agent.set_allowed_tools)
+    assert callable(CoreAgent.set_allowed_tools)
+
+
+def test_an_allowed_set_is_replayed_before_the_system_prompt_is_built():
+    """Set before anything has run, the set reaches the engine when the facade builds it, and
+    BEFORE init_chat: the system prompt documents the tools the model may see. Asserting the
+    cache alone would pass with the replay missing."""
+    from unittest.mock import MagicMock, patch
+
+    agent = Agent(config={"provider": "deepseek", "api_key_deepseek": "sk-test"})
+    agent.set_allowed_tools(["web_search", " contact_history "])
+    with patch("vaf.framework.CoreAgent", return_value=MagicMock()) as built:
+        engine = agent.core
+    assert built.called, "the facade did not build an engine"
+    engine.set_allowed_tools.assert_called_once_with(frozenset({"web_search", "contact_history"}))
+    calls = [c[0] for c in engine.mock_calls]
+    assert calls.index("set_allowed_tools") < calls.index("init_chat"), (
+        "the set arrived after the system prompt was built")
+
+
+def test_lifting_the_allowed_set_reaches_a_live_engine():
+    from unittest.mock import MagicMock, patch
+
+    agent = Agent(config={"provider": "deepseek", "api_key_deepseek": "sk-test"})
+    with patch("vaf.framework.CoreAgent", return_value=MagicMock()):
+        engine = agent.core
+    engine.set_allowed_tools.assert_not_called()
+    agent.set_allowed_tools({"web_search"})
+    engine.set_allowed_tools.assert_called_with(frozenset({"web_search"}))
+    agent.set_allowed_tools(None)
+    engine.set_allowed_tools.assert_called_with(None)
+
+
+def test_one_string_is_not_a_set_of_tools():
+    """`"web_search"` is iterable: read as a set it is eleven one-letter names. Refused at the
+    call on both doors, before any engine exists."""
+    from types import SimpleNamespace
+
+    agent = Agent(config={"provider": "deepseek", "api_key_deepseek": "sk-test"})
+    with pytest.raises(TypeError):
+        agent.set_allowed_tools("web_search")
+    with pytest.raises(TypeError):
+        CoreAgent.set_allowed_tools(SimpleNamespace(), "web_search")
+
+
 def test_tool_caller_keeps_the_arguments_embedding_md_documents():
     """The constructor takes more than this, and EMBEDDING.md says so - the rest exists for
     VAF's own lanes and may move. What is listed in that table is a promise, so it is spelled
@@ -161,6 +210,7 @@ def test_tool_caller_keeps_the_arguments_embedding_md_documents():
         "timeout_for": inspect.Parameter.KEYWORD_ONLY,
         "stop_check": inspect.Parameter.KEYWORD_ONLY,
         "max_result_chars": inspect.Parameter.KEYWORD_ONLY,
+        "allowed_tools": inspect.Parameter.KEYWORD_ONLY,
         "on_event": inspect.Parameter.KEYWORD_ONLY,
     }
     for name, kind in documented.items():

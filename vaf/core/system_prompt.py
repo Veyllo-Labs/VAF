@@ -1338,6 +1338,12 @@ Then use the results to answer. Do NOT guess from your training data!
             names = getattr(self.agent, "_active_tools", None) if self.agent else None
             if not names:
                 return ""
+            visible = getattr(self.agent, "visible_tools", None)
+            if callable(visible):
+                # The scope may carry a pin the schema drops (a hidden tool, one outside the
+                # agent's allowed set); a pitfall for it would name a tool the model cannot use.
+                shown = visible()
+                names = [name for name in names if name in shown]
             small = self.max_tokens < 32000
             out = []
             for name in sorted(set(names)):

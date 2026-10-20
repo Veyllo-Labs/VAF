@@ -123,8 +123,9 @@ This is the contract. Treat it as a stable API.
 - `vaf.user_jail` - turning a declared identity into a file boundary, and
   `vaf.jail_allows` - asking that same boundary from outside a tool run, for a
   route that serves or stores a file on an account's behalf
-- `vaf.ToolCaller` and `vaf.ToolRequest`, plus `set_tool_authorizer` on both
-  `Agent` and `CoreAgent` - running and vetoing a tool call. Their documented
+- `vaf.ToolCaller` and `vaf.ToolRequest`, plus `set_tool_authorizer` and
+  `set_allowed_tools` on both `Agent` and `CoreAgent` - running, vetoing and
+  bounding a tool call. Their documented
   arguments are in [EMBEDDING.md](EMBEDDING.md); `ToolCaller`'s remaining
   constructor parameters are not part of the promise.
 - `vaf.set_account_allowlist_resolver` - the per-account tool allowlist hook,

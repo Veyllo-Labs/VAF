@@ -1660,16 +1660,18 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         agent._front_office_mode = True
                         agent._front_office_chat = _front_office_chat_ref(_meta, _meta.get("username"))
                         agent._front_office_contact = None   # pinned below once the record is resolved
-                        try:
-                            from vaf.core.front_office_tools import FRONT_OFFICE_ALLOWED_TOOLS
-                            agent._active_tools = tuple(n for n in FRONT_OFFICE_ALLOWED_TOOLS if n in agent.tools)
-                        except Exception:
-                            agent._active_tools = None
+                        # The contact gets the Front Office tools and nothing else, offered and
+                        # run: the engine's allowed set holds against the router, the riders,
+                        # the owner's recent tools and any name the model calls. No try/except:
+                        # a set that cannot be applied fails this task rather than opening
+                        # every tool to a stranger.
+                        from vaf.core.front_office_tools import FRONT_OFFICE_ALLOWED_TOOLS
+                        agent.set_allowed_tools(FRONT_OFFICE_ALLOWED_TOOLS)
                     else:
                         agent._front_office_mode = False
                         agent._front_office_chat = None
                         agent._front_office_contact = None
-                        agent._active_tools = None
+                        agent.set_allowed_tools(None)
 
                     # Sidebar documents: inject into this turn only (session history stays clean)
                     effective_input = input_text or ""
@@ -3012,7 +3014,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     agent._front_office_mode = False
                     agent._front_office_chat = None
                     agent._front_office_contact = None
-                    agent._active_tools = None
+                    agent.set_allowed_tools(None)
                     # Cleared with them, for the same reason: one agent object serves every
                     # queued turn, and a mark left standing by a timer would tell the next
                     # turn that nobody is watching - which is exactly when the outward hold

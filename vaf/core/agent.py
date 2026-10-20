@@ -39,6 +39,7 @@ from vaf.core.tool_dispatch import (
     event_result,
     is_channel_session as _is_channel_session,
     make_json_serializable,
+    normalize_allowed_tools as _normalize_allowed_tools,
     normalize_tool_name,
     policy_admin_flag as _policy_admin_flag,
     repair_arguments as _repair_arguments,
@@ -1629,6 +1630,8 @@ class Agent:
 
         # Optional application-supplied authorizer; see set_tool_authorizer().
         self._tool_authorizer = None
+        # Optional ceiling on which tools this agent offers and runs; see set_allowed_tools().
+        self._allowed_tools = None
         self._orchestrator_heavy_calls_this_turn = 0  # Reset each turn; used when orchestrator + small n_ctx
         self._anti_spin_streak = 0  # consecutive bookkeeping (plan/intent) calls; anti-spin guard
         # room_id -> room-driven turns since a real person last spoke. Same shape as
@@ -2127,13 +2130,20 @@ class Agent:
         block share, so the model is never told one thing while the gate does another.
 
         gate_active: `plan_gate_enabled`, and neither a non-interactive run (automation, CLI
-        one-shot) nor a sub-agent process - those are never gated. plan_exists: a plan in this
-        chat's working memory that is not a placeholder ("Neuer Test-Plan hier" / "test" must not
-        open the gate). A read error counts as a plan: the gate fails open, and the line then
-        claims nothing is held."""
+        one-shot) nor a sub-agent process - those are never gated - and the model can write a
+        plan at all: `update_working_memory` is among the tools it may see. A gate whose only
+        exit is a tool the agent may not use is a lock, not a gate (measured: under the
+        Front Office's allowed set every send to the owner was bounced with [PLAN REQUIRED]).
+        plan_exists: a plan in this chat's working memory that is not a placeholder ("Neuer
+        Test-Plan hier" / "test" must not open the gate). A read error counts as a plan: the
+        gate fails open, and the line then claims nothing is held."""
         from vaf.core.config import Config
         is_subagent = os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "") == "1"
-        gate_active = bool(Config.get("plan_gate_enabled", True)) and not (
+        try:
+            can_plan = "update_working_memory" in self.visible_tools()
+        except Exception:
+            can_plan = True   # no registry to ask: the gate stays as it was
+        gate_active = bool(Config.get("plan_gate_enabled", True)) and can_plan and not (
             getattr(self, "_noninteractive", False) or is_subagent)
         plan_exists = True
         try:
@@ -8727,9 +8737,24 @@ class Agent:
         name, and publish the result. Sets ``self._active_tools``.
 
         One method so the chat turn and anything that measures the router (scripts/router_eval.py)
-        run the same selection, not two copies of it."""
+        run the same selection, not two copies of it.
+
+        With an allowed set (``set_allowed_tools``) the set IS the turn's tool set: the router
+        LLM is not asked, and nothing rides along - no recent tools (they are the agent's, and
+        one agent serves every chat), no riders, no cap, no safety net, no pins. The recency
+        decay still runs and the turn's note pins are spent, so neither carries into a later
+        turn without a set."""
         from vaf.cli.ui import UI
-        
+
+        if getattr(self, "_allowed_tools", None) is not None:
+            self._decay_recent_tools()
+            self._note_tools_this_turn = set()
+            self._active_tools = sorted(self.visible_tools())
+            UI.event("Router", f"Allowed set, router not asked: {', '.join(self._active_tools) or 'no tools'}",
+                     style="dim")
+            self._publish_turn_tools(core_subset=False)
+            return
+
         selected_tools = self._route_tools(route_text)
 
         if selected_tools:
@@ -8860,13 +8885,16 @@ class Agent:
         # Termination guarantee for background runs. Placed after BOTH safety nets and the
         # cap, so no narrowing above can leave the run without a way to stop.
         self._ensure_thinking_exit_tools()
+        self._publish_turn_tools(core_subset=bool(not selected_tools and used_core_subset))
 
-        # Show final tools once in Web UI (single source; CLI/router logs above already show selection)
+    def _publish_turn_tools(self, *, core_subset: bool) -> None:
+        """The Router step of the Web UI: the turn's final tool set, shown once."""
+        # Single source; CLI/router logs in _select_turn_tools already show the selection.
         actual_tools = self._active_tools if self._active_tools is not None else list(self.tools.keys())
         final_list = ", ".join(actual_tools)
         if self._active_tools is None:
             final_list = f"ALL ({len(actual_tools)})"
-        elif not selected_tools and used_core_subset:
+        elif core_subset:
             final_list = f"CORE ({len(actual_tools)})"
         # Single display path: push to Web UI only (avoids duplicate with UI.event→log in Web)
         if _emit_to_web_ui():
@@ -9356,9 +9384,20 @@ class Agent:
         array can stay byte-identical and the whole request behind it stays
         cached. Where the provider cannot restrict callability separately, this
         falls back to exactly what it did before.
+
+        Two things named "allowed" meet here and are not the same: the provider's
+        `tool_choice` field `allowed_tools` (which tools of the array this request
+        may call) and the agent's own allowed set (`set_allowed_tools`, which
+        tools the agent offers and runs at all). With the agent's set, the array
+        is the set and nothing else, on every provider: the resident array is the
+        owner's - neither read nor grown here, so it keeps its cache - and the
+        set's own tools are not in it.
         """
         if disable_tools:
             return None, "none"
+        if getattr(self, "_allowed_tools", None) is not None:
+            tools = self.TOOLS
+            return (tools, "auto") if tools else (None, "none")
         if not self._supports_allowed_tools():
             return self.TOOLS, ("auto" if self.tools else "none")
 
@@ -11043,7 +11082,9 @@ class Agent:
                 # catches "Using web_search to find the weather..." with no call behind it.
                 _act_intent = _extract_action_text(full_response)
                 if _act_intent:
-                    _avail_fp = list(self._active_tools) if self._active_tools else list(self.tools.keys())
+                    # What this step OFFERS, never the raw scope: the nudge below says "Call
+                    # <tool> NOW", and a tool outside the allowed set would be ordered and refused.
+                    _avail_fp = self._offered_tool_names()
                     _act_matches = _match_action_to_tools(_act_intent, _avail_fp)
                 else:
                     _act_matches = []
@@ -11578,7 +11619,7 @@ class Agent:
             try:
                 _act = _extract_action_text(full_response)
                 if _act:
-                    _avail = list(self._active_tools) if self._active_tools else list(self.tools.keys())
+                    _avail = self._offered_tool_names()
                     _matches = _match_action_to_tools(_act, _avail)
                     try:
                         append_domain_log(
@@ -13073,7 +13114,8 @@ class Agent:
         """Dispatch one tool call through the full pipeline; returns a string.
 
         The pipeline itself lives in ``vaf/core/tool_dispatch.py`` and is shared with every
-        other lane that runs a tool: policy evaluation (admin-only and channel blocks ->
+        other lane that runs a tool: the agent's allowed set (``set_allowed_tools``; a name
+        outside it -> "Security Error: ...") -> policy evaluation (admin-only and channel blocks ->
         "Security Error: ...") -> confirmation gate (headless, a gated tool returns an
         "[ERROR] ... requires confirmation" string rather than blocking on a person) ->
         argument repair -> declared identity -> bounded execution with timeout and stop
@@ -13140,6 +13182,10 @@ class Agent:
             on_gate_required=self._push_gate_to_websocket,
             stop_check=_session_stop_check(sid),
             authorize=getattr(self, "_tool_authorizer", None),
+            # The agent's ceiling (set_allowed_tools): what the schema leaves out is also
+            # refused here, so a name the model invents, recovers from text or nests in
+            # multi_tool_use.parallel or the sandbox bridge does not run either.
+            allowed_tools=getattr(self, "_allowed_tools", None),
             on_event=emit,
             model_name=getattr(self, "model_display_name", None),
             hooks=_ToolCallHooks(
@@ -13819,6 +13865,35 @@ class Agent:
         """
         self._tool_authorizer = authorize
 
+    def set_allowed_tools(self, names):
+        """Fix which tools this agent offers AND runs, until lifted with ``None``.
+
+        ``names`` is an iterable of tool names; an empty one allows nothing, and a bare
+        string raises TypeError (``{"web_search"}`` is a set of one). Two halves, one value:
+
+        - Offering: ``visible_tools()`` is the registry inside the set, so the schema,
+          ``list_tools``, ``search_tools``, the system prompt's tool documentation and the
+          sandbox bridge name nothing outside it. With a set the tool router is not asked:
+          the set IS the turn's tool set. It wins over every pin a turn adds on top of the
+          router's pick (the discovery tools, the riders, the recent tools, a suggestion
+          note's tool, a thinking run's exit tools, the narrowed subsets of a tight context).
+        - Execution: ``execute_tool`` hands the set to the funnel (``ToolCaller(
+          allowed_tools=)``), which refuses any other name with ``Security Error: ...``
+          before the policy stage, so a name the model invents, recovers from text or nests
+          in ``multi_tool_use.parallel`` does not run either.
+
+        No identity is exempt, unlike the account allowlist (which exempts admins and
+        callers with no scope): the set exists for an agent that answers a third party
+        under its owner's identity. In-process only, like the authorizer: a sub-agent or a
+        workflow process started while a set holds does not inherit it, so a set meant to
+        contain a turn should not name a tool that starts one.
+
+        Every call also clears the current step's tool scope (``_active_tools``), so the
+        next step starts from the new set instead of a scope chosen before it.
+        """
+        self._allowed_tools = _normalize_allowed_tools(names)
+        self._active_tools = None
+
     def set_event_sink(self, sink):
         """Set an optional event sink for structured outputs (e.g. stream-json).
 
@@ -13883,8 +13958,10 @@ class Agent:
 
     def visible_tools(self) -> Dict[str, Any]:
         """The registry as the MODEL may see it: every registered tool minus the ones
-        hidden by ``_excluded_tools``. Hidden is not forbidden: ``execute_tool`` still runs
-        a hidden tool, which is what lets code call a tool the model is not offered.
+        hidden by ``_excluded_tools`` and, while an allowed set holds (``set_allowed_tools``),
+        inside that set. Hidden is not forbidden: ``execute_tool`` still runs a hidden tool,
+        which is what lets code call a tool the model is not offered. Outside the allowed
+        set IS forbidden: the funnel refuses it for every caller.
 
         The one answer to "may the model see this tool". It used to be asked at six
         surfaces and answered at one: the schema hid a tool while ``list_tools``,
@@ -13893,9 +13970,20 @@ class Agent:
         and all six surfaces read back.
         """
         excluded = getattr(self, "_excluded_tools", None) or set()
-        if not excluded:
+        allowed = getattr(self, "_allowed_tools", None)
+        if not excluded and allowed is None:
             return dict(self.tools)
-        return {name: tool for name, tool in self.tools.items() if name not in excluded}
+        return {name: tool for name, tool in self.tools.items()
+                if name not in excluded and (allowed is None or name in allowed)}
+
+    def _offered_tool_names(self) -> list:
+        """The tool names this step's schema offers: the turn's scope (`_active_tools`) inside
+        what the model may see, or everything it may see when the turn has no scope. The same
+        filter `TOOLS` applies, for readers that name a tool to the model in prose."""
+        visible = self.visible_tools()
+        if self._active_tools:
+            return [name for name in self._active_tools if name in visible]
+        return list(visible)
 
     # --- Tool Implementations ---
 
@@ -14862,20 +14950,25 @@ class Agent:
         # Use active tools if available, otherwise all tools
         tools_to_use = self._active_tools if self._active_tools is not None else self.visible_tools().keys()
         excluded = getattr(self, "_excluded_tools", None) or set()
+        allowed = getattr(self, "_allowed_tools", None)
 
         # Cache the built schema. This property sits on the HOT PATH of every LLM call and was rebuilt --
         # re-running Whare Wananga pitfall injection for each tool -- on EVERY access: thousands of times
         # per session (8478 [WW-INJECT] in one run), churning memory. Rebuild only when the scoping inputs
-        # actually change (router re-scope, exclusions, or context size); the router re-scopes per turn, so
-        # newly learned pitfalls are still picked up on the next turn.
-        _cache_key = (frozenset(tools_to_use), frozenset(excluded), n_ctx)
+        # actually change (router re-scope, exclusions, the allowed set, or context size); the router
+        # re-scopes per turn, so newly learned pitfalls are still picked up on the next turn.
+        _cache_key = (frozenset(tools_to_use), frozenset(excluded), allowed, n_ctx)
         if (getattr(self, "_tools_schema_cache_key", None) == _cache_key
                 and getattr(self, "_tools_schema_cache", None) is not None):
             return self._tools_schema_cache
 
+        # Every name passes the visibility answer, whoever put it into the turn's scope: the
+        # router, a rider, a pin or a narrowed subset may name a tool the allowed set leaves
+        # out, and the set wins over all of them.
+        visible = self.visible_tools()
         schema = []
         for name in tools_to_use:
-            if name not in self.tools or name in excluded:
+            if name not in visible:
                 continue
             tool = self.tools[name]
 

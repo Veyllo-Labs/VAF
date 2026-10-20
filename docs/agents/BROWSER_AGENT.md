@@ -603,7 +603,11 @@ own browser, the profile is checked and the logins are restored first), so the c
 marks the request it SENT as `status: 'starting'` and the window draws the interactive
 frame with a spinner ("Starting the browser…") where the stream will be. Any reply
 replaces it; a closed socket, a chat switch and New Chat clear it, because the answer can
-then no longer arrive here. The strings of the start screen, the cover and the statusbar come
+then no longer arrive here, and the client clears it itself when nobody answers within 90
+seconds (`BROWSER_START_TIMEOUT_MS` in `web/app/page.tsx`, longer than the server's own deadlines on
+one start: 30 s for DevTools plus 8 s for the stream on a fresh per-user browser, 30 s plus
+40 s for the verified profile wipe on the shared one). That timer clears only a status that
+is still `starting`, so a reply arriving after it still opens the stream; any reply ends it. The strings of the start screen, the cover and the statusbar come
 from the `main` catalogue (`browserStarting*`, `browserConnecting`, `browserStatus*`). Only a request that left the socket is marked, so a window whose
 socket never connected still says there is no browser instead of spinning forever. While another sub-agent is actually RUNNING,
 the globe stands down and says so. The button reports "open", not "on top": every viewer

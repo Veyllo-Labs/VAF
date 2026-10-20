@@ -180,7 +180,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   connection: it dialled the proxy's own port, so chat replies and the interactive browser
   stayed dead. It now connects through the address it was opened with. Opening the browser
   window also shows a loading screen until the browser is ready, instead of "No browser
-  session yet".
+  session yet", and gives it up after 90 seconds without an answer from the server.
 - **"Create a Veyllo API key" opens the Veyllo dashboard in your language.** The button in
   the first-run wizard and the link in Settings led to the start page of veyllo.app, where no
   key is made; both open the dashboard now, after a sign-in there if needed.

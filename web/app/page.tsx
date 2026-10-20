@@ -636,6 +636,17 @@ function dropPendingBrowserStart<T extends { interactive: { status: string } | n
     return s.interactive?.status === 'starting' ? { ...s, interactive: null } : s;
 }
 
+// The last of those paths: a start whose answer never comes (the server's handler died,
+// the frame was lost) is dropped after this long. Longer than the server's own bounded
+// waits on one start: a fresh per-user browser waits up to 30 s for DevTools plus 8 s for
+// the stream, a start on the shared browser up to 30 s for DevTools plus 40 s for the
+// verified profile wipe (VAF_BROWSER_CDP_WAIT_S, VAF_BROWSER_VNC_WAIT_S,
+// verified_profile_wipe). The rare start that takes longer still (a per-user browser that
+// fails its health check, then the shared one) loses only the spinner: the drop clears a
+// status that is still 'starting' and nothing else, so a reply that lands later still
+// opens the stream.
+const BROWSER_START_TIMEOUT_MS = 90000;
+
 // The hotbar's catalogue. The KINDS are not listed a second time here - they are
 // taken from SUBAGENT_KIND_BY_TOOL above, so a sub-agent can never exist for the
 // window and be missing from the hotbar (or the other way round). What this adds
@@ -4597,6 +4608,11 @@ function VAFDashboardContent() {
     // coder window does not also hold a research view a later run swapped in
     // (the same per-kind semantics the browser had when it was a boolean).
     const handOpenedKindRef = useRef<SubAgentKind | null>(null);
+    // The timer that gives up on the globe's browser start (BROWSER_START_TIMEOUT_MS).
+    const pendingBrowserStartRef = useRef<number | null>(null);
+    useEffect(() => () => {
+        if (pendingBrowserStartRef.current) window.clearTimeout(pendingBrowserStartRef.current);
+    }, []);
     // Current task has a custom view (coder/research/browser): keep the window
     // closed until the first custom data arrives — never flash the generic window.
     const subAgentCustomViewRef = useRef(false);
@@ -6427,6 +6443,12 @@ function VAFDashboardContent() {
                     // ws/wss from this page's protocol exactly as getWsBase does, so host
                     // and port are the only two things it has to be told.
                     if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
+                    // Every state for this chat replaces a pending 'starting' below, so the
+                    // start's give-up timer has nothing left to clear.
+                    if (pendingBrowserStartRef.current) {
+                        window.clearTimeout(pendingBrowserStartRef.current);
+                        pendingBrowserStartRef.current = null;
+                    }
                     {
                         const st = String(data.status ?? '');
                         // The run only BORROWED the browser: an agent_done that says
@@ -8755,6 +8777,14 @@ function VAFDashboardContent() {
                 ? { active: false, status: 'starting', streamUrl: '', saving: false, reason: '', viewerConnected: false }
                 : prev.interactive,
         }));
+        // Only a request that left the socket is waited on, and a new one restarts the wait.
+        if (pendingBrowserStartRef.current) window.clearTimeout(pendingBrowserStartRef.current);
+        pendingBrowserStartRef.current = sent
+            ? window.setTimeout(() => {
+                pendingBrowserStartRef.current = null;
+                setSubAgentState(dropPendingBrowserStart);
+            }, BROWSER_START_TIMEOUT_MS)
+            : null;
         openSubAgentWindow(true);
     };
     useEffect(() => {

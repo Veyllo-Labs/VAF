@@ -15,8 +15,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 - **`Agent.set_allowed_tools(names)`** fixes which tools an agent offers and runs, for every
   identity, until lifted with `None`, so an agent that answers a stranger cannot use your
-  own tools, and a turn under the set never answers a question the agent has open on your
-  own user; `ToolCaller(allowed_tools=)` is the same for a lane of your own. See "Which
+  own tools, and a turn under the set never answers a question the agent has open for your
+  user; `ToolCaller(allowed_tools=)` is the same for a lane of your own. See "Which
   tools this agent may use" in `docs/EMBEDDING.md`.
 
 - **A restore shows in the security log.** `vaf backup restore` replaces every account, key

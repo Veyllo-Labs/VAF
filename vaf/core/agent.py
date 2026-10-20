@@ -9535,8 +9535,10 @@ class Agent:
         turn a person sent (`_turn_is_from_a_person`) AND no allowed set holds.
         A turn under a set (`set_allowed_tools`) answers somebody else under the
         user's identity: it is a person, but never the user, so neither latch may
-        read it as an answer. Both latches are keyed on the user's scope, and a
-        contact's turn runs under it. Measured before this test read the set: a
+        read it as an answer. A contact's turn reaches both: the waiting record is
+        keyed on the user's scope, which the turn runs under, and the ask-first
+        latch is a field of this agent, which serves every chat of a runner
+        worker. Measured before this test read the set: a
         contact's "ja" was filed as the owner's answer to a background question,
         the owner's question, the proposal and the findings behind it reached the
         contact's prompt, and the next background run could close the request on

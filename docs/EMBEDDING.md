@@ -1551,8 +1551,9 @@ The contract:
 - **A turn under the set is not your user answering.** The set is for an agent
   that answers somebody else under your user's identity, and the engine reads it
   that way: the turn neither answers nor clears a question the agent has open on
-  its user (the ask-first latch, a background or automation question and its
-  handoff, all keyed on the user's scope), does not latch one itself, and the
+  its user (the ask-first latch, a field of the agent object, and a background or
+  automation question with its handoff, whose waiting record, request and bundle
+  are keyed on the user's scope), does not latch one itself, and the
   system prompt carries no `last_interaction` or `prior_topic` line, which would
   show your customer what your user last wrote elsewhere. The customer's words
   still become the goal of the chat they wrote in. If you narrow an agent that

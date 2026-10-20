@@ -157,6 +157,28 @@ def test_failover_on_slow_first_token_via_timeout():
     assert list(mgr.chat_completion(_MSGS)) == ["fast backup"]
 
 
+def test_a_timeout_mid_tool_sequence_speaks_the_one_sentinel():
+    """Mid tool sequence the chain does not hand over (the next provider cannot honour the
+    tool-call ids), so a slow first token is surfaced as it is. That was a bare "timeout
+    after 0s", which chat_step took for the model's answer and committed to the history.
+    MUTATION: yield the failure unwrapped again - red."""
+    from vaf.core.completion import is_failure_chunk
+    mgr = _bare_manager({"failover_level": "balanced", "failover_timeout_s": 0.05})
+
+    class _SlowLink(_FakeLink):
+        def _chat_single(self, *a, **k):
+            self.consumed = True
+            time.sleep(0.4)                              # slower than the 0.05s deadline
+            yield "too late"
+
+    primary = _SlowLink("primary", [])
+    backup = _FakeLink("backup", ["fast backup"])
+    mgr._build_failover_chain = lambda model: [(primary, None), (backup, None)]
+    out = list(mgr.chat_completion(_TOOL_MSGS))
+    assert backup.consumed is False
+    assert len(out) == 1 and is_failure_chunk(out[0]) and "timeout after" in out[0]
+
+
 def test_classify_and_trigger_gating():
     mgr = _bare_manager()
     assert mgr._classify_failure("HTTP 429 too many requests") == "rate_limit"

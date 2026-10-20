@@ -241,5 +241,70 @@ def test_the_runner_delivers_through_the_one_function():
     loop = inspect.getsource(hr.run_headless_agent)
     assert ('_deliver_channel_reply(\n                            task, final_text, '
             'session_mgr=session_mgr,\n                            '
-            'contact=getattr(agent, "_front_office_contact", None))') in loop
+            'contact=getattr(agent, "_front_office_contact", None),\n                            '
+            'turn_failed=_turn_failed)') in loop
     assert "_deliver_email_reply(" not in loop
+
+
+# ── a stopped turn, the engine's own mark, the reasoning, the voice note ──────────────────
+
+_FIXED_DE = "Entschuldigung, ich kann gerade nicht antworten. Bitte versuchen Sie es später noch einmal."
+_BUDGET_STOP = ("⚠️ [LOOP_PROTECTION] Daily API budget reached (~$4.12 of $5.00 estimated). "
+                "Raise spend_budget_usd_per_day or wait for the next day.")
+
+
+@pytest.mark.parametrize("channel", sorted(_CHANNEL_META) + ["email"])
+def test_a_contact_is_never_sent_a_loop_protection_stop(delivered, channel):
+    """The budget stop names the owner's spend and a config key. MUTATION: drop
+    `LOOP_PROTECTION in visible` from `_deliver_channel_reply` - red (no flag passed here)."""
+    hr._deliver_channel_reply(_delivery_task(channel, from_contact=True), _BUDGET_STOP,
+                              contact={"preferred_language": "de"})
+    assert delivered == ([] if channel == "email" else [(channel, _FIXED_DE)])
+
+
+@pytest.mark.parametrize("channel", sorted(_CHANNEL_META) + ["email"])
+def test_a_turn_the_engine_marked_failed_is_not_sent_to_a_contact(delivered, channel):
+    """A stop after a tool round leaves the round's own words as the turn's text ("One
+    moment, I'll check."), with no marker in it; the engine's flag says the turn failed.
+    MUTATION: drop `turn_failed or` - red. The owner's chat still gets the text."""
+    hr._deliver_channel_reply(_delivery_task(channel, from_contact=True),
+                              "Einen Moment, ich schaue nach.", turn_failed=True,
+                              contact={"preferred_language": "de"})
+    hr._deliver_channel_reply(_delivery_task(channel, from_contact=False),
+                              "Einen Moment, ich schaue nach.", turn_failed=True)
+    expected = [] if channel == "email" else [(channel, _FIXED_DE)]
+    assert delivered == expected + [(channel, "Einen Moment, ich schaue nach.")]
+
+
+def test_reasoning_that_quotes_an_error_does_not_swallow_the_answer(delivered):
+    """The reasoning streams with the turn (the backend wraps it in <think>) and never
+    leaves; a model that thinks about an "[Error] ..." tool result and then answers is
+    answered. MUTATION: judge `final_text` instead of `visible` - red."""
+    text = ("<think>contact_history gave [Error] API backend failure: x, so I answer from "
+            "the record.</think>\n\nIhr Termin ist am Montag um 10 Uhr.")
+    hr._deliver_channel_reply(_delivery_task("whatsapp", from_contact=True), text)
+    assert delivered == [("whatsapp", "Ihr Termin ist am Montag um 10 Uhr.")]
+
+
+def test_a_failure_inside_unclosed_reasoning_is_still_caught(delivered):
+    """The provider failed mid-reasoning: the "</think>" never came, and the sentinel
+    follows the open block. The outbound text keeps it, so the contact gets the sentence."""
+    hr._deliver_channel_reply(_delivery_task("telegram", from_contact=True),
+                              "<think>Ich prüfe den Kalender " + _KEY_ERROR,
+                              contact={"preferred_language": "de"})
+    assert delivered == [("telegram", _FIXED_DE)]
+
+
+def test_a_failed_turn_after_a_telegram_voice_note_is_not_read_out(delivered):
+    """Telegram's sender reads a reply aloud while a voice note is pending for that chat,
+    like WhatsApp's. MUTATION: drop the telegram branch of `_drop_pending_voice_reply` - red."""
+    from vaf.api import telegram_bridge as tb
+    key = _CHANNEL_META["telegram"]["telegram_chat_id"]
+    with tb._voice_reply_lock:
+        tb._voice_reply_pending[key] = "de"
+    try:
+        hr._deliver_channel_reply(_delivery_task("telegram", from_contact=True), _FAILED_TURNS[1])
+        assert key not in tb._voice_reply_pending
+    finally:
+        with tb._voice_reply_lock:
+            tb._voice_reply_pending.pop(key, None)

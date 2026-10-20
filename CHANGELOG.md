@@ -22,7 +22,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **`vaf.is_error_reply(text)`** tells a turn that failed from a turn that answered. `run()`
   does not raise for a provider that fails during the turn: the failure comes back as the
   answer's text, with the provider's raw answer in it. Ask this before that text reaches
-  anybody who must not read it. See "A complete example, with error handling" in
+  anybody who must not read it. The failure is not part of the conversation: the next
+  `run()` does not show it to the model and `save_session()` does not store it, and the
+  same holds for a loop-protection stop. See "A complete example, with error handling" in
   `docs/EMBEDDING.md`.
 
 - **A restore shows in the security log.** `vaf backup restore` replaces every account, key
@@ -99,14 +101,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   updating so the fix takes effect.
 
 - **A contact no longer receives VAF's internal error text.** When the agent's answer to a
-  contact on WhatsApp, Telegram or Discord failed, the contact got the internal error: most
-  often the AI provider's raw failure ("[API Error from openai: ... Incorrect API key
-  provided ...]", "[Error] API backend failure: ..."), which can name file paths, ids and a
-  masked key, and after a voice note it was read aloud. A contact now gets a short fixed
-  sentence asking them to try again later, as text, in the language on their contact record
-  (English when it names none); an answer by mail is not sent at all and the mail waits for
-  you. The error stays in that chat in the web UI, and your own chats still show it in
-  full. Restart VAF after updating so the fix takes effect.
+  contact on WhatsApp, Telegram or Discord failed, the contact got the internal error, most
+  often the AI provider's raw failure, which can name file paths, ids and a masked key; after
+  a voice note it was read aloud. A stop at the daily API budget told them your spend. A
+  contact now gets a short fixed sentence asking them to try again later, as text, in the
+  language on their contact record (English when it names none). An answer by mail is not
+  sent at all and the mail waits for you. A failed answer also no longer stays in what the
+  agent reads on the next message, so it cannot repeat it when asked what happened; that is
+  true in your own chats too. The web UI still shows the error, and your own messenger chats
+  still receive it in full. Restart VAF after updating so the fix takes effect.
 
 - **Archived chats, agent rooms and word suggestions are encrypted on disk like the chats.**
   Their writers already encrypted every new file, but the start-up sweep that encrypts what

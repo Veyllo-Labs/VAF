@@ -141,6 +141,14 @@ the real answer; the return value is a status:
   statuses above are streamed as well. `vaf.is_error_reply(text)` recognises both
   shapes; ask it of the accumulated stream before the text goes to anybody who must
   not read internals (the raw answer can carry a masked key, a path, an id).
+- A turn that ends without the model's answer, a backend failure (either shape above,
+  the provider's sentinel arriving as its own chunk) or a loop-protection stop, commits
+  NOTHING to the history: `history[-1]` is then not an answer, the failure or stop text
+  is the return value only, and the turn-local `_turn_failed` is True. The model never
+  reads that text as its own words in a later turn. A caller that stores the streamed
+  text apart from the history marks its copy with `session.failed_turn_meta(...)`; the
+  replay in `load_session_context`, `Session.get_history()`, the chat compaction's
+  transcript and the Cross Chat Hint scan skip a message `session.is_failed_turn()` names.
 
 There is no public `stop()`; a running turn is stopped via
 `TaskQueue().request_stop(session_id)` (polled between chunks and tools).

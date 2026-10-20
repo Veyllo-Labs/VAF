@@ -179,7 +179,9 @@ Result: significantly fewer messages and a sharply reduced token count, while pr
 ## 7b. Compression on session load
 
 `Agent.load_session_context` replays the FULL saved transcript into the LLM
-history (the session file is the UI archive and keeps every message by design).
+history (the session file is the UI archive and keeps every message by design),
+except a failed turn's stored text (`session.is_failed_turn`), which the live
+history never held either.
 After the replay it runs `_compress_history_if_needed` - the same structural
 pass as the per-turn check in `chat_step`, with no LLM summarization call. It
 reuses the narrative summary restored from the session's `runtime_state`, so a

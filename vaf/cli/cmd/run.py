@@ -15,6 +15,7 @@ from datetime import datetime
 from rich.console import Console
 from rich.panel import Panel
 from vaf.core.agent import Agent
+from vaf.core.session import failed_turn_meta
 from vaf.cli.ui import UI
 from vaf.core.log_helper import append_crash_log, get_dated_log_path
 import threading
@@ -906,7 +907,8 @@ def prompt_once(prompt: str, output_format: str = "text", session: str = None,
             if save_session:
                 s = mgr.new(model=agent.config.get("model", ""), project_path=os.getcwd())
                 s.add_message("user", prompt)
-                s.add_message("assistant", result_text or "")
+                s.add_message("assistant", result_text or "",
+                              metadata=failed_turn_meta(getattr(agent, "_turn_failed", False)))
                 mgr.save(s)
             raise typer.Exit(0)
 
@@ -916,7 +918,8 @@ def prompt_once(prompt: str, output_format: str = "text", session: str = None,
     if save_session:
         s = mgr.new(model=agent.config.get("model", ""), project_path=os.getcwd())
         s.add_message("user", prompt)
-        s.add_message("assistant", result_text or "")
+        s.add_message("assistant", result_text or "",
+                      metadata=failed_turn_meta(getattr(agent, "_turn_failed", False)))
         mgr.save(s)
         ndjson_emit({"type": "session_saved", "id": s.id})
 
@@ -2578,7 +2581,10 @@ def _process_agent_message(agent, user_input: str, tui, session):
         # Use the same converter to ensure consistency
         full_response_clean = convert_rich_to_xml(full_response_raw)
         
-        session.add_message("assistant", full_response_clean)
+        # A failed turn is marked so a resumed chat does not replay it as an answer
+        # (session.is_failed_turn); the transcript still shows it.
+        session.add_message("assistant", full_response_clean,
+                            metadata=failed_turn_meta(getattr(agent, "_turn_failed", False)))
         
         # AUTO-SAVE SESSION (Critical for Web UI persistence)
         # We assume session object handles its own persistence path if it was loaded/created properly.

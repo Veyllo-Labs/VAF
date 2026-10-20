@@ -450,6 +450,12 @@ answer's text, `[Error] ...` or `[API Error from <provider>: ...]`, with interna
 in it (the provider's raw answer, a masked key, a path). `vaf.is_error_reply(answer)`
 tells that from an answer: ask it before the text reaches anybody who must not read
 internals. VAF's own queue runner asks it before it answers a contact.
+That text is not part of the conversation. The history keeps your message and no
+answer, so the next `run()` neither shows the model the failure (it would repeat it as
+its own words when asked what happened) nor does `save_session()` store it. The same holds
+for a loop-protection stop (`vaf.markers.LOOP_PROTECTION`): its note can name your daily
+API spend and a config key. If you keep your own transcript of what `on_token` streamed,
+keep these out of whatever you hand a model later.
 Some other *handled* failures (e.g. the API returning empty responses repeatedly) also
 come back as a short status string instead of raising:
 

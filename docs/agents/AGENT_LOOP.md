@@ -248,3 +248,21 @@ exist because a *slow* runaway (a reasoning provider grinding many varied tool t
 kept re-verifying an already-created automation) evades the count- and 5-second-based guards. Their
 config keys are in [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md) (the `*_gate_*`, `anti_spin_*`,
 `nonprogress_*`, `chat_step_wall_clock_seconds`, `result_grounding_*` families).
+
+## A turn that produces no answer
+
+A turn ends without the model's answer in two ways: the backend fails (it raises, it
+returns the local server's `[Error] ...`, or a provider's `[API Error from <provider>: ...]`
+arrives as a content chunk of its own, `completion.is_failure_chunk`, also after text the
+round already streamed), or loop protection stops it (the spend cap, the wall clock, the
+hard stop, all carrying `[LOOP_PROTECTION]`). Every one of these exits does the same three
+things: the text is the return value (and is in the stream where it was streamed), NOTHING
+of it is committed to the history, and the turn-local `_turn_failed` is set (reset at the
+start of every `chat_step`, like `_turn_closed_by_tool`). A failed round's tool calls do
+not run: they are a stream cut off mid-way. The text is the engine's, not something the
+model said: in the next turn's context the model would repeat a provider's raw answer, a
+masked key or the owner's spend as its own words, to whoever the chat is with. The queue
+runner and the CLI store the streamed text for their transcripts and mark that copy
+(`session.failed_turn_meta`), so the replay skips it too (`session.is_failed_turn`); the
+runner also answers a contact's failed turn with a fixed sentence (FRONT_OFFICE.md).
+Guard: `tests/test_failed_turn_context.py`.

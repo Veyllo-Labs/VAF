@@ -1461,11 +1461,14 @@ def session_dialogue_excerpt(session_id: str, *, user_label: str = "Contact",
     actually wrote, and the agent is a no-op reload when it already sits on that session.
     Returns "" when the session cannot be read: no transcript, no learning."""
     try:
-        from vaf.core.session import SessionManager
+        from vaf.core.session import SessionManager, is_failed_turn
         messages = getattr(SessionManager().load(session_id), "messages", None) or []
     except Exception:
         return ""
-    dialogue = [(getattr(m, "role", None), getattr(m, "content", None)) for m in messages]
+    # A failed or stopped turn's stored text is no fact about anybody: the error carries the
+    # owner's internals, and what a contact chat learns is read back into that chat's turns.
+    dialogue = [(getattr(m, "role", None), getattr(m, "content", None))
+                for m in messages if not is_failed_turn(m)]
     return _format_compaction_dialogue(dialogue, max_chars, user_label=user_label)
 
 

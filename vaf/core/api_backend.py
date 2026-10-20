@@ -1708,7 +1708,10 @@ class APIBackendManager:
                 if _can_failover:
                     logger.info(f"[failover] {link_mgr.provider_name} failed ({self._classify_failure(failure)}); trying next provider")
                     continue
-                yield failure if isinstance(failure, str) else f"[API Error from {link_mgr.provider_name}: {failure}]"
+                # In the sentinel shape, like the end of the chain below: a slow first token
+                # comes back as a bare "timeout after Ns", which read as the model's answer.
+                text = str(failure)
+                yield text if text.startswith("[API Error from ") else f"[API Error from {link_mgr.provider_name}: {text}]"
                 return
             self._failover_pinned_idx = 0 if return_primary else idx
             self._mark_link_alive(link_mgr.provider_name)

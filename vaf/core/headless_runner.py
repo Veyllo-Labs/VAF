@@ -23,7 +23,8 @@ from vaf.core.identity_binding import (Identity, bind_identity, identity_from_me
                                        reassert_identity, resolve_scope_identity)
 from vaf.core.task_queue import TaskQueue
 from vaf.core.subagent_ipc import take_result_notification
-from vaf.core.session import SessionManager, Session, turn_context_messages_since_last_user
+from vaf.core.session import (SessionManager, Session, failed_turn_meta,
+                              turn_context_messages_since_last_user)
 from vaf.core.tray_context import TrayContext
 from vaf.core.web_interface import get_web_interface
 from vaf.core.platform import Platform
@@ -318,6 +319,26 @@ def _turn_error_text(meta: dict, error, contact=None) -> str:
     return f"Sorry, something went wrong: {err_msg}"
 
 
+def _drop_pending_voice_reply(source, meta: dict) -> None:
+    """Make the next reply to this chat a text: the Telegram and the WhatsApp bridge read a
+    reply aloud while a voice note from that chat is pending (Telegram keys it by chat id,
+    WhatsApp by user and JID; Discord has no voice reply). A failed turn's sentence goes out
+    as text, also after a voice note. Never raises."""
+    try:
+        if source == "telegram" and meta.get("telegram_chat_id"):
+            from vaf.api.telegram_bridge import _voice_reply_lock, _voice_reply_pending
+            key = str(meta["telegram_chat_id"])
+        elif source == "whatsapp" and meta.get("whatsapp_chat_jid"):
+            from vaf.api.whatsapp_bridge import _voice_reply_lock, _voice_reply_pending
+            key = f"{meta.get('username') or 'admin'}|{meta['whatsapp_chat_jid']}"
+        else:
+            return
+        with _voice_reply_lock:
+            _voice_reply_pending.pop(key, None)
+    except Exception:
+        pass
+
+
 def _send_turn_error_reply(task, error, contact=None) -> None:
     """Answer a failed turn on the messenger it came from (Telegram, Discord, WhatsApp), so
     nobody waits for a reply that will not come; the text is `_turn_error_text`'s. `contact`
@@ -328,6 +349,7 @@ def _send_turn_error_reply(task, error, contact=None) -> None:
         source = getattr(task, "source", None)
         meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
         text = _turn_error_text(meta, error, contact)
+        _drop_pending_voice_reply(source, meta)
         if source == "telegram" and meta.get("telegram_chat_id"):
             from vaf.core.telegram_reply import send_telegram_reply
             send_telegram_reply(str(meta["telegram_chat_id"]), text)
@@ -338,13 +360,6 @@ def _send_turn_error_reply(task, error, contact=None) -> None:
             from vaf.core.whatsapp_reply import send_whatsapp_reply
             username = meta.get("username") or "admin"
             jid = str(meta["whatsapp_chat_jid"])
-            # Clear any pending voice reply so the error is sent as text, not read out.
-            try:
-                from vaf.api.whatsapp_bridge import _voice_reply_lock, _voice_reply_pending
-                with _voice_reply_lock:
-                    _voice_reply_pending.pop(f"{username}|{jid}", None)
-            except Exception:
-                pass
             send_whatsapp_reply(
                 username, jid, text,
                 user_scope_id=meta.get("user_scope_id") and str(meta["user_scope_id"]) or None,
@@ -358,17 +373,22 @@ def _send_turn_error_reply(task, error, contact=None) -> None:
         pass
 
 
-def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=None) -> None:
+def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=None,
+                           turn_failed: bool = False) -> None:
     """Send a finished turn's answer back where the task came from: Telegram, Discord,
     WhatsApp, or the mail outbox (`_deliver_email_reply`); a web turn sends nothing here.
 
-    A contact's turn whose text is a backend failure (`completion.is_error_reply`: chat_step
-    hands a provider error back as the turn's text instead of raising) is not sent: the
-    contact gets the fixed sentence `_send_turn_error_reply` sends for a turn that raised,
-    and a mail nothing. The owner's own chats get the text as it is, and so does the web
-    UI, which the runner fed before this. `contact` is the record pinned for THIS turn.
-    `session_mgr` serves the WhatsApp fallback that reads the chat's JID off the session.
-    Never raises."""
+    A contact's turn that produced no answer is not sent: the contact gets the fixed
+    sentence `_send_turn_error_reply` sends for a turn that raised, and a mail nothing.
+    That is a turn the engine marked (`turn_failed`, chat_step's `_turn_failed`: the backend
+    failed or loop protection stopped it), or one whose outgoing text is a failure
+    (`completion.is_error_reply`, which also covers the runner's own "[Error] No response
+    ...") or a stop (`markers.LOOP_PROTECTION`). The text is judged as the contact would
+    receive it, after `_prepare_channel_outbound`: the model's reasoning never leaves, so
+    reasoning that quotes an "[Error] ..." tool result does not decide the turn. The owner's
+    own chats get the text as it is, and so does the web UI, which the runner fed before
+    this. `contact` is the record pinned for THIS turn. `session_mgr` serves the WhatsApp
+    fallback that reads the chat's JID off the session. Never raises."""
     try:
         task_source = getattr(task, "source", None)
         meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
@@ -378,10 +398,13 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
             log_telegram_reply(f"HEADLESS task_source={task_source!r} chat_id={chat_id!r} final_len={len(str(final_text))}")
         except Exception:
             pass
-        from vaf.core.completion import is_error_reply
-        if meta.get("from_contact") and is_error_reply(final_text):
-            _send_turn_error_reply(task, final_text, contact=contact)
-            return
+        if meta.get("from_contact"):
+            from vaf.core.completion import is_error_reply
+            from vaf.markers import LOOP_PROTECTION
+            visible = _prepare_channel_outbound(final_text)
+            if turn_failed or is_error_reply(visible) or LOOP_PROTECTION in visible:
+                _send_turn_error_reply(task, final_text, contact=contact)
+                return
         if task_source == "telegram" and chat_id:
             from vaf.core.telegram_reply import send_telegram_reply
             out = _prepare_channel_outbound(final_text)
@@ -2472,6 +2495,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # A call ended the turn (a question to the person, a draft): the answer is
                     # what the tool declared, not a text the person asked to have written.
                     _turn_closed = bool(getattr(agent, "_turn_closed_by_tool", False))
+                    # The turn produced no answer (backend failure, loop-protection stop): read
+                    # NOW, before anything below runs another chat_step on the same agent.
+                    _turn_failed = bool(getattr(agent, "_turn_failed", False))
                     if response_text.startswith("[ASYNC_ACK]"):
                         clean_ack = response_text.replace("[ASYNC_ACK]", "").strip()
                         final_text = clean_ack or response_text
@@ -2667,7 +2693,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         # The contact pinned for THIS turn: the finally that clears it runs later.
                         _deliver_channel_reply(
                             task, final_text, session_mgr=session_mgr,
-                            contact=getattr(agent, "_front_office_contact", None))
+                            contact=getattr(agent, "_front_office_contact", None),
+                            turn_failed=_turn_failed)
 
                     # Send token/context stats to WebUI
                     try:
@@ -2864,7 +2891,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     append_domain_log("headless", f"turn context not persisted for "
                                                       f"{task.session_id}: {type(_ctx_e).__name__}: {_ctx_e}")
                                 if _clean_response:
-                                    session.add_message(role="assistant", content=_clean_response)
+                                    session.add_message(role="assistant", content=_clean_response,
+                                                        metadata=failed_turn_meta(_turn_failed))
                                 session_mgr.save(session)
                                 if is_debug_logging_enabled():
                                     logging.getLogger(__name__).debug(f"Session saved: +1 user, +1 assistant for {task.session_id}, turn_count={session.runtime_state.get('user_turn_count', 0)}")
@@ -2875,7 +2903,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         last_assistant_msg = _msg_content(msg)
                                         break
                                 if last_assistant_msg != _clean_response:
-                                    session.add_message(role="assistant", content=_clean_response)
+                                    session.add_message(role="assistant", content=_clean_response,
+                                                        metadata=failed_turn_meta(_turn_failed))
                                 # sync_state=True ensures the ContextManager state is saved to runtime_state
                                 session_mgr.save(session, sync_state=True)
                     except Exception as e:

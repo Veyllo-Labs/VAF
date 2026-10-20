@@ -62,6 +62,16 @@ def is_error_reply(text) -> bool:
     return _ERROR_SENTINEL in text or _ENGINE_ERROR in text
 
 
+def is_failure_chunk(chunk) -> bool:
+    """True for the content chunk a provider yields in place of an answer when it fails: the
+    `[API Error from <provider>: ...]` sentinel, which api_backend yields as one whole chunk,
+    also after text the round already streamed. The chunk-level question a stream reader asks
+    (`chat_step` marks its round failed on it, so the text is never committed as the model's
+    answer); `is_error_reply` is the whole-text one. A chunk that merely quotes the sentinel
+    further in is content."""
+    return isinstance(chunk, str) and chunk.startswith(_ERROR_SENTINEL)
+
+
 def is_metadata_frame(chunk: str) -> bool:
     """True for the JSON control frames the backend stream interleaves with content.
 

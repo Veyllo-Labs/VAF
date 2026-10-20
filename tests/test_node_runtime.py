@@ -9,6 +9,7 @@ in PATH", and every page of the web UI answered 502.
 """
 import os
 import re
+import shutil
 from pathlib import Path
 
 import pytest
@@ -37,8 +38,54 @@ def test_a_portable_node_is_found_without_it_on_path(tmp_path, monkeypatch):
     folder, tool = _portable(tmp_path, monkeypatch)
     found = node_runtime.find("npm")
     assert found and Path(found).resolve() == tool.resolve()
-    # npm starts node by name: the folder is on this process's PATH for every child.
-    assert os.environ["PATH"].split(os.pathsep)[0] == str(folder)
+
+
+def test_finding_it_leaves_this_process_path_alone(tmp_path, monkeypatch):
+    """Everything this process starts afterwards would see the portable Node, the linter too,
+    which stays on PATH alone on purpose (_PATH_ONLY): after the web UI had started, it found
+    the portable npx. MUTATION: put the folder on os.environ["PATH"] in find() - red."""
+    folder, _ = _portable(tmp_path, monkeypatch)
+    before = os.environ["PATH"]
+    assert node_runtime.find("npm")
+    assert os.environ["PATH"] == before
+    assert shutil.which("npm") is None, "a PATH-only lookup still does not see it"
+
+
+def test_the_child_that_runs_it_gets_the_folder_first(tmp_path, monkeypatch):
+    """npm starts node by name, so its child needs the folder; the caller's own environment
+    is copied, not changed. MUTATION: return the base without the folder - red."""
+    folder, _ = _portable(tmp_path, monkeypatch)
+    env = node_runtime.child_env(node_runtime.find("npm"), {"PATH": "/usr/bin", "KEEP": "1"})
+    assert env["PATH"].split(os.pathsep) == [str(folder), "/usr/bin"]
+    assert env["KEEP"] == "1"
+    assert os.environ["PATH"] == str(tmp_path / "empty")
+
+
+def test_a_tool_found_on_path_leaves_the_child_path_as_it_was(tmp_path):
+    """Moving a PATH folder to the front would reorder what the child finds (a venv's python
+    behind the system's). MUTATION: always prepend - red."""
+    system = str(tmp_path / "system")
+    base = {"PATH": os.pathsep.join([str(tmp_path / "venv"), system])}
+    assert node_runtime.child_env(os.path.join(system, _TOOL), base)["PATH"] == base["PATH"]
+
+
+# Every child that runs a found Node tool gets its environment from child_env: the file and
+# how many such spawns it has. One without it runs npm whose `env node` finds nothing.
+_SPAWNS = {
+    "vaf/core/frontend_manager.py": 2,   # npm ci/install, and the build and start
+    "vaf/api/whatsapp_bridge.py": 2,     # npm ci/install, and the bridge's node
+    "vaf/cli/cmd/update.py": 1,          # npm ci/install
+}
+
+
+def test_every_child_of_a_found_tool_gets_its_folder():
+    """MUTATION: spawn the bridge's node without child_env - red."""
+    for rel, count in _SPAWNS.items():
+        assert (ROOT / rel).read_text(encoding="utf-8").count("node_runtime.child_env(") == count, rel
+    finders = {path.relative_to(ROOT).as_posix() for path in (ROOT / "vaf").rglob("*.py")
+               if "node_runtime.find(" in path.read_text(encoding="utf-8")}
+    # The QR login hands the node it found to the bridge's spawn helper.
+    assert finders - set(_SPAWNS) == {"vaf/api/whatsapp_routes.py"}
 
 
 def test_path_wins_over_the_portable_node(tmp_path, monkeypatch):

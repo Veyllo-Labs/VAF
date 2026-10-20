@@ -220,7 +220,7 @@ class FrontendManager:
             # lockfile and never modifies it.
             if not os.path.exists(os.path.join(web_dir, "node_modules")):
                 self._log("Installing npm dependencies...", "warning", log_callback)
-                install_kwargs = {"cwd": web_dir, "capture_output": True}
+                install_kwargs = {"cwd": web_dir, "capture_output": True, "env": node_runtime.child_env(npm_path)}
                 if platform.system() == "Windows":
                     install_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
                 use_ci = os.path.exists(os.path.join(web_dir, "package-lock.json"))
@@ -259,7 +259,7 @@ class FrontendManager:
             use_debug_log = is_debug_logging_enabled()
 
             # Production server: build once if needed, then next start (no dev server)
-            frontend_env = os.environ.copy()
+            frontend_env = node_runtime.child_env(npm_path)
             backend_port = Config.get("local_network_port", 8001)
             if Config.get("local_network_enabled", False):
                 frontend_env["VAF_API_PORT"] = str(backend_port)

@@ -1195,12 +1195,12 @@ EOF
                 && ! grep '^Groups:' "/proc/${_um_pid}/status" 2>/dev/null | grep -qw "$_docker_gid"; then
             # A running service other than VAF and the session bus may be in the middle of
             # work that a restart cuts off (and starting it again does not resume it): then
-            # the restart waits for the person's yes, or for the next reboot. Timers and
-            # sockets only wait, so they are started again afterwards, as are services the
-            # person agreed to restart (a unit started by hand does not come back by itself).
+            # the restart waits for the person's yes, or for the next reboot. Timers, sockets
+            # and path watchers only wait, so they are started again afterwards, as are services
+            # the person agreed to restart (a unit started by hand does not come back by itself).
             _busy="$(systemctl --user list-units --type=service --state=running --no-legend --plain 2>/dev/null \
                 | awk '{print $1}' | grep -vxE 'vaf\.service|dbus\.service|dbus-broker\.service' | tr '\n' ' ' || true)"
-            _waiting="$(systemctl --user list-units --type=timer,socket --state=active --no-legend --plain 2>/dev/null \
+            _waiting="$(systemctl --user list-units --type=timer,socket,path --state=active --no-legend --plain 2>/dev/null \
                 | awk '{print $1}' | tr '\n' ' ' || true)"
             _restart=true
             if [[ -n "${_busy// /}" ]]; then

@@ -12,9 +12,11 @@ user unit of a server install, a desktop shortcut before the next login. Measure
 fresh server install (Ubuntu 24.04, no system Node): the service logged "npm not found in
 PATH" and every page of the web UI answered 502, after a reboot as well.
 
-`find(name)` answers from PATH first, then from those folders. A tool found there puts
-its folder on this process's PATH, because npm starts node by name
-(`#!/usr/bin/env node`) and every child has to find it the same way.
+`find(name)` answers from PATH first, then from those folders. npm starts node by name
+(`#!/usr/bin/env node`), so a child that runs a tool found there needs its folder on PATH:
+`child_env(tool)` is that child's environment. This process's own PATH is left alone,
+deliberately: everything else it starts would see the portable Node too, the JavaScript
+linter included, which stays on PATH alone for the reason vaf/tools/linter.py gives.
 
 Not on the facade: which Node an installer brings is VAF's installation, not an
 embedder's.
@@ -25,7 +27,7 @@ import os
 import re
 import shutil
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Mapping, Optional
 
 
 def portable_dirs() -> List[Path]:
@@ -56,6 +58,17 @@ def find(name: str) -> Optional[str]:
     for folder in portable_dirs():
         hit = shutil.which(name, path=str(folder))
         if hit:
-            os.environ["PATH"] = str(folder) + os.pathsep + os.environ.get("PATH", "")
             return hit
     return None
+
+
+def child_env(tool: str, base: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
+    """The environment for a child that runs ``tool`` (a path `find` returned): ``base``, this
+    process's environment by default, with the tool's folder first on PATH when it is not on
+    it yet. A tool found on PATH leaves PATH exactly as it was."""
+    env = dict(os.environ if base is None else base)
+    folder = str(Path(tool).parent)
+    parts = [p for p in env.get("PATH", "").split(os.pathsep) if p]
+    if folder not in parts:
+        env["PATH"] = os.pathsep.join([folder] + parts)
+    return env

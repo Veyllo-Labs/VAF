@@ -380,15 +380,25 @@ def _mentions_environ(node) -> bool:
                for n in ast.walk(node))
 
 
+# Helpers in other modules that return the whole environment plus keys of their own. The
+# guard reads one file at a time and cannot follow the call, so they are named here, and
+# test_named_environment_helpers_carry_the_environment holds each one to it.
+_CARRIES_ENVIRON = {"child_env"}   # vaf/core/node_runtime.py
+
+
 def _inherits_environ(region) -> bool:
     """True only when the WHOLE environment is carried over, not merely read.
 
     Reading one key out of os.environ does not make an environment startable, so
     a stray os.environ.get("PATH") must not silence the guard. Only a spread
-    counts: {**os.environ}, dict(os.environ), os.environ.copy(), or a
-    comprehension over it.
+    counts: {**os.environ}, dict(os.environ), os.environ.copy(), a
+    comprehension over it, or a helper named in _CARRIES_ENVIRON.
     """
     for n in ast.walk(region):
+        if isinstance(n, ast.Call):
+            name = n.func.attr if isinstance(n.func, ast.Attribute) else getattr(n.func, "id", "")
+            if name in _CARRIES_ENVIRON:
+                return True
         if isinstance(n, ast.DictComp):
             if any(_mentions_environ(g.iter) for g in n.generators):
                 return True
@@ -539,6 +549,16 @@ def test_no_posix_only_subprocess_env():
         "            env[keep] = os.environ[keep]\n"
         + "\n".join(hits)
     )
+
+
+def test_named_environment_helpers_carry_the_environment():
+    """What lets _CARRIES_ENVIRON vouch for a helper: every key of this process's environment
+    comes back, SystemRoot included on Windows. MUTATION: return only PATH from child_env - red."""
+    from vaf.core import node_runtime
+    assert _CARRIES_ENVIRON == {"child_env"}, "a new name here needs its own check below"
+    env = node_runtime.child_env(sys.executable)
+    assert {k: v for k, v in env.items() if k != "PATH"} == {
+        k: v for k, v in os.environ.items() if k != "PATH"}
 
 
 def test_the_isabs_class_is_real():

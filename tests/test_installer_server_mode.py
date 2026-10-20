@@ -81,9 +81,9 @@ def test_a_new_docker_group_reaches_the_service_without_a_reboot():
     # waits for an answer at a terminal, or for the next reboot. MUTATION: restart anyway - red.
     assert "if [[ -n \"${_busy// /}\" ]]; then" in block and "[[ -t 0 ]]" in block
     assert block.index('if [[ "$_restart" != "true" ]]; then') < block.index("sudo systemctl restart")
-    # What waited (timers, sockets) and what was agreed to comes back, a unit started by hand
-    # included. MUTATION: drop the restart of the recorded units - red.
-    assert "--type=timer,socket --state=active" in block
+    # What waited (timers, sockets, path watchers) and what was agreed to comes back, a unit
+    # started by hand included. MUTATION: drop the restart of the recorded units - red.
+    assert "--type=timer,socket,path --state=active" in block
     assert 'for _unit in $_busy $_waiting; do' in block and 'systemctl --user start "$_unit"' in block
 
 

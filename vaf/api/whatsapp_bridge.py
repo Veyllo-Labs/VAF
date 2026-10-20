@@ -358,7 +358,8 @@ def ensure_bridge_deps(timeout: float = 600.0) -> Tuple[bool, str]:
             )
         if not os.access(node_dir, os.W_OK):
             return False, f"{node_dir} is not writable; run `npm install` there with the right permissions."
-        kwargs: dict = {"cwd": str(node_dir), "capture_output": True, "text": True, "timeout": timeout}
+        kwargs: dict = {"cwd": str(node_dir), "capture_output": True, "text": True, "timeout": timeout,
+                        "env": node_runtime.child_env(npm)}
         if sys.platform == "win32":
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
         try:
@@ -652,10 +653,12 @@ def spawn_node_bridge(node: str, wa_js: Path, auth_dir: Path) -> subprocess.Pope
     0600, and whatever an earlier start wrote is fixed first. `umask=` rather than a
     preexec_fn, which is not safe in a threaded process; POSIX only, Windows ignores both.
     """
+    from vaf.core import node_runtime
     from vaf.core.whatsapp_auth import harden_auth_dir
     auth_dir.mkdir(parents=True, exist_ok=True)
     harden_auth_dir(auth_dir)
     kwargs: dict = {
+        "env": node_runtime.child_env(node),
         "stdin": subprocess.PIPE,
         "stdout": subprocess.PIPE,
         "stderr": subprocess.PIPE,

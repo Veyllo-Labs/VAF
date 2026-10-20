@@ -195,11 +195,12 @@ def _install_web_deps(root: Path, prev_sha: str = "", force: bool = False) -> No
     # update's dirty-tree check - live incident). Fallback to install when
     # there is no lockfile or ci fails (e.g. lock/manifest mismatch).
     use_ci = (web / "package-lock.json").exists()
+    env = node_runtime.child_env(npm)
     UI.info(f"Updating frontend dependencies (npm {'ci' if use_ci else 'install'})...")
-    r = subprocess.run([npm, "ci" if use_ci else "install"], cwd=str(web))
+    r = subprocess.run([npm, "ci" if use_ci else "install"], cwd=str(web), env=env)
     if use_ci and r.returncode != 0:
         UI.warning("npm ci failed - retrying with npm install...")
-        r = subprocess.run([npm, "install"], cwd=str(web))
+        r = subprocess.run([npm, "install"], cwd=str(web), env=env)
     if r.returncode != 0:
         UI.warning("npm install failed; the Web UI may not rebuild. Run `cd web && npm install` manually.")
     # Belt: whatever npm did, the lockfile must leave the tree clean.

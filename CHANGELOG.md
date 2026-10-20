@@ -83,25 +83,35 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
-- **A tunnel to the web UI's port no longer makes its visitors the machine owner.** A tunnel
-  or reverse proxy pointed at port 3000 on the same machine (a cloudflared quick tunnel to
-  `http://localhost:3000`, Tailscale Serve) connects to VAF from the machine itself, and the
-  web UI's API door did not pass on who the visitor was, so VAF took every visitor for you,
-  with no sign-in at all. The door passes the visitor on now, VAF reads the client a relay
-  names the same way on every port, and the desktop window stays your own as before. A raw
-  port forward such as `ssh -R` names nobody: never put one in front of VAF. Restart VAF
-  and rebuild the web UI after updating.
+- **Sign-ins, sessions and the HTTPS port are hardened (the entries below).** They take effect
+  after a restart of VAF; `vaf update` has the web UI rebuilt at that start. VAF is meant for
+  your LAN and your VPN only: the app refuses public addresses, and putting it on the public
+  internet is not supported.
+
+- **A relay in front of the web UI's port no longer makes its visitors the machine owner.** A
+  reverse proxy on the same machine pointed at port 3000 (an nginx for the LAN, Tailscale
+  Serve inside your tailnet) connects to VAF from the machine itself, and the web UI's API
+  door did not pass on who the visitor was, so VAF took every visitor for you, with no
+  sign-in at all. The door passes the visitor on now, VAF reads the client a relay names the
+  same way on every port, and the desktop window stays your own as before. Such a relay must
+  write `X-Forwarded-For`; a raw port forward such as `ssh -R` names nobody, so never put one
+  in front of VAF.
 
 - **Sign-ins hold against guessing.** A wrong two-factor code now counts like a wrong
   password, and your own correct login no longer resets the count for the address you sign
   in from. An account is held after repeated failed logins from any number of addresses
-  (`local_network_rate_limit_account_attempts`, default 10 per window); the machine itself
+  (new setting `local_network_rate_limit_account_attempts`, default 10 per window); the
+  machine itself
   and addresses that signed in to the account before are not held, so nobody who knows your
   name can lock you out of your own devices. A two-factor code works only once, and five
   wrong codes hold the account's code wherever it is asked (sign-in, password change, an
-  admin's confirmation), each time longer within a day. A held login answers "Too many
-  failed attempts" and is recorded in the security log ("Too many login attempts"). The
-  step between password and code now lasts 15 minutes instead of a day. Known and unknown
+  admin's confirmation), each time longer within a day; a code typed again right after it
+  worked is refused with "wait for the next code" and not counted. A held login says how
+  long to wait, in your language, and is recorded in the security log ("Too many login
+  attempts"). The step between password and code now lasts 15 minutes instead of a day;
+  after that the page says the sign-in took too long, and you sign in again. For your own
+  programs: a wrong code at `POST /api/auth/verify-2fa` now answers 401 (it was 400), and a
+  held request 429 with `Retry-After`. Known and unknown
   account names now take the same time to answer, and password checks no longer stall
   other chats while many logins arrive.
 
@@ -132,7 +142,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   answers carry no `refresh_token`. A client of your own that used it signs in again instead.
 
 - **Pages through the HTTPS port can no longer be framed by another site.** The login and
-  the app served to other devices carried no anti-framing headers and no HSTS; they do now.
+  the app served to other devices carried no anti-framing headers; they do now, and HSTS is
+  sent only for a host name other than `localhost` and no longer for its subdomains, so it
+  cannot force plain-HTTP apps on `localhost` to HTTPS.
 
 - **Messages meant for you on Telegram no longer go to a contact.** When a contact you
   allowed, a relay contact or somebody the open Inbound answered wrote to your agent on

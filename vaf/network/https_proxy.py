@@ -94,21 +94,25 @@ FRONTEND_ORIGIN = "http://127.0.0.1:3000"
 #   (/api/browser-vnc/, a backend response with X-Frame-Options: SAMEORIGIN) is framed by the
 #   UI, and a CSP frame-ancestors would override that. No page of the UI is framed by the UI
 #   (every iframe is srcDoc, about:blank or that viewer).
-# Backend responses get only HSTS when absent; this door is always TLS.
+# HSTS is scoped by the dialled host (binding.hsts_for_host): a DNS name that is not
+# localhost gets it on pages and backend answers alike, an address or localhost never does.
 PAGE_SECURITY_HEADERS = (
     ("X-Content-Type-Options", "nosniff"),
     ("X-Frame-Options", "DENY"),
     ("Content-Security-Policy", "frame-ancestors 'none'"),
     ("Referrer-Policy", "strict-origin-when-cross-origin"),
-    ("Strict-Transport-Security", "max-age=31536000; includeSubDomains"),
 )
-_HSTS = PAGE_SECURITY_HEADERS[-1]
 
 
-def _add_missing_headers(headers: dict, target_origin: str) -> None:
-    """Add the page set (frontend) or HSTS (backend), never over a value the upstream set."""
+def _add_missing_headers(headers: dict, target_origin: str, dialled_host: str = "") -> None:
+    """Add the page set (frontend) and the scoped HSTS (both), never over a value the
+    upstream set."""
+    from vaf.network.binding import hsts_for_host
     present = {k.lower() for k in headers}
-    wanted = PAGE_SECURITY_HEADERS if target_origin == FRONTEND_ORIGIN else (_HSTS,)
+    wanted = list(PAGE_SECURITY_HEADERS) if target_origin == FRONTEND_ORIGIN else []
+    hsts = hsts_for_host(dialled_host)
+    if hsts:
+        wanted.append(("Strict-Transport-Security", hsts))
     for name, value in wanted:
         if name.lower() not in present:
             headers[name] = value
@@ -234,7 +238,7 @@ async def _forward_http(request: Request, target_origin: str) -> Response:
     body_bytes = resp.content
     # Always set Content-Length from actual (decompressed) body to avoid mismatches
     response_headers["Content-Length"] = str(len(body_bytes))
-    _add_missing_headers(response_headers, target_origin)
+    _add_missing_headers(response_headers, target_origin, original_host)
     return Response(
         content=body_bytes,
         status_code=resp.status_code,

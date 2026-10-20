@@ -1366,9 +1366,16 @@ class _SecurityHeadersMiddleware(_BaseHM):
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-        # HSTS only when TLS is active
+        # HSTS only when TLS is active, and only for a dialled DNS name that is not localhost
+        # (binding.hsts_for_host: HSTS on localhost would upgrade every plain-HTTP port of
+        # it, the Web UI's included; never includeSubDomains). Behind the integrated proxy the
+        # dialled host arrives as X-Forwarded-Host.
         if Config.get("local_network_tls_enabled", False):
-            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+            from vaf.network.binding import hsts_for_host
+            _hsts = hsts_for_host(request.headers.get("x-forwarded-host")
+                                  or request.headers.get("host"))
+            if _hsts:
+                response.headers["Strict-Transport-Security"] = _hsts
         return response
 
 # Always on, in every mode: a page that is not VAF's own gets neither the tokenless owner

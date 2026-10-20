@@ -235,7 +235,7 @@ The first time VAF launches, it shows a **setup wizard** (not a login screen) at
 
 The wizard walks you through:
 1. **Language** - English or German (this only affects the UI).
-2. **Admin account** - choose your username and password; this is the owner account.
+2. **Admin account** - choose your username and password; this is the owner account. When the browser is not on the machine VAF runs on (a server opened over the LAN or a VPN), this step first asks for a setup code: run `vaf setup code` in a terminal on that machine (over SSH, as the user VAF runs as) and enter the code it shows. See [FIRST_RUN.md](FIRST_RUN.md#1-create-admin-account).
 3. **Soul** - a short questionnaire that defines the agent's personality. Every field is editable.
 4. **Veyllo API key** (optional) - paste one to use the hosted Veyllo models, or skip it: on the Full profile the local model is used, on the Lean profile you choose a provider under Settings -> AI & Model after the login. You can add providers there later on either.
 5. **Two-factor authentication (required, and the last step)** - scan the QR code with your authenticator app and enter the 6-digit code. The earlier steps are saved only once 2FA succeeds.

@@ -130,7 +130,6 @@ payload = {
 
 **Rules:**
 - `user_scope_id` MUST be present in every access token.
-- Refresh tokens inherit the same `user_scope_id`.
 - Token validation failure = reject request. Never fall back to admin scope for authenticated requests.
 
 ### Layer 2: Middleware & Request State

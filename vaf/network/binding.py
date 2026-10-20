@@ -457,6 +457,35 @@ def _host_and_port(value: str | None) -> Optional[Tuple[str, Optional[int]]]:
     return (host, port) if host else None
 
 
+HSTS_VALUE = "max-age=31536000"
+
+
+def hsts_for_host(dialled_host: str | None) -> Optional[str]:
+    """The Strict-Transport-Security value for an answer to a request that dialled this host,
+    or None when the header must not be sent.
+
+    HSTS applies to a host name on EVERY port, for a year. The local certificate names
+    `localhost`, this machine's host name and its FQDN besides its addresses; HSTS on
+    `localhost` would make the browser upgrade every plain-HTTP app on any localhost port,
+    the Web UI on port 3000 included. So: never for `localhost` or `*.localhost`, never for an
+    IP literal (browsers ignore it there, RFC 6797 8.1.1, and an address is how other devices
+    usually dial VAF), and never `includeSubDomains` (other names under the machine's FQDN are
+    not VAF's to decide). VAF serves the LAN and the VPN only.
+    """
+    parsed = _host_and_port(dialled_host)
+    if not parsed:
+        return None
+    host = parsed[0].strip("[]")
+    try:
+        ipaddress.ip_address(host)
+        return None
+    except ValueError:
+        pass
+    if host == "localhost" or host.endswith(".localhost"):
+        return None
+    return HSTS_VALUE
+
+
 def _origin_tuple(origin: str | None) -> Optional[Tuple[str, str, int]]:
     """An Origin header as (scheme, host, port), the default port filled in. None when it is
     ``null``, not http(s), or carries anything an origin cannot carry."""

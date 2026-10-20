@@ -32,7 +32,7 @@ class _Upstream:
         return SimpleNamespace(status_code=200, headers=dict(self._headers), content=b"<html></html>")
 
 
-def _get(monkeypatch, path, upstream_headers):
+def _get(monkeypatch, path, upstream_headers, host="vaf.lan:8443"):
     upstream = _Upstream(upstream_headers)
 
     async def _client(_origin):
@@ -40,7 +40,7 @@ def _get(monkeypatch, path, upstream_headers):
 
     monkeypatch.setattr(proxy, "_get_client", _client)
     c = TestClient(proxy.create_proxy_app(), client=("192.168.1.20", 40000))
-    return c.get(path)
+    return c.get(path, headers={"Host": host})
 
 
 def test_pages_through_the_proxy_carry_the_headers(monkeypatch):
@@ -50,7 +50,7 @@ def test_pages_through_the_proxy_carry_the_headers(monkeypatch):
     assert r.headers["x-frame-options"] == "DENY"
     assert r.headers["content-security-policy"] == "frame-ancestors 'none'"
     assert r.headers["referrer-policy"] == "strict-origin-when-cross-origin"
-    assert r.headers["strict-transport-security"].startswith("max-age=31536000")
+    assert r.headers["strict-transport-security"] == "max-age=31536000"
     # The UI's own voice input runs in these pages.
     assert "permissions-policy" not in r.headers
 
@@ -68,4 +68,28 @@ def test_backend_responses_get_hsts_only(monkeypatch, path):
     r = _get(monkeypatch, path, {"content-type": "text/html", "X-Frame-Options": "SAMEORIGIN"})
     assert "content-security-policy" not in r.headers
     assert r.headers["x-frame-options"] == "SAMEORIGIN"
-    assert r.headers["strict-transport-security"].startswith("max-age=31536000")
+    assert r.headers["strict-transport-security"] == "max-age=31536000"
+
+
+@pytest.mark.parametrize("host", ["192.168.1.5:8443", "localhost:8443", "app.localhost:8443",
+                                  "[::1]:8443", "127.0.0.1:8443"])
+def test_no_hsts_for_an_address_or_localhost(monkeypatch, host):
+    """HSTS holds a host name on every port for a year: on localhost it would upgrade every
+    plain-HTTP app there, the Web UI's own port included; browsers ignore it for addresses.
+    MUTATION: send it for every host, or with includeSubDomains - red."""
+    r = _get(monkeypatch, "/login", {"content-type": "text/html"}, host=host)
+    assert "strict-transport-security" not in r.headers
+    assert r.headers["x-frame-options"] == "DENY"
+
+
+def test_the_backend_scopes_its_hsts_the_same_way():
+    """The backend's own table (web_server._SecurityHeadersMiddleware) asks the same function."""
+    from vaf.network.binding import hsts_for_host
+    assert hsts_for_host("vaf.lan:8443") == "max-age=31536000"
+    for host in ("localhost", "192.168.1.5", "[::1]:8443", "", None, "x.localhost"):
+        assert hsts_for_host(host) is None, host
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "web_server.py").read_text(
+        encoding="utf-8")
+    assert "max-age=31536000; includeSubDomains" not in src
+    assert "hsts_for_host(request.headers.get(\"x-forwarded-host\")" in src

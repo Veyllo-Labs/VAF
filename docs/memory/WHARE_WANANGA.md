@@ -329,7 +329,13 @@ facts ("no required arguments", "requires an admin session", "limit is optional"
 *fuller* know-how -- pitfalls + procedure + verification (`delivery.tool_knowhow`) -- as a deferred
 system nudge (the same `_post_tc_messages` channel used for other tool-error nudges), so the loop's
 natural re-generation retries informed. Once per tool per turn (to avoid an inject->fail->inject
-loop), hard fail-safe. The error is re-checked from the raw result, and a cheap
+loop), hard fail-safe. Only for a tool the model may see (`Agent.visible_tools()`): a call the
+agent's allowed set refused (`set_allowed_tools`) also starts with "Security Error", but the
+tool never ran, so nothing about it is re-fed or re-learned. Measured before that condition, on
+a Front Office turn: the refused tool's know-how reached the contact's turn with "retry if
+appropriate", and the runtime re-learn distilled the refusal and the contact's arguments into
+"list_contacts is not available here; never call it" in the machine-wide record the owner's
+next turn read. Guard: `tests/test_front_office_tool_set.py`. The error is re-checked from the raw result, and a cheap
 `delivery.known_pitfall_hit` classifies it as a **known pitfall** (the agent saw it via the schema
 and fell for it anyway -> put the procedure first) vs a **novel error** (logged `[WW-SURPRISE]`).
 The matcher strips VAF's OWN dispatcher wrapping first (the `invalid arguments for '<tool>'`

@@ -1518,8 +1518,9 @@ The set holds on both halves of a tool call:
   discovery tools, not the tools the agent used in earlier turns, not the
   narrower subsets of a tight context.
 - **Execution.** Any other name the model calls is refused with `Security
-  Error: ...` before the policy stage, whether the tool is registered or not, and
-  nothing is emitted. That includes a call recovered from the model's text, one
+  Error: ...` before the policy stage, whether the tool is registered or not; the
+  event stream carries nothing for it, and VAF's tool learning neither re-feeds
+  the refused tool's know-how nor learns a pitfall from the refusal. That includes a call recovered from the model's text, one
   nested in `multi_tool_use.parallel` and one made from inside
   `python_sandbox(with_vaf_tools=True)`: all of them dispatch through the agent.
   `ToolCaller(allowed_tools=...)` is this half on its own, for a lane of yours.

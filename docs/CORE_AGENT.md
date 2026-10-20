@@ -231,7 +231,9 @@ allowlist: the set exists for an agent that answers somebody else under its owne
 identity. An empty set allows nothing; a bare string raises `TypeError`. Every call clears
 the current step's tool scope. While a set holds, `chat_step` does not run the workflow
 router (an explicit `@workflow_id` would otherwise run a workflow past the set) and
-handles `thinking_done` inline only when it is inside the set. Not inherited by a
+handles `thinking_done` inline only in a thinking turn and only when the set names it; a
+refused call is inert (the tool-learning lane neither re-feeds nor re-learns from it, see
+[WHARE_WANANGA.md](memory/WHARE_WANANGA.md)). Not inherited by a
 sub-agent or a workflow that a tool in the set starts. Contract:
 [EMBEDDING.md](EMBEDDING.md), "Which tools this agent may use".
 

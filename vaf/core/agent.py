@@ -12075,11 +12075,17 @@ class Agent:
                         # Deliberately NOT matched: "blocked"/"[security]" guard messages,
                         # which already carry their own instructions, and a call whose
                         # arguments were not JSON: the tool never ran, so there is nothing
-                        # about the tool to re-feed or re-learn.
+                        # about the tool to re-feed or re-learn. Nor a tool the model may not
+                        # see: the allowed set's refusal says "Security Error" too, and the
+                        # tool never ran. Re-fed, its know-how reached a contact's turn with
+                        # "retry if appropriate"; re-learned, the refusal (with the arguments
+                        # the contact steered) became a pitfall in the machine-wide record the
+                        # owner's next turn reads (measured on the real chat_step).
                         if _rs.startswith(("error", "failed", "tool error", "security error",
                                            "exception", "❌", "[error]", "access denied")) \
                                 and not _malformed_args \
-                                and function_name not in _ww_reactive_injected:
+                                and function_name not in _ww_reactive_injected \
+                                and function_name in self.visible_tools():
                             from vaf.whare_wananga.delivery import tool_knowhow, known_pitfall_hit
                             # allow_unverified: the call ALREADY failed, so a tagged hint from a
                             # gate-failing record (declare/stale/draft) costs little and is often

@@ -205,8 +205,8 @@ def test_the_client_is_the_rightmost_hop_no_client_wrote(peer, forwarded, client
     """A relay appends what it saw, and a client can only write to the LEFT of it, so the
     rightmost hop that is not this machine is the nearest one no client controls.
 
-    The first-hop rule made a tunnel on this machine (cloudflared, Tailscale Serve, nginx in
-    front of the access port) hand every visitor the owner's tokenless trust.
+    The first hop is whatever the client wrote. In the running server uvicorn's default
+    proxy-header handling hid that on the HTTPS port; the resolver no longer depends on it.
     MUTATIONS, each red here: take the first hop; stop skipping loopback hops; accept a
     non-IP hop; drop the IPv4-mapped normalization."""
     from vaf.network.binding import is_localhost
@@ -224,10 +224,10 @@ def test_mapped_loopback_is_this_machine():
 
 
 def test_a_relay_on_this_machine_is_not_the_owner():
-    """THE finding: a tunnel or reverse proxy on this machine connects from loopback, so the
-    integrated proxy used to write 127.0.0.1 for it, and a tokenless request was the owner.
-    With the client the relay names on the right, it is a stranger (401 or 403).
-    MUTATION: read the first hop again - 200."""
+    """A tunnel or reverse proxy on this machine connects from loopback; with the client it
+    names on the right, the request is a stranger's (401 or 403), whatever the client wrote
+    on the left. In process, without uvicorn's proxy-header middleware: the resolver alone
+    decides. MUTATION: read the first hop again - 200."""
     c = TestClient(_full_app(), client=PROXY_PEER)
     r = c.get("/api/users", headers={"X-Forwarded-For": f"127.0.0.1, {PUBLIC_DEVICE}"})
     assert r.status_code in (401, 403)
@@ -286,9 +286,10 @@ class _RecordingUpstream:
 ])
 def test_the_proxy_writes_the_resolved_client(monkeypatch, peer, incoming, written):
     """The proxy wrote its OWN peer into X-Forwarded-For, which is 127.0.0.1 for a tunnel or
-    reverse proxy on this machine, so every visitor such a relay carried became the owner.
-    It writes the resolver's answer now, once, after stripping the client's copies.
-    MUTATION: write request.client.host again - red for the first row."""
+    reverse proxy on this machine unless uvicorn's default proxy-header handling had already
+    replaced it. It writes the resolver's answer now, once, after stripping the client's
+    copies, so it does not hang on that default. MUTATION: write request.client.host again -
+    red for the first row (no uvicorn middleware here)."""
     import vaf.network.https_proxy as proxy
 
     upstream = _RecordingUpstream()
@@ -374,3 +375,25 @@ def test_the_next_door_forwards_the_hop():
     forwarded = re.search(r"const toForward = \[([^\]]*)\]", src)
     assert forwarded, "the forwarded-header list moved; re-point this guard"
     assert "x-forwarded-for" in set(re.findall(r"'([a-z-]+)'", forwarded.group(1)))
+
+
+@pytest.mark.parametrize("forwarded,allowed", [
+    ("203.0.113.9", False),               # a relay names a public visitor
+    ("127.0.0.1, 203.0.113.9", False),    # ... after whatever the client wrote
+    ("192.168.1.66, 127.0.0.1", False),   # relays chained on this machine
+    ("localhost", False),                 # a name is not this machine
+    ("127.0.0.1", True),                  # the desktop through the Next door
+    (None, True),                         # internal IPC
+])
+def test_behind_uvicorns_proxy_headers_the_answer_is_the_same(forwarded, allowed):
+    """Every uvicorn VAF starts keeps the default proxy_headers, which replaces a 127.0.0.1
+    peer with the rightmost X-Forwarded-For entry that is not 127.0.0.1 before VAF reads the
+    connection. Both layers must agree. The one they did not: uvicorn passes a "localhost"
+    entry through as the client, and is_localhost accepts that name, so the first-hop rule
+    made it this machine. MUTATION: accept a non-IP hop again - red for that row."""
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+    c = TestClient(ProxyHeadersMiddleware(_full_app(), trusted_hosts="127.0.0.1"),
+                   client=PROXY_PEER)
+    hdrs = {"X-Forwarded-For": forwarded} if forwarded else {}
+    status = c.get("/api/users", headers=hdrs).status_code
+    assert (status == 200) is allowed, status

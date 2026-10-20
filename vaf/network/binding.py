@@ -375,11 +375,12 @@ def effective_client_ip(peer_ip: str | None, forwarded_for: str | None) -> str:
     Which hop: walk the header from the RIGHT and take the first hop that is not loopback.
     A relay appends the address it saw, and a client can only write to the LEFT of that, so
     the rightmost entries are the ones no client controls; a loopback hop names this machine
-    (one relay handing to the next) and is skipped. Reading the FIRST hop instead made a
-    tunnel on this machine (cloudflared, Tailscale Serve, nginx) hand every visitor the
-    owner's tokenless trust: the integrated proxy wrote the tunnel's own 127.0.0.1, and the
-    first hop of a chain is whatever the client wrote. A hop that is not an IP literal ends
-    the walk as "unknown", which is neither local nor admitted.
+    (one relay handing to the next) and is skipped. The FIRST hop, read before, is whatever
+    the client wrote. uvicorn's default proxy-header handling (trusting 127.0.0.1) already
+    applies the rightmost rule to the peer in the running server; this resolver applies it
+    itself, so the answer does not hang on that default (an embedder's server, proxy_headers
+    off). A hop that is not an IP literal (a name such as "localhost", which is_localhost
+    accepts) ends the walk as "unknown", which is neither local nor admitted.
 
     No hops, or only loopback hops (internal loopback IPC, the desktop through the Next.js
     /api door, which forwards its own 127.0.0.1): the peer, unchanged.

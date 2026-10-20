@@ -199,11 +199,13 @@ async def _forward_http(request: Request, target_origin: str) -> Response:
     # Set unconditionally: "no X-Forwarded-For" must reliably mean "not relayed by this proxy",
     # otherwise a relayed request without client info would be indistinguishable from genuine
     # internal loopback traffic. "unknown" is not a valid IP, so the backend fails closed.
-    # The value is the resolver's (vaf.network.binding.connection_client_ip), not this proxy's
-    # own peer: a tunnel or reverse proxy on this machine connects from loopback, and writing
-    # that peer made every visitor it carried the machine owner. A non-loopback peer is
-    # written as itself; a loopback one as the client the relay in front of it named, else
-    # 127.0.0.1. The resolver reads the request as it arrived, before the strip above.
+    # The value is the resolver's (vaf.network.binding.connection_client_ip), the one reader
+    # of a connection's client: a tunnel or reverse proxy on this machine connects from
+    # loopback, and its visitor is the client it named, not this machine. (uvicorn's default
+    # proxy-header handling resolves that for this server's own peer too; the resolver does
+    # not hang on that default.) A non-loopback peer is written as itself; a loopback one as
+    # the client the relay in front of it named, else 127.0.0.1. The resolver reads the
+    # request as it arrived, before the strip above.
     from vaf.network.binding import connection_client_ip
     headers["X-Forwarded-For"] = connection_client_ip(request)
     try:

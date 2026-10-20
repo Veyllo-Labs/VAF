@@ -83,12 +83,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
-- **A tunnel or reverse proxy on the same machine no longer makes its visitors the machine
-  owner.** Such a relay (cloudflared, Tailscale Serve, nginx in front of the HTTPS port)
-  connects to VAF from the machine itself, and VAF took every visitor it carried for you,
-  with no sign-in at all. VAF now reads the client the relay names, the HTTPS port passes
-  it on, and the desktop window stays your own as before. A raw port forward such as
-  `ssh -R` names nobody: never put one in front of VAF. Restart VAF after updating.
+- **A tunnel to the web UI's port no longer makes its visitors the machine owner.** A tunnel
+  or reverse proxy pointed at port 3000 on the same machine (a cloudflared quick tunnel to
+  `http://localhost:3000`, Tailscale Serve) connects to VAF from the machine itself, and the
+  web UI's API door did not pass on who the visitor was, so VAF took every visitor for you,
+  with no sign-in at all. The door passes the visitor on now, VAF reads the client a relay
+  names the same way on every port, and the desktop window stays your own as before. A raw
+  port forward such as `ssh -R` names nobody: never put one in front of VAF. Restart VAF
+  and rebuild the web UI after updating.
 
 - **Sign-ins hold against guessing.** A wrong two-factor code now counts like a wrong
   password, and your own correct login no longer resets the count for the address you sign

@@ -456,8 +456,9 @@ its own words when asked what happened) nor does `save_session()` store it. The 
 for a loop-protection stop (`vaf.markers.LOOP_PROTECTION`): its note can name your daily
 API spend and a config key. When the turn had already answered in an earlier round (the
 pending-task auto-continue) and a later round failed or was stopped, `run()` returns that
-answer: a provider failure then reached `on_token` only, a stop note nothing. If you keep your own transcript of what `on_token` streamed,
-keep these out of whatever you hand a model later.
+answer: a provider failure then reached `on_token` only, a stop note nothing. If you keep
+your own transcript of what `on_token` streamed, keep these out of whatever you hand a
+model later.
 Some other *handled* failures (e.g. the API returning empty responses repeatedly) also
 come back as a short status string instead of raising:
 

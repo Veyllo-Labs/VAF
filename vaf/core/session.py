@@ -106,7 +106,9 @@ TURN_FAILURE_KEY = "turn_failure"
 def failed_turn_meta(failed, failure="") -> Optional[Dict[str, Any]]:
     """The metadata for a stored answer: the failed-turn mark when `failed`, the failure that
     followed an answer when only `failure` is given, else None (an ordinary answer keeps the
-    shape it always had). A host passes chat_step's `_turn_failed` and `_turn_failure`."""
+    shape it always had). A host passes chat_step's `_turn_failed`, and `_turn_failure` in
+    the form its stored copy holds it: put through the same cleanup as the copy, or left out
+    when the copy is the turn's return value, which never holds it (`model_text`)."""
     if failed:
         return {FAILED_TURN_KEY: True}
     if failure:
@@ -122,8 +124,10 @@ def is_failed_turn(msg) -> bool:
     (`completion.is_stop_note`): transcripts stored before the mark existed hold those as
     plain answers. A real answer that merely quotes a status or the stop marker further in
     is kept. Named boundary: an unmarked message from before the mark whose failure followed
-    streamed text ("One moment.\\n[API Error from ...]") is not recognised. A message with
-    tool calls never counts, because its calls anchor the tool results that follow it.
+    streamed text ("One moment.\\n[API Error from ...]") is not recognised, and neither is an
+    interactive CLI copy from before the mark, whose markup cleanup deleted the markers. A
+    message with tool calls never counts, because its calls anchor the tool results that
+    follow it.
     Accepts a `Message` or its dict form. Readers ask `model_text`, which builds on this."""
     get = msg.get if isinstance(msg, dict) else (lambda k, d=None: getattr(msg, k, d))
     if get("role") != "assistant" or get("tool_calls"):
@@ -142,12 +146,13 @@ def model_text(msg) -> Optional[str]:
     """What a model may read of a stored message, or None when it may read none of it.
 
     None for a failed turn's text (`is_failed_turn`). For an answer that a later round's
-    failure followed (`metadata.turn_failure`, the failure as streamed), the content without
-    that failure, and None when nothing else is left. A failure the content does not hold
-    verbatim leaves two cases: the content still carries a failure signature (the stored
-    text altered it, `completion.is_error_reply` or the loop-protection marker anywhere), and
-    the message is None, the safe side; or it carries none, and the content is already clean
-    and returned as it is. Every other message: its content, as stored.
+    failure followed (`metadata.turn_failure`), the content without that failure, and None
+    when nothing else is left. A recorded failure the content does not hold verbatim makes
+    the message None, the safe side: the stored copy altered it, and an altered failure need
+    not carry any signature (the CLI's markup cleanup deletes every `[...]` group, `[Error]`
+    and the head of `[API Error from ...` with it, and keeps the rest). So a host records the
+    failure in the form its stored copy holds it (`failed_turn_meta`), or none when its copy
+    never held it. Every other message: its content, as stored.
 
     Asked by everything that builds a model's context, or a tool result a model reads, from
     a stored chat: the replay in `CoreAgent.load_session_context`, `Session.get_history`, the
@@ -166,13 +171,10 @@ def model_text(msg) -> Optional[str]:
     meta = get("metadata")
     failure = meta.get(TURN_FAILURE_KEY) if isinstance(meta, dict) else None
     if isinstance(failure, str) and failure:
-        if failure in content:
-            content = content.replace(failure, "").strip()
-            return content or None
-        from vaf.core.completion import is_error_reply
-        from vaf.markers import LOOP_PROTECTION
-        if is_error_reply(content) or LOOP_PROTECTION in content:
+        if failure not in content:
             return None
+        content = content.replace(failure, "").strip()
+        return content or None
     return content
 
 

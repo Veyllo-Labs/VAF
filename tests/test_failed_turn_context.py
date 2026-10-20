@@ -369,9 +369,9 @@ def test_a_stop_note_is_one_that_begins_with_the_marker():
 
 def test_model_text():
     """An answer that a later failure followed reads back without it. A recorded failure the
-    stored text does not hold verbatim: the message is dropped while the content still
-    carries a failure signature (the safe side), and read as it is when the content is clean.
-    MUTATION: drop every message whose failure is not found - the clean one is lost, red.
+    stored text does not hold verbatim drops the message, the safe side: an altered failure
+    need carry no signature at all (see the CLI test below), so clean-looking content proves
+    nothing. MUTATION: return the content when the failure is not found - red.
     MUTATION: return "" for a message that was the failure alone - red."""
     from vaf.core.session import Message, failed_turn_meta, model_text
     assert failed_turn_meta(False, "x") == {"turn_failure": "x"}
@@ -385,9 +385,9 @@ def test_model_text():
     altered_stop = Message(role="assistant", content="Erledigt. [LOOP_PROTECTION] gekürzt",
                            metadata=failed_turn_meta(False, "\u26a0\ufe0f [LOOP_PROTECTION] x"))
     assert model_text(altered_stop) is None
-    clean = Message(role="assistant", content="Der Termin ist Montag.",
-                    metadata=failed_turn_meta(False, _KEY_ERROR))
-    assert model_text(clean) == "Der Termin ist Montag."
+    looks_clean = Message(role="assistant", content="Der Termin ist Montag.",
+                          metadata=failed_turn_meta(False, _KEY_ERROR))
+    assert model_text(looks_clean) is None
     # A message that was the recorded failure alone. A failure that begins with a marker is
     # caught before (`is_failed_turn`); one without a marker must not read as an empty answer,
     # which `get_history` would replay as an empty assistant entry some providers reject.
@@ -425,11 +425,16 @@ def test_the_hosts_that_store_the_stream_mark_a_failed_turn():
                  '_turn_failure = str(getattr(agent, "_turn_failure", "") or "")'):
         assert loop.index(flag) < loop.index("_hallucination_detected = ("), flag
     assert "turn_failed=_turn_failed, turn_failure=_turn_failure)" in loop
-    cli = " ".join((inspect.getsource(run._process_agent_message)
-                    + inspect.getsource(run.prompt_once)).split())
-    assert cli.count('metadata=failed_turn_meta(getattr(agent, "_turn_failed", False), '
-                     'getattr(agent, "_turn_failure", "")))') == 3
-    assert cli.count('add_message("assistant"') == 3
+    # `vaf run -p` stores the turn's return value, which never holds a failure that followed
+    # an answer; the interactive CLI and the TUI store the stream through their markup
+    # cleanup and record the failure through the same cleanup.
+    once = " ".join(inspect.getsource(run.prompt_once).split())
+    assert once.count('metadata=failed_turn_meta(getattr(agent, "_turn_failed", False)))') == 2
+    assert once.count('add_message("assistant"') == 2 and "_turn_failure" not in once
+    classic = " ".join(inspect.getsource(run._process_agent_message).split())
+    assert ('metadata=failed_turn_meta( getattr(agent, "_turn_failed", False), '
+            'convert_rich_to_xml(getattr(agent, "_turn_failure", "") or "").strip()))') in classic
+    assert classic.count('add_message("assistant"') == 1
 
 
 def test_every_engine_failure_exit_goes_through_the_one_closure():
@@ -537,3 +542,72 @@ def test_the_read_tools_see_what_a_model_may_read(index_world):
     bodies = [r["body"] for r in read_channel_session("telegram", _TG)]
     assert "Ihr Termin ist am Montag." in bodies
     assert not any("sk-proj" in b or _PATH_ERROR in b for b in bodies)
+
+
+# ── the interactive CLI and the TUI store their copy through a markup cleanup ─────────
+
+_TOOL_BRACKET_FAILURE = ("[API Error from openai: Error code: 400 - {'error': {'message': \"Invalid "
+                         "'messages[2].content': Incorrect API key provided: sk-proj-****abcd\"}}]")
+
+
+class _AnsweredThenFailed:
+    """What chat_step leaves for a host after an answer and a failing later round."""
+
+    def __init__(self, failure):
+        self._turn_failed = False
+        self._turn_failure = failure
+
+    def chat_step(self, user_input, stream_callback=None, **kwargs):
+        for piece in ("Ihr Termin ist am Montag um 10 Uhr.", "\n", self._turn_failure):
+            stream_callback(piece)
+        return "Ihr Termin ist am Montag um 10 Uhr."
+
+    def get_token_usage(self):
+        return 10, 100
+
+
+@pytest.mark.parametrize("failure, leftover", [
+    ("[Error] API backend failure: " + _PATH_ERROR, _PATH_ERROR),
+    (_TOOL_BRACKET_FAILURE, "sk-proj-****abcd"),
+], ids=["engine-error", "sentinel-with-inner-bracket"])
+def test_the_cli_copy_of_an_answered_turn_reads_back_without_the_failure(
+        engine, monkeypatch, tmp_path, failure, leftover):
+    """`_process_agent_message` (the interactive CLI and the TUI) stores the stream through its
+    markup cleanup, which deletes every [...] group: "[Error]" and the head of the sentinel
+    vanish, the tail stays, with no signature left. The REAL function stores the copy; the
+    recorded failure must be the cleaned one, or a reader must drop the message.
+    MUTATION: record the raw failure - not found, so the message is dropped and the answer
+    lost, red. MUTATION: return the content when the failure is not found - the tail with
+    the path or the key reaches the replay, red."""
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    import vaf.cli.cmd.run as run_mod
+    import vaf.core.speech as speech_mod
+    from vaf.core.session import SessionManager, model_text
+    web = SimpleNamespace(update_status=lambda *a, **k: None, log=lambda *a, **k: None,
+                          emit_agent_message=lambda *a, **k: None,
+                          emit_message_complete=lambda *a, **k: None,
+                          emit_stats=lambda *a, **k: None,
+                          push_update_to_user=lambda *a, **k: None)
+    monkeypatch.setattr(run_mod, "get_web_interface", lambda: web)
+    monkeypatch.setattr(run_mod, "get_dated_log_path", lambda name, ext: tmp_path / f"{name}.{ext}")
+    monkeypatch.setattr(speech_mod, "get_speech_manager", lambda: SimpleNamespace(stop=lambda: None))
+    monkeypatch.setattr(run_mod, "_check_subagent_results", lambda tui, agent: [])
+    tui = SimpleNamespace(console=SimpleNamespace(print=lambda *a, **k: None),
+                          spinner=lambda *a, **k: nullcontext(), newline=lambda: None,
+                          error=lambda *a, **k: None, primary="cyan")
+    sm = SessionManager()
+    session = sm.new(name="cli chat")
+    session.add_message("user", "Wann ist mein Termin?")
+
+    run_mod._process_agent_message(_AnsweredThenFailed(failure), "Wann ist mein Termin?",
+                                   tui, session)
+    stored = session.messages[-1]
+    assert stored.role == "assistant" and leftover in stored.content   # the transcript shows it
+    assert model_text(stored) == "Ihr Termin ist am Montag um 10 Uhr."
+
+    sm.save(session)
+    engine.reload(session.id)
+    replayed = [str(m.get("content")) for m in engine.history if m.get("role") == "assistant"]
+    assert replayed == ["Ihr Termin ist am Montag um 10 Uhr."]

@@ -279,10 +279,17 @@ from a stored chat reads it through `session.model_text` (SESSION_MANAGEMENT.md)
 also answers a contact's failed turn with a fixed sentence, and a turn that answered first
 with that answer (FRONT_OFFICE.md). Guard: `tests/test_failed_turn_context.py`.
 
-Named boundary: five other returns end a turn early and keep the old shape (their text is
-committed to the history and returned, `_turn_failed` stays unset). Four are the user's stop
-(`[Generation stopped by user]` at the top of a round, between tools and after a tool round,
-and mid-stream, where the partial answer is kept): the person ended the turn, and what they
-see is what they asked for. The fifth is the emergency loop breaker (ten tool calls in under
-five seconds), whose note names no internals. None of them is a backend failure or a
-loop-protection stop.
+Named boundary: other returns end a turn early and keep the old shape (`_turn_failed` stays
+unset). The user's stop (`[Generation stopped by user]` at the top of a round, between tools,
+after a tool round, and mid-stream, where the partial answer is kept) commits its text: the
+person ended the turn, and what they see is what they asked for. The emergency loop breaker
+(ten tool calls in under five seconds) commits a note that names no internals. The empty
+retry's hard limit streams "Model Not Responding" and returns it uncommitted; an API provider
+that keeps answering empty never reaches it (measured: it ends in `[SYSTEM_LOG_ONLY]`, which
+the runner sends to no channel, after its own delayed retries), so only the local lane can,
+and the text names no internals. When the loop ends with no answer at all, the closing
+fallbacks return a status (`"..."`, a tool-finished line quoting the start of the last tool
+result). The queue runner sends what streamed instead, or its own `[Error] No response was
+produced`; the facade's `run()` swaps only a bare `"..."` for the stream and passes a
+tool-finished line on. The "failed to generate a final answer" note is committed. None of
+them is a backend failure or a loop-protection stop.

@@ -83,6 +83,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **A tunnel or reverse proxy on the same machine no longer makes its visitors the machine
+  owner.** Such a relay (cloudflared, Tailscale Serve, nginx in front of the HTTPS port)
+  connects to VAF from the machine itself, and VAF took every visitor it carried for you,
+  with no sign-in at all. VAF now reads the client the relay names, the HTTPS port passes
+  it on, and the desktop window stays your own as before. A raw port forward such as
+  `ssh -R` names nobody: never put one in front of VAF. Restart VAF after updating.
+
 - **Messages meant for you on Telegram no longer go to a contact.** When a contact you
   allowed, a relay contact or somebody the open Inbound answered wrote to your agent on
   Telegram, VAF took their chat as the place to reach you: your reminders, automation

@@ -21,8 +21,13 @@ function copyForwardHeaders(request: Request): HeadersInit {
   // (ForeignOriginGuard, vaf/auth/middleware.py). Without them every request through this door
   // reached the backend as a tokenless local client, i.e. as the owner, whichever page sent it.
   // sec-fetch-mode is left out on purpose: Node's fetch overwrites it with "cors" (measured).
+  // x-forwarded-for: Next.js fills it with the socket address when the request carries none
+  // (base-server), so the desktop window forwards its own 127.0.0.1 and stays this machine,
+  // while a tunnel or reverse proxy in front of this port keeps the client it named. Without
+  // it every request through this door, a relay's visitors included, reached the backend
+  // with no hop at all, which reads as the machine owner.
   const toForward = ['cookie', 'content-type', 'authorization', 'accept', 'accept-language',
-    'origin', 'sec-fetch-site'];
+    'origin', 'sec-fetch-site', 'x-forwarded-for'];
   for (const name of toForward) {
     const v = request.headers.get(name);
     if (v) out[name] = v;

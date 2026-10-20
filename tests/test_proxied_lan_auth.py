@@ -360,3 +360,17 @@ def test_the_proxy_reads_no_client_address_itself():
         encoding="utf-8")
     assert ".client.host" not in src
     assert 'scope.get("client")' not in src
+
+
+def test_the_next_door_forwards_the_hop():
+    """The Next.js /api door forwarded no X-Forwarded-For, so a relay to the frontend port
+    reached the backend with no hop, which reads as the machine owner. Next.js fills the
+    header with the socket address when it is absent, so the desktop forwards 127.0.0.1.
+    MUTATION: remove 'x-forwarded-for' from toForward - red."""
+    import re
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "web" / "app" / "api" / "[...path]"
+           / "route.ts").read_text(encoding="utf-8")
+    forwarded = re.search(r"const toForward = \[([^\]]*)\]", src)
+    assert forwarded, "the forwarded-header list moved; re-point this guard"
+    assert "x-forwarded-for" in set(re.findall(r"'([a-z-]+)'", forwarded.group(1)))

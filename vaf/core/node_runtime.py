@@ -34,6 +34,7 @@ def portable_dirs() -> List[Path]:
         root = Path(os.environ.get("LOCALAPPDATA", "")) / "Veyllo" / "node"
         if not root.is_dir():
             return []
+        # One version below it: install.ps1 removes the folder before it unpacks a Node.
         return [p for p in sorted(root.iterdir()) if p.is_dir()]
     return [Platform.vaf_dir() / "node" / "bin"]
 

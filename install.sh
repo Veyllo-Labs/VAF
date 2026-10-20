@@ -867,7 +867,11 @@ if [[ "$DOCKER_INSTALLED" == "true" ]]; then
                 # A docker group this run added is not active in this shell yet (DOCKER_SUDO):
                 # VAF's own step runs with it, or it cannot reach the daemon and reports a
                 # switch it could not make (measured on a fresh server install).
-                if [[ -n "$DOCKER_SUDO" ]] && command -v sg &>/dev/null; then
+                if [[ -n "$DOCKER_SUDO" ]] && ! id -nG "$USER" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
+                    # Adding the user to the group failed (start_linux_engine): sg would ask for
+                    # a group password, and the step itself cannot reach the daemon either.
+                    print_warning "You are not in the docker group: run sudo usermod -aG docker $USER, log in again, then: vaf profile api"
+                elif [[ -n "$DOCKER_SUDO" ]] && command -v sg &>/dev/null; then
                     sg docker -c "\"$PROJECT_ROOT/venv/bin/python3\" -m vaf.main profile api" \
                         || print_warning "Could not stop the speech containers - run: vaf profile api"
                 else
@@ -1180,15 +1184,23 @@ EOF
         # running since this login, keeps the groups it started with, and so does every
         # service it starts. Measured on a fresh server: VAF could not reach Docker until the
         # next reboot (health down, the first scheduled backup failed). Restarting the manager
-        # hands it the group; on a server that restarts only this user's services.
+        # hands it the group; on a server that restarts only this user's services, and the
+        # ones that were running are started again afterwards (a unit started by hand is not
+        # brought back by the manager on its own).
         _uid="$(id -u)"
         _um_pid="$(systemctl show -p MainPID --value "user@${_uid}.service" 2>/dev/null || true)"
         _docker_gid="$(getent group docker 2>/dev/null | cut -d: -f3)"
         if [[ -n "$_docker_gid" && -n "$_um_pid" && "$_um_pid" != "0" ]] \
                 && id -nG "$USER" 2>/dev/null | tr ' ' '\n' | grep -qx docker \
                 && ! grep '^Groups:' "/proc/${_um_pid}/status" 2>/dev/null | grep -qw "$_docker_gid"; then
+            _running="$(systemctl --user list-units --type=service --state=running --no-legend --plain 2>/dev/null \
+                | awk '{print $1}' | grep -vx 'vaf.service' || true)"
             if sudo systemctl restart "user@${_uid}.service" 2>/dev/null; then
                 print_success "User services restarted, so VAF gets the docker group now"
+                for _unit in $_running; do
+                    systemctl --user start "$_unit" 2>/dev/null \
+                        || print_warning "Could not start $_unit again after the restart: systemctl --user start $_unit"
+                done
             else
                 print_warning "VAF reaches Docker after the next reboot (the docker group is new)"
             fi

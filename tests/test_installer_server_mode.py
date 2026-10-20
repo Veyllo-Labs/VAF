@@ -77,6 +77,9 @@ def test_a_new_docker_group_reaches_the_service_without_a_reboot():
     block = SH.split("# Start the service immediately", 1)[0].rsplit("loginctl enable-linger", 1)[1]
     assert 'sudo systemctl restart "user@${_uid}.service"' in block
     assert "grep -qw \"$_docker_gid\"" in block, "only when the manager lacks the group"
+    # The user services that were running come back, a unit started by hand included.
+    # MUTATION: drop the restart of the recorded units - red.
+    assert "--state=running" in block and 'systemctl --user start "$_unit"' in block
 
 
 def test_the_profile_step_uses_the_new_docker_group():
@@ -84,6 +87,8 @@ def test_the_profile_step_uses_the_new_docker_group():
     not make. MUTATION: run it without sg again - red."""
     step = SH.split('if [[ "$INSTALL_PROFILE" == "api" ]]; then', 1)[1].split("CORE_SERVICES=", 1)[0]
     assert 'sg docker -c' in step and '[[ -n "$DOCKER_SUDO" ]]' in step
+    # Only for a member: sg asks a non-member for a group password. MUTATION: drop it - red.
+    assert step.index("grep -qx docker") < step.index("sg docker -c")
 
 
 def test_the_alias_goes_where_the_login_shell_reads():

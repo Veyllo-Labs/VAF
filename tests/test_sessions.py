@@ -175,3 +175,77 @@ def test_sessions_have_one_writer():
                     and (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) == "UserSession"):
                 sites.append(path.relative_to(root).as_posix())
     assert sites == ["vaf/auth/sessions.py"], sites
+
+
+# ── the 2FA steps ask the session and the password ───────────────────────────────
+
+def _setup_2fa(h, token, ip="192.168.13.9"):
+    return h.client(ip).post("/api/auth/setup-2fa", headers={"Authorization": f"Bearer {token}"})
+
+
+def test_an_ended_token_cannot_enroll_a_second_factor(h):
+    """The two 2FA routes are exempt from the middleware and checked only the signature, so a
+    token whose session an admin's 2FA reset had ended enrolled the thief's own second factor
+    and came back as a live session. MUTATION: drop the standing check in
+    _second_factor_step_token - red."""
+    import auth_harness
+    user_id, secret = h.add_user("bob", "bob-password-123", totp=True)
+    stolen = h.sign_in(h.client("192.168.13.1"), "bob", "bob-password-123", secret)
+    assert h.client(None).post(f"/api/users/{user_id}/reset-2fa").status_code == 200
+    assert _probe(h, stolen) == 401
+    assert _setup_2fa(h, stolen).status_code == 401
+    thief_secret = auth_harness.pyotp.random_base32()
+    r = h.verify(h.client("192.168.13.2"), stolen, auth_harness.pyotp.TOTP(thief_secret).now())
+    assert r.status_code == 401
+
+
+def test_a_logged_out_token_without_a_second_factor_stays_out(h):
+    """An account without a second factor: after a logout its token got a new session through
+    setup-2fa and verify-2fa. MUTATION: drop the standing check - red."""
+    _id, a, _b = _two_devices(h)
+    h.client("192.168.11.1").post("/api/auth/logout", headers={"Authorization": f"Bearer {a}"})
+    assert _setup_2fa(h, a).status_code == 401
+    assert h.verify(h.client("192.168.13.3"), a, "123456").status_code == 401
+
+
+def test_a_temp_token_from_before_a_reset_is_refused(h):
+    """Somebody with the old password holds a temp token; the owner resets the password in a
+    terminal (which also clears the second factor). That token must not enroll a new one.
+    MUTATION: drop the password binding (_minted_with_current_password) - red."""
+    import auth_harness
+    from vaf.auth.user_admin import find_user, reset_password_from_terminal
+    _id, secret = h.add_user("alice", "alice-password-1", totp=True)
+    temp = h.login(h.client("192.168.13.4"), "alice", "alice-password-1").json()["temp_token"]
+
+    async def _reset(db):
+        await reset_password_from_terminal(db, await find_user(db, "alice"), "alice-password-9")
+
+    h.run_db(_reset)
+    assert _setup_2fa(h, temp).status_code == 401
+    thief_secret = auth_harness.pyotp.random_base32()
+    r = h.verify(h.client("192.168.13.5"), temp, auth_harness.pyotp.TOTP(thief_secret).now())
+    assert r.status_code == 401
+    # The owner, with the new password, gets a fresh temp token that works.
+    fresh = h.login(h.client("192.168.13.6"), "alice", "alice-password-9").json()
+    assert fresh["needs_2fa_setup"] is True
+    assert _setup_2fa(h, fresh["temp_token"]).status_code == 200
+
+
+def test_the_wizard_still_enrolls_with_the_bootstrap_token(h, monkeypatch):
+    """The first-run wizard enrolls with the bootstrap's own token (it has a live session)."""
+    import auth_harness
+    from vaf.auth import account_seal, user_admin
+    from vaf.core.config import Config
+    saved = {}
+    monkeypatch.setattr(account_seal, "admin_established", lambda: False)
+    monkeypatch.setattr(account_seal, "mark_admin_established", lambda: None)
+    monkeypatch.setattr(Config, "load", staticmethod(lambda *a, **k: dict(saved)))
+    monkeypatch.setattr(Config, "save", staticmethod(lambda c, *a, **k: saved.update(c)))
+    monkeypatch.setattr(user_admin, "_prepare_user_home", lambda *a, **k: None)
+    local = h.client(None)
+    token = local.post("/api/auth/bootstrap",
+                       json={"username": "owner", "password": "owner-password-1"}).json()["access_token"]
+    r = local.post("/api/auth/setup-2fa", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200, r.text
+    code = auth_harness.pyotp.TOTP(r.json()["secret"]).now()
+    assert h.verify(local, token, code).status_code == 200

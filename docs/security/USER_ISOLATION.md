@@ -499,7 +499,10 @@ there too - cleared before the commit, a lookup in between re-cached the old ans
   account. A reactivation revives none. After a password change or an admin reset the
   account's open sockets are closed too (`WebInterfaceManager.close_account_connections`),
   so a device signed in with an ended token cannot reconnect; the device that changed the
-  password reconnects with its own. Before, none of these ended a token: it kept working for
+  password reconnects with its own. The 2FA steps make the same check (they are exempt from
+  the middleware), and a token from before the second factor is bound to the password it was
+  minted with, so neither an ended token nor one minted before a reset can enroll a new
+  second factor. Before, none of these ended a token: it kept working for
   its whole life (measured: 200 after a logout and after a password change). NAMED
   BOUNDARIES: a terminal reset is seen by the service within the session cache's few seconds,
   and a socket opened before it stays until it reconnects or the service restarts; the

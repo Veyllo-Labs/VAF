@@ -118,6 +118,13 @@ async def hash_password_async(password: str) -> str:
     return await loop.run_in_executor(_argon2_pool(), hash_password, password)
 
 
+def password_fingerprint(password_hash: Optional[str]) -> str:
+    """A short digest of an account's stored password hash. A token from before the second
+    factor carries it (`pwv`), so the 2FA steps can refuse one minted before the password
+    changed, without the hash itself in a JWT anyone can read."""
+    return hashlib.sha256(str(password_hash or "").encode("utf-8")).hexdigest()[:16]
+
+
 def create_access_token(
     user_id: str,
     username: str,
@@ -125,8 +132,10 @@ def create_access_token(
     user_scope_id: str,
     expires_hours: Optional[float] = None,
     is_2fa_verified: bool = False,
+    password_version: Optional[str] = None,
 ) -> str:
-    """Create JWT access token."""
+    """Create JWT access token. `password_version` (`password_fingerprint`) is set on a token
+    from before the second factor, binding it to the password it was minted with."""
     if expires_hours is None:
         expires_hours = float(Config.get("local_network_jwt_expiry_hours", 24))
     now = datetime.now(timezone.utc)
@@ -145,6 +154,8 @@ def create_access_token(
         # code answered 500). It also makes every token its own session to end.
         "jti": secrets.token_hex(16),
     }
+    if password_version:
+        payload["pwv"] = password_version
     return jwt.encode(
         payload,
         _get_jwt_secret(),

@@ -36,6 +36,7 @@ from vaf.auth.database import get_auth_db
 from vaf.auth import account_seal
 from vaf.auth.sessions import end_account_sessions, end_session, open_session, signed_in_from
 from vaf.auth.crypto import (
+    password_fingerprint,
     verify_password_async,
     create_access_token,
     decode_token,
@@ -397,6 +398,38 @@ async def test_veyllo_key(body: TestVeylloKeyRequest, request: Request):
     return {"ok": ok}
 
 
+async def _second_factor_step_token(token: str) -> Optional[dict]:
+    """The decoded token a 2FA step (/setup-2fa, /verify-2fa) was called with, or None.
+
+    Both routes are exempt from the middleware, so they make its check themselves. They used
+    to check only the signature: a token whose session had ended (a logout, an admin's 2FA
+    reset, a terminal reset) still enrolled a new second factor and came back as a live
+    session (measured: setup-2fa 200, verify-2fa 200, and the new token answered as the
+    account). A token from after the second factor (the bootstrap's, a signed-in account's)
+    must stand like on every other route; a token from before it is checked against the
+    password it was minted with (`_minted_with_current_password`)."""
+    payload = decode_token(token) if token else None
+    if not payload or payload.get("type") != "access":
+        return None
+    if payload.get("is_2fa_verified") is True:
+        from vaf.auth.middleware import token_account_stands
+        if not await token_account_stands(payload, token):
+            return None
+    return payload
+
+
+def _minted_with_current_password(payload: dict, user) -> bool:
+    """A token from before the second factor works only while the account still has the
+    password it was minted with: a reset password must not leave a waiting temp token that
+    enrolls the old password holder's own second factor."""
+    if payload.get("is_2fa_verified") is True:
+        return True
+    import hmac
+    from vaf.auth.crypto import password_fingerprint
+    return hmac.compare_digest(str(payload.get("pwv") or ""),
+                               password_fingerprint(getattr(user, "password_hash", None)))
+
+
 @router.post("/setup-2fa")
 async def setup_2fa(request: Request):
     """
@@ -406,8 +439,8 @@ async def setup_2fa(request: Request):
     if not auth:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     token = auth.replace("Bearer ", "").strip() if isinstance(auth, str) else auth
-    payload = decode_token(token)
-    if not payload or payload.get("type") != "access":
+    payload = await _second_factor_step_token(token)
+    if payload is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
     user_id = payload.get("sub")
@@ -419,6 +452,8 @@ async def setup_2fa(request: Request):
         user = result.scalar_one_or_none()
         if not user:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        if not _minted_with_current_password(payload, user):
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
         if not account_seal.check(user, where="/api/auth/setup-2fa", ip=_client_ip(request)):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=account_seal.REFUSAL_LOGIN)
 
@@ -451,8 +486,8 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
     """
     Verify TOTP code and complete 2FA. On success sets cookie, creates session for new token, returns tokens.
     """
-    payload = decode_token(body.temp_token)
-    if not payload or payload.get("type") != "access":
+    payload = await _second_factor_step_token(body.temp_token)
+    if payload is None:
         _log_auth_failure("twofa_failed", request, detail="invalid temp token")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid temp token")
 
@@ -465,6 +500,10 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
             select(LocalUser).where(LocalUser.id == user_id_uuid, LocalUser.is_active == True)
         )
         user = result.scalar_one_or_none()
+        if user is not None and not _minted_with_current_password(payload, user):
+            _log_auth_failure("twofa_failed", request, username=user.username or "",
+                              detail="temp token from before a password change")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid temp token")
         if user is not None and not account_seal.check(user, where="/api/auth/verify-2fa",
                                                        ip=_client_ip(request)):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=account_seal.REFUSAL_LOGIN)
@@ -631,6 +670,8 @@ async def login(body: LoginRequest, request: Request, response: Response):
             str(user.user_scope_id),
             expires_hours=expires_hours,
             is_2fa_verified=is_2fa_verified,
+            # A token from before the second factor is bound to this password.
+            password_version=None if is_2fa_verified else password_fingerprint(user.password_hash),
         )
 
     if not is_2fa_verified:

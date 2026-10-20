@@ -315,10 +315,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
             # tokenless localhost path below rather than getting a hard 401.
             if not is_localhost(client_ip):
                 _emit_security_event("token_rejected", ip=client_ip, path=request.url.path)
-                return JSONResponse(
+                refused = JSONResponse(
                     status_code=401,
                     content={"detail": "Invalid or expired token"},
                 )
+                # A refused COOKIE is deleted in the same answer. The page gate (web/proxy.ts)
+                # judges the cookie by its expiry alone, so a cookie whose session had ended (a
+                # password change elsewhere, a reset, a logout on another device) sent the
+                # browser from /login back to /, and the page sent it back to /login: a loop.
+                # The browser cannot delete the HttpOnly cookie itself. A Bearer token of its
+                # own leaves the cookie alone.
+                if token == request.cookies.get(self.COOKIE_NAME):
+                    refused.delete_cookie(self.COOKIE_NAME, path="/")
+                return refused
 
         # No valid identity established.
         if is_localhost(client_ip):

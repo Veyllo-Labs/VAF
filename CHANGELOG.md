@@ -112,7 +112,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   (the one you changed it on stays signed in), and an admin's password or 2FA reset, a
   deactivation and `vaf users reset-password` sign out every device of that account. Open
   chats of those devices disconnect (if `vaf users reset-password` cannot reach the running
-  VAF, it says so: restart VAF then). Signing in twice in the same second no longer fails.
+  VAF, it says so: restart VAF then). A window whose session ended shows the sign-in page
+  and says why. Signing in twice in the same second no longer fails.
 
 - **The first visitor can no longer make themselves the admin.** While no admin existed,
   any device VAF admits could open the setup page and create the admin account, on a rented

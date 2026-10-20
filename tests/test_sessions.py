@@ -333,3 +333,50 @@ def test_logout_ends_every_presented_token(h):
     assert c.post("/api/auth/logout", headers={"Authorization": f"Bearer {a}"}).status_code == 200
     assert _probe(h, a) == 401
     assert _probe(h, b) == 401
+
+
+# ── a refused cookie does not keep the browser in a loop ─────────────────────────
+
+def _deletes_the_cookie(r):
+    cookie = r.headers.get("set-cookie") or ""
+    return "vaf_token=" in cookie and ("max-age=0" in cookie.lower() or "expires=" in cookie.lower())
+
+
+def test_a_refused_cookie_is_deleted_in_the_same_answer(h):
+    """The page gate (web/proxy.ts) reads only the cookie's expiry: a cookie whose session
+    ended kept the browser bouncing between / and /login, because the middleware refused it
+    without deleting it. MUTATION: drop the delete_cookie - red."""
+    _id, a, b = _two_devices(h)
+    h.client("192.168.11.1").post("/api/auth/logout", headers={"Authorization": f"Bearer {a}"})
+    browser = h.client("192.168.15.1")
+    browser.cookies.set("vaf_token", a)
+    r = browser.get("/api/auth/me")
+    assert r.status_code == 401 and _deletes_the_cookie(r), r.headers
+    # The web UI sends the same token as Bearer AND cookie: the cookie goes too.
+    both = h.client("192.168.15.2")
+    both.cookies.set("vaf_token", a)
+    r = both.get("/api/probe", headers={"Authorization": f"Bearer {a}"})
+    assert r.status_code == 401 and _deletes_the_cookie(r)
+
+
+def test_a_bearer_token_leaves_the_cookie_alone(h):
+    """A program's own Bearer token says nothing about the browser's cookie. MUTATION: delete
+    the cookie for any refused token - red."""
+    _id, a, b = _two_devices(h)
+    h.client("192.168.11.1").post("/api/auth/logout", headers={"Authorization": f"Bearer {a}"})
+    c = h.client("192.168.15.3")
+    c.cookies.set("vaf_token", b)
+    r = c.get("/api/probe", headers={"Authorization": f"Bearer {a}"})
+    assert r.status_code == 401 and not _deletes_the_cookie(r)
+    r = h.client("192.168.15.4").get("/api/probe", headers={"Authorization": f"Bearer {a}"})
+    assert r.status_code == 401 and "set-cookie" not in r.headers
+
+
+def test_the_machine_itself_keeps_its_tokenless_path(h):
+    """A client on this machine with an ended cookie falls through to the tokenless path, as
+    before (the desktop is never locked out)."""
+    _id, a, _b = _two_devices(h)
+    h.client("192.168.11.1").post("/api/auth/logout", headers={"Authorization": f"Bearer {a}"})
+    local = h.client(None)
+    local.cookies.set("vaf_token", a)
+    assert local.get("/api/probe").status_code == 200

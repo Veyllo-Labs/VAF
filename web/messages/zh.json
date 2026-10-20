@@ -2949,6 +2949,7 @@
     "failed": "无法修改密码。",
     "errWrongPassword": "当前密码不正确。",
     "errWrongCode": "2FA 验证码不正确。",
+    "errThrottled": "2FA 验证码错误次数过多。请稍后再试。",
     "errSamePassword": "新密码与当前密码相同。",
     "errRecordChanged": "此账户的记录已在 VAF 之外被修改。管理员可以在安全日志中查看。",
     "errTwofaUnreadable": "无法在这台电脑上读取此账户的 2FA 密钥。请退出并重新登录，重新设置 2FA。",

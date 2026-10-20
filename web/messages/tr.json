@@ -2949,6 +2949,7 @@
     "failed": "Parola değiştirilemedi.",
     "errWrongPassword": "Mevcut parola doğru değil.",
     "errWrongCode": "2FA kodu doğru değil.",
+    "errThrottled": "Çok fazla yanlış 2FA kodu girildi. Daha sonra tekrar dene.",
     "errSamePassword": "Yeni parola mevcut parolayla aynı.",
     "errRecordChanged": "Bu hesabın kaydı VAF dışında değiştirildi. Bir yönetici olayı güvenlik günlüğünde bulur.",
     "errTwofaUnreadable": "Bu hesabın 2FA anahtarı bu bilgisayarda okunamıyor. 2FA'yı yeniden kurmak için oturumu kapatıp tekrar giriş yap.",

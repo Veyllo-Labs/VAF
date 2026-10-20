@@ -116,6 +116,8 @@ class Harness:
             for name in ("_horizon", "_announced", "_closed_until", "_closures"):
                 if hasattr(tracker, name):
                     monkeypatch.setattr(tracker, name, {})
+        from vaf.auth import second_factor
+        monkeypatch.setattr(second_factor, "_last_step", {})
         permissions.invalidate_permissions_cache()
         with contextlib.suppress(Exception):
             from vaf.auth import sessions

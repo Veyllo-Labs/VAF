@@ -184,3 +184,115 @@ def test_the_harness_is_the_attackers_view(h):
     assert c.post("/api/auth/login", json={"username": "a", "password": "b"}).status_code == 403
     assert auth_harness.PROXY_PEER[0] == "127.0.0.1"
     assert time.time() > 0
+
+
+# ── the second-factor window ─────────────────────────────────────────────────────
+
+class _Clock:
+    """The windows' clock, moved by hand."""
+
+    def __init__(self, monkeypatch):
+        from vaf.auth import rate_limit
+        self.t = 1_000_000.0
+        monkeypatch.setattr(rate_limit, "_now", lambda: self.t)
+
+
+def _change_password(h, token, ip, code, new="a-brand-new-password"):
+    c = h.client(ip)
+    return c.post("/api/auth/change-password", headers={"Authorization": f"Bearer {token}"},
+                  json={"current_password": "alice-password-1", "new_password": new, "code": code})
+
+
+def _step_up(h, user_id, code):
+    import asyncio
+
+    from fastapi import HTTPException
+
+    from vaf.api.security_routes import _verify_admin_totp
+    try:
+        asyncio.run(_verify_admin_totp({"user_id": user_id}, code))
+        return 200
+    except HTTPException as e:
+        return e.status_code
+
+
+def _wrong_at_verify(h, secret, ip):
+    c = h.client(ip)
+    temp = h.login(c, "alice", "alice-password-1").json()["temp_token"]
+    return h.verify(c, temp, wrong_code(secret)).status_code
+
+
+def test_the_second_factor_window_closes_and_doubles(h, monkeypatch):
+    """Five wrong codes, at any of the three doors, hold the account's code; the next closure
+    within a day lasts twice as long. MUTATION: key it per address, or drop the doubling - red."""
+    clock = _Clock(monkeypatch)
+    user_id, secret = h.add_user("alice", "alice-password-1", totp=True)
+    token = h.sign_in(h.client("192.168.2.1"), "alice", "alice-password-1", secret)
+    assert _wrong_at_verify(h, secret, "192.168.2.2") == 401
+    assert _wrong_at_verify(h, secret, "192.168.2.3") == 401
+    assert _change_password(h, token, "192.168.2.4", wrong_code(secret)).json()["code"] == "wrong_code"
+    assert _change_password(h, token, "192.168.2.5", wrong_code(secret)).json()["code"] == "wrong_code"
+    assert _step_up(h, user_id, wrong_code(auth_harness.pyotp.random_base32())) == 403
+    # Held at all three doors, the right code included, from an address never seen.
+    c = h.client("192.168.2.6")
+    temp = h.login(c, "alice", "alice-password-1").json()["temp_token"]
+    r = h.verify(c, temp, auth_harness.code_at(secret))
+    assert r.status_code == 429
+    r = _change_password(h, token, "192.168.2.7", auth_harness.code_at(secret))
+    assert r.status_code == 429 and r.json()["code"] == "throttled"
+    assert _step_up(h, user_id, auth_harness.code_at(secret)) == 429
+    assert [e["detail"] for e in h.kinds("login_throttled")] == ["second factor"]
+    # The first closure lasts the window ...
+    clock.t += 899
+    assert h.verify(c, temp, auth_harness.code_at(secret)).status_code == 429
+    clock.t += 2
+    for i in range(5):
+        assert _wrong_at_verify(h, secret, f"192.168.3.{i + 1}") == 401
+    # ... the second one twice as long.
+    clock.t += 1799
+    assert h.verify(c, temp, auth_harness.code_at(secret)).status_code == 429
+    clock.t += 2
+    # (the next step's code: the sign-in above spent the current one)
+    assert h.verify(c, temp, auth_harness.code_at(secret, 1)).status_code == 200
+
+
+def test_success_clears_it(h):
+    """A completed sign-in ends the count. MUTATION: no clear on success - red."""
+    _id, secret = h.add_user("alice", "alice-password-1", totp=True)
+    for i in range(4):
+        assert _wrong_at_verify(h, secret, f"192.168.4.{i + 1}") == 401
+    h.sign_in(h.client("192.168.4.9"), "alice", "alice-password-1", secret)
+    for i in range(4):
+        assert _wrong_at_verify(h, secret, f"192.168.5.{i + 1}") == 401
+    c = h.client("192.168.5.9")
+    temp = h.login(c, "alice", "alice-password-1").json()["temp_token"]
+    assert h.verify(c, temp, auth_harness.code_at(secret, 1)).status_code == 200
+
+
+def test_a_new_password_opens_a_fresh_window(h):
+    """The window is keyed on the account AND its password. MUTATION: key without the hash
+    suffix - red."""
+    _id, secret = h.add_user("alice", "alice-password-1", totp=True)
+    for i in range(5):
+        assert _wrong_at_verify(h, secret, f"192.168.6.{i + 1}") == 401
+    from sqlalchemy.orm import Session
+
+    from vaf.auth.crypto import hash_password
+    with Session(h.engine) as s:
+        user = s.get(type(h.user("alice")), h.user("alice").id)
+        user.password_hash = hash_password("alice-password-2")
+        s.commit()
+    c = h.client("192.168.6.9")
+    temp = h.login(c, "alice", "alice-password-2").json()["temp_token"]
+    assert h.verify(c, temp, auth_harness.code_at(secret)).status_code == 200
+
+
+def test_step_up_shares_it(h):
+    """A stolen admin session guessed the step-up code without limit.
+    MUTATION: verify the step-up code without check_second_factor - red."""
+    user_id, secret = h.add_user("alice", "alice-password-1", role="admin", totp=True)
+    for _ in range(5):
+        assert _step_up(h, user_id, wrong_code(secret)) == 403
+    c = h.client("192.168.7.1")
+    temp = h.login(c, "alice", "alice-password-1").json()["temp_token"]
+    assert h.verify(c, temp, auth_harness.code_at(secret)).status_code == 429

@@ -2949,6 +2949,7 @@
     "failed": "Das Passwort konnte nicht geändert werden.",
     "errWrongPassword": "Das aktuelle Passwort stimmt nicht.",
     "errWrongCode": "Der 2FA-Code stimmt nicht.",
+    "errThrottled": "Zu viele falsche 2FA-Codes. Versuch es später noch einmal.",
     "errSamePassword": "Das neue Passwort ist das aktuelle.",
     "errRecordChanged": "Die Kontodaten wurden außerhalb von VAF verändert. Ein Admin findet den Eintrag im Sicherheitsprotokoll.",
     "errTwofaUnreadable": "Der 2FA-Schlüssel dieses Kontos lässt sich auf diesem Rechner nicht lesen. Melde dich ab und wieder an, dann richtest du 2FA neu ein.",

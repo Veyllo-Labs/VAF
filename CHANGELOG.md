@@ -95,9 +95,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   in from. An account is held after repeated failed logins from any number of addresses
   (`local_network_rate_limit_account_attempts`, default 10 per window); the machine itself
   and addresses that signed in to the account before are not held, so nobody who knows your
-  name can lock you out of your own devices. A held login answers "Too many failed attempts"
-  and is recorded in the security log ("Too many login attempts"). The step between password
-  and code now lasts 15 minutes instead of a day.
+  name can lock you out of your own devices. A two-factor code works only once, and five
+  wrong codes hold the account's code wherever it is asked (sign-in, password change, an
+  admin's confirmation), each time longer within a day. A held login answers "Too many
+  failed attempts" and is recorded in the security log ("Too many login attempts"). The
+  step between password and code now lasts 15 minutes instead of a day.
 
 - **Pages through the HTTPS port can no longer be framed by another site.** The login and
   the app served to other devices carried no anti-framing headers and no HSTS; they do now.

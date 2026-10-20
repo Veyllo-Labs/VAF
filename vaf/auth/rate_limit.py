@@ -17,6 +17,13 @@ Throttling for the sign-in doors: windows of failed attempts, each only emptied 
   and addresses that completed a sign-in for the account before, so a stranger who knows a
   name cannot lock its owner out of their own devices.
 
+- SECOND-FACTOR window (`vaf/auth/second_factor.py` asks it): wrong codes per account and
+  password, at `/verify-2fa`, at the password change and at an admin's step-up alike (three
+  doors with three accountings before: one counted per address by hand, two not at all). Five
+  wrong codes hold the account's code for the window, every further closure within a day
+  twice as long, at most a day. No exemption for the machine: it cannot be reached without
+  the password. A completed sign-in clears it; a new password opens a fresh one.
+
 Each first refusal of a closure is the security event `login_throttled`.
 
 Config keys:
@@ -137,8 +144,87 @@ class _AttemptTracker:
             self._forget(key)
 
 
+class _SecondFactorTracker(_AttemptTracker):
+    """Wrong codes per account and password, each closure longer than the last.
+
+    A closure starts when a key reaches the threshold within the window and lasts
+    `window x 2^(n-1)`, n counting this key's closures in the last day, at most a day. A new
+    closure starts from a fresh count. Clearing (a completed sign-in) ends the count and the
+    closure, not the day's history, so a guesser who comes back is held longer again.
+    """
+
+    DAY = 86400.0
+
+    def __init__(self):
+        super().__init__()
+        self._closed_until: dict[str, float] = {}
+        self._closures: dict[str, list[float]] = {}
+
+    def record_wrong_code(self, key: str, threshold: int) -> bool:
+        """Count one wrong code; True when it closed the window."""
+        window = _window_seconds()
+        with self._lock:
+            now = _now()
+            live = [t for t in self._attempts.get(key, ()) if t > now - window] + [now]
+            self._horizon[key] = window
+            if len(live) < threshold:
+                self._attempts[key] = live
+                if len(self._attempts) > self.MAX_KEYS:
+                    self._sweep(now)
+                return False
+            closures = [c for c in self._closures.get(key, ()) if c > now - self.DAY] + [now]
+            self._closures[key] = closures
+            self._closed_until[key] = now + min(window * 2 ** (len(closures) - 1), self.DAY)
+            self._attempts.pop(key, None)
+            return True
+
+    def closed_for(self, key: str) -> float:
+        """Seconds this key stays closed, 0 when open."""
+        with self._lock:
+            left = self._closed_until.get(key, 0.0) - _now()
+            return left if left > 0 else 0.0
+
+    def first_refusal(self, key: str) -> bool:
+        with self._lock:
+            until = self._closed_until.get(key)
+            if until is None or self._announced.get(key) == until:
+                return False
+            self._announced[key] = until
+            return True
+
+    def clear(self, key: str) -> None:
+        with self._lock:
+            self._attempts.pop(key, None)
+            self._closed_until.pop(key, None)
+
+    def _sweep(self, now: float) -> None:
+        for key in set(self._attempts) | set(self._closed_until) | set(self._closures):
+            window = self._horizon.get(key, 0.0)
+            live = [t for t in self._attempts.get(key, ()) if t > now - window]
+            recent = [c for c in self._closures.get(key, ()) if c > now - self.DAY]
+            if live or recent or self._closed_until.get(key, 0.0) > now:
+                if live:
+                    self._attempts[key] = live
+                else:
+                    self._attempts.pop(key, None)
+                if recent:
+                    self._closures[key] = recent
+                continue
+            self._forget(key)
+
+    def _forget(self, key: str) -> None:
+        super()._forget(key)
+        self._closed_until.pop(key, None)
+        self._closures.pop(key, None)
+
+
 _tracker = _AttemptTracker()           # per real client address
 _account_tracker = _AttemptTracker()   # per account name
+_second_factor_tracker = _SecondFactorTracker()   # per account and password
+
+# Wrong codes per account before its second factor is held. Six digits, three of them valid at
+# any moment: five guesses leave a chance of 1.5 in 100,000 per window.
+SECOND_FACTOR_ATTEMPTS = 5
 
 
 def _int_config(key: str, default: int) -> int:
@@ -223,6 +309,33 @@ def record_account_failure(username: str) -> None:
 
 def account_refusal_is_new(username: str) -> bool:
     return _account_tracker.first_refusal(account_key(username))
+
+
+# ── the second-factor window ──────────────────────────────────────────────────────────
+
+def second_factor_key(user) -> str:
+    """The account, and its current password: a password change opens a fresh window (the
+    last 16 characters of the Argon2 hash change with every new hash)."""
+    return f"{getattr(user, 'id', '')}:{str(getattr(user, 'password_hash', '') or '')[-16:]}"
+
+
+def second_factor_closed(key: str) -> float:
+    """Seconds this account's second factor stays held, 0 when it may be tried."""
+    return _second_factor_tracker.closed_for(key)
+
+
+def record_second_factor_failure(key: str) -> bool:
+    """One wrong code; True when it closed the window."""
+    return _second_factor_tracker.record_wrong_code(key, SECOND_FACTOR_ATTEMPTS)
+
+
+def second_factor_refusal_is_new(key: str) -> bool:
+    return _second_factor_tracker.first_refusal(key)
+
+
+def clear_second_factor(key: str) -> None:
+    """A completed sign-in of the account."""
+    _second_factor_tracker.clear(key)
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):

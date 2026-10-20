@@ -810,8 +810,8 @@ async def _scope_username_map() -> Dict[str, str]:
         return {}
 
 
-async def _verify_admin_totp(user: Dict[str, Any], code: str) -> None:
-    """Verify the CURRENT admin's TOTP code or raise (403 wrong code, 400 no 2FA).
+async def _verify_admin_totp(user: Dict[str, Any], code: str, ip: str = "") -> None:
+    """Verify the CURRENT admin's TOTP code or raise (403 wrong code, 400 no 2FA, 429 held).
 
     The false-positive restore is the one action that deliberately re-exposes a
     HIGH-scanned skill to the agent - it deliberately requires a second factor,
@@ -828,17 +828,21 @@ async def _verify_admin_totp(user: Dict[str, Any], code: str) -> None:
         from sqlalchemy import select
         from vaf.auth.database import get_auth_db
         from vaf.auth.models import LocalUser
-        from vaf.auth.crypto import decrypt_totp_secret, verify_totp
         async with get_auth_db() as db:
             result = await db.execute(select(LocalUser).where(LocalUser.id == _uuid.UUID(user_id)))
             db_user = result.scalar_one_or_none()
-        from vaf.auth import account_seal
+        from vaf.auth import account_seal, second_factor
         if db_user is not None and not account_seal.check(db_user, where="step-up 2FA"):
             raise HTTPException(status_code=403, detail=account_seal.REFUSAL_LOGIN)
         if db_user is None or not db_user.totp_secret or not db_user.totp_nonce:
             raise HTTPException(status_code=400, detail="2FA is not configured for this account")
-        secret = decrypt_totp_secret(db_user.totp_secret, db_user.totp_nonce)
-        if not verify_totp(secret, code):
+        # The same check as at sign-in: a wrong code counts in the account's window (a stolen
+        # session guessed here without limit before), and a code works once.
+        reason = second_factor.check_second_factor(db_user, code, ip=ip, where="step-up")
+        if reason == second_factor.THROTTLED:
+            raise HTTPException(status_code=429, detail="Too many wrong 2FA codes. Try again later.",
+                                headers={"Retry-After": str(max(1, int(second_factor.held_for(db_user))))})
+        if reason is not None:
             raise HTTPException(status_code=403, detail="Invalid 2FA code")
     except HTTPException:
         raise

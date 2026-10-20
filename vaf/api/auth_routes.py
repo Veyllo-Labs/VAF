@@ -44,7 +44,6 @@ from vaf.auth.crypto import (
     decrypt_totp_secret,
     generate_totp_secret,
     get_totp_uri,
-    verify_totp,
 )
 from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
 
@@ -442,9 +441,12 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
         if not user or not user.totp_secret or not user.totp_nonce:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="2FA not set up")
 
-        try:
-            secret = decrypt_totp_secret(user.totp_secret, user.totp_nonce)
-        except Exception:
+        from vaf.auth import second_factor
+        reason = second_factor.check_second_factor(user, code, ip=_client_ip(request))
+        if reason == second_factor.THROTTLED:
+            from vaf.auth.rate_limit import too_many_attempts
+            return too_many_attempts(second_factor.held_for(user))
+        if reason == second_factor.UNREADABLE:
             # Wrong key (e.g. config/restart changed JWT secret) or corrupted data
             user.totp_secret = None
             user.totp_nonce = None
@@ -454,14 +456,14 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="2FA was reset (e.g. after config or restart). Please log in again and set up 2FA with the new QR code.",
             )
-
-        if not verify_totp(secret, code):
-            _log_auth_failure("twofa_failed", request, username=user.username or "", detail="wrong code")
+        if reason is not None:
             # 401 like a wrong password, so the address window counts it: as a 400 it was
             # counted nowhere, and whoever had the password guessed the six digits without
             # limit for the temp token's whole life (measured: 30 wrong codes, zero 429).
+            # The account's own window counts it too (check_second_factor).
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid code")
 
+        second_factor.signed_in(user)
         user.requires_2fa_setup = False
         user.last_login = datetime.utcnow()
         await db.commit()
@@ -891,16 +893,17 @@ async def change_password(body: ChangePasswordRequest, request: Request):
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                     detail="No account to change the password of")
             try:
-                await change_own_password(db, user, body.current_password, body.new_password, body.code)
+                await change_own_password(db, user, body.current_password, body.new_password, body.code,
+                                          ip=_client_ip(request))
             except UserAdminError as e:
                 if e.code == "wrong_code":
                     # A 400, which RateLimitMiddleware does not count. A wrong password is a
                     # 401 and is counted there already; counting it here too made it two.
+                    # The account's own window and the event come from check_second_factor.
                     record_login_failure(client_key(request))
-                if e.code in ("wrong_password", "wrong_code"):
-                    _log_auth_failure("login_failed" if e.code == "wrong_password" else "twofa_failed",
-                                      request, username=user.username or "",
-                                      detail="change-password: " + e.code.replace("_", " "))
+                if e.code == "wrong_password":
+                    _log_auth_failure("login_failed", request, username=user.username or "",
+                                      detail="change-password: wrong password")
                 # The code travels with the sentence so the page can say it in the reader's
                 # language; the sentence stays for every other client.
                 return JSONResponse(status_code=e.http_status, content={"detail": e.message, "code": e.code})

@@ -174,11 +174,3 @@ def get_totp_uri(secret: str, username: str, issuer: str = "VAF") -> str:
     """Provisioning URI for authenticator apps."""
     return pyotp.totp.TOTP(secret).provisioning_uri(name=username, issuer_name=issuer)
 
-
-def verify_totp(secret: str, code: str, window: int = 1) -> bool:
-    """Verify 6-digit TOTP code. window=1 allows ±30s."""
-    try:
-        totp = pyotp.TOTP(secret)
-        return totp.verify(code, valid_window=window)
-    except Exception:
-        return False

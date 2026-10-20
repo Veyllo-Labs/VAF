@@ -167,23 +167,25 @@ async def find_user(db, username: str) -> Optional[LocalUser]:
 
 
 async def change_own_password(db, user: LocalUser, current_password: str, new_password: str,
-                              code: str = "") -> None:
+                              code: str = "", *, ip: str = "") -> None:
     """An account changes its own password (Settings, Account): the current password, and the
     second factor's code when one is set up, so a session left open on someone else's screen
-    is not enough. The row must still verify (vaf/auth/account_seal.py); the write re-seals it.
-    The owner's account also refreshes the terminal door's hash copy."""
-    from vaf.auth import account_seal
-    from vaf.auth.crypto import decrypt_totp_secret, verify_password, verify_totp
+    is not enough. The code is checked like at sign-in (vaf/auth/second_factor.py: counted in
+    the account's window, spent once). The row must still verify (vaf/auth/account_seal.py);
+    the write re-seals it. The owner's account also refreshes the terminal door's hash copy."""
+    from vaf.auth import account_seal, second_factor
+    from vaf.auth.crypto import verify_password
     if not account_seal.check(user, where="change own password"):
         raise UserAdminError("record_changed", account_seal.REFUSAL_LOGIN, 403)
     if not verify_password(user.password_hash, current_password or ""):
         raise UserAdminError("wrong_password", "The current password is not right", 401)
     if user.totp_secret and user.totp_nonce and not user.requires_2fa_setup:
-        try:
-            secret = decrypt_totp_secret(user.totp_secret, user.totp_nonce)
-        except Exception:
+        reason = second_factor.check_second_factor(user, code, ip=ip, where="change-password")
+        if reason == second_factor.THROTTLED:
+            raise UserAdminError("throttled", "Too many wrong 2FA codes. Try again later.", 429)
+        if reason == second_factor.UNREADABLE:
             raise UserAdminError("twofa_unreadable", "The 2FA secret cannot be read on this machine", 400)
-        if not verify_totp(secret, str(code or "").strip().replace(" ", "")):
+        if reason is not None:
             raise UserAdminError("wrong_code", "The 2FA code is not right", 400)
     validate_password(new_password)
     if verify_password(user.password_hash, new_password):

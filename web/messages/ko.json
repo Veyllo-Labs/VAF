@@ -2949,6 +2949,7 @@
     "failed": "비밀번호를 변경할 수 없습니다.",
     "errWrongPassword": "현재 비밀번호가 올바르지 않습니다.",
     "errWrongCode": "2FA 코드가 올바르지 않습니다.",
+    "errThrottled": "2FA 코드를 너무 많이 잘못 입력했습니다. 잠시 후 다시 시도하세요.",
     "errSamePassword": "새 비밀번호가 현재 비밀번호와 같습니다.",
     "errRecordChanged": "이 계정의 기록이 VAF 밖에서 변경되었습니다. 관리자는 보안 로그에서 확인할 수 있습니다.",
     "errTwofaUnreadable": "이 계정의 2FA 키를 이 컴퓨터에서 읽을 수 없습니다. 로그아웃한 뒤 다시 로그인해 2FA를 새로 설정하세요.",

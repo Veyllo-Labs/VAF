@@ -273,6 +273,23 @@ def server_provision(
         UI.print("\n[bold]Access once the service is running:[/bold]")
         for iface in reachable:
             UI.print(f"  - https://{iface.ip}{suffix}  ({iface.name})")
+    hint = _first_admin_hint()
+    if hint:
+        UI.info(hint)
+
+
+def _first_admin_hint():
+    """What to do while this installation has no admin: a browser on another device needs the
+    setup code, which only this machine can show. None once an admin exists (or when the key
+    store cannot say, which counts as yes)."""
+    try:
+        from vaf.auth import account_seal
+        if account_seal.admin_established():
+            return None
+    except Exception:
+        return None
+    return ("No admin account exists yet. Create it here with `vaf setup`, or open an address "
+            "above in a browser and enter the code `vaf setup code` shows on this machine.")
 
 
 # ── who is admitted besides the local networks ─────────────────────────────

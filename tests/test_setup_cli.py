@@ -277,3 +277,14 @@ def test_vaf_setup_code_says_what_to_do_when_the_keyring_is_closed(monkeypatch):
     r = runner.invoke(setup_cmd.app, ["code"])
     assert r.exit_code == EXIT_CODES[SetupOutcome.FAILED] == 1
     assert "as the user VAF runs as" in " ".join(r.output.split())
+
+
+def test_provision_names_the_setup_code_while_no_admin_exists(monkeypatch):
+    """A server installer reads the provision output first: it says how the first admin is
+    created from another device. MUTATION: drop the hint, or show it with an admin - red."""
+    from vaf.auth import account_seal
+    from vaf.cli.cmd import server
+    monkeypatch.setattr(account_seal, "admin_established", lambda: False)
+    assert "vaf setup code" in server._first_admin_hint()
+    monkeypatch.setattr(account_seal, "admin_established", lambda: True)
+    assert server._first_admin_hint() is None

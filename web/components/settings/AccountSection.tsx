@@ -4,7 +4,8 @@
 'use client';
 
 import { useState } from 'react';
-import { useTranslations } from 'next-intl';
+import { useLocale, useTranslations } from 'next-intl';
+import { retryAfterSeconds, retryWhen } from '@/lib/retryAfter';
 
 /** Mirrors MIN_PASSWORD_LEN in vaf/auth/user_admin.py; the server checks it again. */
 const MIN_PASSWORD_LEN = 8;
@@ -18,6 +19,8 @@ const MIN_PASSWORD_LEN = 8;
  */
 export default function AccountSection() {
     const t = useTranslations('account');
+    const tCommon = useTranslations('common');
+    const locale = useLocale();
     const apiBase = typeof window !== 'undefined' ? (document.location.origin || '') : '';
     const [current, setCurrent] = useState('');
     const [next, setNext] = useState('');
@@ -45,15 +48,19 @@ export default function AccountSection() {
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                // A known refusal is said in the reader's language; anything else as sent.
+                // A known refusal is said in the reader's language; anything else as sent. A
+                // hold (429) names its wait: the second factor's, or the address window's.
+                const when = retryWhen(retryAfterSeconds(res), locale);
                 const known: Record<string, string> = {
                     wrong_password: t('errWrongPassword'), wrong_code: t('errWrongCode'),
                     same_password: t('errSamePassword'), record_changed: t('errRecordChanged'),
                     twofa_unreadable: t('errTwofaUnreadable'),
-                    throttled: t('errThrottled'),
+                    throttled: t('errThrottled', { when }),
+                    code_spent: t('errCodeSpent'),
                     password_too_short: t('tooShort', { n: MIN_PASSWORD_LEN }),
                 };
-                setNote({ ok: false, text: known[String(data.code || '')] || String(data.detail || t('failed')) });
+                const held = res.status === 429 && !data.code ? tCommon('tooManyAttempts', { when }) : '';
+                setNote({ ok: false, text: known[String(data.code || '')] || held || String(data.detail || t('failed')) });
                 return;
             }
             setCurrent('');

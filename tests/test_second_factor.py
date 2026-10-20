@@ -18,18 +18,50 @@ def h(monkeypatch):
     return Harness(monkeypatch)
 
 
+def _spent(r):
+    assert r.status_code == 400 and r.json()["code"] == "code_spent", r.text
+
+
 def test_a_code_is_spent_by_its_first_use(h):
-    """MUTATION: drop the last-step comparison - red."""
+    """A code works once: used again it is refused as spent (400 code_spent, so the page can
+    say "wait for the next code"). MUTATION: drop the last-step comparison - red."""
     _id, secret = h.add_user("alice", "alice-password-1", totp=True)
     c = h.client("192.168.8.1")
     code = code_at(secret, 1)
     temp = h.login(c, "alice", "alice-password-1").json()["temp_token"]
     assert h.verify(c, temp, code).status_code == 200
     temp = h.login(c, "alice", "alice-password-1").json()["temp_token"]
-    assert h.verify(c, temp, code).status_code == 401
+    _spent(h.verify(c, temp, code))
     # A code of an earlier step than the last accepted one is spent as well.
     temp = h.login(c, "alice", "alice-password-1").json()["temp_token"]
-    assert h.verify(c, temp, code_at(secret, 0)).status_code == 401
+    _spent(h.verify(c, temp, code_at(secret, 0)))
+
+
+def test_a_spent_code_is_not_a_guess(h):
+    """Typing the code just used to sign in again (a password change or an admin's
+    confirmation within the same 30 seconds) counted as a wrong code and closed the window on
+    its owner. It is a right code: not counted, in neither window.
+    MUTATION: count a spent code in the second-factor window - red."""
+    _id, secret = h.add_user("alice", "alice-password-1", totp=True)
+    c = h.client("192.168.8.2")
+    code = code_at(secret, 1)
+    temp = h.login(c, "alice", "alice-password-1").json()["temp_token"]
+    assert h.verify(c, temp, code).status_code == 200
+    for _ in range(6):
+        temp = h.login(c, "alice", "alice-password-1").json()["temp_token"]
+        _spent(h.verify(c, temp, code))
+    # Neither the account's code nor the address is held: the next code signs in.
+    from vaf.auth import second_factor
+    second_factor.forget_spent_codes()
+    temp = h.login(c, "alice", "alice-password-1").json()["temp_token"]
+    assert h.verify(c, temp, code_at(secret, 0)).status_code == 200
+
+
+def test_an_expired_step_says_so(h):
+    """The step between password and code lasts 15 minutes; when it ran out, the answer says
+    so (sign_in_expired) instead of "invalid code"."""
+    r = h.verify(h.client("192.168.8.3"), "not-a-token", "123456")
+    assert r.status_code == 401 and r.json()["code"] == "sign_in_expired"
 
 
 def test_the_check_answers_with_a_reason(h):
@@ -40,6 +72,7 @@ def test_the_check_answers_with_a_reason(h):
     assert second_factor.check_second_factor(bob, "123456") == second_factor.NOT_SET_UP
     assert second_factor.check_second_factor(alice, "abcdef") == second_factor.WRONG_CODE
     assert second_factor.check_second_factor(alice, code_at(secret)) is None
+    assert second_factor.check_second_factor(alice, code_at(secret)) == second_factor.SPENT
     alice.totp_nonce = b"\x00" * 12
     assert second_factor.check_second_factor(alice, code_at(secret, 1)) == second_factor.UNREADABLE
 

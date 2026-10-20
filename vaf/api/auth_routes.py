@@ -57,6 +57,9 @@ COOKIE_NAME = "vaf_token"
 # The life of the token /login answers a correct password with before the second factor.
 TEMP_TOKEN_HOURS = 0.25
 
+# A second-factor code works once (vaf/auth/second_factor.py).
+SPENT_CODE_TEXT = "This code was already used. Wait for the next code in your authenticator app."
+
 
 def _client_ip(request: Request) -> str:
     """Who this request REALLY comes from - the device, not the socket peer.
@@ -501,7 +504,10 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
     payload = await _second_factor_step_token(body.temp_token)
     if payload is None:
         _log_auth_failure("twofa_failed", request, detail="invalid temp token")
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid temp token")
+        # The code lets the page say what happened: most often the 15 minutes of the step ran
+        # out, and "invalid code" would send the person typing codes into an expired step.
+        return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED,
+                            content={"detail": "Invalid temp token", "code": "sign_in_expired"})
 
     user_id = payload.get("sub")
     code = (body.code or "").strip().replace(" ", "")
@@ -537,6 +543,11 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="2FA was reset (e.g. after config or restart). Please log in again and set up 2FA with the new QR code.",
             )
+        if reason == second_factor.SPENT:
+            # A right code, used already (a double submit): not a guess, so not a 401 the
+            # address window counts.
+            return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST,
+                                content={"detail": SPENT_CODE_TEXT, "code": "code_spent"})
         if reason is not None:
             # 401 like a wrong password, so the address window counts it: as a 400 it was
             # counted nowhere, and whoever had the password guessed the six digits without
@@ -942,8 +953,13 @@ async def change_password(body: ChangePasswordRequest, request: Request):
                     _log_auth_failure("login_failed", request, username=user.username or "",
                                       detail="change-password: wrong password")
                 # The code travels with the sentence so the page can say it in the reader's
-                # language; the sentence stays for every other client.
-                return JSONResponse(status_code=e.http_status, content={"detail": e.message, "code": e.code})
+                # language; the sentence stays for every other client. A hold names its wait.
+                headers = None
+                if e.code == "throttled":
+                    from vaf.auth.second_factor import held_for
+                    headers = {"Retry-After": str(max(1, int(held_for(user))))}
+                return JSONResponse(status_code=e.http_status, headers=headers,
+                                    content={"detail": e.message, "code": e.code})
             username = user.username or ""
             scope = str(user.user_scope_id or "")
             # Every other session of the account ends: a password changed because it leaked

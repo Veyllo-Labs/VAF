@@ -124,6 +124,9 @@
     "verifyAndContinue": "验证并继续",
     "backToLogin": "返回登录",
     "invalidCode": "代码无效。",
+    "codeSpent": "此验证码已被使用。请等待验证器应用中的下一个验证码。",
+    "signInExpired": "此次登录耗时过长。请返回并重新登录。",
+    "sessionEnded": "你已退出登录：会话因在别处退出登录、更改密码或重置而结束，或已过期。",
     "networkError": "发生网络错误。",
     "enterCode": "请输入代码。"
   },
@@ -746,6 +749,7 @@
   },
   "common": {
     "save": "保存",
+    "tooManyAttempts": "失败次数过多。请{when}再试。",
     "cancel": "取消",
     "close": "关闭",
     "create": "创建",
@@ -2953,7 +2957,8 @@
     "failed": "无法修改密码。",
     "errWrongPassword": "当前密码不正确。",
     "errWrongCode": "2FA 验证码不正确。",
-    "errThrottled": "2FA 验证码错误次数过多。请稍后再试。",
+    "errThrottled": "2FA 验证码错误次数过多。请{when}再试。",
+    "errCodeSpent": "此验证码已被使用。请等待验证器应用中的下一个验证码。",
     "errSamePassword": "新密码与当前密码相同。",
     "errRecordChanged": "此账户的记录已在 VAF 之外被修改。管理员可以在安全日志中查看。",
     "errTwofaUnreadable": "无法在这台电脑上读取此账户的 2FA 密钥。请退出并重新登录，重新设置 2FA。",

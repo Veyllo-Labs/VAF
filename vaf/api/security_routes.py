@@ -842,6 +842,9 @@ async def _verify_admin_totp(user: Dict[str, Any], code: str, ip: str = "") -> N
         if reason == second_factor.THROTTLED:
             raise HTTPException(status_code=429, detail="Too many wrong 2FA codes. Try again later.",
                                 headers={"Retry-After": str(max(1, int(second_factor.held_for(db_user))))})
+        if reason == second_factor.SPENT:
+            raise HTTPException(status_code=403, detail="This code was already used. Wait for the "
+                                                        "next code in your authenticator app.")
         if reason is not None:
             raise HTTPException(status_code=403, detail="Invalid 2FA code")
     except HTTPException:

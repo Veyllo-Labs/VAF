@@ -16,6 +16,7 @@ import {
 import { cn } from '@/lib/utils';
 import { useThemeStore } from '@/lib/themeStore';
 import { getApiBase } from '@/lib/utils';
+import { retryAfterSeconds, retryWhen } from '@/lib/retryAfter';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import ReactFlow, {
   Background, Controls, MiniMap,
@@ -1525,6 +1526,9 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
   const [qPending, setQPending] = useState<SkillAction | null>(null); // action awaiting a 2FA code
   // Live re-scan findings for the skill detail popup (the "why").
   const [skillScan, setSkillScan] = useState<SkillScanDetail | null>(null);
+  // A step-up held after repeated wrong codes (429), in the reader's language with its wait.
+  const heldText = (res: Response) =>
+    tCommon('tooManyAttempts', { when: retryWhen(retryAfterSeconds(res), locale) });
   const runSkillAction = async (id: string, action: SkillAction) => {
     setQBusy(true);
     setQError(null);
@@ -1537,7 +1541,7 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
       });
       if (!res.ok) {
         const d = await res.json().catch(() => null);
-        setQError(String(d?.detail ?? `HTTP ${res.status}`));
+        setQError(res.status === 429 ? heldText(res) : String(d?.detail ?? `HTTP ${res.status}`));
       } else {
         setQCode('');
         setQPending(null);
@@ -1571,7 +1575,7 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
       });
       if (!res.ok) {
         const d = await res.json().catch(() => null);
-        setQError(String(d?.detail ?? `HTTP ${res.status}`));
+        setQError(res.status === 429 ? heldText(res) : String(d?.detail ?? `HTTP ${res.status}`));
       } else {
         setQCode('');
         setThreatPending(null);

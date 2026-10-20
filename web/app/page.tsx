@@ -2681,11 +2681,15 @@ function VAFDashboardContent() {
                     setIsAuthenticated(true);
                 } else {
                     if (typeof window !== 'undefined') {
+                        // A token that no longer works means the session ended (signed out on
+                        // another device, a password change, a reset) or ran out: the login
+                        // page says so (?reason=ended) instead of appearing without a word.
+                        const hadToken = !!localStorage.getItem('vaf_token');
                         // Avoid split-brain auth state (stale token in storage, invalid on backend)
                         localStorage.removeItem('vaf_token');
                         // Hard navigation: router.replace('/login') can fail to leave the dashboard
                         // shell when using the integrated HTTPS proxy (e.g. https://localhost:8443).
-                        window.location.replace(`${window.location.origin}/login`);
+                        window.location.replace(`${window.location.origin}/login${hadToken ? '?reason=ended' : ''}`);
                     } else {
                         router.replace('/login');
                     }
@@ -7325,7 +7329,9 @@ function VAFDashboardContent() {
                         if (res.status === 401 || res.status === 403) {
                             localStorage.removeItem('vaf_token');
                             setIsAuthenticated(false);
-                            window.location.replace(`${window.location.origin}/login`);
+                            // The socket was refused and the token no longer works: the
+                            // session ended, and the login page says so.
+                            window.location.replace(`${window.location.origin}/login${t ? '?reason=ended' : ''}`);
                             return;
                         }
                         scheduleReconnect();

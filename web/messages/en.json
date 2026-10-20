@@ -124,6 +124,9 @@
     "verifyAndContinue": "Verify and continue",
     "backToLogin": "Back to login",
     "invalidCode": "Invalid code.",
+    "codeSpent": "This code was already used. Wait for the next code in your authenticator app.",
+    "signInExpired": "This sign-in took too long. Go back and sign in again.",
+    "sessionEnded": "You were signed out. The session ended elsewhere (a sign-out, a password change or a reset) or it ran out.",
     "networkError": "Network error.",
     "enterCode": "Enter code."
   },
@@ -746,6 +749,7 @@
   },
   "common": {
     "save": "Save",
+    "tooManyAttempts": "Too many failed attempts. Try again {when}.",
     "cancel": "Cancel",
     "close": "Close",
     "create": "Create",
@@ -2953,7 +2957,8 @@
     "failed": "The password could not be changed.",
     "errWrongPassword": "The current password is not right.",
     "errWrongCode": "The 2FA code is not right.",
-    "errThrottled": "Too many wrong 2FA codes. Try again later.",
+    "errThrottled": "Too many wrong 2FA codes. Try again {when}.",
+    "errCodeSpent": "This code was already used. Wait for the next code in your authenticator app.",
     "errSamePassword": "The new password is the current one.",
     "errRecordChanged": "This account's record was changed outside VAF. An admin finds the event in the security log.",
     "errTwofaUnreadable": "The 2FA secret of this account cannot be read on this computer. Sign out and sign in again to set up 2FA anew.",

@@ -14,9 +14,12 @@ WHAT IT DOES. `check_second_factor(user, code)` answers None (accepted) or the r
 - `throttled`: the account's second-factor window is closed (vaf/auth/rate_limit.py);
 - `not_set_up`: the account has no second factor;
 - `unreadable`: the stored secret cannot be decrypted on this machine (the caller repairs);
-- `wrong_code`: not a code of the steps -1, 0, +1, or the code of a step that is not later
-  than the last step accepted for this account (spent). A wrong code counts in the window and
-  is the security event `twofa_failed`.
+- `wrong_code`: not a code of the steps -1, 0, +1. It counts in the window and is the
+  security event `twofa_failed`.
+- `spent`: the code of a step that is not later than the last step accepted for this account,
+  typically the one just used to sign in, typed again for a password change or an admin's
+  confirmation within the same 30 seconds. Refused, but not counted: it is a right code, and
+  counting it closed a window on its owner. Still the security event `twofa_failed`.
 
 NAMED BOUNDARY: the last accepted step lives in this process; after a restart a code seen
 before it can be used once more within its 90 seconds.
@@ -32,6 +35,7 @@ THROTTLED = "throttled"
 NOT_SET_UP = "not_set_up"
 UNREADABLE = "unreadable"
 WRONG_CODE = "wrong_code"
+SPENT = "spent"
 
 _lock = threading.Lock()
 _last_step: dict[str, int] = {}
@@ -73,19 +77,23 @@ def check_second_factor(user, code: str, *, ip: str = "", where: str = "") -> Op
     cleaned = str(code or "").strip().replace(" ", "")
     step = _matching_step(secret, cleaned) if cleaned.isdigit() else None
     account = str(getattr(user, "id", "") or "")
+    spent = False
     if step is not None:
         with _lock:
             if step > _last_step.get(account, -1):
                 _last_step[account] = step
                 return None
-    rate_limit.record_second_factor_failure(key)
+            spent = True
+    if not spent:
+        rate_limit.record_second_factor_failure(key)
+    what = "code already used" if spent else "wrong code"
     try:
         from vaf.core.security_events import log_security_event
         log_security_event("twofa_failed", ip=ip, username=username,
-                           detail=f"{where}: wrong code" if where else "wrong code")
+                           detail=f"{where}: {what}" if where else what)
     except Exception:
         pass
-    return WRONG_CODE
+    return SPENT if spent else WRONG_CODE
 
 
 def held_for(user) -> float:

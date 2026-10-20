@@ -11,11 +11,12 @@ import {
     Smartphone, CheckCircle, Check, Copy, Globe, KeyRound, ExternalLink,
     Zap, Cpu, HardDrive, Sun, Moon, SunMoon, Bot, Dices
 } from 'lucide-react';
-import { useTranslations } from 'next-intl';
+import { useTranslations, useLocale } from 'next-intl';
 import { copyText } from '@/lib/clipboard';
 import SoulWizard from '@/components/SoulWizard';
 import { cn } from '@/lib/utils';
 import { getApiBase } from '@/lib/utils';
+import { retryAfterSeconds, retryWhen } from '@/lib/retryAfter';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { useLocaleStore } from '@/lib/localeStore';
 import { veylloDashboardUrl } from '@/lib/veyllo';
@@ -93,6 +94,26 @@ export default function LoginPage() {
     // The login and boot surfaces are their own namespace: they render before a
     // language has been chosen and long after onboarding is over.
     const tAuth = useTranslations('auth');
+    const tCommon = useTranslations('common');
+    const locale = useLocale();
+    // A held sign-in (429) in the reader's language, with the wait the server sent.
+    const heldText = (res: Response) =>
+        tCommon('tooManyAttempts', { when: retryWhen(retryAfterSeconds(res), locale) });
+    // What a refused second-factor answer means: held, the step ran out, a code used once
+    // already, or simply a wrong code.
+    const codeErrorText = (res: Response, data: { code?: string; detail?: string }) => {
+        if (res.status === 429) return heldText(res);
+        if (data?.code === 'sign_in_expired') return tAuth('signInExpired');
+        if (data?.code === 'code_spent') return tAuth('codeSpent');
+        if (res.status === 401) return tAuth('invalidCode');
+        return (data?.detail as string) || tAuth('invalidCode');
+    };
+    // Set when another window sent us here because the session ended (?reason=ended).
+    const [endedNotice, setEndedNotice] = useState(false);
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        if (new URLSearchParams(window.location.search).get('reason') === 'ended') setEndedNotice(true);
+    }, []);
     const setLocale = useLocaleStore((s) => s.setLocale);
     const currentLocale = useLocaleStore((s) => s.locale);
     const theme = useThemeStore((s) => s.theme);
@@ -303,7 +324,7 @@ export default function LoginPage() {
             } else if (res.status === 401) {
                 setSetupCodeError(t('errSetupCode'));
             } else {
-                setSetupCodeError((data?.detail as string) || t('connectionFailed'));
+                setSetupCodeError(res.status === 429 ? heldText(res) : ((data?.detail as string) || t('connectionFailed')));
             }
         } catch {
             setSetupCodeError(t('connectionFailed'));
@@ -421,7 +442,8 @@ export default function LoginPage() {
                 return;
             }
             if (!bootstrapRes.ok) {
-                setBootstrapError((bootstrapData?.detail as string) || t('accountCreationFailed'));
+                setBootstrapError(bootstrapRes.status === 429 ? heldText(bootstrapRes)
+                    : ((bootstrapData?.detail as string) || t('accountCreationFailed')));
                 setIsLoading(false);
                 return;
             }
@@ -485,7 +507,7 @@ export default function LoginPage() {
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                setTwoFAError((data?.detail as string) || tAuth('invalidCode'));
+                setTwoFAError(codeErrorText(res, data));
                 setIsLoading(false);
                 return;
             }
@@ -517,7 +539,7 @@ export default function LoginPage() {
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                setLoginError((data?.detail as string) || tAuth('loginFailed'));
+                setLoginError(res.status === 429 ? heldText(res) : ((data?.detail as string) || tAuth('loginFailed')));
                 setIsLoading(false);
                 return;
             }
@@ -577,7 +599,7 @@ export default function LoginPage() {
             });
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
-                setTwoFAError((data?.detail as string) || tAuth('invalidCode'));
+                setTwoFAError(codeErrorText(res, data));
                 setIsLoading(false);
                 return;
             }
@@ -721,6 +743,9 @@ export default function LoginPage() {
                         <div className="bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden">
                             <div className="p-8">
                                 <h2 className="text-lg font-semibold text-gray-900 mb-6">{tAuth('signInTitle')}</h2>
+                                {endedNotice && (
+                                    <p className="text-sm text-gray-700 bg-gray-50 border border-gray-200 px-3 py-2 rounded-lg mb-5">{tAuth('sessionEnded')}</p>
+                                )}
                                 <form onSubmit={handleLogin} className="space-y-5">
                                     <div className="space-y-1.5">
                                         <label className="text-sm font-medium text-gray-700 ml-1">{tAuth('username')}</label>

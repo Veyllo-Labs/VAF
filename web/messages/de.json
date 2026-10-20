@@ -124,6 +124,9 @@
     "verifyAndContinue": "Prüfen und fortfahren",
     "backToLogin": "Zurück zur Anmeldung",
     "invalidCode": "Ungültiger Code.",
+    "codeSpent": "Dieser Code wurde schon verwendet. Warte auf den nächsten Code in deiner Authenticator-App.",
+    "signInExpired": "Diese Anmeldung hat zu lange gedauert. Geh zurück und melde dich neu an.",
+    "sessionEnded": "Du wurdest abgemeldet. Die Sitzung wurde anderswo beendet (Abmeldung, Passwortänderung oder Zurücksetzen) oder ist abgelaufen.",
     "networkError": "Netzwerkfehler.",
     "enterCode": "Bitte Code eingeben."
   },
@@ -746,6 +749,7 @@
   },
   "common": {
     "save": "Speichern",
+    "tooManyAttempts": "Zu viele Fehlversuche. Versuch es {when} noch einmal.",
     "cancel": "Abbrechen",
     "close": "Schließen",
     "create": "Erstellen",
@@ -2953,7 +2957,8 @@
     "failed": "Das Passwort konnte nicht geändert werden.",
     "errWrongPassword": "Das aktuelle Passwort stimmt nicht.",
     "errWrongCode": "Der 2FA-Code stimmt nicht.",
-    "errThrottled": "Zu viele falsche 2FA-Codes. Versuch es später noch einmal.",
+    "errThrottled": "Zu viele falsche 2FA-Codes. Versuch es {when} noch einmal.",
+    "errCodeSpent": "Dieser Code wurde schon verwendet. Warte auf den nächsten Code in deiner Authenticator-App.",
     "errSamePassword": "Das neue Passwort ist das aktuelle.",
     "errRecordChanged": "Die Kontodaten wurden außerhalb von VAF verändert. Ein Admin findet den Eintrag im Sicherheitsprotokoll.",
     "errTwofaUnreadable": "Der 2FA-Schlüssel dieses Kontos lässt sich auf diesem Rechner nicht lesen. Melde dich ab und wieder an, dann richtest du 2FA neu ein.",

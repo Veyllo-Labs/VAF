@@ -240,6 +240,7 @@ def test_the_second_factor_window_closes_and_doubles(h, monkeypatch):
     assert r.status_code == 429
     r = _change_password(h, token, "192.168.2.7", auth_harness.code_at(secret))
     assert r.status_code == 429 and r.json()["code"] == "throttled"
+    assert 0 < int(r.headers["retry-after"]) <= 900       # the page names the wait
     assert _step_up(h, user_id, auth_harness.code_at(secret)) == 429
     assert [e["detail"] for e in h.kinds("login_throttled")] == ["second factor"]
     # The first closure lasts the window ...

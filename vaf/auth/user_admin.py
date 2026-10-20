@@ -193,6 +193,9 @@ async def change_own_password(db, user: LocalUser, current_password: str, new_pa
             raise UserAdminError("throttled", "Too many wrong 2FA codes. Try again later.", 429)
         if reason == second_factor.UNREADABLE:
             raise UserAdminError("twofa_unreadable", "The 2FA secret cannot be read on this machine", 400)
+        if reason == second_factor.SPENT:
+            raise UserAdminError("code_spent", "This code was already used. Wait for the next code "
+                                 "in your authenticator app.", 400)
         if reason is not None:
             raise UserAdminError("wrong_code", "The 2FA code is not right", 400)
     validate_password(new_password)

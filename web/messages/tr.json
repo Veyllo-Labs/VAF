@@ -124,6 +124,9 @@
     "verifyAndContinue": "Doğrula ve devam et",
     "backToLogin": "Girişe dön",
     "invalidCode": "Geçersiz kod.",
+    "codeSpent": "Bu kod zaten kullanıldı. Doğrulayıcı uygulamandaki bir sonraki kodu bekle.",
+    "signInExpired": "Bu giriş çok uzun sürdü. Geri dön ve yeniden giriş yap.",
+    "sessionEnded": "Oturumun kapatıldı. Oturum başka bir yerde sona erdi (çıkış, parola değişikliği veya sıfırlama) ya da süresi doldu.",
     "networkError": "Ağ hatası.",
     "enterCode": "Kodu gir."
   },
@@ -746,6 +749,7 @@
   },
   "common": {
     "save": "Kaydet",
+    "tooManyAttempts": "Çok fazla başarısız deneme. {when} tekrar dene.",
     "cancel": "İptal",
     "close": "Kapat",
     "create": "Oluştur",
@@ -2953,7 +2957,8 @@
     "failed": "Parola değiştirilemedi.",
     "errWrongPassword": "Mevcut parola doğru değil.",
     "errWrongCode": "2FA kodu doğru değil.",
-    "errThrottled": "Çok fazla yanlış 2FA kodu girildi. Daha sonra tekrar dene.",
+    "errThrottled": "Çok fazla yanlış 2FA kodu girildi. {when} tekrar dene.",
+    "errCodeSpent": "Bu kod zaten kullanıldı. Doğrulayıcı uygulamandaki bir sonraki kodu bekle.",
     "errSamePassword": "Yeni parola mevcut parolayla aynı.",
     "errRecordChanged": "Bu hesabın kaydı VAF dışında değiştirildi. Bir yönetici olayı güvenlik günlüğünde bulur.",
     "errTwofaUnreadable": "Bu hesabın 2FA anahtarı bu bilgisayarda okunamıyor. 2FA'yı yeniden kurmak için oturumu kapatıp tekrar giriş yap.",

@@ -90,3 +90,22 @@ def test_the_old_verifier_is_gone():
                       or "pyotp.TOTP(secret).verify" in p.read_text(encoding="utf-8"))]
     assert not offenders, offenders
     assert auth_harness.JWT_SECRET
+
+
+def test_a_refused_new_password_does_not_spend_the_code(h):
+    """The new password is judged before the code is checked: a code spent on a change that
+    was then refused for its new password made the person wait for the next one.
+    MUTATION: check the code first again - red."""
+    _id, secret = h.add_user("alice", "alice-password-1", totp=True)
+    token = h.sign_in(h.client("192.168.8.5"), "alice", "alice-password-1", secret)
+    c = h.client("192.168.8.6")
+    code = code_at(secret, 1)
+    headers = {"Authorization": f"Bearer {token}"}
+    for new in ("alice-password-1", "short"):
+        r = c.post("/api/auth/change-password", headers=headers,
+                   json={"current_password": "alice-password-1", "new_password": new, "code": code})
+        assert r.json()["code"] in ("same_password", "password_too_short"), r.text
+    r = c.post("/api/auth/change-password", headers=headers,
+               json={"current_password": "alice-password-1", "new_password": "alice-password-2",
+                     "code": code})
+    assert r.status_code == 200, r.text

@@ -187,6 +187,12 @@ async def change_own_password(db, user: LocalUser, current_password: str, new_pa
         raise UserAdminError("record_changed", account_seal.REFUSAL_LOGIN, 403)
     if not await verify_password_async(user.password_hash, current_password or ""):
         raise UserAdminError("wrong_password", "The current password is not right", 401)
+    # The new password is judged BEFORE the code: checking the code spends it, so a refusal
+    # for the new password afterwards cost the person their code for the next half minute.
+    # The current password is verified, so this order tells nobody anything new.
+    validate_password(new_password)
+    if await verify_password_async(user.password_hash, new_password):
+        raise UserAdminError("same_password", "The new password is the current one", 400)
     if user.totp_secret and user.totp_nonce and not user.requires_2fa_setup:
         reason = second_factor.check_second_factor(user, code, ip=ip, where="change-password")
         if reason == second_factor.THROTTLED:
@@ -198,9 +204,6 @@ async def change_own_password(db, user: LocalUser, current_password: str, new_pa
                                  "in your authenticator app.", 400)
         if reason is not None:
             raise UserAdminError("wrong_code", "The 2FA code is not right", 400)
-    validate_password(new_password)
-    if await verify_password_async(user.password_hash, new_password):
-        raise UserAdminError("same_password", "The new password is the current one", 400)
     user.password_hash = await hash_password_async(new_password)
     await db.commit()
     try:

@@ -135,6 +135,12 @@ the real answer; the return value is a status:
   (contains `[LOOP_PROTECTION]`, prefixed by a warning emoji - match by
   substring, not prefix), async sub-agent acks (`[ASYNC_ACK]...`), and
   handled degradations (`[SYSTEM_LOG_ONLY]...`).
+- A provider's own failure is not a return value: the backend yields it as a content
+  chunk, `[API Error from <provider>: <raw answer>]`, so it reaches `stream_callback`
+  and the stored answer, also after text an earlier round streamed. The `[Error] ...`
+  statuses above are streamed as well. `vaf.is_error_reply(text)` recognises both
+  shapes; ask it of the accumulated stream before the text goes to anybody who must
+  not read internals (the raw answer can carry a masked key, a path, an id).
 
 There is no public `stop()`; a running turn is stopped via
 `TaskQueue().request_stop(session_id)` (polled between chunks and tools).

@@ -19,6 +19,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   user; `ToolCaller(allowed_tools=)` is the same for a lane of your own. See "Which
   tools this agent may use" in `docs/EMBEDDING.md`.
 
+- **`vaf.is_error_reply(text)`** tells a turn that failed from a turn that answered. `run()`
+  does not raise for a provider that fails during the turn: the failure comes back as the
+  answer's text, with the provider's raw answer in it. Ask this before that text reaches
+  anybody who must not read it. See "A complete example, with error handling" in
+  `docs/EMBEDDING.md`.
+
 - **A restore shows in the security log.** `vaf backup restore` replaces every account, key
   and chat of the machine; it is now the security event "Backup restored", with the backup,
   the proof the person gave in the terminal and whose backup it was. A restore that did not
@@ -93,12 +99,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   updating so the fix takes effect.
 
 - **A contact no longer receives VAF's internal error text.** When the agent's answer to a
-  contact on WhatsApp, Telegram or Discord failed, the contact got "Sorry, something went
-  wrong:" followed by the internal error, which can name file paths and ids on your machine.
-  A contact now gets a short fixed sentence asking them to try again later, in the language
-  on their contact record (English when it names none). The error stays in that chat's log
-  in the web UI, and your own chats still show it in full. Restart VAF after updating so the
-  fix takes effect.
+  contact on WhatsApp, Telegram or Discord failed, the contact got the internal error: most
+  often the AI provider's raw failure ("[API Error from openai: ... Incorrect API key
+  provided ...]", "[Error] API backend failure: ..."), which can name file paths, ids and a
+  masked key, and after a voice note it was read aloud. A contact now gets a short fixed
+  sentence asking them to try again later, as text, in the language on their contact record
+  (English when it names none); an answer by mail is not sent at all and the mail waits for
+  you. The error stays in that chat in the web UI, and your own chats still show it in
+  full. Restart VAF after updating so the fix takes effect.
 
 - **Archived chats, agent rooms and word suggestions are encrypted on disk like the chats.**
   Their writers already encrypted every new file, but the start-up sweep that encrypts what

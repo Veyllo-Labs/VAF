@@ -36,6 +36,30 @@ import contextvars
 from typing import Optional
 
 _ERROR_SENTINEL = "[API Error from"
+# The engine's own failure status: chat_step returns (and streams) it for a backend
+# exception or a server it gave up on, and the queue runner writes it for a turn that
+# produced nothing.
+_ENGINE_ERROR = "[Error] "
+
+
+def is_error_reply(text) -> bool:
+    """True when a turn's text is a backend failure handed back as text, not an answer.
+
+    `chat_step` does not raise for a failing provider. It returns its `[Error] ...` status,
+    and the backend streams a provider's failure as a content chunk, `[API Error from
+    <provider>: <raw answer>]`, which can follow text an earlier round already streamed. Both
+    reach the turn's answer and carry internal detail (file paths, store ids, the provider's
+    raw answer, a masked key). Judge the whole text you are about to show or send; a reply
+    that quotes either marker counts as an error too, the safe side for a reader who must
+    not see internals.
+
+    Named boundary: the collectors that test ONE chunk of a stream for the provider
+    sentinel (`_collect` here, `_first_chunk` in the failover chain, the vision, voice and
+    memory-answer lanes) stay chunk tests. The engine marker is a whole-text signal; at
+    chunk level it would fire on content that merely starts a chunk with it."""
+    if not isinstance(text, str) or not text:
+        return False
+    return _ERROR_SENTINEL in text or _ENGINE_ERROR in text
 
 
 def is_metadata_frame(chunk: str) -> bool:

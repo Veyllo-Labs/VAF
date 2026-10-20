@@ -21,6 +21,7 @@ One file per contract module:
 | `test_contract_allowlist.py` | `set_account_allowlist_resolver` contract, and `account_allows_tool` (its read side, for surfaces that list tools) |
 | `test_contract_basetool_and_jail.py` | `BaseTool` declarations, `file_access` TypeError, `self.log`, `user_jail`, `jail_allows` |
 | `test_contract_markers_and_slim_import.py` | `vaf.markers` values, `import vaf` stays cheap |
+| `test_contract_error_reply.py` | `is_error_reply`: the two failure shapes `run()` and `chat_step` hand back as text, anywhere in the text, and a real answer |
 | `test_contract_pdf_extract.py` | `extract_pdf_markdown` signature, result dict, missing-extra ImportError |
 | `test_contract_session_turn_context.py` | session/turn context API (`vaf.core.subagent_ipc`) |
 | `test_contract_entry_points.py` | the `vaf.tools` entry-point group loader |

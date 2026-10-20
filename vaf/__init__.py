@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from .core.log_helper import install_thread_excepthook
     from .core.automation_triggers import RoomTriggerWatch
     from .core.code_audit import AuditFinding, AuditReport, code_audit
+    from .core.completion import is_error_reply
     from .core.environments import EnvironmentManager, get_environment_manager
     from .core.pdf_extract import extract_pdf_markdown
     from .core.revocation import (add_revocation_listener, remove_revocation_listener,
@@ -46,7 +47,8 @@ __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_K
            "describe_room_entry", "egress_session", "extract_pdf_markdown",
            "fold_room_owners", "fold_room_tasks", "fold_room_votes", "get_environment_manager",
            "inspect_upload",
-           "install_thread_excepthook", "invited_rooms", "jail_allows", "joined_rooms",
+           "install_thread_excepthook", "invited_rooms", "is_error_reply", "jail_allows",
+           "joined_rooms",
            "list_standing_grants", "mark_trusted_dir", "markers",
            "participant_key", "record_threat", "remove_revocation_listener",
            "restore_account", "revoke_account", "revoke_standing_grants", "room_invitation",
@@ -123,6 +125,14 @@ def __getattr__(name):
         # surface suffices. Pure stdlib at module level (slim-base safe).
         from .core.voice_turn import VoiceTurnEngine, TurnOutcome
         return {"VoiceTurnEngine": VoiceTurnEngine, "TurnOutcome": TurnOutcome}[name]
+    if name == "is_error_reply":
+        # Tell a turn that failed from a turn that answered. run() and chat_step do not
+        # raise for a failing provider: the failure comes back as the turn's text, with
+        # internal detail in it. VAF's own queue runner is the proof it is needed: it sent
+        # that text to contacts on WhatsApp and Telegram until it asked this. Stdlib at
+        # module level. See docs/EMBEDDING.md.
+        from .core.completion import is_error_reply
+        return is_error_reply
     if name == "ToolRequest":
         # What an authorizer is handed: the caller's identity, which is trustworthy, and the
         # model's arguments, which are not. Exported so an application can type-annotate its

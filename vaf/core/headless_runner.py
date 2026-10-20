@@ -295,8 +295,10 @@ def _deliver_email_reply(task, meta: dict, final_text: str) -> None:
 _CONTACT_TURN_FAILED_EN = "Sorry, I can't reply right now. Please try again a little later."
 
 
-def _turn_error_text(meta: dict, error: BaseException, contact=None) -> str:
-    """What a messenger receives when a chat turn raised.
+def _turn_error_text(meta: dict, error, contact=None) -> str:
+    """What a messenger receives when a chat turn failed: it raised (`error` is the exception)
+    or it handed a backend failure back as its text (`error` is that text, see
+    `completion.is_error_reply`).
 
     The owner's own chat gets the error itself: it is theirs to read and act on. A contact's
     (Front Office) turn gets a fixed sentence and never the exception text, which is internal
@@ -316,12 +318,12 @@ def _turn_error_text(meta: dict, error: BaseException, contact=None) -> str:
     return f"Sorry, something went wrong: {err_msg}"
 
 
-def _send_turn_error_reply(task, error: BaseException, contact=None) -> None:
+def _send_turn_error_reply(task, error, contact=None) -> None:
     """Answer a failed turn on the messenger it came from (Telegram, Discord, WhatsApp), so
     nobody waits for a reply that will not come; the text is `_turn_error_text`'s. `contact`
     is the record the runner pinned for THIS turn (`agent._front_office_contact`). Mail
-    answers nothing here: a Front Office mail that failed stays waiting for the owner.
-    Never raises."""
+    answers nothing here: a Front Office mail that failed stays waiting for the owner, and
+    the mail lane's log says so. Never raises."""
     try:
         source = getattr(task, "source", None)
         meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
@@ -347,6 +349,108 @@ def _send_turn_error_reply(task, error: BaseException, contact=None) -> None:
                 username, jid, text,
                 user_scope_id=meta.get("user_scope_id") and str(meta["user_scope_id"]) or None,
             )
+        elif source == "email":
+            from vaf.core.log_helper import append_lane_log
+            append_lane_log("email_inbound",
+                            f"REPLY SKIP the turn failed pk={meta.get('email_message_pk')} "
+                            f"session={getattr(task, 'session_id', None)!r}", always=True)
+    except Exception:
+        pass
+
+
+def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=None) -> None:
+    """Send a finished turn's answer back where the task came from: Telegram, Discord,
+    WhatsApp, or the mail outbox (`_deliver_email_reply`); a web turn sends nothing here.
+
+    A contact's turn whose text is a backend failure (`completion.is_error_reply`: chat_step
+    hands a provider error back as the turn's text instead of raising) is not sent: the
+    contact gets the fixed sentence `_send_turn_error_reply` sends for a turn that raised,
+    and a mail nothing. The owner's own chats get the text as it is, and so does the web
+    UI, which the runner fed before this. `contact` is the record pinned for THIS turn.
+    `session_mgr` serves the WhatsApp fallback that reads the chat's JID off the session.
+    Never raises."""
+    try:
+        task_source = getattr(task, "source", None)
+        meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
+        chat_id = meta.get("telegram_chat_id")
+        try:
+            from vaf.core.log_helper import log_telegram_reply
+            log_telegram_reply(f"HEADLESS task_source={task_source!r} chat_id={chat_id!r} final_len={len(str(final_text))}")
+        except Exception:
+            pass
+        from vaf.core.completion import is_error_reply
+        if meta.get("from_contact") and is_error_reply(final_text):
+            _send_turn_error_reply(task, final_text, contact=contact)
+            return
+        if task_source == "telegram" and chat_id:
+            from vaf.core.telegram_reply import send_telegram_reply
+            out = _prepare_channel_outbound(final_text)
+            if not out:
+                try:
+                    log_telegram_reply(
+                        f"HEADLESS reply empty/blocked after sanitize "
+                        f"raw_len={len(str(final_text))} chat_id={chat_id}"
+                    )
+                except Exception:
+                    pass
+            else:
+                send_telegram_reply(str(chat_id), out)
+        elif task_source == "discord":
+            discord_channel_id = meta.get("discord_channel_id")
+            if discord_channel_id:
+                from vaf.core.discord_reply import send_discord_reply
+                try:
+                    from vaf.core.log_helper import log_discord_reply
+                    log_discord_reply(
+                        f"HEADLESS task_source=discord channel_id={discord_channel_id!r} final_len={len(str(final_text))}"
+                    )
+                except Exception:
+                    pass
+                out = _prepare_channel_outbound(final_text)
+                if out:
+                    send_discord_reply(str(discord_channel_id), out)
+        elif task_source == "email":
+            # A Front Office answer on mail: through the outbox, held or sent
+            # by the channel's reply mode (see _deliver_email_reply).
+            _deliver_email_reply(task, meta, final_text)
+        elif task_source == "whatsapp":
+            chat_jid = meta.get("whatsapp_chat_jid")
+            username = meta.get("username") or "admin"
+            # Fallback: session may have whatsapp_chat_jid if task metadata was not persisted (e.g. self-chat @lid)
+            if not chat_jid and session_mgr is not None:
+                try:
+                    _s = session_mgr.load(task.session_id)
+                    chat_jid = (_s.metadata or {}).get("whatsapp_chat_jid")
+                    if not username or username == "admin":
+                        username = (_s.metadata or {}).get("username") or "admin"
+                except Exception:
+                    pass
+            if chat_jid:
+                from vaf.core.whatsapp_reply import send_whatsapp_reply
+                try:
+                    from vaf.core.log_helper import log_whatsapp_reply
+                    log_whatsapp_reply(
+                        f"HEADLESS task_source=whatsapp jid={chat_jid!r} final_len={len(str(final_text))}"
+                    )
+                except Exception:
+                    pass
+                out = _prepare_channel_outbound(final_text)
+                if out:
+                    send_whatsapp_reply(username, str(chat_jid), out, user_scope_id=meta.get("user_scope_id") and str(meta["user_scope_id"]) or None)
+                else:
+                    try:
+                        from vaf.core.log_helper import log_whatsapp_reply
+                        log_whatsapp_reply(f"HEADLESS whatsapp reply BLOCKED by sanitize jid={chat_jid!r}")
+                    except Exception:
+                        pass
+            else:
+                try:
+                    from vaf.core.log_helper import log_whatsapp_reply
+                    log_whatsapp_reply(
+                        f"HEADLESS whatsapp reply SKIP no chat_jid session={task.session_id!r}"
+                    )
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -2559,86 +2663,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             log_whatsapp_reply(f"HEADLESS SYSTEM_LOG_ONLY suppressed for session={task.session_id!r} len={len(final_text)}")
                         except Exception:
                             pass
-                    try:
-                        task_source = getattr(task, "source", None) if not _is_system_log_only else None
-                        meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
-                        chat_id = meta.get("telegram_chat_id")
-                        try:
-                            from vaf.core.log_helper import log_telegram_reply
-                            log_telegram_reply(f"HEADLESS task_source={task_source!r} chat_id={chat_id!r} final_len={len(str(final_text))}")
-                        except Exception:
-                            pass
-                        if task_source == "telegram" and chat_id:
-                            from vaf.core.telegram_reply import send_telegram_reply
-                            out = _prepare_channel_outbound(final_text)
-                            if not out:
-                                try:
-                                    log_telegram_reply(
-                                        f"HEADLESS reply empty/blocked after sanitize "
-                                        f"raw_len={len(str(final_text))} chat_id={chat_id}"
-                                    )
-                                except Exception:
-                                    pass
-                            else:
-                                send_telegram_reply(str(chat_id), out)
-                        elif task_source == "discord":
-                            discord_channel_id = meta.get("discord_channel_id")
-                            if discord_channel_id:
-                                from vaf.core.discord_reply import send_discord_reply
-                                try:
-                                    from vaf.core.log_helper import log_discord_reply
-                                    log_discord_reply(
-                                        f"HEADLESS task_source=discord channel_id={discord_channel_id!r} final_len={len(str(final_text))}"
-                                    )
-                                except Exception:
-                                    pass
-                                out = _prepare_channel_outbound(final_text)
-                                if out:
-                                    send_discord_reply(str(discord_channel_id), out)
-                        elif task_source == "email":
-                            # A Front Office answer on mail: through the outbox, held or sent
-                            # by the channel's reply mode (see _deliver_email_reply).
-                            _deliver_email_reply(task, meta, final_text)
-                        elif task_source == "whatsapp":
-                            chat_jid = meta.get("whatsapp_chat_jid")
-                            username = meta.get("username") or "admin"
-                            # Fallback: session may have whatsapp_chat_jid if task metadata was not persisted (e.g. self-chat @lid)
-                            if not chat_jid:
-                                try:
-                                    _s = session_mgr.load(task.session_id)
-                                    chat_jid = (_s.metadata or {}).get("whatsapp_chat_jid")
-                                    if not username or username == "admin":
-                                        username = (_s.metadata or {}).get("username") or "admin"
-                                except Exception:
-                                    pass
-                            if chat_jid:
-                                from vaf.core.whatsapp_reply import send_whatsapp_reply
-                                try:
-                                    from vaf.core.log_helper import log_whatsapp_reply
-                                    log_whatsapp_reply(
-                                        f"HEADLESS task_source=whatsapp jid={chat_jid!r} final_len={len(str(final_text))}"
-                                    )
-                                except Exception:
-                                    pass
-                                out = _prepare_channel_outbound(final_text)
-                                if out:
-                                    send_whatsapp_reply(username, str(chat_jid), out, user_scope_id=meta.get("user_scope_id") and str(meta["user_scope_id"]) or None)
-                                else:
-                                    try:
-                                        from vaf.core.log_helper import log_whatsapp_reply
-                                        log_whatsapp_reply(f"HEADLESS whatsapp reply BLOCKED by sanitize jid={chat_jid!r}")
-                                    except Exception:
-                                        pass
-                            else:
-                                try:
-                                    from vaf.core.log_helper import log_whatsapp_reply
-                                    log_whatsapp_reply(
-                                        f"HEADLESS whatsapp reply SKIP no chat_jid session={task.session_id!r}"
-                                    )
-                                except Exception:
-                                    pass
-                    except Exception:
-                        pass
+                    else:
+                        # The contact pinned for THIS turn: the finally that clears it runs later.
+                        _deliver_channel_reply(
+                            task, final_text, session_mgr=session_mgr,
+                            contact=getattr(agent, "_front_office_contact", None))
 
                     # Send token/context stats to WebUI
                     try:

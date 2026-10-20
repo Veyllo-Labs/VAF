@@ -1717,10 +1717,13 @@ class APIBackendManager:
             yield from self._stream_link(link_mgr, first, gen)
             return
 
-        if isinstance(last_failure, str):
-            yield last_failure
-        elif last_failure is not None:
-            yield f"[API Error: {last_failure}]"
+        if last_failure is not None:
+            # In the one sentinel shape every provider failure has, so whatever reads the
+            # stream knows it for a failure (completion.is_error_reply, the one-shot
+            # collector): a bare "[API Error: ...]" or a plain refusal sentence passed as
+            # the answer.
+            text = str(last_failure)
+            yield text if text.startswith("[API Error from ") else f"[API Error from {self.provider_name}: {text}]"
 
     def _chat_single(self, messages, temperature=0.7, max_tokens=4096, stream=True, model=None, tools=None, tool_choice=None):
         """Execute one chat completion against THIS manager's single provider (no failover).

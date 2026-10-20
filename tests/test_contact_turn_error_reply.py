@@ -103,3 +103,143 @@ def test_the_runner_answers_a_failed_turn_through_the_one_helper():
             'contact=getattr(agent, "_front_office_contact", None))') in handler
     for send in ("send_telegram_reply(", "send_discord_reply(", "send_whatsapp_reply("):
         assert send not in handler, send
+
+
+# ── a turn that hands its failure back as text ───────────────────────────────
+#
+# chat_step does not raise for a failing provider: it returns (and streams) "[Error] API
+# backend failure: <e>", and the backend streams a provider's HTTP error as a content chunk,
+# "[API Error from <provider>: <raw answer>]". The runner took either for an answer and sent
+# it to the contact (measured with the contact simulator on WhatsApp and Telegram).
+
+_PATH_ERROR = "database is locked: /home/user/.vaf/users/alice/chats.db"
+_KEY_ERROR = ("[API Error from openai: Error code: 401 - Incorrect API key provided: "
+              "sk-proj-****abcd]")
+
+
+def _engine(monkeypatch, tmp_path, main_call):
+    """The REAL chat_step, the provider faked: the router and side calls get a plain answer,
+    the main call (the one carrying tools) runs `main_call`."""
+    from vaf.core.agent import Agent
+    from vaf.core.platform import Platform
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path / "data"))
+    a = Agent(register_signals=False, run_kind="chat",
+              config_overrides={"provider": "deepseek", "api_key_deepseek": "sk-test"})
+    a.current_session_id = "green123456"
+    a._current_chat_source = "whatsapp"
+    monkeypatch.setattr(a, "_try_workflow", lambda *args, **kw: None)
+
+    def provider(messages=None, **kw):
+        if not kw.get("tools"):
+            yield "ok"
+            return
+        yield from main_call()
+    a.api_backend.chat_completion = provider
+    streamed = []
+    returned = a.chat_step(user_input="Hallo", raw_user_input="Hallo", stream_callback=streamed.append)
+    return "".join(streamed), returned
+
+
+def test_the_engines_failure_texts_are_recognised(monkeypatch, tmp_path):
+    """The predicate is pinned to what chat_step really produces, not to strings written here.
+    MUTATION: drop `_ENGINE_ERROR in text` from `is_error_reply` - the raising provider is
+    taken for an answer, red; drop `_ERROR_SENTINEL in text` - the streamed 401, red."""
+    from vaf.core.completion import is_error_reply
+
+    def raises():
+        raise RuntimeError(_PATH_ERROR)
+        yield  # a generator, like the real provider
+
+    streamed, returned = _engine(monkeypatch, tmp_path, raises)
+    assert _PATH_ERROR in streamed
+    assert is_error_reply(streamed) and is_error_reply(returned)
+
+    def sentinel():
+        yield _KEY_ERROR
+
+    streamed, _ = _engine(monkeypatch, tmp_path, sentinel)
+    assert "sk-proj-****abcd" in streamed and is_error_reply(streamed)
+
+    def answers():
+        yield "Gern geschehen, bis morgen."
+
+    streamed, _ = _engine(monkeypatch, tmp_path, answers)
+    assert "Gern geschehen" in streamed and not is_error_reply(streamed)
+
+
+@pytest.fixture
+def delivered(monkeypatch, sent):
+    """What the runner's delivery sends, the mail lane included: (channel, text)."""
+    monkeypatch.setattr(hr, "_deliver_email_reply",
+                        lambda task, meta, final_text: sent.append(("email", final_text)))
+    return sent
+
+
+_MAIL_META = {"email_account_id": "acc1", "email_message_pk": 7, "email_reply_mode": "send",
+              "user_scope_id": "ab12cd34-0000-0000-0000-000000000000", "username": "alice"}
+
+_FAILED_TURNS = (
+    "[Error] API backend failure: " + _PATH_ERROR,
+    # An earlier round streamed text, then the provider failed: the error follows it.
+    "Einen Moment, ich schaue nach.\n" + _KEY_ERROR,
+    # The runner's own text for a turn that produced nothing.
+    "[Error] No response was produced. The server may have rejected the request (e.g. context "
+    "too large). Try closing the Document Editor or starting a new chat.",
+)
+
+
+def _delivery_task(channel, *, from_contact):
+    meta = dict(_MAIL_META) if channel == "email" else dict(_CHANNEL_META[channel])
+    if from_contact:
+        meta["from_contact"] = True
+    return SimpleNamespace(source=channel, metadata=meta, session_id="s1")
+
+
+@pytest.mark.parametrize("final_text", _FAILED_TURNS)
+@pytest.mark.parametrize("channel", sorted(_CHANNEL_META) + ["email"])
+def test_a_contact_is_never_sent_a_failed_turns_text(delivered, channel, final_text):
+    """MUTATION: drop the `is_error_reply` branch in `_deliver_channel_reply` - every case
+    sends the raw text (the mail lane queues it in send mode), red."""
+    hr._deliver_channel_reply(_delivery_task(channel, from_contact=True), final_text,
+                              contact={"preferred_language": "de"})
+    if channel == "email":
+        assert delivered == []           # nothing queued: the mail waits for the owner
+        return
+    assert delivered == [(channel, "Entschuldigung, ich kann gerade nicht antworten. "
+                                   "Bitte versuchen Sie es später noch einmal.")]
+
+
+def test_a_failed_turn_after_a_voice_note_is_not_read_out(delivered):
+    """The bridge reads a reply aloud while a voice note is pending for that chat; the fixed
+    sentence goes out as text. MUTATION: drop the pop in `_send_turn_error_reply` - red."""
+    from vaf.api import whatsapp_bridge as wb
+    key = "alice|" + _CHANNEL_META["whatsapp"]["whatsapp_chat_jid"]
+    with wb._voice_reply_lock:
+        wb._voice_reply_pending[key] = "de"
+    try:
+        hr._deliver_channel_reply(_delivery_task("whatsapp", from_contact=True), _FAILED_TURNS[1])
+        assert key not in wb._voice_reply_pending
+    finally:
+        with wb._voice_reply_lock:
+            wb._voice_reply_pending.pop(key, None)
+
+
+@pytest.mark.parametrize("channel", sorted(_CHANNEL_META) + ["email"])
+def test_the_owner_and_a_real_answer_go_out_as_they_are(delivered, channel):
+    """The owner's own chat reads the failure in full; a contact's real answer is sent."""
+    hr._deliver_channel_reply(_delivery_task(channel, from_contact=False), _FAILED_TURNS[0])
+    hr._deliver_channel_reply(_delivery_task(channel, from_contact=True), "Bis morgen, Bob.")
+    assert delivered == [(channel, _FAILED_TURNS[0]), (channel, "Bis morgen, Bob.")]
+
+
+def test_the_runner_delivers_through_the_one_function():
+    """The loop hands the turn to `_deliver_channel_reply` with the contact pinned for THIS
+    turn, and carries no second copy of the delivery. MUTATION: put the old inline block
+    back in the loop - red."""
+    import inspect
+    loop = inspect.getsource(hr.run_headless_agent)
+    assert ('_deliver_channel_reply(\n                            task, final_text, '
+            'session_mgr=session_mgr,\n                            '
+            'contact=getattr(agent, "_front_office_contact", None))') in loop
+    assert "_deliver_email_reply(" not in loop

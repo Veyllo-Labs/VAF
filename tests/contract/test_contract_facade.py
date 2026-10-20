@@ -57,6 +57,7 @@ EXPORTED = [
     "inspect_upload",
     "install_thread_excepthook",
     "invited_rooms",
+    "is_error_reply",
     "jail_allows",
     "joined_rooms",
     "list_standing_grants",

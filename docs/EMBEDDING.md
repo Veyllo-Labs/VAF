@@ -443,13 +443,18 @@ not an option for your application - that is the report that would move the line
 
 The engine is built **lazily** on the first `run()` (or `.core`) call, so
 configuration and connection problems surface there, not at `Agent(...)`. `run()`
-returns the final answer as a string. Most misconfigurations and unreachable-provider
-errors **raise**, so wrap the call. Some *handled* failures (e.g. the API returning
-empty responses repeatedly) are caught internally and come back as a short status
-string instead of raising:
+returns the final answer as a string. Misconfigurations (a missing key for the chosen
+provider) **raise**, so wrap the call. A provider that fails DURING the turn does not
+raise: an unreachable endpoint, a rejected key or a 4xx/5xx answer comes back as the
+answer's text, `[Error] ...` or `[API Error from <provider>: ...]`, with internal detail
+in it (the provider's raw answer, a masked key, a path). `vaf.is_error_reply(answer)`
+tells that from an answer: ask it before the text reaches anybody who must not read
+internals. VAF's own queue runner asks it before it answers a contact.
+Some other *handled* failures (e.g. the API returning empty responses repeatedly) also
+come back as a short status string instead of raising:
 
 ```python
-from vaf import Agent
+from vaf import Agent, is_error_reply
 
 agent = Agent(config={
     "provider": "openai",
@@ -459,15 +464,19 @@ agent = Agent(config={
 
 try:
     answer = agent.run("In one sentence, what is Python?")
-    print(answer)
 except ValueError as e:
     # configuration problem - e.g. a missing/empty API key for the chosen
     # provider (when no local fallback applies)
     print("config error:", e)
 except Exception as e:
-    # runtime/provider failure - unreachable endpoint, network timeout,
-    # unknown model, ...
+    # a failure the engine did not turn into text (building it, loading a model, ...)
     print("run failed:", e)
+else:
+    if is_error_reply(answer):
+        # the provider failed during the turn; the text is for your logs, not your users
+        print("provider failed:", answer)
+    else:
+        print(answer)
 ```
 
 Notes:
@@ -484,7 +493,9 @@ Notes:
   internal retries (e.g. a provider returning empty responses), `run()` returns a
   short status string - currently prefixed `[SYSTEM_LOG_ONLY]` - rather than
   raising. If you must distinguish a real answer from such a handled failure,
-  check the returned string for that marker.
+  check the returned string for that marker. A provider failure is the other
+  string `run()` returns instead of raising; `vaf.is_error_reply()` (above) is
+  the check for it, and `on_token` has already streamed its text by then.
 - **Streaming + errors.** An exception during a streamed run can arrive after
   some `on_token` deltas were already delivered; treat partial output as
   non-final until `run()` returns.
@@ -2320,6 +2331,11 @@ Stable public surface (safe to build on):
   exceptions into `crash_<date>.log` (see "Background-thread crashes" above).
   The promise: chains the previously installed hook, idempotent, never raises,
   writes regardless of `debug_logs_enabled`, does not log `SystemExit`.
+- `vaf.is_error_reply(text)` - True when a turn's text (`run()`, `chat_step` and its
+  stream) is a backend failure rather than an answer: it carries the engine's
+  `[Error] ` status or a provider's `[API Error from` sentinel anywhere in it, also
+  after text an earlier round streamed. A reply that quotes either marker counts as a
+  failure, the safe side. Never raises; anything but a non-empty string is False.
 - The `vaf.tools` entry-point group.
 
 Everything else under `vaf.core.*` is internal and may change between releases.
@@ -2330,8 +2346,8 @@ Both are engine-internal by design: VAF exposes no session enumeration on the
 façade, and no embedder has asked for one. If you need it, say so - the export is
 one lazy branch away, and it is not being added on speculation.
 `vaf.ToolCaller`, `vaf.ToolRequest`, `vaf.set_account_allowlist_resolver`,
-`vaf.extract_pdf_markdown` and `vaf.install_thread_excepthook` are the deliberate
-exceptions: they live in `vaf.core` but are re-exported on the façade, and the
+`vaf.extract_pdf_markdown`, `vaf.install_thread_excepthook` and `vaf.is_error_reply`
+are the deliberate exceptions: they live in `vaf.core` but are re-exported on the façade, and the
 façade names are the ones to import.
 
 ### Breaking-change tests you can run in your own CI

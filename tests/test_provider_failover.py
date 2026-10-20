@@ -81,6 +81,38 @@ def test_last_link_error_is_surfaced():
     assert any("API Error" in c for c in out)            # both failed -> user still sees an error
 
 
+
+class _RaisingLink(_FakeLink):
+    """A link whose provider raises before its first token (a refused connection)."""
+
+    def _chat_single(self, *args, **kwargs):
+        self.consumed = True
+        raise ConnectionError("connection refused: /run/vaf/provider.sock")
+        yield  # a generator, like the real provider
+
+
+def test_a_chain_that_gives_up_speaks_the_one_sentinel(monkeypatch):
+    """When no link is left to answer (the local link refused under the api profile), what
+    the chain yields still carries the sentinel every reader of a provider error checks for.
+    It yielded a bare "[API Error: <exception>]" and, with the primary cooling down, the plain
+    refusal sentence - both read as the answer, so a contact was sent them. MUTATION: yield
+    `last_failure` / f"[API Error: {last_failure}]" unwrapped again - red."""
+    import vaf.core.inference_profile as ip
+    from vaf.core.completion import is_error_reply
+    monkeypatch.setattr(ip, "local_inference_allowed", lambda: False)
+    mgr = _bare_manager({"failover_level": "basic", "failover_timeout_s": 0})
+    primary = _RaisingLink("primary", [])
+    local = _FakeLink("local", ["from the local model"])
+    mgr._build_failover_chain = lambda model: [(primary, None), (local, None)]
+    out = list(mgr.chat_completion(_MSGS))
+    assert out == ["[API Error from primary: connection refused: /run/vaf/provider.sock]"]
+    assert primary.consumed and not local.consumed and is_error_reply("".join(out))
+    # The primary cooling down: only the refused local link is left, and its refusal is said.
+    mgr._failover_open_until = {"primary": time.monotonic() + 600}
+    out = list(mgr.chat_completion(_MSGS))
+    assert len(out) == 1 and out[0].startswith("[API Error from primary: " + ip.refusal("the local failover link")[:40])
+    assert is_error_reply(out[0])
+
 def test_usage_is_mirrored_from_fallback_link():
     mgr = _bare_manager({"failover_level": "balanced", "failover_timeout_s": 0})
     primary = _FakeLink("primary", [SENTINEL])

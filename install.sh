@@ -1193,11 +1193,28 @@ EOF
         if [[ -n "$_docker_gid" && -n "$_um_pid" && "$_um_pid" != "0" ]] \
                 && id -nG "$USER" 2>/dev/null | tr ' ' '\n' | grep -qx docker \
                 && ! grep '^Groups:' "/proc/${_um_pid}/status" 2>/dev/null | grep -qw "$_docker_gid"; then
-            _running="$(systemctl --user list-units --type=service --state=running --no-legend --plain 2>/dev/null \
-                | awk '{print $1}' | grep -vx 'vaf.service' || true)"
-            if sudo systemctl restart "user@${_uid}.service" 2>/dev/null; then
+            # A running service other than VAF and the session bus may be in the middle of
+            # work that a restart cuts off (and starting it again does not resume it): then
+            # the restart waits for the person's yes, or for the next reboot. Timers and
+            # sockets only wait, so they are started again afterwards, as are services the
+            # person agreed to restart (a unit started by hand does not come back by itself).
+            _busy="$(systemctl --user list-units --type=service --state=running --no-legend --plain 2>/dev/null \
+                | awk '{print $1}' | grep -vxE 'vaf\.service|dbus\.service|dbus-broker\.service' | tr '\n' ' ' || true)"
+            _waiting="$(systemctl --user list-units --type=timer,socket --state=active --no-legend --plain 2>/dev/null \
+                | awk '{print $1}' | tr '\n' ' ' || true)"
+            _restart=true
+            if [[ -n "${_busy// /}" ]]; then
+                _restart=false
+                if [[ -t 0 ]]; then
+                    read -p "  Restart your user services ($_busy) so VAF reaches Docker now? [y/N]: " _answer
+                    [[ "$_answer" =~ ^[yYjJ] ]] && _restart=true
+                fi
+            fi
+            if [[ "$_restart" != "true" ]]; then
+                print_warning "VAF reaches Docker after the next reboot, or after: sudo systemctl restart user@${_uid}.service (it stops your running user services: $_busy)"
+            elif sudo systemctl restart "user@${_uid}.service" 2>/dev/null; then
                 print_success "User services restarted, so VAF gets the docker group now"
-                for _unit in $_running; do
+                for _unit in $_busy $_waiting; do
                     systemctl --user start "$_unit" 2>/dev/null \
                         || print_warning "Could not start $_unit again after the restart: systemctl --user start $_unit"
                 done

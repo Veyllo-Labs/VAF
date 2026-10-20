@@ -108,15 +108,16 @@ class LinterTool(BaseTool):
 
         # Check if Node.js is required
         if linter_config.get('requires_node'):
-            # PATH, else the installer's portable Node (vaf/core/node_runtime.py), which also
-            # puts it on PATH for the npx the linter then runs.
-            from vaf.core import node_runtime
-            if not node_runtime.find('node'):
+            # PATH alone, deliberately not vaf/core/node_runtime.py: `npx --yes eslint` fetches
+            # and runs a package with this process's whole environment (the class comment), and
+            # finding the installer's portable Node would hand that to servers that never had
+            # a Node of their own.
+            if not shutil.which('node'):
                 return False, (
                     f"{linter_name} requires Node.js. "
                     f"Install: https://nodejs.org/ or use your system package manager"
                 )
-            if not node_runtime.find('npx'):
+            if not shutil.which('npx'):
                 return False, f"{linter_name} requires npx (comes with Node.js)"
 
         # Check if Java is required

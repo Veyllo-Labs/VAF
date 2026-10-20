@@ -77,9 +77,14 @@ def test_a_new_docker_group_reaches_the_service_without_a_reboot():
     block = SH.split("# Start the service immediately", 1)[0].rsplit("loginctl enable-linger", 1)[1]
     assert 'sudo systemctl restart "user@${_uid}.service"' in block
     assert "grep -qw \"$_docker_gid\"" in block, "only when the manager lacks the group"
-    # The user services that were running come back, a unit started by hand included.
-    # MUTATION: drop the restart of the recorded units - red.
-    assert "--state=running" in block and 'systemctl --user start "$_unit"' in block
+    # A service busy with other work is not cut off without the person's yes: the restart
+    # waits for an answer at a terminal, or for the next reboot. MUTATION: restart anyway - red.
+    assert "if [[ -n \"${_busy// /}\" ]]; then" in block and "[[ -t 0 ]]" in block
+    assert block.index('if [[ "$_restart" != "true" ]]; then') < block.index("sudo systemctl restart")
+    # What waited (timers, sockets) and what was agreed to comes back, a unit started by hand
+    # included. MUTATION: drop the restart of the recorded units - red.
+    assert "--type=timer,socket --state=active" in block
+    assert 'for _unit in $_busy $_waiting; do' in block and 'systemctl --user start "$_unit"' in block
 
 
 def test_the_profile_step_uses_the_new_docker_group():

@@ -73,16 +73,27 @@ def test_the_folders_are_the_ones_the_installers_write():
 
 
 _BARE_LOOKUP = re.compile(r"""shutil\.which\(\s*["'](?:node|npm|npx)["']""")
+# Files that look Node up on PATH alone on purpose, with the reason.
+_PATH_ONLY = {
+    "vaf/tools/linter.py": "npx --yes eslint fetches and runs a package with the whole "
+                           "environment; the portable Node would hand that to servers",
+}
+
+
+def test_the_path_only_list_has_no_dead_entries():
+    for rel in _PATH_ONLY:
+        assert _BARE_LOOKUP.search((ROOT / rel).read_text(encoding="utf-8")), rel
 
 
 def test_no_lookup_of_node_skips_the_portable_install():
-    """Seven lookups in five files looked Node up on PATH alone (the web UI, the WhatsApp
-    bridge and its QR login, `vaf update`, the linter); one knew the portable install, on
-    Windows only.
+    """Five lookups in four files looked Node up on PATH alone (the web UI, the WhatsApp
+    bridge and its QR login, `vaf update`); one knew the portable install, on Windows only.
+    The linter stays on PATH by decision (_PATH_ONLY says why).
     MUTATION: put `shutil.which("npm")` back into the frontend manager - red."""
     hits = []
     for path in (ROOT / "vaf").rglob("*.py"):
-        if path.name == "node_runtime.py":
+        rel = path.relative_to(ROOT).as_posix()
+        if path.name == "node_runtime.py" or rel in _PATH_ONLY:
             continue
         for no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
             if _BARE_LOOKUP.search(line):
@@ -95,3 +106,16 @@ def test_the_posix_folder_is_under_the_vaf_directory(monkeypatch, tmp_path):
     from vaf.core.platform import Platform
     monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: tmp_path))
     assert node_runtime.portable_dirs() == [tmp_path / "node" / "bin"]
+
+
+def test_on_windows_the_newest_portable_node_is_tried_first(tmp_path, monkeypatch):
+    """Version order, not the order of the names: "v22.9.0" sorts after "v22.11.0" as text.
+    MUTATION: sort the folder names - red."""
+    from vaf.core.platform import Platform
+    monkeypatch.setattr(Platform, "is_windows", staticmethod(lambda: True))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    root = tmp_path / "Veyllo" / "node"
+    for name in ("node-v20.18.0-win-x64", "node-v22.9.0-win-x64", "node-v22.11.0-win-x64", "notes"):
+        (root / name).mkdir(parents=True)
+    assert [p.name for p in node_runtime.portable_dirs()] == [
+        "node-v22.11.0-win-x64", "node-v22.9.0-win-x64", "node-v20.18.0-win-x64", "notes"]

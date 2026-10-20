@@ -141,8 +141,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   service did not find the portable Node.js the installer had placed in `~/.vaf/node`, and
   until the first reboot VAF could not reach Docker, since the docker group the installer
   added was not active for the running service. VAF now finds the portable Node itself (the
-  web UI, the WhatsApp bridge, `vaf update` and the JavaScript linter), and the installer
-  restarts the user's services so they get the group. The install no longer reports a
+  web UI, the WhatsApp bridge and `vaf update`), and the installer restarts the user's
+  services so they get the group, unless other user services are busy: then it asks, or
+  leaves it to the next reboot. The install no longer reports a
   profile switch it could not make, the `vaf` alias lands in the file your login shell
   reads, and a backup that cannot reach Docker says so instead of naming a missing
   database container. A restore leaves the portable Node in place.

@@ -161,7 +161,7 @@ def _own_change(monkeypatch, user, caller_user_id=None):
 
     import vaf.api.auth_routes as auth_routes
     import vaf.auth.rate_limit as rate_limit
-    events, failures = [], []
+    events = []
 
     class _Db:
         async def execute(self, *_a, **_k):
@@ -176,10 +176,15 @@ def _own_change(monkeypatch, user, caller_user_id=None):
         yield _Db()
 
     monkeypatch.setattr(auth_routes, "get_auth_db", _get_db)
-    # The real limiter, middleware and route both, counting what reaches its window.
+    # The real limiter, middleware and route both, counting what stays in its window (the
+    # middleware counts a request before it runs and takes it back unless it failed).
     tracker = rate_limit._AttemptTracker()
-    count_into = tracker.record_failure
-    tracker.record_failure = lambda key: failures.append(key) or count_into(key)
+
+    class _Counted:
+        def __len__(self):
+            return sum(len(v) for v in tracker._attempts.values())
+
+    failures = _Counted()
     monkeypatch.setattr(rate_limit, "_tracker", tracker)
     import vaf.core.security_events as security_events
     monkeypatch.setattr(security_events, "log_security_event",

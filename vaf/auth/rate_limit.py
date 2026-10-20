@@ -9,7 +9,7 @@ Throttling for the sign-in doors: windows of failed attempts, each only emptied 
   clear it, and `/login` answers 200 for a correct password BEFORE the second factor, so any
   account holder could put a login of their own between guesses at other accounts and guess
   without limit (measured: 20 guesses, each 4 interleaved with an own login, zero 429).
-- ACCOUNT window (`account_window_closed`, asked by the login route BEFORE it checks the
+- ACCOUNT window (`reserve_account_attempt`, asked by the login route BEFORE it checks the
   password): failed logins per account NAME, from any number of addresses, so a guesser with
   many addresses (a botnet, many VPN peers) is held as well (measured before: 24 guesses at
   one account from 6 addresses, zero 429). Unknown names are held the same way, so the
@@ -23,6 +23,12 @@ Throttling for the sign-in doors: windows of failed attempts, each only emptied 
   wrong codes hold the account's code for the window, every further closure within a day
   twice as long, at most a day. No exemption for the machine: it cannot be reached without
   the password. A completed sign-in clears it; a new password opens a fresh one.
+
+The address and account windows count an attempt BEFORE it runs (`_AttemptTracker.reserve`:
+check and count are one step under the lock) and take it back once it did not fail. Checked
+first and counted after the awaited password work, a burst of concurrent requests all passed the
+check before the first failure was recorded (measured: 60 of 60 reached the password check). So
+the attempts in flight count toward the threshold, and at most that many reach the password.
 
 Each first refusal of a closure is the security event `login_throttled`.
 
@@ -114,6 +120,38 @@ class _AttemptTracker:
         self._attempts.pop(key, None)
         self._horizon.pop(key, None)
         self._announced.pop(key, None)
+
+    def reserve(self, key: str, max_attempts: int) -> Optional[float]:
+        """Count one attempt now if the window is open: returns its mark for `release`, or
+        None when the window is closed. Check and count are ONE step under the lock: checked
+        first and counted after the awaited password work, a burst of concurrent requests all
+        passed the check before the first failure was recorded (measured: 60 of 60 reached
+        the password check, threshold 5)."""
+        window = _window_seconds()
+        with self._lock:
+            now = _now()
+            live = [t for t in self._attempts.get(key, ()) if t > now - window]
+            if len(live) >= max_attempts:
+                if live:
+                    self._attempts[key] = live
+                return None
+            live.append(now)
+            self._attempts[key] = live
+            self._horizon[key] = max(window, self._horizon.get(key, 0.0))
+            if len(self._attempts) > self.MAX_KEYS:
+                self._sweep(now)
+            return now
+
+    def release(self, key: str, mark: Optional[float]) -> None:
+        """Take back an attempt `reserve` counted: it did not fail."""
+        if mark is None:
+            return
+        with self._lock:
+            attempts = self._attempts.get(key)
+            if attempts and mark in attempts:
+                attempts.remove(mark)
+                if not attempts:
+                    self._forget(key)
 
     def is_blocked(self, key: str, max_attempts: int, window_seconds: float) -> bool:
         with self._lock:
@@ -297,11 +335,16 @@ def account_key(username: str) -> str:
     return str(username or "").strip().lower()
 
 
-def account_window_closed(username: str) -> bool:
-    """Whether this account name has reached its threshold of failed logins in the window,
-    from any number of addresses. Asked BEFORE the password is checked."""
+def reserve_account_attempt(username: str) -> Optional[float]:
+    """Count a login for this account name before its password is checked, from any number
+    of addresses: the mark to take back with `release_account_attempt` when the password
+    was right, or None when the name has reached its threshold in the window."""
     threshold = max(1, _int_config("local_network_rate_limit_account_attempts", 10))
-    return _account_tracker.is_blocked(account_key(username), threshold, _window_seconds())
+    return _account_tracker.reserve(account_key(username), threshold)
+
+
+def release_account_attempt(username: str, mark: Optional[float]) -> None:
+    _account_tracker.release(account_key(username), mark)
 
 
 def record_account_failure(username: str) -> None:
@@ -361,9 +404,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         client_ip = client_key(request)
 
         max_attempts = _int_config("local_network_rate_limit_attempts", 5)
-        window_seconds = _window_seconds()
 
-        if _tracker.is_blocked(client_ip, max_attempts, window_seconds):
+        # Counted BEFORE the request runs, and taken back afterwards unless it failed (a 401:
+        # bad credentials, a wrong code). A success clears nothing else: a correct password is
+        # not the end of a sign-in, and an account holder's own login must not empty the
+        # window of their guesses at other accounts.
+        mark = _tracker.reserve(client_ip, max_attempts)
+        if mark is None:
             logger.warning(
                 "Rate-limit: blocked %s on %s (%d attempts in %d min)",
                 client_ip, path, max_attempts, window_minutes(),
@@ -372,12 +419,11 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 announce_throttled(client_ip, "", "address", path)
             return too_many_attempts()
 
-        response = await call_next(request)
-
-        # Record failure if the response was 401 (bad credentials, a wrong code). A success
-        # clears nothing: a correct password is not the end of a sign-in, and an account
-        # holder's own login must not empty the window of their guesses at other accounts.
-        if response.status_code == 401:
-            _tracker.record_failure(client_ip)
-
+        try:
+            response = await call_next(request)
+        except BaseException:
+            _tracker.release(client_ip, mark)
+            raise
+        if response.status_code != 401:
+            _tracker.release(client_ip, mark)
         return response

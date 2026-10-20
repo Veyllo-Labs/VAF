@@ -556,23 +556,22 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
 _KNOWN_ADDRESS_DAYS = 30
 
 
-async def _account_window_refusal(db, request: Request, username: str):
-    """The account window's answer for this login, or None to go on. Asked BEFORE the
-    password, so a held account costs no hashing; the same for known and unknown names.
+async def _account_window_refusal(request: Request, username: str):
+    """The account window is closed for this name: its refusal, or None when this client is
+    not held by it. A held account costs no hashing, and the answer is the same for known and
+    unknown names.
 
     Not held: the machine itself, and an address that completed a sign-in for this account
     before (vaf/auth/rate_limit.py). Both are still held by the address window."""
-    from vaf.auth.rate_limit import (account_refusal_is_new, account_window_closed,
-                                     announce_throttled, too_many_attempts)
+    from vaf.auth.rate_limit import account_refusal_is_new, announce_throttled, too_many_attempts
     from vaf.network.binding import is_localhost
-    if not account_window_closed(username):
-        return None
     ip = _client_ip(request)
     if is_localhost(ip):
         return None
     try:
-        if await signed_in_from(db, username, ip, days=_KNOWN_ADDRESS_DAYS):
-            return None
+        async with get_auth_db() as db:
+            if await signed_in_from(db, username, ip, days=_KNOWN_ADDRESS_DAYS):
+                return None
     except Exception as e:
         logger.warning("Known-address lookup failed, the account window holds: %s", e)
     if account_refusal_is_new(username):
@@ -585,12 +584,31 @@ async def login(body: LoginRequest, request: Request, response: Response):
     """
     Username/password login. If user has 2FA, returns temp_token for verify-2fa.
     """
-    from vaf.auth.rate_limit import record_account_failure
+    from vaf.auth.rate_limit import release_account_attempt, reserve_account_attempt
     username_clean = (body.username or "").strip()
-    async with get_auth_db() as db:
-        refusal = await _account_window_refusal(db, request, username_clean)
+    # The account window counts this login BEFORE anything is awaited (check and count in one
+    # step) and takes it back once the login did not fail: checked here and counted after the
+    # awaited password work, a burst of concurrent logins all passed (measured: 60 of 60
+    # reached the password check, threshold 10). A client the closed window does not hold
+    # (the machine itself, a known address) goes on uncounted and is counted if it fails.
+    attempt = {"mark": reserve_account_attempt(username_clean), "failed": False}
+    if attempt["mark"] is None:
+        refusal = await _account_window_refusal(request, username_clean)
         if refusal is not None:
             return refusal
+    try:
+        return await _sign_in(body, request, response, username_clean, attempt)
+    finally:
+        if not attempt["failed"]:
+            release_account_attempt(username_clean, attempt["mark"])
+
+
+async def _sign_in(body: LoginRequest, request: Request, response: Response,
+                   username_clean: str, attempt: dict):
+    """The login past the account window. Sets attempt["failed"] for a wrong password or an
+    unknown name, the only outcomes the account window keeps."""
+    from vaf.auth.rate_limit import record_account_failure
+    async with get_auth_db() as db:
         result = await db.execute(
             select(LocalUser).where(
                 func.lower(LocalUser.username) == username_clean.lower(),
@@ -603,13 +621,12 @@ async def login(body: LoginRequest, request: Request, response: Response):
         # names exist; on its own pool, so logins never stall the chats on this loop.
         password_ok = await verify_password_async(user.password_hash if user else None,
                                                   body.password or "")
-        if not user:
-            record_account_failure(username_clean)
-            _log_auth_failure("login_failed", request, username=username_clean, detail="unknown user")
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
-        if not password_ok:
-            record_account_failure(username_clean)
-            _log_auth_failure("login_failed", request, username=username_clean, detail="wrong password")
+        if not user or not password_ok:
+            attempt["failed"] = True
+            if attempt["mark"] is None:
+                record_account_failure(username_clean)
+            _log_auth_failure("login_failed", request, username=username_clean,
+                              detail="unknown user" if not user else "wrong password")
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
         # After the password, so a stranger learns nothing about a row; before the terminal
         # door's hash copy below and before any token, so a hash set in the database alone

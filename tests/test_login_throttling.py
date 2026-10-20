@@ -296,3 +296,57 @@ def test_step_up_shares_it(h):
     c = h.client("192.168.7.1")
     temp = h.login(c, "alice", "alice-password-1").json()["temp_token"]
     assert h.verify(c, temp, auth_harness.code_at(secret)).status_code == 429
+
+
+# ── a burst is counted before it is checked ──────────────────────────────────────
+
+def _burst(h, n, ip_for):
+    """`n` wrong logins for alice, all in flight at once, through the real stack."""
+    import asyncio
+
+    import httpx
+    app = h.app()
+
+    async def main():
+        transport = httpx.ASGITransport(app=app, client=("127.0.0.1", 40000))
+        async with httpx.AsyncClient(transport=transport, base_url="http://vaf") as c:
+            async def one(i):
+                return await c.post("/api/auth/login",
+                                    json={"username": "alice", "password": f"guess-{i}"},
+                                    headers={"X-Forwarded-For": ip_for(i)})
+            return await asyncio.gather(*[one(i) for i in range(n)])
+
+    return [r.status_code for r in asyncio.run(main())]
+
+
+def test_a_burst_from_one_address_gets_the_address_limit(h, argon2_calls):
+    """Each window was checked before the awaited password work and counted after it, so a
+    burst passed the check before any failure was recorded (measured: 60 of 60 through, 60
+    Argon2 checks, threshold 5). MUTATION: count after the response again - red."""
+    h.add_user("alice", "alice-password-1")
+    before = len(argon2_calls)
+    statuses = _burst(h, 40, lambda i: "192.168.20.1")
+    assert len(argon2_calls) - before <= 5, len(argon2_calls) - before
+    assert statuses.count(401) <= 5 and statuses.count(429) >= 35, statuses
+
+
+def test_a_burst_across_addresses_gets_the_account_limit(h, argon2_calls):
+    """The same for one account from many addresses. MUTATION: check the account window
+    without counting the attempt first - red."""
+    h.add_user("alice", "alice-password-1")
+    before = len(argon2_calls)
+    statuses = _burst(h, 40, lambda i: f"10.21.0.{i + 1}")
+    assert len(argon2_calls) - before <= 10, len(argon2_calls) - before
+    assert statuses.count(429) >= 30, statuses
+
+
+def test_a_correct_login_is_not_counted(h):
+    """An attempt is counted before it runs and taken back unless it failed: correct logins
+    from one address, and from many, never close a window.
+    MUTATION: never take an attempt back (in either window) - red."""
+    h.add_user("alice", "alice-password-1", no_second_factor=True)
+    one = h.client("192.168.22.1")
+    for _ in range(7):
+        assert h.login(one, "alice", "alice-password-1").status_code == 200
+    for i in range(12):
+        assert h.login(h.client(f"10.22.0.{i + 1}"), "alice", "alice-password-1").status_code == 200

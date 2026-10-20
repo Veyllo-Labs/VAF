@@ -26,8 +26,11 @@ NAMED BOUNDARIES:
 - A store that cannot be asked keeps the token (`unknown`), the same desktop default as the
   account standing (vaf/auth/permissions.py): a stopped database stack means nobody can sign
   in either.
-- Another process (the terminal's `vaf users reset-password`) ends rows the service learns of
-  within the cache's few seconds.
+- Another process (the terminal's `vaf users reset-password`) ends the rows in the database
+  and then asks the running service, through the loopback lane the CLI uses
+  (`POST /api/users/<id>/sign-out`), to forget its cache and close the account's sockets: a
+  socket is checked only at its handshake. When the service does not answer, the command
+  says so and names a restart.
 - The rows are not sealed: whoever can write the database can reactivate an ended session of
   a token they hold.
 """

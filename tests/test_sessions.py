@@ -249,3 +249,76 @@ def test_the_wizard_still_enrolls_with_the_bootstrap_token(h, monkeypatch):
     assert r.status_code == 200, r.text
     code = auth_harness.pyotp.TOTP(r.json()["secret"]).now()
     assert h.verify(local, token, code).status_code == 200
+
+
+# ── open sockets end with their sessions ─────────────────────────────────────────
+
+def test_the_sign_out_route_ends_every_session_and_closes_the_sockets(h, monkeypatch):
+    """What `vaf users reset-password` asks the running service: only it holds the sockets.
+    MUTATION: drop the close, or the ending, in the route - red."""
+    from vaf.core.web_interface import WebInterfaceManager
+    closed = []
+    monkeypatch.setattr(WebInterfaceManager, "close_account_connections",
+                        lambda self, scope: closed.append(scope))
+    user_id, a, b = _two_devices(h)
+    r = h.client(None).post(f"/api/users/{user_id}/sign-out")
+    assert r.status_code == 200 and r.json() == {"ended": 2}
+    assert _probe(h, a) == 401 and _probe(h, b) == 401
+    assert closed == [str(h.user("alice").user_scope_id)]
+    # Admin only.
+    c = h.sign_in(h.client("192.168.14.1"), "alice", "alice-password-1", None)
+    r = h.client("192.168.14.1").post(f"/api/users/{user_id}/sign-out",
+                                      headers={"Authorization": f"Bearer {c}"})
+    assert r.status_code == 403
+
+
+def test_logout_closes_the_sockets_of_its_tokens(h, monkeypatch):
+    """A socket is checked only at its handshake: a logout that ends the session must close
+    the sockets opened with it. MUTATION: no close in the logout - red."""
+    from vaf.auth.crypto import token_hash_for_db
+    from vaf.core.web_interface import WebInterfaceManager
+    closed = []
+    monkeypatch.setattr(WebInterfaceManager, "close_session_connections",
+                        lambda self, token_hash: closed.append(token_hash))
+    _id, a, b = _two_devices(h)
+    c = h.client("192.168.11.1")
+    c.cookies.set("vaf_token", b)
+    assert c.post("/api/auth/logout", headers={"Authorization": f"Bearer {a}"}).status_code == 200
+    assert sorted(closed) == sorted([token_hash_for_db(a), token_hash_for_db(b)])
+
+
+def test_the_manager_closes_only_the_sockets_of_one_token():
+    import asyncio
+
+    from vaf.core.web_interface import WebInterfaceManager
+    mgr = WebInterfaceManager()
+
+    class _WS:
+        def __init__(self):
+            self.closed = None
+
+        async def close(self, code=1000, reason=""):
+            self.closed = code
+
+    mine, other = _WS(), _WS()
+    try:
+        mgr.set_connection_token(mine, "hash-a")
+        mgr.set_connection_token(other, "hash-b")
+        assert asyncio.run(mgr.close_token_connections("hash-a")) == 1
+        assert mine.closed == 4001 and other.closed is None
+        assert mine not in mgr.connection_tokens and other in mgr.connection_tokens
+    finally:
+        mgr.connection_tokens.pop(mine, None)
+        mgr.connection_tokens.pop(other, None)
+
+
+def test_the_socket_handshake_remembers_its_token():
+    """The two token lanes of /ws record which token opened the socket; the local-admin
+    fallback has none. MUTATION: drop the record - red."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "web_server.py").read_text(
+        encoding="utf-8")
+    handshake = src[src.index("async def websocket_endpoint"):]
+    handshake = handshake[:handshake.index("elif type == ")]
+    assert handshake.count('"token_hash": token_hash_for_db(token),') == 2
+    assert 'manager.set_connection_token(websocket, user_context.get("token_hash") or "")' in handshake

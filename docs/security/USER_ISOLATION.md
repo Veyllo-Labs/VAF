@@ -503,9 +503,13 @@ there too - cleared before the commit, a lookup in between re-cached the old ans
   the middleware), and a token from before the second factor is bound to the password it was
   minted with, so neither an ended token nor one minted before a reset can enroll a new
   second factor. Before, none of these ended a token: it kept working for
-  its whole life (measured: 200 after a logout and after a password change). NAMED
-  BOUNDARIES: a terminal reset is seen by the service within the session cache's few seconds,
-  and a socket opened before it stays until it reconnects or the service restarts; the
+  its whole life (measured: 200 after a logout and after a password change). A logout also
+  closes the sockets opened with the tokens it ended (each socket remembers the token that
+  opened it). The terminal's `vaf users reset-password` ends the rows in the database and
+  then asks the running service (`POST /api/users/<id>/sign-out`, admin only, over the
+  loopback lane the other commands use) to close the account's sockets, since a socket is
+  checked only at its handshake and only the service holds it; when the service does not
+  confirm, the command says so and tells the owner to restart VAF. NAMED BOUNDARY: the
   session rows are not sealed, so whoever can write the database can reactivate one.
 - **Running work stops.** Deactivation and deletion call `revoke_account`; a demotion or a
   narrowed tool, workflow or hands-off grant calls `stop_account_work`. Both stop every chat

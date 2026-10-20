@@ -110,6 +110,9 @@ class WebInterfaceManager:
         self.connection_users: Dict[WebSocket, str] = {}  # ws -> user_id (for RAG scope)
         self.connection_usernames: Dict[WebSocket, str] = {}  # ws -> username (for User identity block)
         self.connection_roles: Dict[WebSocket, str] = {}  # ws -> role (admin, user, guest)
+        # ws -> hash of the access token the socket was opened with, so the end of exactly that
+        # session (a logout) closes exactly its sockets (vaf/auth/sessions.py).
+        self.connection_tokens: Dict[WebSocket, str] = {}
         self.agent_instance = None
         self.tools_cache: List[Dict[str, str]] = []
         # Queue for incoming chat messages from Web UI -> Main Loop
@@ -268,6 +271,12 @@ class WebInterfaceManager:
             del self.connection_usernames[websocket]
         if websocket in self.connection_roles:
             del self.connection_roles[websocket]
+        self.connection_tokens.pop(websocket, None)
+
+    def set_connection_token(self, websocket: WebSocket, token_hash: str) -> None:
+        """Remember which access token (its hash) opened this socket."""
+        if token_hash:
+            self.connection_tokens[websocket] = token_hash
 
     async def close_scope_connections(self, user_scope_id: str) -> int:
         """Close every socket of one account. Returns how many were closed."""
@@ -281,6 +290,29 @@ class WebInterfaceManager:
                 pass
             self.disconnect(ws)
         return len(targets)
+
+    async def close_token_connections(self, token_hash: str) -> int:
+        """Close every socket opened with one access token. Returns how many were closed."""
+        targets = [ws for ws, opened_with in list(self.connection_tokens.items())
+                   if token_hash and opened_with == token_hash]
+        for ws in targets:
+            try:
+                await ws.close(code=4001, reason="Signed out")
+            except Exception:
+                pass
+            self.disconnect(ws)
+        return len(targets)
+
+    def close_session_connections(self, token_hash: str) -> None:
+        """`close_token_connections` from any thread, handed to the server's loop and not
+        waited for: a logout ends one session, and the sockets it opened end with it."""
+        loop = self._server_loop
+        if loop is None or loop.is_closed() or not loop.is_running():
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(self.close_token_connections(token_hash), loop)
+        except Exception:
+            pass
 
     def close_account_connections(self, user_scope_id: str) -> None:
         """Close every socket of one account, from any thread: the close is handed to the

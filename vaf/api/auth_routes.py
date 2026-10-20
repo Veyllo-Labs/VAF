@@ -88,6 +88,18 @@ def close_account_sockets(user_scope_id: str) -> None:
         logger.debug("Closing the account's sockets failed: %s", e)
 
 
+def close_session_sockets(token: str) -> None:
+    """Close the open WebSockets that were opened with this access token (its session just
+    ended). Never raises."""
+    if not token:
+        return
+    try:
+        from vaf.core.web_interface import WebInterfaceManager
+        WebInterfaceManager().close_session_connections(token_hash_for_db(token))
+    except Exception as e:
+        logger.debug("Closing the session's sockets failed: %s", e)
+
+
 def _log_auth_failure(kind: str, request: Request, username: str = "", detail: str = "") -> None:
     """Record a failed login/2FA attempt in the security event log (never the
     password/code itself). Lazy + swallow-all: auditing must never break auth."""
@@ -879,7 +891,8 @@ async def logout(request: Request, response: Response):
 
     Logging out used to delete the cookie and nothing else: the token itself kept answering
     200 for its whole life (measured), so a token copied from a shared or stolen device
-    outlived every sign-out. A tokenless caller only loses the cookie, as before."""
+    outlived every sign-out. A tokenless caller only loses the cookie, as before. The sockets
+    opened with those tokens close too: a socket is checked only at its handshake."""
     tokens = _access_token_candidates(request)
     if tokens:
         try:
@@ -888,6 +901,8 @@ async def logout(request: Request, response: Response):
                     await end_session(db, token)
         except Exception as e:
             logger.warning("Logout could not end the session: %s", e)
+        for token in tokens:
+            close_session_sockets(token)
     response.delete_cookie(key=COOKIE_NAME, path="/")
     return {"ok": True}
 

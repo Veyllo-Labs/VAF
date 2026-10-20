@@ -27,8 +27,10 @@ def world(monkeypatch):
     import vaf.core.recovery_kit as recovery_kit
     import vaf.core.security_events as security_events
 
-    state = {"user": SimpleNamespace(username="alice", role="admin", seal="x"), "resets": [],
-             "events": [], "answers": [], "sealed": True}
+    state = {"user": SimpleNamespace(username="alice", role="admin", seal="x",
+                                     id="11111111-0000-4000-8000-0000000000a1"),
+             "resets": [], "events": [], "answers": [], "sealed": True, "closed": [],
+             "close_answer": None}
 
     @contextlib.asynccontextmanager
     async def _db():
@@ -54,6 +56,9 @@ def world(monkeypatch):
     monkeypatch.setattr(security_events, "log_security_event",
                         lambda kind, **kw: state["events"].append((kind, kw.get("detail", ""))))
     monkeypatch.setattr(users_cmd.getpass, "getpass", lambda _p="": state["answers"].pop(0))
+    # Never the running VAF on this machine: the call that closes open connections is recorded.
+    monkeypatch.setattr(users_cmd, "_close_open_connections",
+                        lambda user_id: state["closed"].append(user_id) or state["close_answer"])
     return state
 
 
@@ -270,3 +275,54 @@ def test_every_refusal_of_the_own_change_is_said_in_the_readers_language():
     catalogue = json.loads((root / "web/messages/en.json").read_text(encoding="utf-8"))["account"]
     assert set(mapped.values()) <= set(catalogue), sorted(set(mapped.values()) - set(catalogue))
 
+
+
+def test_the_reset_asks_the_running_service_to_close_open_connections(world):
+    """The command ended the sessions in the database, but a socket is checked only at its
+    handshake and only the service holds it: an intruder's open chat stayed until a restart
+    while the command said every device was signed out. MUTATION: skip the call - red."""
+    world["answers"] = ["the-real-key", "a-new-password-1", "a-new-password-1"]
+    r = _run(["reset-password", "alice", "--recovery-key"])
+    assert r.exit_code == 0, r.output
+    assert world["closed"] == ["11111111-0000-4000-8000-0000000000a1"]
+    assert "Every device signed in to it is signed out" in " ".join(r.output.split())
+
+
+def test_an_unconfirmed_close_is_said_plainly(world):
+    """When the service does not confirm, the command does not claim it. MUTATION: print the
+    success line whatever the answer - red."""
+    world["answers"] = ["the-real-key", "a-new-password-1", "a-new-password-1"]
+    world["close_answer"] = "it answered 500"
+    r = _run(["reset-password", "alice", "--recovery-key"])
+    assert r.exit_code == 0, r.output
+    said = " ".join(r.output.split())
+    assert "restart VAF" in said and "Every device signed in to it is signed out" not in said
+
+
+def test_the_close_goes_through_the_loopback_lane(monkeypatch):
+    """The same lane as the other commands (internal_api_base); no service running means
+    nothing is open."""
+    import requests
+
+    from vaf.cli.cmd import users as cmd
+    seen = []
+
+    class _Answer:
+        def __init__(self, code):
+            self.status_code = code
+
+    def _post(url, timeout=None):
+        seen.append(url)
+        return answers.pop(0)
+
+    answers = [_Answer(200), _Answer(500)]
+    monkeypatch.setattr(requests, "post", _post)
+    assert cmd._close_open_connections("u1") is None
+    assert cmd._close_open_connections("u1") == "it answered 500"
+    assert seen[0].endswith("/api/users/u1/sign-out") and seen[0].startswith("http://127.0.0.1:")
+
+    def _refused(url, timeout=None):
+        raise requests.ConnectionError("nothing listens")
+
+    monkeypatch.setattr(requests, "post", _refused)
+    assert cmd._close_open_connections("u1") is None

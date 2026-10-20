@@ -10,6 +10,7 @@ Endpoints:
 - GET  /api/users/{id}    - Get user details (Admin only)
 - PUT  /api/users/{id}    - Update user (Admin only)
 - DELETE /api/users/{id}  - Delete user (Admin only)
+- POST /api/users/{id}/sign-out - End every session of the user and close its sockets (Admin only)
 """
 
 import logging
@@ -502,6 +503,27 @@ async def _end_every_session(db, user) -> None:
     from vaf.auth.sessions import end_account_sessions
     await end_account_sessions(db, user.id)
     close_account_sockets(str(user.user_scope_id or ""))
+
+
+@router.post("/{user_id}/sign-out")
+async def sign_out_everywhere(user_id: str, _: Dict[str, Any] = Depends(require_admin)):
+    """Sign an account out everywhere (admin only): every session of it ends and its open
+    sockets close. `vaf users reset-password` asks this of the running service after it ended
+    the sessions in the database itself: only the service holds the sockets, and a socket is
+    checked only at its handshake, so an intruder's open chat stayed until a restart."""
+    try:
+        wanted = uuid_module.UUID(user_id)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    async with get_auth_db() as db:
+        user = (await db.execute(select(LocalUser).where(LocalUser.id == wanted))).scalar_one_or_none()
+        if not user:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+        from vaf.auth.sessions import end_account_sessions
+        ended = await end_account_sessions(db, user.id)
+        from vaf.api.auth_routes import close_account_sockets
+        close_account_sockets(str(user.user_scope_id or ""))
+    return {"ended": ended}
 
 
 @router.post("/{user_id}/reset-password")

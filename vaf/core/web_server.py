@@ -4179,6 +4179,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
     When local_network_enabled=True, non-localhost requires valid JWT.
     When local_network_enabled=False, only localhost is allowed.
     """
+    from vaf.auth.crypto import token_hash_for_db
     # Use cookie if frontend didn't pass token in URL (e.g. after login from same host)
     if not token and hasattr(websocket, "cookies") and websocket.cookies:
         token = websocket.cookies.get(VAF_TOKEN_COOKIE)
@@ -4272,6 +4273,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 "username": payload.get("username"),
                 "role": payload.get("role"),
                 "session_id": payload.get("session_id"),
+                "token_hash": token_hash_for_db(token),
             }
             log("API", f"WebSocket (localhost) authenticated: {user_context.get('username')} (scope: {user_context.get('user_scope_id')})")
         except Exception as e:
@@ -4346,6 +4348,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         "username": payload.get("username"),
                         "role": payload.get("role"),
                         "session_id": payload.get("session_id"),
+                        "token_hash": token_hash_for_db(token),
                     }
                     log("API", f"WebSocket authenticated: {user_context.get('username')}")
                     
@@ -4433,6 +4436,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 username=user_context.get("username"),
                 role=user_context.get("role"),
             )
+            # The token it was opened with: a logout closes exactly that session's sockets.
+            manager.set_connection_token(websocket, user_context.get("token_hash") or "")
         os.environ["VAF_WEBUI_ACTIVE"] = "1"
         print(f"[WebSocket] Connected! Active: {len(manager.active_connections)}")
         log("API", f"WebSocket connected! Active: {len(manager.active_connections)}")

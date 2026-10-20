@@ -183,9 +183,9 @@ def reset_password(
         async with get_auth_db() as db:
             user = await find_user(db, username)
             if user is None:
-                return False
+                return None
             await reset_password_from_terminal(db, user, password)
-            return True
+            return str(user.id)
 
     try:
         done = asyncio.run(_reset())
@@ -201,5 +201,32 @@ def reset_password(
                            detail=f"reset in a terminal on this machine ({proof})")
     except Exception:
         pass
-    UI.success(f"New password set for {username}. Every device signed in to it is signed out "
-               "(within a few seconds); the second factor is set up again at the next login.")
+    why_not = _close_open_connections(done)
+    if why_not is None:
+        UI.success(f"New password set for {username}. Every device signed in to it is signed out, "
+                   "and the second factor is set up again at the next login.")
+    else:
+        UI.success(f"New password set for {username}. Its sessions ended, and the second factor is "
+                   "set up again at the next login.")
+        UI.warning(f"VAF did not confirm that the account's open connections were closed ({why_not}). "
+                   "A device with a chat still open keeps it until VAF restarts: restart VAF now.")
+
+
+def _close_open_connections(user_id: str):
+    """Ask the running VAF to close the account's open connections: this command ended the
+    sessions in the database, but only the service holds the sockets, and a socket is checked
+    only at its handshake. Through the same loopback lane the other commands use
+    (`internal_api_base`), as the machine owner. None when done, or when no VAF runs (nothing
+    is open then); otherwise why not."""
+    import requests
+
+    from vaf.core.web_interface import internal_api_base
+    try:
+        r = requests.post(f"{internal_api_base()}/api/users/{user_id}/sign-out", timeout=10)
+    except requests.ConnectionError:
+        return None
+    except requests.RequestException as e:
+        return f"no answer: {type(e).__name__}"
+    if r.status_code == 200:
+        return None
+    return f"it answered {r.status_code}"

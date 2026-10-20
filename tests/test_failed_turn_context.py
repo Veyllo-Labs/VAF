@@ -13,7 +13,8 @@ passed every delivery check and went to the contact.
 
 Now no failure or stop text is committed, the turn says so in `_turn_failed`, a host that
 stores the streamed text marks its copy (`session.failed_turn_meta`), and every reader that
-builds a model's context from a stored chat skips it (`session.is_failed_turn`)."""
+builds a model's context from a stored chat reads it through `session.model_text`, which
+leaves it out (and takes off a failure that followed an answer)."""
 import contextvars
 import inspect
 import json
@@ -194,7 +195,7 @@ def test_a_loop_protection_stop_is_not_in_the_next_turns_context(engine, monkeyp
 def test_a_stored_failed_turn_is_not_replayed(engine):
     """The runner stores the streamed text for the web UI, marked by the engine's own flag.
     After a session switch or a restart the replay rebuilds the history from that file.
-    MUTATION: drop the `is_failed_turn` skip in `load_session_context` - red."""
+    MUTATION: drop the `model_text` skip in `load_session_context` - red."""
     from vaf.core.session import SessionManager, failed_turn_meta
     streamed, _ = engine.turn("Hallo", _fails_after_text)
     sm = SessionManager()

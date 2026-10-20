@@ -420,25 +420,32 @@ def _status(flag):
     return f"Name:\tpython3\nUid:\t1000\t1000\t1000\t1000\nNoNewPrivs:\t{flag}\nSeccomp:\t0\n"
 
 
-@pytest.mark.parametrize("linux, status, uid_map, expected", [
-    (True, _status(1), "         0          0 4294967295\n", "no-new-privileges"),
-    (True, _status(0), "      1000       1000          1\n", "user namespace"),
-    (True, _status(0), "", "user namespace"),
-    (True, _status(0), "         0          0 4294967295\n", None),
-    (True, _status(0), "         0       1000      65536\n", None),
-    (True, None, None, None),
-    (True, _status(0), "not a map\n", None),
-    (False, _status(1), "      1000       1000          1\n", None),
+@pytest.mark.parametrize("linux, euid, status, uid_map, expected", [
+    (True, 1000, _status(1), "         0          0 4294967295\n", "no-new-privileges"),
+    (True, 1000, _status(0), "      1000       1000          1\n", "user namespace"),
+    (True, 1000, _status(0), "", "user namespace"),
+    (True, 1000, _status(0), "         0          0 4294967295\n", None),
+    (True, 1000, _status(0), "         0       1000      65536\n", None),
+    (True, 1000, None, None, None),
+    (True, 1000, _status(0), "not a map\n", None),
+    (False, 1000, _status(1), "      1000       1000          1\n", None),
+    (True, 0, _status(1), "         0          0 4294967295\n", None),
 ], ids=["no-new-privs", "namespace-without-root", "empty-map", "plain-process",
-        "rootless-container", "files-missing", "map-unreadable", "not-linux"])
-def test_elevation_unavailable_reads_the_flag_and_the_namespace(monkeypatch, tmp_path, linux,
+        "rootless-container", "files-missing", "map-unreadable", "not-linux",
+        "root-with-no-new-privs"])
+def test_elevation_unavailable_reads_the_flag_and_the_namespace(monkeypatch, tmp_path, linux, euid,
                                                                 status, uid_map, expected):
     """Measured with `systemd-run --user`: the no-new-privileges flag, and a user namespace
     that does not map root (what PrivateTmp= or ProtectSystem= alone give a user service),
-    each make sudo and pkexec fail. Anything unknown must NOT refuse, or a desktop that can
-    elevate would lose its password dialog. MUTATIONS: drop the NoNewPrivs branch; drop the
-    uid_map branch; treat an unreadable file as refusing; drop the non-Linux return - red."""
+    each make sudo and pkexec fail for a caller that is not root. A caller that IS root (a
+    root-run unit or container with the flag) needs no setuid helper, and sudo checks the flag
+    only when it is not running as root, so it is never refused. Anything unknown must NOT
+    refuse, or a desktop that can elevate would lose its password dialog. MUTATIONS: drop the
+    NoNewPrivs branch; drop the uid_map branch; treat an unreadable file as refusing; drop the
+    non-Linux return; drop the euid check - red."""
     monkeypatch.setattr(fw.Platform, "is_linux", lambda *a: linux)
+    # raising=False: Windows has no geteuid, and this test runs there too.
+    monkeypatch.setattr(fw.os, "geteuid", lambda: euid, raising=False)
     status_path, uid_map_path = tmp_path / "status", tmp_path / "uid_map"
     if status is not None:
         status_path.write_bytes(status.encode())
@@ -452,6 +459,8 @@ def test_elevation_unavailable_reads_the_flag_and_the_namespace(monkeypatch, tmp
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="prctl and /proc are Linux")
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,
+                    reason="a root child needs no elevation and is rightly not refused")
 def test_a_process_with_no_new_privileges_is_seen_as_such():
     """The defaults read this very process: a child that set the flag itself (what systemd's
     NoNewPrivileges= does before exec) is refused. MUTATION: default status_path to

@@ -583,8 +583,9 @@ What an embedded agent can and cannot do on the host - the short version of
   framework (a native polkit dialog on a desktop, non-interactive `sudo -n`
   headless). Whether the lane can work at all is
   `vaf.network.firewall.elevation_unavailable()`: it returns the reason when this
-  process cannot gain root (the no-new-privileges flag, or a user namespace that
-  does not map root, as in the server's systemd service), and then neither the
+  process is not root and cannot become root (the no-new-privileges flag, or a user
+  namespace that does not map root, as in the server's systemd user service; a
+  process that already runs as root is never refused), and then neither the
   repair nor the firewall setup tries; the repair step names the reason and the
   two commands to run by hand. An embedder with its own dialog replaces
   `elevation_argv`, and one whose dialog needs no setuid helper replaces

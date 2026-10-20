@@ -551,8 +551,9 @@ def elevation_unavailable(status_path: str = "/proc/self/status",
                           uid_map_path: str = "/proc/self/uid_map") -> Optional[str]:
     """Why this process cannot gain root through `elevation_argv()`, or None when it may.
 
-    The lane's helpers, sudo and pkexec, are setuid programs, and two states of a Linux
-    process rule every setuid elevation out, whatever sudoers says:
+    The lane's helpers, sudo and pkexec, are setuid programs, and for a process that is not
+    root already (euid 0 needs no helper and is never refused) two states of a Linux process
+    rule every setuid elevation out, whatever sudoers says:
     - the no-new-privileges flag (`NoNewPrivs: 1` in /proc/self/status; systemd's
       `NoNewPrivileges=`): sudo refuses with "The "no new privileges" flag is set";
     - a user namespace that does not map root (no line of /proc/self/uid_map covers uid 0).
@@ -574,6 +575,14 @@ def elevation_unavailable(status_path: str = "/proc/self/status",
     `elevation_argv`."""
     if not Platform.is_linux():
         return None
+    try:
+        if os.geteuid() == 0:
+            # Already root: no setuid helper is needed, and sudo checks the flag only when
+            # it is not running as root (sudo's ChangeLog: "If sudo is not set-user-ID root,
+            # check for the no_new_privs flag"). A root-run unit or container keeps its lane.
+            return None
+    except Exception:
+        pass
     try:
         with open(status_path, "rb") as fh:
             status = fh.read().decode("ascii", "replace")

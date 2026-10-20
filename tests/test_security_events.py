@@ -152,3 +152,26 @@ def test_events_route_filters_by_module_before_the_limit(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         security_routes.security_events(date="2026-01-02", limit=100, module="skills", _={})
     assert exc.value.status_code == 400
+
+
+def test_one_event_is_one_line(tmp_path, monkeypatch):
+    """A login name with a newline wrote a forged second line into the readable log (measured:
+    "... [password_changed] user=admin ..."). Every value from outside is one line there; the
+    JSONL keeps it as it was. MUTATION: drop the sanitizing - red."""
+    _fresh(tmp_path, monkeypatch)
+    forged = "mallory\n2026-10-20T03:00:00 [password_changed] user=admin"
+    for breaker in ("\n", "\r", " ", " ", "\x0b", "\x85"):
+        se._last_emit.clear()
+        se.log_security_event("login_failed", ip=f"10.0.0.1{breaker}x", username=forged.replace("\n", breaker),
+                              path=f"/api{breaker}y", detail=f"wrong{breaker}password",
+                              channel=f"web{breaker}z")
+    day = datetime.now().strftime("%Y-%m-%d")
+    lines = (tmp_path / f"security_{day}.log").read_bytes().decode("utf-8").split("\n")
+    lines = [ln for ln in lines if ln]
+    assert len(lines) == 6, lines
+    assert all(re.match(r"^\d{4}-\d{2}-\d{2}T[\d:.]+\s+\[login_failed\]", ln) for ln in lines)
+    assert not any(ch in "".join(lines) for ch in ("\r", " ", " ", "\x0b", "\x85"))
+    # (split on "\n" as the reader does: U+2028 stays raw inside a JSON string)
+    entries = [json.loads(x) for x in (tmp_path / f"security_events_{day}.jsonl").read_bytes()
+               .decode("utf-8").split("\n") if x]
+    assert entries[0]["username"] == forged[:80]

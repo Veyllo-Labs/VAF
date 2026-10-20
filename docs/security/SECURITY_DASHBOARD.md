@@ -98,7 +98,9 @@ assistant access. Two sinks are written together per event:
 - `security_<date>.log`: human-readable mirror. The Logs window's file rail
   lists domains from `<domain>_<date>.log` automatically, so it appears there
   as the `security` domain without extra wiring (ISO timestamp first, so the
-  line parser renders the timestamp column).
+  line parser renders the timestamp column). One event is one line: control
+  characters and line separators in a value become spaces (a login name with a
+  newline forged a second line); the JSONL keeps the value.
 
 **Retention.** These files are kept for `security_log_retention_days` (default 14), not
 the `gc_max_age_hours` that governs ordinary logs. The distinction is not cosmetic: they

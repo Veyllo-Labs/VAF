@@ -24,6 +24,8 @@ Rules:
 - NEVER log secrets: no passwords, no 2FA codes, no tokens. Usernames and IPs
   are fine (the reader endpoints are admin-only).
 - Never raises; logging must not be able to break the request path.
+- One event, one line in the readable mirror: control characters and line separators in a
+  value from outside become spaces there (a login name with a newline forged a second line).
 - Flood throttle: repeated identical (kind, ip) events within a short window
   are dropped (an attacker hammering an endpoint must not grow the log
   unboundedly). Pattern mirrors channel_ingress_policy.should_log_unauthorized.
@@ -172,6 +174,16 @@ _NEVER_THROTTLED = frozenset({"backup_restored", "backup_restore_failed"})
 _lock = threading.Lock()
 
 
+# What ends or breaks a line for a log reader: the C0 controls (newline, carriage return,
+# vertical tab, form feed, ...), DEL, the C1 controls (NEL among them) and the Unicode line and
+# paragraph separators. Each becomes a space in the readable line.
+_LINE_BREAKERS = {c: " " for c in [*range(0x00, 0x20), 0x7F, *range(0x80, 0xA0), 0x2028, 0x2029]}
+
+
+def _one_line(value) -> str:
+    return str(value or "").translate(_LINE_BREAKERS)
+
+
 def log_security_event(kind: str, *, ip: str = "", username: str = "",
                        path: str = "", detail: str = "", channel: str = "") -> None:
     """Append one security event to both sinks. Throttled, never raises."""
@@ -215,14 +227,19 @@ def log_security_event(kind: str, *, ip: str = "", username: str = "",
             with (log_dir / f"security_events_{day}.jsonl").open("a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
+            # One event, one line. Every value here can carry text from outside (a username
+            # typed at the login, a request path, an address header), and a line break in it
+            # wrote a forged second line into the readable log (measured: a login name with
+            # a newline produced "... [password_changed] user=admin ..."). The JSONL keeps the
+            # value as it was; JSON escapes it.
             human = " ".join(
                 x for x in (
-                    f"[{kind}]",
-                    f"channel={entry.get('channel')}" if channel else "",
-                    f"ip={ip}" if ip else "",
-                    f"user={entry.get('username')}" if username else "",
-                    f"path={entry.get('path')}" if path else "",
-                    entry.get("detail", ""),
+                    f"[{_one_line(kind)}]",
+                    f"channel={_one_line(entry.get('channel'))}" if channel else "",
+                    f"ip={_one_line(ip)}" if ip else "",
+                    f"user={_one_line(entry.get('username'))}" if username else "",
+                    f"path={_one_line(entry.get('path'))}" if path else "",
+                    _one_line(entry.get("detail", "")),
                 ) if x
             )
             # ISO timestamp first: the Logs window's line parser renders it as the

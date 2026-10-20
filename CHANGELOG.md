@@ -118,6 +118,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   and enter the code it shows. The window on the machine itself and `vaf setup` need no
   code.
 
+- **An account name can no longer forge lines in the security log.** A login attempt with a
+  line break in the name wrote a second, made-up line into the readable security log (the
+  Logs window); every event is one line there now.
+
 - **Pages through the HTTPS port can no longer be framed by another site.** The login and
   the app served to other devices carried no anti-framing headers and no HSTS; they do now.
 

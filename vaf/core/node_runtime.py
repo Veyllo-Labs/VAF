@@ -68,7 +68,9 @@ def child_env(tool: str, base: Optional[Mapping[str, str]] = None) -> Dict[str, 
     it yet. A tool found on PATH leaves PATH exactly as it was."""
     env = dict(os.environ if base is None else base)
     folder = str(Path(tool).parent)
-    parts = [p for p in env.get("PATH", "").split(os.pathsep) if p]
-    if folder not in parts:
-        env["PATH"] = os.pathsep.join([folder] + parts)
+    path = env.get("PATH", "")
+    if folder not in path.split(os.pathsep):
+        # The rest stays byte for byte: an empty entry means the working directory on POSIX,
+        # so dropping one (or adding one to an empty PATH) would change what the child finds.
+        env["PATH"] = folder + os.pathsep + path if path else folder
     return env

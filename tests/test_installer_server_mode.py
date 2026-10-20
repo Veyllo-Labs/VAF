@@ -87,7 +87,10 @@ def test_a_new_docker_group_reaches_the_service_without_a_reboot():
     # An installer started from a desktop terminal runs inside that manager and would end
     # itself. MUTATION: drop the cgroup check - red.
     assert 'grep -q "/user@${_uid}\\.service/" "/proc/$$/cgroup"' in block
-    assert block.index('"/proc/$$/cgroup"') < block.index('read -p "  Restart your user services')
+    assert block.index('"/proc/$$/cgroup"') < block.index('read -r -p "  Restart your user services')
+    # Ctrl-D at that prompt answers no; under set -e a failed read ended the install before
+    # the service was started. MUTATION: drop the fallback - red.
+    assert '_answer || _answer=""' in block
     # ... and says why it did not restart, rather than naming an empty list of services.
     assert 'if [[ "$_inside" == "true" ]]; then' in block
     # What waited (timers, sockets, path watchers) and what was agreed to comes back, a unit

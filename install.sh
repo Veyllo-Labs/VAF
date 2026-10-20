@@ -1218,7 +1218,9 @@ EOF
             elif [[ -n "${_busy// /}" ]]; then
                 _restart=false
                 if [[ -t 0 ]]; then
-                    read -p "  Restart your user services ($_busy) so VAF reaches Docker now? [y/N]: " _answer
+                    # EOF (Ctrl-D) answers no: under set -e a failed read would end the install
+                    # here, before the service is started.
+                    read -r -p "  Restart your user services ($_busy) so VAF reaches Docker now? [y/N]: " _answer || _answer=""
                     [[ "$_answer" =~ ^[yYjJ] ]] && _restart=true
                 fi
             fi

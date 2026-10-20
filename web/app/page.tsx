@@ -7273,11 +7273,13 @@ function VAFDashboardContent() {
             }, delay + jitter);
         };
         socket.onclose = () => {
+            // A socket this effect already replaced closes late: the state is the new
+            // socket's now (the cleanup below has done this one's share).
+            if (cancelled) return;
             setStatus('disconnected');
             setWs(null);
             // A browser start sent on this socket is answered on this socket or never.
             setSubAgentState(dropPendingBrowserStart);
-            if (cancelled) return;
             // A socket that closed WITHOUT ever opening = a rejected handshake (expired/invalid token,
             // or the server briefly down). Re-check auth before reconnecting so an expired session
             // routes cleanly to /login instead of hammering /ws.
@@ -7314,6 +7316,7 @@ function VAFDashboardContent() {
             wsSocketRef.current?.close();
             wsSocketRef.current = null;
             setWs(null);
+            setSubAgentState(dropPendingBrowserStart);
         };
     }, [reconnectAttempt, isAuthenticated, authChecking]);
 

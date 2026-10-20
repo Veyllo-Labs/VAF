@@ -61,6 +61,18 @@ def test_the_child_that_runs_it_gets_the_folder_first(tmp_path, monkeypatch):
     assert os.environ["PATH"] == str(tmp_path / "empty")
 
 
+def test_prepending_keeps_the_rest_of_path_byte_for_byte(tmp_path, monkeypatch):
+    """An empty PATH entry means the working directory on POSIX: dropping it, or adding one to
+    an empty PATH, changes what the child finds. MUTATION: rebuild PATH from its non-empty
+    entries - red."""
+    folder, _ = _portable(tmp_path, monkeypatch)
+    tool = node_runtime.find("npm")
+    original = os.pathsep.join(["/usr/bin", "", "/bin"])
+    assert node_runtime.child_env(tool, {"PATH": original})["PATH"] == str(folder) + os.pathsep + original
+    assert node_runtime.child_env(tool, {"PATH": ""})["PATH"] == str(folder)
+    assert node_runtime.child_env(tool, {})["PATH"] == str(folder)
+
+
 def test_a_tool_found_on_path_leaves_the_child_path_as_it_was(tmp_path):
     """Moving a PATH folder to the front would reorder what the child finds (a venv's python
     behind the system's). MUTATION: always prepend - red."""

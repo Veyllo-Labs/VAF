@@ -81,7 +81,8 @@ def _recorder(monkeypatch):
 
     calls = {}
 
-    async def fake_create_first_admin(_db, *, username, password, agent_name=None):
+    async def fake_create_first_admin(_db, *, username, password, agent_name=None,
+                                      setup_code=None, require_setup_code=False):
         calls["agent_name"] = agent_name
         class _User:
             id = uuid.uuid4()

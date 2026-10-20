@@ -51,7 +51,7 @@ def test_the_old_verifier_is_gone():
     from vaf.auth import crypto
     assert not hasattr(crypto, "verify_totp")
     root = Path(__file__).resolve().parents[1] / "vaf"
-    offenders = [str(p.relative_to(root.parent)) for p in root.rglob("*.py")
+    offenders = [p.relative_to(root.parent).as_posix() for p in root.rglob("*.py")
                  if p.name != "second_factor.py"
                  and (".verify(code" in p.read_text(encoding="utf-8")
                       or "pyotp.TOTP(secret).verify" in p.read_text(encoding="utf-8"))]

@@ -300,30 +300,88 @@ def test_an_unconfirmed_close_is_said_plainly(world):
     assert "restart VAF" in said and "Every device signed in to it is signed out" not in said
 
 
-def test_the_close_goes_through_the_loopback_lane(monkeypatch):
-    """The same lane as the other commands (internal_api_base); no service running means
-    nothing is open."""
+def _loopback_server():
+    """A stand-in for the running VAF on a free loopback port: records each request."""
+    import http.server
+    import threading
+
+    seen = []
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen.append(self.path)
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *_a):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, seen
+
+
+def test_the_close_goes_through_the_loopback_lane_and_no_proxy(monkeypatch):
+    """The same lane as the other commands (internal_api_base), never through a proxy from the
+    environment: with HTTP_PROXY set and no loopback exception, the call went to the proxy,
+    failed like a VAF that is not running, and the command said every device was signed out.
+    MUTATION: honour the environment again - red."""
+    import vaf.core.web_interface as web_interface
+    from vaf.cli.cmd import users as cmd
+    server, seen = _loopback_server()
+    try:
+        monkeypatch.setattr(web_interface, "internal_api_base",
+                            lambda: f"http://127.0.0.1:{server.server_port}")
+        monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
+        monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.delenv("no_proxy", raising=False)
+        assert cmd._close_open_connections("u1") is None
+        assert seen == ["/api/users/u1/sign-out"]
+    finally:
+        server.shutdown()
+
+
+def test_only_a_refused_connection_means_no_vaf_runs(monkeypatch):
+    """A refused connection: nothing listens, nothing is open. A timeout, a TLS or a proxy
+    failure: a VAF may run and hold the sockets, so the restart warning. MUTATION: treat
+    every ConnectionError as not running - red."""
+    import socket
+
+    import requests
+
+    import vaf.core.web_interface as web_interface
+    from vaf.cli.cmd import users as cmd
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    free_port = probe.getsockname()[1]
+    probe.close()
+    monkeypatch.setattr(web_interface, "internal_api_base", lambda: f"http://127.0.0.1:{free_port}")
+    assert cmd._close_open_connections("u1") is None             # refused: really not running
+    worded = requests.exceptions.ConnectionError("reset")
+    worded.reason = "a reason that is only text"
+    for error in (requests.exceptions.ProxyError("proxy"), requests.exceptions.SSLError("tls"),
+                  requests.exceptions.ConnectTimeout("slow"), requests.exceptions.ReadTimeout("hung"),
+                  worded):
+        def _fail(self, *_a, _error=error, **_k):
+            raise _error
+        monkeypatch.setattr(requests.Session, "post", _fail)
+        why = cmd._close_open_connections("u1")
+        assert why and why.startswith("no answer:"), (error, why)
+
+
+def test_the_close_reads_the_answer(monkeypatch):
     import requests
 
     from vaf.cli.cmd import users as cmd
-    seen = []
 
     class _Answer:
         def __init__(self, code):
             self.status_code = code
 
-    def _post(url, timeout=None):
-        seen.append(url)
-        return answers.pop(0)
-
     answers = [_Answer(200), _Answer(500)]
-    monkeypatch.setattr(requests, "post", _post)
+    monkeypatch.setattr(requests.Session, "post", lambda self, *a, **k: answers.pop(0))
     assert cmd._close_open_connections("u1") is None
     assert cmd._close_open_connections("u1") == "it answered 500"
-    assert seen[0].endswith("/api/users/u1/sign-out") and seen[0].startswith("http://127.0.0.1:")
-
-    def _refused(url, timeout=None):
-        raise requests.ConnectionError("nothing listens")
-
-    monkeypatch.setattr(requests, "post", _refused)
-    assert cmd._close_open_connections("u1") is None

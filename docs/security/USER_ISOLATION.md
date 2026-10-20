@@ -509,9 +509,11 @@ there too - cleared before the commit, a lookup in between re-cached the old ans
   closes the sockets opened with the tokens it ended (each socket remembers the token that
   opened it). The terminal's `vaf users reset-password` ends the rows in the database and
   then asks the running service (`POST /api/users/<id>/sign-out`, admin only, over the
-  loopback lane the other commands use) to close the account's sockets, since a socket is
-  checked only at its handshake and only the service holds it; when the service does not
-  confirm, the command says so and tells the owner to restart VAF. NAMED BOUNDARY: the
+  loopback lane the other commands use, never through a proxy from the environment) to
+  close the account's sockets, since a socket is checked only at its handshake and only the
+  service holds it. Only a refused connection counts as "no VAF runs, nothing is open"; when
+  the service does not confirm (a timeout, a TLS or proxy failure, any other answer), the
+  command says so and tells the owner to restart VAF. NAMED BOUNDARY: the
   session rows are not sealed, so whoever can write the database can reactivate one.
 - **Running work stops.** Deactivation and deletion call `revoke_account`; a demotion or a
   narrowed tool, workflow or hands-off grant calls `stop_account_work`. Both stop every chat

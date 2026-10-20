@@ -222,11 +222,33 @@ def _close_open_connections(user_id: str):
 
     from vaf.core.web_interface import internal_api_base
     try:
-        r = requests.post(f"{internal_api_base()}/api/users/{user_id}/sign-out", timeout=10)
-    except requests.ConnectionError:
-        return None
+        # Never through a proxy from the environment: this call does not leave the machine,
+        # and with HTTP_PROXY set and no loopback exception it went to the proxy and failed
+        # like a VAF that is not running.
+        with requests.Session() as session:
+            session.trust_env = False
+            r = session.post(f"{internal_api_base()}/api/users/{user_id}/sign-out", timeout=10)
     except requests.RequestException as e:
-        return f"no answer: {type(e).__name__}"
+        # Only a refused connection means nothing listens. A timeout, a TLS or proxy failure
+        # are also ConnectionErrors in requests, and they mean a VAF may run and hold the
+        # sockets: those get the restart warning.
+        return None if _refused(e) else f"no answer: {type(e).__name__}"
     if r.status_code == 200:
         return None
     return f"it answered {r.status_code}"
+
+
+def _refused(exc: BaseException) -> bool:
+    """Whether a requests error is a refused connection: a ConnectionRefusedError somewhere
+    in its chain (requests wraps urllib3's MaxRetryError, which wraps NewConnectionError)."""
+    seen, stack = set(), [exc]
+    while stack:
+        e = stack.pop()
+        if not isinstance(e, BaseException) or id(e) in seen:
+            continue                 # `reason` can be a string on some errors
+        seen.add(id(e))
+        if isinstance(e, ConnectionRefusedError):
+            return True
+        stack += [getattr(e, "reason", None), e.__cause__, e.__context__]
+        stack += [a for a in getattr(e, "args", ()) if isinstance(a, BaseException)]
+    return False

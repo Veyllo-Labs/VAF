@@ -63,7 +63,7 @@ directly and never passes through the proxy at all. **A new socket is tested ove
 
 ## Connection Sequence (Happy Path)
 
-1. WebUI opens its WebSocket using the transport from `/api/network/ws-config`: `ws://localhost:8001/ws` when TLS is off; `wss://<host>:<effective proxy port>/ws` for a LAN client behind the HTTPS proxy; and plain `ws://127.0.0.1:8005/ws` for the local desktop (which loads `http://127.0.0.1:3000` and cannot use the proxy's self-signed cert).
+1. WebUI opens its WebSocket. A page served over HTTPS, or on port 80 or the default port, dials its own origin (`/ws`): it came through a proxy, and the integrated one relays `/ws` itself. Asking the server instead would name the port the proxy bound, which is not the port the browser dialled once a port forward, a NAT or a load balancer sits in between (measured: a page on a forwarded `:18443` dialled `:8443` and never connected). Every other page asks `/api/network/ws-config`: `ws://localhost:8001/ws` when TLS is off, and plain `ws://127.0.0.1:8005/ws` for the local desktop (which loads `http://127.0.0.1:3000` and cannot use the proxy's self-signed cert). Pinned by `tests/test_ws_config.py`.
 2. Backend sends `session_list` and then `history_update` (auto-load latest session).
 3. Frontend sets `currentSessionId` and starts sending `chat` messages with session ID.
 4. Backend queues the task with metadata (`origin_channel`, `task_class`, `enqueue_session_id`).

@@ -628,6 +628,14 @@ function subAgentKindFromName(toolName: string): SubAgentKind | null {
     return null;
 }
 
+// A browser start the window is still waiting on (status 'starting', set by the globe).
+// Every path on which its answer can no longer reach the window drops it - the socket
+// closing, a chat switch, New Chat (the reply is addressed to the chat that was left) -
+// or the window would spin forever.
+function dropPendingBrowserStart<T extends { interactive: { status: string } | null }>(s: T): T {
+    return s.interactive?.status === 'starting' ? { ...s, interactive: null } : s;
+}
+
 // The hotbar's catalogue. The KINDS are not listed a second time here - they are
 // taken from SUBAGENT_KIND_BY_TOOL above, so a sub-agent can never exist for the
 // window and be missing from the hotbar (or the other way round). What this adds
@@ -3949,7 +3957,8 @@ function VAFDashboardContent() {
         } | null;
         // Interactive browser: the person drives the sandbox Chromium by hand.
         // active=true carries the stream URL for the KasmVNC iframe; active=false
-        // is a surfaced refusal (busy/error) shown in the window's empty state.
+        // is a surfaced refusal (busy/error) shown in the window's empty state, or
+        // status 'starting', set by the client while its start awaits the reply.
         interactive: {
             active: boolean;
             status: string;
@@ -4807,7 +4816,7 @@ function VAFDashboardContent() {
         // window with its next heartbeat within seconds; a finished one stays down
         // instead of pinning the stop button on a chat that is idle.
         setSubAgentState({
-            ...restoredSubAgent,
+            ...dropPendingBrowserStart(restoredSubAgent),
             isOpen: false,
             presence: restoredSubAgent.presence === 'error' ? 'error' : 'idle',
         });
@@ -4938,8 +4947,14 @@ function VAFDashboardContent() {
         (async () => {
             let base: string;
             const port = window.location.port || '';
-            // When accessed via reverse proxy (nginx/integrated proxy) on 80/443/8443, use same-origin so /ws is proxied
-            if (port === '80' || port === '443' || port === '8443' || port === '') {
+            // Same-origin whenever a proxy serves this page, so /ws rides the front door the
+            // page came through. Every HTTPS page did: the Next server never speaks TLS, and
+            // the integrated proxy relays /ws itself, as does a reverse proxy in front of it.
+            // Asking ws-config instead names the port the proxy BOUND, which is not the port
+            // the browser dialled once anything remaps it (a VM or container port forward, a
+            // NAT, a load balancer): measured on a forwarded :18443, the socket dialled :8443,
+            // never connected, and the chat and the interactive browser stayed dead.
+            if (window.location.protocol === 'https:' || port === '80' || port === '') {
                 base = '';
             } else {
                 try {
@@ -6531,6 +6546,8 @@ function VAFDashboardContent() {
                 else if (data.type === 'history_update') {
                     const prevSessionId = currentSessionIdRef.current;
                     setCurrentSessionId(data.sessionId);
+                    // New Chat reaches a new session only through here, past handleSessionSwitch.
+                    if (data.sessionId !== prevSessionId) setSubAgentState(dropPendingBrowserStart);
                     // Do not clear Document Viewer documents here – they are kept per session in sessionViewerState and would be lost on second switch-back
                     sidebarDocsSyncedForSessionRef.current = null;
 
@@ -7258,6 +7275,8 @@ function VAFDashboardContent() {
         socket.onclose = () => {
             setStatus('disconnected');
             setWs(null);
+            // A browser start sent on this socket is answered on this socket or never.
+            setSubAgentState(dropPendingBrowserStart);
             if (cancelled) return;
             // A socket that closed WITHOUT ever opening = a rejected handshake (expired/invalid token,
             // or the server briefly down). Re-check auth before reconnecting so an expired session
@@ -8654,10 +8673,12 @@ function VAFDashboardContent() {
     useEscapeLayer({ active: subAgentPaletteOpen, level: 85, onEscape: () => setSubAgentPaletteOpen(false) });
     // The card covers the palette, so it answers Escape first (one level up).
     useEscapeLayer({ active: subAgentPaletteOpen && subAgentHelpOpen, level: 86, onEscape: closeSubAgentHelp });
-    const sendBrowserInteractive = useCallback((msg: Record<string, unknown>) => {
+    const sendBrowserInteractive = useCallback((msg: Record<string, unknown>): boolean => {
         if (ws?.readyState === WebSocket.OPEN && currentSessionId) {
             ws.send(JSON.stringify({ ...msg, sessionId: currentSessionId }));
+            return true;
         }
+        return false;
     }, [ws, currentSessionId]);
     const stopBrowserInteractiveIfAny = useCallback(() => {
         if (subAgentState.interactive?.active) {
@@ -8716,11 +8737,22 @@ function VAFDashboardContent() {
         // reappears with the window; with no run behind it the window asks the server for the
         // INTERACTIVE stream - the reply decides whether the person gets to drive (active),
         // sees a refusal (busy/error), or an agent run keeps the window (agent_active).
-        setSubAgentState(prev => ({ ...prev, agentKind: 'browser' }));
-        openSubAgentWindow(true);
         // No save flag: interactive use is always the persistent mode, decided
         // server-side; whether a login gets remembered is the browser's own ask.
-        sendBrowserInteractive({ type: 'browser_interactive_start' });
+        const sent = sendBrowserInteractive({ type: 'browser_interactive_start' });
+        // The reply can take seconds (the pool may start the person's own browser, the
+        // profile is checked and the logins restored first). Until it lands the window
+        // says the browser is starting instead of claiming there is none; any reply
+        // replaces this. Not over a live lease or an agent run, which keep their view: a
+        // run is live while presence is online, before its watch grant has arrived too.
+        setSubAgentState(prev => ({
+            ...prev,
+            agentKind: 'browser',
+            interactive: sent && prev.presence !== 'online' && !prev.interactive?.active && prev.interactive?.status !== 'agent_active'
+                ? { active: false, status: 'starting', streamUrl: '', saving: false, reason: '', viewerConnected: false }
+                : prev.interactive,
+        }));
+        openSubAgentWindow(true);
     };
     useEffect(() => {
         if (!anyDockPanelOpen && subAgentSheetOpen) setSubAgentSheetOpen(false);

@@ -136,6 +136,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **The web UI connects behind a port forward, and the browser window shows that it is
+  starting.** A page reached over HTTPS on a port other than the one VAF's proxy listens on
+  (a forwarded port on a rented server or a VM, a NAT, a load balancer) never opened its live
+  connection: it dialled the proxy's own port, so chat replies and the interactive browser
+  stayed dead. It now connects through the address it was opened with. Opening the browser
+  window also shows a loading screen until the browser is ready, instead of "No browser
+  session yet".
 - **"Create a Veyllo API key" opens the Veyllo dashboard in your language.** The button in
   the first-run wizard and the link in Settings led to the start page of veyllo.app, where no
   key is made; both open the dashboard now, after a sign-in there if needed.

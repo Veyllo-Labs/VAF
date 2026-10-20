@@ -51,3 +51,19 @@ def test_tls_on_lan_via_proxy_gets_wss(monkeypatch):
         assert body == {"useWss": True, "port": 8443}
     finally:
         runtime_status.reset()
+
+
+def test_an_https_page_dials_its_own_origin():
+    """The client half. An HTTPS page came through a TLS proxy that relays /ws (the Next server
+    never speaks TLS), so it dials its own origin and does not ask this route: the port the route
+    names is the one the proxy BOUND, and a port forward or a NAT changes the one the browser
+    dialled (measured: a page on a forwarded :18443 dialled :8443 and never connected). The proxy's
+    port written into the same-origin test was that bug."""
+    import re
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    same_origin = re.search(r"if \(([^{]*)\) \{\s*base = '';", src)
+    assert same_origin, "the WebSocket base resolution in web/app/page.tsx moved; re-point this guard"
+    condition = same_origin.group(1)
+    assert "window.location.protocol === 'https:'" in condition
+    assert "8443" not in condition

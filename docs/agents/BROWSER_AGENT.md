@@ -580,7 +580,10 @@ the viewer has already replaced the page with its own white splash. Every reconn
 one of those moments, and that is why the splash kept flashing briefly. The cover is
 also SILENT: a plain dark surface, with its spinner and wording fading in only after
 three seconds (pure CSS, no timer), because a label that appears for a second and
-vanishes is just a splash of our own - which is exactly what it was mistaken for.
+vanishes is just a splash of our own - which is exactly what it was mistaken for. The
+one exception follows a start screen (below): the person is already watching a spinner
+then, and a dark pause between it and the picture reads as the browser having died, so
+the cover keeps the spinner on show until the picture is up.
 
 The stream viewer's splash cannot be switched off from the outside, and that was checked
 rather than assumed: its 44 URL settings (`initSetting` in the client bundle) contain
@@ -594,7 +597,15 @@ vendor client, which the licence boundary above rules out.
 
 With no run behind it and no interactive stream, the window shows an honest empty state
 ("No browser session yet") instead of a starting banner; `presence` separates a hand-opened
-window from a run whose data is on its way. While another sub-agent is actually RUNNING,
+window from a run whose data is on its way. The globe's own request is the exception:
+`browser_interactive_start` can take seconds to answer (the pool may start the person's
+own browser, the profile is checked and the logins are restored first), so the client
+marks the request it SENT as `status: 'starting'` and the window draws the interactive
+frame with a spinner ("Starting the browser…") where the stream will be. Any reply
+replaces it; a closed socket, a chat switch and New Chat clear it, because the answer can
+then no longer arrive here. The strings of the start screen, the cover and the statusbar come
+from the `main` catalogue (`browserStarting*`, `browserConnecting`, `browserStatus*`). Only a request that left the socket is marked, so a window whose
+socket never connected still says there is no browser instead of spinning forever. While another sub-agent is actually RUNNING,
 the globe stands down and says so. The button reports "open", not "on top": every viewer
 and editor keeps its priority over the sub-agent window, and the button deliberately does
 not close them to get the slot - closing the document panel detaches the chat's documents

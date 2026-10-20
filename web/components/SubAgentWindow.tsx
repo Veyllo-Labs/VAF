@@ -5,6 +5,7 @@
 
 import React, { Fragment, useMemo, useRef, useEffect, useLayoutEffect, useState, useCallback } from 'react';
 import { X, Terminal, FileCode, CheckCircle2, Circle, Loader2, Globe, Folder, FolderOpen, FolderPlus, GitBranch, Moon, Printer, Search, Pencil, HardDrive, Cloud, Lock, FileText, Image as ImageIcon, Film, Archive, ChevronLeft } from 'lucide-react';
+import { useTranslations } from 'next-intl';
 import { WindowAgentSeat, seatModeFor } from '@/components/AgentAvatar';
 import { cn } from '@/lib/utils';
 import { sanitizeUntrustedHtml } from '@/lib/sanitize';
@@ -590,6 +591,7 @@ export default function SubAgentWindow({
     browser,
     agentKind = null,
 }: SubAgentWindowProps) {
+    const tMain = useTranslations('main');
     const displayFile = artifactFile ?? currentFile;
     const displayCode = artifactCode ?? codeContent;
     const displayStatus = status;
@@ -1076,6 +1078,19 @@ export default function SubAgentWindow({
     useEffect(() => {
         setViewerSaysState(null);
     }, [interactiveIsActive, interactiveStreamUrl]);
+
+    // A start the person asked for and the server has not answered yet (the client sets
+    // status 'starting' when it sends one). The window draws it as a start screen, and the
+    // connecting cover that follows keeps its spinner on show instead of going silent:
+    // the person is already watching one, and a dark pause between it and the picture
+    // reads as the browser having died. Every other cover (a reconnect) stays silent.
+    const interactiveStarting = !interactive?.active && interactive?.status === 'starting';
+    const pictureUp = viewerSaysState !== null ? viewerSaysState === 'connected' : !!interactive?.viewerConnected;
+    const [startShown, setStartShown] = useState(false);
+    useEffect(() => {
+        if (interactiveStarting) setStartShown(true);
+        else if (!interactiveIsActive || pictureUp) setStartShown(false);
+    }, [interactiveStarting, interactiveIsActive, pictureUp]);
 
     // The browser window is ONE browser with two modes: the person drives it
     // (interactive lease) or the agent does (a run, watched through the same
@@ -2775,7 +2790,10 @@ export default function SubAgentWindow({
         // tabs, omnibox and navigation are inside the stream, so the rebuilt chrome
         // bar, the bottom dock and the statusbar all stand down. Only the window
         // header stays (identity, the save-logins toggle, close).
-        if (interactive?.active && interactive.streamUrl) {
+        // A pending start draws this same frame with a spinner where the stream will be,
+        // so the window goes from asking to driving without passing through "No browser
+        // session yet".
+        if ((interactive?.active && interactive.streamUrl) || interactiveStarting) {
             // The streamed browser keeps its OWN chrome - tab strip, toolbar,
             // bookmarks, downloads - themed dark to match. This window deliberately
             // draws none of its own on top: two stacked toolbars was the first thing
@@ -2791,9 +2809,7 @@ export default function SubAgentWindow({
             // WHO decides "no picture": the viewer itself if it has ever spoken to us,
             // because only it knows when it has finished drawing. The server's byte
             // count is the fallback for the case where it never does.
-            const showCover = viewerSaysState !== null
-                ? viewerSaysState !== 'connected'
-                : !interactive.viewerConnected;
+            const showCover = interactiveStarting || !pictureUp;
             return (
                 <div
                     className={cn(
@@ -2809,8 +2825,8 @@ export default function SubAgentWindow({
                                 <div className="min-w-0">
                                     <div className="text-xs font-semibold text-gray-900">Browser</div>
                                     <div className="flex items-center gap-2 text-[10px] text-gray-500">
-                                        <span className="h-1.5 w-1.5 flex-none rounded-full bg-emerald-500" />
-                                        <span className="truncate">Interactive browser - you are in control</span>
+                                        <span className={cn("h-1.5 w-1.5 flex-none rounded-full", interactiveStarting ? "animate-pulse bg-sky-500" : "bg-emerald-500")} />
+                                        <span className="truncate">{interactiveStarting ? tMain('browserStartingYours') : tMain('browserInControl')}</span>
                                     </div>
                                 </div>
                             </div>
@@ -2820,26 +2836,29 @@ export default function SubAgentWindow({
                         <div className="relative min-h-0 w-full flex-1">
                             {/* Clipboard permissions delegated so copy/paste between host and
                                 sandbox works where the browser allows it. */}
-                            <iframe
-                                ref={streamIframeRef}
-                                src={interactive.streamUrl}
-                                title="Interactive browser"
-                                className="absolute inset-0 h-full w-full border-0 bg-[#1e2430]"
-                                allow="clipboard-read; clipboard-write"
-                            />
+                            {interactive?.active && (
+                                <iframe
+                                    ref={streamIframeRef}
+                                    src={interactive.streamUrl}
+                                    title="Interactive browser"
+                                    className="absolute inset-0 h-full w-full border-0 bg-[#1e2430]"
+                                    allow="clipboard-read; clipboard-write"
+                                />
+                            )}
                             {showCover && (
                                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-[#1e2430]">
                                     {/* Silent by default: the cover's whole job is to hide the
                                         stream viewer's white splash, and a label that appears
                                         for a second and vanishes is just a splash of our own.
                                         After three seconds the wait is no longer normal and
-                                        saying so beats an empty dark window. */}
+                                        saying so beats an empty dark window. A start screen
+                                        that was already on show carries straight on instead. */}
                                     <div
-                                        className="flex flex-col items-center gap-3 opacity-0"
-                                        style={{ animation: 'vafBrowserConnectHint .4s ease-out 3s forwards' }}
+                                        className={cn("flex flex-col items-center gap-3", startShown || interactiveStarting ? "" : "opacity-0")}
+                                        style={startShown || interactiveStarting ? undefined : { animation: 'vafBrowserConnectHint .4s ease-out 3s forwards' }}
                                     >
                                         <Loader2 size={20} className="animate-spin text-[#5c6675]" />
-                                        <span className="text-[12px] text-[#9aa4b5]">Connecting to the browser…</span>
+                                        <span className="text-[12px] text-[#9aa4b5]">{interactiveStarting ? tMain('browserStarting') : tMain('browserConnecting')}</span>
                                     </div>
                                 </div>
                             )}
@@ -2848,7 +2867,7 @@ export default function SubAgentWindow({
                         <div className="flex h-6 flex-none items-center gap-3 border-t border-gray-200 bg-white px-3 text-[10px] text-gray-500">
                             <span className="rounded bg-sky-600 px-1.5 py-0.5 text-[9px] font-bold text-white">VAF</span>
                             <span className="truncate">Sandbox browser</span>
-                            <span className="ml-auto flex-none">{interactive.viewerConnected ? 'connected' : 'connecting'}</span>
+                            <span className="ml-auto flex-none">{interactiveStarting ? tMain('browserStatusStarting') : pictureUp ? tMain('browserStatusConnected') : tMain('browserStatusConnecting')}</span>
                         </div>
                     </div>
                     {handoverOverlay}
@@ -2923,7 +2942,7 @@ export default function SubAgentWindow({
                                                     style={{ animation: 'vafBrowserConnectHint .4s ease-out 3s forwards' }}
                                                 >
                                                     <Loader2 size={20} className="animate-spin text-[#5c6675]" />
-                                                    <span className="text-[12px] text-[#9aa4b5]">Connecting to the browser…</span>
+                                                    <span className="text-[12px] text-[#9aa4b5]">{tMain('browserConnecting')}</span>
                                                 </div>
                                             )}
                                     </div>

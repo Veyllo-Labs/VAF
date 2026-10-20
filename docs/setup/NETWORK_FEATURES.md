@@ -407,7 +407,7 @@ When TLS is active, the following changes take effect across the stack:
 | Security Headers | Standard set | Standard set + **HSTS** (`max-age=31536000`) |
 | Frontend Proxy | `http://127.0.0.1:8001` | `http://127.0.0.1:8005` (internal plain channel) |
 
-The WebSocket transport differs by client: `/api/network/ws-config` returns `wss://` + the effective proxy port for LAN clients (identified by the `X-Forwarded-Proto: https` header the proxy stamps), and plain `ws://` + the internal `8005` channel for the desktop window. The internal `8005` channel is plain HTTP, always running while TLS is on, and exists so the Next.js proxy and the desktop reach the backend without the self-signed cert.
+The WebSocket transport differs by client. A page served over HTTPS dials its own origin, because the proxy that served it relays `/ws`; that is the only answer that survives a port forward or a NAT between the browser and the proxy, where the browser dials a different port than the one the proxy bound. Other pages ask `/api/network/ws-config`, which returns plain `ws://` + the internal `8005` channel for the desktop window, and `wss://` + the effective proxy port for a caller that came through the proxy (identified by the `X-Forwarded-Proto: https` header the proxy stamps). The internal `8005` channel is plain HTTP, always running while TLS is on, and exists so the Next.js proxy and the desktop reach the backend without the self-signed cert.
 
 ### TLS Configuration Reference
 

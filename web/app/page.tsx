@@ -4610,9 +4610,15 @@ function VAFDashboardContent() {
     const handOpenedKindRef = useRef<SubAgentKind | null>(null);
     // The timer that gives up on the globe's browser start (BROWSER_START_TIMEOUT_MS).
     const pendingBrowserStartRef = useRef<number | null>(null);
-    useEffect(() => () => {
+    // Ends that wait. Called wherever the pending start is dropped (socket closed, chat
+    // switched, New Chat), answered, replaced by a new start, and on unmount, so no timer
+    // outlives the start it belongs to. Touches only the ref, so an old render's copy in a
+    // long-lived closure does the same.
+    const clearBrowserStartWait = () => {
         if (pendingBrowserStartRef.current) window.clearTimeout(pendingBrowserStartRef.current);
-    }, []);
+        pendingBrowserStartRef.current = null;
+    };
+    useEffect(() => () => clearBrowserStartWait(), []);
     // Current task has a custom view (coder/research/browser): keep the window
     // closed until the first custom data arrives — never flash the generic window.
     const subAgentCustomViewRef = useRef(false);
@@ -4825,6 +4831,7 @@ function VAFDashboardContent() {
         // the stop button and the delegate avatar alive in session B.
         subAgentUserClosedRef.current = false;  // Reset for new session
         handOpenedKindRef.current = null;   // the hand-opened window belongs to the previous chat
+        clearBrowserStartWait();            // so does its pending browser start, dropped below
         const restoredSubAgent = sessionSubAgentStates.current[id] ?? IDLE_SUB_AGENT_STATE;
         // Restored with presence DEMOTED: while this chat was closed, its worker's
         // terminal event went to nobody, so the snapshot may claim "running" about
@@ -6445,10 +6452,7 @@ function VAFDashboardContent() {
                     if (!eventBelongsHere(data, activeSessionId, 'worker')) return;
                     // Every state for this chat replaces a pending 'starting' below, so the
                     // start's give-up timer has nothing left to clear.
-                    if (pendingBrowserStartRef.current) {
-                        window.clearTimeout(pendingBrowserStartRef.current);
-                        pendingBrowserStartRef.current = null;
-                    }
+                    clearBrowserStartWait();
                     {
                         const st = String(data.status ?? '');
                         // The run only BORROWED the browser: an agent_done that says
@@ -6569,7 +6573,10 @@ function VAFDashboardContent() {
                     const prevSessionId = currentSessionIdRef.current;
                     setCurrentSessionId(data.sessionId);
                     // New Chat reaches a new session only through here, past handleSessionSwitch.
-                    if (data.sessionId !== prevSessionId) setSubAgentState(dropPendingBrowserStart);
+                    if (data.sessionId !== prevSessionId) {
+                        clearBrowserStartWait();
+                        setSubAgentState(dropPendingBrowserStart);
+                    }
                     // Do not clear Document Viewer documents here – they are kept per session in sessionViewerState and would be lost on second switch-back
                     sidebarDocsSyncedForSessionRef.current = null;
 
@@ -7301,6 +7308,7 @@ function VAFDashboardContent() {
             setStatus('disconnected');
             setWs(null);
             // A browser start sent on this socket is answered on this socket or never.
+            clearBrowserStartWait();
             setSubAgentState(dropPendingBrowserStart);
             // A socket that closed WITHOUT ever opening = a rejected handshake (expired/invalid token,
             // or the server briefly down). Re-check auth before reconnecting so an expired session
@@ -7338,6 +7346,7 @@ function VAFDashboardContent() {
             wsSocketRef.current?.close();
             wsSocketRef.current = null;
             setWs(null);
+            clearBrowserStartWait();
             setSubAgentState(dropPendingBrowserStart);
         };
     }, [reconnectAttempt, isAuthenticated, authChecking]);
@@ -8778,7 +8787,7 @@ function VAFDashboardContent() {
                 : prev.interactive,
         }));
         // Only a request that left the socket is waited on, and a new one restarts the wait.
-        if (pendingBrowserStartRef.current) window.clearTimeout(pendingBrowserStartRef.current);
+        clearBrowserStartWait();
         pendingBrowserStartRef.current = sent
             ? window.setTimeout(() => {
                 pendingBrowserStartRef.current = null;

@@ -63,7 +63,7 @@ def test_only_a_sent_start_is_waited_on_and_the_wait_drops_only_starting():
     body = _toggle_browser_window()
     assert "const sent = sendBrowserInteractive({ type: 'browser_interactive_start' });" in body
     flat = " ".join(body.split())
-    assert ("if (pendingBrowserStartRef.current) window.clearTimeout(pendingBrowserStartRef.current); "
+    assert ("clearBrowserStartWait(); "
             "pendingBrowserStartRef.current = sent ? window.setTimeout(() => { "
             "pendingBrowserStartRef.current = null; setSubAgentState(dropPendingBrowserStart); "
             "}, BROWSER_START_TIMEOUT_MS) : null;") in flat
@@ -79,8 +79,28 @@ def test_a_reply_ends_the_wait():
     branch = branch.split("else if (data.type === 'artifact_update')", 1)[0]
     flat = " ".join(branch.split())
     belongs = "if (!eventBelongsHere(data, activeSessionId, 'worker')) return;"
-    clear = ("if (pendingBrowserStartRef.current) { window.clearTimeout(pendingBrowserStartRef.current); "
-             "pendingBrowserStartRef.current = null; }")
+    clear = "clearBrowserStartWait();"
     assert belongs in flat and clear in flat
     # After the session check: a reply for another chat must not end this chat's wait.
     assert flat.index(belongs) < flat.index(clear)
+
+
+def test_every_path_that_drops_a_start_also_ends_its_wait():
+    """A chat switch, New Chat, a closed socket and the socket's own cleanup drop a pending
+    start; each also ends its timer, as do a reply, a new start and unmount, so no timer
+    outlives its start. MUTATION: delete the clear on the chat switch (next to
+    `handOpenedKindRef.current = null`) - red."""
+    flat = " ".join(PAGE.split())
+    assert ("const clearBrowserStartWait = () => { if (pendingBrowserStartRef.current) "
+            "window.clearTimeout(pendingBrowserStartRef.current); "
+            "pendingBrowserStartRef.current = null; };") in flat
+    assert "useEffect(() => () => clearBrowserStartWait(), []);" in flat
+    lines = PAGE.splitlines()
+    drops = [i for i, line in enumerate(lines)
+             if "dropPendingBrowserStart" in line and "function dropPendingBrowserStart" not in line]
+    assert len(drops) == 5, drops   # the four drop paths and the timer itself
+    for i in drops:
+        before = "\n".join(lines[max(0, i - 10):i])
+        if "pendingBrowserStartRef.current = null;" in lines[i - 1]:
+            continue   # the timer's own callback: it has just ended the wait
+        assert "clearBrowserStartWait();" in before, f"page.tsx:{i + 1} drops a start and leaves its timer"

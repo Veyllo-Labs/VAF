@@ -607,9 +607,14 @@ then no longer arrive here, and the client clears it itself when nobody answers 
 seconds (`BROWSER_START_TIMEOUT_MS` in `web/app/page.tsx`, longer than the server's own deadlines on
 one start: 30 s for DevTools plus 8 s for the stream on a fresh per-user browser, 30 s plus
 40 s for the verified profile wipe on the shared one). That timer clears only a status that
-is still `starting`, so a reply arriving after it still opens the stream; any reply ends it. The strings of the start screen, the cover and the statusbar come
-from the `main` catalogue (`browserStarting*`, `browserConnecting`, `browserStatus*`). Only a request that left the socket is marked, so a window whose
-socket never connected still says there is no browser instead of spinning forever. While another sub-agent is actually RUNNING,
+is still `starting`, so a reply arriving after it still opens the stream. The timer never
+outlives its start: a reply, a new start, unmount and every path that drops the start
+(`clearBrowserStartWait` next to each `dropPendingBrowserStart`) end it. Only a request that
+left the socket is marked, so a window whose socket never connected still says there is no
+browser instead of spinning forever.
+
+The strings of the start screen, the cover and the statusbar come from the `main` catalogue
+(`browserStarting*`, `browserConnecting`, `browserStatus*`). While another sub-agent is actually RUNNING,
 the globe stands down and says so. The button reports "open", not "on top": every viewer
 and editor keeps its priority over the sub-agent window, and the button deliberately does
 not close them to get the slot - closing the document panel detaches the chat's documents

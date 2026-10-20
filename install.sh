@@ -864,8 +864,16 @@ if [[ "$DOCKER_INSTALLED" == "true" ]]; then
             # running unless they are stopped, and `vaf profile api` does that (it names the
             # services itself, so no list is kept here either).
             if [[ "$INSTALL_PROFILE" == "api" ]]; then
-                "$PROJECT_ROOT/venv/bin/python3" -m vaf.main profile api \
-                    || print_warning "Could not stop the speech containers - run: vaf profile api"
+                # A docker group this run added is not active in this shell yet (DOCKER_SUDO):
+                # VAF's own step runs with it, or it cannot reach the daemon and reports a
+                # switch it could not make (measured on a fresh server install).
+                if [[ -n "$DOCKER_SUDO" ]] && command -v sg &>/dev/null; then
+                    sg docker -c "\"$PROJECT_ROOT/venv/bin/python3\" -m vaf.main profile api" \
+                        || print_warning "Could not stop the speech containers - run: vaf profile api"
+                else
+                    "$PROJECT_ROOT/venv/bin/python3" -m vaf.main profile api \
+                        || print_warning "Could not stop the speech containers - run: vaf profile api"
+                fi
             fi
             # Which services start is VAF's answer, not a list kept here: the profile leaves
             # the speech containers out (vaf/core/service_stack.py needed_services).
@@ -941,8 +949,12 @@ chmod +x start_vaf.sh 2>/dev/null
 if [[ "$OS_TYPE" == "macos" ]]; then
     SHELL_CONFIG="$HOME/.zshrc"
 else
-    SHELL_CONFIG="$HOME/.bashrc"
-    [[ -f "$HOME/.zshrc" ]] && SHELL_CONFIG="$HOME/.zshrc"
+    # The login shell decides, not which files exist: the uv installer above writes a
+    # ~/.zshrc on a bash system too, and the alias then landed where bash never reads it.
+    case "$(basename "${SHELL:-bash}")" in
+        zsh) SHELL_CONFIG="$HOME/.zshrc" ;;
+        *)   SHELL_CONFIG="$HOME/.bashrc" ;;
+    esac
 fi
 
 RUN_SCRIPT="$PROJECT_ROOT/run_vaf.sh"
@@ -1162,6 +1174,24 @@ EOF
         else
             print_warning "Could not enable linger (sudo required)"
             print_info "To enable boot start: sudo loginctl enable-linger $USER"
+        fi
+
+        # The docker group this run added is in /etc/group only: the systemd user manager,
+        # running since this login, keeps the groups it started with, and so does every
+        # service it starts. Measured on a fresh server: VAF could not reach Docker until the
+        # next reboot (health down, the first scheduled backup failed). Restarting the manager
+        # hands it the group; on a server that restarts only this user's services.
+        _uid="$(id -u)"
+        _um_pid="$(systemctl show -p MainPID --value "user@${_uid}.service" 2>/dev/null || true)"
+        _docker_gid="$(getent group docker 2>/dev/null | cut -d: -f3)"
+        if [[ -n "$_docker_gid" && -n "$_um_pid" && "$_um_pid" != "0" ]] \
+                && id -nG "$USER" 2>/dev/null | tr ' ' '\n' | grep -qx docker \
+                && ! grep '^Groups:' "/proc/${_um_pid}/status" 2>/dev/null | grep -qw "$_docker_gid"; then
+            if sudo systemctl restart "user@${_uid}.service" 2>/dev/null; then
+                print_success "User services restarted, so VAF gets the docker group now"
+            else
+                print_warning "VAF reaches Docker after the next reboot (the docker group is new)"
+            fi
         fi
 
         # Start the service immediately

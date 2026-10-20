@@ -447,6 +447,21 @@ def _wait_for_postgres(role: str, container: str = PG_CONTAINER, timeout: float 
     raise BackupError("The memory database did not become ready.")
 
 
+def _docker_unreachable() -> Optional[str]:
+    """Why Docker does not answer this process, or None when it does. `container_state` says
+    None for a container Docker does not have AND for a Docker it cannot reach, and the two
+    need different remedies: measured on a fresh server, where the service could not use the
+    docker group yet, the first scheduled backup reported a missing database container."""
+    from vaf.core.service_stack import diagnose_docker_daemon
+    daemon = diagnose_docker_daemon()
+    if daemon.get("ok"):
+        return None
+    if daemon.get("reason") == "permission_denied":
+        return ("this process may not use Docker yet (the user's docker group is not active "
+                "for it; a new login or a restart activates it)")
+    return str(daemon.get("detail") or daemon.get("reason") or "no answer")
+
+
 def _dump_postgres(staging: Path, container: str = PG_CONTAINER) -> Tuple[List[Tuple[str, Path]], Dict]:
     """The database and its roles, dumped inside the database container as the owner."""
     from vaf.core import containers
@@ -457,6 +472,10 @@ def _dump_postgres(staging: Path, container: str = PG_CONTAINER) -> Tuple[List[T
     except Exception as e:
         raise BackupError(f"Docker does not answer, so the memory database cannot be dumped: {e}")
     if state is None:
+        unreachable = _docker_unreachable()
+        if unreachable:
+            raise BackupError(f"Docker does not answer, so the memory database cannot be dumped: "
+                              f"{unreachable}.")
         raise BackupError(f"There is no {container} container, so the memory database cannot "
                           "be dumped. A backup without it would not restore the accounts or the "
                           "memories.")
@@ -1197,7 +1216,8 @@ def _staged_project_environments(staging: Path) -> List[str]:
 def _clear_target(manifest: Dict) -> None:
     """Remove what the backup replaces: every entry of the roots that is backed up, derived
     or runtime state (a cache or queue of the old state would only confuse the restored
-    one). Logs, unknown entries, the backup folder and this machine's key stay."""
+    one). Logs, unknown entries, the installation's own files (the portable Node), the backup
+    folder and this machine's key stay."""
     from vaf.core import data_stores
     replaced = {data_stores.DATA, data_stores.KEY, data_stores.RECREATABLE, data_stores.AUDIT,
                 data_stores.DERIVED, data_stores.RUNTIME}
@@ -1283,6 +1303,10 @@ def restore_backup(path: Path, *, identity: Optional[str] = None,
         from vaf.core import containers
         state = containers.container_state(container)
         if state is None:
+            unreachable = _docker_unreachable()
+            if unreachable:
+                raise BackupError(f"Docker does not answer, so nothing can be restored: "
+                                  f"{unreachable}.")
             raise BackupError(f"There is no {container} container to restore the database into. "
                               "Start VAF's services once (vaf service start), then stop VAF "
                               "and restore again.")

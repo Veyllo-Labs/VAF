@@ -110,8 +110,8 @@ def test_the_qr_flow_protects_the_directory_even_when_it_ends_early(tmp_path, mo
     auth = tmp_path / "users" / "alice" / "whatsapp"
     _loose_session(auth)
     monkeypatch.setattr(wa, "get_whatsapp_auth_dir", lambda username: auth)
-    import shutil
-    monkeypatch.setattr(shutil, "which", lambda name: None)     # no Node: the flow returns early
+    from vaf.core import node_runtime
+    monkeypatch.setattr(node_runtime, "find", lambda name: None)  # no Node: the flow returns early
     routes._run_qr_login("alice")
     assert _mode(auth) == 0o700
     assert all(_mode(auth / n) == 0o600 for n in ("creds.json", "session-4917.json", "pre-key-7.json"))

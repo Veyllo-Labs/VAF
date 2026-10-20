@@ -15,7 +15,6 @@ only swaps tracked source and rollback is another checkout.
 """
 import json
 import os
-import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -178,7 +177,8 @@ def _install_web_deps(root: Path, prev_sha: str = "", force: bool = False) -> No
     web = root / "web"
     if not (web / "package.json").exists():
         return
-    npm = shutil.which("npm")
+    from vaf.core import node_runtime
+    npm = node_runtime.find("npm")
     if not npm:
         if force or prev_sha:
             UI.warning("npm not found - skipping Web UI dependency update (install Node to update the dashboard).")

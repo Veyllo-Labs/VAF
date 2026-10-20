@@ -28,6 +28,9 @@ each top-level entry of each root is classified once, here:
 - ``RUNTIME``: locks, pids, queues and markers of a running process. Restoring them would
   replay or confuse work, not recover it.
 - ``LOG``: diagnostics.
+- ``INSTALL``: part of the installation that an installer put into a root (the portable
+  Node.js). Not backed up, and a restore leaves it where it is: the backup's machine may not
+  have had it, and without it the web UI does not start.
 - ``NEVER``: must not leave the machine in a backup (the recovery note: a plaintext key).
 
 A backup takes ``KEY``, ``DATA``, ``RECREATABLE`` and ``AUDIT`` (``BACKED_UP``). An entry
@@ -73,10 +76,11 @@ AUDIT = "audit"
 DERIVED = "derived"
 RUNTIME = "runtime"
 LOG = "log"
+INSTALL = "install"
 NEVER = "never"
 
 BACKED_UP = frozenset({KEY, DATA, RECREATABLE, AUDIT})
-KINDS = frozenset({KEY, DATA, RECREATABLE, AUDIT, DERIVED, RUNTIME, LOG, NEVER})
+KINDS = frozenset({KEY, DATA, RECREATABLE, AUDIT, DERIVED, RUNTIME, LOG, INSTALL, NEVER})
 
 
 @dataclass(frozen=True)
@@ -166,6 +170,8 @@ STORES: Tuple[Store, ...] = (
     _s("vaf", "memory.md", DATA, "vaf/core/persistence.py"),
     _s("vaf", "snapshots", DATA, "vaf/core/snapshot.py"),
     _s("vaf", "icons", DERIVED, "vaf/tray.py"),
+    _s("vaf", "node", INSTALL, "install.sh",
+       "the portable Node.js when the system has none (vaf/core/node_runtime.py)"),
     _s("vaf", "logs", LOG, "vaf/main.py", harden=True),
     _s("vaf", "main", RUNTIME, "vaf/core/main_persistence.py", "working memory of a launch from HOME"),
     _s("vaf", "backup_schedule.json", RUNTIME, "vaf/core/backup_schedule.py",

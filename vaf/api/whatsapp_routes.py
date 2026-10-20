@@ -874,7 +874,6 @@ def _run_qr_login(username: str) -> None:
     """Spawn Node process for QR login, capture QR to _qr_state."""
     from vaf.core.log_helper import log_whatsapp_qr
     from vaf.core.whatsapp_auth import get_whatsapp_auth_dir
-    import shutil
     import json
 
     log_whatsapp_qr(f"[VAF] QR flow started for user={username}")
@@ -894,7 +893,8 @@ def _run_qr_login(username: str) -> None:
         with _qr_lock:
             _qr_state[username] = {"error": f"The WhatsApp session folder could not be prepared: {e}", "ts": 0}
         return
-    node = shutil.which("node")
+    from vaf.core import node_runtime
+    node = node_runtime.find("node")
     wa_js = Path(__file__).resolve().parents[1] / "whatsapp_node" / "wa-bridge.js"
     if not node or not wa_js.exists():
         with _qr_lock:

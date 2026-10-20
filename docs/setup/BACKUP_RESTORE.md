@@ -37,6 +37,7 @@ Each top-level entry is one of:
 | `derived` | caches and indexes VAF rebuilds | no |
 | `runtime` | locks, pids, queues, markers of a running process; restoring them would replay work | no |
 | `log` | diagnostics | no |
+| `install` | part of the installation an installer put there (the portable Node.js in `~/.vaf/node`); a restore leaves it in place | no |
 | `never` | must not leave the machine: the recovery note (a plaintext key) and plaintext legacy copies of keys | no |
 
 An entry on disk that the list does not know is reported, not taken and not

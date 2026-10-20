@@ -68,3 +68,26 @@ def test_the_passphrase_never_travels_as_an_argument():
     # never from argv where `ps` shows them
     assert "read -rs" in SH
     assert "--passphrase" not in SH
+
+
+def test_a_new_docker_group_reaches_the_service_without_a_reboot():
+    """Measured on a fresh server: the user manager, running since the login that ran the
+    installer, kept its old groups, so the VAF service could not reach Docker until the next
+    reboot. MUTATION: drop the restart of the user manager - red."""
+    block = SH.split("# Start the service immediately", 1)[0].rsplit("loginctl enable-linger", 1)[1]
+    assert 'sudo systemctl restart "user@${_uid}.service"' in block
+    assert "grep -qw \"$_docker_gid\"" in block, "only when the manager lacks the group"
+
+
+def test_the_profile_step_uses_the_new_docker_group():
+    """`vaf profile api` ran without the group this run added and reported a switch it could
+    not make. MUTATION: run it without sg again - red."""
+    step = SH.split('if [[ "$INSTALL_PROFILE" == "api" ]]; then', 1)[1].split("CORE_SERVICES=", 1)[0]
+    assert 'sg docker -c' in step and '[[ -n "$DOCKER_SUDO" ]]' in step
+
+
+def test_the_alias_goes_where_the_login_shell_reads():
+    """The uv installer writes ~/.zshrc on a bash system too; choosing by that file put the
+    alias where bash never reads it. MUTATION: choose by the file's existence again - red."""
+    assert '[[ -f "$HOME/.zshrc" ]] && SHELL_CONFIG=' not in SH
+    assert 'case "$(basename "${SHELL:-bash}")" in' in SH

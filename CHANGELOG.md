@@ -136,6 +136,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **A fresh server install works without a reboot, and its web UI starts.** Measured on a
+  new Ubuntu 24.04 server with the one-line install: every page answered 502, because the
+  service did not find the portable Node.js the installer had placed in `~/.vaf/node`, and
+  until the first reboot VAF could not reach Docker, since the docker group the installer
+  added was not active for the running service. VAF now finds the portable Node itself (the
+  web UI, the WhatsApp bridge, `vaf update` and the JavaScript linter), and the installer
+  restarts the user's services so they get the group. The install no longer reports a
+  profile switch it could not make, the `vaf` alias lands in the file your login shell
+  reads, and a backup that cannot reach Docker says so instead of naming a missing
+  database container. A restore leaves the portable Node in place.
 - **The settings window shows its whole menu again.** With the Account tab the left column
   had grown past the window's height, and "Log out" was cut off at the bottom. The window is
   larger now (990 by 720 pixels instead of 906 by 660) and never taller than the screen.

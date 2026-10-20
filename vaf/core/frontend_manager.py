@@ -5,7 +5,6 @@ import os
 import sys
 import time
 import socket
-import shutil
 import subprocess
 import threading
 import platform
@@ -206,20 +205,10 @@ class FrontendManager:
 
         # Not running, need to start
         try:
-            npm_path = shutil.which("npm")
-            if not npm_path and platform.system() == "Windows":
-                # On a fresh install the portable Node the installer fetched is only on the
-                # *registry* PATH; a shortcut launched before re-login won't see it. Fall back
-                # to the known location install.ps1 writes: %LOCALAPPDATA%\Veyllo\node\<ver>\npm.cmd
-                node_root = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Veyllo", "node")
-                if os.path.isdir(node_root):
-                    for sub in sorted(os.listdir(node_root)):
-                        cand = os.path.join(node_root, sub, "npm.cmd")
-                        if os.path.exists(cand):
-                            npm_path = cand
-                            # Prepend so the spawned npm finds its sibling node.exe.
-                            os.environ["PATH"] = os.path.join(node_root, sub) + os.pathsep + os.environ.get("PATH", "")
-                            break
+            # PATH, else the portable Node an installer brought (vaf/core/node_runtime.py):
+            # a systemd unit or a shortcut before re-login does not have it on PATH.
+            from vaf.core import node_runtime
+            npm_path = node_runtime.find("npm")
             if not npm_path:
                 raise FileNotFoundError("npm not found in PATH")
 

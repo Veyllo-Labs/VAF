@@ -23,7 +23,6 @@ import os
 import time
 import uuid
 import queue
-import shutil
 import subprocess
 import sys
 import threading
@@ -308,8 +307,9 @@ def _wa_bridge_path() -> Path:
 
 
 def _node_path() -> Optional[str]:
-    """Resolve Node executable."""
-    return shutil.which("node")
+    """Resolve Node executable: PATH, else the installer's portable Node."""
+    from vaf.core import node_runtime
+    return node_runtime.find("node")
 
 
 _deps_lock = threading.Lock()
@@ -349,7 +349,8 @@ def ensure_bridge_deps(timeout: float = 600.0) -> Tuple[bool, str]:
         have = _installed_baileys_version(node_dir)
         if have and (not wanted or have == wanted):
             return True, f"WhatsApp bridge dependencies present (Baileys {have})"
-        npm = shutil.which("npm")
+        from vaf.core import node_runtime
+        npm = node_runtime.find("npm")
         if not npm:
             return False, (
                 "npm not found. Install Node.js 18+ (with npm), then start WhatsApp again; "

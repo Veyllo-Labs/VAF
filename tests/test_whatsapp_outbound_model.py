@@ -20,6 +20,7 @@ import pytest
 
 from vaf.api import whatsapp_bridge as wa
 from vaf.core import channel_message_store as store
+from vaf.core import node_runtime
 from vaf.core import whatsapp_auth
 from vaf.core.config import Config
 from vaf.core.platform import Platform
@@ -348,7 +349,7 @@ def test_bridge_deps_are_left_alone_when_they_match_the_lockfile(tmp_path, monke
 def test_bridge_deps_are_installed_from_the_lockfile_when_missing_or_behind(tmp_path, monkeypatch, installed):
     node_dir = _bridge_tree(tmp_path, "6.7.24", installed)
     monkeypatch.setattr(wa, "_wa_bridge_path", lambda: node_dir / "wa-bridge.js")
-    monkeypatch.setattr(wa.shutil, "which", lambda name: "/usr/bin/npm" if name == "npm" else None)
+    monkeypatch.setattr(node_runtime, "find", lambda name: "/usr/bin/npm" if name == "npm" else None)
     calls = []
 
     def fake_run(cmd, **kwargs):
@@ -367,7 +368,7 @@ def test_bridge_deps_are_installed_from_the_lockfile_when_missing_or_behind(tmp_
 def test_bridge_deps_fall_back_to_npm_install_and_report_a_failure_honestly(tmp_path, monkeypatch):
     node_dir = _bridge_tree(tmp_path, "6.7.24", None)
     monkeypatch.setattr(wa, "_wa_bridge_path", lambda: node_dir / "wa-bridge.js")
-    monkeypatch.setattr(wa.shutil, "which", lambda name: "/usr/bin/npm" if name == "npm" else None)
+    monkeypatch.setattr(node_runtime, "find", lambda name: "/usr/bin/npm" if name == "npm" else None)
     calls = []
     monkeypatch.setattr(wa.subprocess, "run", lambda cmd, **k: (calls.append(cmd), SimpleNamespace(returncode=1, stdout="", stderr="ENOTFOUND registry"))[1])
     ok, msg = wa.ensure_bridge_deps()
@@ -378,7 +379,7 @@ def test_bridge_deps_fall_back_to_npm_install_and_report_a_failure_honestly(tmp_
 def test_bridge_deps_without_npm_say_so(tmp_path, monkeypatch):
     node_dir = _bridge_tree(tmp_path, "6.7.24", None)
     monkeypatch.setattr(wa, "_wa_bridge_path", lambda: node_dir / "wa-bridge.js")
-    monkeypatch.setattr(wa.shutil, "which", lambda name: None)
+    monkeypatch.setattr(node_runtime, "find", lambda name: None)
     ok, msg = wa.ensure_bridge_deps()
     assert not ok and "npm not found" in msg
 

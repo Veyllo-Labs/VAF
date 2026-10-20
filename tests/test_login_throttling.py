@@ -350,3 +350,27 @@ def test_a_correct_login_is_not_counted(h):
         assert h.login(one, "alice", "alice-password-1").status_code == 200
     for i in range(12):
         assert h.login(h.client(f"10.22.0.{i + 1}"), "alice", "alice-password-1").status_code == 200
+
+
+def test_an_address_is_known_for_thirty_days_only(h):
+    """The account window's exemption: an address that completed a sign-in for the account
+    within 30 days. One older than that is a stranger again. MUTATION: drop or widen the
+    30-day bound in signed_in_from - red."""
+    from datetime import datetime, timedelta
+
+    from sqlalchemy import update
+    from sqlalchemy.orm import Session
+
+    from vaf.auth.models import UserSession
+    h.add_user("alice", "alice-password-1", no_second_factor=True)
+    known = h.client("192.168.23.1")
+    h.sign_in(known, "alice", "alice-password-1", None)
+    with Session(h.engine) as s:
+        s.execute(update(UserSession).values(created_at=datetime.utcnow() - timedelta(days=31)))
+        s.commit()
+    _close_account_window(h, "alice")
+    assert h.login(known, "alice", "alice-password-1").status_code == 429
+    with Session(h.engine) as s:
+        s.execute(update(UserSession).values(created_at=datetime.utcnow() - timedelta(days=29)))
+        s.commit()
+    assert h.login(known, "alice", "alice-password-1").status_code == 200

@@ -322,3 +322,14 @@ def test_the_socket_handshake_remembers_its_token():
     handshake = handshake[:handshake.index("elif type == ")]
     assert handshake.count('"token_hash": token_hash_for_db(token),') == 2
     assert 'manager.set_connection_token(websocket, user_context.get("token_hash") or "")' in handshake
+
+
+def test_logout_ends_every_presented_token(h):
+    """The Bearer token and the cookie can differ (a tab that signed in again); a logout ends
+    both. MUTATION: end only the first presented token - red."""
+    _id, a, b = _two_devices(h)
+    c = h.client("192.168.11.1")
+    c.cookies.set("vaf_token", b)
+    assert c.post("/api/auth/logout", headers={"Authorization": f"Bearer {a}"}).status_code == 200
+    assert _probe(h, a) == 401
+    assert _probe(h, b) == 401

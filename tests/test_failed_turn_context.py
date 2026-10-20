@@ -574,11 +574,11 @@ def test_the_cli_copy_of_an_answered_turn_reads_back_without_the_failure(
         engine, monkeypatch, tmp_path, failure, leftover):
     """`_process_agent_message` (the interactive CLI and the TUI) stores the stream through its
     markup cleanup, which deletes every [...] group: "[Error]" and the head of the sentinel
-    vanish, the tail stays, with no signature left. The REAL function stores the copy; the
-    recorded failure must be the cleaned one, or a reader must drop the message.
+    vanish, the tail stays, with no signature left. The REAL function stores the copy, and the
+    recorded failure is the cleaned one, so a reader finds it and takes it off. A failure it
+    cannot find drops the message (`test_model_text` pins that safe side).
     MUTATION: record the raw failure - not found, so the message is dropped and the answer
-    lost, red. MUTATION: return the content when the failure is not found - the tail with
-    the path or the key reaches the replay, red."""
+    lost, red."""
     from contextlib import nullcontext
     from types import SimpleNamespace
 

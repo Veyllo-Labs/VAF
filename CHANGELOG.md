@@ -92,6 +92,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   questions alone and no longer sees what you last wrote in another chat. Restart VAF after
   updating so the fix takes effect.
 
+- **A contact no longer receives VAF's internal error text.** When the agent's answer to a
+  contact on WhatsApp, Telegram or Discord failed, the contact got "Sorry, something went
+  wrong:" followed by the internal error, which can name file paths and ids on your machine.
+  A contact now gets a short fixed sentence asking them to try again later, in the language
+  on their contact record (English when it names none). The error stays in that chat's log
+  in the web UI, and your own chats still show it in full. Restart VAF after updating so the
+  fix takes effect.
+
 - **Archived chats, agent rooms and word suggestions are encrypted on disk like the chats.**
   Their writers already encrypted every new file, but the start-up sweep that encrypts what
   is left from before did not know them, and once it found the other stores clean it turned

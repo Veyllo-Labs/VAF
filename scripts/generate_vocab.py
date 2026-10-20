@@ -75,6 +75,11 @@ _KIND_HINTS = {
                                 "their screen or messenger, e.g. 'I could not quite recognize your voice - "
                                 "please confirm on your screen that it is you'. Natural spoken tone, one "
                                 "short sentence, read aloud by TTS"),
+    "contact_turn_failed": ("one short, polite WRITTEN sentence an assistant sends on a messenger to a "
+                            "third party (not its owner) when it cannot answer their message right now, "
+                            "asking them to try again later. No technical detail, no blame, and a "
+                            "neutral or polite form of address (never an informal 'du'/'tu' where the "
+                            "language distinguishes): the reader may be a stranger"),
 }
 
 

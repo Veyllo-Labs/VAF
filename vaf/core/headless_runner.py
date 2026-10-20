@@ -292,6 +292,65 @@ def _deliver_email_reply(task, meta: dict, final_text: str) -> None:
         pass
 
 
+_CONTACT_TURN_FAILED_EN = "Sorry, I can't reply right now. Please try again a little later."
+
+
+def _turn_error_text(meta: dict, error: BaseException, contact=None) -> str:
+    """What a messenger receives when a chat turn raised.
+
+    The owner's own chat gets the error itself: it is theirs to read and act on. A contact's
+    (Front Office) turn gets a fixed sentence and never the exception text, which is internal
+    (file paths, store and session ids, a provider's raw answer) while the reader is a third
+    party. The sentence follows the language on the contact's record, else English: the
+    owner's language says nothing about the person writing in, the same rule the Front Office
+    prompt gives the model."""
+    if (meta or {}).get("from_contact"):
+        lang = contact.get("preferred_language") if isinstance(contact, dict) else None
+        try:
+            from vaf.core import vocab
+            text = vocab.pick("contact_turn_failed", lang)
+        except Exception:
+            text = ""
+        return text or _CONTACT_TURN_FAILED_EN
+    err_msg = str(error).replace("\n", " ")[:400]
+    return f"Sorry, something went wrong: {err_msg}"
+
+
+def _send_turn_error_reply(task, error: BaseException, contact=None) -> None:
+    """Answer a failed turn on the messenger it came from (Telegram, Discord, WhatsApp), so
+    nobody waits for a reply that will not come; the text is `_turn_error_text`'s. `contact`
+    is the record the runner pinned for THIS turn (`agent._front_office_contact`). Mail
+    answers nothing here: a Front Office mail that failed stays waiting for the owner.
+    Never raises."""
+    try:
+        source = getattr(task, "source", None)
+        meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
+        text = _turn_error_text(meta, error, contact)
+        if source == "telegram" and meta.get("telegram_chat_id"):
+            from vaf.core.telegram_reply import send_telegram_reply
+            send_telegram_reply(str(meta["telegram_chat_id"]), text)
+        elif source == "discord" and meta.get("discord_channel_id"):
+            from vaf.core.discord_reply import send_discord_reply
+            send_discord_reply(str(meta["discord_channel_id"]), text)
+        elif source == "whatsapp" and meta.get("whatsapp_chat_jid"):
+            from vaf.core.whatsapp_reply import send_whatsapp_reply
+            username = meta.get("username") or "admin"
+            jid = str(meta["whatsapp_chat_jid"])
+            # Clear any pending voice reply so the error is sent as text, not read out.
+            try:
+                from vaf.api.whatsapp_bridge import _voice_reply_lock, _voice_reply_pending
+                with _voice_reply_lock:
+                    _voice_reply_pending.pop(f"{username}|{jid}", None)
+            except Exception:
+                pass
+            send_whatsapp_reply(
+                username, jid, text,
+                user_scope_id=meta.get("user_scope_id") and str(meta["user_scope_id"]) or None,
+            )
+    except Exception:
+        pass
+
+
 def _apply_channel_history_window(agent, source: str) -> None:
     """
     Keep only a small recent window for channel sessions (Telegram/WhatsApp/Discord)
@@ -2979,37 +3038,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         )
                     except Exception:
                         pass
-                    # If task came from Telegram or Discord, send error reply so user sees something
-                    try:
-                        task_source_err = getattr(task, "source", None)
-                        meta_err = (task.metadata or {}) if getattr(task, "metadata", None) else {}
-                        err_msg = str(e).replace("\n", " ")[:400]
-                        err_text = f"Sorry, something went wrong: {err_msg}"
-                        if task_source_err == "telegram" and meta_err.get("telegram_chat_id"):
-                            from vaf.core.telegram_reply import send_telegram_reply
-                            send_telegram_reply(str(meta_err["telegram_chat_id"]), err_text)
-                        elif task_source_err == "discord" and meta_err.get("discord_channel_id"):
-                            from vaf.core.discord_reply import send_discord_reply
-                            send_discord_reply(str(meta_err["discord_channel_id"]), err_text)
-                        elif task_source_err == "whatsapp" and meta_err.get("whatsapp_chat_jid"):
-                            from vaf.core.whatsapp_reply import send_whatsapp_reply
-                            # Clear any pending voice reply so error messages are sent as text, not TTS'd
-                            try:
-                                from vaf.api.whatsapp_bridge import _voice_reply_pending, _voice_reply_lock
-                                _err_username = meta_err.get("username") or "admin"
-                                _err_jid = str(meta_err["whatsapp_chat_jid"])
-                                with _voice_reply_lock:
-                                    _voice_reply_pending.pop(f"{_err_username}|{_err_jid}", None)
-                            except Exception:
-                                pass
-                            send_whatsapp_reply(
-                                meta_err.get("username") or "admin",
-                                str(meta_err["whatsapp_chat_jid"]),
-                                err_text,
-                                user_scope_id=meta_err.get("user_scope_id") and str(meta_err["user_scope_id"]) or None,
-                            )
-                    except Exception:
-                        pass
+                    # A messenger turn answers its failure there too. A contact's turn gets
+                    # a fixed sentence, never the exception text; the contact is the one
+                    # pinned for THIS turn (still set: the finally below clears it).
+                    _send_turn_error_reply(
+                        task, e, contact=getattr(agent, "_front_office_contact", None))
                 finally:
                     agent._front_office_mode = False
                     agent._front_office_chat = None

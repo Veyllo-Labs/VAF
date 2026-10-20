@@ -252,7 +252,7 @@ The mapping only tells the bridge which number that @lid represents; who is answ
 
 **Root cause:** The crash happened *before* the normal reply consumed `_voice_reply_pending` (the per-chat language flag set when a voice message is received). So the error-handler's text also gets TTS'd.
 
-**Fix:** The error handler in `headless_runner.py` now explicitly pops `_voice_reply_pending` for the affected chat before calling `send_whatsapp_reply`, so error messages are always sent as plain text.
+**Fix:** The error handler in `headless_runner.py` (`_send_turn_error_reply`) now explicitly pops `_voice_reply_pending` for the affected chat before calling `send_whatsapp_reply`, so error messages are always sent as plain text. A contact never receives the error text at all: a failed Front Office turn is answered with a fixed sentence in the contact's language (see [FRONT_OFFICE.md](../agents/FRONT_OFFICE.md#when-front-office-activates)); only the owner's own chat gets the "Sorry, something went wrong: ..." line.
 
 ### Troubleshooting: Voice reply contained raw JSON (tool_calls)
 

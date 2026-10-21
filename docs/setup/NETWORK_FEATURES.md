@@ -139,6 +139,7 @@ Use the built-in doctor command to detect common security misconfigurations befo
 
 - `vaf doctor` (alias for `vaf security doctor`)
 - Checks include weak network posture flags (TLS/firewall/login/2FA), a channel whose Inbound is open to new senders, and channel-enabled-without-pairing states.
+- Whether the access port faces the internet, in network mode: `network_public_address` (this machine has a public IPv4 address, `binding.public_addresses()`; medium, low once "VPN only" is on, since then a provider's own network is no longer admitted), `network_ufw_disabled` (ufw is installed but switched off while the firewall step is on, `firewall.host_firewall()`; with what to do, SSH allowed first) and `network_public_refusals` (high: today's security log holds `ip_blocked` refusals of public addresses, so the port was reached from the internet: an open hosting firewall, a forwarded router port or a tunnel). VAF cannot see a hosting provider's firewall from inside; the refusals are the evidence that it is open.
 - Output is intentionally non-secret and safe to share in internal troubleshooting.
 
 ### Layer 4: Rate Limiting

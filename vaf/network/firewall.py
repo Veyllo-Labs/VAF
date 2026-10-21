@@ -42,6 +42,12 @@ FIREWALL_INACTIVE = "inactive"
 # translated, so reading it needs no root and parses no command output.
 UFW_CONF = "/etc/ufw/ufw.conf"
 
+# What an operator does about a switched-off ufw; `vaf server provision` and `vaf doctor` both
+# say it. SSH first: enabling ufw without an allow for it cuts off the session that typed it.
+UFW_OFF_ADVICE = ("If the hosting provider's firewall or the router keeps the port closed, that is "
+                  "enough. Otherwise allow SSH first (`sudo ufw allow OpenSSH`), then "
+                  "`sudo ufw enable` and `sudo -v && vaf server provision`.")
+
 
 def _sources(*, narrow_lan: bool = False) -> list:
     """The source networks to open, from the one admission decision (binding.inbound_policy)."""

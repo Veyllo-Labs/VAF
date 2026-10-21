@@ -78,13 +78,6 @@ def server_status():
     UI.print()
 
 
-# What an operator does about a switched-off ufw, said by provision and `vaf doctor`. SSH first:
-# enabling ufw without an allow for it cuts off the session that typed the command.
-UFW_OFF_ADVICE = ("If the hosting provider's firewall or the router keeps the port closed, that is "
-                  "enough. Otherwise allow SSH first (`sudo ufw allow OpenSSH`), then "
-                  "`sudo ufw enable` and `sudo -v && vaf server provision`.")
-
-
 def _print_access(suffix: str) -> None:
     """Interfaces with their access URL, the admitted networks, and what was refused."""
     from vaf.network.binding import (REFUSAL_REASONS, access_addresses, inbound_policy,
@@ -221,7 +214,7 @@ def server_provision(
         except Exception as e:
             outcome = False
             UI.warning(f"Firewall setup error: {e}")
-        from vaf.network.firewall import FIREWALL_INACTIVE
+        from vaf.network.firewall import FIREWALL_INACTIVE, UFW_OFF_ADVICE
         if outcome == "present":
             UI.success(f"Firewall rule already in place for port {access_port}.")
         elif outcome == FIREWALL_INACTIVE:

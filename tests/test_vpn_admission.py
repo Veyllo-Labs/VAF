@@ -281,11 +281,25 @@ def test_a_new_vpn_address_gets_a_new_certificate(monkeypatch, tmp_path):
 
 # ── the doctor ─────────────────────────────────────────────────────────────
 
-def _codes(**cfg):
+def _findings(public=(), host=None, events=(), **cfg):
+    """The doctor's findings for a network-mode config. The checks that read the machine
+    itself (its public addresses, its host firewall, today's security log) are pinned, so
+    the answer does not depend on the runner: Ubuntu runners ship ufw switched off."""
+    import vaf.core.security_events as se
+    import vaf.network.firewall as fw
     from vaf.core.security_misconfig import collect_security_findings
     base = {"local_network_enabled": True, "local_network_tls_enabled": True,
             "local_network_firewall_enabled": True, "local_network_require_2fa": True}
-    return {f["code"] for f in collect_security_findings({**base, **cfg})}
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(binding, "public_addresses", lambda: list(public))
+        mp.setattr(binding, "resolve_lan_access_ports", lambda wait_for_proxy=False: (8443, 8001))
+        mp.setattr(fw, "host_firewall", lambda: host)
+        mp.setattr(se, "read_security_events", lambda date, limit=100: list(events))
+        return {f["code"]: f for f in collect_security_findings({**base, **cfg})}
+
+
+def _codes(**cfg):
+    return set(_findings(**cfg))
 
 
 def test_doctor_no_longer_claims_login_is_not_required():
@@ -344,3 +358,43 @@ def test_doctor_names_a_point_to_point_vpn_under_vpn_only(monkeypatch):
                            "wg0": (True, [_v4("10.8.0.1", "255.255.255.255")])})
     assert "network_vpn_single_address" in _codes(local_network_vpn_only=True)
     assert "network_vpn_single_address" not in _codes()
+
+
+# ── the doctor: does the access port face the internet ───────────────────────
+
+PUBLIC = [("eth0", "9.9.9.9")]
+
+
+def test_doctor_sees_a_public_address_a_switched_off_ufw_and_public_refusals():
+    """MUTATIONS: drop each finding in turn; count private refusals; give `low` regardless
+    of "VPN only" - red."""
+    found = _findings(public=PUBLIC)["network_public_address"]
+    assert found["severity"] == "medium"
+    assert "9.9.9.9 (eth0)" in found["message"] and "port 8443" in found["message"]
+    assert "`vaf server vpn-only on`" in found["message"]
+    found = _findings(public=PUBLIC, local_network_vpn_only=True)["network_public_address"]
+    assert found["severity"] == "low" and "vpn-only on" not in found["message"]
+
+    found = _findings(host="ufw_off")["network_ufw_disabled"]
+    assert found["severity"] == "medium"
+    assert found["message"].index("sudo ufw allow OpenSSH") < found["message"].index("sudo ufw enable")
+    assert "network_ufw_disabled" not in _codes(host="ufw_off", local_network_firewall_enabled=False)
+    assert "network_ufw_disabled" not in _codes(host="ufw")
+
+    refused = [{"kind": "ip_blocked", "ip": "9.9.9.9", "detail": "/login"},
+               {"kind": "ip_blocked", "ip": "9.9.9.9", "detail": "/api/users"}]
+    found = _findings(events=refused)["network_public_refusals"]
+    assert found["severity"] == "high"
+    assert "1 public address" in found["message"] and "9.9.9.9" in found["message"]
+    for ip in ("192.168.1.5", "100.101.102.103", "unknown"):
+        assert "network_public_refusals" not in _codes(
+            events=[{"kind": "ip_blocked", "ip": ip, "detail": "/login"}]), ip
+    assert "network_public_refusals" not in _codes(
+        events=[{"kind": "login_failed", "ip": "9.9.9.9"}])
+
+
+def test_doctor_says_nothing_about_the_internet_in_local_mode():
+    off = {"local_network_enabled": False}
+    assert not _codes(public=PUBLIC, host="ufw_off",
+                      events=[{"kind": "ip_blocked", "ip": "9.9.9.9"}], **off) & {
+        "network_public_address", "network_ufw_disabled", "network_public_refusals"}

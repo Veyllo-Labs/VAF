@@ -44,6 +44,70 @@ def _admission_findings(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
     return found
 
 
+def _access_port() -> int:
+    from vaf.network.binding import resolve_lan_access_ports
+    return resolve_lan_access_ports(wait_for_proxy=False)[0]
+
+
+def _internet_findings(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Whether the access port faces the internet: a public address on this machine, a
+    switched-off ufw, public addresses the admission check refused today. Each check reads
+    the machine and yields no finding when that read fails."""
+    from vaf.network import binding, firewall
+    found: List[Dict[str, str]] = []
+
+    try:
+        public = binding.public_addresses()
+        if public:
+            vpn_only = binding.inbound_policy(cfg).vpn_only
+            named = ", ".join(f"{ip} ({iface})" for iface, ip in public)
+            plural = "addresses" if len(public) > 1 else "address"
+            message = (f"This machine has the public {plural} {named}. VAF refuses public "
+                       f"addresses itself, but port {_access_port()} still answers the TLS "
+                       "handshake: keep it closed in the hosting provider's firewall or the "
+                       "router and reach VAF over a VPN.")
+            if not vpn_only:
+                message += (" \"VPN only\" is off, so every private network this machine "
+                            "reaches is admitted, a hosting provider's own network and the "
+                            "container bridges included: `vaf server vpn-only on`.")
+            found.append(_finding("low" if vpn_only else "medium", "network_public_address",
+                                  message))
+    except Exception:
+        pass
+
+    try:
+        if (bool(cfg.get("local_network_firewall_enabled", False))
+                and firewall.host_firewall() == "ufw_off"):
+            found.append(_finding(
+                "medium", "network_ufw_disabled",
+                "ufw is installed but switched off, so this machine's firewall does not guard "
+                "the access port. " + firewall.UFW_OFF_ADVICE))
+    except Exception:
+        pass
+
+    try:
+        from datetime import datetime
+
+        from vaf.core.security_events import read_security_events
+        today = datetime.now().strftime("%Y-%m-%d")
+        refused: List[str] = []
+        for event in read_security_events(today, limit=5000):
+            ip = str(event.get("ip") or "")
+            if (event.get("kind") == "ip_blocked" and binding.classify_address(ip) == "public"
+                    and ip not in refused):
+                refused.append(ip)
+        if refused:
+            plural = "addresses" if len(refused) > 1 else "address"
+            found.append(_finding(
+                "high", "network_public_refusals",
+                f"Today VAF refused {len(refused)} public {plural}, for example {refused[0]}: "
+                "the access port is reachable from the internet (an open hosting firewall, a "
+                "forwarded router port or a tunnel). Close it there."))
+    except Exception:
+        pass
+    return found
+
+
 def collect_security_findings(config: Dict[str, Any] | None = None) -> List[Dict[str, str]]:
     """
     Return security findings derived from config.
@@ -88,6 +152,7 @@ def collect_security_findings(config: Dict[str, Any] | None = None) -> List[Dict
         # check that stood here read a key registered nowhere, so it reported HIGH on
         # every server.
         findings.extend(_admission_findings(cfg))
+        findings.extend(_internet_findings(cfg))
 
     # The one state that means "somebody the owner never decided about is answered": the
     # channel switch. The expert modes this used to warn about are gone (they said the same

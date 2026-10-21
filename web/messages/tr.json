@@ -1754,6 +1754,8 @@
       "remoteAccess": {
         "title": "Uzaktan erişim (VPN)",
         "intro": "VAF kendi VPN'ini kurmaz. Bu cihazda bir VPN çalışıyorsa (WireGuard, OpenVPN, Tailscale, NetBird), VAF bu bağlantıyı algılar. Cihazların onun üzerinden girip giremeyeceğini aşağıda belirlersin: WireGuard ve OpenVPN genellikle zaten izinlidir, Tailscale ve NetBird ise ancak sen izin verdiğinde.",
+        "scope": "VAF yalnızca yerel ağında ve VPN'inde kullanılmak içindir. Portunu yönlendiricide dışarı açma ve bir tünel hizmetiyle yayınlama: İnternetteki bir ajanın giriş sayfası gece gündüz saldırıya uğrar.",
+        "publicAddress": "Bu cihazın genel bir IP adresi var: {address}. VAF'ın portunu barındırma sağlayıcının güvenlik duvarında kapalı tut ve VPN üzerinden bağlan.",
         "connections": "Algılanan bağlantılar",
         "none": "Ağ ya da VPN bağlantısı bulunamadı.",
         "kindLan": "LAN",

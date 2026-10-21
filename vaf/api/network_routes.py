@@ -195,7 +195,7 @@ def _firewall_after_save() -> str:
 
 def _remote_access_state(request: Request) -> dict:
     from vaf.network.binding import (connection_client_ip, inbound_policy, is_allowed_ip,
-                                     local_interfaces)
+                                     local_interfaces, public_addresses)
     from vaf.network.ssl_utils import certificate_ip_addresses
 
     policy = inbound_policy(detect_vpn=True)
@@ -229,6 +229,8 @@ def _remote_access_state(request: Request) -> dict:
         "mesh_vpn_admitted": any(a == _MESH_VPN_NETWORK for a in policy.allowed),
         "your_address": connection_client_ip(request),
         "firewall_after_save": _firewall_after_save(),
+        # The machine sits on the internet: the settings say to keep the port closed there.
+        "public_addresses": [{"name": name, "ip": ip} for name, ip in public_addresses()],
     }
 
 

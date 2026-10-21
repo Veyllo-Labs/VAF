@@ -50,6 +50,7 @@ def stored(monkeypatch):
         values.update(cfg)
     monkeypatch.setattr(Config, "save", classmethod(save))
     monkeypatch.setattr(binding, "local_interfaces", lambda: [LAN, WG, TS])
+    monkeypatch.setattr(binding, "public_addresses", lambda: [])
     monkeypatch.setattr(network_routes, "_access_port", lambda: 8443)
     return values
 
@@ -194,3 +195,27 @@ def test_the_save_note_follows_what_a_save_does_to_the_firewall():
     assert re.search(r"firewall_after_save\s*:\s*'automatic'\s*\|\s*'provision'\s*\|\s*'manual'", src)
     assert re.search(r"after\s*===\s*'provision'\s*\?\s*t\('savedFirewallProvision'\)", src)
     assert re.search(r"after\s*===\s*'manual'\s*\?\s*t\('savedFirewallManual'\)\s*:\s*t\('saved'\)", src)
+
+
+
+def test_remote_access_names_public_addresses(stored, monkeypatch):
+    """The settings warn while the machine sits on the internet; GET and PUT answer the
+    same state. MUTATION: leave the field out of the answer - red."""
+    assert _app().get("/api/network/remote-access").json()["public_addresses"] == []
+    monkeypatch.setattr(binding, "public_addresses", lambda: [("eth0", "9.9.9.9")])
+    want = [{"name": "eth0", "ip": "9.9.9.9"}]
+    assert _app().get("/api/network/remote-access").json()["public_addresses"] == want
+    r = _app().put("/api/network/remote-access", json={"allowed": [], "vpn_only": False})
+    assert r.status_code == 200, r.text
+    assert r.json()["public_addresses"] == want
+
+
+def test_the_section_warns_about_a_public_address():
+    """The scope line always; the banner only while hosting is on and the list is not empty.
+    MUTATION: render the banner without the `enabled` condition - red."""
+    src = (Path(__file__).resolve().parents[1] / "web" / "components" / "settings"
+           / "RemoteAccessSection.tsx").read_bytes().decode("utf-8")
+    assert "{t('scope')}" in src
+    assert re.search(r"\{data\.enabled && publicAddresses\.length > 0 && \(\s*<div[^>]*role=\"alert\"", src)
+    assert re.search(r"t\('publicAddress', \{ address: publicAddresses\.map\(a => a\.ip\)\.join\(', '\) \}\)", src)
+    assert "public_addresses?: { name: string; ip: string }[];" in src

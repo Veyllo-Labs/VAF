@@ -1754,6 +1754,8 @@
       "remoteAccess": {
         "title": "远程访问（VPN）",
         "intro": "VAF 自己不搭建 VPN。如果这台设备上运行着 VPN（WireGuard、OpenVPN、Tailscale、NetBird），VAF 会检测到这个连接。设备能否通过它进来，在下方设置：WireGuard 和 OpenVPN 通常已经放行，Tailscale 和 NetBird 要在你放行后才能进来。",
+        "scope": "VAF 只在你的本地网络和 VPN 中使用。不要在路由器上转发它的端口，也不要通过隧道服务把它公开：互联网上的智能体登录页面会被全天候攻击。",
+        "publicAddress": "这台设备有公网地址 {address}。请在主机服务商的防火墙中关闭 VAF 的端口，并通过 VPN 连接。",
         "connections": "检测到的连接",
         "none": "没有找到网络连接或 VPN 连接。",
         "kindLan": "LAN",

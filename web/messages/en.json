@@ -1754,6 +1754,8 @@
       "remoteAccess": {
         "title": "Remote access (VPN)",
         "intro": "VAF sets up no VPN of its own. If one runs on this machine (WireGuard, OpenVPN, Tailscale, NetBird), VAF detects the connection. Whether devices get in through it is set below: WireGuard and OpenVPN are usually admitted already, Tailscale and NetBird only once you admit them.",
+        "scope": "VAF is for your local network and your VPN only. Do not forward its port on your router or publish it through a tunnel service: an agent's login page on the internet is attacked around the clock.",
+        "publicAddress": "This machine has the public address {address}. Keep VAF's port closed in your hosting provider's firewall and connect over a VPN.",
         "connections": "Detected connections",
         "none": "No network or VPN connection found.",
         "kindLan": "LAN",

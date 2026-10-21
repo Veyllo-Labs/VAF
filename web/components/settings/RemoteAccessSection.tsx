@@ -39,6 +39,9 @@ interface State {
     // the running VAF tries to apply it, a server names `vaf server provision`, or nothing
     // touches it. The note after a save follows it instead of promising a change.
     firewall_after_save: 'automatic' | 'provision' | 'manual';
+    // This machine's public IPv4 addresses (vaf/network/binding.py public_addresses): the
+    // machine sits on the internet, where VAF's port must be closed in front of it.
+    public_addresses?: { name: string; ip: string }[];
 }
 
 // The refusal codes of vaf/network/binding.py REFUSAL_REASONS, each worded in the catalogue.
@@ -155,6 +158,7 @@ export default function RemoteAccessSection({ sectionId }: { sectionId?: string 
     const meshWaiting = !data.mesh_vpn_admitted
         && data.interfaces.some(i => i.kind === 'vpn' && i.network === mesh && !i.admitted);
     const nobodyGetsIn = data.vpn_only && data.vpn_networks.length === 0 && data.allowed.length === 0;
+    const publicAddresses = data.public_addresses ?? [];
 
     const toggleMesh = () => {
         const next = data.mesh_vpn_admitted ? data.allowed.filter(n => n !== mesh) : [...data.allowed, mesh];
@@ -171,7 +175,15 @@ export default function RemoteAccessSection({ sectionId }: { sectionId?: string 
     return (
         <div id={sectionId} className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 scroll-mt-2">
             <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-2">{t('title')}</h3>
-            <p className="text-xs text-gray-600 mb-4">{t('intro')}</p>
+            <p className="text-xs text-gray-600 mb-2">{t('intro')}</p>
+            <p className="text-xs text-gray-600 mb-4">{t('scope')}</p>
+            {data.enabled && publicAddresses.length > 0 && (
+                <div className="mb-4 p-3 rounded-lg border border-amber-200 bg-amber-50" role="alert">
+                    <p className="text-xs text-amber-800">
+                        {t('publicAddress', { address: publicAddresses.map(a => a.ip).join(', ') })}
+                    </p>
+                </div>
+            )}
 
             <p className="text-xs font-semibold text-gray-700 mb-1">{t('connections')}</p>
             {data.interfaces.length === 0 ? (

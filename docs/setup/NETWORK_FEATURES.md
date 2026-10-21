@@ -707,9 +707,13 @@ section of the settings shows:
   "vpn_networks": ["100.64.0.0/10"],
   "mesh_vpn_network": "100.64.0.0/10",
   "mesh_vpn_admitted": false,
-  "your_address": "192.168.2.50"
+  "your_address": "192.168.2.50",
+  "firewall_after_save": "automatic",
+  "public_addresses": []
 }
 ```
+
+`public_addresses` lists this machine's public IPv4 addresses as `{"name", "ip"}` (`binding.public_addresses()`, for example `[{"name": "eth0", "ip": "9.9.9.9"}]` on a rented server); the settings show a warning while it is not empty. The PUT answers the same state.
 
 **PUT** `/api/network/remote-access` with `{"allowed": [...], "vpn_only": bool, "confirm": bool,
 "base_allowed": [...], "base_vpn_only": bool}` replaces both settings, checked and written under the

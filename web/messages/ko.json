@@ -1754,6 +1754,8 @@
       "remoteAccess": {
         "title": "원격 접속(VPN)",
         "intro": "VAF는 VPN을 직접 만들지 않아요. 이 기기에서 VPN(WireGuard, OpenVPN, Tailscale, NetBird)이 실행 중이면 VAF가 그 연결을 감지해요. 그 경로로 기기가 들어올 수 있는지는 아래에서 정해요. WireGuard와 OpenVPN은 보통 이미 허용되어 있고, Tailscale과 NetBird는 허용해야 들어올 수 있어요.",
+        "scope": "VAF는 로컬 네트워크와 VPN 안에서만 쓰는 거예요. 라우터에서 포트를 포워딩하거나 터널 서비스로 공개하지 마세요. 인터넷에 열린 에이전트 로그인 페이지는 24시간 내내 공격받아요.",
+        "publicAddress": "이 기기에는 공인 주소 {address}이(가) 있어요. 호스팅 업체의 방화벽에서 VAF 포트를 닫아 두고 VPN으로 연결하세요.",
         "connections": "감지된 연결",
         "none": "네트워크나 VPN 연결을 찾지 못했어요.",
         "kindLan": "LAN",

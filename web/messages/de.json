@@ -1754,6 +1754,8 @@
       "remoteAccess": {
         "title": "Fernzugriff (VPN)",
         "intro": "VAF richtet selbst kein VPN ein. Läuft auf diesem Gerät eins (WireGuard, OpenVPN, Tailscale, NetBird), erkennt VAF die Verbindung. Ob Geräte darüber hereinkommen, legst du unten fest: WireGuard und OpenVPN sind meist schon zugelassen, Tailscale und NetBird erst, wenn du sie freigibst.",
+        "scope": "VAF ist nur für dein lokales Netz und dein VPN gedacht. Leite seinen Port nicht am Router weiter und veröffentliche ihn nicht über einen Tunnel-Dienst: Die Anmeldeseite eines Agenten im Internet wird rund um die Uhr angegriffen.",
+        "publicAddress": "Dieses Gerät hat die öffentliche Adresse {address}. Halte den Port von VAF in der Firewall deines Hosting-Anbieters geschlossen und verbinde dich über ein VPN.",
         "connections": "Erkannte Verbindungen",
         "none": "Keine Netzwerk- oder VPN-Verbindung gefunden.",
         "kindLan": "LAN",

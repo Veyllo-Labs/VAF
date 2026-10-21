@@ -36,14 +36,17 @@ def fake_upstream(monkeypatch, *, local_network=True):
         lambda cls, key, default=False: seen.network["on"] if key == "local_network_enabled"
         else real_get_bool(cls, key, default)))
 
-    class _Upstream:
-        async def request(self, method, url, headers=None, content=None):
-            seen.requests.append((method, url))
-            return SimpleNamespace(status_code=200, headers={"content-type": "text/html"},
-                                   content=b"<html>login</html>")
+    import httpx
+
+    def _answer(request):
+        seen.requests.append((request.method, str(request.url)))
+        return httpx.Response(200, headers={"content-type": "text/html"},
+                              stream=httpx.ByteStream(b"<html>login</html>"))
+
+    upstream = httpx.AsyncClient(transport=httpx.MockTransport(_answer))
 
     async def _client(_origin):
-        return _Upstream()
+        return upstream
 
     class _Backend:
         close_code = 1000

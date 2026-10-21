@@ -208,7 +208,8 @@ def test_the_client_is_the_rightmost_hop_no_client_wrote(peer, forwarded, client
     rightmost hop that is not this machine is the nearest one no client controls.
 
     The first hop is whatever the client wrote. In the running server uvicorn's default
-    proxy-header handling hid that on the HTTPS port; the resolver no longer depends on it.
+    proxy-header handling hid that on the HTTPS port; the HTTPS port now switches it off and
+    the resolver is the only rule there.
     MUTATIONS, each red here: take the first hop; stop skipping loopback hops; accept a
     non-IP hop; drop the IPv4-mapped normalization."""
     from vaf.network.binding import is_localhost
@@ -268,14 +269,19 @@ def test_proxy_strips_client_supplied_forwarding_headers():
 class _RecordingUpstream:
     """Stands in for the proxy's pooled httpx client: records what reached the backend."""
 
+    """The proxy's pooled client: a real httpx client over a recording transport. Each
+    request's headers are kept as sent, a repeated header as two entries."""
+
     def __init__(self):
+        import httpx
         self.headers = []
 
-    async def request(self, method, url, headers=None, content=None):
-        from types import SimpleNamespace
-        self.headers.append(dict(headers or {}))
-        return SimpleNamespace(status_code=200, headers={"content-type": "text/plain"},
-                               content=b"ok")
+        def _answer(request):
+            self.headers.append(list(request.headers.multi_items()))
+            return httpx.Response(200, headers={"content-type": "text/plain"},
+                                  stream=httpx.ByteStream(b"ok"))
+
+        self.client = httpx.AsyncClient(transport=httpx.MockTransport(_answer))
 
 
 @pytest.mark.parametrize("peer,incoming,written", [
@@ -299,14 +305,14 @@ def test_the_proxy_writes_the_resolved_client(monkeypatch, peer, incoming, writt
     upstream = _RecordingUpstream()
 
     async def _client(_origin):
-        return upstream
+        return upstream.client
 
     monkeypatch.setattr(proxy, "_get_client", _client)
     c = TestClient(proxy.create_proxy_app(), client=(peer, 40000))
     hdrs = {"X-Forwarded-For": incoming} if incoming else {}
     assert c.get("/api/users", headers=hdrs).status_code == 200
     sent = upstream.headers[-1]
-    values = [v for k, v in sent.items() if k.lower() == "x-forwarded-for"]
+    values = [v for k, v in sent if k.lower() == "x-forwarded-for"]
     assert values == [written]
 
 
@@ -330,7 +336,7 @@ def test_the_proxys_header_path_asks_no_dns_in_a_test(monkeypatch, local_network
     upstream = _RecordingUpstream()
 
     async def _client(_origin):
-        return upstream
+        return upstream.client
 
     monkeypatch.setattr(proxy, "_get_client", _client)
     c = TestClient(proxy.create_proxy_app(), client=(LAN_DEVICE, 40000))
@@ -428,9 +434,10 @@ def test_the_next_door_forwards_the_hop():
     (None, True),                         # internal IPC
 ])
 def test_behind_uvicorns_proxy_headers_the_answer_is_the_same(forwarded, allowed):
-    """Every uvicorn VAF starts keeps the default proxy_headers, which replaces a 127.0.0.1
-    peer with the rightmost X-Forwarded-For entry that is not 127.0.0.1 before VAF reads the
-    connection. Both layers must agree. The one they did not: uvicorn passes a "localhost"
+    """The backend's loopback listeners (8001, 8005) keep uvicorn's default proxy_headers,
+    which replaces a 127.0.0.1 peer with the rightmost X-Forwarded-For entry that is not
+    127.0.0.1 before VAF reads the connection (the doors other devices reach switch it off,
+    vaf/network/door.py). Both layers must agree. The one they did not: uvicorn passes a "localhost"
     entry through as the client, and is_localhost accepts that name, so the first-hop rule
     made it this machine. MUTATION: accept a non-IP hop again - red for that row."""
     from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware

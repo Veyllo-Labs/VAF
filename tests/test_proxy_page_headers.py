@@ -12,8 +12,7 @@ The set at the proxy is deliberately not the backend's: no Permissions-Policy (i
 switch off the UI's own voice input), and frame-ancestors on pages only (the interactive
 browser's viewer is a BACKEND response framed by the UI under SAMEORIGIN).
 """
-from types import SimpleNamespace
-
+import httpx
 import pytest
 from starlette.testclient import TestClient
 
@@ -34,20 +33,18 @@ def _machine_named_workstation(monkeypatch):
     monkeypatch.setattr(binding, "_OWN_LABELS", {})
 
 
-class _Upstream:
-    """The proxy's pooled client, answering with the headers each test hands it."""
-
-    def __init__(self, headers):
-        self._headers = headers
-        self.urls = []
-
-    async def request(self, method, url, headers=None, content=None):
-        self.urls.append(url)
-        return SimpleNamespace(status_code=200, headers=dict(self._headers), content=b"<html></html>")
+def _upstream(headers):
+    """The proxy's pooled client, a real httpx client whose upstream answers with the headers
+    each test hands it. The body is a stream, as a real upstream's is: the proxy relays it
+    without reading it first."""
+    def _answer(_request):
+        return httpx.Response(200, headers=list(headers.items()),
+                              stream=httpx.ByteStream(b"<html></html>"))
+    return httpx.AsyncClient(transport=httpx.MockTransport(_answer))
 
 
 def _get(monkeypatch, path, upstream_headers, host="vaf.lan:8443"):
-    upstream = _Upstream(upstream_headers)
+    upstream = _upstream(upstream_headers)
 
     async def _client(_origin):
         return upstream

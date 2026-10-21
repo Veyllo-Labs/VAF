@@ -35,8 +35,8 @@ from pathlib import Path
 from typing import Callable
 
 from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.responses import Response
+from starlette.requests import ClientDisconnect, Request
+from starlette.responses import Response, StreamingResponse
 from starlette.routing import Route, WebSocketRoute
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocket
@@ -124,25 +124,26 @@ PAGE_SECURITY_HEADERS = (
 )
 
 
-def _add_missing_headers(headers: dict, target_origin: str, dialled_host: str = "") -> None:
-    """Add the page set (frontend) and the scoped HSTS (both), never over a value the
-    upstream set."""
+def _add_missing_headers(raw_headers: list, target_origin: str, dialled_host: str = "") -> None:
+    """Add the page set (frontend) and the scoped HSTS (both) to a raw header list, never over
+    a value the upstream set."""
     from vaf.network.binding import hsts_for_host
-    present = {k.lower() for k in headers}
+    present = {name.lower() for name, _value in raw_headers}
     wanted = list(PAGE_SECURITY_HEADERS) if target_origin == FRONTEND_ORIGIN else []
     hsts = hsts_for_host(dialled_host)
     if hsts:
         wanted.append(("Strict-Transport-Security", hsts))
     for name, value in wanted:
-        if name.lower() not in present:
-            headers[name] = value
+        key = name.lower().encode("latin-1")
+        if key not in present:
+            raw_headers.append((key, value.encode("latin-1")))
 
 
 # Internal HTTP channel (8005) is always running when this proxy runs (TLS on); 8001 is HTTPS-only
 BACKEND_ORIGIN = "http://127.0.0.1:8005"
 
-# Shared httpx clients for connection pooling — reuse TCP connections across requests
-# instead of opening a new connection for every single resource (JS chunks, CSS, images, etc.)
+# Shared httpx clients for connection pooling: reuse TCP connections across requests instead of
+# opening a new connection for every single resource (JS chunks, CSS, images, etc.).
 _frontend_client: "httpx.AsyncClient | None" = None  # noqa: F821
 _backend_client: "httpx.AsyncClient | None" = None  # noqa: F821
 
@@ -169,23 +170,30 @@ def stop_https_proxy() -> None:
         pass
 
 
+def _new_upstream_client() -> "httpx.AsyncClient":  # noqa: F821
+    """A pooled client for one upstream. The pool is as large as the door's connection cap:
+    a streamed response holds its upstream connection while the device reads it, so with a
+    smaller pool a few slow readers would starve every other request into the pool timeout,
+    and with an equal one the door's cap is the only bound. The 60 s timeout is also how long
+    a response may send nothing between two parts."""
+    import httpx
+    return httpx.AsyncClient(
+        timeout=60.0,
+        limits=httpx.Limits(max_connections=door.connection_cap(), max_keepalive_connections=20,
+                            keepalive_expiry=30),
+    )
+
+
 async def _get_client(target_origin: str) -> "httpx.AsyncClient":  # noqa: F821
     """Return a shared httpx.AsyncClient for the target, with connection pooling."""
-    import httpx
     global _frontend_client, _backend_client
     if target_origin == FRONTEND_ORIGIN:
         if _frontend_client is None or _frontend_client.is_closed:
-            _frontend_client = httpx.AsyncClient(
-                timeout=60.0,
-                limits=httpx.Limits(max_connections=50, max_keepalive_connections=20, keepalive_expiry=30),
-            )
+            _frontend_client = _new_upstream_client()
         return _frontend_client
     else:
         if _backend_client is None or _backend_client.is_closed:
-            _backend_client = httpx.AsyncClient(
-                timeout=60.0,
-                limits=httpx.Limits(max_connections=50, max_keepalive_connections=20, keepalive_expiry=30),
-            )
+            _backend_client = _new_upstream_client()
         return _backend_client
 
 
@@ -208,9 +216,83 @@ def _normalize_headers_for_upstream(headers: dict, target_origin: str, original_
     headers["X-Forwarded-Host"] = original_host or "127.0.0.1"
 
 
+# Response headers that describe one connection, not the content: the door frames its own
+# answer. date and server too, which uvicorn already writes for the door (server only where it
+# is on), and x-powered-by, which names the software: relayed, each response carried two dates
+# and two servers.
+_UPSTREAM_ONLY_HEADERS = frozenset((
+    b"connection", b"keep-alive", b"transfer-encoding", b"te", b"trailer", b"upgrade",
+    b"date", b"server", b"x-powered-by",
+))
+
+
+class _BodyRefused(Exception):
+    """A request body the door stops: too large (413) or stalled (408)."""
+
+    def __init__(self, status: int) -> None:
+        super().__init__(status)
+        self.status = status
+
+
+def _refusal(status: int) -> Response:
+    """A body the relay stopped (413, 408, or 400 for a device that left), with the connection
+    closed: the rest of the body is never read."""
+    return Response(content=b"", status_code=status, headers={"Connection": "close"})
+
+
+async def _client_body(request: Request):
+    """The client's body as it arrives, held to door.BODY_MAX_BYTES in all and to
+    door.BODY_STALL_S per part. A refusal raises _BodyRefused inside the upstream send, which
+    aborts the upstream request."""
+    received = 0
+    parts = request.stream().__aiter__()
+    while True:
+        try:
+            part = await asyncio.wait_for(parts.__anext__(), timeout=door.BODY_STALL_S)
+        except StopAsyncIteration:
+            return
+        except asyncio.TimeoutError:
+            raise _BodyRefused(408) from None
+        received += len(part)
+        if received > door.BODY_MAX_BYTES:
+            raise _BodyRefused(413)
+        if part:
+            yield part
+
+
+class _RelayedResponse(StreamingResponse):
+    """An upstream answer relayed as it arrives, its body untouched (a compressed body stays
+    compressed), under the header list the relay built.
+
+    The upstream response is closed however the answer ends: done, device gone, or an error.
+    Closing it in the body iterator alone missed a device that left before the first part was
+    read (an iterator that never started runs no cleanup), and the pooled connection stayed
+    taken. An upstream that fails after its headers ends the stream there, so the device sees
+    a cut-off answer, never a clean end."""
+
+    def __init__(self, upstream, raw_headers: list) -> None:
+        super().__init__(upstream.aiter_raw(), status_code=upstream.status_code)
+        self.raw_headers = raw_headers
+        self._upstream = upstream
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        import anyio
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            with anyio.CancelScope(shield=True):
+                await self._upstream.aclose()
+
+
 async def _forward_http(request: Request, target_origin: str) -> Response:
-    """Forward HTTP request to target and return response."""
-    import httpx
+    """Relay one HTTP request to the target, streaming in both directions.
+
+    It used to read the whole request body into memory before sending it (a 150 MB body was
+    taken, measured) and the whole response before answering: a live stream (the mail and
+    WhatsApp drafts, the memory answer) arrived in one piece at its end, measured 3.0 s for a
+    stream whose first event was ready at once, and it decoded the body and appended a
+    Content-Length of its own to the upstream's (HEAD: 17 and 0; a compressed answer: two
+    different values, and the body was lost)."""
     path = (request.scope.get("path") or request.url.path or "/").strip()
     if not path.startswith("/"):
         path = "/" + path
@@ -225,45 +307,55 @@ async def _forward_http(request: Request, target_origin: str) -> Response:
     # internal loopback traffic. "unknown" is not a valid IP, so the backend fails closed.
     # The value is the resolver's (vaf.network.binding.connection_client_ip), the one reader
     # of a connection's client: a tunnel or reverse proxy on this machine connects from
-    # loopback, and its visitor is the client it named, not this machine. (uvicorn's default
-    # proxy-header handling resolves that for this server's own peer too; the resolver does
-    # not hang on that default.) A non-loopback peer is written as itself; a loopback one as
-    # the client the relay in front of it named, else 127.0.0.1. The resolver reads the
-    # request as it arrived, before the strip above.
+    # loopback, and its visitor is the client it named, not this machine. The door switches
+    # uvicorn's own forwarded-header handling off (door.door_options), so the resolver is the
+    # only rule here. A non-loopback peer is written as itself; a loopback one as the client
+    # the relay in front of it named, else 127.0.0.1. The resolver reads the request as it
+    # arrived, before the strip above.
     from vaf.network.binding import connection_client_ip
     headers["X-Forwarded-For"] = connection_client_ip(request)
+    # A client that asked for no encoding gets none: httpx would ask the upstream for gzip,
+    # deflate, br and zstd on its behalf, and the body now passes through undecoded.
+    if "accept-encoding" not in headers:
+        headers["accept-encoding"] = "identity"
+
+    # A body travels only when the client declared one, so a GET never becomes chunked. Its
+    # Content-Length goes along with the stream (httpx then sends no Transfer-Encoding); a
+    # chunked body is sent chunked. A declared length above the cap is refused before one
+    # byte is read, and the upstream never sees the request.
+    declared = request.headers.get("content-length")
     try:
-        body = await request.body()
-    except Exception:
-        body = b""
+        length = int(declared) if declared is not None else None
+    except ValueError:
+        length = None
+    if length is not None and length > door.BODY_MAX_BYTES:
+        return _refusal(413)
+    has_body = (length or 0) > 0 or "transfer-encoding" in request.headers
     try:
         client = await _get_client(target_origin)
-        resp = await client.request(
-            request.method,
-            url,
-            headers=headers,
-            content=body,
-        )
+        upstream = client.build_request(request.method, url, headers=headers,
+                                        content=_client_body(request) if has_body else None)
+        resp = await client.send(upstream, stream=True)
+    except _BodyRefused as refused:
+        return _refusal(refused.status)
+    except ClientDisconnect:
+        # The device left during its upload; the upstream request was aborted with it, and
+        # this answer reaches nobody.
+        logger.debug("HTTPS proxy: client left during the body of %s %s", request.method, path)
+        return _refusal(400)
     except Exception as e:
         logger.warning("HTTPS proxy forward failed %s %s -> %s: %s", request.method, path, target_origin, e)
         return Response(content=b"Bad Gateway", status_code=502)
-    response_headers = dict(resp.headers)
-    for h in ("connection", "transfer-encoding", "keep-alive", "te", "trailer", "upgrade"):
-        response_headers.pop(h, None)
-    # httpx returns decoded body; strip Content-Encoding so client does not double-decode
-    for k in list(response_headers):
-        if k.lower() == "content-encoding":
-            del response_headers[k]
-            break
-    body_bytes = resp.content
-    # Always set Content-Length from actual (decompressed) body to avoid mismatches
-    response_headers["Content-Length"] = str(len(body_bytes))
-    _add_missing_headers(response_headers, target_origin, original_host)
-    return Response(
-        content=body_bytes,
-        status_code=resp.status_code,
-        headers=response_headers,
-    )
+    # Repeated headers stay repeated (two Set-Cookie are two lines; a dict joined them into
+    # one), and Content-Encoding and Content-Length pass through as the upstream sent them.
+    try:
+        raw_headers = [(name.lower(), value) for name, value in resp.headers.raw
+                       if name.lower() not in _UPSTREAM_ONLY_HEADERS]
+        _add_missing_headers(raw_headers, target_origin, original_host)
+    except BaseException:
+        await resp.aclose()
+        raise
+    return _RelayedResponse(resp, raw_headers)
 
 
 def _get_cookie_header(scope: dict) -> str | None:

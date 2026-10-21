@@ -651,30 +651,84 @@ def test_only_systemds_inactive_is_trusted(monkeypatch, answer, inactive):
     assert fw._ufw_unit_inactive() is inactive
 
 
+# The state Ubuntu ships ufw in: the switch off (ENABLED=no), the unit running.
+_SHIPPED = {"switch_on": False, "unit_stopped": False}
+
+
 def test_the_ufw_advice_names_the_ssh_port_and_the_vpn_port(monkeypatch):
     """`ufw allow OpenSSH` opens port 22 only, and nothing allowed the VPN's port: following
-    the advice locked out an SSH on another port and cut the VPN. MUTATION: always name
-    OpenSSH; drop the VPN port - red."""
-    on_22 = fw.ufw_off_advice(22)
+    the advice locked out an SSH on another port and cut the VPN. A VPN other than WireGuard
+    (Tailscale, NetBird) is pointed at its own port. MUTATION: always name OpenSSH; drop the
+    VPN port - red."""
+    on_22 = fw.ufw_off_advice(22, **_SHIPPED)
     assert "`sudo ufw allow OpenSSH`" in on_22 and "<port>" not in on_22
-    on_2222 = fw.ufw_off_advice(2222)
+    on_2222 = fw.ufw_off_advice(2222, **_SHIPPED)
     assert "`sudo ufw allow 2222/tcp`" in on_2222 and "OpenSSH" not in on_2222
     monkeypatch.delenv("SSH_CONNECTION", raising=False)
-    unknown = fw.ufw_off_advice()
+    unknown = fw.ufw_off_advice(**_SHIPPED)
     assert "`sudo ufw allow OpenSSH` when it listens on port 22" in unknown
     assert "`sudo ufw allow <port>/tcp`" in unknown
     for text in (on_22, on_2222, unknown):
         assert text.index("ufw allow") < text.index("51820/udp") < text.index("sudo ufw enable")
+        assert "another VPN: its own port" in text
 
 
 def test_the_ufw_advice_reads_the_port_this_session_came_in_on(monkeypatch):
     monkeypatch.setenv("SSH_CONNECTION", "192.168.1.5 50122 192.168.1.10 2222")
     assert fw.ssh_session_port() == 2222
-    assert "`sudo ufw allow 2222/tcp`" in fw.ufw_off_advice()
+    assert "`sudo ufw allow 2222/tcp`" in fw.ufw_off_advice(**_SHIPPED)
     monkeypatch.setenv("SSH_CONNECTION", "garbage")
     assert fw.ssh_session_port() is None
     monkeypatch.delenv("SSH_CONNECTION")
     assert fw.ssh_session_port() is None
+
+
+@pytest.mark.parametrize("port", ["\u00b2", "\u0663", "99999", "0", "+22"])
+def test_a_hand_set_session_port_names_no_port_and_raises_nothing(monkeypatch, port):
+    """sshd writes ASCII digits; a variable set by hand may not. A superscript two passes
+    `str.isdigit` and then made `int()` raise inside provision's message. MUTATION: go back
+    to `isdigit()` then `int()` - red (first row)."""
+    monkeypatch.setenv("SSH_CONNECTION", f"192.168.1.5 50122 192.168.1.10 {port}")
+    assert fw.ssh_session_port() is None
+    assert "`sudo ufw allow OpenSSH` when it listens on port 22" in fw.ufw_off_advice(**_SHIPPED)
+
+
+def test_a_stopped_unit_is_enabled_and_started_after_ufw_enable():
+    """`ufw enable` writes ENABLED=yes and runs `ufw-init start` itself; it never touches the
+    systemd unit, so after `systemctl disable --now ufw` the rules it loads are gone at the
+    next boot and systemd keeps saying `inactive`. MUTATION: leave the unit step out - red;
+    name it for a running unit too - red."""
+    for switch_on in (False, True):
+        text = fw.ufw_off_advice(22, switch_on=switch_on, unit_stopped=True)
+        assert (text.index("51820/udp") < text.index("`sudo ufw enable`")
+                < text.index("`sudo systemctl enable --now ufw`")
+                < text.index("vaf server provision"))
+    assert "systemctl" not in fw.ufw_off_advice(22, **_SHIPPED)
+
+
+def test_with_the_switch_on_and_the_unit_stopped_the_switch_goes_off_first():
+    """That pair is what `systemctl disable --now ufw` leaves: ufw.conf still says ENABLED=yes,
+    so `ufw allow` writes the IPv4 rule, fails reloading the chains the stop deleted and never
+    writes the IPv6 one. `sudo ufw disable` first records the allows whole. MUTATION: drop the
+    disable step - red; say it whenever the unit is stopped - red."""
+    text = fw.ufw_off_advice(22, switch_on=True, unit_stopped=True)
+    assert (text.index("`sudo ufw disable`") < text.index("`sudo ufw allow OpenSSH`")
+            < text.index("51820/udp") < text.index("`sudo ufw enable`"))
+    assert "ufw disable" not in fw.ufw_off_advice(22, switch_on=False, unit_stopped=True)
+    assert "ufw disable" not in fw.ufw_off_advice(22, **_SHIPPED)
+
+
+def test_the_advice_reads_ufws_state_the_way_host_firewall_does(monkeypatch):
+    """Called without a state, as provision and the doctor call it, the advice asks the same
+    two readers `host_firewall()` asks. MUTATION: default either state to off - red."""
+    monkeypatch.setattr(fw, "ufw_enabled", lambda conf_path=fw.UFW_CONF: True)
+    monkeypatch.setattr(fw, "_ufw_unit_inactive", lambda: True)
+    text = fw.ufw_off_advice(22)
+    assert "`sudo ufw disable`" in text and "`sudo systemctl enable --now ufw`" in text
+    monkeypatch.setattr(fw, "ufw_enabled", lambda conf_path=fw.UFW_CONF: None)
+    monkeypatch.setattr(fw, "_ufw_unit_inactive", lambda: False)
+    text = fw.ufw_off_advice(22)
+    assert "ufw disable" not in text and "systemctl" not in text
 
 
 def test_ufw_counts_as_installed_by_its_config_file(monkeypatch, tmp_path):

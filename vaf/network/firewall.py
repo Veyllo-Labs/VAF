@@ -45,20 +45,43 @@ UFW_CONF = "/etc/ufw/ufw.conf"
 
 def ssh_session_port() -> Optional[int]:
     """The port this SSH session came in on (the last field of `SSH_CONNECTION`, which sshd
-    sets for the session), or None outside one."""
+    sets for the session), or None outside one. ASCII digits in the port range only: a
+    hand-set variable is not sshd's, and `str.isdigit` alone passes a superscript two, which
+    `int()` then refuses."""
     parts = (os.environ.get("SSH_CONNECTION") or "").split()
-    if len(parts) == 4 and parts[3].isdigit():
-        return int(parts[3])
+    if len(parts) == 4 and parts[3].isascii() and parts[3].isdigit():
+        port = int(parts[3])
+        if 0 < port < 65536:
+            return port
     return None
 
 
-def ufw_off_advice(ssh_port: Optional[int] = None) -> str:
+def ufw_off_advice(ssh_port: Optional[int] = None, *, switch_on: Optional[bool] = None,
+                   unit_stopped: Optional[bool] = None) -> str:
     """What an operator does about a switched-off ufw; `vaf server provision` and `vaf doctor`
     both say it. SSH and the VPN first: `sudo ufw enable` with no allow for them cuts off the
     session that typed it, and the VPN everybody else comes in through. `ufw allow OpenSSH`
     opens port 22 only (its application profile), so an SSH on another port is named by its
-    number: the one this session came in on when it is known."""
+    number: the one this session came in on when it is known.
+
+    The steps follow the state ufw is in, read as `host_firewall()` reads it (`switch_on`:
+    ufw.conf says `ENABLED=yes`; `unit_stopped`: systemd says its unit is `inactive`), both
+    read here when not given. Measured in ufw's own code (0.36, Ubuntu 24.04):
+    - `ufw enable` writes the switch and runs `ufw-init start` itself; it never starts or
+      enables the unit, and only the unit loads the rules at boot. A stopped unit therefore
+      also needs `sudo systemctl enable --now ufw` (its start finds the rules loaded and
+      leaves them), or the rules are gone after the next reboot and systemd keeps saying
+      `inactive`, which VAF reads as off.
+    - With the switch on and the unit stopped, which is what `systemctl disable --now ufw`
+      leaves, `ufw allow` writes the IPv4 rule and then fails reloading the chains the stop
+      deleted, before it writes the IPv6 one. `sudo ufw disable` first turns the switch off
+      (its stop tolerates the missing chains), so the allows are recorded whole.
+    """
     port = ssh_port if ssh_port is not None else ssh_session_port()
+    if switch_on is None:
+        switch_on = ufw_enabled() is True
+    if unit_stopped is None:
+        unit_stopped = _ufw_unit_inactive()
     if port == 22:
         ssh = "`sudo ufw allow OpenSSH`"
     elif port:
@@ -66,10 +89,19 @@ def ufw_off_advice(ssh_port: Optional[int] = None) -> str:
     else:
         ssh = ("`sudo ufw allow OpenSSH` when it listens on port 22, else "
                "`sudo ufw allow <port>/tcp`")
+    if switch_on and unit_stopped:
+        steps = ("run `sudo ufw disable` (ufw's switch is still on while its unit is stopped, "
+                 f"and `ufw allow` fails in that state), then allow SSH ({ssh})")
+    else:
+        steps = f"allow SSH first ({ssh})"
+    start = "`sudo ufw enable`"
+    if unit_stopped:
+        start += (" and `sudo systemctl enable --now ufw` (`ufw enable` does not start a "
+                  "stopped unit, and only the unit loads the rules at boot)")
     return ("If the hosting provider's firewall or the router keeps the port closed, that is "
-            f"enough. Otherwise allow SSH first ({ssh}) and the VPN's own port (WireGuard: "
-            "`sudo ufw allow 51820/udp`, or the ListenPort its configuration names), then "
-            "`sudo ufw enable` and `sudo -v && vaf server provision`.")
+            f"enough. Otherwise {steps} and the VPN's own port (WireGuard: "
+            "`sudo ufw allow 51820/udp`, or the ListenPort its configuration names; another "
+            f"VPN: its own port), then {start}, then `sudo -v && vaf server provision`.")
 
 
 def _sources(*, narrow_lan: bool = False) -> list:

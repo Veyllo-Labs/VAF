@@ -773,11 +773,30 @@ AUTHORITY, never the server certificate** - the leaf is reissued with a fresh ke
 whenever the machine's LAN address changes, which an ordinary DHCP lease does by itself,
 so pinning it would turn a router reboot into a broken room.
 
-An invitation carries the CA FINGERPRINT, not the CA. Joining pins it only if it matches:
+The authority is the LAST certificate of the chain the host serves, which is what a joining
+machine reads from the TLS handshake (`trust.fetch_authority`): the host's local CA while it
+serves VAF's own certificate, the top of the chain when it serves a certificate of its own
+([NETWORK_FEATURES.md](../setup/NETWORK_FEATURES.md#your-own-certificate)), which can be an
+intermediate or, for a certificate given without its chain, the certificate itself. The
+invitation and `/api/a2a/ca.pem` read the same function (`ssl_utils.served_authority`), so
+they name what the host really serves.
+
+An invitation carries the authority's FINGERPRINT, not the authority. Joining pins it only if
+it matches:
 
 ```
 vaf a2a trust wss://<ip>:<port> --ca-fp <sha256>
 ```
+
+The pinning contexts (`trust.client_context`, the guest client's `pinned_context`) demand
+`VERIFY_X509_PARTIAL_CHAIN` next to `VERIFY_X509_STRICT`: verification ends at a pinned
+intermediate only with it, Python 3.13 sets it by default and 3.10 to 3.12 do not (measured:
+"unable to get issuer certificate" without it).
+
+**A changed authority breaks the pins.** The host switching to an own certificate, back to
+VAF's own (`vaf server cert reset`), or renewing its CA (`vaf server ca renew`) changes the
+fingerprint; every machine in a room there runs `vaf a2a trust` again with the new one. The
+host's terminal prints that line, and its settings say so before the change.
 
 There is no way to say "connect anyway". An unverified channel turns a join ticket into a
 credential somebody else can harvest, so "encrypted" without verification means
@@ -909,7 +928,8 @@ rest itself. Two unauthenticated downloads exist for exactly this case:
   verified refetch is the stronger route - a checksum that no longer matches
   the old invitation is the expected outcome, because the host was updated.
 - `https://<host>:<port>/api/a2a/ca.pem` - the authority itself, for a client that
-  wants to pin it without reading the TLS chain.
+  wants to pin it without reading the TLS chain: the last certificate of the served chain,
+  the same one the invitation's fingerprint names.
 
 The same file is the MCP door. `python3 a2a_client.py mcp` serves the verbs to an
 MCP host over stdio (line-delimited JSON-RPC, protocol revision `2024-11-05` - the

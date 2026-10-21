@@ -180,3 +180,149 @@ def test_the_client_context_never_appears_in_the_cli_with_verification_off():
         source = path.read_text(encoding="utf-8")
         assert "CERT_NONE" not in source
         assert "verify_mode" not in source
+
+
+# ── the authority a peer pins is the one the served chain ends in ──────────────
+
+def _serve_tls(cert_file, key_file):
+    """A TLS listener on a free loopback port serving this pair to every connection, until
+    the returned stop is called."""
+    import socket
+    import ssl as _ssl
+    import threading
+
+    from cert_factory import server_context
+    context = server_context(cert_file, key_file)
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(8)
+    listener.settimeout(0.2)
+    stopped = threading.Event()
+
+    def _accept():
+        while not stopped.is_set():
+            try:
+                raw, _addr = listener.accept()
+            except OSError:
+                continue
+            try:
+                with context.wrap_socket(raw, server_side=True) as tls:
+                    tls.recv(1)
+            except (OSError, _ssl.SSLError):
+                pass
+    thread = threading.Thread(target=_accept, daemon=True)
+    thread.start()
+
+    def _stop():
+        stopped.set()
+        thread.join(timeout=5)
+        listener.close()
+    return listener.getsockname()[1], _stop
+
+
+def _own_chain_served(tmp_path, monkeypatch, *, with_root: bool):
+    import vaf.core.a2a.invite as invite_mod
+    import vaf.network.binding as binding
+    from cert_factory import isolated_home, key_pem, own_chain, pem
+
+    monkeypatch.setattr(binding, "get_all_local_ips", lambda: [("lo", "127.0.0.1")])
+    monkeypatch.setattr(binding, "local_interfaces", lambda: [])
+    monkeypatch.setattr(binding, "get_local_network_ip", lambda: "127.0.0.1")
+    isolated_home(tmp_path, monkeypatch, local_network_enabled=True,
+                  local_network_tls_enabled=True)
+    monkeypatch.setattr(trust_mod, "trust_dir", lambda: tmp_path / "trust")
+    (tmp_path / "trust").mkdir()
+    leaf, key, inter, root = own_chain(names=("127.0.0.1",))
+    chain = pem(leaf, inter, root) if with_root else pem(leaf, inter)
+    ssl_utils.install_certificate(chain, key_pem(key))
+    served = ssl_utils.served_certificate()
+    port, stop = _serve_tls(served.cert_path, served.key_path)
+    monkeypatch.setattr(invite_mod, "_effective_port", lambda: (port, True))
+    return invite_mod.lan_endpoint("room-x"), (inter, root), port, stop
+
+
+@pytest.mark.skipif(not hasattr(__import__("ssl").SSLSocket, "get_unverified_chain"),
+                    reason="the peer reads the chain with get_unverified_chain (Python 3.13)")
+@pytest.mark.parametrize("with_root", [True, False])
+def test_an_own_chain_is_the_authority_peers_pin(tmp_path, monkeypatch, with_root):
+    """AC 15: the invitation names the top of the chain this machine serves, and a peer that
+    fetches it over TLS (no ca_file) pins it and then verifies a real handshake. The chain
+    without its root pins the intermediate. MUTATION: keep ca_fingerprint() in lan_endpoint
+    - red (TrustRefused: the invitation names an authority the chain does not end in)."""
+    import socket
+
+    from cert_factory import fingerprint
+    endpoint, (inter, root), port, stop = _own_chain_served(tmp_path, monkeypatch,
+                                                          with_root=with_root)
+    try:
+        expected = fingerprint(root if with_root else inter)
+        assert endpoint["ca_fingerprint"] == expected
+        url = f"wss://127.0.0.1:{port}"
+        _where, pinned = pin_authority(url, expected_fingerprint=endpoint["ca_fingerprint"])
+        assert pinned == expected
+        context = client_context(url)
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as raw:
+            with context.wrap_socket(raw) as tls:
+                assert tls.getpeercert(binary_form=True)
+    finally:
+        stop()
+
+
+def test_the_download_serves_the_authority_the_invitation_names(tmp_path, monkeypatch):
+    """AC 15: /api/a2a/ca.pem and the invitation read one function."""
+    from cert_factory import fingerprint
+    endpoint, (_inter, root), _port, stop = _own_chain_served(tmp_path, monkeypatch,
+                                                             with_root=True)
+    stop()
+    authority = ssl_utils.served_authority()
+    assert authority[1] == endpoint["ca_fingerprint"] == fingerprint(root)
+    assert ssl_utils.fingerprint_of(authority[0]) == fingerprint(root)
+
+
+def test_automatic_authority_is_the_local_ca(tmp_path, monkeypatch):
+    """AC 15: with VAF's own certificate nothing changes for existing invitations: the last
+    certificate of server.pem is the local CA."""
+    import vaf.core.a2a.invite as invite_mod
+    import vaf.network.binding as binding
+    from cert_factory import isolated_home
+    monkeypatch.setattr(binding, "get_all_local_ips", lambda: [("enp3s0", "192.168.1.20")])
+    monkeypatch.setattr(binding, "local_interfaces", lambda: [])
+    monkeypatch.setattr(binding, "get_local_network_ip", lambda: "192.168.1.20")
+    monkeypatch.setattr(binding, "is_allowed_ip", lambda _ip: True)
+    isolated_home(tmp_path, monkeypatch, local_network_enabled=True,
+                  local_network_tls_enabled=True)
+    monkeypatch.setattr(invite_mod, "_effective_port", lambda: (8443, True))
+    ssl_utils.ensure_ssl_certificates()
+
+    assert ssl_utils.served_authority()[1] == ssl_utils.ca_fingerprint()
+    assert invite_mod.lan_endpoint("room-x")["ca_fingerprint"] == ssl_utils.ca_fingerprint()
+
+
+def test_a_pinned_intermediate_verifies_without_the_interpreter_default(anchored, monkeypatch,
+                                                                       tmp_path):
+    """AC 16: Python 3.10-3.12 do not set VERIFY_X509_PARTIAL_CHAIN, and without it a pinned
+    intermediate fails with "unable to get issuer certificate". The context demands it like
+    STRICT. MUTATION: drop the explicit flag in trust.py - red."""
+    import ssl as _ssl
+
+    from cert_factory import handshake, key_pem, own_chain, pem, server_context
+    real = _ssl.create_default_context
+
+    def _like_older_pythons(*a, **kw):
+        context = real(*a, **kw)
+        context.verify_flags &= ~_ssl.VERIFY_X509_PARTIAL_CHAIN
+        return context
+    monkeypatch.setattr(trust_mod.ssl, "create_default_context", _like_older_pythons)
+    leaf, key, inter, _root = own_chain(names=("192.168.1.42",))
+    (tmp_path / "inter.pem").write_bytes(pem(inter))
+    (tmp_path / "chain.pem").write_bytes(pem(leaf, inter))
+    (tmp_path / "leaf.key").write_bytes(key_pem(key))
+    url = "wss://192.168.1.42:8443"
+    pin_authority(url, expected_fingerprint=ssl_utils.fingerprint_of(pem(inter)),
+                  ca_file=tmp_path / "inter.pem")
+
+    context = client_context(url)
+
+    assert context.verify_flags & _ssl.VERIFY_X509_PARTIAL_CHAIN
+    assert context.verify_flags & _ssl.VERIFY_X509_STRICT
+    handshake(server_context(tmp_path / "chain.pem", tmp_path / "leaf.key"), context)

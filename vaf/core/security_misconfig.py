@@ -123,6 +123,50 @@ def _internet_findings(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
     return found
 
 
+def _certificate_findings(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
+    """What is wrong with the certificate every device is served, and with the local CA
+    (vaf/network/ssl_utils.py certificate_state, which creates and writes nothing)."""
+    try:
+        from vaf.network.ssl_utils import RENEW_BEFORE_DAYS, certificate_state
+        state = certificate_state(cfg)
+    except Exception:
+        return []
+    found: List[Dict[str, str]] = []
+    problem = state.get("problem")
+    if problem:
+        found.append(_finding(
+            "high", "network_certificate_unusable",
+            f"The certificate configured for this machine ({state.get('own_path')}) cannot be "
+            f"used: {problem.get('text', '')} VAF serves its own certificate instead, which "
+            "devices that trust only yours warn about. Fix the file, set it again with "
+            "`vaf server cert set`, or go back with `vaf server cert reset`."))
+    facts = state.get("certificate") or {}
+    if facts:
+        days = int(facts.get("days_left", 0))
+        until = str(facts.get("not_after", ""))[:10]
+        renew = ("renew it and run `vaf server cert set`" if state.get("source") == "own"
+                 else "VAF issues a new one at its next start, or now with `vaf server cert "
+                      "reset`")
+        if days < 0:
+            found.append(_finding(
+                "high", "network_certificate_expired",
+                f"The certificate VAF serves expired on {until}, so every device warns: "
+                f"{renew}."))
+        elif days < RENEW_BEFORE_DAYS:
+            found.append(_finding(
+                "medium", "network_certificate_expiring",
+                f"The certificate VAF serves expires on {until}, in {days} days: {renew}."))
+    authority = state.get("local_ca")
+    if authority and not authority.get("restricted"):
+        found.append(_finding(
+            "low", "network_ca_unrestricted",
+            "VAF's local certificate authority may vouch for any name, so a copy of its key "
+            "could impersonate other sites on a device that installed it. `vaf server ca "
+            "renew` replaces it with one restricted to private addresses and names; every "
+            "device then installs the new one."))
+    return found
+
+
 def collect_security_findings(config: Dict[str, Any] | None = None) -> List[Dict[str, str]]:
     """
     Return security findings derived from config.
@@ -168,6 +212,7 @@ def collect_security_findings(config: Dict[str, Any] | None = None) -> List[Dict
         # every server.
         findings.extend(_admission_findings(cfg))
         findings.extend(_internet_findings(cfg))
+        findings.extend(_certificate_findings(cfg))
 
     # The one state that means "somebody the owner never decided about is answered": the
     # channel switch. The expert modes this used to warn about are gone (they said the same

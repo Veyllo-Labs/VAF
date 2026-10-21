@@ -244,7 +244,7 @@ The wizard walks you through:
 
 After 2FA you land in the web UI, logged in, with your agent live. For a screen-by-screen walkthrough see [FIRST_RUN.md](FIRST_RUN.md).
 
-> In **Server** mode (Linux) there is no window opened for you: open the LAN HTTPS URL shown by the installer or by `vaf status` (the certificate is self-signed, so your browser warns once - accept it).
+> In **Server** mode (Linux) there is no window opened for you: open the LAN HTTPS URL shown by the installer or by `vaf status`. The certificate comes from VAF's own authority: install it on the device once (`vaf server ca` prints its fingerprint to compare) instead of accepting the warning ([NETWORK_FEATURES.md](NETWORK_FEATURES.md#eliminating-browser-warnings)).
 
 ---
 

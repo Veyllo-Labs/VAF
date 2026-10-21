@@ -81,6 +81,12 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
                              "could not be recreated. `path` the backup file, `detail` what is "
                              "missing, the proof, the safety backup to go back to and whose "
                              "backup it was",
+    "tls_certificate_changed": "The certificate every TLS listener serves was switched: to the "
+                               "person's own (`vaf server cert set`, Settings), back to VAF's "
+                               "own (`vaf server cert reset`), or the local authority was "
+                               "renewed (`vaf server ca renew`). `username` who did it, "
+                               "`detail` what is served now with the leaf and authority "
+                               "fingerprint prefixes, and where it was done",
     "account_seal_broken": "An account row whose seal does not verify (changed in the database "
                            "outside VAF) was refused for a login, a token or its rights. "
                            "`path` names the check",
@@ -171,8 +177,10 @@ _THROTTLE_S = 5.0
 _last_emit: Dict[str, float] = {}
 # The throttle is for what arrives from outside in bursts (a rejected sender, a scanner). A
 # change a person made to the whole machine is never a burst, and a second one seconds after
-# the first (the same backup restored twice) is a second event, not a repeat.
-_NEVER_THROTTLED = frozenset({"backup_restored", "backup_restore_failed"})
+# the first (the same backup restored twice, a certificate set and set back) is a second
+# event, not a repeat.
+_NEVER_THROTTLED = frozenset({"backup_restored", "backup_restore_failed",
+                              "tls_certificate_changed"})
 _lock = threading.Lock()
 
 

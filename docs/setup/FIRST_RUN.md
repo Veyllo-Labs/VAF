@@ -9,9 +9,11 @@ instead of the login screen. This page walks through it. Installation comes firs
 
 - **Desktop mode:** the tray opens the web UI automatically, or browse to
   `http://localhost:3000`.
-- **Server mode:** open the LAN HTTPS URL shown by the installer / `vaf status` (the
-  certificate is self-signed, so your browser will warn once). See
-  [SERVER_MODE.md](SERVER_MODE.md).
+- **Server mode:** open the LAN HTTPS URL shown by the installer / `vaf status`. The
+  certificate comes from VAF's own authority, which a device trusts only once it is
+  installed: compare its fingerprint with `vaf server ca` and install it instead of clicking
+  the warning away. See [SERVER_MODE.md](SERVER_MODE.md) and
+  [NETWORK_FEATURES.md](NETWORK_FEATURES.md#eliminating-browser-warnings).
 
 The wizard is detected automatically (the backend reports "needs setup" while no admin
 account exists); these bootstrap endpoints are reachable without a login, by design - see
@@ -178,3 +180,8 @@ What you see: every device that trusted the old file warns once. What to do: cop
 `~/.vaf/ssl/ca.pem` over the old one on those devices. The log says the same thing at
 warning level when it happens, and nothing else about your setup changes - your account,
 sessions and settings are untouched.
+
+The same happens after you renew the authority yourself (`vaf server ca renew`, or
+"Restrict to private addresses" in Settings, Local Network, Certificate): install the new
+authority on each device (compare its fingerprint with `vaf server ca` first) and remove the
+old one there. Machines in rooms on this one run `vaf a2a trust` with the new fingerprint.

@@ -2,43 +2,100 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
-Auto-generate self-signed TLS certificates for local network mode.
+The certificate every TLS listener of VAF serves, and the local authority behind it.
 
-When the user enables TLS but has no certificate configured, VAF generates
-a self-signed CA + server certificate pair stored in ~/.vaf/ssl/.
+Which pair is served (``served_certificate``): with TLS on, the person's own certificate
+when ``local_network_ssl_cert`` / ``local_network_ssl_key`` name one that loads, expired or
+not; otherwise VAF's own, issued here by a local CA in ``~/.vaf/ssl/``:
 
-The generated certs are:
-  ca.pem / ca-key.pem       - Local root CA (user can install for trust)
-  server.pem / server-key.pem - Server certificate (signed by local CA)
+  ca.pem / ca-key.pem          - the local CA (devices install ca.pem to trust this machine)
+  server.pem / server-key.pem  - the server certificate it signs, with the CA appended
+  custom/<fp>.pem / <fp>.key   - an own certificate installed through ``install_certificate``
 
-The server cert includes SANs for:
-  - localhost / 127.0.0.1
-  - All detected local network IPs (e.g. 192.168.1.x)
-  - Hostname of the machine
+The two keys hold the person's own pair or nothing; VAF never writes its own paths into
+them, and never replaces an own certificate. One that cannot load (missing, encrypted, the
+key does not belong to it) is answered with VAF's own for that run and an ERROR line, the
+configuration untouched, so fixing the file at that path is enough. An own certificate near
+or past its expiry is still served: serving another authority instead teaches people to
+click warnings away.
 
-Validity: 365 days (auto-renewed on next startup if expired).
+VAF's own server certificate carries ``localhost``, 127.0.0.1, ::1, the host name, the FQDN
+and every LAN and VPN address, is valid for 365 days and is issued again at a start that
+finds it under 30 days, unusable to strict verifiers, or missing an address. The CA is kept
+across those re-issues: every device that installed it keeps trusting the machine.
+
+A NEW CA is restricted (critical NameConstraints, ``_authority_constraints``): it can vouch
+only for private, shared and loopback addresses and for ``localhost``, this machine's names,
+``lan``, ``local``, ``home.arpa`` and ``internal``. A copy of its key then cannot vouch for a
+bank's name on a device that installed it, on clients that enforce the constraints (OpenSSL
+and Python, measured; Chrome on Linux 112 and later, Firefox and Chrome on macOS by their
+documentation). An existing CA is kept as it is, so installed devices keep working;
+``renew_authority`` replaces it when the person chooses.
+
+``inspect_certificate`` is the one check of a certificate somebody wants to serve (key,
+chain, dates, key strength, names); ``install_certificate`` and ``reset_certificate`` switch
+the served pair, and ``reload_certificate`` loads it into every running listener without a
+restart (``register_tls_listener``). ``served_authority`` is what a room peer on another
+machine pins: the last certificate of the served chain.
 
 ``server_tls_options(certfile, keyfile)`` is the one TLS policy of every listener VAF serves
-TLS on (the integrated HTTPS proxy, the desktop's TLS port, ``vaf run --web``).
+TLS on (the integrated HTTPS proxy, the desktop's TLS port, ``vaf run --web``), and
+``register_tls_listener`` sits beside it: every listener built from those options registers
+for the reload.
+
+Named boundaries:
+- Not on the ``vaf`` facade. The served pair is read by three listeners, all of them VAF's
+  own doors (the proxy, the desktop's TLS port, ``vaf run --web``), and by no embedder-facing
+  listener: an embedder who serves an agent runs its own door and its own TLS, the same
+  boundary as ``vaf.network.binding`` ("one HTTP door today", docs/EMBEDDING.md). The one
+  embedder-visible effect goes through ``vaf.room_invitation``, whose ``ca_fingerprint`` is
+  ``served_authority``.
+- The CA key is an unencrypted owner-only file. The constraints limit what a copy can sign;
+  they do not make the key secret again.
+- PKCS#12 files and passphrase-protected keys are refused with the conversion command;
+  VAF runs no ACME client.
+- Name constraints were not measured on Windows or Safari; a client that ignores them is no
+  worse off than with an unrestricted CA.
+- ``vaf run --web`` has no internal channel, so a change made in a terminal reaches it at
+  its next start.
 """
 
-import os
+import ipaddress
 import logging
+import os
+import re
+import socket
 import ssl
+import tempfile
+import threading
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from cryptography import x509
-from cryptography.x509.oid import NameOID, ExtendedKeyUsageOID
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
-import ipaddress
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 logger = logging.getLogger(__name__)
 
 # Default directory for generated certs
 _SSL_DIR_NAME = "ssl"
+# Own certificates installed through install_certificate, named by their fingerprint.
+_CUSTOM_DIR_NAME = "custom"
+
+# The two keys that name the person's own pair. Empty means VAF's own.
+CERT_KEY = "local_network_ssl_cert"
+KEY_KEY = "local_network_ssl_key"
+CERTIFICATE_KEYS = (CERT_KEY, KEY_KEY)
+
+# A certificate with fewer days left is re-issued (VAF's own) or warned about (an own one).
+RENEW_BEFORE_DAYS = 30
+# What one part of an upload may hold. A real chain is a few KiB; a bundle of the leaf, two
+# intermediates and the key stays far under it.
+PEM_PART_MAX_BYTES = 64 * 1024
+CHAIN_MAX_CERTIFICATES = 8
 
 # The TLS 1.2 suites of Mozilla's "intermediate" profile (server-side TLS guidelines 6.0):
 # forward-secret key exchange (ECDHE) and an AEAD cipher, nothing else. OpenSSL's DEFAULT,
@@ -74,7 +131,9 @@ def server_tls_options(certfile: str, keyfile: str) -> dict:
       over TLS 1.2 (the oldest the profile keeps: Android 4.4.2, Firefox 27, Chrome 31,
       IE 11 on Windows 7, Safari 9).
 
-    A context built anew later (a certificate reload) must take the same options.
+    A listener built from these options registers with ``register_tls_listener`` once its
+    ``uvicorn.Server`` exists. The reload loads the new pair into the context uvicorn built
+    from these options, so the policy stays as it is.
     """
     return {
         "ssl_certfile": certfile,
@@ -84,17 +143,143 @@ def server_tls_options(certfile: str, keyfile: str) -> dict:
     }
 
 
-def _get_ssl_dir() -> Path:
-    """Get or create the SSL certificate directory (~/.vaf/ssl/)."""
+# ── the running listeners, for the reload ───────────────────────────────────
+
+# name -> (uvicorn.Server, the event loop it serves on). Name-keyed: a listener started
+# again (the tray's restart) replaces its entry.
+_LISTENERS: Dict[str, Tuple[Any, Any]] = {}
+_LISTENERS_LOCK = threading.Lock()
+# One change of the served pair at a time in this process: install, reset, renewal, reload.
+_CHANGE_LOCK = threading.RLock()
+# How long a listener's own loop may take to load the new pair.
+_RELOAD_WAIT_S = 10.0
+
+
+def register_tls_listener(name: str, server: Any, loop: Any = None) -> None:
+    """Register a running TLS listener so ``reload_certificate`` reaches it.
+
+    ``server`` is the ``uvicorn.Server`` built from ``server_tls_options``; ``loop`` is the
+    event loop it serves on. The new pair is loaded on that loop: OpenSSL does not promise
+    that a context can be changed while another thread runs a handshake on it, and every
+    handshake of the listener runs on its loop."""
+    with _LISTENERS_LOCK:
+        _LISTENERS[str(name)] = (server, loop)
+
+
+def _no_passphrase() -> bytes:
+    """The password callback for every load: never OpenSSL's terminal prompt, which would
+    hang a service that meets an encrypted key."""
+    return b""
+
+
+# ── where the files live ─────────────────────────────────────────────────────
+
+def _ssl_dir_path() -> Path:
+    """The SSL directory (~/.vaf/ssl/), whether or not it exists. Read-only callers use
+    this; nothing here creates it."""
     from vaf.core.config import Config
     vaf_home = Path(Config.get("vaf_home", str(Path.home() / ".vaf")))
-    ssl_dir = vaf_home / _SSL_DIR_NAME
+    return vaf_home / _SSL_DIR_NAME
+
+
+def _get_ssl_dir() -> Path:
+    """The SSL directory, created when missing. For the callers that write into it."""
+    ssl_dir = _ssl_dir_path()
     ssl_dir.mkdir(parents=True, exist_ok=True)
     return ssl_dir
 
 
+def _write_secret(path: Path, data: bytes) -> None:
+    """A private key, owner-only from its first byte (mkstemp's 0600, then a rename): a
+    write followed by a chmod left it readable under the umask in between."""
+    from vaf.core.secure_store import atomic_write_bytes
+    atomic_write_bytes(path, data)
+
+
+def _write_public(path: Path, data: bytes) -> None:
+    """A certificate: public, so the mode of the file it replaces (0644 for a new one)."""
+    from vaf.core.secure_store import atomic_write_bytes
+    atomic_write_bytes(path, data, keep_mode=True)
+
+
+# ── the local authority ──────────────────────────────────────────────────────
+
+# DNS names a restricted CA vouches for besides this machine's own: the names home and
+# office networks give their devices (RFC 8375's home.arpa, the common lan, mDNS's local,
+# and internal, set aside for private use in 2024).
+_PRIVATE_DNS_SUFFIXES = ("lan", "local", "home.arpa", "internal")
+_IPV6_LOOPBACK = ipaddress.ip_network("::1/128")
+_DNS_LABEL = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)$")
+
+
+def _is_dns_name(name: str) -> bool:
+    """A host name an X.509 DNSName can carry: LDH labels (A-labels), at most 253 long."""
+    name = str(name or "").strip().rstrip(".").lower()
+    if not name or len(name) > 253:
+        return False
+    return all(_DNS_LABEL.match(label) for label in name.split("."))
+
+
+def _authority_constraints() -> x509.NameConstraints:
+    """What a new local CA may vouch for: the address ranges the admission check serves
+    (``binding.PRIVATE_RANGES``, ``CGNAT_RANGE``, ``LOCALHOST_RANGES``, plus ::1) and the
+    private DNS names. Both name types are listed: RFC 5280 leaves a type that has no
+    permitted subtree unconstrained, so listing addresses alone would leave every DNS name
+    open (and the other way round)."""
+    from vaf.network.binding import CGNAT_RANGE, LOCALHOST_RANGES, PRIVATE_RANGES
+    networks = [*PRIVATE_RANGES, CGNAT_RANGE, *LOCALHOST_RANGES, _IPV6_LOOPBACK]
+    names: List[str] = ["localhost"]
+    try:
+        from vaf.network.binding import machine_dns_names
+        for name in machine_dns_names():
+            name = str(name).strip().rstrip(".").lower()
+            if _is_dns_name(name) and name not in names:
+                names.append(name)
+    except Exception:
+        pass
+    for suffix in _PRIVATE_DNS_SUFFIXES:
+        if suffix not in names:
+            names.append(suffix)
+    permitted: List[x509.GeneralName] = [x509.IPAddress(n) for n in networks]
+    permitted += [x509.DNSName(n) for n in names]
+    return x509.NameConstraints(permitted_subtrees=permitted, excluded_subtrees=None)
+
+
+def _constraints_of(cert: x509.Certificate) -> Optional[x509.NameConstraints]:
+    try:
+        return cert.extensions.get_extension_for_class(x509.NameConstraints).value
+    except x509.ExtensionNotFound:
+        return None
+
+
+def _subtree_matches(name: x509.GeneralName, subtree: x509.GeneralName) -> bool:
+    if isinstance(name, x509.DNSName) and isinstance(subtree, x509.DNSName):
+        value = name.value.lower().rstrip(".")
+        base = subtree.value.lower().rstrip(".").lstrip(".")
+        return value == base or value.endswith("." + base)
+    if isinstance(name, x509.IPAddress) and isinstance(subtree, x509.IPAddress):
+        address, network = name.value, subtree.value
+        if isinstance(network, (ipaddress.IPv4Network, ipaddress.IPv6Network)):
+            return address.version == network.version and address in network
+    return False
+
+
+def _permits(constraints: Optional[x509.NameConstraints], name: x509.GeneralName) -> bool:
+    """Whether an authority with these constraints may vouch for ``name`` (RFC 5280: a name
+    type without permitted subtrees is open; an excluded subtree always refuses)."""
+    if constraints is None:
+        return True
+    for subtree in constraints.excluded_subtrees or []:
+        if _subtree_matches(name, subtree):
+            return False
+    same_type = [s for s in constraints.permitted_subtrees or [] if type(s) is type(name)]
+    if not same_type:
+        return True
+    return any(_subtree_matches(name, s) for s in same_type)
+
+
 def _generate_ca(ssl_dir: Path) -> tuple:
-    """Generate a local root CA key + certificate."""
+    """Generate a local root CA key + certificate, restricted to private names."""
     ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
     ca_name = x509.Name([
@@ -130,30 +315,73 @@ def _generate_ca(ssl_dir: Path) -> tuple:
             x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()),
             critical=False,
         )
+        # Critical, as RFC 5280 requires of a CA's name constraints: a verifier that does
+        # not understand them must refuse rather than ignore them.
+        .add_extension(_authority_constraints(), critical=True)
         .sign(ca_key, hashes.SHA256())
     )
 
-    # Write CA key
     ca_key_path = ssl_dir / "ca-key.pem"
-    ca_key_path.write_bytes(
-        ca_key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.TraditionalOpenSSL,
-            serialization.NoEncryption(),
-        )
-    )
-    # Restrict permissions (owner only)
-    try:
-        os.chmod(ca_key_path, 0o600)
-    except OSError:
-        pass  # Windows may not support chmod
-
-    # Write CA cert
+    _write_secret(ca_key_path, ca_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    ))
     ca_cert_path = ssl_dir / "ca.pem"
-    ca_cert_path.write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
+    _write_public(ca_cert_path, ca_cert.public_bytes(serialization.Encoding.PEM))
 
     logger.info("Generated local CA: %s", ca_cert_path)
     return ca_key, ca_cert
+
+
+def _key_belongs_to(cert: x509.Certificate, key) -> bool:
+    """Whether a private key is the one whose public half the certificate carries."""
+    def _spki(public_key) -> bytes:
+        return public_key.public_bytes(serialization.Encoding.DER,
+                                       serialization.PublicFormat.SubjectPublicKeyInfo)
+    try:
+        return _spki(cert.public_key()) == _spki(key.public_key())
+    except Exception:
+        return False
+
+
+_NEW_CA_WARNING = ("Generating a new CA: any device that installed the old ca.pem must "
+                   "install the new one.")
+
+
+def _load_or_create_ca(ssl_dir: Path) -> tuple:
+    """The local CA, kept when it is usable and created when it is not.
+
+    Kept across server-certificate rotations on purpose: anybody who installed it in a
+    trust store keeps trusting this machine. Replaced, at WARNING, because every device
+    that trusted the old file has to be handed the new one, when it lacks its key
+    identifier (no strict client can verify it), when its key does not belong to it, or
+    when only one of the two files is there."""
+    ca_key_path = ssl_dir / "ca-key.pem"
+    ca_cert_path = ssl_dir / "ca.pem"
+    if ca_key_path.exists() and ca_cert_path.exists():
+        try:
+            ca_key = serialization.load_pem_private_key(ca_key_path.read_bytes(), password=None)
+            ca_cert = x509.load_pem_x509_certificate(ca_cert_path.read_bytes())
+        except Exception:
+            logger.warning("Failed to load the existing CA at %s. %s", ca_cert_path,
+                           _NEW_CA_WARNING)
+            return _generate_ca(ssl_dir)
+        if not _cert_has_key_identifiers(ca_cert, is_ca=True):
+            logger.warning(
+                "The local CA at %s predates the key identifiers that strict TLS "
+                "verification requires, so no properly verifying client could "
+                "connect. %s", ca_cert_path, _NEW_CA_WARNING)
+            return _generate_ca(ssl_dir)
+        if not _key_belongs_to(ca_cert, ca_key):
+            logger.warning("The CA key at %s does not belong to %s, so nothing it signs "
+                           "verifies. %s", ca_key_path, ca_cert_path, _NEW_CA_WARNING)
+            return _generate_ca(ssl_dir)
+        logger.info("Loaded existing CA certificate")
+        return ca_key, ca_cert
+    if ca_cert_path.exists() or ca_key_path.exists():
+        logger.warning("Only one half of the local CA is in %s. %s", ssl_dir, _NEW_CA_WARNING)
+    return _generate_ca(ssl_dir)
 
 
 def _collect_sans() -> list:
@@ -186,6 +414,24 @@ def _collect_sans() -> list:
     return sans
 
 
+def _sans_inside(constraints: Optional[x509.NameConstraints], sans: list) -> list:
+    """The names a CA with these constraints may sign. One name outside makes a strict
+    verifier refuse the whole certificate (measured: private names plus one public address,
+    "permitted subtree violation"), so a name outside is left off, at WARNING."""
+    if constraints is None:
+        return list(sans)
+    kept, dropped = [], []
+    for name in sans:
+        (kept if _permits(constraints, name) else dropped).append(name)
+    if dropped:
+        logger.warning(
+            "The local CA may not vouch for %s, so the server certificate leaves them out "
+            "and devices reaching VAF at them see a warning. A renamed machine: `vaf server "
+            "ca renew` issues an authority that includes the new name (every device then "
+            "installs it again).", ", ".join(str(n.value) for n in dropped))
+    return kept
+
+
 def _generate_server_cert(ssl_dir: Path, ca_key, ca_cert) -> tuple[Path, Path]:
     """Generate a server certificate signed by the local CA."""
     server_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -195,7 +441,7 @@ def _generate_server_cert(ssl_dir: Path, ca_key, ca_cert) -> tuple[Path, Path]:
         x509.NameAttribute(NameOID.ORGANIZATION_NAME, "VAF"),
     ])
 
-    sans = _collect_sans()
+    sans = _sans_inside(_constraints_of(ca_cert), _collect_sans())
 
     server_cert = (
         x509.CertificateBuilder()
@@ -238,26 +484,19 @@ def _generate_server_cert(ssl_dir: Path, ca_key, ca_cert) -> tuple[Path, Path]:
         .sign(ca_key, hashes.SHA256())
     )
 
-    # Write server key
     server_key_path = ssl_dir / "server-key.pem"
-    server_key_path.write_bytes(
-        server_key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.TraditionalOpenSSL,
-            serialization.NoEncryption(),
-        )
-    )
-    try:
-        os.chmod(server_key_path, 0o600)
-    except OSError:
-        pass
+    _write_secret(server_key_path, server_key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    ))
 
-    # Write server cert (include CA cert for chain)
+    # The certificate with its CA appended: the CA is the last certificate of the chain, the
+    # authority a room peer pins (served_authority).
     server_cert_path = ssl_dir / "server.pem"
-    server_cert_path.write_bytes(
-        server_cert.public_bytes(serialization.Encoding.PEM)
-        + ca_cert.public_bytes(serialization.Encoding.PEM)
-    )
+    _write_public(server_cert_path,
+                  server_cert.public_bytes(serialization.Encoding.PEM)
+                  + ca_cert.public_bytes(serialization.Encoding.PEM))
 
     logger.info("Generated server certificate: %s (SANs: %d entries)", server_cert_path, len(sans))
     return server_cert_path, server_key_path
@@ -284,15 +523,14 @@ def _cert_has_key_identifiers(cert: x509.Certificate, *, is_ca: bool) -> bool:
     return True
 
 
-def _is_cert_valid(cert_path: Path, min_days_remaining: int = 30,
+def _is_cert_valid(cert_path: Path, min_days_remaining: int = RENEW_BEFORE_DAYS,
                    *, is_ca: bool = False) -> bool:
-    """Check if an existing certificate is still valid AND usable.
+    """Whether VAF's own certificate is still valid AND usable.
 
-    Expiry was the only question until a certificate generated before the key
-    identifiers were added turned out to verify nowhere strict. Such a file is
-    reissued rather than kept: an unusable certificate that has not expired is still
-    unusable, and the only cost of replacing it is that whoever installed the old CA in
-    a trust store installs the new one.
+    Expiry was the only question until a certificate generated before the key identifiers
+    were added turned out to verify nowhere strict. Such a file is reissued rather than
+    kept: an unusable certificate that has not expired is still unusable. Asked of VAF's
+    own files only; an own certificate is never replaced.
     """
     try:
         cert_pem = cert_path.read_bytes()
@@ -320,18 +558,261 @@ def _cert_has_required_ip_sans(cert_path: Path, required_ips: set[str]) -> bool:
         return False
 
 
+# ── PEM parts ────────────────────────────────────────────────────────────────
+
+_PEM_BLOCK = re.compile(rb"-----BEGIN ([A-Z0-9 ]+)-----.*?-----END \1-----", re.S)
+
+
+def _pem_blocks(data: bytes) -> Tuple[List[bytes], List[bytes]]:
+    """(certificate blocks, private key blocks) in the order they appear."""
+    certs: List[bytes] = []
+    keys: List[bytes] = []
+    for match in _PEM_BLOCK.finditer(bytes(data or b"")):
+        label = match.group(1).strip()
+        if label == b"CERTIFICATE":
+            certs.append(match.group(0) + b"\n")
+        elif label.endswith(b"PRIVATE KEY"):
+            keys.append(match.group(0) + b"\n")
+    return certs, keys
+
+
+def _key_problem(key_block: bytes) -> Tuple[Optional[str], Any]:
+    """(problem code or None, the loaded key)."""
+    if b"ENCRYPTED" in key_block.split(b"\n", 2)[0] or b"Proc-Type: 4,ENCRYPTED" in key_block:
+        return "key_encrypted", None
+    try:
+        return None, serialization.load_pem_private_key(key_block, password=None)
+    except TypeError:
+        # "Password was not given but private key is encrypted" (measured).
+        return "key_encrypted", None
+    except Exception:
+        return "no_key", None
+
+
+_WEAK_SSL_REASONS = ("TOO_SMALL", "TOO_WEAK", "MD_TOO_WEAK")
+
+
+def _ssl_load_problem(error: Exception) -> str:
+    reason = str(getattr(error, "reason", "") or "")
+    if any(part in reason for part in _WEAK_SSL_REASONS):
+        return "weak_key"
+    if "KEY_VALUES_MISMATCH" in reason:
+        return "key_mismatch"
+    if isinstance(error, ssl.SSLError):
+        return "key_mismatch"
+    return "unreadable"
+
+
+def _load_problem(cert_path: str, key_path: str) -> Optional[str]:
+    """Load a pair into a THROWAWAY server context, as uvicorn will: None when it loads.
+
+    The check comes before any live listener sees the pair, because a failed load into a
+    live context leaves it without a certificate and every later handshake fails (measured
+    on uvicorn 0.49)."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    try:
+        context.load_cert_chain(cert_path, key_path, password=_no_passphrase)
+    except (ssl.SSLError, ValueError, TypeError) as e:
+        return _ssl_load_problem(e)
+    except OSError:
+        return "missing"
+    return None
+
+
+def _same_file(left: str, right: Path) -> bool:
+    try:
+        return (os.path.normcase(str(Path(left).expanduser().resolve()))
+                == os.path.normcase(str(Path(right).resolve())))
+    except Exception:
+        return False
+
+
+def _pair_problem(cert_path: str, key_path: str) -> Optional[str]:
+    """Why a configured pair cannot be served, or None. Never prompts for a passphrase."""
+    if not cert_path or not key_path or not os.path.isfile(cert_path) or not os.path.isfile(key_path):
+        return "missing"
+    try:
+        cert_bytes = Path(cert_path).read_bytes()
+        key_bytes = Path(key_path).read_bytes()
+    except OSError:
+        return "missing"
+    if not _pem_blocks(cert_bytes)[0]:
+        return "unreadable"
+    keys = _pem_blocks(key_bytes)[1]
+    if not keys:
+        return "no_key"
+    problem, _key = _key_problem(keys[0])
+    if problem:
+        return problem
+    return _load_problem(cert_path, key_path)
+
+
+# ── which pair is served ─────────────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class ServedCertificate:
+    """The pair the TLS listeners serve.
+
+    ``source`` is what is served: ``own``, ``automatic`` (VAF's own) or ``none`` (TLS off).
+    ``problem`` is set when the configuration names an own pair that cannot load, and VAF's
+    own is served instead; ``own_cert_path`` is the path the configuration names."""
+    source: str
+    cert_path: Optional[str]
+    key_path: Optional[str]
+    problem: Optional[str] = None
+    own_cert_path: str = ""
+
+
+def _cfg_get(cfg: Optional[dict], key: str, default=None):
+    if cfg is None:
+        from vaf.core.config import Config
+        return Config.get(key, default)
+    return cfg.get(key, default)
+
+
+def _flag(value) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def served_certificate(cfg: Optional[dict] = None) -> ServedCertificate:
+    """Which pair the TLS listeners serve. Read-only: creates and writes nothing.
+
+    TLS off: ``none``. Both keys empty, or naming VAF's own files (an older install wrote
+    them there): ``automatic``. Anything else is the person's own pair, served whenever it
+    loads, expired or not; one that cannot load leaves VAF's own served with ``problem``
+    saying why."""
+    if not _flag(_cfg_get(cfg, "local_network_tls_enabled", False)):
+        return ServedCertificate("none", None, None)
+    ssl_dir = _ssl_dir_path()
+    auto_cert, auto_key = ssl_dir / "server.pem", ssl_dir / "server-key.pem"
+    cert = str(_cfg_get(cfg, CERT_KEY, "") or "").strip()
+    key = str(_cfg_get(cfg, KEY_KEY, "") or "").strip()
+    if (not cert and not key) or (_same_file(cert, auto_cert) and _same_file(key, auto_key)):
+        return ServedCertificate("automatic", str(auto_cert), str(auto_key))
+    problem = _pair_problem(cert, key)
+    if problem is None:
+        return ServedCertificate("own", cert, key, own_cert_path=cert)
+    return ServedCertificate("automatic", str(auto_cert), str(auto_key), problem=problem,
+                             own_cert_path=cert)
+
+
+def _leaf_of(path: Optional[str]) -> Optional[x509.Certificate]:
+    if not path:
+        return None
+    try:
+        blocks = _pem_blocks(Path(path).read_bytes())[0]
+        return x509.load_pem_x509_certificate(blocks[0]) if blocks else None
+    except Exception:
+        return None
+
+
+def _log_own_certificate(cert_path: str) -> None:
+    leaf = _leaf_of(cert_path)
+    if leaf is None:
+        return
+    now = datetime.now(timezone.utc)
+    until = leaf.not_valid_after_utc
+    if until <= now:
+        logger.error("Your certificate %s expired on %s. VAF serves it anyway, so every device "
+                     "warns: renew it and run `vaf server cert set`.", cert_path,
+                     until.date().isoformat())
+    elif (until - now).days < RENEW_BEFORE_DAYS:
+        logger.warning("Your certificate %s expires on %s (%d days left). Renew it and run "
+                       "`vaf server cert set`; VAF does not replace it.", cert_path,
+                       until.date().isoformat(), (until - now).days)
+    else:
+        logger.info("Using your own certificate: %s", cert_path)
+
+
+def _required_ips() -> set:
+    """Every address a device may reach this machine on, LAN and VPN alike, so a changed
+    LAN address or a VPN that came up since the last start gets a certificate that names
+    it. One that went away does not force a new one (a superset still verifies)."""
+    required: set = {"127.0.0.1"}
+    try:
+        from vaf.network.binding import get_all_local_ips
+        required.update(str(ip).strip() for _iface, ip in get_all_local_ips() if str(ip).strip())
+    except Exception:
+        pass
+    return required
+
+
+def _ensure_automatic(*, reissue: bool = False) -> Tuple[str, str]:
+    """VAF's own pair, issued when missing, near its end, unusable or missing an address
+    (``reissue`` issues a new one in any case). The CA is kept (``_load_or_create_ca``)."""
+    required_ips = _required_ips()
+    ssl_dir = _get_ssl_dir()
+    server_cert_path = ssl_dir / "server.pem"
+    server_key_path = ssl_dir / "server-key.pem"
+
+    if not reissue and server_cert_path.exists() and server_key_path.exists():
+        if _is_cert_valid(server_cert_path) and _cert_has_required_ip_sans(server_cert_path, required_ips):
+            logger.info("Using existing auto-generated SSL certificate")
+            return str(server_cert_path), str(server_key_path)
+        if _is_cert_valid(server_cert_path):
+            logger.warning(
+                "Auto-generated SSL cert is valid but SANs do not match current LAN IP(s) %s; regenerating.",
+                sorted(required_ips),
+            )
+
+    ca_key, ca_cert = _load_or_create_ca(ssl_dir)
+    cert_path, key_path = _generate_server_cert(ssl_dir, ca_key, ca_cert)
+    logger.info(
+        "Auto-generated SSL certificates in %s. "
+        "To avoid browser warnings, install %s as a trusted CA.",
+        ssl_dir, ssl_dir / "ca.pem",
+    )
+    return str(cert_path), str(key_path)
+
+
+def ensure_ssl_certificates() -> tuple[Optional[str], Optional[str]]:
+    """The pair to serve, VAF's own issued when it is the one to serve.
+
+    Returns ``(cert_path, key_path)``, or ``(None, None)`` while TLS is off. Never writes
+    ``local_network_ssl_cert`` / ``_key``: they name the person's own pair or nothing, and
+    an own pair is never replaced (``served_certificate``).
+    """
+    from vaf.core.config import Config
+
+    if not Config.get("local_network_tls_enabled", False):
+        return None, None
+
+    # The machine's own names for the HSTS scope, looked up here at the start (getfqdn is a
+    # DNS lookup) rather than on the first answer. A certificate issued below looks them up
+    # again (_collect_sans), and that lookup renews the memo with the names it carries.
+    try:
+        from vaf.network.binding import own_name_labels
+        own_name_labels()
+    except Exception:
+        pass
+
+    with _CHANGE_LOCK:
+        served = served_certificate()
+        if served.source == "own":
+            _log_own_certificate(str(served.cert_path))
+            return served.cert_path, served.key_path
+        if served.problem:
+            logger.error("The configured certificate %s cannot be used: %s Serving VAF's own "
+                         "certificate for this run; fix the file at that path, or go back with "
+                         "`vaf server cert reset`.", served.own_cert_path,
+                         REPORT_REASONS.get(served.problem, served.problem))
+        return _ensure_automatic()
+
+
+# ── reading certificates ─────────────────────────────────────────────────────
+
 def certificate_ip_addresses() -> Optional[set]:
     """The IP addresses the certificate in use names, or None when there is none to read.
 
     For the settings: an address that came up after the start (a VPN switched on later)
     is admitted at once but enters the certificate only at the next start."""
     try:
-        from vaf.core.config import Config
-        path = (Config.get("local_network_ssl_cert") or "").strip()
-        if not path or not os.path.isfile(path):
+        leaf = _leaf_of(served_certificate().cert_path)
+        if leaf is None:
             return None
-        cert = x509.load_pem_x509_certificate(Path(path).read_bytes())
-        san_ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+        san_ext = leaf.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
         return {str(v) for v in san_ext.get_values_for_type(x509.IPAddress)}
     except Exception:
         return None
@@ -339,21 +820,17 @@ def certificate_ip_addresses() -> Optional[set]:
 
 def ca_certificate_path() -> Optional[Path]:
     """Where this machine's local CA lives, or None if it has none yet."""
-    path = _get_ssl_dir() / "ca.pem"
+    path = _ssl_dir_path() / "ca.pem"
     return path if path.exists() else None
 
 
 def ca_fingerprint() -> Optional[str]:
-    """The SHA-256 fingerprint of this machine's CA, lowercase hex, or None.
+    """The SHA-256 fingerprint of this machine's local CA, lowercase hex, or None.
 
-    THE MACHINE'S IDENTITY for anybody connecting from outside. It is stable across
-    server-certificate rotations - the CA is deliberately kept when only the leaf is
-    reissued - which is exactly why a remote peer pins this and never the leaf: an
-    ordinary DHCP lease change reissues the server certificate with a fresh key.
-
-    There was no way to read this before. Provisioning meant copying a file and hoping,
-    with nothing to compare against; a fingerprint is what turns "here is a certificate"
-    into "here is the certificate I meant".
+    What a device that installed VAF's own authority compares, and what ``vaf server ca``
+    and the settings show. Stable across server-certificate rotations: the CA is kept when
+    only the leaf is reissued. What a room peer pins is ``served_authority``, which is this
+    CA while VAF's own certificate is served.
     """
     path = ca_certificate_path()
     if path is None:
@@ -368,6 +845,12 @@ def ca_fingerprint() -> Optional[str]:
 def fingerprint_of(cert_pem: bytes) -> str:
     """The SHA-256 fingerprint of a PEM certificate, lowercase hex."""
     return x509.load_pem_x509_certificate(cert_pem).fingerprint(hashes.SHA256()).hex()
+
+
+def colon_fingerprint(hex_fingerprint: str) -> str:
+    """A fingerprint the way browsers and operating systems show it: AB:CD:..."""
+    value = "".join(ch for ch in str(hex_fingerprint or "").upper() if ch in "0123456789ABCDEF")
+    return ":".join(value[i:i + 2] for i in range(0, len(value), 2))
 
 
 def fingerprints_match(left: str, right: str) -> bool:
@@ -388,133 +871,672 @@ def fingerprints_match(left: str, right: str) -> bool:
     return hmac.compare_digest(a, b)
 
 
-def ensure_ssl_certificates() -> tuple[Optional[str], Optional[str]]:
-    """
-    Ensure SSL certificates exist and are valid.
+def served_authority(cfg: Optional[dict] = None) -> Optional[Tuple[bytes, str]]:
+    """(PEM, SHA-256 hex) of the authority a room peer on another machine pins, or None.
 
-    If TLS is enabled in config but no cert/key paths are set, auto-generates
-    a self-signed certificate pair.  If existing certs are expired or missing,
-    regenerates them.
+    The LAST certificate of the served file, which is what a peer fetches from the TLS
+    chain (``vaf.core.a2a.trust.fetch_authority``): the local CA while VAF's own
+    certificate is served (its ``server.pem`` carries the CA last), the top of the chain
+    an own certificate came with otherwise."""
+    served = served_certificate(cfg)
+    if served.source == "none" or not served.cert_path:
+        return None
+    try:
+        blocks = _pem_blocks(Path(served.cert_path).read_bytes())[0]
+        if not blocks:
+            return None
+        top = x509.load_pem_x509_certificate(blocks[-1])
+    except Exception:
+        return None
+    pem = top.public_bytes(serialization.Encoding.PEM)
+    return pem, top.fingerprint(hashes.SHA256()).hex()
 
-    Returns:
-        (cert_path, key_path) strings, or (None, None) if TLS is not enabled.
-    """
+
+# ── the check of a certificate somebody wants to serve ──────────────────────
+
+# One text per code: the CLI and the logs print it, the settings word the code in the
+# person's language and show this text for a code they do not know.
+REPORT_REASONS: Dict[str, str] = {
+    # errors: nothing is installed
+    "too_large": "A part is larger than 64 KiB or holds more than 8 certificates.",
+    "unreadable": "No PEM certificate could be read.",
+    "missing": "The certificate or key file does not exist.",
+    "no_key": "No private key was found, or it could not be read.",
+    "key_encrypted": ("The private key is protected by a passphrase. VAF needs it without one: "
+                      "`openssl pkey -in key.pem -out plain-key.pem`, or from a PKCS#12 file "
+                      "`openssl pkcs12 -in cert.p12 -noenc -out bundle.pem`."),
+    "key_mismatch": "The private key does not belong to the certificate.",
+    "expired": "The certificate expired on {date}.",
+    "not_yet_valid": "The certificate is valid only from {date}.",
+    "not_for_servers": ("The certificate is not made for a server: it is an authority, or its "
+                        "extended key usage leaves out server authentication."),
+    "weak_key": ("The key is too weak or of a kind browsers do not accept: use RSA with at "
+                 "least 2048 bits, or ECDSA on P-256 or P-384."),
+    "chain_broken": ("The chain is not in order: each certificate must be issued by the one "
+                     "after it, from the server certificate up."),
+    "no_names": ("The certificate names no host name or address (subject alternative names); "
+                 "browsers ignore the common name."),
+    # warnings: installed anyway
+    "expires_soon": "The certificate expires on {date}, in {days} days.",
+    "names_missing": ("The certificate does not name {names}: a device that reaches VAF there "
+                      "gets a certificate warning."),
+    "no_key_identifiers": ("A certificate of the chain lacks its key identifiers, which strict "
+                           "clients (Python since 3.13, VAF's room peers among them) refuse."),
+    "no_issuer": ("Only the server certificate was given. Devices that do not have its issuer "
+                  "fail, and a room peer would pin the certificate itself, so every renewal "
+                  "breaks its pin: add the chain."),
+    "authority_changes": ("The authority changes to {fingerprint}. Devices must trust it, and "
+                          "a machine in a room here runs `vaf a2a trust <address> --ca-fp "
+                          "{fingerprint}` again."),
+}
+
+
+@dataclass
+class ReportItem:
+    code: str
+    text: str
+    params: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"code": self.code, "text": self.text, "params": dict(self.params)}
+
+
+@dataclass
+class CertificateReport:
+    """What the check found. ``errors`` refuse the certificate, ``warnings`` do not;
+    ``facts`` describe it. Never any key material."""
+    errors: List[ReportItem] = field(default_factory=list)
+    warnings: List[ReportItem] = field(default_factory=list)
+    facts: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors
+
+    def codes(self) -> List[str]:
+        return [i.code for i in self.errors] + [i.code for i in self.warnings]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"ok": self.ok,
+                "errors": [i.to_dict() for i in self.errors],
+                "warnings": [i.to_dict() for i in self.warnings],
+                "facts": dict(self.facts)}
+
+
+class CertificateRefused(Exception):
+    """The certificate failed the check; nothing was written."""
+
+    def __init__(self, report: CertificateReport):
+        self.report = report
+        super().__init__("; ".join(i.text for i in report.errors) or "refused")
+
+
+def _item(code: str, **params) -> ReportItem:
+    return ReportItem(code, REPORT_REASONS[code].format(**params), params)
+
+
+def _key_description(public_key) -> Tuple[str, Any]:
+    if isinstance(public_key, rsa.RSAPublicKey):
+        return "RSA", public_key.key_size
+    if isinstance(public_key, ec.EllipticCurvePublicKey):
+        return "EC", {"secp256r1": "P-256", "secp384r1": "P-384",
+                      "secp521r1": "P-521"}.get(public_key.curve.name, public_key.curve.name)
+    return type(public_key).__name__.replace("PublicKey", "").lstrip("_"), None
+
+
+def _weak(public_key) -> bool:
+    """Weaker than browsers accept: RSA under 2048 bits, a curve other than P-256 or P-384,
+    and every other key type (Ed25519, Ed448, DSA), which browsers do not take."""
+    if isinstance(public_key, rsa.RSAPublicKey):
+        return public_key.key_size < 2048
+    if isinstance(public_key, ec.EllipticCurvePublicKey):
+        return public_key.curve.name not in ("secp256r1", "secp384r1")
+    return True
+
+
+def _san_names(cert: x509.Certificate) -> List[x509.GeneralName]:
+    try:
+        ext = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    except x509.ExtensionNotFound:
+        return []
+    return [n for n in ext if isinstance(n, (x509.DNSName, x509.IPAddress))]
+
+
+def _covers(names: List[x509.GeneralName], target: str) -> bool:
+    """Whether a certificate with these names verifies for ``target``: an address exactly,
+    a DNS name exactly or by a wildcard for one label, case-insensitively."""
+    try:
+        address = ipaddress.ip_address(target)
+    except ValueError:
+        address = None
+    if address is not None:
+        return any(isinstance(n, x509.IPAddress) and n.value == address for n in names)
+    wanted = target.lower().rstrip(".")
+    for name in names:
+        if not isinstance(name, x509.DNSName):
+            continue
+        value = name.value.lower().rstrip(".")
+        if value == wanted:
+            return True
+        if value.startswith("*.") and "." in wanted and wanted.split(".", 1)[1] == value[2:]:
+            return True
+    return False
+
+
+def _self_signed(cert: x509.Certificate) -> bool:
+    if cert.issuer != cert.subject:
+        return False
+    try:
+        cert.verify_directly_issued_by(cert)
+        return True
+    except Exception:
+        return False
+
+
+def _facts(certs: List[x509.Certificate]) -> Dict[str, Any]:
+    leaf, top = certs[0], certs[-1]
+    now = datetime.now(timezone.utc)
+    key_type, key_size = _key_description(leaf.public_key())
+    return {
+        "subject": leaf.subject.rfc4514_string(),
+        "issuer": leaf.issuer.rfc4514_string(),
+        "names": [str(n.value) for n in _san_names(leaf)],
+        "not_before": leaf.not_valid_before_utc.isoformat(),
+        "not_after": leaf.not_valid_after_utc.isoformat(),
+        "days_left": (leaf.not_valid_after_utc - now).days,
+        "key_type": key_type,
+        "key_size": key_size,
+        "sha256": leaf.fingerprint(hashes.SHA256()).hex(),
+        "authority_subject": top.subject.rfc4514_string(),
+        "authority_sha256": top.fingerprint(hashes.SHA256()).hex(),
+        "self_signed": _self_signed(leaf),
+        "chain_length": len(certs),
+    }
+
+
+def _default_reach() -> Tuple[List[str], List[str]]:
+    """The addresses devices are admitted on now, and the host name."""
+    addresses: List[str] = []
+    try:
+        from vaf.network.binding import access_addresses
+        addresses = [i.ip for i in access_addresses()]
+    except Exception:
+        pass
+    names: List[str] = []
+    try:
+        host = socket.gethostname().strip().lower()
+        if host and host != "localhost":
+            names.append(host)
+    except Exception:
+        pass
+    return addresses, names
+
+
+def uncovered_names(names: List[x509.GeneralName], addresses: Optional[List[str]] = None,
+                    host_names: Optional[List[str]] = None) -> List[str]:
+    """The admitted addresses and the host name a certificate with these names does not
+    cover, in that order."""
+    if addresses is None or host_names is None:
+        default_addresses, default_names = _default_reach()
+        addresses = default_addresses if addresses is None else addresses
+        host_names = default_names if host_names is None else host_names
+    missing: List[str] = []
+    for target in [*addresses, *host_names]:
+        if target and target not in missing and not _covers(names, target):
+            missing.append(target)
+    return missing
+
+
+@dataclass
+class _Bundle:
+    certs: List[x509.Certificate]
+    key: Any
+
+
+def _read_bundle(cert_pem: bytes, key_pem: bytes, chain_pem: bytes,
+                 report: CertificateReport) -> Optional[_Bundle]:
+    """The certificates (leaf first) and the key of an upload, or None with the error in the
+    report. The certificate part may carry the chain and the key as well (one PEM bundle);
+    a key given on its own wins."""
+    parts = [bytes(cert_pem or b""), bytes(key_pem or b""), bytes(chain_pem or b"")]
+    if any(len(p) > PEM_PART_MAX_BYTES for p in parts):
+        report.errors.append(_item("too_large"))
+        return None
+    cert_blocks, bundled_keys = _pem_blocks(parts[0])
+    _ignored, given_keys = _pem_blocks(parts[1])
+    chain_blocks, chain_keys = _pem_blocks(parts[2])
+    blocks = cert_blocks + chain_blocks
+    if len(blocks) > CHAIN_MAX_CERTIFICATES:
+        report.errors.append(_item("too_large"))
+        return None
+    if not blocks:
+        report.errors.append(_item("unreadable"))
+        return None
+    try:
+        certs = [x509.load_pem_x509_certificate(b) for b in blocks]
+    except Exception:
+        report.errors.append(_item("unreadable"))
+        return None
+    keys = given_keys or bundled_keys or chain_keys
+    key = None
+    if not keys:
+        report.errors.append(_item("no_key"))
+    else:
+        problem, key = _key_problem(keys[0])
+        if problem:
+            report.errors.append(_item(problem))
+    return _Bundle(certs, key)
+
+
+def _pem_of(certs: List[x509.Certificate]) -> bytes:
+    return b"".join(c.public_bytes(serialization.Encoding.PEM) for c in certs)
+
+
+def _key_pem_of(key) -> bytes:
+    return key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                             serialization.NoEncryption())
+
+
+def _throwaway_load(certs: List[x509.Certificate], key) -> Optional[str]:
+    """Load the pair into a throwaway server context, the check uvicorn itself makes. From a
+    private temporary directory (0700, removed at once): the ssl module loads files only."""
+    with tempfile.TemporaryDirectory(prefix="vaf-cert-check-") as tmp:
+        cert_file = Path(tmp) / "cert.pem"
+        key_file = Path(tmp) / "key.pem"
+        cert_file.write_bytes(_pem_of(certs))
+        fd = os.open(str(key_file), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(_key_pem_of(key))
+        return _load_problem(str(cert_file), str(key_file))
+
+
+def inspect_certificate(cert_pem: bytes, key_pem: bytes = b"", chain_pem: bytes = b"", *,
+                        addresses: Optional[List[str]] = None,
+                        host_names: Optional[List[str]] = None,
+                        current_authority: Optional[str] = None) -> CertificateReport:
+    """Check a certificate before it is served. Writes nothing that outlives the call.
+
+    ``addresses`` / ``host_names`` are what the name check holds the certificate to (the
+    admitted addresses and the host name by default); ``current_authority`` is the
+    fingerprint served now (``served_authority`` by default, "" for none)."""
+    report = CertificateReport()
+    bundle = _read_bundle(cert_pem, key_pem, chain_pem, report)
+    if bundle is None:
+        return report
+    certs = bundle.certs
+    leaf = certs[0]
+    report.facts = _facts(certs)
+    now = datetime.now(timezone.utc)
+
+    if leaf.not_valid_after_utc <= now:
+        report.errors.append(_item("expired", date=leaf.not_valid_after_utc.date().isoformat()))
+    elif leaf.not_valid_before_utc > now:
+        report.errors.append(_item("not_yet_valid",
+                                   date=leaf.not_valid_before_utc.date().isoformat()))
+    try:
+        if leaf.extensions.get_extension_for_class(x509.BasicConstraints).value.ca:
+            report.errors.append(_item("not_for_servers"))
+    except x509.ExtensionNotFound:
+        pass
+    if "not_for_servers" not in report.codes():
+        try:
+            usages = leaf.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+            if ExtendedKeyUsageOID.SERVER_AUTH not in list(usages):
+                report.errors.append(_item("not_for_servers"))
+        except x509.ExtensionNotFound:
+            pass
+    if _weak(leaf.public_key()):
+        report.errors.append(_item("weak_key"))
+    for lower, upper in zip(certs, certs[1:]):
+        try:
+            lower.verify_directly_issued_by(upper)
+        except Exception:
+            report.errors.append(_item("chain_broken"))
+            break
+    names = _san_names(leaf)
+    if not names:
+        report.errors.append(_item("no_names"))
+    if bundle.key is not None and "weak_key" not in report.codes():
+        problem = _throwaway_load(certs, bundle.key)
+        if problem and problem not in report.codes():
+            report.errors.append(_item(problem if problem in REPORT_REASONS else "key_mismatch"))
+
+    days = (leaf.not_valid_after_utc - now).days
+    if leaf.not_valid_after_utc > now and days < RENEW_BEFORE_DAYS:
+        report.warnings.append(_item("expires_soon", days=days,
+                                     date=leaf.not_valid_after_utc.date().isoformat()))
+    if names:
+        missing = uncovered_names(names, addresses, host_names)
+        if missing:
+            report.warnings.append(_item("names_missing", names=", ".join(missing)))
+    self_signed = _self_signed(leaf)
+    identifiers = _cert_has_key_identifiers(leaf, is_ca=self_signed) and all(
+        _cert_has_key_identifiers(c, is_ca=True) for c in certs[1:])
+    if not identifiers:
+        report.warnings.append(_item("no_key_identifiers"))
+    if not self_signed and len(certs) == 1:
+        report.warnings.append(_item("no_issuer"))
+    if current_authority is None:
+        served = served_authority()
+        current_authority = served[1] if served else ""
+    top = report.facts["authority_sha256"]
+    if current_authority and not fingerprints_match(current_authority, top):
+        report.warnings.append(_item("authority_changes", fingerprint=colon_fingerprint(top)))
+    return report
+
+
+# ── switching the served pair ────────────────────────────────────────────────
+
+@dataclass
+class ReloadResult:
+    """What the reload did. ``listeners`` maps each registered listener to ``loaded``,
+    ``restored`` (the new pair failed on it and the previous one was loaded back),
+    ``failed`` (neither loads: its handshakes fail until a restart) or ``not_started``.
+    ``refused`` is the problem code when the served pair failed the throwaway check and no
+    listener was touched."""
+    listeners: Dict[str, str] = field(default_factory=dict)
+    refused: Optional[str] = None
+    source: str = "none"
+
+    @property
+    def ok(self) -> bool:
+        return self.refused is None and all(
+            s in ("loaded", "not_started") for s in self.listeners.values())
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"ok": self.ok, "listeners": dict(self.listeners), "refused": self.refused,
+                "source": self.source}
+
+
+@dataclass
+class ChangeResult:
+    """What a change of the served pair did: the check's report (an install), the reload
+    (None when the caller reloads elsewhere), and the authority a room peer pins before and
+    after (for a renewal, the local CA's)."""
+    report: Optional[CertificateReport] = None
+    reload: Optional[ReloadResult] = None
+    old_authority: Optional[str] = None
+    new_authority: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"report": self.report.to_dict() if self.report else None,
+                "reload": self.reload.to_dict() if self.reload else None,
+                "old_authority": self.old_authority, "new_authority": self.new_authority}
+
+
+def _run_on_loop(loop, fn):
+    """Run ``fn`` on the listener's own loop and wait for it; directly when that loop is not
+    running or is the one running here."""
+    import asyncio
+    import concurrent.futures
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if loop is None or running is loop or not getattr(loop, "is_running", lambda: False)():
+        return fn()
+    done: "concurrent.futures.Future" = concurrent.futures.Future()
+
+    def _call() -> None:
+        try:
+            done.set_result(fn())
+        except BaseException as e:  # noqa: BLE001 - handed back to the waiting thread
+            done.set_exception(e)
+
+    loop.call_soon_threadsafe(_call)
+    try:
+        return done.result(timeout=_RELOAD_WAIT_S)
+    except Exception:
+        return "failed"
+
+
+def _reload_listener(server, loop, cert: str, key: str) -> str:
+    config = getattr(server, "config", None)
+    context = getattr(config, "ssl", None)
+    if (context is None or not getattr(server, "started", False)
+            or getattr(server, "should_exit", False)):
+        return "not_started"
+    previous = (getattr(config, "ssl_certfile", None), getattr(config, "ssl_keyfile", None))
+
+    def _load() -> str:
+        try:
+            context.load_cert_chain(cert, key, password=_no_passphrase)
+        except Exception:
+            # The live context lost its pair with the failed load (measured): load the
+            # previous one back so the listener keeps serving it.
+            try:
+                context.load_cert_chain(previous[0], previous[1], password=_no_passphrase)
+                return "restored"
+            except Exception:
+                return "failed"
+        config.ssl_certfile, config.ssl_keyfile = cert, key
+        return "loaded"
+
+    return _run_on_loop(loop, _load)
+
+
+def prune_custom_certificates() -> None:
+    """Remove files in ``custom/`` that neither the configuration nor a running listener
+    names any more. A listener that kept its previous pair keeps that pair's files."""
+    custom = _ssl_dir_path() / _CUSTOM_DIR_NAME
+    if not custom.is_dir():
+        return
+    keep: List[str] = [str(_cfg_get(None, k, "") or "").strip() for k in CERTIFICATE_KEYS]
+    with _LISTENERS_LOCK:
+        listeners = list(_LISTENERS.values())
+    for server, _loop in listeners:
+        config = getattr(server, "config", None)
+        keep += [str(getattr(config, "ssl_certfile", "") or ""),
+                 str(getattr(config, "ssl_keyfile", "") or "")]
+    kept = {os.path.normcase(str(Path(p).resolve())) for p in keep if p}
+    for path in custom.iterdir():
+        try:
+            if path.is_file() and os.path.normcase(str(path.resolve())) not in kept:
+                path.unlink()
+        except OSError:
+            pass
+
+
+def reload_certificate() -> ReloadResult:
+    """Load the served pair into every registered listener, without a restart.
+
+    The pair is resolved as at the start (``ensure_ssl_certificates``) and loaded into a
+    throwaway context first: when that fails, no listener is touched. Then each listener
+    loads it on its own loop; one whose load fails gets its previous pair back. New
+    connections get the new pair, connections already open keep theirs (measured on
+    uvicorn 0.49: ``server.config.ssl`` is the context it built at ``config.load()``).
+    Files of earlier own certificates are removed once nothing names them."""
+    with _CHANGE_LOCK:
+        try:
+            cert, key = ensure_ssl_certificates()
+        except Exception as e:
+            logger.error("Certificate reload: the served pair could not be prepared: %s", e)
+            return ReloadResult(refused="unreadable")
+        if not cert or not key:
+            prune_custom_certificates()
+            return ReloadResult(source="none")
+        source = served_certificate().source
+        problem = _load_problem(cert, key)
+        if problem:
+            logger.error("Certificate reload refused, nothing changed: %s",
+                         REPORT_REASONS.get(problem, problem))
+            return ReloadResult(refused=problem, source=source)
+        with _LISTENERS_LOCK:
+            listeners = list(_LISTENERS.items())
+        result = ReloadResult(source=source)
+        for name, (server, loop) in listeners:
+            result.listeners[name] = _reload_listener(server, loop, cert, key)
+        for name, status in result.listeners.items():
+            if status in ("restored", "failed"):
+                logger.error("Certificate reload: the %s listener %s.", name,
+                             "kept the previous certificate" if status == "restored"
+                             else "has no certificate now; restart VAF")
+        prune_custom_certificates()
+        return result
+
+
+def _authority_now() -> str:
+    served = served_authority()
+    return served[1] if served else ""
+
+
+def _event(detail: str, via: str, username: str) -> None:
+    """The security event of a change: what is served now and, in ``via``, where the change
+    was made ("in Settings", "in a terminal on this machine")."""
+    try:
+        from vaf.core.security_events import log_security_event
+        log_security_event("tls_certificate_changed", username=str(username or ""),
+                           detail=f"{detail}, {via}" if via else detail)
+    except Exception:
+        pass
+
+
+def install_certificate(cert_pem: bytes, key_pem: bytes = b"", chain_pem: bytes = b"", *,
+                        username: str = "", via: str = "", reload: bool = True) -> ChangeResult:
+    """Serve an own certificate from now on.
+
+    Checked first (``inspect_certificate``): any error raises ``CertificateRefused`` with
+    nothing written. Then the chain (leaf first) and the key are written to
+    ``custom/<first 16 hex of the leaf's fingerprint>.pem`` / ``.key`` (the key owner-only
+    from creation), both keys switch in ONE save, and the running listeners reload
+    (``reload=False`` when the caller asks the running VAF to reload instead)."""
+    from vaf.core.config import Config
+    from vaf.core.secure_store import harden_dir
+
+    with _CHANGE_LOCK:
+        report = inspect_certificate(cert_pem, key_pem, chain_pem)
+        if not report.ok:
+            raise CertificateRefused(report)
+        report_probe = CertificateReport()
+        bundle = _read_bundle(cert_pem, key_pem, chain_pem, report_probe)
+        if bundle is None or bundle.key is None:  # pragma: no cover - the check above read it
+            raise CertificateRefused(report_probe)
+        old_authority = _authority_now()
+        leaf_fp = report.facts["sha256"]
+        custom = _get_ssl_dir() / _CUSTOM_DIR_NAME
+        custom.mkdir(parents=True, exist_ok=True)
+        harden_dir(custom)
+        cert_path = custom / f"{leaf_fp[:16]}.pem"
+        key_path = custom / f"{leaf_fp[:16]}.key"
+        _write_secret(key_path, _key_pem_of(bundle.key))
+        _write_public(cert_path, _pem_of(bundle.certs))
+        with Config._locked():
+            cfg = Config.load()
+            cfg[CERT_KEY] = str(cert_path)
+            cfg[KEY_KEY] = str(key_path)
+            Config.save(cfg)
+        reloaded = reload_certificate() if reload else None
+        new_authority = report.facts["authority_sha256"]
+        _event(f"own certificate, leaf {leaf_fp[:16]}, authority {new_authority[:16]}", via,
+               username)
+        return ChangeResult(report=report, reload=reloaded, old_authority=old_authority or None,
+                            new_authority=new_authority)
+
+
+def reset_certificate(*, username: str = "", via: str = "", reload: bool = True) -> ChangeResult:
+    """Go back to VAF's own certificate: both keys cleared in ONE save and a freshly issued
+    server certificate from the KEPT local CA, so every device that installed it keeps
+    trusting this machine (deleting ``~/.vaf/ssl`` would replace the CA too)."""
     from vaf.core.config import Config
 
-    tls_enabled = Config.get("local_network_tls_enabled", False)
-    if not tls_enabled:
-        return None, None
+    with _CHANGE_LOCK:
+        old_authority = _authority_now()
+        with Config._locked():
+            cfg = Config.load()
+            cfg[CERT_KEY] = ""
+            cfg[KEY_KEY] = ""
+            Config.save(cfg)
+        if Config.get("local_network_tls_enabled", False):
+            _ensure_automatic(reissue=True)
+        reloaded = reload_certificate() if reload else None
+        if not reload:
+            prune_custom_certificates()
+        new_authority = _authority_now()
+        _event(f"VAF's own certificate, authority {new_authority[:16]}", via, username)
+        return ChangeResult(reload=reloaded, old_authority=old_authority or None,
+                            new_authority=new_authority or None)
 
-    # The machine's own names for the HSTS scope, looked up here at the start (getfqdn is a
-    # DNS lookup) rather than on the first answer. A certificate issued below looks them up
-    # again (_collect_sans), and that lookup renews the memo with the names it carries.
-    try:
-        from vaf.network.binding import own_name_labels
-        own_name_labels()
-    except Exception:
-        pass
 
-    # Current required IP SANs: every address a device may reach this machine on, LAN
-    # and VPN alike, so a changed LAN address or a VPN that came up since the last
-    # start gets a certificate that names it. One that went away does not force a new
-    # one (a superset still verifies).
-    required_ips: set[str] = {"127.0.0.1"}
-    try:
-        from vaf.network.binding import get_all_local_ips
-        required_ips.update(str(ip).strip() for _iface, ip in get_all_local_ips() if str(ip).strip())
-    except Exception:
-        pass
-
-    # Check if user has manually configured cert paths
-    ssl_cert = (Config.get("local_network_ssl_cert") or "").strip()
-    ssl_key = (Config.get("local_network_ssl_key") or "").strip()
-
-    ssl_dir = _get_ssl_dir()
-    auto_server_cert = (ssl_dir / "server.pem").resolve()
-    auto_server_key = (ssl_dir / "server-key.pem").resolve()
-
-    if ssl_cert and ssl_key and os.path.isfile(ssl_cert) and os.path.isfile(ssl_key):
-        # User-provided certs exist - check validity
-        if _is_cert_valid(Path(ssl_cert)):
-            try:
-                cert_resolved = Path(ssl_cert).resolve()
-                key_resolved = Path(ssl_key).resolve()
-            except Exception:
-                cert_resolved = Path(ssl_cert)
-                key_resolved = Path(ssl_key)
-            is_auto_managed_cert = cert_resolved == auto_server_cert and key_resolved == auto_server_key
-            if is_auto_managed_cert and not _cert_has_required_ip_sans(Path(ssl_cert), required_ips):
-                logger.warning(
-                    "Existing auto-generated SSL cert SANs missing current LAN IP(s) %s; regenerating.",
-                    sorted(required_ips),
-                )
-            else:
-                logger.info("Using user-provided SSL certificate: %s", ssl_cert)
-                return ssl_cert, ssl_key
-        else:
-            logger.warning("User-provided SSL certificate is expired or invalid: %s", ssl_cert)
-            # Fall through to auto-generation
-
-    # Auto-generate certificates
-    ca_key_path = ssl_dir / "ca-key.pem"
-    ca_cert_path = ssl_dir / "ca.pem"
-    server_cert_path = ssl_dir / "server.pem"
-    server_key_path = ssl_dir / "server-key.pem"
-
-    # Check if existing auto-generated certs are still valid
-    if server_cert_path.exists() and server_key_path.exists():
-        if _is_cert_valid(server_cert_path) and _cert_has_required_ip_sans(server_cert_path, required_ips):
-            logger.info("Using existing auto-generated SSL certificate")
-            # Update config with auto-generated paths
-            Config.set("local_network_ssl_cert", str(server_cert_path))
-            Config.set("local_network_ssl_key", str(server_key_path))
-            return str(server_cert_path), str(server_key_path)
-        if _is_cert_valid(server_cert_path):
-            logger.warning(
-                "Auto-generated SSL cert is valid but SANs do not match current LAN IP(s) %s; regenerating.",
-                sorted(required_ips),
-            )
-
-    # Generate new CA if needed. An existing one is kept across server-certificate
-    # rotations on purpose - anybody who installed it in a trust store keeps trusting
-    # this machine - but a CA that no strict client can verify is not doing that job,
-    # so one without its key identifier is replaced and the replacement is announced at
-    # WARNING rather than buried at info: every device that trusted the old file has to
-    # be handed the new one.
-    if ca_key_path.exists() and ca_cert_path.exists():
-        try:
-            ca_key = serialization.load_pem_private_key(
-                ca_key_path.read_bytes(), password=None
-            )
-            ca_cert = x509.load_pem_x509_certificate(ca_cert_path.read_bytes())
-            if not _cert_has_key_identifiers(ca_cert, is_ca=True):
-                logger.warning(
-                    "The local CA at %s predates the key identifiers that strict TLS "
-                    "verification requires, so no properly verifying client could "
-                    "connect. Generating a new CA: any device that installed the old "
-                    "ca.pem must install the new one.",
-                    ca_cert_path,
-                )
-                ca_key, ca_cert = _generate_ca(ssl_dir)
-            else:
-                logger.info("Loaded existing CA certificate")
-        except Exception:
-            logger.warning("Failed to load existing CA, regenerating")
-            ca_key, ca_cert = _generate_ca(ssl_dir)
-    else:
+def renew_authority(*, username: str = "", via: str = "", reload: bool = True) -> ChangeResult:
+    """Replace the local CA with a new, restricted one and issue VAF's own server
+    certificate from it. The old CA key is gone (the new file replaces it); an own
+    certificate stays served. Every device that installed the old CA installs the new one,
+    and machines in rooms here trust the new fingerprint."""
+    with _CHANGE_LOCK:
+        ssl_dir = _get_ssl_dir()
+        old = ca_fingerprint()
         ca_key, ca_cert = _generate_ca(ssl_dir)
+        _generate_server_cert(ssl_dir, ca_key, ca_cert)
+        new = ca_cert.fingerprint(hashes.SHA256()).hex()
+        reloaded = None
+        if reload and served_certificate().source == "automatic":
+            reloaded = reload_certificate()
+        _event(f"authority renewed, old {str(old or '')[:16]}, new {new[:16]}", via, username)
+        return ChangeResult(reload=reloaded, old_authority=old, new_authority=new)
 
-    # Generate server certificate
-    cert_path, key_path = _generate_server_cert(ssl_dir, ca_key, ca_cert)
 
-    # Update config with auto-generated paths
-    Config.set("local_network_ssl_cert", str(cert_path))
-    Config.set("local_network_ssl_key", str(key_path))
+def without_certificate_keys(payload):
+    """A Settings save without the two certificate keys. They change only through the
+    checked route (``install_certificate``, behind a second factor): a save sends the whole
+    page, and a stolen session could otherwise point them at a file it planted. Both save
+    lanes pass it: the WebSocket ``save_config`` and ``PATCH /api/config``."""
+    if isinstance(payload, dict) and any(k in payload for k in CERTIFICATE_KEYS):
+        return {k: v for k, v in payload.items() if k not in CERTIFICATE_KEYS}
+    return payload
 
-    logger.info(
-        "Auto-generated SSL certificates in %s. "
-        "To avoid browser warnings, install %s as a trusted CA.",
-        ssl_dir, ca_cert_path,
-    )
 
-    return str(cert_path), str(key_path)
+# ── the state, for the settings, the CLI and the doctor ─────────────────────
+
+def local_authority() -> Optional[Dict[str, Any]]:
+    """The local CA: path, fingerprint, valid until, restricted. Read-only."""
+    path = ca_certificate_path()
+    if path is None:
+        return None
+    try:
+        cert = x509.load_pem_x509_certificate(path.read_bytes())
+    except Exception:
+        return None
+    return {"path": str(path), "fingerprint": cert.fingerprint(hashes.SHA256()).hex(),
+            "not_after": cert.not_valid_after_utc.isoformat(),
+            "restricted": _constraints_of(cert) is not None}
+
+
+def certificate_state(cfg: Optional[dict] = None, *, step_up_required: bool = False) -> Dict[str, Any]:
+    """Everything the settings, ``vaf server cert show``, ``vaf server ca`` and the doctor
+    show about the served certificate. Read-only: creates nothing, writes nothing."""
+    served = served_certificate(cfg)
+    state: Dict[str, Any] = {
+        "tls": served.source != "none",
+        "source": served.source,
+        "own_configured": bool(served.own_cert_path),
+        "own_path": served.own_cert_path or None,
+        "problem": ({"code": served.problem, "text": REPORT_REASONS.get(served.problem, "")}
+                    if served.problem else None),
+        "certificate": None,
+        "authority": None,
+        "local_ca": local_authority(),
+        "uncovered": [],
+        "step_up_required": bool(step_up_required),
+    }
+    if served.source == "none" or not served.cert_path:
+        return state
+    try:
+        blocks = _pem_blocks(Path(served.cert_path).read_bytes())[0]
+        certs = [x509.load_pem_x509_certificate(b) for b in blocks]
+    except Exception:
+        certs = []
+    if not certs:
+        return state
+    facts = _facts(certs)
+    state["certificate"] = facts
+    state["authority"] = {"subject": facts["authority_subject"],
+                          "fingerprint": facts["authority_sha256"]}
+    addresses = None
+    if cfg is not None:
+        try:
+            from vaf.network.binding import access_addresses
+            addresses = [i.ip for i in access_addresses(cfg)]
+        except Exception:
+            addresses = []
+    state["uncovered"] = uncovered_names(_san_names(certs[0]), addresses)
+    return state

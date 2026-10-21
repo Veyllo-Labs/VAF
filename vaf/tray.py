@@ -418,14 +418,17 @@ def start_uvicorn(wait_for_db: bool = True):
         uvicorn_loop = loop
         log("Tray", "Event loop created for Uvicorn")
 
-        # --- ENSURE SSL CERTS EXIST BEFORE STARTING ---
-        # If TLS enabled but no certs, generate them NOW so they are in config before uvicorn reads it
+        # --- THE PAIR TO SERVE, BEFORE ANY LISTENER STARTS ---
+        # ensure_ssl_certificates() decides it (the person's own certificate, or VAF's own,
+        # issued when needed) and both TLS listeners below take what it returns. With Local
+        # Network off no TLS listener starts, whatever the configuration names.
+        ssl_cert, ssl_key = None, None
         if Config.get("local_network_enabled", False) and Config.get("local_network_tls_enabled", False):
             try:
                 from vaf.network.ssl_utils import ensure_ssl_certificates
-                cert_p, key_p = ensure_ssl_certificates()
-                if cert_p and key_p:
-                    log("Tray", "SSL certificates verified/generated successfully")
+                ssl_cert, ssl_key = ensure_ssl_certificates()
+                if ssl_cert and ssl_key:
+                    log("Tray", f"TLS certificate ready: {ssl_cert}")
             except Exception as ssl_err:
                 log("Tray", f"Pre-startup SSL setup failed: {ssl_err}")
 
@@ -443,36 +446,33 @@ def start_uvicorn(wait_for_db: bool = True):
         local_network_enabled = Config.get("local_network_enabled", False)
         host = "127.0.0.1" if local_network_enabled else "127.0.0.1"
         tls_enabled = Config.get("local_network_tls_enabled", False)
-        ssl_cert = (Config.get("local_network_ssl_cert") or "").strip()
-        ssl_key = (Config.get("local_network_ssl_key") or "").strip()
         # Mask the /ws?token=<jwt> query param out of uvicorn's access log.
         from vaf.core.log_helper import WS_MAX_SIZE_BYTES, redacted_uvicorn_log_config
         _log_cfg = redacted_uvicorn_log_config()
         if tls_enabled and ssl_cert and ssl_key:
-            import os
-            if os.path.isfile(ssl_cert) and os.path.isfile(ssl_key):
-                print(f"[Tray] Starting Uvicorn with TLS (HTTPS/WSS) on port 8001 ({host})...")
-                log("Tray", f"Initializing Uvicorn Config with TLS ({host}:8001)...")
-                # The TLS policy every listener shares. The door limits of the HTTPS proxy
-                # (vaf/network/door.py) stay off this port and 8005: only this machine
-                # reaches them, and they keep uvicorn's forwarded-header defaults.
-                from vaf.network.ssl_utils import server_tls_options
-                config = uvicorn.Config(
-                    app, host=host, port=8001, log_level="info", use_colors=False,
-                    log_config=_log_cfg,
-                    **server_tls_options(ssl_cert, ssl_key),
-                    ws_max_size=WS_MAX_SIZE_BYTES,
-                )
-            else:
-                log("Tray", "TLS enabled but cert/key files missing or invalid; starting without TLS")
-                config = uvicorn.Config(app, host=host, port=8001, log_level="info", use_colors=False, log_config=_log_cfg,
-                                        ws_max_size=WS_MAX_SIZE_BYTES)
+            print(f"[Tray] Starting Uvicorn with TLS (HTTPS/WSS) on port 8001 ({host})...")
+            log("Tray", f"Initializing Uvicorn Config with TLS ({host}:8001)...")
+            # The TLS policy every listener shares. The door limits of the HTTPS proxy
+            # (vaf/network/door.py) stay off this port and 8005: only this machine
+            # reaches them, and they keep uvicorn's forwarded-header defaults.
+            from vaf.network.ssl_utils import register_tls_listener, server_tls_options
+            config = uvicorn.Config(
+                app, host=host, port=8001, log_level="info", use_colors=False,
+                log_config=_log_cfg,
+                **server_tls_options(ssl_cert, ssl_key),
+                ws_max_size=WS_MAX_SIZE_BYTES,
+            )
+            server = uvicorn.Server(config)
+            # A changed certificate is loaded into this listener without a restart.
+            register_tls_listener("desktop", server, loop)
         else:
+            if tls_enabled:
+                log("Tray", "TLS enabled but no certificate to serve; starting without TLS")
             print(f"[Tray] Starting Uvicorn thread on port 8001 ({host})...")
             log("Tray", f"Initializing Uvicorn Config ({host}:8001)...")
             config = uvicorn.Config(app, host=host, port=8001, log_level="info", use_colors=False, log_config=_log_cfg,
                                     ws_max_size=WS_MAX_SIZE_BYTES)
-        server = uvicorn.Server(config)
+            server = uvicorn.Server(config)
         uvicorn_server = server
 
         # --- START INTEGRATED HTTPS PROXY (single entry point for HTTPS, no Nginx required) ---
@@ -480,7 +480,7 @@ def start_uvicorn(wait_for_db: bool = True):
         # run_https_proxy tries that port and transparently falls back to 8443 when it is privileged
         # (<1024, e.g. 443) and cannot be bound without admin/root — on EVERY platform, not just Windows.
         # The effective port + bind result land in vaf.network.runtime_status so the UI shows the real URL.
-        if tls_enabled and ssl_cert and ssl_key and os.path.isfile(ssl_cert) and os.path.isfile(ssl_key):
+        if tls_enabled and ssl_cert and ssl_key:
             try:
                 from vaf.network.https_proxy import run_https_proxy
                 https_port = Config.get("local_network_https_port", 443)

@@ -85,17 +85,23 @@ def lan_endpoint(room_id: str) -> Dict[str, str]:
     an interface): under "VPN only" the local network, on a rented server often the
     hosting provider's private one, is refused the same way, and the invitation would
     only hand out the server's private address.
+
+    The fingerprint is the authority a peer fetches from the chain this machine serves
+    (`ssl_utils.served_authority`): the local CA, or the top of an own certificate's chain.
+    The local CA alone would name an authority the served chain does not end in, and every
+    `vaf a2a trust` from another machine would refuse.
     """
     try:
         from vaf.core.config import Config
         from vaf.network.binding import get_local_network_ip, is_allowed_ip
-        from vaf.network.ssl_utils import ca_fingerprint
+        from vaf.network.ssl_utils import served_authority
 
         if not (Config.get_bool("local_network_enabled", False)
                 and Config.get_bool("local_network_tls_enabled", False)):
             return {}
         host = str(get_local_network_ip() or "").strip()
-        fingerprint = str(ca_fingerprint() or "").strip()
+        authority = served_authority()
+        fingerprint = str(authority[1] if authority else "").strip()
         if not host or not fingerprint or not is_allowed_ip(host):
             return {}
         port, confirmed = _effective_port()

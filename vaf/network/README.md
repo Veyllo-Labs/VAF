@@ -89,9 +89,16 @@ It never dials loopback, where a tokenless request is the owner.
   arrives, both ways (a request body at most 128 MiB and never silent for 60 s), passes a
   compressed answer through as it is, and accepts a WebSocket only once the backend accepted
   the relayed handshake. It runs on `door.py`'s settings and `ssl_utils.server_tls_options`.
-- **ssl_utils.py**: the local CA and the server certificate, re-issued when an address is
-  missing from it, and `server_tls_options(cert, key)`, the one TLS policy of every listener
-  VAF serves TLS on (TLS 1.2 with forward-secret AEAD suites only, and TLS 1.3).
+- **ssl_utils.py**: the served certificate, the person's own when one is configured and
+  loads (never replaced, expired or not) or VAF's own, issued by a local CA that is
+  restricted to private names when it is created and re-issued when an address is missing
+  (`served_certificate`, `ensure_ssl_certificates`); the check of a certificate somebody
+  wants to serve (`inspect_certificate`), the switch (`install_certificate`,
+  `reset_certificate`, `renew_authority`) and the live reload into every running listener
+  (`register_tls_listener`, `reload_certificate`); `served_authority`, what a room peer
+  pins; and `server_tls_options(cert, key)`, the one TLS policy of every listener VAF serves
+  TLS on (TLS 1.2 with forward-secret AEAD suites only, and TLS 1.3). Named boundary: not on
+  the facade, its three listeners are VAF's own doors.
 - **egress.py**: outbound fetches that never reach this machine.
 - **oauth_redirect.py**, **runtime_status.py**, **connection_tracker.py**: OAuth callback
   addresses, the port the proxy really bound, the live connection map.

@@ -129,16 +129,17 @@ def test_a_host_without_the_file_names_the_repository(client, monkeypatch):
     assert "raw.githubusercontent.com" in response.json()["detail"]
 
 
-def test_the_ca_download_is_honest_about_a_missing_authority(client, monkeypatch, tmp_path):
-    monkeypatch.setattr("vaf.network.ssl_utils.ca_certificate_path", lambda: None)
+def test_the_ca_download_is_honest_about_a_missing_authority(client, monkeypatch):
+    """The download serves the authority the invitation names (served_authority), and says
+    so when there is none."""
+    monkeypatch.setattr("vaf.network.ssl_utils.served_authority", lambda: None)
     assert client.get("/api/a2a/ca.pem").status_code == 404
 
-    pem = tmp_path / "ca.pem"
-    pem.write_bytes(b"-----BEGIN CERTIFICATE-----\nab12\n-----END CERTIFICATE-----\n")
-    monkeypatch.setattr("vaf.network.ssl_utils.ca_certificate_path", lambda: pem)
+    pem = b"-----BEGIN CERTIFICATE-----\nab12\n-----END CERTIFICATE-----\n"
+    monkeypatch.setattr("vaf.network.ssl_utils.served_authority", lambda: (pem, "ab" * 32))
     response = client.get("/api/a2a/ca.pem")
     assert response.status_code == 200
-    assert response.content == pem.read_bytes()
+    assert response.content == pem
 
 
 def test_the_briefing_offers_the_mcp_door_beside_the_shell(circle, monkeypatch):

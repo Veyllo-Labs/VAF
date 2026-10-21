@@ -93,7 +93,7 @@ def test_the_printed_address_comes_from_the_certificate_s_own_source(monkeypatch
     import vaf.core.a2a.invite as invite_mod
 
     monkeypatch.setattr("vaf.network.binding.get_local_network_ip", lambda: "192.168.7.7")
-    monkeypatch.setattr("vaf.network.ssl_utils.ca_fingerprint", lambda: "ab" * 32)
+    monkeypatch.setattr("vaf.network.ssl_utils.served_authority", lambda: (b"", "ab" * 32))
     monkeypatch.setattr("vaf.core.config.Config.get",
                         staticmethod(lambda key, default=None: {
                             "local_network_enabled": True,
@@ -129,7 +129,7 @@ def test_no_lan_address_is_handed_out_while_local_network_is_off(monkeypatch):
     import vaf.core.a2a.invite as invite_mod
 
     monkeypatch.setattr("vaf.network.binding.get_local_network_ip", lambda: "192.168.7.7")
-    monkeypatch.setattr("vaf.network.ssl_utils.ca_fingerprint", lambda: "ab" * 32)
+    monkeypatch.setattr("vaf.network.ssl_utils.served_authority", lambda: (b"", "ab" * 32))
     monkeypatch.setattr("vaf.core.config.Config.get",
                         staticmethod(lambda key, default=None: {
                             "local_network_enabled": False,
@@ -155,7 +155,7 @@ def test_the_lan_address_is_handed_out_only_while_it_is_admitted(monkeypatch, po
 
     monkeypatch.setattr("vaf.network.binding.get_local_network_ip", lambda: "192.168.7.7")
     monkeypatch.setattr("vaf.network.binding.local_interfaces", lambda: [])
-    monkeypatch.setattr("vaf.network.ssl_utils.ca_fingerprint", lambda: "ab" * 32)
+    monkeypatch.setattr("vaf.network.ssl_utils.served_authority", lambda: (b"", "ab" * 32))
     monkeypatch.setattr(Config, "load", classmethod(lambda cls: dict(policy)))
     monkeypatch.setattr(Config, "get",
                         classmethod(lambda cls, key, default=None: {

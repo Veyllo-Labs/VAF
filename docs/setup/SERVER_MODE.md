@@ -179,7 +179,7 @@ VAF listens on `https://<LAN-IP>:8443` in the usual case: the configured HTTPS p
 
 **Private networks only.** The access port answers this machine, your local network and the VPNs you admit, and refuses every other address before any page. Never forward it on your router or publish it through a tunnel service.
 
-**TLS certificate:** VAF auto-generates a self-signed certificate on first start (`~/.vaf/ssl/`). Browsers will show a certificate warning on the first visit - this is expected for local networks. Accept the exception once; the certificate is then trusted for that browser.
+**TLS certificate:** VAF issues its own certificate on first start, signed by a local certificate authority it creates in `~/.vaf/ssl/`. A device that does not trust that authority warns on the first visit. Do not click the warning away: install the authority on the device (Settings, Local Network, Certificate, "Download", or `~/.vaf/ssl/ca.pem`) after comparing its fingerprint with the one `vaf server ca` prints on the server ([NETWORK_FEATURES.md](NETWORK_FEATURES.md#eliminating-browser-warnings)). A certificate of your own (a company authority, Let's Encrypt): `vaf server cert set --cert FILE --key FILE`, checked first and served without a restart ([NETWORK_FEATURES.md](NETWORK_FEATURES.md#your-own-certificate)).
 
 **Authentication:** All access (local and LAN) requires login. Credentials are set during the initial setup wizard at `https://<LAN-IP>:8443`, which first asks for the setup code that `vaf setup code` prints in an SSH session on the server (the browser is not on the machine itself, see [FIRST_RUN.md](FIRST_RUN.md#1-create-admin-account)); `vaf setup` creates the admin in the terminal instead.
 
@@ -365,12 +365,14 @@ Common causes: Python venv path changed after a `git pull` to a different direct
 - Without firewalld and ufw, VAF adds iptables rules, which last until the next reboot: the service cannot gain root to add them again, so after a reboot run `sudo -v && vaf server provision`.
 
 **Certificate regeneration:**
-If the TLS certificate has expired or the LAN IP changed:
+VAF's own certificate is issued again at a start that finds it with under 30 days left or
+missing a current address. To issue a new one at once, without a restart:
 ```bash
-rm -rf ~/.vaf/ssl/
-systemctl --user restart vaf
+vaf server cert reset
 ```
-VAF regenerates the certificate on the next start.
+It comes from the same authority, so devices that installed it keep trusting the server.
+Do not delete `~/.vaf/ssl/`: that also replaces the authority every device trusts. A
+certificate of your own is never replaced; `vaf doctor` warns 30 days before it expires.
 
 **LAN IP changed (DHCP):**
-The access URL, the certificate's IP SANs and the subnet-scoped firewall rule are all bound to the address. Give the server a static LAN IP, or reserve its address in the router's DHCP settings; `vaf server provision` warns during installation when the address looks DHCP-assigned. After an IP change: regenerate the certificate (`rm -rf ~/.vaf/ssl/` + restart, see above) and re-run `vaf server provision` so the firewall rule matches the new subnet. Alternatively use the hostname instead of the IP: the auto-generated certificate carries the machine's hostname and FQDN as DNS SANs, so a name that resolves on your network keeps working across IP changes (note the certificate is NOT re-issued when the hostname itself changes - only IP changes trigger regeneration).
+The access URL, the certificate's IP SANs and the subnet-scoped firewall rule are all bound to the address. Give the server a static LAN IP, or reserve its address in the router's DHCP settings; `vaf server provision` warns during installation when the address looks DHCP-assigned. After an IP change: restart VAF or run `vaf server cert reset` so the certificate names the new address (see above), and re-run `vaf server provision` so the firewall rule matches the new subnet. Alternatively use the hostname instead of the IP: the auto-generated certificate carries the machine's hostname and FQDN as DNS SANs, so a name that resolves on your network keeps working across IP changes (note the certificate is NOT re-issued when the hostname itself changes - only IP changes trigger regeneration).

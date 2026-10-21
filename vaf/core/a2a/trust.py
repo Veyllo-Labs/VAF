@@ -10,7 +10,10 @@ the human in the invitation, so the certificate cannot vouch for itself.
 WHAT IS PINNED IS THE AUTHORITY, NEVER THE SERVER CERTIFICATE. The leaf is reissued with
 a fresh key whenever the machine's LAN address changes, which an ordinary DHCP lease does
 on its own; pinning it would turn a router reboot into a broken room. The CA is kept
-across those rotations on purpose, so it is the stable thing to point at.
+across those rotations on purpose, so it is the stable thing to point at. The authority is
+the last certificate of the chain the host serves: its local CA, or the top of the chain of
+a certificate of the host's own (`ssl_utils.served_authority`), which may be an
+intermediate.
 
 There is no way to say "connect anyway". A connection whose certificate cannot be
 verified is refused, and a test greps this module for the shapes that would undo that -
@@ -138,5 +141,10 @@ def client_context(url: str) -> ssl.SSLContext:
     # failure the hostile-env script cannot catch, because it shares the
     # interpreter with the developer.
     context.verify_flags |= ssl.VERIFY_X509_STRICT
+    # PARTIAL_CHAIN for the same reason: the pinned authority may be an intermediate (the
+    # top of an own certificate's chain), and verification ends at a pinned certificate only
+    # with this flag, which 3.13 sets by default and 3.10-3.12 do not (measured: "unable to
+    # get issuer certificate" without it).
+    context.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
     context.check_hostname = False
     return context

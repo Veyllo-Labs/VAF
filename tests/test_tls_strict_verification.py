@@ -156,7 +156,7 @@ def test_a_legacy_ca_is_replaced_rather_than_reused(tmp_path, monkeypatch, caplo
     ssl_dir.mkdir()
     legacy = _legacy_ca(ssl_dir)
 
-    monkeypatch.setattr(ssl_utils, "_get_ssl_dir", lambda: ssl_dir)
+    monkeypatch.setattr(ssl_utils, "_ssl_dir_path", lambda: ssl_dir)
     # TLS on, or ensure_ssl_certificates returns before it looks at anything.
     stored = {"local_network_tls_enabled": True}
     from vaf.core.config import Config
@@ -182,7 +182,7 @@ def test_a_good_ca_is_kept_across_a_run(tmp_path, monkeypatch):
     this machine: a CA that carries its identifier is NOT replaced."""
     ssl_dir = tmp_path / "ssl"
     ssl_dir.mkdir()
-    monkeypatch.setattr(ssl_utils, "_get_ssl_dir", lambda: ssl_dir)
+    monkeypatch.setattr(ssl_utils, "_ssl_dir_path", lambda: ssl_dir)
     # TLS on, or ensure_ssl_certificates returns before it looks at anything.
     stored = {"local_network_tls_enabled": True}
     from vaf.core.config import Config

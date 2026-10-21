@@ -208,9 +208,9 @@ def _step_up(h, user_id, code):
 
     from fastapi import HTTPException
 
-    from vaf.api.security_routes import _verify_admin_totp
+    from vaf.api.security_routes import verify_admin_totp
     try:
-        asyncio.run(_verify_admin_totp({"user_id": user_id}, code))
+        asyncio.run(verify_admin_totp({"user_id": user_id}, code))
         return 200
     except HTTPException as e:
         return e.status_code
@@ -391,7 +391,7 @@ def test_the_step_up_records_the_callers_address():
     from pathlib import Path
     src = (Path(__file__).resolve().parents[1] / "vaf" / "api" / "security_routes.py").read_text(
         encoding="utf-8")
-    assert src.count('await _verify_admin_totp(user, str(payload.get("code") or ""), ip=_caller_ip(request))') == 3
+    assert src.count('await verify_admin_totp(user, str(payload.get("code") or ""), ip=_caller_ip(request))') == 3
 
 
 # ── an attempt that neither failed nor succeeded is taken back ───────────────────

@@ -254,7 +254,7 @@ def test_a_new_vpn_address_gets_a_new_certificate(monkeypatch, tmp_path):
               "local_network_ssl_key": ""}
     monkeypatch.setattr(Config, "get", classmethod(lambda cls, k, d=None: values.get(k, d)))
     monkeypatch.setattr(Config, "set", classmethod(lambda cls, k, v: values.__setitem__(k, v)))
-    monkeypatch.setattr(ssl_utils, "_get_ssl_dir", lambda: tmp_path)
+    monkeypatch.setattr(ssl_utils, "_ssl_dir_path", lambda: tmp_path)
 
     addresses = [("enp3s0", "192.168.2.10"), ("wg0", "10.8.0.1")]
     monkeypatch.setattr(binding, "get_all_local_ips", lambda: list(addresses))

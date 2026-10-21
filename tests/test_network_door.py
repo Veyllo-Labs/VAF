@@ -996,6 +996,8 @@ def test_both_doors_use_the_options_and_the_loop(monkeypatch, tmp_path, door_loo
     monkeypatch.setattr(binding, "pick_bindable_port", lambda _host, port, _fallback: port)
     monkeypatch.setattr(runtime_status, "set_proxy_bound", lambda *_a: None)
     monkeypatch.setattr(runtime_status, "set_proxy_failed", lambda *_a: None)
+    from vaf.network import ssl_utils as _ssl_utils
+    monkeypatch.setattr(_ssl_utils, "_LISTENERS", {})
     proxy.run_https_proxy("127.0.0.1", 18443, "cert.pem", "key.pem")
     _assert_a_door(seen)
     assert seen["config"].ssl_ciphers == SERVER_TLS12_CIPHERS
@@ -1005,17 +1007,16 @@ def test_both_doors_use_the_options_and_the_loop(monkeypatch, tmp_path, door_loo
     from vaf.core.config import Config
     monkeypatch.setenv("VAF_WEBUI_ACTIVE", "0")      # run_server sets it; restored after
     monkeypatch.setattr(web_server.manager, "set_server_loop", lambda _loop: None)
+    from vaf.network import ssl_utils
+    # The pair comes from ensure_ssl_certificates(); Config.load is never reached, so the
+    # files are never read.
+    monkeypatch.setattr(ssl_utils, "ensure_ssl_certificates",
+                        lambda: (str(tmp_path / "cert.pem"), str(tmp_path / "key.pem")))
+    monkeypatch.setattr(ssl_utils, "_LISTENERS", {})
     for tls in (False, True):
         seen.pop("config", None)
         seen.pop("loop", None)
-        files = {}
-        if tls:
-            for name in ("cert", "key"):
-                files[name] = tmp_path / f"{name}.pem"
-                files[name].write_text("unused: Config.load is never reached")
-        values = {"local_network_tls_enabled": tls,
-                  "local_network_ssl_cert": str(files.get("cert", "")),
-                  "local_network_ssl_key": str(files.get("key", ""))}
+        values = {"local_network_tls_enabled": tls}
         monkeypatch.setattr(Config, "get", staticmethod(
             lambda key, default=None, _v=values: _v.get(key, default)))
         web_server.run_server("127.0.0.1", 18001)

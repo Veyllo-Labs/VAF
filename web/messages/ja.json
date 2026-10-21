@@ -555,6 +555,7 @@
     "ovEvPasswordChanged": "パスワードが再設定されました",
     "ovEvBackupRestored": "バックアップから復元されました",
     "ovEvBackupRestoreFailed": "バックアップからの復元が完了しませんでした",
+    "ovEvTlsCertificateChanged": "証明書が変更されました",
     "ovEvWs": "WebSocketを拒否",
     "ovEvForeignOrigin": "他のWebサイトからのリクエストを拒否",
     "ovDescAudit": "ツール呼び出しはすべてSHA-256のハッシュチェーンに記録されます。あとから変更や削除をすると、それ以降の連なりがただちに壊れるため、改ざんを検知できます。",

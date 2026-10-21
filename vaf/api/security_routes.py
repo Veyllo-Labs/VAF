@@ -816,12 +816,13 @@ def _caller_ip(request: Request) -> str:
     return connection_client_ip(request)
 
 
-async def _verify_admin_totp(user: Dict[str, Any], code: str, ip: str = "") -> None:
+async def verify_admin_totp(user: Dict[str, Any], code: str, ip: str = "") -> None:
     """Verify the CURRENT admin's TOTP code or raise (403 wrong code, 400 no 2FA, 429 held).
 
-    The false-positive restore is the one action that deliberately re-exposes a
-    HIGH-scanned skill to the agent - it deliberately requires a second factor,
-    so a stolen admin session alone cannot lift a quarantine."""
+    The one admin step-up check: every route that must not yield to a stolen admin session
+    alone calls it. The false-positive restore here re-exposes a HIGH-scanned skill to the
+    agent; the certificate routes (vaf/api/network_routes.py) change what every device is
+    served."""
     code = str(code or "").strip().replace(" ", "")
     if not code:
         raise HTTPException(status_code=403, detail="2FA code required")
@@ -958,7 +959,7 @@ async def threats_remove(sha256: str, request: Request, payload: Dict[str, Any] 
     digest = str(sha256 or "").strip().lower()
     if not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise HTTPException(status_code=400, detail="sha256 must be 64 hex characters")
-    await _verify_admin_totp(user, str(payload.get("code") or ""), ip=_caller_ip(request))
+    await verify_admin_totp(user, str(payload.get("code") or ""), ip=_caller_ip(request))
     if not remove_threat(digest, by=str(user.get("username") or "")):
         raise HTTPException(status_code=404, detail="That digest is not listed")
     return {"ok": True, "delisted": digest}
@@ -1009,7 +1010,7 @@ async def skill_acknowledge(skill_id: str, request: Request,
     level = str(((entry.get("scan") or {}).get("level")) or "clean")
     if level == "high":
         raise HTTPException(status_code=400, detail="High-risk skills cannot be acknowledged - delete or restore instead")
-    await _verify_admin_totp(user, str(payload.get("code") or ""), ip=_caller_ip(request))
+    await verify_admin_totp(user, str(payload.get("code") or ""), ip=_caller_ip(request))
     set_skill_acknowledged(sid, by=str(user.get("username") or ""))
     return {"ok": True, "acknowledged": sid}
 
@@ -1046,7 +1047,7 @@ async def quarantined_skill_restore(skill_id: str, request: Request,
         raise HTTPException(status_code=404, detail="Unknown skill")
     if not entry.get("quarantined"):
         raise HTTPException(status_code=400, detail="Skill is not quarantined")
-    await _verify_admin_totp(user, str(payload.get("code") or ""), ip=_caller_ip(request))
+    await verify_admin_totp(user, str(payload.get("code") or ""), ip=_caller_ip(request))
     clear_skill_quarantine(sid)
     try:
         from vaf.core.security_events import log_security_event

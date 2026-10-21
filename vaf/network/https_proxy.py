@@ -22,8 +22,8 @@ The door admits what the backend admits and refuses every other client before an
 call or socket. With Local Network on that is what ``binding.inbound_policy()`` admits (this
 machine, the local networks or with "VPN only" the VPN networks, plus the private networks an
 admin added); with it off, this machine only. ``admission.ByLocalNetwork`` picks the guard per
-request, the same choice the backend makes, because this proxy runs whenever TLS is on, Local
-Network or not (vaf/tray.py), and outlives a switch to off until the restart stops it. A
+request, the same choice the backend makes, because this proxy outlives a switch to off until
+the restart stops it (it starts only with Local Network and TLS on, vaf/tray.py). A
 refused browser gets a short page that says which networks VAF answers and what to do, an API
 call 403 JSON, a socket 4003. The door used to relay pages to any address and leave the
 refusal to the backend's API (measured: ``GET /login`` 200 for ``203.0.113.9``, its socket
@@ -50,7 +50,7 @@ from starlette.websockets import WebSocket
 
 from vaf.network import door
 from vaf.network.admission import AdmissionGuard, ByLocalNetwork, this_machine_only
-from vaf.network.ssl_utils import server_tls_options
+from vaf.network.ssl_utils import register_tls_listener, server_tls_options
 
 logger = logging.getLogger(__name__)
 
@@ -680,6 +680,8 @@ def run_https_proxy(
         runtime_status.set_proxy_bound(effective, port)
         loop = door.door_event_loop()
         asyncio.set_event_loop(loop)
+        # A changed certificate is loaded into this listener without a restart.
+        register_tls_listener("proxy", server, loop)
         loop.run_until_complete(server.serve())
         _running_server = None
     except Exception as e:

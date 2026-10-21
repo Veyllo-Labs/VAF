@@ -203,7 +203,7 @@ def test_the_machines_names_are_looked_up_once_not_on_every_answer(monkeypatch):
     def _stop():
         raise _Stop()
 
-    monkeypatch.setattr(ssl_utils, "_get_ssl_dir", _stop)     # no certificate work in a test
+    monkeypatch.setattr(ssl_utils, "_ssl_dir_path", _stop)     # no certificate work in a test
     with pytest.raises(_Stop):
         ssl_utils.ensure_ssl_certificates()
     assert len(lookups) == 2 and binding._OWN_LABELS

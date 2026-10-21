@@ -827,3 +827,26 @@ def test_counting_the_unread_never_consumes_it(peer, server, capsys, held):
     assert line.pending(record) == first, "counting moved the cursor"
     assert record["cursor"] == [0, "", 0]
     assert len(line.take_new(record)) == first, "the announced messages were gone"
+
+
+def test_a_pinned_intermediate_verifies_without_the_interpreter_default(peer, monkeypatch,
+                                                                       tmp_path):
+    """The guest client demands VERIFY_X509_PARTIAL_CHAIN next to STRICT, so a host serving
+    an own certificate whose chain top is an intermediate verifies on Python 3.10-3.12 too.
+    MUTATION: drop the flag in pinned_context - red."""
+    from cert_factory import handshake, key_pem, own_chain, pem, server_context
+    real = ssl.create_default_context
+
+    def _like_older_pythons(*a, **kw):
+        context = real(*a, **kw)
+        context.verify_flags &= ~ssl.VERIFY_X509_PARTIAL_CHAIN
+        return context
+    monkeypatch.setattr(peer.ssl, "create_default_context", _like_older_pythons)
+    leaf, key, inter, _root = own_chain(names=("127.0.0.1",))
+    (tmp_path / "chain.pem").write_bytes(pem(leaf, inter))
+    (tmp_path / "leaf.key").write_bytes(key_pem(key))
+
+    context = peer.pinned_context(pem(inter).decode("ascii"))
+
+    assert context.verify_flags & ssl.VERIFY_X509_PARTIAL_CHAIN
+    handshake(server_context(tmp_path / "chain.pem", tmp_path / "leaf.key"), context)

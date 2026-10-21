@@ -90,6 +90,11 @@ def server_status():
     UI.print(f"  Primary Port:    [cyan]{port}[/cyan]")
     from vaf.core.inference_profile import current as inference_profile
     UI.print(f"  Profile:         [cyan]{inference_profile()}[/cyan] (`vaf profile` shows what it runs)")
+    if tls:
+        try:
+            _print_certificate_line()
+        except Exception as e:
+            UI.warning(f"Could not read the certificate: {e}")
 
     if enabled:
         try:
@@ -97,6 +102,24 @@ def server_status():
         except Exception as e:
             UI.warning(f"Could not read the network interfaces: {e}")
     UI.print()
+
+
+def _print_certificate_line() -> None:
+    """One line on the certificate VAF serves, and its problem when it has one."""
+    from vaf.network.ssl_utils import certificate_state
+    state = certificate_state()
+    facts = state.get("certificate")
+    if facts is None:
+        validity = "issued at the next start"
+    elif facts["days_left"] < 0:
+        validity = "[red]EXPIRED[/red]"
+    else:
+        validity = f"valid {facts['days_left']} more days"
+    UI.print(f"  Certificate:     [cyan]{_source_words(state['source'])}[/cyan], {validity} "
+             "(`vaf server cert show`)")
+    if state.get("problem"):
+        UI.warning(f"Your certificate cannot be used: {state['problem']['text']} VAF serves its "
+                   "own instead (`vaf server cert show`).")
 
 
 def _print_access(access_port: int) -> None:
@@ -239,7 +262,9 @@ def server_provision(
         from vaf.network.ssl_utils import ensure_ssl_certificates
         cert_path, _key_path = ensure_ssl_certificates()
         if cert_path:
-            UI.info(f"TLS certificate ready: {cert_path}")
+            from vaf.network.ssl_utils import served_certificate
+            UI.info(f"TLS certificate ready: {cert_path} "
+                    f"({_source_words(served_certificate().source)})")
     except Exception as e:
         UI.warning(f"TLS certificate preparation failed ({e}); it is retried on service start.")
 
@@ -598,3 +623,283 @@ def server_vpn_only(state: str = typer.Argument(..., metavar="on|off")):
         UI.warning("Devices on " + ", ".join(partly) + " can no longer connect, except the "
                    "addresses inside " + ", ".join(touching) + ", which stay admitted.")
     _applied_note()
+
+
+# ── the certificate every TLS listener serves ─────────────────────────────────
+#
+# The terminal half of Settings, Local Network, Certificate. Every decision is the
+# framework's (vaf/network/ssl_utils.py): the check, the switch, the restricted authority.
+# The terminal writes through it and then asks the running VAF to load the new pair
+# (POST /api/network/certificate/reload on the internal channel, the lane `vaf health`
+# uses). Exit codes, fit for a renewal hook: 0 served now (or VAF is not running and serves
+# it at its next start), 1 refused and nothing changed, 3 changed but the running VAF still
+# serves the previous one (restart it).
+
+cert_app = typer.Typer(help="The certificate VAF serves: show it, use your own, go back to VAF's own")
+app.add_typer(cert_app, name="cert")
+ca_app = typer.Typer(help="VAF's local certificate authority: its fingerprint, renew it",
+                     invoke_without_command=True)
+app.add_typer(ca_app, name="ca")
+
+_VIA_TERMINAL = "in a terminal on this machine"
+EXIT_REFUSED = 1
+EXIT_RESTART_NEEDED = 3
+
+
+def _line(text: str = "") -> None:
+    """A line of the certificate commands. Rich's emoji codes are off: they turned the ":CD:"
+    of a fingerprint like AB:CD:EF into a disc symbol (measured), and these lines carry
+    fingerprints a person compares character by character."""
+    UI.console.print(text, markup=True, emoji=False)
+
+
+def _source_words(source: str) -> str:
+    return {"own": "your own", "automatic": "VAF's own", "none": "none (TLS is off)"}.get(
+        source, source)
+
+
+def _date(iso: str) -> str:
+    return str(iso or "")[:10]
+
+
+def _print_report(report) -> None:
+    from rich.markup import escape
+
+    from vaf.network.ssl_utils import colon_fingerprint
+    facts = {k: escape(v) if isinstance(v, str) else v for k, v in (report.facts or {}).items()}
+    if facts:
+        _line(f"  Subject:      {facts.get('subject', '')}")
+        _line(f"  Issuer:       {facts.get('issuer', '')}")
+        _line(f"  Names:        {', '.join(facts.get('names') or []) or '-'}")
+        _line(f"  Valid until:  {_date(facts.get('not_after'))} "
+                 f"({facts.get('days_left')} days)")
+        _line(f"  Key:          {facts.get('key_type')} {facts.get('key_size') or ''}".rstrip())
+        _line(f"  SHA-256:      {colon_fingerprint(facts.get('sha256', ''))}")
+        _line(f"  Authority:    {facts.get('authority_subject', '')}")
+        _line(f"                {colon_fingerprint(facts.get('authority_sha256', ''))}")
+    for item in report.errors:
+        _line(f"[red]Error[/red]    {escape(item.text)}")
+    for item in report.warnings:
+        _line(f"[yellow]Warning[/yellow]  {escape(item.text)}")
+
+
+def _backend_port_listens() -> bool:
+    import socket
+    port = int(Config.get("local_network_port", 8001) or 8001)
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def _ask_running_vaf_to_reload():
+    """(outcome, answer): "answered" with the reload result, "not_running", "no_channel" (a
+    VAF that serves the backend itself, `vaf run --web`, has no internal channel to ask) or
+    "error" (a status other than 200, e.g. a VAF from before this route)."""
+    import requests
+
+    from vaf.core.web_interface import internal_api_base
+    try:
+        response = requests.post(f"{internal_api_base()}/api/network/certificate/reload",
+                                 timeout=30)
+    except requests.RequestException:
+        if Config.get_bool("local_network_tls_enabled", False) and _backend_port_listens():
+            return "no_channel", None
+        return "not_running", None
+    if response.status_code != 200:
+        return "error", {"status": response.status_code}
+    try:
+        return "answered", response.json()
+    except ValueError:
+        return "error", {"status": response.status_code}
+
+
+def _finish_with_reload(what: str) -> None:
+    """Ask the running VAF to load the pair and exit with the code that says what happened."""
+    outcome, answer = _ask_running_vaf_to_reload()
+    if outcome == "not_running":
+        # Nothing serves the files of the certificate this one replaced.
+        from vaf.network.ssl_utils import prune_custom_certificates
+        prune_custom_certificates()
+        UI.success(f"{what} VAF is not running; it serves this certificate at its next start.")
+        raise typer.Exit(0)
+    if outcome == "answered" and isinstance(answer, dict):
+        if answer.get("source") == "none":
+            UI.success(f"{what} TLS is off; VAF serves this certificate once TLS is on.")
+            raise typer.Exit(0)
+        if answer.get("ok"):
+            UI.success(f"{what} The running VAF serves it now, no restart needed.")
+            raise typer.Exit(0)
+        listeners = answer.get("listeners") or {}
+        detail = ", ".join(f"{name} {status}" for name, status in listeners.items())
+        refused = answer.get("refused")
+        UI.warning(f"{what} The running VAF still serves the previous certificate"
+                   + (f" ({detail})" if detail else "")
+                   + (f" ({refused})" if refused else "")
+                   + ": restart it (`systemctl --user restart vaf`, or quit and start the tray).")
+        raise typer.Exit(EXIT_RESTART_NEEDED)
+    if outcome == "no_channel":
+        UI.warning(f"{what} A VAF started with `vaf run --web` serves the previous certificate "
+                   "until it is restarted: it has no channel this terminal can ask.")
+        raise typer.Exit(EXIT_RESTART_NEEDED)
+    status = (answer or {}).get("status")
+    UI.warning(f"{what} The running VAF did not load it (HTTP {status}); it still serves the "
+               "previous certificate: restart it.")
+    raise typer.Exit(EXIT_RESTART_NEEDED)
+
+
+def _peer_trust_line(fingerprint: str) -> None:
+    from rich.markup import escape
+
+    from vaf.network.ssl_utils import colon_fingerprint
+    host = "<address>"
+    try:
+        from vaf.network.binding import access_addresses
+        reachable = access_addresses()
+        if reachable:
+            host = reachable[0].ip
+    except Exception:
+        pass
+    _line("Machines in rooms here trust the new authority again with:")
+    _line(f"  vaf a2a trust wss://{escape(host)}{_access_port_suffix()} --ca-fp "
+          f"{colon_fingerprint(fingerprint)}")
+
+
+def _read_file_or_exit(path: Optional[str], what: str) -> bytes:
+    if not path:
+        return b""
+    from pathlib import Path
+    try:
+        return Path(path).expanduser().read_bytes()
+    except OSError as e:
+        UI.error(f"Cannot read the {what} file {path}: {e}")
+        raise typer.Exit(EXIT_REFUSED)
+
+
+@cert_app.command("show")
+def cert_show():
+    """The certificate VAF serves: where it comes from, its names, dates and fingerprints."""
+    from vaf.network.ssl_utils import certificate_state, colon_fingerprint
+    state = certificate_state()
+    if not state["tls"]:
+        UI.info("TLS is off, so VAF serves no certificate (`vaf server on` switches it on).")
+        return
+    from rich.markup import escape
+    _line(f"\n[bold]Certificate:[/bold] {_source_words(state['source'])}")
+    problem = state.get("problem")
+    if problem:
+        UI.error(f"Your certificate {state.get('own_path')} cannot be used: {problem['text']} "
+                 "VAF serves its own instead; fix the file or run `vaf server cert reset`.")
+    facts = state.get("certificate")
+    if not facts:
+        UI.info("  VAF issues its own certificate at its next start.")
+        return
+    _line(f"  Subject:      {escape(facts['subject'])}")
+    _line(f"  Issuer:       {escape(facts['issuer'])}")
+    _line(f"  Names:        {escape(', '.join(facts['names'])) or '-'}")
+    left = facts["days_left"]
+    until = f"{_date(facts['not_after'])} ({left} days)" if left >= 0 else (
+        f"{_date(facts['not_after'])} (EXPIRED)")
+    _line(f"  Valid until:  {until}")
+    _line(f"  SHA-256:      {colon_fingerprint(facts['sha256'])}")
+    _line(f"  Authority:    {escape(facts['authority_subject'])}")
+    _line(f"                {colon_fingerprint(facts['authority_sha256'])}")
+    if state.get("uncovered"):
+        UI.warning("It does not name " + ", ".join(state["uncovered"]) + ": a device that "
+                   "reaches VAF there gets a certificate warning.")
+    _line()
+
+
+@cert_app.command("set")
+def cert_set(
+    cert: str = typer.Option(..., "--cert", help="The certificate (PEM); may hold the chain and the key"),
+    key: Optional[str] = typer.Option(None, "--key", help="Its private key (PEM, without a passphrase)"),
+    chain: Optional[str] = typer.Option(None, "--chain", help="The intermediate certificates (PEM)"),
+    check: bool = typer.Option(False, "--check", help="Only check it; change nothing"),
+):
+    """Serve your own certificate. It is checked first, and served at once without a restart.
+
+    Exit code 0 served now (or at the next start, when VAF is not running), 1 refused and
+    nothing changed, 3 installed but the running VAF still serves the previous one."""
+    from vaf.network.ssl_utils import (CertificateRefused, inspect_certificate,
+                                       install_certificate)
+    cert_pem = _read_file_or_exit(cert, "certificate")
+    key_pem = _read_file_or_exit(key, "key")
+    chain_pem = _read_file_or_exit(chain, "chain")
+    if check:
+        report = inspect_certificate(cert_pem, key_pem, chain_pem)
+        _line("\n[bold]Check:[/bold]")
+        _print_report(report)
+        if report.ok:
+            UI.success("The certificate can be used (nothing was changed).")
+            return
+        raise typer.Exit(EXIT_REFUSED)
+    try:
+        result = install_certificate(cert_pem, key_pem, chain_pem, via=_VIA_TERMINAL,
+                                     reload=False)
+    except CertificateRefused as refused:
+        _line("\n[bold]Check:[/bold]")
+        _print_report(refused.report)
+        UI.error("Not installed; nothing was changed.")
+        raise typer.Exit(EXIT_REFUSED)
+    _line("\n[bold]Check:[/bold]")
+    _print_report(result.report)
+    if "authority_changes" in result.report.codes():
+        _peer_trust_line(result.new_authority or "")
+    _finish_with_reload("Your certificate is installed.")
+
+
+@cert_app.command("reset")
+def cert_reset():
+    """Go back to VAF's own certificate, freshly issued by the authority devices already trust."""
+    from vaf.network.ssl_utils import fingerprints_match, reset_certificate
+    result = reset_certificate(via=_VIA_TERMINAL, reload=False)
+    if result.old_authority and result.new_authority and not fingerprints_match(
+            result.old_authority, result.new_authority):
+        _peer_trust_line(result.new_authority)
+    _finish_with_reload("VAF's own certificate is back.")
+
+
+@ca_app.callback()
+def ca_show(ctx: typer.Context):
+    """VAF's local certificate authority: where it is, its fingerprint, whether it is restricted."""
+    if ctx.invoked_subcommand is not None:
+        return
+    from vaf.network.ssl_utils import colon_fingerprint, local_authority
+    authority = local_authority()
+    if authority is None:
+        UI.info("This machine has no local authority yet; VAF creates one when TLS starts.")
+        return
+    from rich.markup import escape
+    _line(f"\n[bold]Local authority:[/bold] {escape(authority['path'])}")
+    _line(f"  SHA-256:      {colon_fingerprint(authority['fingerprint'])}")
+    _line(f"  Valid until:  {_date(authority['not_after'])}")
+    _line("  Restricted:   " + ("yes, to private addresses and names" if authority["restricted"]
+                                   else "no"))
+    UI.info("Compare this fingerprint with the one a device shows before you trust the "
+            "authority on it, never with a page loaded over the connection you are checking.")
+    if not authority["restricted"]:
+        UI.info("`vaf server ca renew` restricts it to private addresses; every device then "
+                "installs it again.")
+    _line()
+
+
+@ca_app.command("renew")
+def ca_renew(yes: bool = typer.Option(False, "--yes", help="Do not ask")):
+    """Replace the local authority with a new one that only vouches for private names."""
+    from vaf.network.ssl_utils import colon_fingerprint, renew_authority, served_certificate
+    UI.warning("A new authority replaces the old one. Every device that installed the old one "
+               "must install the new one, machines in rooms here trust its new fingerprint, and "
+               "the old one can then be removed from your devices.")
+    if not yes and not typer.confirm("Renew the authority now?"):
+        UI.info("Nothing was changed.")
+        raise typer.Exit(0)
+    result = renew_authority(via=_VIA_TERMINAL, reload=False)
+    _line(f"  Old SHA-256:  {colon_fingerprint(result.old_authority or '') or '-'}")
+    _line(f"  New SHA-256:  {colon_fingerprint(result.new_authority or '')}")
+    if served_certificate().source != "automatic":
+        UI.success("The authority is renewed. Your own certificate stays served.")
+        return
+    _peer_trust_line(result.new_authority or "")
+    _finish_with_reload("The authority is renewed.")

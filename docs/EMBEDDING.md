@@ -732,7 +732,11 @@ What an embedded agent can and cannot do on the host - the short version of
   `vaf.network.binding` (the guard in `vaf.network.admission` and the door's settings in
   `vaf.network.door`, which need the server extra; the TLS policy in
   `vaf.network.ssl_utils`), not on the `vaf` facade: the only doors that use them are VAF's own
-  two, the same named boundary as the origin guard
+  two, the same named boundary as the origin guard. The served certificate is engine-internal
+  for the same reason (`ssl_utils.served_certificate`, `install_certificate`,
+  `reload_certificate`: three listeners, all VAF's own doors); a door of yours brings its own
+  certificate, and the one effect an embedder sees is `vaf.room_invitation`'s
+  `ca_fingerprint`, the authority of the chain the machine serves
   ([NETWORK_FEATURES.md](setup/NETWORK_FEATURES.md#remote-access-over-a-vpn),
   [vaf/network/README.md](../vaf/network/README.md)).
 - **Admin-only tools stay off - but a bare agent still acts as the machine

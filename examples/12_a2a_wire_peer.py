@@ -165,6 +165,10 @@ def pinned_context(ca_pem: str) -> ssl.SSLContext:
     context accepts."""
     context = ssl.create_default_context(cadata=ca_pem)
     context.verify_flags |= ssl.VERIFY_X509_STRICT
+    # The pinned authority may be an intermediate (a host serving a certificate of its
+    # own); verification ends at it only with PARTIAL_CHAIN, which Python 3.13 sets by
+    # default and 3.10-3.12 do not.
+    context.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
     context.check_hostname = False
     return context
 

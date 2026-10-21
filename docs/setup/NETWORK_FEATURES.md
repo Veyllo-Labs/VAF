@@ -2,7 +2,7 @@
 
 VAF (Veyllo Agent Framework) includes robust networking capabilities designed to allow secure, local collaboration. This document details the architecture, security measures, and usage of these features.
 
-**Integrated HTTPS proxy (no Nginx required):** When **Local Network** and **SSL/TLS** are enabled and certificate/key paths are set, VAF starts an integrated reverse proxy on `0.0.0.0:local_network_https_port` (default 443). On **any platform** (Linux/macOS/Windows), if 443 is privileged and cannot be bound by a non-root user, VAF automatically falls back to 8443. The effective bound port is surfaced via `/api/network/status` (`effective_https_port`), so the UI always shows the real port. The proxy is the single TLS entry point and routes requests as follows:
+**Integrated HTTPS proxy (no Nginx required):** When **Local Network** and **SSL/TLS** are enabled and a certificate is available (your own, or VAF's own, which it issues itself), VAF starts an integrated reverse proxy on `0.0.0.0:local_network_https_port` (default 443). On **any platform** (Linux/macOS/Windows), if 443 is privileged and cannot be bound by a non-root user, VAF automatically falls back to 8443. The effective bound port is surfaced via `/api/network/status` (`effective_https_port`), so the UI always shows the real port. The proxy is the single TLS entry point and routes requests as follows:
 
 | Path | Target | Description |
 |------|--------|-------------|
@@ -117,7 +117,7 @@ Every HTTP request and every WebSocket handshake passes through `AdmissionGuard`
 - Judges WebSockets too. The check used to be a `BaseHTTPMiddleware`, and Starlette passes every scope that is not HTTP through such a middleware unjudged (measured: HTTP 403 while a WebSocket route behind the same check opened and answered). Only `/ws` checked the address itself; the room socket (`/ws/a2a/{room_id}`) and the interactive browser's stream checked none, and `vaf run --web` serves the backend on `0.0.0.0:8001` in network mode, so there they faced the network directly
 - Judges the REAL client, not the socket peer: the integrated proxy relays every device over loopback, so the peer is `127.0.0.1` for all of them. The address comes from `connection_client_ip` in `vaf/network/binding.py`, which honors `X-Forwarded-For` only when the peer is loopback (see [Who the client is](#who-the-client-is)). This check used to read the peer and therefore passed every relayed request, a public address on the proxy port included (measured: 200 through the proxy, 403 only on a direct connection), while the WebSocket handshake already refused it.
 - Admitted are this machine, the local networks (RFC 1918) and the networks an admin added; with "VPN only" the networks of the detected VPN interfaces replace the local ones. WireGuard and OpenVPN clients (`10.x`) pass by default; mesh VPNs that hand out `100.64.0.0/10` (Tailscale, Headscale, NetBird) pass once that network is admitted. The decision is `inbound_policy()` in `vaf/network/binding.py`, read on every request, so a change applies without a restart - see [Remote access over a VPN](#remote-access-over-a-vpn).
-- Active in network mode. With Local Network off the HTTPS door and the backend serve this machine only: every other client is refused with 403 (the page says Local Network is off), a WebSocket with 4003 before accept (see [Middleware Execution Order](#middleware-execution-order)). The door follows the setting per request like the backend (`ByLocalNetwork` in `vaf/network/admission.py`, both doors built on it), because the proxy runs whenever TLS is on, Local Network or not, and outlives a switch to off until the restart stops it; it used to relay pages to LAN devices then while the backend refused their API calls
+- Active in network mode. With Local Network off the HTTPS door and the backend serve this machine only: every other client is refused with 403 (the page says Local Network is off), a WebSocket with 4003 before accept (see [Middleware Execution Order](#middleware-execution-order)). The door follows the setting per request like the backend (`ByLocalNetwork` in `vaf/network/admission.py`, both doors built on it), because the proxy outlives a switch to off until the restart stops it (it starts only with Local Network and TLS on); it used to relay pages to LAN devices then while the backend refused their API calls
 - The door refuses before any page. The check used to sit only in the backend: page loads went from the proxy straight to the Next.js frontend, so a client outside the admitted networks received the login page and only the API calls behind it were refused (measured: `GET /login` 200 for `203.0.113.9`, its socket accepted by the proxy). The proxy now wraps its whole app in the guard, outermost, so a refused request reaches neither the frontend nor the backend nor the proxy's access log (which keeps one line per request and has no throttle); the security log holds it.
 - Named boundary, the TLS handshake: it happens before any HTTP check, so a client that reaches the access port still receives the certificate, whose names list the LAN and VPN addresses and the host name, and learns that a TLS server runs there. Only a firewall, or a bind to the admitted interfaces only, closes that. A per-interface bind is not built: a VPN that comes up later would need a rebind.
 
@@ -195,6 +195,7 @@ Use the built-in doctor command to detect common security misconfigurations befo
 
 - `vaf doctor` (alias for `vaf security doctor`)
 - Checks include weak network posture flags (TLS/firewall/login/2FA), a channel whose Inbound is open to new senders, and channel-enabled-without-pairing states.
+- The certificate, in network mode: `network_certificate_expiring` (medium: the served certificate has under 30 days left), `network_certificate_expired` (high: it is served expired, so every device warns), `network_certificate_unusable` (high: the configured own certificate does not load, VAF serves its own instead) and `network_ca_unrestricted` (low: the local CA may vouch for any name; `vaf server ca renew`), all read from `ssl_utils.certificate_state`, which creates and writes nothing ([Your Own Certificate](#your-own-certificate), [Restricting the Authority](#restricting-the-authority)).
 - Whether the access port faces the internet, in network mode: `network_public_address` (this machine has a public IPv4 address, `binding.public_addresses()`; medium, low once "VPN only" is on, since then a provider's own network is no longer admitted), `network_ufw_disabled` (ufw is installed but switched off while the firewall step is on, `firewall.host_firewall()`; with what to do, SSH allowed first), `network_ufw_unknown` (low: ufw's switch could not be read with certainty, ufw's own command reads it as off, or its systemd unit is not `active`, so the allow rule is added but nothing confirms ufw guards the port; check with `sudo ufw status`, `firewall.ufw_switch_unconfirmed()`) and `network_public_refusals` (high: today's security log holds `ip_blocked` refusals of public addresses, so the port was reached from the internet: an open hosting firewall, a forwarded router port or a tunnel). VAF cannot see a hosting provider's firewall from inside; the refusals are the evidence that it is open.
 - Output is intentionally non-secret and safe to share in internal troubleshooting.
 
@@ -385,7 +386,7 @@ once if its network is, but enters the certificate at the next start.
 
 ## TLS/SSL Encryption
 
-VAF supports full TLS encryption for both HTTP (HTTPS) and WebSocket (WSS) traffic within the local network. This prevents eavesdropping and man-in-the-middle attacks even on shared LANs.
+VAF supports full TLS encryption for both HTTP (HTTPS) and WebSocket (WSS) traffic within the local network. It prevents eavesdropping, and it prevents a man in the middle once a device trusts the authority behind the certificate (it installed it, or its fingerprint was compared out of band; see [Eliminating Browser Warnings](#eliminating-browser-warnings)). A device that clicks a certificate warning away is encrypted to whoever answered.
 
 ### Quick Start (Automatic Certificates)
 
@@ -394,37 +395,37 @@ The simplest way to enable TLS:
 1. Enable Local Network Hosting (`local_network_enabled=true`) in Settings or via `vaf server on`
 2. Restart VAF
 
-That's it. VAF automatically generates a local Certificate Authority (CA) and server certificate. No manual `openssl` commands needed.
+That's it. VAF automatically generates a local Certificate Authority (CA) and server certificate. No manual `openssl` commands needed. To serve a certificate of your own instead, see [Your Own Certificate](#your-own-certificate).
 
 > **Important:** Network mode is TLS-only. If `local_network_enabled=true`, VAF automatically enforces `local_network_tls_enabled=true` when loading/saving config.
 
 ### How Auto-SSL Works
 
-When TLS is enabled and no valid certificate is configured, VAF's `ssl_utils` module automatically:
+With TLS on and no own certificate configured, VAF's `ssl_utils` module:
 
 1. **Creates a local CA** (`~/.vaf/ssl/ca.pem` + `ca-key.pem`)
-   - RSA 2048-bit key
-   - Valid for 10 years
-   - Used to sign server certificates
-   - Only needs to be installed once in the browser/OS for trust
+   - RSA 2048-bit key, valid for 10 years
+   - Restricted to private addresses and names when it is created ([Restricting the Authority](#restricting-the-authority))
+   - Signs the server certificate, and only needs to be installed once per device
 
 2. **Creates a server certificate** (`~/.vaf/ssl/server.pem` + `server-key.pem`)
-   - RSA 2048-bit key, signed by the local CA
+   - RSA 2048-bit key, signed by the local CA, which `server.pem` carries after it
    - Valid for 1 year
    - Includes Subject Alternative Names (SANs) for:
      - `localhost` / `127.0.0.1` / `::1`
      - Every detected LAN and VPN address (e.g. `192.168.1.100`, `10.8.0.1`, `100.101.102.103`)
      - Machine hostname and FQDN
 
-3. **Persists certificates** in `~/.vaf/ssl/`
-   - Certificates are generated once and reused across restarts
-   - On each startup, the server checks if the certificate has at least 30 days remaining
-   - If expired or expiring soon, only the server certificate is regenerated (CA stays the same)
-   - A certificate is also replaced when it cannot be VERIFIED, not only when it expires
-     (see below) - and that is the one case in which the CA itself is replaced too
-   - Config paths (`local_network_ssl_cert`, `local_network_ssl_key`) are updated automatically
+3. **Keeps both in `~/.vaf/ssl/`**
+   - On each start the server certificate is checked: under 30 days left, unusable to strict verifiers (see below) or missing a current address means a new one, from the same CA
+   - `vaf server cert reset` issues a new one at once, also from the same CA, and the running VAF serves it without a restart
+   - The CA is kept across these re-issues, so every device that installed it keeps trusting the machine; it is replaced only when it cannot be verified (see below), when its key does not belong to it, or when only one of its two files is there, each time at WARNING level
+   - Both private keys are owner-only (0600) from their first byte: they are written to a file created owner-only and then renamed into place
+   - `local_network_ssl_cert` / `local_network_ssl_key` are never written; they name your own certificate or nothing. A configuration from an older version that holds VAF's own paths there is read as VAF's own
 
 #### Why a valid certificate can still be replaced
+
+This applies to VAF's own files only; [your own certificate](#your-own-certificate) is never replaced.
 
 Both certificates carry the key identifiers RFC 5280 requires: the CA names its own key,
 and the server certificate names both itself and the key that signed it. Without them a
@@ -448,36 +449,90 @@ reissued on the next start. **The new CA has a different fingerprint**, so any d
 installed the old `~/.vaf/ssl/ca.pem` in its trust store has to be given the new one. The
 replacement is logged at warning level and says exactly that.
 
+### Restricting the Authority
+
+A device that installs VAF's CA trusts everything that CA signs. A CA without limits would
+let a copy of its key sign a certificate for any name, a bank's included, and that device
+would accept it. So a CA VAF creates carries critical name constraints: it may vouch for
+the addresses the admission check serves (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
+`100.64.0.0/10`, `127.0.0.0/8`, `::1`; the constants in `vaf/network/binding.py`) and for
+the DNS names `localhost`, this machine's host name and FQDN, and everything under `lan`,
+`local`, `home.arpa` and `internal`. Both name types are listed, because RFC 5280 leaves a
+type without permitted names unconstrained.
+
+Measured under strict verification (`openssl verify -x509_strict` and a Python handshake with
+`VERIFY_X509_STRICT`), with certificates signed by such a CA:
+
+| Certificate for | Result |
+|---|---|
+| VAF's own names (`localhost`, host name, FQDN, 127.0.0.1, ::1, a LAN and a VPN address) | OK |
+| `www.examplebank.com` | refused, "permitted subtree violation" |
+| `203.0.113.9`, `2001:db8::1` | refused, "permitted subtree violation" |
+| private names plus one public address | refused as a whole |
+
+Because one name outside the constraints refuses the whole certificate, VAF's own server
+certificate carries only the names inside them: a host renamed after its CA was created is
+left out with a warning that names `vaf server ca renew`.
+
+**An existing CA is kept as it is**, so devices that installed it keep working.
+`vaf server ca` and the settings show whether it is restricted, and `vaf doctor` reports an
+unrestricted one (`network_ca_unrestricted`, low). `vaf server ca renew`, or "Restrict to
+private addresses" in Settings, Local Network, Certificate, replaces it with a restricted
+one: every device then installs the new authority, machines in rooms here trust its new
+fingerprint (`vaf a2a trust ... --ca-fp <new>`), and the old one can be removed from the
+devices. An own certificate stays served through a renewal.
+
+Named boundaries:
+- **Clients that enforce the constraints.** OpenSSL and Python (measured), Chrome on Linux
+  from 112, Firefox, and Chrome on macOS (by their documentation). Not measured on Windows
+  and Safari. A client that ignores them is no worse off than with an unrestricted CA.
+- **The CA key is an unencrypted owner-only file.** The constraints limit what a copy of it
+  can sign; they do not make it secret again.
+
 ### Certificate Lifecycle
 
 ```
-First Start (TLS enabled)
+Start (TLS enabled)
     |
     v
-Certificates exist in ~/.vaf/ssl/?
-    |                    |
-    No                  Yes
-    |                    |
-    v                    v
-Generate CA         Certificate valid, verifiable (>30 days)?
-Generate Server         |              |
-    |                  Yes             No
-    |                   |              |
-    v                   v              v
-Store in              Reuse        Regenerate server cert
-~/.vaf/ssl/                        (keep CA unless it is
-                                    itself unverifiable)
+local_network_ssl_cert / _key name your own pair?
+    |                         |
+   Yes                        No (empty, or VAF's own paths)
+    |                         |
+    v                         v
+Does it load (files there,  VAF's own certificate in ~/.vaf/ssl/
+key without passphrase,     valid (>30 days), verifiable, names
+key belongs to it)?         every current address?
+    |            |              |                |
+   Yes           No            Yes               No
+    |            |              |                |
+    v            v              v                v
+Serve it,     ERROR line,     Serve it        Issue a new one from the
+expired or    serve VAF's                     kept CA (a new restricted
+not (warns    own for this                    CA only when there is none
+from 30 days  run, config                     usable)
+left)         untouched
     |
     v
-Update config paths
-    |
-    v
-Start Uvicorn with SSL
+A change later (vaf server cert set / reset, vaf server ca renew, Settings):
+every running TLS listener loads the new pair, no restart
 ```
 
 ### Eliminating Browser Warnings
 
-Self-signed certificates will show a browser warning. To eliminate this, install the CA certificate as a trusted root:
+Install the authority behind the certificate on each device once: with VAF's own
+certificate that is the local CA. Get it from Settings, Local Network, Certificate
+("Download", `vaf-authority.pem`; the file `/api/a2a/ca.pem` serves) or as the file
+`~/.vaf/ssl/ca.pem`.
+
+**Compare the fingerprint before you trust it.** A file fetched over the connection you are
+about to trust proves nothing on its own: compare the SHA-256 fingerprint the device shows
+with the one `vaf server ca` prints on this machine, or the one the settings show on this
+machine. Never compare it with a page loaded over the connection you are checking.
+
+**Reached by name, install first.** A browser that once received VAF's HSTS header for a
+host name (a year for a DNS name set up for VAF) does not let a certificate warning for that
+name be clicked past, so install the authority before you open VAF by name.
 
 **Windows:**
 ```
@@ -503,19 +558,75 @@ sudo update-ca-certificates
 **Firefox** (all platforms):
 Firefox uses its own certificate store. Go to `Settings -> Privacy & Security -> Certificates -> View Certificates -> Authorities -> Import` and select `~/.vaf/ssl/ca.pem`.
 
-### Custom Certificates
+### Your Own Certificate
 
-If you prefer to use your own certificates (e.g. from a corporate CA or Let's Encrypt):
+A certificate from a company authority, from Let's Encrypt or from an authority of your own:
 
-```json
-{
-  "local_network_tls_enabled": true,
-  "local_network_ssl_cert": "/path/to/your/cert.pem",
-  "local_network_ssl_key": "/path/to/your/key.pem"
-}
+```bash
+vaf server cert set --cert fullchain.pem --key privkey.pem [--chain chain.pem] [--check]
 ```
 
-When custom paths are configured and the files exist, VAF uses them directly without auto-generating anything.
+or Settings, Local Network, Certificate, "Use your own certificate". The certificate file may
+hold the chain and the key as well (one PEM bundle). It is checked first; `--check` stops
+there and changes nothing.
+
+| The check | Result |
+|---|---|
+| a part over 64 KiB or more than 8 certificates; no PEM certificate; no key | refused |
+| a key with a passphrase (and PKCS#12, which is not read) | refused, with the conversion: `openssl pkey -in key.pem -out plain-key.pem`, or `openssl pkcs12 -in cert.p12 -noenc -out bundle.pem` |
+| the key does not belong to the certificate (loaded into a throwaway server context, the check uvicorn itself makes) | refused |
+| expired, or not valid yet | refused |
+| an authority certificate, or an extended key usage without server authentication | refused |
+| RSA under 2048 bits, a curve other than P-256 or P-384, Ed25519, Ed448 or DSA (browsers do not take them) | refused |
+| a chain out of order (each certificate must be issued by the one after it) | refused |
+| no subject alternative names (browsers ignore the common name) | refused |
+| under 30 days left | warning |
+| an admitted address or the host name it does not name | warning: devices that reach VAF there get a certificate warning |
+| missing key identifiers | warning: strict clients, VAF's room peers among them, refuse it |
+| the server certificate alone, not self-signed | warning: devices without its issuer fail, and a room peer would pin the certificate itself, so every renewal breaks its pin |
+| the authority changes | warning: devices must trust the new one, and machines in rooms here run `vaf a2a trust ... --ca-fp <new>` (the CLI prints the line) |
+
+Then it is served **at once, without a restart**: every running TLS listener (the HTTPS
+port and the desktop's TLS port) loads the new pair; connections already open keep theirs.
+The pair is loaded into a throwaway context first, so a pair that does not load never
+reaches a live listener; a listener whose load fails keeps its previous pair. `vaf run
+--web` loads a change made in its own Settings at once, and one made in a terminal at its
+next start: it has no internal channel the terminal could ask. The exit code of
+`vaf server cert set` and `reset`: 0 served now (or at the next start, when VAF is not
+running), 1 refused and nothing changed, 3 changed but the running VAF still serves the
+previous one (restart it).
+
+- **Where it goes.** `~/.vaf/ssl/custom/<first 16 hex digits of its fingerprint>.pem` and
+  `.key` (the key owner-only from creation, the folder 0700), and both config keys switch in
+  one save. The files of the certificate it replaced are removed once nothing serves them.
+- **Never replaced.** VAF serves it expired or not, and warns from 30 days before the end
+  (the log, `vaf doctor`'s `network_certificate_expiring` and `network_certificate_expired`,
+  `vaf server cert show`, `vaf server status`, the settings).
+- **When it cannot load** (the file is gone, the key has a passphrase, the key does not
+  belong to it), VAF serves its own certificate for that run and logs why at ERROR, without
+  touching the configuration: fixing the file at that path is enough. `vaf doctor` reports
+  `network_certificate_unusable`.
+- **Back to VAF's own:** `vaf server cert reset` (or "Back to VAF's own certificate" in the
+  settings) issues a fresh server certificate from the kept CA. Do not delete `~/.vaf/ssl/`
+  for that: it replaces the CA every device trusts.
+- **Only through the check.** The generic settings save (`PATCH /api/config`, the WebSocket
+  `save_config`) cannot set the two keys. A signed-in admin gives the 2FA code for a change
+  in the settings; a request without a token comes from this machine only and needs none,
+  the same trust as the terminal and the configuration file.
+- **The private key travels with an upload.** Upload it in the settings only from this
+  machine or over a connection you already verified; otherwise use `vaf server cert set` on
+  the machine.
+- **Rooms on other machines** pin the authority of the served chain (its last certificate,
+  [A2A_PROTOCOL.md](../agents/A2A_PROTOCOL.md#trust-between-machines)). Switching to an own
+  certificate, back, or renewing the CA changes it; those machines run `vaf a2a trust` again
+  with the new fingerprint.
+
+**Renewing automatically.** VAF runs no ACME client. A DNS-01 client (certbot with a DNS
+plugin, acme.sh, lego) can renew a certificate for a name inside your network and run
+`vaf server cert set --cert <fullchain> --key <privkey>` as its deploy hook; the exit code
+says whether the running VAF serves it. The costs: the DNS provider's API credentials live
+on the server, the name appears in the public certificate transparency logs, and the
+certificates are short-lived, so the hook must run unattended.
 
 ### What TLS Protects
 
@@ -538,22 +649,25 @@ The WebSocket transport differs by client. Any HTTPS page, and an HTTP page on p
 |------------|------|---------|-------------|
 | `local_network_tls_enabled` | `bool` | `false` | TLS flag. Enforced to `true` whenever `local_network_enabled=true` |
 | `local_network_https_port` | `int` | `443` | HTTPS proxy listen port (falls back to 8443 automatically on any platform when 443 is privileged/unbindable) |
-| `local_network_ssl_cert` | `string` | `""` | Path to PEM certificate (auto-populated if empty) |
-| `local_network_ssl_key` | `string` | `""` | Path to PEM private key (auto-populated if empty) |
+| `local_network_ssl_cert` | `string` | `""` | Your own certificate (PEM, may carry the chain); empty means VAF's own. Set by `vaf server cert set` or the settings; not writable through the generic settings save |
+| `local_network_ssl_key` | `string` | `""` | Its private key (PEM, without a passphrase); empty means VAF's own |
 
-Every listener VAF serves TLS on (the HTTPS port, the desktop's TLS port, `vaf run --web`) takes its TLS options from one place, `server_tls_options` in `vaf/network/ssl_utils.py`: TLS 1.2 with forward-secret AEAD suites only, and TLS 1.3 ([The HTTPS door holds](#the-https-door-holds)).
+Every listener VAF serves TLS on (the HTTPS port, the desktop's TLS port, `vaf run --web`) takes its TLS options from one place, `server_tls_options` in `vaf/network/ssl_utils.py`: TLS 1.2 with forward-secret AEAD suites only, and TLS 1.3 ([The HTTPS door holds](#the-https-door-holds)). Each registers there for the certificate reload (`register_tls_listener`), and takes the pair `ensure_ssl_certificates()` decides; no other module reads the two keys.
 
 ### File Locations
 
 ```
 ~/.vaf/ssl/
-  ca.pem            # Local CA certificate (install in browser for trust)
-  ca-key.pem        # Local CA private key (chmod 600)
-  server.pem        # Server certificate + CA chain
-  server-key.pem    # Server private key (chmod 600)
+  ca.pem            # Local CA certificate (install on your devices for trust)
+  ca-key.pem        # Local CA private key (0600 from creation)
+  server.pem        # Server certificate + the CA after it
+  server-key.pem    # Server private key (0600 from creation)
+  custom/           # Your own certificate, when you set one (0700)
+    <fp>.pem        #   the certificate and its chain
+    <fp>.key        #   its private key (0600 from creation)
 ```
 
-Implementation: `vaf/network/ssl_utils.py`
+Implementation: `vaf/network/ssl_utils.py` (`served_certificate`, `ensure_ssl_certificates`, `inspect_certificate`, `install_certificate`, `reset_certificate`, `renew_authority`, `reload_certificate`, `served_authority`, `certificate_state`)
 
 ---
 
@@ -600,8 +714,8 @@ With this lock enabled, attempts to disable hosting in the UI/API are ignored an
 | `local_network_rate_limit_window_minutes` | `int` | `15` | Rate limit sliding window |
 | `local_network_tls_enabled` | `bool` | `false` | Enable HTTPS/WSS encryption |
 | `local_network_https_port` | `int` | `443` | HTTPS proxy listen port (falls back to 8443 automatically on any platform when 443 is privileged/unbindable) |
-| `local_network_ssl_cert` | `string` | `""` | PEM certificate path (auto-populated) |
-| `local_network_ssl_key` | `string` | `""` | PEM private key path (auto-populated) |
+| `local_network_ssl_cert` | `string` | `""` | Your own certificate (PEM); empty means VAF's own. Set by `vaf server cert set` or the settings ([Your Own Certificate](#your-own-certificate)) |
+| `local_network_ssl_key` | `string` | `""` | Its private key (PEM); empty means VAF's own |
 | `local_network_allowed_networks` | `list[str]` | `[]` | Private networks admitted besides the local ones (CIDR or address); public networks are refused. See [Remote access over a VPN](#remote-access-over-a-vpn) |
 | `local_network_vpn_only` | `bool` | `false` | Admit the networks of the detected VPN interfaces instead of the local networks |
 
@@ -616,7 +730,7 @@ Who is admitted (`local_network_allowed_networks`, `local_network_vpn_only`) res
 When TLS is enabled, firewall setup uses the effective HTTPS access port (`local_network_https_port`, or `8443` when `443` is privileged on any platform) so LAN clients can reach the proxy entry point. On Linux, firewalld is preferred: it opens only that effective proxy port for the LAN subnet via a rich rule, elevating through pkexec (desktop GUI dialog) or `sudo -n` (headless); a process that cannot gain root (`elevation_unavailable()`: the no-new-privileges flag, or a user namespace without root, as in the server's systemd service) does not try and logs once why.
 On Windows, creating firewall rules via `netsh advfirewall` requires elevated rights. If VAF is not started as Administrator, LAN access can fail even when hosting is enabled.
 The integrated HTTPS proxy, like every TLS listener of VAF, accepts TLS 1.2 with forward-secret AEAD suites only, and TLS 1.3; a device from before about 2014 that knows only CBC or static-RSA suites cannot connect ([The HTTPS door holds](#the-https-door-holds)).
-Auto-generated TLS certificates carry the machine's hostname and FQDN as DNS SANs plus every LAN and VPN address, and are re-generated at start when an address is missing (a changed LAN IP, a VPN that came up), so the IP SANs stay aligned with the access addresses (a hostname change alone does not trigger re-issuance - the freshness check covers IP SANs only).
+VAF's own TLS certificate carries the machine's hostname and FQDN as DNS SANs plus every LAN and VPN address, and is re-issued at start when an address is missing (a changed LAN IP, a VPN that came up), so the IP SANs stay aligned with the access addresses (a hostname change alone does not trigger re-issuance - the freshness check covers IP SANs only). `vaf server cert reset` re-issues it at once, without a restart. A certificate of your own is never re-issued or replaced ([Your Own Certificate](#your-own-certificate)).
 
 ---
 
@@ -640,10 +754,10 @@ vaf/
     firewall.py          # OS firewall automation (Windows/macOS/Linux) for the admitted networks
     https_proxy.py       # Integrated HTTPS reverse proxy (/api, /ws -> 8005; rest -> 3000), streaming
     connection_tracker.py # Real-time connection monitoring
-    ssl_utils.py         # Auto-SSL certificate generation, the TLS policy of every listener
+    ssl_utils.py         # The served certificate (yours or VAF's), the restricted local CA, the check, the live reload, the TLS policy of every listener
   api/
     auth_routes.py       # Login, 2FA, bootstrap and setup code, logout, own password change
-    network_routes.py    # Access URL, connection list
+    network_routes.py    # Access URL, connection list, remote access, certificate
   core/
     web_server.py        # FastAPI app, middleware stack, CORS, TLS server
     frontend_manager.py  # Next.js process management with TLS env vars
@@ -791,7 +905,27 @@ state to redo the change on. `409` with `{"code": "lockout", "address"}` when th
 out the address the request comes from; sent again with `"confirm": true` it is saved. The answer
 is the new state. The CLI (`vaf server networks`) reads and writes the list under the same lock.
 
-### 6. Authentication Endpoints
+### 6. Certificate
+
+The served certificate and VAF's authority, what Settings, Local Network, Certificate shows;
+the terminal half is `vaf server cert` / `vaf server ca` ([Your Own Certificate](#your-own-certificate)).
+Every route is admin-only; no answer carries key material.
+
+| Method | Endpoint | Second factor | Description |
+|--------|----------|---------------|-------------|
+| GET | `/api/network/certificate` | - | `certificate_state()`: `tls`, `source` (`own`, `automatic`, `none`), `own_path`, `problem` (`{code, text}` when the configured own certificate does not load), `certificate` (subject, issuer, names, dates, `days_left`, key, `sha256`, the authority's subject and `sha256`, chain length), `authority`, `local_ca` (`path`, `fingerprint`, `not_after`, `restricted`), `uncovered` (admitted addresses and the host name the certificate does not name), `step_up_required` |
+| POST | `/api/network/certificate/check` | - | `{certificate, key?, chain?}` (PEM, each at most 64 KiB): the report (`ok`, `errors` and `warnings` as `{code, text, params}`, `facts`); nothing is written |
+| PUT | `/api/network/certificate` | signed-in admin | `{certificate, key?, chain?, code?}`: install and reload. `422` `{code: "refused", report}` before the code is asked for, nothing written |
+| DELETE | `/api/network/certificate` | signed-in admin | `{code?}`: back to VAF's own, freshly issued from the kept CA |
+| POST | `/api/network/certificate/authority` | signed-in admin | `{confirm, code?}`: a new restricted CA; `409` `{code: "confirm"}` until `confirm` is set |
+| POST | `/api/network/certificate/reload` | - | load the configured pair into every running TLS listener (what `vaf server cert set` asks after a change in the terminal): `{ok, listeners, refused, source}` |
+
+A change answers `{result: {report, reload, old_authority, new_authority}, state}`. The second
+factor is `security_routes.verify_admin_totp`, the one admin step-up check (403 wrong or
+missing code, counted like every step-up); a request without a token comes from this machine
+only and needs none. A change is the security event `tls_certificate_changed`.
+
+### 7. Authentication Endpoints
 
 | Method | Endpoint | Auth Required | Description |
 |--------|----------|---------------|-------------|

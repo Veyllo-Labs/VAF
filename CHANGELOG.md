@@ -93,6 +93,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   from a script or the agent. `vaf users list` shows the accounts. Every password reset, in the
   terminal or by an admin in Settings, now appears in the security log.
 
+- **Your own certificate, checked and served at once.** `vaf server cert set --cert FILE --key
+  FILE` checks a certificate before using it (key, chain, expiry, which of your addresses it
+  names) and the running VAF serves it without a restart; `vaf server cert reset` goes back to
+  VAF's own. `vaf server ca` shows the fingerprint of VAF's certificate authority, so you can
+  compare it with what a device shows before you trust it. Room invitations to other machines
+  now name the authority of the certificate you serve.
+
 ### Security
 
 - **Sign-ins, sessions and the HTTPS port are hardened (the entries below).** They take effect
@@ -307,6 +314,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   message's length with `music-metadata` before it sends one, and the version in use could be
   made to crash the bridge or loop forever by a crafted audio file (three advisories). It now
   runs 11.16.1.
+
+- **A certificate you configured is never replaced.** VAF used to drop it when it had fewer
+  than 30 days left or lacked two extensions, serve its own instead and overwrite your settings;
+  it now always serves yours and `vaf doctor` warns as it nears expiry.
+
+- **VAF's certificate authority can only vouch for private addresses.** A newly created
+  authority cannot sign a certificate for a public name or address, so a copy of its key cannot
+  impersonate other sites on your devices. An existing authority is kept, so your devices keep
+  working; `vaf server ca renew` replaces it when you choose.
 
 ### Fixed
 

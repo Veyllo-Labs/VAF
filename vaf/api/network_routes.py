@@ -9,6 +9,8 @@ Endpoints:
 - GET /api/network/status → the proxy's real binding (admin)
 - GET /api/network/connections → the live connection map (admin)
 - GET/PUT /api/network/remote-access → VPN interfaces and who is admitted (admin)
+- GET/PUT/DELETE /api/network/certificate, POST .../check, .../authority, .../reload → the
+  certificate every TLS listener serves (admin; a change needs a signed-in admin's 2FA code)
 - GET /api/network/ws-config → { "useWss", "port" } for WebSocket URL (TLS vs plain); open,
   the login page needs it before anybody is signed in
 
@@ -22,7 +24,7 @@ import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from vaf.api.user_routes import require_admin
 from vaf.core.config import Config
@@ -302,3 +304,142 @@ def put_remote_access(body: RemoteAccessUpdate, request: Request):
             raise HTTPException(status_code=409, detail={"code": "lockout", "address": caller})
         Config.save(proposed)
     return _remote_access_state(request)
+
+
+# ── the certificate: Settings, Local Network, Certificate ────────────────────
+#
+# The web half of `vaf server cert` / `vaf server ca`. Every decision is the framework's
+# (vaf/network/ssl_utils.py); these routes check the caller and pass the bytes through.
+# A change (install, reset, renewal) changes what every device is served, so a signed-in
+# admin gives the 2FA code (security_routes.verify_admin_totp, the one step-up check). A
+# tokenless request reaches a route only from this machine, the same trust as the terminal
+# and the config file, which any process of this user can write, so it needs none. No
+# answer carries key material, and the key is never logged.
+
+# One part of an upload, as ssl_utils holds it (a chain of a few KiB fits many times over).
+_PEM_MAX = 64 * 1024
+
+
+class CertificateParts(BaseModel):
+    certificate: str = Field(..., max_length=_PEM_MAX)
+    key: str = Field("", max_length=_PEM_MAX)
+    chain: str = Field("", max_length=_PEM_MAX)
+
+
+class CertificateUpload(CertificateParts):
+    code: str = Field("", max_length=16)
+
+
+class CertificateStepUp(BaseModel):
+    code: str = Field("", max_length=16)
+
+
+class AuthorityRenewal(BaseModel):
+    # Set after the person saw what a new authority means for their devices and rooms.
+    confirm: bool = False
+    code: str = Field("", max_length=16)
+
+
+def _signed_in(request: Request) -> bool:
+    """A request with an account (a token); a tokenless one comes from this machine."""
+    return isinstance(getattr(request.state, "user", None), dict)
+
+
+async def _step_up(request: Request, user: dict, code: str) -> None:
+    if not _signed_in(request):
+        return
+    from vaf.api.security_routes import verify_admin_totp
+    from vaf.network.binding import connection_client_ip
+    await verify_admin_totp(user, code, ip=connection_client_ip(request))
+
+
+def _state(request: Request) -> dict:
+    from vaf.network.ssl_utils import certificate_state
+    return certificate_state(step_up_required=_signed_in(request))
+
+
+def _parts(body: CertificateParts) -> tuple:
+    return (body.certificate.encode("utf-8"), body.key.encode("utf-8"),
+            body.chain.encode("utf-8"))
+
+
+def _refused(report) -> HTTPException:
+    return HTTPException(status_code=422, detail={"code": "refused", "report": report.to_dict()})
+
+
+@router.get("/certificate", dependencies=[Depends(require_admin)])
+def get_certificate(request: Request):
+    """The served certificate, VAF's authority, and whether a change asks for a 2FA code."""
+    return _state(request)
+
+
+@router.post("/certificate/check", dependencies=[Depends(require_admin)])
+def check_certificate(body: CertificateParts):
+    """The check alone (ssl_utils.inspect_certificate): nothing is written."""
+    from vaf.network.ssl_utils import inspect_certificate
+    return inspect_certificate(*_parts(body)).to_dict()
+
+
+@router.put("/certificate")
+async def put_certificate(body: CertificateUpload, request: Request,
+                          user: dict = Depends(require_admin)):
+    """Serve this certificate from now on, without a restart.
+
+    422 ``refused`` with the report when the check finds an error, before the code is asked
+    for, so a refused upload spends no code; nothing is written. Then the code, then the
+    switch."""
+    from starlette.concurrency import run_in_threadpool
+
+    from vaf.network.ssl_utils import (CertificateRefused, inspect_certificate,
+                                       install_certificate)
+    cert_pem, key_pem, chain_pem = _parts(body)
+    report = await run_in_threadpool(inspect_certificate, cert_pem, key_pem, chain_pem)
+    if not report.ok:
+        raise _refused(report)
+    await _step_up(request, user, body.code)
+    try:
+        result = await run_in_threadpool(lambda: install_certificate(
+            cert_pem, key_pem, chain_pem, username=str(user.get("username") or ""),
+            via="in Settings"))
+    except CertificateRefused as refused:
+        raise _refused(refused.report)
+    return {"result": result.to_dict(), "state": _state(request)}
+
+
+@router.delete("/certificate")
+async def delete_certificate(request: Request, body: Optional[CertificateStepUp] = None,
+                             user: dict = Depends(require_admin)):
+    """Go back to VAF's own certificate, issued anew by the authority devices trust."""
+    from starlette.concurrency import run_in_threadpool
+
+    from vaf.network.ssl_utils import reset_certificate
+    await _step_up(request, user, body.code if body else "")
+    result = await run_in_threadpool(lambda: reset_certificate(
+        username=str(user.get("username") or ""), via="in Settings"))
+    return {"result": result.to_dict(), "state": _state(request)}
+
+
+@router.post("/certificate/authority")
+async def renew_certificate_authority(body: AuthorityRenewal, request: Request,
+                                      user: dict = Depends(require_admin)):
+    """Replace VAF's authority with one restricted to private names. 409 ``confirm`` until
+    the person confirmed what it means: every device installs the new one, and machines in
+    rooms here trust its new fingerprint."""
+    from starlette.concurrency import run_in_threadpool
+
+    from vaf.network.ssl_utils import renew_authority
+    if not body.confirm:
+        raise HTTPException(status_code=409, detail={"code": "confirm"})
+    await _step_up(request, user, body.code)
+    result = await run_in_threadpool(lambda: renew_authority(
+        username=str(user.get("username") or ""), via="in Settings"))
+    return {"result": result.to_dict(), "state": _state(request)}
+
+
+@router.post("/certificate/reload", dependencies=[Depends(require_admin)])
+def reload_certificate():
+    """Load the configured pair into every running TLS listener. No code: it changes nothing
+    the configuration does not already say; `vaf server cert set` asks for it here after
+    switching the pair in the terminal."""
+    from vaf.network.ssl_utils import reload_certificate as _reload
+    return _reload().to_dict()

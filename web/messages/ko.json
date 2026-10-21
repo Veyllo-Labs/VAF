@@ -555,6 +555,7 @@
     "ovEvPasswordChanged": "비밀번호가 새로 설정됨",
     "ovEvBackupRestored": "백업에서 복원됨",
     "ovEvBackupRestoreFailed": "백업 복원이 완료되지 않음",
+    "ovEvTlsCertificateChanged": "인증서가 변경됨",
     "ovEvWs": "WebSocket 거부",
     "ovEvForeignOrigin": "다른 웹사이트의 요청 거부",
     "ovDescAudit": "도구 호출은 모두 SHA-256 해시 체인에 기록돼요. 나중에 바꾸거나 지우면 그 뒤의 고리가 바로 어긋나서, 변조를 탐지할 수 있어요.",

@@ -32,8 +32,8 @@ fifty paths would write fifty lines; in ``detail`` it writes one per address per
 
 ``ByLocalNetwork`` picks a door per request by the Local Network setting, and
 ``this_machine_only`` is the door while it is off: VAF's HTTPS proxy and its backend both
-follow the setting through them, so the proxy, which runs whenever TLS is on, refuses other
-devices exactly when the backend does.
+follow the setting through them, so the proxy, which outlives a switch to off until the
+restart stops it, refuses other devices exactly when the backend does.
 
 Named boundaries: the TLS handshake happens before any HTTP check, so a client that reaches
 the access port still receives the certificate (whose names list the LAN and VPN addresses

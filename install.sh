@@ -1311,7 +1311,7 @@ if [[ "$SETUP_LAN" == "true" ]]; then
     "$PROJECT_ROOT/venv/bin/python3" -m vaf.main server status \
         || echo -e "    - vaf server status lists the addresses once the service runs"
     echo -e "    - Never forward this port on your router or publish it to the internet."
-    echo -e "    - Accept the self-signed certificate warning on first visit."
+    echo -e "    - Install the certificate authority on your devices once: vaf server ca (prints its fingerprint)."
     echo ""
 fi
 

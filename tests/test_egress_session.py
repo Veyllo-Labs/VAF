@@ -252,6 +252,10 @@ def test_tls_is_verified_against_the_name_not_the_pinned_address(tmp_path, monke
     from cryptography import x509
     from vaf.network import ssl_utils
     monkeypatch.setattr(ssl_utils, "_collect_sans", lambda: [x509.DNSName("public.test")])
+    # A CA VAF creates vouches for private names only; this one stands in for a public
+    # authority, so it may vouch for the test's public name.
+    monkeypatch.setattr(ssl_utils, "_authority_constraints", lambda: x509.NameConstraints(
+        permitted_subtrees=[x509.DNSName("public.test")], excluded_subtrees=None))
     ca_key, ca_cert = ssl_utils._generate_ca(tmp_path)
     cert_path, key_path = ssl_utils._generate_server_cert(tmp_path, ca_key, ca_cert)
 

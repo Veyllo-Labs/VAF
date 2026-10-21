@@ -1317,7 +1317,7 @@ except Exception as e:
 app.add_middleware(NetworkModeLayers)
 
 if Config.get("local_network_enabled", False):
-    # Auto-generate SSL certificates if TLS enabled but no certs configured
+    # The pair to serve, VAF's own issued when it is the one to serve (ssl_utils).
     if Config.get("local_network_tls_enabled", False):
         try:
             from vaf.network.ssl_utils import ensure_ssl_certificates
@@ -5743,6 +5743,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         is_admin = is_admin_identity(stored_role, user_scope_id)
                         existing = Config.load()
                         new_config = _inference_profile.without_profile_key(new_config)
+                        # The certificate keys change only through the checked route
+                        # (/api/network/certificate, behind a second factor).
+                        from vaf.network.ssl_utils import without_certificate_keys
+                        new_config = without_certificate_keys(new_config)
                         new_config = Config.split_connection_toggles(
                             existing, new_config, str(user_scope_id) if user_scope_id else None, is_admin=is_admin)
                         # Keys leave the payload for the encrypted store; see
@@ -9299,15 +9303,17 @@ async def a2a_guest_client():
 
 @app.get("/api/a2a/ca.pem")
 async def a2a_guest_ca():
-    """The authority a guest pins, checked against the invitation's fingerprint."""
+    """The authority a guest pins, checked against the invitation's fingerprint: the last
+    certificate of the chain this machine serves (the local CA, or the top of an own
+    certificate's chain), the same one the invitation names (ssl_utils.served_authority)."""
     from fastapi.responses import Response as _Response
 
-    from vaf.network.ssl_utils import ca_certificate_path
-    path = ca_certificate_path()
-    if path is None or not path.exists():
+    from vaf.network.ssl_utils import served_authority
+    authority = served_authority()
+    if authority is None:
         raise HTTPException(status_code=404, detail=(
             "this host has no LAN authority; local network TLS is not enabled"))
-    return _Response(content=path.read_bytes(), media_type="application/x-pem-file")
+    return _Response(content=authority[0], media_type="application/x-pem-file")
 
 
 # ── the room workspace over the wire: list, fetch, push ─────────────────────
@@ -10037,20 +10043,19 @@ def run_server(host="127.0.0.1", port=8001):
     asyncio.set_event_loop(loop)
     manager.set_server_loop(loop)
 
+    # The pair to serve: the person's own certificate, or VAF's own, issued when needed
+    # (ensure_ssl_certificates decides; the listener takes what it returns).
     tls_enabled = Config.get("local_network_tls_enabled", False)
-    ssl_cert = (Config.get("local_network_ssl_cert") or "").strip()
-    ssl_key = (Config.get("local_network_ssl_key") or "").strip()
-
-    # Auto-generate certificates if TLS enabled but no valid certs
-    if tls_enabled and (not ssl_cert or not ssl_key or not os.path.isfile(ssl_cert) or not os.path.isfile(ssl_key)):
+    ssl_cert, ssl_key = None, None
+    if tls_enabled:
         try:
             from vaf.network.ssl_utils import ensure_ssl_certificates
             ssl_cert, ssl_key = ensure_ssl_certificates()
             if ssl_cert and ssl_key:
-                log("WebServer", f"Auto-generated SSL certificate: {ssl_cert}")
+                log("WebServer", f"TLS certificate ready: {ssl_cert}")
         except Exception as e:
-            log("WebServer", f"SSL auto-generation failed, falling back to HTTP: {e}")
-            ssl_cert, ssl_key = "", ""
+            log("WebServer", f"SSL certificate setup failed, falling back to HTTP: {e}")
+            ssl_cert, ssl_key = None, None
 
     # Allow large PDF/file attachments: base64-encoded image-heavy PDFs can easily exceed
     # uvicorn's default ws_max_size (16 MB), causing the server to close the WebSocket
@@ -10058,24 +10063,29 @@ def run_server(host="127.0.0.1", port=8001):
     # Shared constant: the tray and the HTTPS proxy start their own uvicorns and
     # carried the 16 MB default while this value sat only here.
     from vaf.core.log_helper import WS_MAX_SIZE_BYTES, redacted_uvicorn_log_config
-    from vaf.network.ssl_utils import server_tls_options
+    from vaf.network.ssl_utils import register_tls_listener, server_tls_options
 
     # The door's head, connection and forwarded-header settings in both branches, always:
     # with Local Network on, this listener is what other devices reach.
-    if tls_enabled and ssl_cert and ssl_key and os.path.isfile(ssl_cert) and os.path.isfile(ssl_key):
+    if tls_enabled and ssl_cert and ssl_key:
         config = uvicorn.Config(
             app=app, host=host, port=port, loop="asyncio", log_level="error",
             **server_tls_options(ssl_cert, ssl_key), **door.door_options(),
             ws_max_size=WS_MAX_SIZE_BYTES, log_config=redacted_uvicorn_log_config(),
         )
         log("WebServer", f"Starting with TLS (HTTPS/WSS) on {host}:{port}")
+        server = uvicorn.Server(config)
+        # A certificate changed in this process (the settings) is loaded without a restart.
+        # A change made in a terminal reaches this lane at its next start: it has no
+        # internal channel the terminal could ask.
+        register_tls_listener("backend", server, loop)
     else:
         config = uvicorn.Config(app=app, host=host, port=port, loop="asyncio", log_level="error",
                                 **door.door_options(),
                                 ws_max_size=WS_MAX_SIZE_BYTES, log_config=redacted_uvicorn_log_config())
         if tls_enabled:
             log("WebServer", f"WARNING: TLS enabled but no certificates available, running HTTP on {host}:{port}")
-    server = uvicorn.Server(config)
+        server = uvicorn.Server(config)
 
     # We run this in the thread provided by the caller
     loop.run_until_complete(server.serve())

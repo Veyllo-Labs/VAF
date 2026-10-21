@@ -22,9 +22,12 @@ def h(monkeypatch):
 
 @pytest.fixture
 def frozen_second(monkeypatch):
-    """Every token minted in the same second."""
+    """Every token minted in the same second.
+
+    The second is the real one, taken once here: the tokens are decoded against the real
+    clock, so a fixed date would expire them one token lifetime after it."""
     from vaf.auth import crypto
-    fixed = _real_datetime(2026, 10, 20, 12, 0, 0, tzinfo=timezone.utc)
+    fixed = _real_datetime.now(timezone.utc).replace(microsecond=0)
 
     class _Frozen(_real_datetime):
         @classmethod

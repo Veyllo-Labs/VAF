@@ -65,21 +65,23 @@ def ufw_off_advice(ssh_port: Optional[int] = None, *, switch_on: Optional[bool] 
     number: the one this session came in on when it is known.
 
     The steps follow the state ufw is in, read as `host_firewall()` reads it (`switch_on`:
-    ufw.conf says `ENABLED=yes`; `unit_stopped`: systemd says its unit is `inactive`), both
+    ufw.conf may say `ENABLED=yes`; `unit_stopped`: systemd says its unit is `inactive`), both
     read here when not given. Measured in ufw's own code (0.36, Ubuntu 24.04):
     - `ufw enable` writes the switch and runs `ufw-init start` itself; it never starts or
       enables the unit, and only the unit loads the rules at boot. A stopped unit therefore
       also needs `sudo systemctl enable --now ufw` (its start finds the rules loaded and
-      leaves them), or the rules are gone after the next reboot and systemd keeps saying
-      `inactive`, which VAF reads as off.
+      leaves them): until then systemd keeps saying `inactive`, which VAF reads as off, and a
+      disabled unit does not load the rules at the next boot.
     - With the switch on and the unit stopped, which is what `systemctl disable --now ufw`
       leaves, `ufw allow` writes the IPv4 rule and then fails reloading the chains the stop
       deleted, before it writes the IPv6 one. `sudo ufw disable` first turns the switch off
-      (its stop tolerates the missing chains), so the allows are recorded whole.
+      (its stop tolerates the missing chains), so the allows are recorded whole. An
+      unreadable ufw.conf counts as on here: `ufw disable` only flushes ufw's own chains and
+      sets ACCEPT policies, so it is harmless in every state, and `ufw enable` follows it.
     """
     port = ssh_port if ssh_port is not None else ssh_session_port()
     if switch_on is None:
-        switch_on = ufw_enabled() is True
+        switch_on = ufw_enabled() is not False
     if unit_stopped is None:
         unit_stopped = _ufw_unit_inactive()
     if port == 22:
@@ -90,8 +92,8 @@ def ufw_off_advice(ssh_port: Optional[int] = None, *, switch_on: Optional[bool] 
         ssh = ("`sudo ufw allow OpenSSH` when it listens on port 22, else "
                "`sudo ufw allow <port>/tcp`")
     if switch_on and unit_stopped:
-        steps = ("run `sudo ufw disable` (ufw's switch is still on while its unit is stopped, "
-                 f"and `ufw allow` fails in that state), then allow SSH ({ssh})")
+        steps = ("run `sudo ufw disable` (with ufw's switch on and its unit stopped, "
+                 f"`ufw allow` fails), then allow SSH ({ssh})")
     else:
         steps = f"allow SSH first ({ssh})"
     start = "`sudo ufw enable`"

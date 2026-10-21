@@ -731,6 +731,17 @@ def test_the_advice_reads_ufws_state_the_way_host_firewall_does(monkeypatch):
     assert "ufw disable" not in text and "systemctl" not in text
 
 
+def test_an_unreadable_switch_with_a_stopped_unit_still_gets_the_disable_step(monkeypatch):
+    """ufw.conf unreadable means the switch may be on, and then `ufw allow` fails before it
+    writes the IPv6 rule; `ufw disable` is harmless in every state. MUTATION: read an
+    unreadable switch as off (`is True`) - red."""
+    monkeypatch.setattr(fw, "ufw_enabled", lambda conf_path=fw.UFW_CONF: None)
+    monkeypatch.setattr(fw, "_ufw_unit_inactive", lambda: True)
+    text = fw.ufw_off_advice(22)
+    assert text.index("`sudo ufw disable`") < text.index("`sudo ufw allow OpenSSH`")
+    assert "`sudo systemctl enable --now ufw`" in text
+
+
 def test_ufw_counts_as_installed_by_its_config_file(monkeypatch, tmp_path):
     """The service's PATH may lack /usr/sbin, where Ubuntu puts ufw; the file says it too."""
     monkeypatch.setattr(fw.subprocess, "run",

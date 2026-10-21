@@ -89,8 +89,9 @@ def ufw_off_advice(ssh_port: Optional[int] = None, *, switch_on: Optional[bool] 
       sequence to give, since every ufw start flushes then (the one at boot too, before
       Docker writes its own), so the advice says so and adds `sudo systemctl restart docker`,
       which writes Docker's rules again; VAF's containers come back by their restart policy
-      (`unless-stopped`). When /etc/default/ufw cannot be read, it says the same as a
-      condition.
+      (`unless-stopped`). When the two files give no certain value (one unreadable, or a
+      line `_ufw_settings` cannot be sure of), it says the same as a condition and names
+      both files.
     """
     port = ssh_port if ssh_port is not None else ssh_session_port()
     if switch_on is None:
@@ -123,9 +124,10 @@ def ufw_off_advice(ssh_port: Optional[int] = None, *, switch_on: Optional[bool] 
     if manages_builtins is not False:
         flushes = ("`ufw disable` and `ufw enable` also flush" if disable_first
                    else "`ufw enable` also flushes")
-        why = ("This ufw manages the built-in chains (`MANAGE_BUILTINS=yes` in "
-               "/etc/default/ufw), so " if manages_builtins else
-               "If /etc/default/ufw sets `MANAGE_BUILTINS=yes`, ")
+        why = ("This ufw manages the built-in chains (`MANAGE_BUILTINS=yes`), so "
+               if manages_builtins else
+               "If `MANAGE_BUILTINS` ends up `yes` (set in /etc/default/ufw, or in "
+               "/etc/ufw/ufw.conf, which is read last and wins), ")
         advice += (f" {why}{flushes} every other iptables rule, Docker's included: run "
                    "`sudo systemctl restart docker` after `sudo ufw enable` so Docker writes "
                    "its rules again.")
@@ -488,25 +490,31 @@ def _cleanup_firewall_macos() -> bool:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def ufw_enabled(conf_path: str = UFW_CONF) -> Optional[bool]:
-    """Whether ufw is switched on, read from its config file: True for `ENABLED=yes`, False
-    for any other value or no such line, None when the file is missing or unreadable.
+    """Whether ufw is switched on, read from its config file: True for `ENABLED=yes` or
+    `ENABLED=YES` (the two words ufw-init's start accepts), False for any other value or no
+    such line, None when the file is missing, unreadable, or holds a line `_ufw_settings`
+    cannot be sure of.
 
     Deliberately not systemd's answer: on Ubuntu 24.04 `systemctl is-active ufw` says
     `active` and `is-enabled` says `enabled` while ufw itself is off (measured on a server
     whose ufw.conf said `ENABLED=no`), because the unit only loads the rules ufw would use.
-    Not `ufw status` either: it needs root and prints translated text. Whitespace, quotes
-    and case around the value are tolerated; the last `ENABLED=` line wins.
+    Not `ufw status` either: it needs root and prints translated text. The file is read by
+    the shell's rules, because ufw-init sources it and that start is what loads the rules at
+    boot: `enabled=yes` is another variable, `ENABLED=yes#note` is the value `yes#note`, the
+    last assignment wins.
     """
     settings = _ufw_settings(conf_path)
-    if settings is None:
+    value = None if settings is None else _setting(settings, "ENABLED")
+    if value is None:
         return None
-    return settings.get("ENABLED", "").lower() == "yes"
+    return value in ("yes", "YES")
 
 
 def ufw_manages_builtins(paths: Optional[tuple] = None) -> Optional[bool]:
     """Whether ufw manages the built-in chains (`MANAGE_BUILTINS=yes`), read the way
-    ufw-init reads it: /etc/default/ufw, then ufw.conf, the last line wins, and only the exact
-    word `yes` counts (ufw-init compares `= "yes"`). None when a file cannot be read.
+    ufw-init reads it: /etc/default/ufw, then ufw.conf, the last assignment wins, and only
+    the exact word `yes` counts (ufw-init compares `= "yes"`). None when a file cannot be
+    read or `_ufw_settings` cannot be sure of it.
 
     It decides what `ufw disable` and `ufw enable` do to rules that are not ufw's: with `yes`
     both run `flush_builtins` (ufw-init-functions, in `ufw_stop` and `ufw_start`), which
@@ -514,27 +522,91 @@ def ufw_manages_builtins(paths: Optional[tuple] = None) -> Optional[bool]:
     ships `no`, and then ufw touches only its own chains.
     """
     settings = _ufw_settings(*(paths or (UFW_DEFAULTS, UFW_CONF)))
-    if settings is None:
+    value = None if settings is None else _setting(settings, "MANAGE_BUILTINS")
+    if value is None:
         return None
-    return settings.get("MANAGE_BUILTINS") == "yes"
+    return value == "yes"
+
+
+# Characters that take a word out of the plain subset this reader follows: expansions, the
+# backslash, operators, redirections, globs, tilde. A line holding one is not read further.
+_SHELL_UNSURE = frozenset("$`\\;&|<>(){}*?[]~!")
+# The key `_ufw_settings` uses for "every name": a line outside the plain subset was read, so
+# no value is certain any more.
+_UNSURE = "*"
+
+
+def _shell_words(line: str):
+    """One line split into words the way the shell splits a simple command, or None outside
+    the plain subset. Words end at unquoted blanks (space, tab: a carriage return is part of
+    the word, as in the shell); `'...'` is literal, `"..."` too unless it holds `$`, a
+    backquote or a backslash, and adjacent pieces join (`"ye"s` is `yes`); `#` opens a
+    comment only at the start of a word, so `yes#note` is one value. Returns
+    `(raw, value)` pairs, raw being the word as written."""
+    words, i, n = [], 0, len(line)
+    while i < n:
+        if line[i] in " \t":
+            i += 1
+            continue
+        if line[i] == "#":
+            break
+        start, value = i, []
+        while i < n and line[i] not in " \t":
+            c = line[i]
+            if c in "'\"":
+                end = line.find(c, i + 1)
+                inner = line[i + 1:end]
+                if end < 0 or (c == '"' and any(ch in inner for ch in "$`\\")):
+                    return None
+                value.append(inner)
+                i = end + 1
+            elif c in _SHELL_UNSURE:
+                return None
+            else:
+                value.append(c)
+                i += 1
+        words.append((line[start:i], "".join(value)))
+    return words
 
 
 def _ufw_settings(*paths: str) -> Optional[dict]:
-    """The `KEY=value` lines of ufw's shell-sourced config files, read in order so a later
-    line wins, keys upper-cased, values stripped of whitespace and quotes; None when any of
-    the files cannot be read."""
+    """The variables ufw's shell-sourced config files set, read in order the way ufw-init
+    sources them (`. /etc/default/ufw`, then `. /etc/ufw/ufw.conf`), or None when one cannot
+    be read. Measured against dash, the shell ufw-init runs under on Ubuntu:
+    - names are case-sensitive: `enabled=yes` is another variable than `ENABLED`;
+    - a line is followed only when it is blank, a comment, or nothing but `NAME=value` words
+      (`A=1 B=2` sets both); `NAME=value command` sets NAME for that command only, and
+      `NAME = value` runs a command, so neither assigns.
+    Any other line (a command, an expansion, `if`, a quote the reader does not follow) may
+    change anything after it, an `if` block's assignments included, so from there on every
+    name reads as unknown (`_setting` answers None): a doubtful file is never read as on."""
     settings: dict = {}
     for path in paths:
         try:
             text = Path(path).read_bytes().decode("utf-8", "replace")
         except OSError:
             return None
-        for raw in text.splitlines():
-            line = raw.split("#", 1)[0].strip()
-            key, sep, value = line.partition("=")
-            if sep and key.strip():
-                settings[key.strip().upper()] = value.strip().strip("\"'").strip()
+        if _UNSURE in settings:
+            continue
+        for line in text.split("\n"):
+            words = _shell_words(line)
+            names = [raw.partition("=")[0] for raw, _ in words or ()]
+            if words is None or not all(
+                    "=" in raw and name.isascii() and name.isidentifier()
+                    for (raw, _), name in zip(words, names)):
+                settings = {_UNSURE: None}
+                break
+            for (_, value), name in zip(words, names):
+                settings[name] = value[len(name) + 1:]
     return settings
+
+
+def _setting(settings: dict, name: str) -> Optional[str]:
+    """A variable's value after `_ufw_settings`: "" when nothing set it (the shell's unset),
+    None when the files left it unknown."""
+    if _UNSURE in settings:
+        return None
+    return settings.get(name, "")
 
 
 def _ufw_installed() -> bool:
@@ -569,7 +641,7 @@ def _linux_host_firewall() -> str:
 
 def host_firewall() -> Optional[str]:
     """Which host firewall guards this machine: "firewalld" (running), "ufw" (installed and
-    on, or its switch unreadable), "ufw_off" (installed but switched off, or its unit stopped:
+    on, or its switch unreadable or not certain), "ufw_off" (installed but switched off, or its unit stopped:
     it guards nothing), "iptables" (neither), or None off Linux. The one answer for the setup
     and `vaf doctor`.
 

@@ -573,14 +573,31 @@ LOGLEVEL=low
 @pytest.mark.parametrize("text, expected", [
     (UBUNTU_DEFAULT_UFW_CONF, False),
     (UBUNTU_DEFAULT_UFW_CONF.replace("ENABLED=no", "ENABLED=yes"), True),
-    ('LOGLEVEL=low\n ENABLED = "YES" \n', True),
     ("LOGLEVEL=low\n", False),
     ("# ENABLED=yes\nENABLED=no\n", False),
+    # Each row below as dash reads it when ufw-init sources the file (measured):
+    ("ENABLED=no\nenabled=yes\n", False),        # names are case-sensitive
+    ("ENABLED=yes#note\n", False),                # the value is `yes#note`
+    ("ENABLED=yes # note\n", True),               # `#` after a blank opens a comment
+    ('  ENABLED="yes"\n', True),
+    ("ENABLED='YES'\n", True),                    # ufw's start accepts yes and YES
+    ("ENABLED=Yes\n", False),
+    ("ENABLED=yes\r\n", False),                   # the carriage return is in the value
+    ('ENABLED="ye"s\n', True),                    # adjacent pieces join
+    ("A=1 ENABLED=yes\n", True),                  # an assignment-only line sets both
+    # Lines outside plain assignments: unknown, never on.
+    ("ENABLED=yes true\n", None),                 # dash: set for `true` only
+    ('ENABLED = "YES"\n', None),                  # dash: a command named ENABLED
+    ("ENABLED=$ON\n", None),
+    ("if false; then\nENABLED=yes\nfi\n", None),
+    ("ENABLED=no\nexport LOGLEVEL\n", None),
 ])
 def test_ufw_enabled_reads_the_config_file(tmp_path, text, expected):
     """systemd says `active` and `enabled` for ufw's unit while ufw itself is off, so only
-    ufw's own switch answers. MUTATION: True for any ENABLED= line; False for a missing
-    file - red."""
+    ufw's own switch answers, and by the shell's rules, since ufw-init sources the file.
+    MUTATION: True for any ENABLED= line; False for a missing file; keys case-insensitive;
+    `#` a comment anywhere; lowercase the value; split at a carriage return; read on past a
+    line outside plain assignments - red."""
     conf = tmp_path / "ufw.conf"
     conf.write_bytes(text.encode("utf-8"))
     assert fw.ufw_enabled(str(conf)) is expected
@@ -755,6 +772,10 @@ def test_an_unreadable_switch_with_a_stopped_unit_still_gets_the_disable_step(mo
     ("MANAGE_BUILTINS=no\n", "MANAGE_BUILTINS=yes\n", True),    # ufw.conf is sourced last
     ("IPV6=yes\n", "ENABLED=no\n", False),
     (None, "ENABLED=no\n", None),
+    ("MANAGE_BUILTINS=yes#x\n", "ENABLED=no\n", False),       # dash: the value is `yes#x`
+    ("manage_builtins=yes\n", "ENABLED=no\n", False),         # another variable
+    ("MANAGE_BUILTINS=no\n", "MANAGE_BUILTINS=$X\n", None),
+    ("MANAGE_BUILTINS=no\nif true; then\n", "MANAGE_BUILTINS=no\n", None),
 ])
 def test_ufw_manages_builtins_is_read_the_way_ufw_init_reads_it(monkeypatch, tmp_path, defaults,
                                                                 conf, expected):
@@ -786,7 +807,9 @@ def test_the_advice_says_what_a_ufw_that_manages_the_builtins_does_to_docker(mon
     if manages:
         assert "This ufw manages the built-in chains (`MANAGE_BUILTINS=yes`" in text
     else:
-        assert "If /etc/default/ufw sets `MANAGE_BUILTINS=yes`" in text
+        # Unknown may come from either file, and ufw.conf, read last, decides.
+        assert "If `MANAGE_BUILTINS` ends up `yes` (set in /etc/default/ufw, or in" in text
+        assert "/etc/ufw/ufw.conf, which is read last and wins)" in text
     flushes = ("`ufw disable` and `ufw enable` also flush" if disable_first
                else "`ufw enable` also flushes")
     assert flushes in text

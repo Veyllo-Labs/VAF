@@ -464,36 +464,15 @@ answer: a provider failure then reached `on_token` only, a stop note nothing.
 failure or a loop-protection stop), and whose `failure` is the failure text exactly as
 `on_token` received it, also for a turn that answered first. If you store `run()`'s return
 value, `failed` is all you need: that value never holds a failure that followed an answer.
-If you keep your own transcript of what `on_token` streamed, store the stream with
-`vaf.stored_turn_copy` and hand a model only what `vaf.model_text` returns for it: None for
-a failed turn, the answer without its failure for a turn that answered first, the text
-otherwise. The copy keeps the whole stream, the way the person saw it. VAF's own runner and
-terminal store their transcripts exactly this way.
+If you keep a transcript of what `on_token` received, see "Your own transcript of the
+stream" after the notes below.
 
-```python
-import vaf
-
-streamed = []
-answer = agent.run(prompt, on_token=streamed.append)
-copy, metadata = vaf.stored_turn_copy("".join(streamed), agent.last_turn)
-transcript.append({"role": "assistant", "content": copy, "metadata": metadata})
-
-# later, what a model may read of that transcript:
-readable = [{"role": m["role"], "content": text}
-            for m in transcript if (text := vaf.model_text(m)) is not None]
-```
-
-Store `metadata` beside the copy as it is (None for most turns) and hand it back with the
-message; its keys are VAF's own and not part of the promise. If you clean the stream before
-you store it (strip reasoning, collapse blank lines), pass that function as the third
-argument, `vaf.stored_turn_copy(streamed, agent.last_turn, clean)`: the answer and the
-failure are cleaned apart, so the failure stays the copy's exact tail and still comes off.
-Cleaning the stored copy afterwards can change the failure, and a message whose recorded
-failure is no longer its tail is left out entirely, the safe side.
 Some other *handled* failures (e.g. the API returning empty responses repeatedly) also
 come back as a short status string instead of raising:
 
 ```python
+import os
+
 from vaf import Agent, is_error_reply
 
 agent = Agent(config={
@@ -541,6 +520,50 @@ Notes:
 - **Streaming + errors.** An exception during a streamed run can arrive after
   some `on_token` deltas were already delivered; treat partial output as
   non-final until `run()` returns.
+
+**Your own transcript of the stream.** What `on_token` received can end with a failure even
+when `run()` returned an answer. If you keep your own transcript of that stream, store it
+with `vaf.stored_turn_copy` and hand a model only what `vaf.model_text` returns for each
+message: None for a failed turn, the answer without its failure for a turn that answered
+first, the text otherwise. The stored copy keeps the whole stream, failure included, so
+your record shows what happened. VAF's own runner and terminal store their transcripts
+exactly this way. With `agent` from the example above, and `reply` standing for however
+your application answers the person:
+
+```python
+import logging
+
+import vaf
+
+log = logging.getLogger(__name__)
+transcript = []  # your own record of the conversation
+
+prompt = "When is my appointment?"
+transcript.append({"role": "user", "content": prompt})
+streamed = []
+answer = agent.run(prompt, on_token=streamed.append)
+if agent.last_turn.failed:
+    # No answer: `answer` is the failure, with internal detail in it.
+    # Log it and send a fixed sentence; never hand the failure on.
+    log.warning("turn failed: %s", answer)
+    reply("Sorry, that did not work. Please try again.")
+else:
+    reply(answer)  # never holds a failure, also when a later round failed
+copy, metadata = vaf.stored_turn_copy("".join(streamed), agent.last_turn)
+transcript.append({"role": "assistant", "content": copy, "metadata": metadata})
+
+# Later, what a model may read of that transcript:
+readable = [{"role": m["role"], "content": text}
+            for m in transcript if (text := vaf.model_text(m)) is not None]
+```
+
+Store `metadata` beside the copy as it is (None for most turns) and hand it back with the
+message; its keys are VAF's own and not part of the promise. If you clean the stream before
+you store it (strip reasoning, collapse blank lines), pass that function as the third
+argument, `vaf.stored_turn_copy("".join(streamed), agent.last_turn, clean)`: the answer
+and the failure are cleaned apart, so the failure stays the copy's exact tail and still
+comes off. Cleaning the stored copy afterwards can change the failure, and a message whose
+recorded failure is no longer its tail is left out entirely, the safe side.
 
 ---
 

@@ -91,7 +91,7 @@ def test_the_network_layers_follow_the_setting_at_request_time(network):
     assert desktop.get("/api/users").status_code == 200
     network["on"] = True
     assert lan.get("/api/users").status_code == 401           # sign-in required now
-    assert _relayed(app, PUBLIC).get("/api/users").status_code in (401, 403)
+    assert _relayed(app, PUBLIC).get("/api/users").status_code == 403
     assert desktop.get("/api/users").status_code == 200       # the desktop stays tokenless
 
 
@@ -132,25 +132,47 @@ def test_a_socket_from_another_device_is_refused_while_local_network_is_off(netw
         assert ws.receive_text() == "hello"
 
 
-def test_the_network_chain_is_auth_then_admission_then_rate_limit():
-    """Today's order, Auth outermost, built once: the rate limiter's windows are module state,
-    and a chain rebuilt per request would cost an allocation for nothing."""
+def test_the_network_chain_is_admission_then_auth_then_rate_limit():
+    """Admission outermost, built once: the rate limiter's windows are module state, and a
+    chain rebuilt per request would cost an allocation for nothing. With Local Network off,
+    the door the HTTPS proxy uses then."""
     from vaf.auth.rate_limit import RateLimitMiddleware
-    from vaf.network.admission import AdmissionGuard
+    from vaf.network.admission import LOCAL_NETWORK_OFF, AdmissionGuard
     from vaf.network.binding import is_localhost
 
     async def inner(scope, receive, send):  # pragma: no cover - never called here
         pass
 
     layers = mw.NetworkModeLayers(inner)
-    chain = layers._network
-    assert isinstance(chain, mw.AuthMiddleware)
-    assert isinstance(chain.app, AdmissionGuard) and chain.app._admits is None
+    chain = layers.network
+    assert isinstance(chain, AdmissionGuard) and chain._admits is None
+    assert isinstance(chain.app, mw.AuthMiddleware)
     assert isinstance(chain.app.app, RateLimitMiddleware)
     assert chain.app.app.app is inner
-    assert isinstance(layers._this_machine, AdmissionGuard)
-    assert layers._this_machine._admits is is_localhost and layers._this_machine.app is inner
-    assert layers._local is inner
+    assert isinstance(layers.this_machine, AdmissionGuard)
+    assert layers.this_machine._admits is is_localhost and layers.this_machine.app is inner
+    assert layers.this_machine._reason == LOCAL_NETWORK_OFF
+
+
+def test_a_client_outside_the_admitted_networks_meets_no_sign_in_check(network, events,
+                                                                      monkeypatch):
+    """With the sign-in check outermost a tokenless public client got 401 and was recorded as
+    `unauthenticated_blocked`, which the doctor's count of public refusals never reads, and a
+    public client that sent a token had it decoded and looked up in the account and session
+    stores before the address check refused it. MUTATION: Auth outside the admission check -
+    red."""
+    import vaf.auth.crypto as crypto
+    decoded = []
+    monkeypatch.setattr(crypto, "decode_token", lambda token: decoded.append(token) or None)
+    network["on"] = True
+    app = _small_app()
+    r = _relayed(app, PUBLIC).get("/api/users")
+    assert r.status_code == 403
+    assert [k for k, _ in events] == ["ip_blocked"]
+    c = _relayed(app, PUBLIC)
+    c.headers["Authorization"] = "Bearer abc.def.ghi"
+    assert c.get("/api/users").status_code == 403
+    assert decoded == []
 
 
 # --------------------------------------------------------------------------- the real app
@@ -180,7 +202,7 @@ def test_the_real_app_refuses_after_a_runtime_enable(real_app, network):
     assert desktop.get("/api/config").status_code == 200
     network["on"] = True
     public = _relayed(real_app, PUBLIC).get("/api/config")
-    assert public.status_code in (401, 403)
+    assert public.status_code == 403
     assert "local_network_enabled" not in public.text
     assert _relayed(real_app, LAN).get("/api/config").status_code == 401
     assert _relayed(real_app, LAN).get("/api/network/remote-access").status_code == 401

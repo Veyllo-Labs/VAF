@@ -4244,7 +4244,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             try: get_tracker().unregister_connection(connection_id)
             except: pass
             
-            await websocket.close(code=4003, reason="Local network feature is disabled")
+            from vaf.network.admission import LOCAL_NETWORK_OFF
+            await websocket.close(code=4003, reason=LOCAL_NETWORK_OFF)
             return
         if not token:
             log("API", "WebSocket rejected: Localhost connection without token")

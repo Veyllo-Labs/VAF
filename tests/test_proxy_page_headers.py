@@ -19,6 +19,8 @@ from starlette.testclient import TestClient
 
 import vaf.network.https_proxy as proxy
 
+# Every page here is relayed to a device on the LAN, which the door serves in network mode only.
+pytestmark = pytest.mark.usefixtures("local_network_on")
 
 @pytest.fixture(autouse=True)
 def _machine_named_workstation(monkeypatch):

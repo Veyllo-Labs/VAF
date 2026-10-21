@@ -77,13 +77,18 @@ def lan_endpoint(room_id: str) -> Dict[str, str]:
     covers - a test holds the two together. Empty rather than raising: a machine with
     no LAN identity still hands out a perfectly good local invitation, and an
     exception here would take that away over a feature the user may not have enabled.
+
+    Empty while Local Network is off, TLS or not: the HTTPS door and the backend then
+    answer this machine only, so a LAN address handed out then is one every peer on
+    another machine is refused at (4003 at the handshake).
     """
     try:
         from vaf.core.config import Config
         from vaf.network.binding import get_local_network_ip
         from vaf.network.ssl_utils import ca_fingerprint
 
-        if not Config.get("local_network_tls_enabled", False):
+        if not (Config.get_bool("local_network_enabled", False)
+                and Config.get_bool("local_network_tls_enabled", False)):
             return {}
         host = str(get_local_network_ip() or "").strip()
         fingerprint = str(ca_fingerprint() or "").strip()

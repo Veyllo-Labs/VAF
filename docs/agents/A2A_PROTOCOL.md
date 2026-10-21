@@ -961,8 +961,11 @@ flaw: the invitation carries the file's sha256 and the CA fingerprint by another
 route, and checking them IS the trust step. A host installed from a wheel has no
 examples tree to serve; its client endpoint answers 404 and names the repository
 copy, which travels over publicly verifiable TLS instead. The invitation renders
-this lane only when a wire endpoint exists at all - without LAN TLS there is no lane
-a VAF-less guest could use, because the local lane is the `vaf` command itself.
+this lane only when a wire endpoint exists at all - without Local Network on and LAN TLS
+there is no lane a VAF-less guest could use, because the local lane is the `vaf` command
+itself. With Local Network off the HTTPS door and the backend answer this machine only, so
+`lan_endpoint` names no LAN address then, TLS on or not: every peer on another machine would
+be refused at the handshake (4003).
 
 The client is convenience, never a requirement. The posture of the conformance suite
 stands: this document alone is enough to implement from, and the two example files

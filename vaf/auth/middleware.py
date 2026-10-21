@@ -9,7 +9,7 @@ puts the LAST ``add_middleware`` call outermost):
   SecurityHeaders -> ForeignOriginGuard -> NetworkModeLayers -> OwnOriginCORSMiddleware
     -> route handler
 NetworkModeLayers is registered in every mode and chooses on every request: in network mode
-AuthMiddleware -> AdmissionGuard -> RateLimitMiddleware, with Local Network off an
+AdmissionGuard -> AuthMiddleware -> RateLimitMiddleware, with Local Network off an
 AdmissionGuard that admits this machine only.
 
 ForeignOriginGuard refuses what a browser marks as coming from another web page (HTTP and
@@ -35,8 +35,7 @@ from starlette.websockets import WebSocketClose
 # Module level on purpose: network mode must never start without its admission check and its
 # rate limit, so a failed import fails the web server's import instead of leaving them out.
 from vaf.auth.rate_limit import RateLimitMiddleware
-from vaf.network.admission import AdmissionGuard
-from vaf.network.binding import is_localhost
+from vaf.network.admission import AdmissionGuard, ByLocalNetwork, this_machine_only
 
 
 logger = logging.getLogger(__name__)
@@ -175,8 +174,8 @@ class OwnOriginCORSMiddleware(CORSMiddleware):
 # The network layers, chosen per request
 # ---------------------------------------------------------------------------
 
-class NetworkModeLayers:
-    """Sign-in check, address check and rate limit for network mode, chosen on every request.
+class NetworkModeLayers(ByLocalNetwork):
+    """Address check, sign-in check and rate limit for network mode, chosen on every request.
 
     Why per request: these layers used to be added to the app at import time, and only when
     Local Network was on then. The tray serves a settings toggle by starting a new uvicorn on
@@ -186,37 +185,26 @@ class NetworkModeLayers:
     200, as the local admin) until the next full restart. The `/ws` handler reads the setting
     per connection and was not affected.
 
-    Network mode: Auth -> admission (AdmissionGuard, HTTP and WebSocket alike) -> rate limit
-    -> the app, the order network mode always had. Local Network off: this machine only, an
-    AdmissionGuard that admits loopback; a request from anywhere else is refused (HTTP 403,
-    WebSocket 4003 before accept), as the `/ws` handler has always refused one. Off must not
-    mean "no checks": the HTTPS proxy outlives the switch by the frontend's restart (the tray
-    restarts the frontend first and stops the proxy after it), `vaf run --web` keeps its
-    0.0.0.0 bind for its whole run, and a `config.json` that does not parse reads as the
-    defaults, so a device that needed a sign-in a moment ago would otherwise get the local
-    admin's route floors.
+    Network mode: admission (AdmissionGuard, HTTP and WebSocket alike) -> Auth -> rate limit
+    -> the app. Admission is outermost, so a client outside the admitted networks is refused
+    as `ip_blocked` (403) before any token of its is decoded or looked up in the account and
+    session stores, and before the rate limiter counts it; with Auth outside, a tokenless
+    public client got 401 and was recorded as `unauthenticated_blocked`, which the doctor's
+    count of public refusals does not read. Local Network off: this machine only
+    (`this_machine_only`, the same door the HTTPS proxy uses then); a request from anywhere
+    else is refused (HTTP 403, WebSocket 4003 before accept), as the `/ws` handler has always
+    refused one. Off must not mean "no checks": the HTTPS proxy outlives the switch by the
+    frontend's restart (the tray restarts the frontend first and stops the proxy after it),
+    `vaf run --web` keeps its 0.0.0.0 bind for its whole run, and a `config.json` that does
+    not parse reads as the defaults, so a device that needed a sign-in a moment ago would
+    otherwise get the local admin's route floors.
 
-    Cost: one config read per request (about 0.15 ms measured with every key stored). Both
-    chains are built once here; the rate limiter's windows are module state either way.
-    Scopes other than http and websocket (lifespan) go straight to the app.
+    Both chains are built once here; the rate limiter's windows are module state either way.
     """
 
     def __init__(self, app) -> None:
-        self._local = app
-        self._this_machine = AdmissionGuard(app, admits=is_localhost,
-                                            reason="Local network feature is disabled")
-        self._network = AuthMiddleware(AdmissionGuard(RateLimitMiddleware(app)))
-
-    async def __call__(self, scope, receive, send) -> None:
-        if scope.get("type") not in ("http", "websocket"):
-            await self._local(scope, receive, send)
-            return
-        from vaf.core.config import Config
-
-        if Config.get_bool("local_network_enabled", False):
-            await self._network(scope, receive, send)
-            return
-        await self._this_machine(scope, receive, send)
+        super().__init__(network=AdmissionGuard(AuthMiddleware(RateLimitMiddleware(app))),
+                         this_machine=this_machine_only(app))
 
 
 # ---------------------------------------------------------------------------

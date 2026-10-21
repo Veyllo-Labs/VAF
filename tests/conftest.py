@@ -161,6 +161,19 @@ def _isolated_config_and_kek(tmp_path_factory):
     ss._KEYRING_AVAILABLE = None
 
 
+@pytest.fixture
+def local_network_on(monkeypatch):
+    """Local Network switched on for one test, read the way VAF's two doors read it on every
+    request (`Config.get_bool`, vaf/network/admission.py ByLocalNetwork). A test that relays a
+    device on the LAN through the HTTPS proxy needs it: with Local Network off the proxy
+    serves this machine only."""
+    from vaf.core.config import Config
+    real_get_bool = Config.get_bool.__func__
+    monkeypatch.setattr(Config, "get_bool", classmethod(
+        lambda cls, key, default=False: True if key == "local_network_enabled"
+        else real_get_bool(cls, key, default)))
+
+
 @pytest.fixture(autouse=True)
 def _isolated_data_keyring(tmp_path, monkeypatch):
     """A data keyring per TEST - same class as the provider-key store below.

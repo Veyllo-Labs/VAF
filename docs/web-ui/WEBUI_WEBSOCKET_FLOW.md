@@ -77,7 +77,9 @@ Who may connect at all is decided before any socket handler runs. `AdmissionGuar
 and judges the handshake of EVERY WebSocket route, `/ws`, the room socket `/ws/a2a/{room_id}` and
 the interactive browser's stream alike: in network mode a client outside the admitted networks
 (`inbound_policy()`), with Local Network off any client that is not this machine, is closed with
-`4003` before accept and recorded as `ip_blocked`. Starlette's `BaseHTTPMiddleware` never sees
+`4003` before accept and recorded as `ip_blocked`. The HTTPS door applies the same rule to the
+handshakes it relays (`ByLocalNetwork` in `vaf/network/admission.py`), so with Local Network off a
+device on the LAN is closed there already. Starlette's `BaseHTTPMiddleware` never sees
 websocket-scope connections, so the address check used to be a `BaseHTTPMiddleware` that judged
 no socket at all: only `/ws` checked the address itself, and the room socket and the browser
 stream checked none.

@@ -56,9 +56,12 @@ It never dials loopback, where a tokenless request is the owner.
 ## Modules
 
 - **admission.py**: `AdmissionGuard(app)`, the admission check as a pure ASGI door: it
-  refuses a client `is_allowed_ip` does not admit, HTTP with 403 and a WebSocket with 4003
-  before accept, and records `ip_blocked` with the path in `detail`. Not imported by the
-  package: it needs starlette, which a slim install lacks.
+  refuses a client `is_allowed_ip` does not admit, HTTP with 403 (a browser loading a page
+  gets a short page saying what to do, everything else JSON) and a WebSocket with 4003
+  before accept, and records `ip_blocked` with the path in `detail`. `ByLocalNetwork` picks
+  a door per request by the Local Network setting and `this_machine_only` is the door while
+  it is off; both of VAF's doors are built on them. Not imported by the package: it needs
+  starlette, which a slim install lacks.
 - **binding.py**: interfaces, the inbound policy, the real client, the foreign-origin
   decision, port resolution, the outbound address classifier.
 - **firewall.py**: the OS firewall for the admitted networks (firewalld, ufw, iptables,
@@ -69,7 +72,8 @@ It never dials loopback, where a tokenless request is the owner.
   systemd service), so no caller runs sudo there.
 - **https_proxy.py**: the integrated TLS entry point (`/api`, `/ws` to the backend,
   everything else to the frontend), wrapped in `AdmissionGuard` so a client that is not
-  admitted gets no page at all; it writes `X-Forwarded-For` from `connection_client_ip`
+  admitted (with Local Network off: any client but this machine) gets no page of VAF's;
+  it writes `X-Forwarded-For` from `connection_client_ip`
   (the device itself, or the client a relay on this machine named), on every HTTP request
   and every WebSocket handshake, and adds the page security headers (`PAGE_SECURITY_HEADERS`)
   to what the frontend serves, and HSTS scoped by the dialled host (`binding.hsts_for_host`:

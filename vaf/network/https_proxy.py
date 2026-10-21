@@ -11,14 +11,19 @@ When local_network_enabled and local_network_tls_enabled, this proxy listens on
 
 Best practice: single entry point for HTTPS, TLS termination here.
 
-The door admits what ``binding.inbound_policy()`` admits (this machine, the local networks or
-with "VPN only" the VPN networks, plus the private networks an admin added) and refuses every
-other client before any page, API call or socket: ``AdmissionGuard`` wraps the whole app, so a
-public address gets 403 (a WebSocket 4003) instead of the login page. It used to relay pages to
-any address and leave the refusal to the backend's API (measured: ``GET /login`` 200 for
-``203.0.113.9``, its socket accepted). Named boundary: the TLS handshake happens before any HTTP
-check, so a client that reaches the port still receives the certificate, whose names list the
-LAN and VPN addresses and the host name; only a firewall closes that.
+The door admits what the backend admits and refuses every other client before any page, API
+call or socket. With Local Network on that is what ``binding.inbound_policy()`` admits (this
+machine, the local networks or with "VPN only" the VPN networks, plus the private networks an
+admin added); with it off, this machine only. ``admission.ByLocalNetwork`` picks the guard per
+request, the same choice the backend makes, because this proxy runs whenever TLS is on, Local
+Network or not (vaf/tray.py), and outlives a switch to off until the restart stops it. A
+refused browser gets a short page that says which networks VAF answers and what to do, an API
+call 403 JSON, a socket 4003. The door used to relay pages to any address and leave the
+refusal to the backend's API (measured: ``GET /login`` 200 for ``203.0.113.9``, its socket
+accepted), and with Local Network off it still relayed pages to LAN devices. Named boundary:
+the TLS handshake happens before any HTTP check, so a client that reaches the port still
+receives the certificate, whose names list the LAN and VPN addresses and the host name; only a
+firewall closes that.
 """
 
 import asyncio
@@ -37,7 +42,7 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocket
 
-from vaf.network.admission import AdmissionGuard
+from vaf.network.admission import AdmissionGuard, ByLocalNetwork, this_machine_only
 
 logger = logging.getLogger(__name__)
 
@@ -461,6 +466,8 @@ def create_proxy_app() -> ASGIApp:
     The admission check is the outermost layer: a refused client is answered before anything is
     relayed, and it writes nothing to the access log, which keeps one line per request and has no
     throttle; the refusal is the security event ``ip_blocked``, one per address per 5 seconds.
+    Which guard answers follows Local Network per request, like the backend's
+    (``NetworkModeLayers``): the admitted networks while it is on, this machine while it is off.
     """
     routes = [
         WebSocketRoute("/ws", endpoint=_ws_handler),
@@ -481,8 +488,8 @@ def create_proxy_app() -> ASGIApp:
         Route("/sounds/{filename:path}", endpoint=_api_route, methods=["GET", "HEAD"]),
         Route("/{path:path}", endpoint=_proxy_handler, methods=_API_METHODS),
     ]
-    app = Starlette(routes=routes, lifespan=_lifespan)
-    return AdmissionGuard(AccessLogMiddleware(app))
+    logged = AccessLogMiddleware(Starlette(routes=routes, lifespan=_lifespan))
+    return ByLocalNetwork(network=AdmissionGuard(logged), this_machine=this_machine_only(logged))
 
 
 def run_https_proxy(

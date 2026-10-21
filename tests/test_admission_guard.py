@@ -98,7 +98,7 @@ def test_the_guard_refuses_what_the_policy_does_not_admit(why, peer, forwarded, 
     app = _app(reached)
     r = _client(app, peer, forwarded).get("/login")
     assert r.status_code == 403
-    assert r.json() == {"detail": "Access denied: only local network clients are allowed"}
+    assert r.json() == {"detail": admission.REFUSED_DETAIL}
     with pytest.raises(WebSocketDisconnect) as refused:
         with _client(app, peer, forwarded).websocket_connect("/ws/a2a/r1"):
             pass
@@ -150,6 +150,25 @@ def test_a_scope_without_a_client_is_refused(admitted, reached, events):
     assert events and events[0][1]["ip"] == "unknown"
 
 
+@pytest.mark.parametrize("lines", [
+    [b"192.168.1.5", b"203.0.113.9"],
+    [b"127.0.0.1", b"203.0.113.9"],
+], ids=["a LAN line before the relay's", "this machine before the relay's"])
+def test_every_forwarded_line_counts(admitted, reached, events, lines):
+    """A relay that adds a line of its own (HAProxy's `option forwardfor`) puts the client it
+    saw LAST; the first line is whatever the client sent. Read alone, it made a public client
+    a LAN device, or this machine. MUTATION: read the first header line only - red."""
+    import asyncio
+    scope = {"type": "http", "method": "GET", "path": "/login", "raw_path": b"/login",
+             "query_string": b"", "scheme": "http", "server": ("127.0.0.1", 8443),
+             "client": (PROXY_PEER, 40000), "http_version": "1.1", "root_path": "",
+             "headers": [(b"x-forwarded-for", line) for line in lines]}
+    sent = asyncio.run(_drive(_app(reached), scope))
+    assert sent[0]["status"] == 403
+    assert reached == []
+    assert events[0][1]["ip"] == "203.0.113.9"
+
+
 def test_a_lifespan_scope_passes():
     import asyncio
     seen = []
@@ -168,6 +187,114 @@ def test_a_door_can_admit_by_its_own_rule(reached, events):
     assert _client(guard, PROXY_PEER).get("/login").status_code == 200
     r = _client(guard, PROXY_PEER, "192.168.1.20").get("/login")
     assert r.status_code == 403 and r.json() == {"detail": "Not here"}
+
+
+# --------------------------------------------------------------------------- what a person sees
+
+PAGE = {"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
+
+
+def test_a_refused_browser_gets_a_page_that_says_what_to_do(admitted, reached, events):
+    """A person who opened the login page from a network that is not admitted read raw JSON
+    that named the local network alone and gave no way forward. The page says which networks
+    VAF answers and what to do, names no address and keeps nothing. MUTATION: answer JSON for
+    every request; drop the next step - red."""
+    r = _client(_app(reached), PROXY_PEER, "203.0.113.9").get("/login", headers=PAGE)
+    assert r.status_code == 403
+    assert r.headers["content-type"].startswith("text/html")
+    page = r.text
+    assert "VPN" in page and "local network" in page
+    assert "<code>vaf server status</code>" in page
+    assert "203.0.113.9" not in page and "/login" not in page
+    assert r.headers["cache-control"] == "no-store"
+    assert "default-src 'none'" in r.headers["content-security-policy"]
+    assert r.headers["x-frame-options"] == "DENY"
+    assert "<script" not in page
+    assert reached == []
+
+
+@pytest.mark.parametrize("method,path,headers", [
+    ("GET", "/api/users", PAGE),                 # an API path keeps JSON whatever it accepts
+    ("GET", "/login", {"Accept": "*/*"}),        # a fetch or a script
+    ("POST", "/login", PAGE),                    # not a page load
+], ids=["api path", "no html accepted", "post"])
+def test_everything_else_keeps_the_json_answer(admitted, reached, events, method, path, headers):
+    app = admission.AdmissionGuard(Starlette(routes=[]))
+    r = _client(app, "203.0.113.9").request(method, path, headers=headers)
+    assert r.status_code == 403
+    assert r.json() == {"detail": admission.REFUSED_DETAIL}
+
+
+def test_the_refusal_names_the_vpn_not_the_local_network_alone():
+    """Under "VPN only" the local network is refused too; "only local network clients are
+    allowed" was false there."""
+    assert "VPN" in admission.REFUSED_DETAIL
+    assert "local network clients" not in admission.REFUSED_DETAIL
+    assert "`vaf server status`" in admission.REFUSED_NEXT_STEP
+
+
+def test_with_local_network_off_the_page_says_so(reached, events):
+    guard = admission.this_machine_only(_app(reached).app)
+    r = _client(guard, PROXY_PEER, "192.168.1.20").get("/login", headers=PAGE)
+    assert r.status_code == 403
+    assert "Local Network is off" in r.text and "<code>vaf server on</code>" in r.text
+    assert "vaf server status" not in r.text
+    with pytest.raises(WebSocketDisconnect) as refused:
+        with _client(guard, PROXY_PEER, "192.168.1.20").websocket_connect("/ws/a2a/r1"):
+            pass
+    assert refused.value.code == 4003 and refused.value.reason == admission.LOCAL_NETWORK_OFF
+    assert reached == []
+
+
+def test_a_long_reason_still_closes_the_socket(reached, events):
+    """A close reason over 123 bytes fails the close frame itself (RFC 6455 5.5). MUTATION: send
+    the reason uncut - red."""
+    long_reason = "\u00e4" * 100                   # 200 bytes in UTF-8
+    guard = admission.AdmissionGuard(_app(reached).app, admits=lambda ip: False,
+                                     reason=long_reason)
+    with pytest.raises(WebSocketDisconnect) as refused:
+        with _client(guard, PROXY_PEER).websocket_connect("/ws/a2a/r1"):
+            pass
+    assert refused.value.code == 4003
+    assert len(refused.value.reason.encode("utf-8")) <= 123
+    assert refused.value.reason == "\u00e4" * 61
+
+
+# --------------------------------------------------------------------------- one door per mode
+
+def test_the_door_follows_local_network_on_every_request(monkeypatch, admitted, reached, events):
+    """VAF's two doors pick their guard per request: the admitted networks while Local Network
+    is on, this machine only while it is off. MUTATION: decide once at construction - red."""
+    from vaf.core.config import Config
+    state = {"on": True}
+    monkeypatch.setattr(Config, "get_bool",
+                        classmethod(lambda cls, key, default=False:
+                                    state["on"] if key == "local_network_enabled" else default))
+    inner = _app(reached).app
+    door = admission.ByLocalNetwork(network=admission.AdmissionGuard(inner),
+                                    this_machine=admission.this_machine_only(inner))
+    lan = _client(door, PROXY_PEER, "192.168.1.20")
+    assert lan.get("/login").status_code == 200
+    state["on"] = False
+    r = lan.get("/login")
+    assert r.status_code == 403 and r.json() == {"detail": admission.LOCAL_NETWORK_OFF}
+    assert _client(door, PROXY_PEER).get("/login").status_code == 200
+    state["on"] = True
+    assert _client(door, PROXY_PEER, "203.0.113.9").get("/login").status_code == 403
+    assert lan.get("/login").status_code == 200
+
+
+def test_a_lifespan_reaches_the_app_once_through_both_doors():
+    import asyncio
+    seen = []
+
+    async def inner(scope, receive, send):
+        seen.append(scope["type"])
+
+    door = admission.ByLocalNetwork(network=admission.AdmissionGuard(inner),
+                                    this_machine=admission.this_machine_only(inner))
+    asyncio.run(door({"type": "lifespan"}, None, None))
+    assert seen == ["lifespan"]
 
 
 # --------------------------------------------------------------------------- the record

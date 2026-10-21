@@ -697,24 +697,30 @@ What an embedded agent can and cannot do on the host - the short version of
   `Request` or `WebSocket` (a pure ASGI middleware wraps its scope in
   `HTTPConnection(scope)`). A relay of yours on the same machine must write
   `X-Forwarded-For` with the client it saw: VAF reads that header only from a
-  loopback peer, and takes the rightmost hop that is not this machine, so a
-  client's own entries to the left are never read. A raw TCP forward writes no
-  header, and its clients are this machine. `is_allowed_ip(ip)` answers with the same policy
-  VAF's own doors and firewall use: this machine, the local networks, and what an
-  admin admitted (`local_network_allowed_networks`, `local_network_vpn_only`).
-  To refuse everybody else, wrap your app the way VAF's two doors (the HTTPS proxy and
-  the backend in network mode) wrap theirs: `vaf.network.admission.AdmissionGuard(app)`
-  judges HTTP requests and WebSocket handshakes alike (403, or close 4003 before
-  accept) and records the refusal; `admits=` takes another rule, such as
-  `binding.is_localhost` for this machine only. An address check of your own written
-  as a Starlette `BaseHTTPMiddleware` would let every WebSocket through: Starlette
-  hands such a middleware HTTP scopes only.
+  loopback peer, joins all of its lines in order, and takes the rightmost hop that
+  is not this machine, so a client's own entries to the left are never read. A raw
+  TCP forward writes no header, and its clients are this machine. `is_allowed_ip(ip)`
+  answers with the same policy VAF's own doors and firewall use: this machine, the
+  local networks, and what an admin admitted (`local_network_allowed_networks`,
+  `local_network_vpn_only`).
+  To refuse everybody else, wrap your app the way VAF's two doors (the HTTPS proxy
+  and the backend) wrap theirs: `vaf.network.admission.AdmissionGuard(app)` judges
+  HTTP requests and WebSocket handshakes alike (403, or close 4003 before accept),
+  shows a browser that loads a page a short page saying what to do, and records the
+  refusal; `admits=` takes another rule, such as `binding.is_localhost` for this
+  machine only, and `reason=` and `next_step=` its words. VAF's two doors follow its
+  Local Network setting per request through `ByLocalNetwork(network=...,
+  this_machine=this_machine_only(app))`; a door of yours that has no such switch
+  needs only the guard. An address check of your own written as a Starlette
+  `BaseHTTPMiddleware` would let every WebSocket through: Starlette hands such a
+  middleware HTTP scopes only.
   `inbound_policy()` returns that policy whole, `firewall_sources()` the networks
   an OS firewall should open, `local_interfaces()` this machine's LAN and VPN
   addresses, `public_addresses()` its public IPv4 addresses (the machine is on the
-  internet, so the port must be closed in front of it). These live in `vaf.network.binding` (the guard in `vaf.network.admission`,
-  which needs the server extra), not on the `vaf` facade:
-  there is one HTTP door today, the same named boundary as the origin guard
+  internet, so the port must be closed in front of it). These live in
+  `vaf.network.binding` (the guard in `vaf.network.admission`, which needs the
+  server extra), not on the `vaf` facade: the only doors that use them are VAF's own
+  two, the same named boundary as the origin guard
   ([NETWORK_FEATURES.md](setup/NETWORK_FEATURES.md#remote-access-over-a-vpn),
   [vaf/network/README.md](../vaf/network/README.md)).
 - **Admin-only tools stay off - but a bare agent still acts as the machine

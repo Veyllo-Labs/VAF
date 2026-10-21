@@ -287,7 +287,8 @@ class _RecordingUpstream:
     # A browser on this machine, no relay in front: this machine.
     ("127.0.0.1", None, "127.0.0.1"),
 ])
-def test_the_proxy_writes_the_resolved_client(monkeypatch, peer, incoming, written):
+def test_the_proxy_writes_the_resolved_client(monkeypatch, peer, incoming, written,
+                                               local_network_on):
     """The proxy wrote its OWN peer into X-Forwarded-For, which is 127.0.0.1 for a tunnel or
     reverse proxy on this machine unless uvicorn's default proxy-header handling had already
     replaced it. It writes the resolver's answer now, once, after stripping the client's
@@ -309,7 +310,7 @@ def test_the_proxy_writes_the_resolved_client(monkeypatch, peer, incoming, writt
     assert values == [written]
 
 
-def test_the_proxys_header_path_asks_no_dns_in_a_test(monkeypatch):
+def test_the_proxys_header_path_asks_no_dns_in_a_test(monkeypatch, local_network_on):
     """An answer through the proxy decides HSTS for the dialled Host, `testserver` here, a
     DNS name, so it looks the machine's names up: that was one real reverse lookup in this
     file (measured), with the real machine's name as its answer. tests/conftest.py answers
@@ -337,7 +338,7 @@ def test_the_proxys_header_path_asks_no_dns_in_a_test(monkeypatch):
     assert asked == []
 
 
-def test_the_socket_relay_always_names_the_client(monkeypatch):
+def test_the_socket_relay_always_names_the_client(monkeypatch, local_network_on):
     """The WebSocket half sent the header only when a peer was known, and then the peer
     itself. A relayed handshake without the header reads as the machine; with the peer,
     a tunnel on this machine does. MUTATION: send the header only for a known client, or

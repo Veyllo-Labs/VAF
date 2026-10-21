@@ -7,7 +7,8 @@ The measurement this was written on: ``TestClient(create_proxy_app(), client=("2
 40000))`` with the upstream faked: ``GET /login`` 200 (the login page relayed), ``GET
 /api/users`` relayed upstream, and the WebSocket ``/ws/a2a/room1`` accepted by the proxy. The
 door is the only listener on a network interface, and only the backend's API behind it said
-no. The same for ``192.168.1.20``, which is admitted and must stay so.
+no. The same for ``192.168.1.20``, which is admitted and must stay so while Local Network is
+on; while it is off the door serves this machine only, as the backend does.
 """
 import contextlib
 from types import SimpleNamespace
@@ -24,10 +25,16 @@ LAN = "192.168.1.20"
 _REAL_POLICY = binding.inbound_policy
 
 
-def fake_upstream(monkeypatch):
+def fake_upstream(monkeypatch, *, local_network=True):
     """The proxy's two upstream legs, faked in one place: the pooled HTTP client and the
-    backend socket dial. Returns what reached each."""
-    seen = SimpleNamespace(requests=[], sockets=[], access=[])
+    backend socket dial. Returns what reached each; ``seen.network`` switches Local Network,
+    read on every request like the real setting."""
+    seen = SimpleNamespace(requests=[], sockets=[], access=[], network={"on": local_network})
+    from vaf.core.config import Config
+    real_get_bool = Config.get_bool.__func__
+    monkeypatch.setattr(Config, "get_bool", classmethod(
+        lambda cls, key, default=False: seen.network["on"] if key == "local_network_enabled"
+        else real_get_bool(cls, key, default)))
 
     class _Upstream:
         async def request(self, method, url, headers=None, content=None):
@@ -99,6 +106,31 @@ def test_the_door_refuses_before_any_page(monkeypatch, events, peer, forwarded):
     assert seen.access == [], "a refused request must not reach the unthrottled access log"
     assert [k for k, _ in events] == ["ip_blocked"] * 4
     assert {f["ip"] for _, f in events} == {PUBLIC}
+
+
+def test_a_refused_browser_gets_the_page_not_the_login(monkeypatch, events):
+    seen = fake_upstream(monkeypatch)
+    r = _client(PUBLIC).get("/login", headers={"Accept": "text/html"})
+    assert r.status_code == 403 and r.headers["content-type"].startswith("text/html")
+    assert "vaf server status" in r.text and "login" not in r.text and PUBLIC not in r.text
+    assert seen.requests == [] and seen.access == []
+
+
+def test_with_local_network_off_the_door_serves_this_machine_only(monkeypatch, events):
+    """The proxy runs whenever TLS is on, Local Network or not, and outlives a switch to off
+    until the restart stops it; it relayed pages to LAN devices then while the backend refused
+    them. MUTATION: wrap the app in the network guard alone - red."""
+    seen = fake_upstream(monkeypatch, local_network=False)
+    r = _client(LAN).get("/login", headers={"Accept": "text/html"})
+    assert r.status_code == 403 and "Local Network is off" in r.text
+    with pytest.raises(WebSocketDisconnect) as refused:
+        with _client(LAN).websocket_connect("/ws"):
+            pass
+    assert refused.value.code == 4003
+    assert seen.requests == [] and seen.sockets == [] and seen.access == []
+    assert _client("127.0.0.1").get("/login").status_code == 200
+    seen.network["on"] = True
+    assert _client(LAN).get("/login").status_code == 200
 
 
 def test_an_admitted_device_is_relayed(monkeypatch, events):

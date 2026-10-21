@@ -96,6 +96,7 @@ def test_the_printed_address_comes_from_the_certificate_s_own_source(monkeypatch
     monkeypatch.setattr("vaf.network.ssl_utils.ca_fingerprint", lambda: "ab" * 32)
     monkeypatch.setattr("vaf.core.config.Config.get",
                         staticmethod(lambda key, default=None: {
+                            "local_network_enabled": True,
                             "local_network_tls_enabled": True,
                             "local_network_https_port": 8443,
                         }.get(key, default)))
@@ -119,6 +120,23 @@ def test_a_machine_with_no_lan_identity_still_invites(monkeypatch):
     monkeypatch.setattr("vaf.core.config.Config.get",
                         staticmethod(lambda key, default=None: False))
     assert lan_endpoint("room-x") == {}
+
+
+def test_no_lan_address_is_handed_out_while_local_network_is_off(monkeypatch):
+    """With Local Network off the HTTPS door and the backend answer this machine only, so a
+    LAN address handed out then is one every peer on another machine is refused at (4003),
+    TLS on or not. MUTATION: ask only the TLS setting again - red."""
+    import vaf.core.a2a.invite as invite_mod
+
+    monkeypatch.setattr("vaf.network.binding.get_local_network_ip", lambda: "192.168.7.7")
+    monkeypatch.setattr("vaf.network.ssl_utils.ca_fingerprint", lambda: "ab" * 32)
+    monkeypatch.setattr("vaf.core.config.Config.get",
+                        staticmethod(lambda key, default=None: {
+                            "local_network_enabled": False,
+                            "local_network_tls_enabled": True,
+                            "local_network_https_port": 8443,
+                        }.get(key, default)))
+    assert invite_mod.lan_endpoint("room-x") == {}
 
 
 def test_the_briefing_promises_the_remote_lane_exactly_when_it_exists(circle, monkeypatch):

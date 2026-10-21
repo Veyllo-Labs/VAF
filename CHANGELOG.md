@@ -123,8 +123,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   answers arrived all at once at the end, and a device whose session had ended kept
   reconnecting; now it goes back to the sign-in page. A connection to the port has 15 seconds
   for its TLS handshake and 15 seconds to finish its request head, which may be at most
-  16 KiB. A request body may be at most 128 MiB and may not stall for a minute, and the port
-  serves at most 512 connections at once. VAF raises its own open-file limit at start (a
+  16 KiB. A request body may be at most 128 MiB and may not stall for a minute, and once 512
+  connections are open the port turns new requests away. VAF raises its own open-file limit at start (a
   systemd service starts with 1024), so a flood of slow connections can no longer starve the
   whole service. Every HTTPS listener accepts only forward-secret AEAD suites over TLS 1.2,
   where static RSA and CBC suites were accepted, so a device from before about 2014 that

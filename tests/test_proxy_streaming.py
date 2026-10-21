@@ -340,3 +340,21 @@ def test_the_pools_match_the_door(monkeypatch):
     clients = asyncio.run(_both())
     assert clients[0] is not clients[1]
     assert [limits.max_connections for limits in made] == [door.connection_cap()] * 2 == [77, 77]
+
+
+# --------------------------------------------------------------------------- WebSocket
+
+def test_a_refused_socket_fails_at_the_handshake(relay):
+    """AC 20: a socket the backend refuses before accept fails at the handshake (HTTP 403)
+    instead of opening and closing with 1000, and an accepted one still relays both ways.
+    MUTATION: accept the client before dialling the backend - red."""
+    from websockets.exceptions import InvalidStatus
+    from websockets.sync.client import connect
+    port, _upstream = relay
+    with pytest.raises(InvalidStatus) as refused:
+        with connect(f"ws://127.0.0.1:{port}/ws", open_timeout=5):
+            pass
+    assert refused.value.response.status_code == 403
+    with connect(f"ws://127.0.0.1:{port}/ws/a2a/room1", open_timeout=5) as ws:
+        ws.send("hi")
+        assert ws.recv(timeout=5) == "echo:hi"

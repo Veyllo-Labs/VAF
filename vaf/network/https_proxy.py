@@ -383,12 +383,22 @@ _WS_ALLOWED = re.compile(
 
 
 async def _forward_websocket(websocket: WebSocket) -> None:
-    """Accept client WS and relay it to the SAME path on the backend (ws://127.0.0.1:8005).
+    """Relay a client WS to the SAME path on the backend (ws://127.0.0.1:8005), which is
+    asked first: the client is accepted only once the backend accepted the relayed
+    handshake.
 
     The path used to be hardcoded to /ws, which meant a second websocket route would
     have relayed to the WebUI handler: the socket opens, frames flow, the wrong handler
     answers. That is the worst failure shape there is, because everything looks healthy,
     so the path is carried through and checked against an allowlist instead.
+
+    The client used to be accepted before the backend was dialled, so a handshake the
+    backend refused (no session, an ended one, a foreign origin: every /ws refusal comes
+    before accept) opened on the device and closed with 1000 (measured), and a socket
+    without a session could send frames into the door until the refusal arrived. Now a
+    refused or unreachable backend closes the client before accept, which a browser sees
+    as a failed handshake (HTTP 403), as the desktop does on 8005: the web UI then checks
+    its session and goes to the sign-in page instead of reconnecting again and again.
     """
     import websockets
     path = websocket.scope.get("path") or "/ws"
@@ -401,7 +411,6 @@ async def _forward_websocket(websocket: WebSocket) -> None:
     # checks what came back; accepting without one leaves it holding a socket it
     # will not speak on.
     _offered = websocket.scope.get("subprotocols") or []
-    await websocket.accept(subprotocol=_offered[0] if _offered else None)
     # Derived from BACKEND_ORIGIN, not a second hardcoded 8005: the HTTP half already
     # reads that constant, and two literals for one backend is one of them going stale.
     backend_uri = BACKEND_ORIGIN.replace("http://", "ws://").replace("https://", "wss://") + path
@@ -458,6 +467,8 @@ async def _forward_websocket(websocket: WebSocket) -> None:
         async with websockets.connect(backend_uri, additional_headers=extra_headers or None,
                                       origin=_origin, subprotocols=_sub, max_size=None,
                                       ping_interval=None) as backend_ws:
+            await websocket.accept(subprotocol=_offered[0] if _offered else None)
+
             async def from_backend():
                 try:
                     async for msg in backend_ws:
@@ -501,8 +512,14 @@ async def _forward_websocket(websocket: WebSocket) -> None:
             for half in pending:
                 half.cancel()
     except Exception as e:
-        logger.warning("HTTPS proxy WebSocket backend connect failed: %s", e)
+        # websockets' InvalidStatus carries the backend's answer to the handshake.
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        if status is not None:
+            logger.warning("HTTPS proxy: backend refused the WebSocket handshake (HTTP %s)", status)
+        else:
+            logger.warning("HTTPS proxy WebSocket backend connect failed: %s", e)
     finally:
+        # Before accept this refuses the handshake; after it, it carries the backend's close.
         try:
             await websocket.close(code=closing["code"], reason=closing["reason"])
         except Exception:

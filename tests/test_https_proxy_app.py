@@ -147,3 +147,79 @@ def test_forward_websocket_relays_large_frames_without_size_cap():
         "first binary frame and that half of the relay dies silently"
     )
     assert 'message.get("bytes")' in _relay_src, "binary frames must be forwarded as bytes"
+
+
+def test_the_relay_asks_the_backend_first():
+    """The client is accepted only after the backend accepted the relayed handshake. The
+    relay used to accept first, so a socket the backend refused opened on the device and
+    closed with 1000 (measured), and the web UI reconnected again and again instead of going
+    to the sign-in page. A refused backend now closes the client before accept, which the
+    device sees as a failed handshake. MUTATION: accept before connect (the old order) - red."""
+    import websockets as _ws
+    from websockets.datastructures import Headers as WsHeaders
+    from websockets.exceptions import InvalidStatus
+    from websockets.http11 import Response as WsResponse
+
+    order = []
+
+    class _BackendWS:
+        close_code = 1000
+        close_reason = ""
+
+        async def __aenter__(self):
+            order.append("connect")
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+        async def send(self, _):
+            pass
+
+    class _Refusing:
+        async def __aenter__(self):
+            order.append("connect")
+            raise InvalidStatus(WsResponse(403, "Forbidden", WsHeaders()))
+
+        async def __aexit__(self, *a):
+            return False
+
+    class _ClientWS:
+        url = type("U", (), {"query": ""})()
+        scope = {"path": "/ws", "headers": []}
+        client = type("C", (), {"host": "192.168.1.50"})()
+        headers = Headers(scope=scope)
+
+        async def accept(self, subprotocol=None):
+            order.append("accept")
+
+        async def receive(self):
+            raise RuntimeError("client gone")
+
+        async def send_text(self, _):
+            pass
+
+        async def send_bytes(self, _):
+            pass
+
+        async def close(self, code=1000, reason=""):
+            order.append(f"close {code}")
+
+    orig = _ws.connect
+    try:
+        _ws.connect = lambda uri, **kw: _Refusing()
+        asyncio.run(proxy._forward_websocket(_ClientWS()))
+        assert order == ["connect", "close 1000"], order    # never accepted
+
+        order.clear()
+        _ws.connect = lambda uri, **kw: _BackendWS()
+        asyncio.run(proxy._forward_websocket(_ClientWS()))
+        assert order[:2] == ["connect", "accept"], order
+    finally:
+        _ws.connect = orig

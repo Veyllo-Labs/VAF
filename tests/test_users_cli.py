@@ -328,6 +328,8 @@ def test_the_close_goes_through_the_loopback_lane_and_no_proxy(monkeypatch):
     environment: with HTTP_PROXY set and no loopback exception, the call went to the proxy,
     failed like a VAF that is not running, and the command said every device was signed out.
     MUTATION: honour the environment again - red."""
+    import os
+
     import vaf.core.web_interface as web_interface
     from vaf.cli.cmd import users as cmd
     server, seen = _loopback_server()
@@ -335,9 +337,12 @@ def test_the_close_goes_through_the_loopback_lane_and_no_proxy(monkeypatch):
         monkeypatch.setattr(web_interface, "internal_api_base",
                             lambda: f"http://127.0.0.1:{server.server_port}")
         monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
-        monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
         monkeypatch.delenv("NO_PROXY", raising=False)
-        monkeypatch.delenv("no_proxy", raising=False)
+        if os.name != "nt":
+            # Linux and macOS read both spellings as two variables; on Windows the
+            # environment is case-insensitive and the upper-case lines above are both.
+            monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")
+            monkeypatch.delenv("no_proxy", raising=False)
         assert cmd._close_open_connections("u1") is None
         assert seen == ["/api/users/u1/sign-out"]
     finally:

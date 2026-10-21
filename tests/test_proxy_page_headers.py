@@ -22,9 +22,14 @@ import vaf.network.https_proxy as proxy
 
 @pytest.fixture(autouse=True)
 def _machine_named_workstation(monkeypatch):
-    """A fixed host name, so the real machine's name never decides a test."""
+    """A fixed host name and FQDN, so the real machine's names never decide a test (and no
+    test waits on a DNS lookup); the memo of the machine's names starts empty."""
     import socket
+
+    import vaf.network.binding as binding
     monkeypatch.setattr(socket, "gethostname", lambda: "Workstation")
+    monkeypatch.setattr(socket, "getfqdn", lambda *_a: "Workstation.example.lan")
+    monkeypatch.setattr(binding, "_OWN_LABELS", {})
 
 
 class _Upstream:
@@ -150,9 +155,56 @@ def test_the_certificate_carries_the_names_hsts_keeps_off(monkeypatch):
 
     import vaf.network.binding as binding
     from vaf.network import ssl_utils
-    monkeypatch.setattr(socket, "getfqdn", lambda: "Workstation.example.lan")
     monkeypatch.setattr(binding, "get_all_local_ips", lambda: [])
     names = [v.value for v in ssl_utils._collect_sans() if isinstance(v, x509.DNSName)]
     assert names == ["localhost", "Workstation", "Workstation.example.lan"]
     for name in names:
         assert binding.hsts_for_host(f"{name}:8443") == binding.HSTS_CLEAR, name
+
+
+
+def test_an_fqdn_with_another_first_label_is_the_machines_own_too(monkeypatch):
+    """getfqdn() can name the machine differently from gethostname() (a host alias), and the
+    certificate carries both: the FQDN and the names built on its label get max-age=0 as
+    well, and the year still goes to a name of its own. MUTATION: judge by gethostname()
+    alone - red."""
+    import socket
+
+    import vaf.network.binding as binding
+    monkeypatch.setattr(socket, "getfqdn", lambda *_a: "nas.example.lan")
+    assert binding.hsts_for_host("nas.example.lan:8443") == binding.HSTS_CLEAR
+    assert binding.hsts_for_host("nas.local") == binding.HSTS_CLEAR
+    assert binding.hsts_for_host("workstation.lan") == binding.HSTS_CLEAR
+    assert binding.hsts_for_host("vaf.lan") == binding.HSTS_VALUE
+
+
+def test_the_machines_names_are_looked_up_once_not_on_every_answer(monkeypatch):
+    """getfqdn() is a DNS lookup and HSTS is decided on every answer: it runs once per host
+    name, and the certificate check fills it at the start. MUTATION: drop the memo, or the
+    warm-up in ensure_ssl_certificates - red."""
+    import socket
+
+    import vaf.network.binding as binding
+    lookups = []
+    monkeypatch.setattr(socket, "getfqdn", lambda *_a: lookups.append(1) or "nas.example.lan")
+    for _ in range(50):
+        binding.hsts_for_host("vaf.lan:8443")
+    assert len(lookups) == 1
+
+    # The start fills it before any answer: the certificate check with TLS on asks first.
+    from vaf.core.config import Config
+    from vaf.network import ssl_utils
+    monkeypatch.setattr(binding, "_OWN_LABELS", {})
+    monkeypatch.setattr(Config, "get", staticmethod(
+        lambda key, default=None: True if key == "local_network_tls_enabled" else default))
+
+    class _Stop(Exception):
+        pass
+
+    def _stop():
+        raise _Stop()
+
+    monkeypatch.setattr(ssl_utils, "_get_ssl_dir", _stop)     # no certificate work in a test
+    with pytest.raises(_Stop):
+        ssl_utils.ensure_ssl_certificates()
+    assert len(lookups) == 2 and binding._OWN_LABELS

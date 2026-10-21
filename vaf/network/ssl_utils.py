@@ -358,6 +358,14 @@ def ensure_ssl_certificates() -> tuple[Optional[str], Optional[str]]:
     if not tls_enabled:
         return None, None
 
+    # The machine's own names for the HSTS scope, looked up once here at the start (getfqdn
+    # is a DNS lookup) rather than on the first answer.
+    try:
+        from vaf.network.binding import own_name_labels
+        own_name_labels()
+    except Exception:
+        pass
+
     # Current required IP SANs: every address a device may reach this machine on, LAN
     # and VPN alike, so a changed LAN address or a VPN that came up since the last
     # start gets a certificate that names it. One that went away does not force a new

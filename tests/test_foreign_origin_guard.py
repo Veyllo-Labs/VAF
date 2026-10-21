@@ -296,7 +296,7 @@ def test_the_https_proxy_relays_what_the_guard_judges(monkeypatch):
                                                 (b"sec-fetch-site", b"same-origin")]}
             client = type("C", (), {"host": "192.168.1.50"})()
             # A real WebSocket carries its headers; the relay asks the resolver for the client.
-            headers: dict = {}
+            headers = Headers(scope=scope)
 
             async def accept(self, subprotocol=None):
                 pass

@@ -463,15 +463,10 @@ def connection_client_ip(conn) -> str:
     one comma-separated list). A relay that adds its own line (HAProxy's ``option forwardfor``)
     puts the client it saw in the LAST line; reading the first line alone took the client's own
     line for the answer, so a remote client could name ``127.0.0.1`` there and be this machine
-    wherever uvicorn's own proxy-header handling is off. A plain mapping in place of
-    Starlette's headers holds one value per name and is read as that one line.
+    wherever uvicorn's own proxy-header handling is off.
     """
     client = getattr(conn, "client", None)
-    headers = conn.headers
-    if hasattr(headers, "getlist"):
-        lines = [line for line in headers.getlist("x-forwarded-for") if line]
-    else:
-        lines = [headers.get("x-forwarded-for")] if headers.get("x-forwarded-for") else []
+    lines = [line for line in conn.headers.getlist("x-forwarded-for") if line]
     return effective_client_ip(client.host if client else None,
                                ", ".join(lines) if lines else None)
 

@@ -12,6 +12,8 @@ that the shared httpx clients are still closed on shutdown.
 import asyncio
 from pathlib import Path
 
+from starlette.datastructures import Headers
+
 import vaf.network.https_proxy as proxy
 
 
@@ -104,7 +106,7 @@ def test_forward_websocket_relays_large_frames_without_size_cap():
         scope = {"headers": []}
         client = type("C", (), {"host": "192.168.1.50"})()
         # A real WebSocket carries its headers; the relay asks the resolver for the client.
-        headers: dict = {}
+        headers = Headers(scope=scope)
 
         accepted_subprotocol = "unset"
 

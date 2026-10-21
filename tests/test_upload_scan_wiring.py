@@ -23,6 +23,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from starlette.datastructures import Headers
 
 import vaf.core.threat_db as tdb
 
@@ -112,7 +113,7 @@ def test_workspace_upload_endpoint_refuses_with_403(tmp_path, monkeypatch):
     req = ws.WorkspaceUploadRequest(sessionId="s", filename="payload.sh",
                                     content_base64=_b64(PAYLOAD))
     with pytest.raises(HTTPException) as e:
-        asyncio.run(ws.upload_session_workspace_file(req, SimpleNamespace(client=None, headers={})))
+        asyncio.run(ws.upload_session_workspace_file(req, SimpleNamespace(client=None, headers=Headers())))
     assert e.value.status_code == 403
     assert not (tmp_path / "payload.sh").exists(), "nothing may be written on a refusal"
 
@@ -124,7 +125,7 @@ def test_workspace_upload_endpoint_still_accepts_clean_files(tmp_path, monkeypat
     monkeypatch.setattr(ws, "_requester_name", lambda request: "admin")
     req = ws.WorkspaceUploadRequest(sessionId="s", filename="list.txt",
                                     content_base64=_b64(CLEAN))
-    out = asyncio.run(ws.upload_session_workspace_file(req, SimpleNamespace(client=None, headers={})))
+    out = asyncio.run(ws.upload_session_workspace_file(req, SimpleNamespace(client=None, headers=Headers())))
     assert out["ok"] is True
     assert (tmp_path / "list.txt").read_bytes() == CLEAN
 
@@ -141,7 +142,7 @@ def test_a2a_room_push_refuses_before_touching_the_workspace(monkeypatch):
 
     class _Req:
         client = None
-        headers: dict = {}
+        headers = Headers()
 
         async def body(self):
             return PAYLOAD

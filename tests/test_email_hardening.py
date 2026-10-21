@@ -17,6 +17,7 @@ All tests are network-free and Pillow-free.
 import pytest
 
 from fastapi import HTTPException
+from starlette.datastructures import Headers
 
 from vaf.core.config import Config
 from vaf.core.email_transport import normalize_recipients
@@ -123,17 +124,13 @@ def test_ssrf_guard_override_allows_private_but_never_link_local():
 class _FakeClient:
     def __init__(self, host): self.host = host
 
-class _FakeHeaders:
-    def __init__(self, d): self._d = {k.lower(): v for k, v in (d or {}).items()}
-    def get(self, k, default=None): return self._d.get(k.lower(), default)
-
 class _FakeState:
     def __init__(self, user): self.user = user
 
 class _FakeRequest:
     def __init__(self, host, headers=None, user=None):
         self.client = _FakeClient(host)
-        self.headers = _FakeHeaders(headers)
+        self.headers = Headers(headers or {})
         self.state = _FakeState(user)
 
 

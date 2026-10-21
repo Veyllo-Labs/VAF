@@ -373,6 +373,53 @@ def test_a_renewal_during_a_dns_outage_keeps_the_fqdn(monkeypatch):
     assert binding.hsts_for_host("nas.example.lan:8443") == binding.HSTS_CLEAR
 
 
+def test_a_renewal_without_an_fqdn_does_not_outrank_the_certificates_lookup(monkeypatch):
+    """The start ran while DNS was down, so the memo holds the host name alone. A certificate's
+    lookup starts; while its query runs, the entry crosses the minute and an answer starts a
+    renewal, whose query fails at once (the bare host name) and lands first. The certificate's
+    query then finds the FQDN. The renewal had taken the newer place in the start order with
+    no new names, so the certificate's lookup was thrown away and the FQDN it carries got the
+    year. A lookup that finds no FQDN keeps the place of the names it keeps. MUTATION: give
+    it its own place in the start order - red."""
+    import socket
+    import threading
+
+    from cryptography import x509
+
+    import vaf.network.binding as binding
+    from vaf.network import ssl_utils
+    certificate = {"issuing": False}
+    lookups = []
+
+    def _getfqdn(*_a):
+        renewal = threading.current_thread().name == "vaf-own-names"
+        lookups.append("renewal" if renewal else "direct")
+        if renewal:
+            return "Workstation"            # the renewal's query fails: the bare host name
+        if certificate["issuing"]:
+            # The certificate's query is in flight: the entry crosses the minute, an answer
+            # starts a renewal, and that renewal lands before this query returns.
+            labels, looked_up_at, order = binding._OWN_LABELS["Workstation"]
+            binding._OWN_LABELS["Workstation"] = (
+                labels, looked_up_at - binding.OWN_NAMES_MAX_AGE_S, order)
+            assert binding.hsts_for_host("nas.example.lan:8443") == binding.HSTS_VALUE
+            binding._OWN_LABELS_REFRESHER.join(5)
+            assert not binding._OWN_LABELS_REFRESHER.is_alive()
+            return "nas.example.lan"
+        return "Workstation"                # the start: DNS not up yet
+
+    monkeypatch.setattr(socket, "getfqdn", _getfqdn)
+    monkeypatch.setattr(binding, "get_all_local_ips", lambda: [])
+    assert binding.own_name_labels() == frozenset({"workstation"})          # the start
+    certificate["issuing"] = True
+    names = [v.value for v in ssl_utils._collect_sans() if isinstance(v, x509.DNSName)]
+    assert names == ["localhost", "Workstation", "nas.example.lan"]
+    assert lookups == ["direct", "direct", "renewal"]
+    assert binding._OWN_LABELS["Workstation"][0] == frozenset({"workstation", "nas"})
+    assert binding.hsts_for_host("nas.example.lan:8443") == binding.HSTS_CLEAR
+    assert binding.hsts_for_host("vaf.lan") == binding.HSTS_VALUE
+
+
 def test_the_https_proxy_looks_the_names_up_before_it_serves(monkeypatch):
     """With TLS on and the LAN switched off the proxy still runs, and no certificate check at
     the start has looked the machine's names up: the proxy does it before its first answer.

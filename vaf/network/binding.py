@@ -471,17 +471,20 @@ def machine_dns_names() -> List[str]:
     """This machine's own DNS names besides `localhost`: the host name and, when it differs,
     the FQDN. The local certificate carries exactly these (ssl_utils._collect_sans).
 
-    Every call is a lookup (getfqdn()) and renews the memo own_name_labels() reads, unless a
-    lookup that started after this one has landed first: the memo keeps the lookup that
-    started last, not the one that finished last. So a renewal already running when a
-    certificate's lookup begins cannot put older names back once the certificate is issued,
-    and the HSTS scope holds the names of the certificate's lookup or of a newer one.
+    Every call is a lookup (getfqdn()) and renews the memo own_name_labels() reads, unless
+    the names the memo holds come from a lookup that started after this one: the memo keeps
+    the lookup that started last, not the one that finished last. So a renewal already
+    running when a certificate's lookup begins cannot put older names back once the
+    certificate is issued, and the HSTS scope holds the names of the certificate's lookup or
+    of a newer one that found an FQDN.
 
     A lookup that finds no FQDN (getfqdn() failed, or answered the host name itself, which
-    is also its answer while DNS is down) keeps the names the memo already holds for this
-    host name and renews only their time: a short DNS outage at a renewal would otherwise
-    drop the FQDN and hand that name, which the certificate carries, a year of HSTS. On the
-    safe side, an FQDN that is removed while VAF runs keeps max-age=0 until a restart."""
+    is also its answer while DNS is down) brings no names: it keeps the names the memo
+    already holds for this host name and their place in the start order, and renews only
+    their time. Otherwise a short DNS outage at a renewal would drop the FQDN and hand that
+    name, which the certificate carries, a year of HSTS, and a renewal that started while a
+    certificate's lookup ran would outrank that lookup and throw away the FQDN it found. On
+    the safe side, an FQDN that is removed while VAF runs keeps max-age=0 until a restart."""
     hostname = _host_name()
     with _OWN_LABELS_LOCK:
         order = next(_OWN_LABELS_STARTS)
@@ -501,8 +504,11 @@ def machine_dns_names() -> List[str]:
         if stored is None or stored[2] < order:
             if stored is not None and len(names) < 2:
                 # No FQDN found: the old names stay, the time is renewed all the same, so a
-                # machine without an FQDN is not looked up again on every answer.
-                labels = stored[0]
+                # machine without an FQDN is not looked up again on every answer. The names
+                # keep their place in the start order as well: this lookup carries nothing
+                # new, so it must not outrank one that started before it and is still
+                # running (a certificate's lookup that finds the FQDN lands after it).
+                labels, order = stored[0], stored[2]
             _OWN_LABELS[hostname] = (labels, started_at, order)
     return names
 
@@ -512,8 +518,9 @@ def _first_labels(names: List[str]) -> FrozenSet[str]:
                      if label and label != "localhost")
 
 
-# Host name -> (the first labels of machine_dns_names(), time.monotonic() when that lookup
-# started, its place in the order the lookups started). getfqdn() is a DNS lookup and HSTS
+# Host name -> (the first labels of machine_dns_names(), time.monotonic() when the lookup that
+# last renewed the entry started, the place in the start order of the lookup the labels came
+# from; a lookup that finds no FQDN renews only the time). getfqdn() is a DNS lookup and HSTS
 # asks on every answer, so an answer reads this memo; the start fills it
 # (ensure_ssl_certificates(), run_https_proxy()). Deliberately not kept for the process life:
 # when DNS is not up at the start, getfqdn() answers with the bare host name, and the FQDN the

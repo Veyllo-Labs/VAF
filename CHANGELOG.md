@@ -122,7 +122,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   warns about a public address on this machine, a switched-off ufw and public addresses that
   reached the port. The installer lists the LAN and VPN addresses instead of the server's
   public one, and Settings, Local Network, Remote access says that VAF is for the local
-  network and the VPN only, with a warning while the machine has a public address.
+  network and the VPN only, with a warning while the machine has a public address. The
+  documentation says it plainly: an agent's login page on the public internet is close to
+  negligent; reach VAF over a VPN.
 
 - **A relay in front of the web UI's port no longer makes its visitors the machine owner.** A
   reverse proxy on the same machine pointed at port 3000 (an nginx for the LAN, Tailscale

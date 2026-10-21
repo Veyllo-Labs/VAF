@@ -28,7 +28,7 @@ detected VPN interfaces, plus the private networks an admin listed in
 
 | Function | Used by |
 |---|---|
-| `is_allowed_ip(ip)` | the IP check middleware and the WebSocket handshake, on every request |
+| `is_allowed_ip(ip)` | `AdmissionGuard` (`admission.py`), the backend's admission check for every HTTP request and every WebSocket handshake; the remote-access settings' display |
 | `firewall_sources(narrow_lan=False)` | every OS firewall backend in `firewall.py` |
 | `access_addresses()` | the access URLs in the settings, `vaf top` and `vaf server status` |
 | `normalize_allowed_networks(values)` | the settings, the CLI and `vaf doctor`: what an entry means, or why it is refused |
@@ -52,6 +52,10 @@ It never dials loopback, where a tokenless request is the owner.
 
 ## Modules
 
+- **admission.py**: `AdmissionGuard(app)`, the admission check as a pure ASGI door: it
+  refuses a client `is_allowed_ip` does not admit, HTTP with 403 and a WebSocket with 4003
+  before accept, and records `ip_blocked` with the path in `detail`. Not imported by the
+  package: it needs starlette, which a slim install lacks.
 - **binding.py**: interfaces, the inbound policy, the real client, the foreign-origin
   decision, port resolution, the outbound address classifier.
 - **firewall.py**: the OS firewall for the admitted networks (firewalld, ufw, iptables,

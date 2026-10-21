@@ -30,7 +30,8 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from vaf.auth.middleware import AuthMiddleware, IPValidationMiddleware
+from vaf.auth.middleware import AuthMiddleware
+from vaf.network.admission import AdmissionGuard
 from vaf.network.binding import effective_client_ip
 
 # The peer the backend sees for ANYTHING relayed by the integrated HTTPS proxy.
@@ -104,21 +105,21 @@ def test_first_run_endpoints_stay_reachable_for_a_lan_browser():
     assert c.post("/api/auth/test-veyllo-key", headers=hop).status_code == 200
 
 
-# --------------------------------------------------------------------------- the IP check (Layer 2)
+# --------------------------------------------------------------------------- the admission check (Layer 2)
 
 def _ip_checked_app():
     app = Starlette(routes=[
         Route("/api/users", _ok),
         Route("/api/auth/bootstrap", _ok, methods=["POST"]),  # creates the first admin
     ])
-    app.add_middleware(IPValidationMiddleware)
+    app.add_middleware(AdmissionGuard)
     return app
 
 
 def _full_app():
-    """Auth outside the IP check, the order the network mode registers them in."""
+    """Auth outside the admission check, the order the network mode runs them in."""
     app = Starlette(routes=[Route("/api/users", _ok)])
-    app.add_middleware(IPValidationMiddleware)
+    app.add_middleware(AdmissionGuard)
     app.add_middleware(AuthMiddleware)
     return app
 
@@ -157,13 +158,13 @@ def test_ip_check_fails_closed_without_client_info():
 
 def test_ip_check_records_the_device_not_the_proxy(monkeypatch):
     """The security log entry must name who knocked, or every refusal reads 127.0.0.1."""
-    import vaf.auth.middleware as mw
+    import vaf.core.security_events as se
 
     events = []
-    monkeypatch.setattr(mw, "_emit_security_event", lambda kind, **f: events.append((kind, f)))
+    monkeypatch.setattr(se, "log_security_event", lambda kind, **f: events.append((kind, f)))
     c = TestClient(_ip_checked_app(), client=PROXY_PEER)
     c.get("/api/users", headers={"X-Forwarded-For": PUBLIC_DEVICE})
-    assert events == [("ip_blocked", {"ip": PUBLIC_DEVICE, "path": "/api/users"})]
+    assert events == [("ip_blocked", {"ip": PUBLIC_DEVICE, "detail": "/api/users"})]
 
 
 # --------------------------------------------------------------------------- the resolver itself

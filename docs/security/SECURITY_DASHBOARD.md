@@ -139,7 +139,7 @@ undeclared, undocumented here, or unlabelled in the dashboard.
 
 | Kind | Meaning | Emit site |
 |------|---------|-----------|
-| `ip_blocked` | Request from outside the allowed LAN ranges (403) | `vaf/auth/middleware.py` |
+| `ip_blocked` | A client outside the admitted networks, refused before any route (403, a WebSocket 4003); with Local Network off, any client that is not this machine. `detail` is the path, so a scanner walking many paths is one line per address per 5 seconds | `vaf/network/admission.py` |
 | `unauthenticated_blocked` | LAN request without a token (401) | `vaf/auth/middleware.py` |
 | `token_rejected` | LAN request with an invalid/expired token, or one whose account was deactivated, deleted or demoted since it was issued (401) | `vaf/auth/middleware.py` |
 | `login_failed` | Wrong username/password on `/api/auth/login` | `vaf/api/auth_routes.py` |

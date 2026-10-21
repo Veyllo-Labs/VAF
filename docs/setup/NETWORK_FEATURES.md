@@ -52,11 +52,12 @@ sudo firewall-cmd --permanent --zone=public --add-rich-rule='rule family="ipv4" 
 
 Implementation: `vaf/network/firewall.py`
 
-### Layer 2: IP Validation Middleware
+### Layer 2: Admission Check
 
-Every HTTP request passes through `IPValidationMiddleware` which validates the client IP against the networks `inbound_policy()` admits, at the application level: this machine, then by default the RFC 1918 ranges, or with "VPN only" the VPN networks instead, plus the private networks an admin added (which may lie outside RFC 1918, such as `100.64.0.0/10`). This acts as a second barrier if firewall rules are misconfigured or bypassed.
+Every HTTP request and every WebSocket handshake passes through `AdmissionGuard` (`vaf/network/admission.py`), which validates the client address against the networks `inbound_policy()` admits, at the application level: this machine, then by default the RFC 1918 ranges, or with "VPN only" the VPN networks instead, plus the private networks an admin added (which may lie outside RFC 1918, such as `100.64.0.0/10`). This acts as a second barrier if firewall rules are misconfigured or bypassed.
 
-- Rejects any IP outside the admitted networks with HTTP 403 (recorded as `ip_blocked` with the device's address); under "VPN only" that includes the home network
+- Rejects any address outside the admitted networks with HTTP 403, a WebSocket with close 4003 before accept, before any route or socket handler runs (recorded as `ip_blocked` with the device's address and the path in `detail`, so a scanner walking many paths is one line per address per 5 seconds); under "VPN only" that includes the home network
+- Judges WebSockets too. The check used to be a `BaseHTTPMiddleware`, and Starlette passes every scope that is not HTTP through such a middleware unjudged (measured: HTTP 403 while a WebSocket route behind the same check opened and answered). Only `/ws` checked the address itself; the room socket (`/ws/a2a/{room_id}`) and the interactive browser's stream checked none, and `vaf run --web` serves the backend on `0.0.0.0:8001` in network mode, so there they faced the network directly
 - Judges the REAL client, not the socket peer: the integrated proxy relays every device over loopback, so the peer is `127.0.0.1` for all of them. The address comes from `connection_client_ip` in `vaf/network/binding.py`, which honors `X-Forwarded-For` only when the peer is loopback (see [Who the client is](#who-the-client-is)). This check used to read the peer and therefore passed every relayed request, a public address on the proxy port included (measured: 200 through the proxy, 403 only on a direct connection), while the WebSocket handshake already refused it.
 - Admitted are this machine, the local networks (RFC 1918) and the networks an admin added; with "VPN only" the networks of the detected VPN interfaces replace the local ones. WireGuard and OpenVPN clients (`10.x`) pass by default; mesh VPNs that hand out `100.64.0.0/10` (Tailscale, Headscale, NetBird) pass once that network is admitted. The decision is `inbound_policy()` in `vaf/network/binding.py`, read on every request, so a change applies without a restart - see [Remote access over a VPN](#remote-access-over-a-vpn).
 - Active in network mode. With Local Network off the backend serves this machine only: every other client is refused with 403, a WebSocket with 4003 before accept (see [Middleware Execution Order](#middleware-execution-order))
@@ -76,7 +77,7 @@ Why the rightmost: a relay appends the address it saw, and a client can only wri
 
 VAF is for the LAN and the VPN only: the IP check refuses public addresses, and putting VAF on the public internet is not supported. Should a relay of your own on this machine ever sit in front of VAF, it must write `X-Forwarded-For` with the client it saw (nginx: `$remote_addr`, or `$proxy_add_x_forwarded_for`, which the rightmost rule makes safe as well; Tailscale Serve does it on its own). Do not set uvicorn's `FORWARDED_ALLOW_IPS` environment variable for VAF: its default (`127.0.0.1`) is what the rule above assumes, and with `*` a device on the network that writes `X-Forwarded-For: 127.0.0.1` counts as this machine on the HTTPS port (switching uvicorn's own proxy-header handling off on the doors other devices reach is planned separately). NAMED BOUNDARY: a raw TCP forward on this machine (`ssh -R`, socat, a port forward that is not an HTTP proxy) writes no header at all, so every client it carries is this machine to every check. Never put one in front of VAF; replacing the tokenless local trust with a per-start IPC token is the separate change Layer 3 names.
 
-Implementation: `vaf/auth/middleware.py` -> `IPValidationMiddleware`
+Implementation: `vaf/network/admission.py` -> `AdmissionGuard`, run by `NetworkModeLayers` in `vaf/auth/middleware.py`
 
 ### Layer 3: JWT Authentication Middleware
 
@@ -195,11 +196,11 @@ Requests pass through middleware from outermost to innermost. Starlette puts the
 ```
 Request -> SecurityHeaders -> ForeignOriginGuard -> NetworkModeLayers -> OwnOriginCORSMiddleware -> Route Handler
                                                       |
-                     network mode:  AuthMiddleware -> IPValidationMiddleware -> RateLimitMiddleware
-                     Local Network off:  this machine only (403, WebSocket 4003)
+                     network mode:  AuthMiddleware -> AdmissionGuard -> RateLimitMiddleware
+                     Local Network off:  AdmissionGuard for this machine only (403, WebSocket 4003)
 ```
 
-All four are registered in every mode. `NetworkModeLayers` (`vaf/auth/middleware.py`) reads `local_network_enabled` on every request and picks the chain: in network mode the sign-in check, the address check and the rate limit, in that order; with Local Network off, a request from this machine goes straight on and any other is refused. The guard sits outside CORS, so a preflight from a foreign page is refused before CORS could answer it.
+All four are registered in every mode. `NetworkModeLayers` (`vaf/auth/middleware.py`) reads `local_network_enabled` on every request and picks the chain: in network mode the sign-in check, the admission check and the rate limit, in that order; with Local Network off, an admission check that admits this machine only, so a request from this machine goes straight on and any other is refused. The guard sits outside CORS, so a preflight from a foreign page is refused before CORS could answer it.
 
 Why per request: the three network layers used to be added when the backend module was imported, and only when Local Network was on at that moment. The tray serves a settings toggle by starting a new uvicorn on the SAME app, so a VAF started with Local Network off and switched on later ran the HTTPS proxy in front of an app without them (measured: a client the proxy relayed from `203.0.113.9` got `GET /api/config` with every key, the admin-only `/api/network/remote-access` and the account list, 200, as the local admin) until a full restart. And "off" means this machine only, not "no checks": the proxy outlives the switch by the frontend's restart (the tray restarts the frontend first and stops the proxy after it), `vaf run --web` keeps its `0.0.0.0` bind for its whole run, and a `config.json` that does not parse reads as the defaults; in each case a device that needed a sign-in a moment before would otherwise reach the local admin's route floors. The cost is one config read per request, about 0.15 ms.
 
@@ -207,7 +208,7 @@ Why per request: the three network layers used to be added when the backend modu
 
 Rejections from the layers above are recorded in an always-on security event log (independent of `debug_logs_enabled`; the writer never raises and never slows the request path):
 
-- **Recorded kinds** (`vaf/core/security_events.py`): `ip_blocked` (Layer 2 403), `unauthenticated_blocked` and `token_rejected` (Layer 3 401s), `login_failed` and `twofa_failed` (failed login/2FA attempts), `login_throttled` (a window of Layer 4 closed, once per closure), `ws_rejected` (rejected WebSocket handshakes), and `foreign_origin_blocked` (the origin guard, every mode). The messenger pairing kinds and the rest of the registry are listed in [SECURITY_DASHBOARD.md](../security/SECURITY_DASHBOARD.md); a messenger sender the agent refused to answer is channel traffic, recorded in that channel's inbound log, not here.
+- **Recorded kinds** (`vaf/core/security_events.py`): `ip_blocked` (Layer 2: 403, WebSocket 4003), `unauthenticated_blocked` and `token_rejected` (Layer 3 401s), `login_failed` and `twofa_failed` (failed login/2FA attempts), `login_throttled` (a window of Layer 4 closed, once per closure), `ws_rejected` (rejected WebSocket handshakes), and `foreign_origin_blocked` (the origin guard, every mode). The messenger pairing kinds and the rest of the registry are listed in [SECURITY_DASHBOARD.md](../security/SECURITY_DASHBOARD.md); a messenger sender the agent refused to answer is channel traffic, recorded in that channel's inbound log, not here.
 - **Sinks**: each event is appended to `security_events_<date>.jsonl` (structured) and mirrored human-readably to `security_<date>.log` (the "security" domain in the Logs file rail). One event is one line there: line breaks and other control characters in any value (a username typed at the login, a path, an address) become spaces, because a login name with a newline wrote a forged second line into that file (measured), and a field value that could pose as more fields (a space, `=`, a bracket or a quote in it, such as a username `x ip=127.0.0.1 [password_changed]`) is quoted; the JSONL keeps the value as it was. The integrated proxy's access log (`https_proxy_access_<date>.log`) keeps one request on one line the same way: it writes the percent-decoded path, and `GET /page%0a...` wrote a forged line.
 - **Throttle**: a per-source throttle (kind + ip + username + channel, 5s) prevents floods without letting distinct sources swallow each other's events.
 - **Never logged**: passwords, 2FA codes, or tokens - only the event kind, source, and a short detail.
@@ -560,13 +561,14 @@ Auto-generated TLS certificates carry the machine's hostname and FQDN as DNS SAN
 ```
 vaf/
   auth/
-    middleware.py        # ForeignOriginGuard, OwnOriginCORSMiddleware, NetworkModeLayers, AuthMiddleware, IPValidationMiddleware
+    middleware.py        # ForeignOriginGuard, OwnOriginCORSMiddleware, NetworkModeLayers, AuthMiddleware
     rate_limit.py        # RateLimitMiddleware (brute-force protection)
     crypto.py            # Argon2, JWT, AES-256-GCM for TOTP
     models.py            # SQLAlchemy models (LocalUser, UserSession)
     database.py          # Auth DB session (shared with memory DB)
     user_config.py       # Per-user config directories
   network/
+    admission.py         # AdmissionGuard: refuses a client that is not admitted, HTTP and WebSocket alike
     binding.py           # LAN/VPN interfaces, who is admitted (inbound_policy), real client, foreign-origin decision, frontend port
     firewall.py          # OS firewall automation (Windows/macOS/Linux) for the admitted networks
     https_proxy.py       # Integrated HTTPS reverse proxy (/api, /ws -> 8005; rest -> 3000)
@@ -596,7 +598,7 @@ Integrated HTTPS proxy (0.0.0.0:8443 or 443)  [connection-pooled httpx clients]
     |
     v (for /api, /sounds, and /ws)
 Uvicorn + FastAPI (127.0.0.1:8005)
-    +-- SecurityHeaders, ForeignOriginGuard, NetworkModeLayers (AuthMiddleware, IPValidationMiddleware, RateLimitMiddleware), OwnOriginCORSMiddleware
+    +-- SecurityHeaders, ForeignOriginGuard, NetworkModeLayers (AuthMiddleware, AdmissionGuard, RateLimitMiddleware), OwnOriginCORSMiddleware
     v
 Route Handler (reads request.state.user for identity & scoping)
 ```

@@ -4,8 +4,8 @@
 """The sign-in doors in process, the way an attacker meets them.
 
 The real `vaf.api.auth_routes` router (and the user admin routes) behind the real
-`AuthMiddleware`, `IPValidationMiddleware` and `RateLimitMiddleware`, registered in the
-order network mode registers them (vaf/core/web_server.py). The accounts and sessions are
+`NetworkModeLayers` with Local Network on, the layer vaf/core/web_server.py registers: the
+sign-in check, the admission check and the rate limit, in that order. The accounts and sessions are
 `LocalUser` / `UserSession` on an in-memory SQLite behind a thin async wrapper, so the
 seal's mapper hook and every query run as they do against PostgreSQL. A fixed JWT secret
 and seal key; nothing reaches the keyring or a real database.
@@ -177,8 +177,8 @@ class Harness:
 
         from vaf.api.auth_routes import router as auth_router
         from vaf.api.user_routes import router as user_router
-        from vaf.auth.middleware import AuthMiddleware, IPValidationMiddleware
-        from vaf.auth.rate_limit import RateLimitMiddleware
+        from vaf.auth.middleware import NetworkModeLayers
+        from vaf.core.config import Config
 
         app = FastAPI()
         app.include_router(auth_router)
@@ -190,10 +190,12 @@ class Harness:
         app.add_api_route("/api/probe", _probe, methods=["GET"])
         for path, endpoint, methods in extra_routes:
             app.add_api_route(path, endpoint, methods=methods)
-        # web_server.py order: the LAST added is outermost -> Auth, IP check, rate limit.
-        app.add_middleware(RateLimitMiddleware)
-        app.add_middleware(IPValidationMiddleware)
-        app.add_middleware(AuthMiddleware)
+        # The layer web_server.py registers, in network mode (it reads the setting per request).
+        real_get = Config.get
+        self.mp.setattr(Config, "get", staticmethod(
+            lambda key, default=None: True if key == "local_network_enabled"
+            else real_get(key, default)))
+        app.add_middleware(NetworkModeLayers)
         return app
 
     def client(self, ip: Optional[str] = "192.168.1.50", app=None):

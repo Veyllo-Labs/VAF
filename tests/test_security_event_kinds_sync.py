@@ -132,7 +132,10 @@ def test_the_scan_actually_finds_the_emit_sites():
     """
     emitted = _emitted_kinds()
     assert len(emitted) >= 14, f"the scan found only {len(emitted)} kinds; it is broken"
-    assert "vaf/auth/middleware.py" in emitted["ip_blocked"]
+    assert "vaf/network/admission.py" in emitted["ip_blocked"]
+    assert "vaf/auth/middleware.py" in emitted["token_rejected"], (
+        "the wrapper lane is unseen; auth/middleware.py emits through _emit_security_event"
+    )
     assert "vaf/skills/rescan.py" in emitted["skill_scan_alert"], (
         "the conditional-kind lane is unseen; rescan.py picks its kind with an if/else"
     )

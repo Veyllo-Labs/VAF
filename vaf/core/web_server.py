@@ -4278,21 +4278,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             await websocket.close(code=4001, reason="Invalid token")
             return
     else:
-        # Local network is ENABLED - authenticate network users
+        # Local network is ENABLED - authenticate network users. Who may connect at all was
+        # decided before this handler ran: AdmissionGuard (NetworkModeLayers) refuses a client
+        # outside the admitted networks at the handshake, on every socket route.
         try:
-            from vaf.network.binding import is_allowed_ip
             from vaf.auth.crypto import get_jwt_secret, second_factor_done, token_hash_for_db
             import jwt
-            
-            # Validate IP is from local network
-            if not is_allowed_ip(client_ip):
-                log("API", f"WebSocket rejected: Non-local IP {client_ip}")
-                _emit_sec_ws("non-local ip", ip=client_ip)
-                try: get_tracker().unregister_connection(connection_id)
-                except: pass
-                await websocket.close(code=4003, reason="Local network only")
-                return
-            
+
             # Require token authentication for all network-mode clients (including localhost).
             if not token:
                 log("API", f"WebSocket rejected: No token from {client_ip}")

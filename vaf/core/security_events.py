@@ -59,7 +59,9 @@ from vaf.core.log_helper import get_app_log_dir
 # plus the two message catalogs. The guard names whichever of those you forgot.
 SECURITY_EVENT_KINDS: dict[str, str] = {
     # network / auth perimeter
-    "ip_blocked": "Request from outside the allowed LAN ranges (403)",
+    "ip_blocked": "A client outside the admitted networks, refused before any route (403, a "
+                  "WebSocket 4003); with Local Network off, any client that is not this "
+                  "machine. `detail` is the path",
     "unauthenticated_blocked": "LAN request without a token (401)",
     "token_rejected": "LAN request with an invalid or expired token (401)",
     "login_failed": "Wrong username or password on /api/auth/login",

@@ -72,23 +72,32 @@ directly and never passes through the proxy at all. **A new socket is tested ove
 
 ## WebSocket Authentication
 
-The `/ws` endpoint (`websocket_endpoint` in `vaf/core/web_server.py`) authenticates **inside the
-handler**, not via the HTTP `AuthMiddleware` - Starlette's `BaseHTTPMiddleware` never sees
-websocket-scope connections, so HTTP middleware cannot gate the handshake. The token is read from the
+Who may connect at all is decided before any socket handler runs. `AdmissionGuard`
+(`vaf/network/admission.py`, run by `NetworkModeLayers` in `vaf/auth/middleware.py`) is pure ASGI
+and judges the handshake of EVERY WebSocket route, `/ws`, the room socket `/ws/a2a/{room_id}` and
+the interactive browser's stream alike: in network mode a client outside the admitted networks
+(`inbound_policy()`), with Local Network off any client that is not this machine, is closed with
+`4003` before accept and recorded as `ip_blocked`. Starlette's `BaseHTTPMiddleware` never sees
+websocket-scope connections, so the address check used to be a `BaseHTTPMiddleware` that judged
+no socket at all: only `/ws` checked the address itself, and the room socket and the browser
+stream checked none.
+
+The `/ws` endpoint (`websocket_endpoint` in `vaf/core/web_server.py`) then authenticates **inside
+the handler**, not via the HTTP `AuthMiddleware`, for the same reason. The token is read from the
 `?token=<jwt>` query param or the `vaf_token` cookie.
 
-**Trust model.** Localhost (`127.0.0.1`/`::1`, and the Docker bridge `172.16.0.0/12`) is trusted,
-consistent with the HTTP localhost bypass. In **network mode** (`local_network_enabled=true`) a
-non-localhost client must come from an RFC1918 IP, present a valid `access` JWT, and have passed 2FA
-(unless it is an admin on localhost).
+**Trust model.** Localhost (loopback: `127.0.0.1`, `::1`, `binding.is_localhost`, the same rule
+the HTTP localhost bypass uses) is trusted. In **network mode** (`local_network_enabled=true`) a
+non-localhost client must come from an admitted network, present a valid `access` JWT, and have
+passed 2FA (unless it is an admin on localhost).
 
 **Gating (first match wins):**
 
 | Condition | Result |
 |-----------|--------|
-| Network disabled + non-localhost IP | reject - close `4003` |
+| Network disabled + non-localhost IP | reject - close `4003` (`AdmissionGuard`, before the handler) |
 | Network disabled + localhost, missing/invalid token | reject - close `4001` |
-| Network enabled + non-RFC1918 IP | reject - close `4003` |
+| Network enabled + an address outside the admitted networks | reject - close `4003` (`AdmissionGuard`, before the handler; `ip_blocked`) |
 | Network enabled + no token | reject - close `4001` |
 | Token EXPIRED, from **localhost** | accept - fall through to the local-admin floor below (see the note) |
 | Token expired (non-localhost) / token invalid (any origin) | reject - close `4001` |

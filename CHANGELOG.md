@@ -109,6 +109,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   stays open for a moment after the switch, or a relay of your own in front of VAF, no longer
   hands other devices the machine's admin either.
 
+- **VAF answers only this machine, your local network and your VPN.** The backend's address
+  check now covers every WebSocket as well: agent rooms and the interactive browser's stream
+  had none, and on `vaf run --web`, which serves the backend on every address, they faced the
+  network without it.
+
 - **A relay in front of the web UI's port no longer makes its visitors the machine owner.** A
   reverse proxy on the same machine pointed at port 3000 (an nginx for the LAN, Tailscale
   Serve inside your tailnet) connects to VAF from the machine itself, and the web UI's API

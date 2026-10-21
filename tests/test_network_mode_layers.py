@@ -53,6 +53,8 @@ def network(monkeypatch):
 @pytest.fixture
 def events(monkeypatch):
     seen = []
+    import vaf.core.security_events as se
+    monkeypatch.setattr(se, "log_security_event", lambda kind, **f: seen.append((kind, f)))
     monkeypatch.setattr(mw, "_emit_security_event", lambda kind, **f: seen.append((kind, f)))
     return seen
 
@@ -130,10 +132,12 @@ def test_a_socket_from_another_device_is_refused_while_local_network_is_off(netw
         assert ws.receive_text() == "hello"
 
 
-def test_the_network_chain_is_auth_then_ip_check_then_rate_limit():
+def test_the_network_chain_is_auth_then_admission_then_rate_limit():
     """Today's order, Auth outermost, built once: the rate limiter's windows are module state,
     and a chain rebuilt per request would cost an allocation for nothing."""
     from vaf.auth.rate_limit import RateLimitMiddleware
+    from vaf.network.admission import AdmissionGuard
+    from vaf.network.binding import is_localhost
 
     async def inner(scope, receive, send):  # pragma: no cover - never called here
         pass
@@ -141,9 +145,11 @@ def test_the_network_chain_is_auth_then_ip_check_then_rate_limit():
     layers = mw.NetworkModeLayers(inner)
     chain = layers._network
     assert isinstance(chain, mw.AuthMiddleware)
-    assert isinstance(chain.app, mw.IPValidationMiddleware)
+    assert isinstance(chain.app, AdmissionGuard) and chain.app._admits is None
     assert isinstance(chain.app.app, RateLimitMiddleware)
     assert chain.app.app.app is inner
+    assert isinstance(layers._this_machine, AdmissionGuard)
+    assert layers._this_machine._admits is is_localhost and layers._this_machine.app is inner
     assert layers._local is inner
 
 
@@ -194,3 +200,38 @@ def test_the_real_app_serves_only_this_machine_while_local_network_is_off(real_a
             pass
     assert refused.value.code == 4003
     assert opened == []
+
+
+# --------------------------------------------------------------------------- every socket route
+
+VNC = "/api/browser-vnc/t/abcdefghijklmnop/websockify"
+
+
+def test_the_backend_judges_every_socket(real_app, network, events, monkeypatch):
+    """The room socket and the interactive browser's stream had no address check at all, and
+    `/ws` had its own. In network mode the admission check refuses a client outside the
+    admitted networks at the handshake of every socket route, before any handler runs."""
+    network["on"] = True
+    import vaf.core.a2a.wire as wire
+    import vaf.core.browser_interactive as browser_interactive
+    import vaf.core.web_server as web_server
+
+    reached = []
+    monkeypatch.setattr(web_server.manager, "connect", lambda ws: reached.append("connect"))
+    monkeypatch.setattr(wire, "open_room", lambda room_id: reached.append("room"))
+    monkeypatch.setattr(browser_interactive, "get_manager_by_ticket",
+                        lambda ticket: reached.append("vnc"))
+    for path in ("/ws", "/ws/a2a/r1", VNC):
+        with pytest.raises(WebSocketDisconnect) as refused:
+            with _relayed(real_app, PUBLIC).websocket_connect(path):
+                pass
+        assert refused.value.code == 4003, path
+    assert reached == []
+    assert [(k, f["detail"]) for k, f in events] == [
+        ("ip_blocked", "/ws"), ("ip_blocked", "/ws/a2a/r1"), ("ip_blocked", VNC)]
+
+    # An admitted device still meets the handler's own sign-in check.
+    with pytest.raises(WebSocketDisconnect) as refused:
+        with _relayed(real_app, LAN).websocket_connect("/ws"):
+            pass
+    assert refused.value.code == 4001

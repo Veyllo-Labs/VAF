@@ -2,19 +2,20 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
-Authentication, IP validation and origin middleware for the web server.
+Authentication, admission and origin middleware for the web server.
 
 Middleware stack as ``vaf/core/web_server.py`` registers it (outermost -> innermost; Starlette
 puts the LAST ``add_middleware`` call outermost):
   SecurityHeaders -> ForeignOriginGuard -> NetworkModeLayers -> OwnOriginCORSMiddleware
     -> route handler
 NetworkModeLayers is registered in every mode and chooses on every request: in network mode
-AuthMiddleware -> IPValidationMiddleware -> RateLimitMiddleware, with Local Network off this
-machine only.
+AuthMiddleware -> AdmissionGuard -> RateLimitMiddleware, with Local Network off an
+AdmissionGuard that admits this machine only.
 
 ForeignOriginGuard refuses what a browser marks as coming from another web page (HTTP and
 WebSocket alike), before any identity is looked at.
-IPValidationMiddleware rejects any client IP outside the admitted networks (binding.inbound_policy).
+AdmissionGuard (``vaf/network/admission.py``) refuses every HTTP request and WebSocket
+handshake from a client outside the admitted networks (binding.inbound_policy).
 Every client address here comes from ``binding.connection_client_ip`` (the real client behind
 the integrated proxy), never from the socket peer.
 AuthMiddleware enforces JWT authentication for non-localhost clients.
@@ -31,9 +32,11 @@ from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse
 from starlette.websockets import WebSocketClose
 
-# Module level on purpose: network mode must never start without its rate limit, so a failed
-# import fails the web server's import instead of leaving the checks out.
+# Module level on purpose: network mode must never start without its admission check and its
+# rate limit, so a failed import fails the web server's import instead of leaving them out.
 from vaf.auth.rate_limit import RateLimitMiddleware
+from vaf.network.admission import AdmissionGuard
+from vaf.network.binding import is_localhost
 
 
 logger = logging.getLogger(__name__)
@@ -57,7 +60,7 @@ AUTH_EXEMPT_PATHS: set[str] = {
     "/api/network/ws-config",  # So frontend can build wss:// URL when TLS is on
     # The installation's health for a monitor, which holds no account. It answers one word
     # (ok, degraded, down) from a cached snapshot; the checks behind it are admin-only at
-    # /api/system/health. The network admission (IPValidationMiddleware) still applies.
+    # /api/system/health. The network admission (AdmissionGuard) still applies.
     "/api/health",
     # The A2A guest lane: a foreign harness holds a join ticket, not an account,
     # so it cannot authenticate here - and must not need to. Both files are
@@ -169,38 +172,6 @@ class OwnOriginCORSMiddleware(CORSMiddleware):
 
 
 # ---------------------------------------------------------------------------
-# Layer 2: IP Validation Middleware
-# ---------------------------------------------------------------------------
-
-class IPValidationMiddleware(BaseHTTPMiddleware):
-    """
-    Reject requests from addresses outside the admitted networks.
-
-    The networks come from binding.inbound_policy (through is_allowed_ip): this machine,
-    by default the RFC 1918 ranges, with "VPN only" the VPN networks instead, plus the
-    private networks an admin added. Everything else gets a 403.
-
-    The address judged is the REAL client, not the socket peer: the integrated HTTPS proxy
-    relays every device over loopback, so the peer is 127.0.0.1 for all of them and this check
-    used to pass every relayed request, a public address on the proxy port included.
-    """
-
-    async def dispatch(self, request: Request, call_next: Callable):
-        from vaf.network.binding import connection_client_ip, is_allowed_ip
-
-        client_ip = connection_client_ip(request)
-        if not is_allowed_ip(client_ip):
-            logger.warning("Blocked non-private IP: %s %s", client_ip, request.url.path)
-            _emit_security_event("ip_blocked", ip=client_ip, path=request.url.path)
-            return JSONResponse(
-                status_code=403,
-                content={"detail": "Access denied: only local network clients are allowed"},
-            )
-
-        return await call_next(request)
-
-
-# ---------------------------------------------------------------------------
 # The network layers, chosen per request
 # ---------------------------------------------------------------------------
 
@@ -215,8 +186,9 @@ class NetworkModeLayers:
     200, as the local admin) until the next full restart. The `/ws` handler reads the setting
     per connection and was not affected.
 
-    Network mode: Auth -> IP check -> rate limit -> the app, the order network mode always had.
-    Local Network off: this machine only. A request from anywhere else is refused (HTTP 403,
+    Network mode: Auth -> admission (AdmissionGuard, HTTP and WebSocket alike) -> rate limit
+    -> the app, the order network mode always had. Local Network off: this machine only, an
+    AdmissionGuard that admits loopback; a request from anywhere else is refused (HTTP 403,
     WebSocket 4003 before accept), as the `/ws` handler has always refused one. Off must not
     mean "no checks": the HTTPS proxy outlives the switch by the frontend's restart (the tray
     restarts the frontend first and stops the proxy after it), `vaf run --web` keeps its
@@ -231,7 +203,9 @@ class NetworkModeLayers:
 
     def __init__(self, app) -> None:
         self._local = app
-        self._network = AuthMiddleware(IPValidationMiddleware(RateLimitMiddleware(app)))
+        self._this_machine = AdmissionGuard(app, admits=is_localhost,
+                                            reason="Local network feature is disabled")
+        self._network = AuthMiddleware(AdmissionGuard(RateLimitMiddleware(app)))
 
     async def __call__(self, scope, receive, send) -> None:
         if scope.get("type") not in ("http", "websocket"):
@@ -242,22 +216,7 @@ class NetworkModeLayers:
         if Config.get_bool("local_network_enabled", False):
             await self._network(scope, receive, send)
             return
-        from vaf.network.binding import connection_client_ip, is_localhost
-
-        ip = connection_client_ip(HTTPConnection(scope))
-        if is_localhost(ip):
-            await self._local(scope, receive, send)
-            return
-        path = scope.get("path") or ""
-        logger.debug("Refused %s from %s %s: Local Network is off", scope["type"], ip, path)
-        _emit_security_event("ip_blocked", ip=ip, detail=f"local network off: {path[:200]}")
-        if scope["type"] == "websocket":
-            await WebSocketClose(code=4003, reason="Local network feature is disabled")(
-                scope, receive, send)
-            return
-        await JSONResponse(status_code=403,
-                           content={"detail": "Local network feature is disabled"})(
-            scope, receive, send)
+        await self._this_machine(scope, receive, send)
 
 
 # ---------------------------------------------------------------------------

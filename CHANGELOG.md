@@ -100,38 +100,30 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   your LAN and your VPN only: the app refuses public addresses, and putting it on the public
   internet is not supported.
 
-- **Switching on Local Network in the settings no longer opens VAF without a sign-in.** The
-  network checks (sign-in, address check, rate limit) were set up only when VAF started, so a
-  VAF started with Local Network off and switched on later served other devices with none of
-  them until it was restarted, every request as the machine's admin (measured: the whole
-  configuration answered a device that had not signed in). They now follow the setting on
-  every request. With Local Network off, VAF now answers this machine only, so a port that
-  stays open for a moment after the switch, or a relay of your own in front of VAF, no longer
-  hands other devices the machine's admin either.
+- **Turning on Local Network in Settings asks other devices to sign in at once.** Before, a
+  VAF started with Local Network off and switched on later let other devices in without a
+  sign-in, as the machine's admin, until it was restarted. With Local Network off, the web UI
+  now answers this machine only, its HTTPS port included.
 
-- **VAF answers only this machine, your local network and your VPN.** The HTTPS port now
-  refuses every address that is not admitted before it serves anything, the login page
-  included; before, a public address got the login page and only the API behind it refused.
-  In the backend the same check now covers every WebSocket as well: agent rooms and the
-  interactive browser's stream had none, and on `vaf run --web`, which serves the backend on
-  every address, they faced the network without it. `vaf server provision` says when ufw is
-  installed but switched off (Ubuntu's default) instead of reporting the port as opened: rules
-  added to a switched-off ufw do nothing. `vaf server provision` turns "VPN only" on when it
-  first sets up a server that has a public address, since the private ranges admitted by
-  default are then the hosting provider's network and the container bridges. `vaf doctor`
-  warns about a public address on this machine, a switched-off ufw and public addresses that
-  reached the port. The installer lists the LAN and VPN addresses instead of the server's
-  public one, and Settings, Local Network, Remote access says that VAF is for the local
-  network and the VPN only, with a warning while the machine has a public address. The
-  documentation says it plainly: an agent's login page on the public internet is close to
-  negligent; reach VAF over a VPN.
+- **A device outside your local network and your VPN gets a short "not reachable from here"
+  page instead of the login page.** The page says to connect through the VPN, or to run
+  `vaf server status` on the machine VAF runs on. VAF refuses such a device before it shows
+  anything, its live connections included (agent rooms, the interactive browser).
+  `vaf server provision` turns "VPN only" on when it first sets up a rented server with a
+  public address, and says when ufw is switched off, or when nothing is admitted yet, instead
+  of reporting the port as opened. `vaf doctor`, `vaf server status` and Settings, Local
+  Network, Remote access warn while the machine has a public address. The documentation says
+  it plainly: an agent's login page on the public internet is close to negligent; reach VAF
+  over a VPN. Details: "Scope: private networks only" in `docs/setup/NETWORK_FEATURES.md`.
 
 - **A relay in front of the web UI's port no longer makes its visitors the machine owner.** A
   reverse proxy on the same machine pointed at port 3000 (an nginx for the LAN, Tailscale
   Serve inside your tailnet) connects to VAF from the machine itself, and the web UI's API
   door did not pass on who the visitor was, so VAF took every visitor for you, with no
   sign-in at all. The door passes the visitor on now, VAF reads the client a relay names the
-  same way on every port, and the desktop window stays your own as before. Such a relay must
+  same way on every port, from every `X-Forwarded-For` line a request carries (a relay that
+  adds a line of its own puts the visitor in the last one), and the desktop window stays your
+  own as before. Such a relay must
   write `X-Forwarded-For`; a raw port forward such as `ssh -R` names nobody, so never put one
   in front of VAF.
 

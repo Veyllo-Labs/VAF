@@ -195,6 +195,16 @@ def _field(value) -> str:
     return text
 
 
+def _free_text(value) -> str:
+    """The detail part of the readable line: free text, read as such, so spaces stay plain.
+    Quoted when it carries what could pose as a field or another event ('=', a bracket or a
+    quote): a refused request's own Origin header lands here, and any LAN client sets it."""
+    text = one_line(value)
+    if any(ch in '=[]"' for ch in text):
+        return json.dumps(text, ensure_ascii=False)
+    return text
+
+
 def log_security_event(kind: str, *, ip: str = "", username: str = "",
                        path: str = "", detail: str = "", channel: str = "") -> None:
     """Append one security event to both sinks. Throttled, never raises."""
@@ -250,7 +260,7 @@ def log_security_event(kind: str, *, ip: str = "", username: str = "",
                     f"ip={_field(ip)}" if ip else "",
                     f"user={_field(entry.get('username'))}" if username else "",
                     f"path={_field(entry.get('path'))}" if path else "",
-                    one_line(entry.get("detail", "")),
+                    _free_text(entry.get("detail", "")),
                 ) if x
             )
             # ISO timestamp first: the Logs window's line parser renders it as the

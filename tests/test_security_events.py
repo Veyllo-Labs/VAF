@@ -188,3 +188,16 @@ def test_a_value_cannot_pose_as_more_fields(tmp_path, monkeypatch):
     line = (tmp_path / f"security_{day}.log").read_text(encoding="utf-8").strip()
     assert 'user="x ip=127.0.0.1 [password_changed]"' in line
     assert "ip=10.0.0.5" in line and line.count("[password_changed]") == 1
+    assert line.endswith(" wrong password")          # plain free text stays plain
+
+
+def test_the_detail_cannot_pose_as_fields_either(tmp_path, monkeypatch):
+    """A refused request's own Origin header lands in the detail, and any LAN client sets it:
+    measured, "origin: http://a [password_changed] user=admin ip=127.0.0.1" read as a second
+    event. It is quoted now. MUTATION: write the detail unquoted - red."""
+    _fresh(tmp_path, monkeypatch)
+    forged = "origin: http://a [password_changed] user=admin ip=127.0.0.1"
+    se.log_security_event("foreign_origin_blocked", ip="192.168.1.66", path="/api/x", detail=forged)
+    day = datetime.now().strftime("%Y-%m-%d")
+    line = (tmp_path / f"security_{day}.log").read_text(encoding="utf-8").strip()
+    assert line.endswith(" " + json.dumps(forged)), line

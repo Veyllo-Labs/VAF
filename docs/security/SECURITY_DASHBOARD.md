@@ -100,8 +100,10 @@ assistant access. Two sinks are written together per event:
   as the `security` domain without extra wiring (ISO timestamp first, so the
   line parser renders the timestamp column). One event is one line: control
   characters and line separators in a value become spaces (a login name with a
-  newline forged a second line), and a value with a space, `=`, a bracket or a
-  quote is quoted so it cannot pose as more fields; the JSONL keeps the value.
+  newline forged a second line), and a field value with a space, `=`, a bracket
+  or a quote is quoted so it cannot pose as more fields. The free-text detail at
+  the end is quoted when it carries `=`, a bracket or a quote (a refused
+  request's own `Origin` header lands there); the JSONL keeps the value.
 
 **Retention.** These files are kept for `security_log_retention_days` (default 14), not
 the `gc_max_age_hours` that governs ordinary logs. The distinction is not cosmetic: they

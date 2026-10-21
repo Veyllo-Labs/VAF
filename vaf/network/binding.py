@@ -9,7 +9,8 @@ admitted in network mode. The decision has ONE source, `inbound_policy()`: the a
 check (`is_allowed_ip`), every OS firewall backend (`firewall_sources`) and the shown
 access addresses (`access_addresses`) all read it, so they cannot disagree.
 
-SECURITY: This is Layer 1 of the three-layer defense against internet exposure.
+VAF is served to private networks only, never to the internet: the layers that hold it are
+the Security Model of docs/setup/NETWORK_FEATURES.md.
 """
 
 import socket
@@ -44,8 +45,8 @@ CGNAT_RANGE = ipaddress.ip_network('100.64.0.0/10')
 # What an admin may add to the admitted networks: anything inside these. Deliberately
 # not 198.18.0.0/15, which the outbound classifier below counts as private because
 # fake-IP proxies resolve names into it (no other device sits there), and nothing
-# public: admitting a public network is the internet mode, which needs more than a
-# list entry (a real certificate, a door that turns scanners away).
+# public: a public network is never admitted, because VAF is served to private
+# networks only.
 _ADMISSIBLE_RANGES = (*PRIVATE_RANGES, CGNAT_RANGE)
 
 
@@ -176,8 +177,9 @@ def local_interfaces() -> List[LocalInterface]:
     IPv4 only, interfaces that are up, addresses inside a private range or the
     shared address space. Loopback, container bridges, link-local and public
     addresses are left out: the first two never carry another device, and a public
-    address is the internet mode. psutil is a declared dependency; if it fails the
-    list is empty and the callers fall back to what they did before.
+    address is not served (`public_addresses()` lists those). psutil is a declared
+    dependency; if it fails the list is empty and the callers fall back to what they
+    did before.
     """
     try:
         import psutil
@@ -210,6 +212,44 @@ def local_interfaces() -> List[LocalInterface]:
     return found
 
 
+def public_addresses() -> List[Tuple[str, str]]:
+    """This machine's public IPv4 addresses as (interface, ip), in the order the OS reports
+    them, without duplicates.
+
+    A public address means the machine sits on the internet (a rented server, a modem in
+    bridge mode), where the access port must be closed in front of VAF. What counts is
+    `classify_address(ip) == "public"`, on every interface that is up: no names are skipped,
+    because a public address on a bridge (a server whose uplink is bridged, a name such as
+    `bridge0` that `local_interfaces` leaves out) puts the machine on the internet as much as
+    one on `eth0`. IPv6 deliberately out: the access port
+    listens on IPv4 only, and home connections usually carry global IPv6 addresses, so
+    counting them would call every home server public.
+
+    Named boundary: a server behind 1:1 NAT (several clouds) sees only a private address and
+    is not detected. When psutil fails, the source address of the default route stands in,
+    as ("default", ip) when it is public. Never raises.
+    """
+    found: List[Tuple[str, str]] = []
+    try:
+        import psutil
+        addresses = psutil.net_if_addrs()
+        stats = psutil.net_if_stats()
+    except Exception as e:
+        logger.debug("interface listing unavailable: %s", e)
+        ip = _default_route_ip()
+        return [("default", ip)] if ip and classify_address(ip) == "public" else []
+    for name, entries in addresses.items():
+        state = stats.get(name)
+        if state is not None and not state.isup:
+            continue
+        for entry in entries:
+            if getattr(entry, "family", None) != socket.AF_INET or not entry.address:
+                continue
+            if classify_address(entry.address) == "public" and (name, entry.address) not in found:
+                found.append((name, entry.address))
+    return found
+
+
 # Why an entry of the admitted-networks setting was not taken. The codes travel to the
 # web UI, which words them itself; the texts are for the CLI and the logs.
 REFUSAL_REASONS = {
@@ -217,7 +257,7 @@ REFUSAL_REASONS = {
     "ipv6": "IPv6 is not served: the access port listens on IPv4 only",
     "everything": "this would admit every address, which is the internet",
     "loopback": "this machine is always admitted",
-    "not_private": "not a private network; admitting a public network is the internet mode",
+    "not_private": "not a private network; VAF is never served to the internet",
 }
 
 

@@ -711,7 +711,8 @@ What an embedded agent can and cannot do on the host - the short version of
   hands such a middleware HTTP scopes only.
   `inbound_policy()` returns that policy whole, `firewall_sources()` the networks
   an OS firewall should open, `local_interfaces()` this machine's LAN and VPN
-  addresses. These live in `vaf.network.binding` (the guard in `vaf.network.admission`,
+  addresses, `public_addresses()` its public IPv4 addresses (the machine is on the
+  internet, so the port must be closed in front of it). These live in `vaf.network.binding` (the guard in `vaf.network.admission`,
   which needs the server extra), not on the `vaf` facade:
   there is one HTTP door today, the same named boundary as the origin guard
   ([NETWORK_FEATURES.md](setup/NETWORK_FEATURES.md#remote-access-over-a-vpn),

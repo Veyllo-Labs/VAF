@@ -39,9 +39,12 @@ loopback and public addresses left out) as `LocalInterface(name, ip, network, ki
 DHCP warning, room invitations); `get_all_local_ips()` is every LAN and VPN address, which
 the certificate carries.
 
-Public networks are never admitted: that is the internet mode, which needs a real
-certificate and a door that turns scanners away, not a list entry. The design and the named
-boundaries are in [NETWORK_FEATURES.md](../../docs/setup/NETWORK_FEATURES.md#remote-access-over-a-vpn).
+Public networks are never admitted, by any setting: VAF is served to this machine, the local
+networks and VPNs only, and there is no internet mode. `public_addresses()` lists this
+machine's own public IPv4 addresses (any interface that is up, no names skipped; IPv6 left
+out, since the access port listens on IPv4 only), for every reader that must say when the
+machine sits on the internet. The design and the named boundaries
+are in [NETWORK_FEATURES.md](../../docs/setup/NETWORK_FEATURES.md#remote-access-over-a-vpn).
 
 ## Where VAF may connect
 

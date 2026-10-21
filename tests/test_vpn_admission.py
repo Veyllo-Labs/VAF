@@ -70,6 +70,35 @@ def test_lan_and_vpn_interfaces_are_found_and_the_rest_is_left_out(machine):
     }
 
 
+def test_public_addresses_are_the_public_ipv4_ones(monkeypatch):
+    """A public address on ANY interface that is up puts the machine on the internet, a bridge
+    included: `bridge0` is a name local_interfaces() leaves out as a container bridge.
+    MUTATION: build it on local_interfaces() (empty); drop the up-check (eth9 listed); skip
+    names like local_interfaces does (bridge0 missing)."""
+    _machine(monkeypatch, {
+        **MACHINE,
+        "eth0": (True, [_v4("9.9.9.9", "255.255.255.0"),
+                        _Addr(socket.AF_INET6, "2001:4860:4860::8888", None, None, None)]),
+        "bridge0": (True, [_v4("8.8.4.4", "255.255.255.0")]),
+        "eth9": (False, [_v4("9.9.9.10", "255.255.255.0")]),
+    })
+    # eth2 carries 203.0.113.20, a documentation address: classify_address calls it forbidden.
+    assert binding.public_addresses() == [("eth0", "9.9.9.9"), ("bridge0", "8.8.4.4")]
+
+
+def test_public_addresses_fall_back_to_the_default_route(monkeypatch):
+    def _broken():
+        raise OSError("no interface listing here")
+
+    monkeypatch.setattr(psutil, "net_if_addrs", _broken)
+    monkeypatch.setattr(binding, "_default_route_ip", lambda: "9.9.9.9")
+    assert binding.public_addresses() == [("default", "9.9.9.9")]
+    monkeypatch.setattr(binding, "_default_route_ip", lambda: "192.168.1.5")
+    assert binding.public_addresses() == []
+    monkeypatch.setattr(binding, "_default_route_ip", lambda: None)
+    assert binding.public_addresses() == []
+
+
 @pytest.mark.parametrize("name, kind", [
     ("wg0", "vpn"), ("wt0", "vpn"), ("tun0", "vpn"), ("tap1", "vpn"), ("utun3", "vpn"),
     ("tailscale0", "vpn"), ("Tailscale", "vpn"), ("OpenVPN Wintun", "vpn"),

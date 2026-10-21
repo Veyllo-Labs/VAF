@@ -98,6 +98,25 @@ Choose **[2] Server** for home servers, NAS devices, or any headless machine tha
 
 ---
 
+## Keep VAF off the public internet
+
+VAF is an agent. It holds your API keys and account credentials, reads your mail and
+messages, keeps your files and memory, and can run commands and send messages in your name.
+Its login page is the only thing between all of that and whoever can reach it, and a login
+page on the public internet is found by scanners within hours and attacked without pause.
+One reused password, one phished code or one future bug is then enough. Putting an agent's
+login page on the internet is close to negligent, so VAF is built not to be reachable from
+there: it answers only this machine, your local network and the VPN networks you admit, and
+refuses every public address before it shows any page.
+
+To use VAF away from home or the office, connect through a VPN: WireGuard, the VPN built into
+many routers, or a mesh VPN such as Tailscale or NetBird. Do not forward VAF's port on your
+router, do not publish it through a tunnel service (Cloudflare Tunnel, Tailscale Funnel,
+ngrok and the like), and on a rented server keep the port closed in the provider's firewall.
+See [Server mode](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/SERVER_MODE.md#over-a-vpn).
+
+---
+
 ## Quickstart
 
 Confirm the install works with a one-shot prompt:

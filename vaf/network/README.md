@@ -40,11 +40,11 @@ DHCP warning, room invitations); `get_all_local_ips()` is every LAN and VPN addr
 the certificate carries.
 
 Public networks are never admitted, by any setting: VAF is served to this machine, the local
-networks and VPNs only, and there is no internet mode. `public_addresses()` lists this
-machine's own public IPv4 addresses (any interface that is up, no names skipped; IPv6 left
-out, since the access port listens on IPv4 only), for every reader that must say when the
-machine sits on the internet. The design and the named boundaries
-are in [NETWORK_FEATURES.md](../../docs/setup/NETWORK_FEATURES.md#remote-access-over-a-vpn).
+networks and VPNs only. `public_addresses()` lists this machine's own public IPv4 addresses
+(any interface that is up, no names skipped; IPv6 left out, since the access port listens on
+IPv4 only); `vaf doctor`, `vaf server provision` and `status`, and the remote-access settings
+read it to say when the machine sits on the internet. The design and the named boundaries are
+in [NETWORK_FEATURES.md](../../docs/setup/NETWORK_FEATURES.md#scope-private-networks-only).
 
 ## Where VAF may connect
 

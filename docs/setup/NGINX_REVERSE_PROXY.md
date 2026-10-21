@@ -2,6 +2,8 @@
 
 **Note:** VAF includes an **integrated HTTPS proxy**. If you enable **Local Network** and **SSL/TLS** in settings and set certificate/key paths, VAF starts the proxy on port 443 (or `local_network_https_port`, e.g. 8443 on Windows). **Nginx is not required** - the integrated proxy is the single HTTPS entry point (localhost and LAN). It forwards `/api` and `/ws` to the internal backend channel and allows all HTTP methods (so login and API calls work). See [NETWORK_FEATURES.md](NETWORK_FEATURES.md).
 
+**Private networks only.** nginx here terminates TLS for devices on your LAN or VPN. Do not use it to publish VAF on the internet; see "Scope: private networks only" in [NETWORK_FEATURES.md](NETWORK_FEATURES.md#scope-private-networks-only). The `allow` and `deny` lines below are required, not optional: nginx serves the pages straight from the frontend, and VAF judges only `/api` and the sockets itself.
+
 If you would rather use **Nginx** instead (e.g. for advanced configuration), the following applies.
 
 If you want to run VAF in network mode with **HTTPS** (e.g. accessing it from other devices at `https://192.168.2.114`), you can use **Nginx** as a reverse proxy. Nginx handles TLS; VAF keeps running over HTTP (localhost).

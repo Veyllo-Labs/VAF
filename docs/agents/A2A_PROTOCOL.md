@@ -786,6 +786,11 @@ credential somebody else can harvest, so "encrypted" without verification means
 The address printed in an invitation comes from the same source the certificate's subject
 names are built from, so a printed address is always one the certificate covers.
 
+A room is joined from this machine, the local network or an admitted VPN, never from the
+internet: the HTTPS door and the backend refuse every other address at the handshake of
+`/ws/a2a/{room_id}` (close 4003) before the room is read or a ticket redeemed
+([NETWORK_FEATURES.md](../setup/NETWORK_FEATURES.md#scope-private-networks-only)).
+
 ### The CLI client: seats, and how a spent ticket comes back
 
 A cross-machine join is one command: `vaf a2a join <room> --ticket <t> --url

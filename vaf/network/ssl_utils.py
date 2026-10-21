@@ -358,8 +358,9 @@ def ensure_ssl_certificates() -> tuple[Optional[str], Optional[str]]:
     if not tls_enabled:
         return None, None
 
-    # The machine's own names for the HSTS scope, looked up once here at the start (getfqdn
-    # is a DNS lookup) rather than on the first answer.
+    # The machine's own names for the HSTS scope, looked up here at the start (getfqdn is a
+    # DNS lookup) rather than on the first answer. A certificate issued below looks them up
+    # again (_collect_sans), and that lookup renews the memo with the names it carries.
     try:
         from vaf.network.binding import own_name_labels
         own_name_labels()

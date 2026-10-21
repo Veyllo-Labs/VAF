@@ -15,8 +15,10 @@ SECURITY: This is Layer 1 of the three-layer defense against internet exposure.
 import socket
 import ipaddress
 import logging
+import threading
+import time
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import Dict, FrozenSet, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -457,44 +459,79 @@ def _host_and_port(value: str | None) -> Optional[Tuple[str, Optional[int]]]:
     return (host, port) if host else None
 
 
+def _host_name() -> str:
+    try:
+        return socket.gethostname() or ""
+    except Exception:
+        return ""
+
+
 def machine_dns_names() -> List[str]:
     """This machine's own DNS names besides `localhost`: the host name and, when it differs,
-    the FQDN. The local certificate carries exactly these (ssl_utils._collect_sans)."""
+    the FQDN. The local certificate carries exactly these (ssl_utils._collect_sans).
+
+    Every call is a lookup (getfqdn()) and refreshes the memo own_name_labels() reads, so a
+    certificate issued now and the HSTS scope hold the names of the same lookup."""
     names: List[str] = []
-    try:
-        hostname = socket.gethostname()
-        if hostname and hostname != "localhost":
-            names.append(hostname)
-            try:
-                fqdn = socket.getfqdn()
-                if fqdn and fqdn != hostname and fqdn != "localhost":
-                    names.append(fqdn)
-            except Exception:
-                pass
-    except Exception:
-        pass
+    hostname = _host_name()
+    if hostname and hostname != "localhost":
+        names.append(hostname)
+        try:
+            fqdn = socket.getfqdn()
+            if fqdn and fqdn != hostname and fqdn != "localhost":
+                names.append(fqdn)
+        except Exception:
+            pass
+    _OWN_LABELS[hostname] = (_first_labels(names), time.monotonic())
     return names
 
 
-# Host name -> the first labels of this machine's own names (machine_dns_names()). getfqdn()
-# is a DNS lookup and HSTS asks on every answer, so it runs once per host name:
-# ensure_ssl_certificates() fills it at the start, before anything is served.
-_OWN_LABELS: dict = {}
+def _first_labels(names: List[str]) -> FrozenSet[str]:
+    return frozenset(label for label in (n.lower().rstrip(".").split(".")[0] for n in names)
+                     if label and label != "localhost")
 
 
-def own_name_labels() -> frozenset:
+# Host name -> (the first labels of machine_dns_names(), time.monotonic() of that lookup).
+# getfqdn() is a DNS lookup and HSTS asks on every answer, so an answer reads this memo; the
+# start fills it (ensure_ssl_certificates(), run_https_proxy()). Deliberately not kept for
+# the process life: when DNS is not up at the start, getfqdn() answers with the bare host
+# name, and the FQDN the certificate may carry would get the year until a restart. An entry
+# older than OWN_NAMES_MAX_AGE_S is looked up again in a thread of its own, one at a time,
+# while the answers go on with the old one.
+_OWN_LABELS: Dict[str, Tuple[FrozenSet[str], float]] = {}
+OWN_NAMES_MAX_AGE_S = 60.0
+_OWN_LABELS_LOCK = threading.Lock()
+_OWN_LABELS_REFRESHER: Optional[threading.Thread] = None
+
+
+def _refresh_own_names_in_background() -> None:
+    global _OWN_LABELS_REFRESHER
+    with _OWN_LABELS_LOCK:
+        if _OWN_LABELS_REFRESHER is not None and _OWN_LABELS_REFRESHER.is_alive():
+            return
+        refresher = threading.Thread(target=machine_dns_names, name="vaf-own-names", daemon=True)
+        try:
+            refresher.start()
+        except RuntimeError:
+            return
+        _OWN_LABELS_REFRESHER = refresher
+
+
+def own_name_labels() -> FrozenSet[str]:
     """The first labels, lowercase, of the names the local certificate carries for this
-    machine (machine_dns_names(): the host name and the FQDN). Memoised per host name."""
-    try:
-        hostname = socket.gethostname()
-    except Exception:
-        hostname = ""
-    labels = _OWN_LABELS.get(hostname)
-    if labels is None:
-        labels = frozenset(
-            label for label in (n.lower().rstrip(".").split(".")[0] for n in machine_dns_names())
-            if label and label != "localhost")
-        _OWN_LABELS[hostname] = labels
+    machine (machine_dns_names(): the host name and the FQDN).
+
+    Read from a memo per host name, so an answer does not wait on DNS: a result older than
+    OWN_NAMES_MAX_AGE_S is handed out once more while a lookup in a thread of its own
+    replaces it. NAMED BOUNDARY: a host name with no entry yet (a host renamed while VAF
+    runs, or an answer that came before the start's lookup) is looked up in front of that
+    one answer."""
+    entry = _OWN_LABELS.get(_host_name())
+    if entry is None:
+        return _first_labels(machine_dns_names())
+    labels, looked_up_at = entry
+    if time.monotonic() - looked_up_at >= OWN_NAMES_MAX_AGE_S:
+        _refresh_own_names_in_background()
     return labels
 
 
@@ -525,7 +562,12 @@ def hsts_for_host(dialled_host: str | None) -> Optional[str]:
     on a host called `vaf` counts as the machine's own and gets `max-age=0`. VAF serves the
     LAN and the VPN only.
 
-    No DNS lookup per answer: own_name_labels() asks getfqdn() once per host name.
+    The machine's names come from a memo (own_name_labels()) that the start fills and a
+    lookup beside the answers renews once a minute at most. NAMED BOUNDARY: an FQDN that
+    did not resolve at the start (DNS not up yet) or that changes while VAF runs counts
+    from the first renewal after it, so the answers before that use the names of the
+    previous lookup; and the one answer that waits on DNS is the first for a host name
+    with no lookup yet (a host renamed while VAF runs, or an answer ahead of the start's).
     """
     parsed = _host_and_port(dialled_host)
     if not parsed:

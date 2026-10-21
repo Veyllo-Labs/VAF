@@ -179,9 +179,9 @@ def test_an_fqdn_with_another_first_label_is_the_machines_own_too(monkeypatch):
 
 
 def test_the_machines_names_are_looked_up_once_not_on_every_answer(monkeypatch):
-    """getfqdn() is a DNS lookup and HSTS is decided on every answer: it runs once per host
-    name, and the certificate check fills it at the start. MUTATION: drop the memo, or the
-    warm-up in ensure_ssl_certificates - red."""
+    """getfqdn() is a DNS lookup and HSTS is decided on every answer: the answers read a memo
+    per host name, and the certificate check fills it at the start. MUTATION: drop the memo,
+    or the warm-up in ensure_ssl_certificates - red."""
     import socket
 
     import vaf.network.binding as binding
@@ -208,3 +208,97 @@ def test_the_machines_names_are_looked_up_once_not_on_every_answer(monkeypatch):
     with pytest.raises(_Stop):
         ssl_utils.ensure_ssl_certificates()
     assert len(lookups) == 2 and binding._OWN_LABELS
+
+
+def test_a_lookup_from_before_dns_was_up_is_renewed_beside_the_answers(monkeypatch):
+    """With DNS not up at the start, getfqdn() answers with the bare host name, and the FQDN
+    (which a certificate from an earlier start can carry) got the year until a restart. A
+    result older than OWN_NAMES_MAX_AGE_S is now looked up again in a thread of its own: the
+    answer that finds it goes out at once with the old names, the answers during the lookup
+    start no second one, and the answers after it use the new names. MUTATION: never renew,
+    renew in front of the answer, or start a lookup per answer while one runs - red."""
+    import socket
+    import threading
+    import time
+
+    import vaf.network.binding as binding
+    dns_up = threading.Event()
+    entered = threading.Event()
+    release = threading.Event()
+    lookups = []
+
+    def _getfqdn(*_a):
+        lookups.append(1)
+        if not dns_up.is_set():
+            return "Workstation"            # what getfqdn() answers when the lookup fails
+        entered.set()
+        release.wait(5)
+        return "nas.example.lan"
+
+    monkeypatch.setattr(socket, "getfqdn", _getfqdn)
+    assert binding.own_name_labels() == frozenset({"workstation"})      # the start
+    dns_up.set()
+    for _ in range(20):
+        assert binding.hsts_for_host("nas.example.lan:8443") == binding.HSTS_VALUE
+    assert len(lookups) == 1                 # a fresh result: no lookup on an answer
+
+    labels, looked_up_at = binding._OWN_LABELS["Workstation"]
+    binding._OWN_LABELS["Workstation"] = (labels, looked_up_at - binding.OWN_NAMES_MAX_AGE_S)
+    started = time.monotonic()
+    assert binding.hsts_for_host("nas.example.lan:8443") == binding.HSTS_VALUE
+    assert time.monotonic() - started < 2.5  # the answer did not wait for the lookup
+    assert entered.wait(5)
+    for _ in range(20):
+        binding.hsts_for_host("nas.example.lan:8443")
+    assert len(lookups) == 2                 # one renewal at a time
+
+    release.set()
+    binding._OWN_LABELS_REFRESHER.join(5)
+    assert binding.hsts_for_host("nas.example.lan:8443") == binding.HSTS_CLEAR
+    assert binding.hsts_for_host("vaf.lan") == binding.HSTS_VALUE
+    assert len(lookups) == 2
+
+
+def test_a_certificate_issued_now_and_hsts_hold_the_same_lookup(monkeypatch):
+    """The start's lookup can come before DNS is up and the certificate's a moment later,
+    after it: the certificate then names the FQDN while HSTS still held the bare host name.
+    Every lookup of the machine's names renews the memo, so they agree. MUTATION: keep the
+    memo's first entry instead of renewing it - red."""
+    import socket
+
+    from cryptography import x509
+
+    import vaf.network.binding as binding
+    from vaf.network import ssl_utils
+    answer = {"fqdn": "Workstation"}
+    monkeypatch.setattr(socket, "getfqdn", lambda *_a: answer["fqdn"])
+    monkeypatch.setattr(binding, "get_all_local_ips", lambda: [])
+    assert binding.own_name_labels() == frozenset({"workstation"})      # the start's lookup
+    answer["fqdn"] = "nas.example.lan"
+    names = [v.value for v in ssl_utils._collect_sans() if isinstance(v, x509.DNSName)]
+    assert "nas.example.lan" in names
+    assert binding.hsts_for_host("nas.example.lan:8443") == binding.HSTS_CLEAR
+
+
+def test_the_https_proxy_looks_the_names_up_before_it_serves(monkeypatch):
+    """With TLS on and the LAN switched off the proxy still runs, and no certificate check at
+    the start has looked the machine's names up: the proxy does it before its first answer.
+    MUTATION: drop the lookup in run_https_proxy - red."""
+    import socket
+
+    import vaf.network.binding as binding
+    from vaf.network import runtime_status
+    lookups = []
+    monkeypatch.setattr(socket, "getfqdn", lambda *_a: lookups.append(1) or "nas.example.lan")
+    monkeypatch.setattr(binding, "pick_bindable_port", lambda _host, port, _fallback: port)
+    monkeypatch.setattr(runtime_status, "set_proxy_failed", lambda *_a: None)
+    seen = {}
+
+    def _create_app():
+        seen["labels"] = dict(binding._OWN_LABELS)
+        raise RuntimeError("stop before serving")
+
+    monkeypatch.setattr(proxy, "create_proxy_app", _create_app)
+    proxy.run_https_proxy("127.0.0.1", 8443, "cert.pem", "key.pem")
+    assert len(lookups) == 1
+    assert seen["labels"]["Workstation"][0] == frozenset({"workstation", "nas"})

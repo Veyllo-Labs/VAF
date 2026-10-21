@@ -498,6 +498,11 @@ def run_https_proxy(
             return
         if effective != port:
             _log(f"HTTPS port {port} not bindable (privileged?); using {effective} instead", "warning")
+        # The machine's names for the HSTS scope (binding.own_name_labels), looked up here
+        # before the first answer: with TLS on and the LAN switched off the proxy still runs,
+        # and no certificate check at the start has done it.
+        from vaf.network.binding import own_name_labels
+        own_name_labels()
         app = create_proxy_app()
         # Compatibility: ensure TLS 1.2 clients can connect.
         # Some devices fail with ERR_EMPTY_RESPONSE if only TLS 1.3 is effectively negotiated.

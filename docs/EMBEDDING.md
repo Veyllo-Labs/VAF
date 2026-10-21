@@ -714,12 +714,23 @@ What an embedded agent can and cannot do on the host - the short version of
   needs only the guard. An address check of your own written as a Starlette
   `BaseHTTPMiddleware` would let every WebSocket through: Starlette hands such a
   middleware HTTP scopes only.
+  A uvicorn door of your own takes VAF's door settings: `**vaf.network.ssl_utils.server_tls_options(cert, key)`
+  for the TLS policy (TLS 1.2 with forward-secret AEAD suites only, and TLS 1.3), and
+  `**vaf.network.door.door_options()` on a loop from `vaf.network.door.door_event_loop()`
+  for a 15 s TLS handshake, a request head of at most 16 KiB within 15 s (431 above it), a
+  connection cap (503 above it), a raised open-file limit, and no forwarded-header trust of
+  uvicorn's own (it trusts `FORWARDED_ALLOW_IPS`, and with `*` a device that writes
+  `X-Forwarded-For: 127.0.0.1` is this machine). Without them uvicorn holds a slow client
+  open as long as it likes and accepts any head size and the static-RSA and CBC suites of
+  OpenSSL's default (measured on VAF's own door,
+  [NETWORK_FEATURES.md](setup/NETWORK_FEATURES.md#the-https-door-holds)).
   `inbound_policy()` returns that policy whole, `firewall_sources()` the networks
   an OS firewall should open, `local_interfaces()` this machine's LAN and VPN
   addresses, `public_addresses()` its public IPv4 addresses (the machine is on the
   internet, so the port must be closed in front of it). These live in
-  `vaf.network.binding` (the guard in `vaf.network.admission`, which needs the
-  server extra), not on the `vaf` facade: the only doors that use them are VAF's own
+  `vaf.network.binding` (the guard in `vaf.network.admission` and the door's settings in
+  `vaf.network.door`, which need the server extra; the TLS policy in
+  `vaf.network.ssl_utils`), not on the `vaf` facade: the only doors that use them are VAF's own
   two, the same named boundary as the origin guard
   ([NETWORK_FEATURES.md](setup/NETWORK_FEATURES.md#remote-access-over-a-vpn),
   [vaf/network/README.md](../vaf/network/README.md)).

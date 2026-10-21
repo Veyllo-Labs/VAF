@@ -47,8 +47,8 @@ purpose - so a reader of this document does not have to wonder which rules apply
 | Carried by the proxy | `WebSocketRoute("/ws")` | `WebSocketRoute("/ws/a2a/{room_id})`, and the relay carries the PATH through against an allowlist |
 | What it speaks | the message types below | the A2A frame, see the room modules under `vaf/core/a2a/` |
 
-Two things about the proxy are worth knowing before adding any third socket, because
-both fail in a way that looks like success:
+Three things about the proxy are worth knowing before adding another socket, because each
+failed in a way that looked like success:
 
 - Starlette's catch-all route matches HTTP scopes only, so a websocket path with no
   explicit `WebSocketRoute` is answered with **HTTP 403 at the handshake**. It never
@@ -56,6 +56,11 @@ both fail in a way that looks like success:
 - The relay used to hardcode the backend path. A new route registered without also
   carrying the path through would have opened, exchanged frames, and been answered by
   the WebUI handler.
+- The relay dials the backend before it accepts the device, and accepts only once the
+  backend accepted the relayed handshake. A handshake the backend refuses before accept
+  fails at the device's handshake too (HTTP 403, as on the desktop's 8005); it used to open
+  on the device and close with 1000, a socket that seemed to work. A route that accepts
+  first and refuses in-band (the room socket, the VNC stream) still opens on the device.
 
 Neither is visible on the developer's desktop, which is handed `ws://127.0.0.1:8005`
 directly and never passes through the proxy at all. **A new socket is tested over
@@ -130,7 +135,10 @@ clients keep the strict behaviour: expiry means log in again.
 authenticated session, and reconnects with **exponential backoff + jitter (capped 30s)** rather than a fixed
 interval. When a socket closes **without ever opening** - the handshake was rejected (`4001`/`4003`, e.g. an
 expired token mid-session) - the client re-checks `/api/auth/me`; a `401`/`403` clears the token and routes
-to `/login` instead of retrying. This stops a stale/expired token from hammering `/ws` once per reload.
+to `/login` instead of retrying. This stops a stale/expired token from hammering `/ws` once per reload. It holds
+on the LAN too: the integrated proxy accepts a device's socket only after the backend accepted the relayed
+handshake, so a refused handshake reaches the browser as one (it used to open and close with 1000, and a LAN
+client whose session had ended reconnected with backoff instead of going to `/login`).
 
 **Fail-closed guarantee.** A non-localhost connection is **never** established without a resolved
 `user_scope_id`. RAG no longer treats a missing scope as global/admin: for an unscoped/`None` request
@@ -699,7 +707,7 @@ per-file gate on both sides (client before base64, server after decoding).
 - `vaf/core/web_server.py` (WebSocket server & routing)
 - `vaf/core/web_interface.py` (broadcast manager)
 - `vaf/core/headless_runner.py` (WebUI agent loop)
-- `vaf/network/https_proxy.py` (integrated HTTPS reverse proxy with connection pooling)
+- `vaf/network/https_proxy.py` (integrated HTTPS reverse proxy: streaming relay, WebSocket relay that asks the backend first)
 - `web/app/page.tsx` (frontend session filtering, message ordering & render)
 
 *Last updated: 2026-08-23*

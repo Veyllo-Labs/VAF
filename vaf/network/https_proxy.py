@@ -11,6 +11,13 @@ When local_network_enabled and local_network_tls_enabled, this proxy listens on
 
 Best practice: single entry point for HTTPS, TLS termination here.
 
+The listener holds every connection, admitted or not, to the door's limits (``door.py``: a
+15 s TLS handshake, a request head within 15 s and 16 KiB, a connection cap, no forwarded-header
+trust of uvicorn's) and serves TLS with the one policy of every listener
+(``ssl_utils.server_tls_options``). It relays each body as it arrives, both ways (a request
+body at most ``door.BODY_MAX_BYTES`` and never silent for ``door.BODY_STALL_S``), and accepts a
+WebSocket only once the backend accepted the relayed handshake.
+
 The door admits what the backend admits and refuses every other client before any page, API
 call or socket. With Local Network on that is what ``binding.inbound_policy()`` admits (this
 machine, the local networks or with "VPN only" the VPN networks, plus the private networks an

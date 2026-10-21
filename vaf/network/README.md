@@ -55,6 +55,13 @@ It never dials loopback, where a tokenless request is the owner.
 
 ## Modules
 
+- **door.py**: what a listener other devices reach holds to, before any HTTP is judged:
+  `door_options()` for `uvicorn.Config` (a request head within 15 s and 16 KiB, 431 above
+  it; a connection cap, 503 above it; no `Server` header; uvicorn's forwarded-header trust
+  off, so `connection_client_ip` is the only reader of `X-Forwarded-For` there),
+  `door_event_loop()` (a 15 s TLS handshake), `raise_open_file_limit()`, and the body limits
+  the proxy holds a request to. The HTTPS proxy and `vaf run --web` are built on it. Not
+  imported by the package: it needs uvicorn.
 - **admission.py**: `AdmissionGuard(app)`, the admission check as a pure ASGI door: it
   refuses a client `is_allowed_ip` does not admit, HTTP with 403 (a browser loading a page
   gets a short page saying what to do, everything else JSON) and a WebSocket with 4003
@@ -77,9 +84,13 @@ It never dials loopback, where a tokenless request is the owner.
   (the device itself, or the client a relay on this machine named), on every HTTP request
   and every WebSocket handshake, and adds the page security headers (`PAGE_SECURITY_HEADERS`)
   to what the frontend serves, and HSTS scoped by the dialled host (`binding.hsts_for_host`:
-  never a year for `localhost` or this machine's own names).
+  never a year for `localhost` or this machine's own names). It relays each body as it
+  arrives, both ways (a request body at most 128 MiB and never silent for 60 s), passes a
+  compressed answer through as it is, and accepts a WebSocket only once the backend accepted
+  the relayed handshake. It runs on `door.py`'s settings and `ssl_utils.server_tls_options`.
 - **ssl_utils.py**: the local CA and the server certificate, re-issued when an address is
-  missing from it.
+  missing from it, and `server_tls_options(cert, key)`, the one TLS policy of every listener
+  VAF serves TLS on (TLS 1.2 with forward-secret AEAD suites only, and TLS 1.3).
 - **egress.py**: outbound fetches that never reach this machine.
 - **oauth_redirect.py**, **runtime_status.py**, **connection_tracker.py**: OAuth callback
   addresses, the port the proxy really bound, the live connection map.

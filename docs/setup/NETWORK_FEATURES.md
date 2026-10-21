@@ -11,11 +11,11 @@ VAF (Veyllo Agent Framework) includes robust networking capabilities designed to
 | `/sounds/*` | `http://127.0.0.1:8005` | Notification sound files (GET/HEAD) |
 | Everything else | `http://127.0.0.1:3000` | Next.js frontend |
 
-The proxy uses **shared httpx clients with connection pooling** (max 50 connections, 20 keep-alive) for both frontend and backend targets, avoiding the overhead of opening a new TCP connection for every resource request. The desktop app window loads the frontend directly over plain HTTP at `http://127.0.0.1:3000` (it must not use the proxy URL, whose self-signed cert QtWebEngine rejects). The proxy URL (`https://<LAN-IP>:8443`, or `:443` when bindable) is for devices on the LAN or a VPN, never the internet (see [Scope](#scope-private-networks-only)), and works without an external proxy. Optional: [NGINX_REVERSE_PROXY.md](NGINX_REVERSE_PROXY.md) and `docs/setup/nginx-vaf-https.conf.example`.
+The proxy relays bodies **as they arrive, in both directions** (a live stream reaches the device as it is written), through **shared httpx clients with connection pooling** (as many connections as the door serves, 20 keep-alive) for both frontend and backend targets, avoiding the overhead of opening a new TCP connection for every resource request. Every connection to it is held to the limits in [The HTTPS door holds](#the-https-door-holds). The desktop app window loads the frontend directly over plain HTTP at `http://127.0.0.1:3000` (it must not use the proxy URL, whose self-signed cert QtWebEngine rejects). The proxy URL (`https://<LAN-IP>:8443`, or `:443` when bindable) is for devices on the LAN or a VPN, never the internet (see [Scope](#scope-private-networks-only)), and works without an external proxy. Optional: [NGINX_REVERSE_PROXY.md](NGINX_REVERSE_PROXY.md) and `docs/setup/nginx-vaf-https.conf.example`.
 
 ## Security Model
 
-Security is the primary design constraint for VAF's network features. The system employs a **Defense in Depth** strategy with five network layers, plus an origin guard that runs in every mode, including single-user:
+Security is the primary design constraint for VAF's network features. The system employs a **Defense in Depth** strategy with five network layers, plus an origin guard that runs in every mode, including single-user, and the limits every connection to the HTTPS port is held to:
 
 ### Scope: private networks only
 
@@ -49,6 +49,38 @@ A tokenless request from this machine is the owner (the desktop window, internal
 Named boundaries: a browser that sends no fetch metadata (Safari before 16.4) is judged on `Origin` and `Host` alone, so its plain cross-site GET passes. GET navigations from other pages pass, as they do for `SameSite=Lax` cookies, so a GET must not change state (an OAuth callback is protected by its `state`). The API serves no other web origin, even with a token. Another operating-system user on the same machine can reach the backend without a browser; that is the existing boundary of the tokenless localhost trust and not something an origin check can see.
 
 Implementation: `ForeignOriginGuard` in `vaf/auth/middleware.py`, the decision in `foreign_request_reason` (`vaf/network/binding.py`), registered unconditionally in `vaf/core/web_server.py`. Pinned by `tests/test_foreign_origin_guard.py`.
+
+### The HTTPS door holds
+
+The access port is the one listener other devices reach, and it is hardened as if an attacker sat on the same network. Every connection is held to the limits below in the protocol and the event loop (`vaf/network/door.py`), admitted or not, before the admission check reads a single header. `vaf run --web`, which serves the backend itself on `0.0.0.0:8001` in network mode with no proxy in front, gets the same TLS policy and the same head, handshake and connection limits.
+
+| Limit | Value | Before (measured on the proxy with the settings it ran with) |
+|---|---|---|
+| TLS handshake | 15 s (`TLS_HANDSHAKE_TIMEOUT_S`) | asyncio's 60 s: a TCP connection that never started TLS was still open after 25 s |
+| Request head, time | 15 s from the ready connection, or from the first byte of a follow-up request on a kept-alive one; then the connection closes without an answer (`HEAD_TIMEOUT_S`) | none: an idle connection after TLS and a head sent a byte at a time were still open after 25 s |
+| Request head, size | 16 KiB, above it 431 (`HEAD_MAX_BYTES`, Node's own default, which every page behind the proxy already had) | none: one header of 1 MB and 2000 headers were answered 200 and relayed |
+| Connections at once | 512, above it 503 (`MAX_CONNECTIONS`; a quarter of the open-file limit when that is lower) | none: 520 idle connections, and a request still answered |
+| Keep-alive | 5 s (`KEEP_ALIVE_S`) | the same, uvicorn's default, now written down |
+| Request body (proxy) | 128 MiB, above it 413; a declared Content-Length above it is refused before a byte is read (`BODY_MAX_BYTES`, more than twice the largest body VAF takes, a 40 MiB document as base64) | none: a 150 MB body was read whole into memory, then relayed |
+| Body stall (proxy) | 60 s without a byte, then 408 and the upstream request ends (`BODY_STALL_S`) | none |
+
+- **Open files.** A systemd service starts with a soft limit of 1024 open files (the hard limit is 524288), and about 800 slow connections then took every descriptor of the process: the proxy, the backend and its database pool. VAF raises its own soft limit when the door starts, to the hard limit but at most 65536 (10240 on macOS when the hard limit is unlimited), never lower than it was (`raise_open_file_limit`). Child processes inherit it. A connection cap below 512 is logged once with the limit that set it.
+- **TLS.** One policy for the HTTPS port, the desktop's TLS port and `vaf run --web` (`server_tls_options` in `vaf/network/ssl_utils.py`): over TLS 1.2 only the six forward-secret AEAD suites of Mozilla's intermediate profile (ECDHE with AES-GCM or ChaCha20-Poly1305), TLS 1.3 as OpenSSL offers it, key exchange groups at OpenSSL's default (the post-quantum hybrid `X25519MLKEM768` first on OpenSSL 3.5), TLS 1.2 as the floor. The proxy asked for OpenSSL's `DEFAULT` and the two others for nothing, and all three accepted static RSA (no forward secrecy: a key stolen later decrypts recorded traffic) and CBC with SHA-1 (measured: `AES128-SHA`, `AES128-GCM-SHA256`, `AES256-SHA256`, `ECDHE-RSA-AES128-SHA`). A device from before about 2014 that knows only those suites cannot connect any more (the oldest the profile keeps: Android 4.4.2, Firefox 27, Chrome 31, IE 11 on Windows 7, Safari 9).
+- **Forwarding headers.** uvicorn's own forwarded-header handling is off on the HTTPS port and on `vaf run --web`. It trusted the addresses in the environment variable `FORWARDED_ALLOW_IPS`, and with `*` a device on the network that wrote `X-Forwarded-For: 127.0.0.1` reached the backend as `127.0.0.1`, the tokenless owner (measured). The resolver ([Who the client is](#who-the-client-is)) is the only rule there. The backend's loopback listeners (8001, 8005) keep uvicorn's default; only this machine reaches them, and the resolver reads the header again behind it.
+- **Streaming.** The proxy relays each body as it arrives, both ways. Live streams (the mail and WhatsApp drafts, the memory answer) reach the device as they are written (measured: the first event of a stream through the proxy after 3.0 s before, at once now). A compressed answer passes through compressed with the upstream's own Content-Length; a client that asked for no encoding gets none. Each response carries one Content-Length, one Date and no `Server` or `X-Powered-By` header, and repeated headers stay repeated (two `Set-Cookie` are two). Before, the proxy decoded and re-counted every body: each response carried two Content-Length, two Date and two Server headers, HEAD answered with Content-Length 17 and 0, and a compressed answer with its own Content-Length went out with two different values and no body.
+- **WebSocket, backend first.** The relay dials the backend before it accepts the device, and accepts only once the backend accepted the relayed handshake. A handshake the backend refuses fails at the device's handshake (HTTP 403), as it does on the desktop's 8005, so the web UI checks its session and goes to the sign-in page; it used to open on the device, close with 1000 and reconnect again and again, and a device without a session could send frames into the door until the refusal came.
+
+Named boundaries:
+- **The TLS handshake** comes before every limit but its own 15 s, and before the admission check ([Scope](#scope-private-networks-only)).
+- **One address can fill the connection cap.** What the cap changes is the blast radius: a flood gets 503 at the door while the desktop window, which bypasses the proxy, and the backend keep working. A count per address would need a second reader of the socket peer and bookkeeping across the WebSocket upgrade; no incident asks for it.
+- **A WebSocket upgrade counts toward the cap but is not refused by it:** uvicorn decides the upgrade before it checks the cap. Every upgrade at the proxy dials the backend first, which refuses a handshake without a session at once.
+- **Slow but steady.** A device that reads an answer slowly holds one door connection and one upstream connection while it reads, and a body sent in parts, each within 60 s, holds its connection while it lasts. The cap bounds how many.
+- **`vaf run --web`** has no proxy, so a body there is held only by the route that reads it.
+- **Refusals at this level** (431, a closed head, 503) appear in neither the access log nor the security log, because a flood must not become a write flood; uvicorn logs one line of its own for each 503.
+- **An upstream that fails after its answer started** ends the stream there: the device sees a cut-off answer, not a 502.
+- **uvicorn's internals.** The bounded protocol subclasses uvicorn's httptools protocol and overrides only asyncio's protocol methods and httptools' parser callbacks, unchanged from uvicorn 0.27 to 0.49; `tests/test_network_door.py` pins them and runs on CI against the newest uvicorn `requirements.txt` resolves. A uvicorn upgraded by hand after a release is not covered.
+
+Implementation: `vaf/network/door.py` (`door_options`, `door_event_loop`, `BoundedHttpToolsProtocol`, `raise_open_file_limit`), `server_tls_options` in `vaf/network/ssl_utils.py`, the relay in `vaf/network/https_proxy.py`. Pinned by `tests/test_network_door.py` and `tests/test_proxy_streaming.py`.
 
 ### Layer 1: OS Firewall Automation
 
@@ -95,9 +127,9 @@ Every HTTP request and every WebSocket handshake passes through `AdmissionGuard`
 - No header, or only loopback hops: the peer, so internal IPC and the desktop stay local.
 - Every `X-Forwarded-For` line counts, joined in order into one list (RFC 9110 5.3). A relay that adds a line of its own (HAProxy's `option forwardfor`) puts the client it saw in the last line; the resolver read the first line alone, so a client's own line (`127.0.0.1`, or a LAN address) was the answer wherever uvicorn's proxy-header handling is off (measured with the guard: lines `127.0.0.1` then `9.9.9.9` resolved to this machine).
 
-Why the rightmost: a relay appends the address it saw, and a client can only write to the LEFT of that. The first hop, which VAF's resolver used to read, is whatever the client wrote. In the running server that was hidden on the HTTPS port: every uvicorn VAF starts keeps uvicorn's default `proxy_headers`, which trusts `127.0.0.1` and replaces a loopback peer with the rightmost `X-Forwarded-For` entry that is not `127.0.0.1` before VAF sees the request (measured on a test server: a relay to the HTTPS port naming `203.0.113.9` was refused). The resolver now applies the same rule itself, so the answer does not hang on a server default (an embedder's server, `proxy_headers` off), and a hop that is not an address (`localhost`) is never read as this machine. What was open in the running server is the Next.js `/api` door: it passed on no `X-Forwarded-For`, so a relay on this machine pointed at the frontend port (a reverse proxy, or Tailscale Serve inside a tailnet, in front of `http://localhost:3000`) reached the backend as `127.0.0.1` with no hop, and every visitor was the machine owner (measured on a test server: `X-Forwarded-For: 203.0.113.9` to port 3000 answered the account list, 200). The door forwards the header now (Origin Guard, "Every door carries the marks"). The polarity stays fail-safe: a hop can only make a client look more remote.
+Why the rightmost: a relay appends the address it saw, and a client can only write to the LEFT of that. The first hop, which VAF's resolver used to read, is whatever the client wrote. In the running server that was hidden on the HTTPS port: uvicorn's default `proxy_headers`, which every uvicorn VAF started kept then, trusts `127.0.0.1` and replaces a loopback peer with the rightmost `X-Forwarded-For` entry that is not `127.0.0.1` before VAF sees the request (measured on a test server: a relay to the HTTPS port naming `203.0.113.9` was refused). The resolver now applies the same rule itself, so the answer does not hang on a server default (an embedder's server, `proxy_headers` off), and a hop that is not an address (`localhost`) is never read as this machine. The doors other devices reach (the HTTPS port, `vaf run --web`) now switch uvicorn's handling off, so there the resolver is the only rule; the backend's loopback listeners keep uvicorn's default. What was open in the running server is the Next.js `/api` door: it passed on no `X-Forwarded-For`, so a relay on this machine pointed at the frontend port (a reverse proxy, or Tailscale Serve inside a tailnet, in front of `http://localhost:3000`) reached the backend as `127.0.0.1` with no hop, and every visitor was the machine owner (measured on a test server: `X-Forwarded-For: 203.0.113.9` to port 3000 answered the account list, 200). The door forwards the header now (Origin Guard, "Every door carries the marks"). The polarity stays fail-safe: a hop can only make a client look more remote.
 
-VAF is for the LAN and the VPN only: the admission check refuses public addresses, and putting VAF on the public internet is not supported ([Scope](#scope-private-networks-only)). Such a relay serves devices on your own networks; one that publishes VAF to the internet is outside the supported scope. Should a relay of your own on this machine ever sit in front of VAF, it must write `X-Forwarded-For` with the client it saw (nginx: `$remote_addr`, or `$proxy_add_x_forwarded_for`, which the rightmost rule makes safe as well; Tailscale Serve does it on its own). Do not set uvicorn's `FORWARDED_ALLOW_IPS` environment variable for VAF: its default (`127.0.0.1`) is what the rule above assumes, and with `*` a device on the network that writes `X-Forwarded-For: 127.0.0.1` counts as this machine on the HTTPS port (switching uvicorn's own proxy-header handling off on the doors other devices reach is planned separately). NAMED BOUNDARY: a raw TCP forward on this machine (`ssh -R`, socat, a port forward that is not an HTTP proxy) writes no header at all, so every client it carries is this machine to every check. Never put one in front of VAF; replacing the tokenless local trust with a per-start IPC token is the separate change Layer 3 names.
+VAF is for the LAN and the VPN only: the admission check refuses public addresses, and putting VAF on the public internet is not supported ([Scope](#scope-private-networks-only)). Such a relay serves devices on your own networks; one that publishes VAF to the internet is outside the supported scope. Should a relay of your own on this machine ever sit in front of VAF, it must write `X-Forwarded-For` with the client it saw (nginx: `$remote_addr`, or `$proxy_add_x_forwarded_for`, which the rightmost rule makes safe as well; Tailscale Serve does it on its own). uvicorn's `FORWARDED_ALLOW_IPS` environment variable no longer decides anything on the doors other devices reach: with `*` set, a device on the network that wrote `X-Forwarded-For: 127.0.0.1` counted as this machine on the HTTPS port (measured), and the HTTPS port and `vaf run --web` now switch uvicorn's own proxy-header handling off ([The HTTPS door holds](#the-https-door-holds)). On the backend's loopback listeners, where it still applies, only this machine connects. NAMED BOUNDARY: a raw TCP forward on this machine (`ssh -R`, socat, a port forward that is not an HTTP proxy) writes no header at all, so every client it carries is this machine to every check. Never put one in front of VAF; replacing the tokenless local trust with a per-start IPC token is the separate change Layer 3 names.
 
 Implementation: `vaf/network/admission.py` -> `AdmissionGuard`, run by `NetworkModeLayers` in `vaf/auth/middleware.py`
 
@@ -504,6 +536,8 @@ The WebSocket transport differs by client. Any HTTPS page, and an HTTP page on p
 | `local_network_ssl_cert` | `string` | `""` | Path to PEM certificate (auto-populated if empty) |
 | `local_network_ssl_key` | `string` | `""` | Path to PEM private key (auto-populated if empty) |
 
+Every listener VAF serves TLS on (the HTTPS port, the desktop's TLS port, `vaf run --web`) takes its TLS options from one place, `server_tls_options` in `vaf/network/ssl_utils.py`: TLS 1.2 with forward-secret AEAD suites only, and TLS 1.3 ([The HTTPS door holds](#the-https-door-holds)).
+
 ### File Locations
 
 ```
@@ -576,7 +610,7 @@ Who is admitted (`local_network_allowed_networks`, `local_network_vpn_only`) res
 
 When TLS is enabled, firewall setup uses the effective HTTPS access port (`local_network_https_port`, or `8443` when `443` is privileged on any platform) so LAN clients can reach the proxy entry point. On Linux, firewalld is preferred: it opens only that effective proxy port for the LAN subnet via a rich rule, elevating through pkexec (desktop GUI dialog) or `sudo -n` (headless); a process that cannot gain root (`elevation_unavailable()`: the no-new-privileges flag, or a user namespace without root, as in the server's systemd service) does not try and logs once why.
 On Windows, creating firewall rules via `netsh advfirewall` requires elevated rights. If VAF is not started as Administrator, LAN access can fail even when hosting is enabled.
-The integrated HTTPS proxy is configured for broad client compatibility (`TLS 1.2+`) so older LAN devices do not fail with empty-response errors during TLS negotiation.
+The integrated HTTPS proxy, like every TLS listener of VAF, accepts TLS 1.2 with forward-secret AEAD suites only, and TLS 1.3; a device from before about 2014 that knows only CBC or static-RSA suites cannot connect ([The HTTPS door holds](#the-https-door-holds)).
 Auto-generated TLS certificates carry the machine's hostname and FQDN as DNS SANs plus every LAN and VPN address, and are re-generated at start when an address is missing (a changed LAN IP, a VPN that came up), so the IP SANs stay aligned with the access addresses (a hostname change alone does not trigger re-issuance - the freshness check covers IP SANs only).
 
 ---
@@ -597,10 +631,11 @@ vaf/
   network/
     admission.py         # AdmissionGuard: refuses a client that is not admitted, HTTP and WebSocket alike
     binding.py           # LAN/VPN interfaces, who is admitted (inbound_policy), real client, foreign-origin decision, frontend port
+    door.py              # The door's limits: head time and size, connections, TLS handshake, open files
     firewall.py          # OS firewall automation (Windows/macOS/Linux) for the admitted networks
-    https_proxy.py       # Integrated HTTPS reverse proxy (/api, /ws -> 8005; rest -> 3000)
+    https_proxy.py       # Integrated HTTPS reverse proxy (/api, /ws -> 8005; rest -> 3000), streaming
     connection_tracker.py # Real-time connection monitoring
-    ssl_utils.py         # Auto-SSL certificate generation
+    ssl_utils.py         # Auto-SSL certificate generation, the TLS policy of every listener
   api/
     auth_routes.py       # Login, 2FA, bootstrap and setup code, logout, own password change
     network_routes.py    # Access URL, connection list
@@ -617,7 +652,7 @@ When TLS is enabled, the **integrated HTTPS proxy** is the single entry point **
 LAN/remote browser (https://<LAN-IP>, port 8443 or 443)
     |
     v
-Integrated HTTPS proxy (0.0.0.0:8443 or 443)  [connection-pooled httpx clients]
+Integrated HTTPS proxy (0.0.0.0:8443 or 443)  [door limits; streaming relay over pooled httpx clients]
     |
     +-- AdmissionGuard: a client outside the admitted networks (with Local Network off: any
     |   client but this machine) gets 403, a browser the refusal page (WebSocket 4003) here
@@ -633,7 +668,7 @@ Uvicorn + FastAPI (127.0.0.1:8005)
 Route Handler (reads request.state.user for identity & scoping)
 ```
 
-The proxy `/ws` relay connects to the backend with `max_size=None`, so it does **not** impose its own per-frame size cap on the backend leg. The effective bound is `WS_MAX_SIZE_BYTES` (200 MB, `vaf/core/log_helper.py`), which EVERY uvicorn the product starts now passes explicitly: `run_server`, the tray's own `start_uvicorn` (main port AND the internal 8005 channel this proxy relays into), and the proxy's front listener - a pin test walks all `uvicorn.Config` sites. For a long time only `run_server` set it, so the desktop/tray path and the LAN front door silently capped frames at uvicorn's 16 MB default: an upload above ~12 MB raw (base64 inflates by ~4/3) dropped the connection mid-transfer with nothing but the reconnect banner. Attachments are additionally gated at 100 MB per file on BOTH sides (client before encoding, server after decoding) with a named error instead of a dropped socket.
+The proxy `/ws` relay dials the backend before it accepts the device, so a handshake the backend refuses fails at the device's handshake too ([The HTTPS door holds](#the-https-door-holds)). It connects to the backend with `max_size=None`, so it does **not** impose its own per-frame size cap on the backend leg. The effective bound is `WS_MAX_SIZE_BYTES` (200 MB, `vaf/core/log_helper.py`), which EVERY uvicorn the product starts now passes explicitly: `run_server`, the tray's own `start_uvicorn` (main port AND the internal 8005 channel this proxy relays into), and the proxy's front listener - a pin test walks all `uvicorn.Config` sites. For a long time only `run_server` set it, so the desktop/tray path and the LAN front door silently capped frames at uvicorn's 16 MB default: an upload above ~12 MB raw (base64 inflates by ~4/3) dropped the connection mid-transfer with nothing but the reconnect banner. Attachments are additionally gated at 100 MB per file on BOTH sides (client before encoding, server after decoding) with a named error instead of a dropped socket.
 
 ---
 

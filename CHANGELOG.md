@@ -130,14 +130,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   turns new requests and live connections away until some close. VAF raises its own
   open-file limit at start (a systemd service starts with 1024), so slow connections fill
   those 512 places instead of starving the whole service; only a flood of more than a
-  thousand new connections a second still needs a firewall in front. On Python 3.10, a
-  device that never answers the end of an encrypted connection can still keep it open;
-  Python 3.11 or later closes it after 5 seconds. Very old devices, from before about 2014,
-  can no longer connect: every HTTPS listener of VAF now accepts only modern encryption.
-  With the `FORWARDED_ALLOW_IPS` environment variable set to `*`, a device on the network
-  counted as this machine on the port and under `vaf run --web`; that variable no longer
-  decides it. Restart VAF after updating. Details: "The HTTPS door holds" in
-  `docs/setup/NETWORK_FEATURES.md`.
+  thousand new connections a second still needs a firewall in front. A connection VAF closes
+  ends within 5 seconds, even when the device never answers the close. Very old devices,
+  from before about 2014, can no longer connect: every HTTPS listener of VAF now accepts
+  only modern encryption. With the `FORWARDED_ALLOW_IPS` environment variable set to `*`, a
+  device on the network counted as this machine on the port and under `vaf run --web`; that
+  variable no longer decides it. Restart VAF after updating. Details: "The HTTPS door holds"
+  in `docs/setup/NETWORK_FEATURES.md`.
 
 - **A relay in front of the web UI's port no longer makes its visitors the machine owner.** A
   reverse proxy on the same machine pointed at port 3000 (an nginx for the LAN, Tailscale

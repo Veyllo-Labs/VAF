@@ -716,10 +716,10 @@ What an embedded agent can and cannot do on the host - the short version of
   middleware HTTP scopes only. A uvicorn door of your own takes VAF's door settings:
   `**vaf.network.ssl_utils.server_tls_options(cert, key)` for the TLS policy (TLS 1.2 with
   forward-secret AEAD suites only, and TLS 1.3), and `**vaf.network.door.door_options()`
-  on a loop from `vaf.network.door.door_event_loop()` for a 15 s TLS handshake, a 5 s TLS
-  close on Python 3.11 and later, a request head of at most 16 KiB within 15 s (431 above
-  it), a connection cap (503 above it, for a WebSocket upgrade too), at most 16 requests
-  sent ahead of their answers, a raised open-file limit, and no forwarded-header trust of
+  on a loop from `vaf.network.door.door_event_loop()` for a 15 s TLS handshake, every
+  close ended within 5 s, a request head of at most 16 KiB within 15 s (431 above it), a
+  connection cap (503 above it, for a WebSocket upgrade too), at most 16 requests sent
+  ahead of their answers, a raised open-file limit, and no forwarded-header trust of
   uvicorn's own (it trusts `FORWARDED_ALLOW_IPS`, and with `*` a device that writes
   `X-Forwarded-For: 127.0.0.1` is this machine). Without them uvicorn holds a slow client
   open as long as it likes and accepts any head size and the static-RSA and CBC suites of

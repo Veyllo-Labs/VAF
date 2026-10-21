@@ -703,22 +703,22 @@ What an embedded agent can and cannot do on the host - the short version of
   answers with the same policy VAF's own doors and firewall use: this machine, the
   local networks, and what an admin admitted (`local_network_allowed_networks`,
   `local_network_vpn_only`).
-  To refuse everybody else, wrap your app the way VAF's two doors (the HTTPS proxy
-  and the backend) wrap theirs: `vaf.network.admission.AdmissionGuard(app)` judges
-  HTTP requests and WebSocket handshakes alike (403, or close 4003 before accept),
-  shows a browser that loads a page a short page saying what to do, and records the
-  refusal; `admits=` takes another rule, such as `binding.is_localhost` for this
-  machine only, and `reason=` and `next_step=` its words. VAF's two doors follow its
-  Local Network setting per request through `ByLocalNetwork(network=...,
-  this_machine=this_machine_only(app))`; a door of yours that has no such switch
-  needs only the guard. An address check of your own written as a Starlette
-  `BaseHTTPMiddleware` would let every WebSocket through: Starlette hands such a
-  middleware HTTP scopes only.
-  A uvicorn door of your own takes VAF's door settings: `**vaf.network.ssl_utils.server_tls_options(cert, key)`
-  for the TLS policy (TLS 1.2 with forward-secret AEAD suites only, and TLS 1.3), and
-  `**vaf.network.door.door_options()` on a loop from `vaf.network.door.door_event_loop()`
-  for a 15 s TLS handshake, a request head of at most 16 KiB within 15 s (431 above it), a
-  connection cap (503 above it), a raised open-file limit, and no forwarded-header trust of
+  To refuse everybody else, wrap your app the way VAF's two doors (the HTTPS proxy and the
+  backend) wrap theirs: `vaf.network.admission.AdmissionGuard(app)` judges HTTP requests
+  and WebSocket handshakes alike (403 with the connection closed, or close 4003 before
+  accept), shows a browser that loads a page a short page saying what to do, and records
+  the refusal; `admits=` takes another rule, such as `binding.is_localhost` for this
+  machine only, and `reason=` and `next_step=` its words. VAF's two doors follow its Local
+  Network setting per request through `ByLocalNetwork(network=...,
+  this_machine=this_machine_only(app))`; a door of yours that has no such switch needs
+  only the guard. An address check of your own written as a Starlette `BaseHTTPMiddleware`
+  would let every WebSocket through: Starlette hands such a middleware HTTP scopes only. A
+  uvicorn door of your own takes VAF's door settings:
+  `**vaf.network.ssl_utils.server_tls_options(cert, key)` for the TLS policy (TLS 1.2 with
+  forward-secret AEAD suites only, and TLS 1.3), and `**vaf.network.door.door_options()`
+  on a loop from `vaf.network.door.door_event_loop()` for a 15 s TLS handshake, a request
+  head of at most 16 KiB within 15 s (431 above it), a connection cap (503 above it, for a
+  WebSocket upgrade too), a raised open-file limit, and no forwarded-header trust of
   uvicorn's own (it trusts `FORWARDED_ALLOW_IPS`, and with `*` a device that writes
   `X-Forwarded-For: 127.0.0.1` is this machine). Without them uvicorn holds a slow client
   open as long as it likes and accepts any head size and the static-RSA and CBC suites of

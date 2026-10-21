@@ -119,19 +119,22 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   only" in `docs/setup/NETWORK_FEATURES.md`.
 
 - **On other devices, mail and WhatsApp drafts and memory answers appear as they are
-  written, and the HTTPS port holds against a device on the same network.** Before, those
-  answers arrived all at once at the end, and a device whose session had ended kept
-  reconnecting; now it goes back to the sign-in page. A connection to the port has 15 seconds
-  for its TLS handshake and 15 seconds to finish its request head, which may be at most
-  16 KiB. A request body may be at most 128 MiB and may not stall for a minute, and once 512
-  connections are open the port turns new requests away. VAF raises its own open-file limit at start (a
-  systemd service starts with 1024), so a flood of slow connections can no longer starve the
-  whole service. Every HTTPS listener accepts only forward-secret AEAD suites over TLS 1.2,
-  where static RSA and CBC suites were accepted, so a device from before about 2014 that
-  knows only those can no longer connect. Pages cross the network compressed, and each
-  answer carries one Content-Length. The port and `vaf run --web` no longer trust forwarding
-  headers because of the `FORWARDED_ALLOW_IPS` environment variable; with it set to `*`, a
-  device on the network counted as the machine itself. Details: "The HTTPS door holds" in
+  written, and a device whose session ended goes back to the sign-in page.** Before, those
+  answers arrived all at once at the end, and a device whose session had ended kept trying
+  to reconnect. Pages now also reach other devices compressed. Restart VAF after updating.
+
+- **The HTTPS port holds against a device on the same network.** A connection that does not
+  finish its request within 15 seconds is closed. One that sends more than 16 KiB of request
+  headers, a body larger than 128 MiB, or an upload that stalls for a minute gets a short
+  sentence saying why, and is closed as well. Once 512 connections are open, the port turns
+  new requests and live connections away until some close. VAF raises its own open-file
+  limit at start (a systemd service starts with 1024), so slow connections fill those 512
+  places instead of starving the whole service; only a flood of thousands of new connections
+  a second still needs a firewall in front. Very old devices, from before about 2014, can no
+  longer connect: every HTTPS listener of VAF now accepts only modern encryption. With the
+  `FORWARDED_ALLOW_IPS` environment variable set to `*`, a device on the network counted as
+  this machine on the port and under `vaf run --web`; that variable no longer decides it.
+  Restart VAF after updating. Details: "The HTTPS door holds" in
   `docs/setup/NETWORK_FEATURES.md`.
 
 - **A relay in front of the web UI's port no longer makes its visitors the machine owner.** A

@@ -134,7 +134,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 - **An account name can no longer forge lines in the security log.** A login attempt with a
   line break in the name wrote a second, made-up line into the readable security log (the
-  Logs window); every event is one line there now.
+  Logs window); every event is one line there now, and a name or a request header that looks
+  like more fields or another event is shown in quotes.
 
 - **The unused refresh token is gone.** Every sign-in also handed out a refresh token that
   stayed valid for 7 days, was stored nowhere, and survived signing out and a password

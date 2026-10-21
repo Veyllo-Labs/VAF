@@ -28,7 +28,7 @@ detected VPN interfaces, plus the private networks an admin listed in
 
 | Function | Used by |
 |---|---|
-| `is_allowed_ip(ip)` | `AdmissionGuard` (`admission.py`), the backend's admission check for every HTTP request and every WebSocket handshake; the remote-access settings' display |
+| `is_allowed_ip(ip)` | `AdmissionGuard` (`admission.py`), which both doors wrap: the integrated HTTPS proxy and the backend, for every HTTP request and every WebSocket handshake; the remote-access settings' display |
 | `firewall_sources(narrow_lan=False)` | every OS firewall backend in `firewall.py` |
 | `access_addresses()` | the access URLs in the settings, `vaf top` and `vaf server status` |
 | `normalize_allowed_networks(values)` | the settings, the CLI and `vaf doctor`: what an entry means, or why it is refused |
@@ -65,7 +65,8 @@ It never dials loopback, where a tokenless request is the owner.
   no-new-privileges flag, or a user namespace without root, as in the server's
   systemd service), so no caller runs sudo there.
 - **https_proxy.py**: the integrated TLS entry point (`/api`, `/ws` to the backend,
-  everything else to the frontend); it writes `X-Forwarded-For` from `connection_client_ip`
+  everything else to the frontend), wrapped in `AdmissionGuard` so a client that is not
+  admitted gets no page at all; it writes `X-Forwarded-For` from `connection_client_ip`
   (the device itself, or the client a relay on this machine named), on every HTTP request
   and every WebSocket handshake, and adds the page security headers (`PAGE_SECURITY_HEADERS`)
   to what the frontend serves, and HSTS scoped by the dialled host (`binding.hsts_for_host`:

@@ -10,6 +10,15 @@ When local_network_enabled and local_network_tls_enabled, this proxy listens on
   - everything else -> http://127.0.0.1:3000 (frontend)
 
 Best practice: single entry point for HTTPS, TLS termination here.
+
+The door admits what ``binding.inbound_policy()`` admits (this machine, the local networks or
+with "VPN only" the VPN networks, plus the private networks an admin added) and refuses every
+other client before any page, API call or socket: ``AdmissionGuard`` wraps the whole app, so a
+public address gets 403 (a WebSocket 4003) instead of the login page. It used to relay pages to
+any address and leave the refusal to the backend's API (measured: ``GET /login`` 200 for
+``203.0.113.9``, its socket accepted). Named boundary: the TLS handshake happens before any HTTP
+check, so a client that reaches the port still receives the certificate, whose names list the
+LAN and VPN addresses and the host name; only a firewall closes that.
 """
 
 import asyncio
@@ -27,6 +36,8 @@ from starlette.responses import Response
 from starlette.routing import Route, WebSocketRoute
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocket
+
+from vaf.network.admission import AdmissionGuard
 
 logger = logging.getLogger(__name__)
 
@@ -444,8 +455,13 @@ async def _lifespan(app):
     await _shutdown_clients()
 
 
-def create_proxy_app() -> Starlette:
-    """Create the ASGI proxy application. WebSocket /ws must use WebSocketRoute so upgrades work."""
+def create_proxy_app() -> ASGIApp:
+    """Create the ASGI proxy application. WebSocket /ws must use WebSocketRoute so upgrades work.
+
+    The admission check is the outermost layer: a refused client is answered before anything is
+    relayed, and it writes nothing to the access log, which keeps one line per request and has no
+    throttle; the refusal is the security event ``ip_blocked``, one per address per 5 seconds.
+    """
     routes = [
         WebSocketRoute("/ws", endpoint=_ws_handler),
         # Agent rooms. Registered explicitly: Starlette's catch-all Route matches HTTP
@@ -466,7 +482,7 @@ def create_proxy_app() -> Starlette:
         Route("/{path:path}", endpoint=_proxy_handler, methods=_API_METHODS),
     ]
     app = Starlette(routes=routes, lifespan=_lifespan)
-    return AccessLogMiddleware(app)
+    return AdmissionGuard(AccessLogMiddleware(app))
 
 
 def run_https_proxy(

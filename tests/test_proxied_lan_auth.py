@@ -29,6 +29,7 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from vaf.auth.middleware import AuthMiddleware
 from vaf.network.admission import AdmissionGuard
@@ -278,8 +279,9 @@ class _RecordingUpstream:
 
 
 @pytest.mark.parametrize("peer,incoming,written", [
-    # A tunnel on this machine names its visitor: the backend must hear the visitor.
-    ("127.0.0.1", "203.0.113.9", "203.0.113.9"),
+    # A tunnel on this machine names its visitor: the backend must hear the visitor. (A
+    # public visitor never gets this far: the door refuses it, tests/test_proxy_door_admission.py.)
+    ("127.0.0.1", "192.168.1.66", "192.168.1.66"),
     # A LAN device cannot buy loopback with a header of its own.
     ("192.168.1.20", "127.0.0.1", "192.168.1.20"),
     # A browser on this machine, no relay in front: this machine.
@@ -368,11 +370,9 @@ def test_the_socket_relay_always_names_the_client(monkeypatch):
 
     monkeypatch.setattr(websockets, "connect", _connect)
 
-    for peer, incoming, written in (("127.0.0.1", "203.0.113.9", "203.0.113.9"),
+    for peer, incoming, written in (("127.0.0.1", "192.168.1.66", "192.168.1.66"),
                                     ("192.168.1.20", "127.0.0.1", "192.168.1.20"),
-                                    ("127.0.0.1", None, "127.0.0.1"),
-                                    # No client at all: "unknown", which fails closed.
-                                    (None, None, "unknown")):
+                                    ("127.0.0.1", None, "127.0.0.1")):
         c = TestClient(proxy.create_proxy_app(), client=(peer, 40000) if peer else None)
         hdrs = {"X-Forwarded-For": incoming} if incoming else {}
         with contextlib.suppress(Exception):
@@ -380,6 +380,18 @@ def test_the_socket_relay_always_names_the_client(monkeypatch):
                 ws.receive()
         forwarded = [v for k, v in seen[-1] if k.lower() == "x-forwarded-for"]
         assert forwarded == [written], (peer, incoming, seen[-1])
+
+    # No client at all reads as "unknown" and a public one is not admitted: the door refuses
+    # both at the handshake, so the relay never dials the backend for them.
+    dialled = len(seen)
+    for peer, incoming in ((None, None), ("127.0.0.1", "203.0.113.9")):
+        c = TestClient(proxy.create_proxy_app(), client=(peer, 40000) if peer else None)
+        hdrs = {"X-Forwarded-For": incoming} if incoming else {}
+        with pytest.raises(WebSocketDisconnect) as refused:
+            with c.websocket_connect("/ws", headers=hdrs):
+                pass
+        assert refused.value.code == 4003
+    assert len(seen) == dialled
 
 
 def test_the_proxy_reads_no_client_address_itself():

@@ -900,8 +900,9 @@ def test_https_proxy_relays_the_stream_socket():
     assert _WS_ALLOWED.match("/ws"), "the WebUI socket must keep working"
     assert _WS_ALLOWED.match("/ws/a2a/room-abc"), "rooms must keep working"
 
-    app = create_proxy_app()
-    inner = getattr(app, "app", app)          # unwrap the access-log middleware
+    inner = create_proxy_app()
+    while not hasattr(inner, "routes"):       # unwrap the admission check and the access log
+        inner = inner.app
     ws_routes = [r for r in inner.routes if isinstance(r, WebSocketRoute)]
     assert any("browser-vnc" in r.path for r in ws_routes), (
         "no WebSocketRoute for the stream: the /api catch-all is HTTP-only, so the "

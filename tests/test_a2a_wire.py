@@ -528,3 +528,21 @@ def test_the_room_door_asks_the_session_and_the_standing(monkeypatch):
     assert _a2a_credential_verifier(token) is None
     now.update(session=sessions.LIVE, account=("inactive", "user"))
     assert _a2a_credential_verifier(token) is None
+
+
+def test_the_standing_lookups_hold_nothing_bound_to_a_loop():
+    """The room door runs token_account_stands under asyncio.run in a worker thread
+    (asyncio.to_thread(admit, ...)), so every handshake brings a fresh loop. That is sound
+    only while nothing it touches is bound to a loop: the caches are guarded by threading
+    locks, and on a worker thread get_engine hands out a NullPool engine made for that one
+    call (vaf/memory/database.py). An asyncio primitive kept at module level would bind to
+    the first handshake's loop and refuse every later one. MUTATION: add a module-level
+    asyncio.Event to vaf/auth/sessions.py - red."""
+    import asyncio
+
+    from vaf.auth import account_seal, middleware, permissions, sessions
+    loop_bound = (asyncio.Lock, asyncio.Event, asyncio.Semaphore, asyncio.Condition,
+                  asyncio.Queue, asyncio.Future, asyncio.AbstractEventLoop)
+    for module in (middleware, permissions, sessions, account_seal):
+        for name, value in vars(module).items():
+            assert not isinstance(value, loop_bound), f"{module.__name__}.{name}"

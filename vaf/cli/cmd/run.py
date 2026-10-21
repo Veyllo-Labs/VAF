@@ -2585,13 +2585,12 @@ def _process_agent_message(agent, user_input: str, tui, session):
         # "[API Error from ..." and all of "[Error]" with it) and turns [...dim...] groups into
         # <think>, matching across brackets, so it is converted apart from the answer and
         # recorded the way this copy then holds it (session.stored_turn_copy, model_text).
-        full_response_clean, _stored_failure = stored_turn_copy(
-            full_response_raw, getattr(agent, "_turn_failure", "") or "", convert_rich_to_xml)
+        full_response_clean, _turn_meta = stored_turn_copy(
+            full_response_raw, getattr(agent, "_turn_failed", False),
+            getattr(agent, "_turn_failure", "") or "", convert_rich_to_xml)
         
         # A failed turn is marked so a resumed chat does not replay it as an answer.
-        session.add_message("assistant", full_response_clean,
-                            metadata=failed_turn_meta(getattr(agent, "_turn_failed", False),
-                                                      _stored_failure))
+        session.add_message("assistant", full_response_clean, metadata=_turn_meta)
         
         # AUTO-SAVE SESSION (Critical for Web UI persistence)
         # We assume session object handles its own persistence path if it was loaded/created properly.

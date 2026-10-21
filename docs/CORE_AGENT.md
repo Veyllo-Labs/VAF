@@ -153,13 +153,15 @@ the real answer; the return value is a status:
   fails. `_turn_failure` holds the failure text when it was streamed (a backend failure);
   a loop-protection note and the local server's statuses are never streamed, and leave it
   empty. The model never reads that text as its own words in a later turn. A
-  caller that stores the streamed text apart from the history marks its copy with
-  `session.failed_turn_meta(_turn_failed, failure)`, the failure in the form its copy holds
-  it (`session.stored_turn_copy` cleans the answer and the failure apart with the host's
-  own cleanup, or none when the copy is the return value), and the readers that build a
-  model's context from a stored chat read it through `session.model_text()`, which takes
-  the failure off as the copy's tail and drops a message whose recorded failure it cannot
-  find there.
+  caller that stores the streamed text apart from the history builds its copy and the
+  metadata to store it with through `session.stored_turn_copy(stream, _turn_failed,
+  _turn_failure, clean)`: the answer and the failure are cleaned apart with the host's own
+  cleanup, the failure is recorded as the copy's tail, and a stream that does not end with
+  its failure is marked failed. A copy that is the return value is marked with
+  `session.failed_turn_meta(_turn_failed)` alone. The readers that build a model's context
+  from a stored chat read it through `session.model_text()`, which takes the failure off
+  as the copy's tail (`session.take_off_turn_failure`) and drops a message whose recorded
+  failure it cannot take off there.
 
 There is no public `stop()`; a running turn is stopped via
 `TaskQueue().request_stop(session_id)` (polled between chunks and tools).

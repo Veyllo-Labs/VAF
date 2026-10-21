@@ -403,16 +403,18 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
         if meta.get("from_contact"):
             from vaf.core.completion import is_error_reply, is_stop_note
             if turn_failure and not turn_failed:
-                # Answered, then a later round failed: the answer goes out, the failure not.
-                # A failure the outgoing text no longer holds verbatim (the tool-call JSON
-                # strip cut into it) cannot be taken off, so nothing of the turn goes out:
-                # the marker check below would catch a provider failure anyway, a failure
-                # text without a marker it would not.
-                final_text = str(final_text or "")
-                if turn_failure not in final_text:
-                    _send_turn_error_reply(task, final_text, contact=contact)
+                # Answered, then a later round failed: the answer goes out, the failure not,
+                # taken off as the text's tail by the same rule the stored copy follows. A
+                # failure the outgoing text does not end with (the tool-call JSON strip cut
+                # into it), or holds once more, cannot be taken off safely, so nothing of the
+                # turn goes out: the marker check below would catch a provider failure anyway,
+                # a failure text without a marker it would not.
+                from vaf.core.session import take_off_turn_failure
+                answer = take_off_turn_failure(final_text, turn_failure)
+                if answer is None:
+                    _send_turn_error_reply(task, str(final_text or ""), contact=contact)
                     return
-                final_text = final_text.replace(turn_failure, "").strip()
+                final_text = answer
             visible = _prepare_channel_outbound(final_text)
             if turn_failed or is_error_reply(visible) or is_stop_note(visible):
                 _send_turn_error_reply(task, final_text, contact=contact)
@@ -501,8 +503,8 @@ def _clean_for_session(text: str) -> str:
     return cleaned.strip()
 
 
-def _chat_turn_copy(response_parts, response_text, *, ends_at_draft, turn_failure):
-    """The chat lane's stored copy of a turn and the failure to record with it.
+def _chat_turn_copy(response_parts, response_text, *, ends_at_draft, failed, turn_failure):
+    """The chat lane's stored copy of a turn and the metadata to store it with.
 
     The copy is the stream, cleaned (`_clean_for_session`); a failure that followed an answer
     is its tail, cleaned apart and recorded the way the copy holds it (`stored_turn_copy`).
@@ -511,8 +513,16 @@ def _chat_turn_copy(response_parts, response_text, *, ends_at_draft, turn_failur
     hides), the copy is the turn's return value, which never holds such a failure: nothing
     is recorded, only the failed-turn mark can apply."""
     if response_parts and not ends_at_draft:
-        return stored_turn_copy("".join(response_parts), turn_failure, _clean_for_session)
-    return _clean_for_session(str(response_text or "")), ""
+        return stored_turn_copy("".join(response_parts), failed, turn_failure, _clean_for_session)
+    return _clean_for_session(str(response_text or "")), failed_turn_meta(failed)
+
+
+def _drain_turn_copy(response_parts, *, failed, turn_failure):
+    """The sub-agent drain's stored copy of its summary turn and the metadata to store it
+    with: the stream through `_clean_drain_text`, a failure that followed an answer cleaned
+    apart as its tail (`stored_turn_copy`). The summary turn is a turn like any other, so a
+    failed one is marked and an answered-then-failed one records its failure."""
+    return stored_turn_copy("".join(response_parts or []), failed, turn_failure, _clean_drain_text)
 
 
 def _clean_drain_text(text: str) -> str:
@@ -2802,9 +2812,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         except FileNotFoundError:
                             session = new_session_for_task(task)
                         _user_input = input_text or ""
-                        _clean_response, _stored_failure = _chat_turn_copy(
+                        _clean_response, _turn_meta = _chat_turn_copy(
                             response_parts, response_text, ends_at_draft=_turn_ends_at_draft,
-                            turn_failure=_turn_failure)
+                            failed=_turn_failed, turn_failure=_turn_failure)
 
                         if _user_input.strip():
                             # Helper to get role/content from Message object or dict
@@ -2934,7 +2944,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                                       f"{task.session_id}: {type(_ctx_e).__name__}: {_ctx_e}")
                                 if _clean_response:
                                     session.add_message(role="assistant", content=_clean_response,
-                                                        metadata=failed_turn_meta(_turn_failed, _stored_failure))
+                                                        metadata=_turn_meta)
                                 session_mgr.save(session)
                                 if is_debug_logging_enabled():
                                     logging.getLogger(__name__).debug(f"Session saved: +1 user, +1 assistant for {task.session_id}, turn_count={session.runtime_state.get('user_turn_count', 0)}")
@@ -2946,7 +2956,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         break
                                 if last_assistant_msg != _clean_response:
                                     session.add_message(role="assistant", content=_clean_response,
-                                                        metadata=failed_turn_meta(_turn_failed, _stored_failure))
+                                                        metadata=_turn_meta)
                                 # sync_state=True ensures the ContextManager state is saved to runtime_state
                                 session_mgr.save(session, sync_state=True)
                     except Exception as e:
@@ -3650,14 +3660,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 # (mirrors main chat path – ensures browser sees the response even
                                 # if WebSocket dropped during streaming, and persists it for reload)
                                 _result_sid = getattr(agent, "current_session_id", None)
-                                _final_result_text = "".join(response_parts)
-
-
-                                # The stored copy is the cleaned stream; a failure that followed an
-                                # answer is its tail, cleaned apart and recorded the way the copy
-                                # holds it, so no later context reads it back (session.model_text).
-                                _clean_result, _drain_stored_failure = stored_turn_copy(
-                                    _final_result_text, _drain_failure, _clean_drain_text)
+                                # The stored copy is the cleaned stream, marked so no later
+                                # context reads a failure back (session.model_text).
+                                _clean_result, _drain_meta = _drain_turn_copy(
+                                    response_parts, failed=_drain_failed, turn_failure=_drain_failure)
 
                                 if _clean_result:
                                     # 1. Final emit – guarantees browser has complete message
@@ -3683,8 +3689,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                             _saved_sess = session_mgr.load(_result_sid)
                                             _saved_sess.add_message(
                                                 role="assistant", content=_clean_result,
-                                                metadata=failed_turn_meta(_drain_failed,
-                                                                          _drain_stored_failure))
+                                                metadata=_drain_meta)
                                             session_mgr.save(_saved_sess)
                                     except Exception:
                                         pass

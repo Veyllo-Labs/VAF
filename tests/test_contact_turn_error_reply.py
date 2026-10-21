@@ -328,20 +328,39 @@ def test_an_answer_that_explains_the_stop_marker_is_sent(delivered):
     assert delivered == [("telegram", text)]
 
 
-def test_a_failure_delivery_cannot_find_is_never_sent(delivered):
-    """When the outgoing text no longer holds the recorded failure verbatim, it cannot be
-    taken off. A provider failure left in the text would still be refused: `is_error_reply`
+def test_a_failure_delivery_cannot_take_off_is_never_sent(delivered):
+    """The failure is taken off as the outgoing text's tail, by the rule the stored copy
+    follows (`session.take_off_turn_failure`). When the text does not end with it, it cannot
+    be taken off. A provider failure left in the text would still be refused: `is_error_reply`
     looks for its marker anywhere in the text, not only at its start. A failure text without
     a marker would go out, so delivery fails closed on its own: the fixed sentence, never the
-    text. MUTATION: drop the explicit not-found check - the marker-free failure reaches the
-    contact, red."""
+    text. MUTATION: send the text when the failure cannot be taken off - the marker-free
+    failure reaches the contact, red."""
     from vaf.core.completion import is_error_reply
-    left_in = "Ihr Termin ist am Montag.\n\n" + _KEY_ERROR
+    left_in = "Ihr Termin ist am Montag.\n\n" + _KEY_ERROR + "\n\nNoch etwas."
     assert is_error_reply(left_in)            # the marker is found mid-text
     hr._deliver_channel_reply(_delivery_task("telegram", from_contact=True), left_in,
-                              turn_failure=_KEY_ERROR + "\n")
+                              turn_failure=_KEY_ERROR)
     hr._deliver_channel_reply(_delivery_task("whatsapp", from_contact=True),
                               "Ihr Termin ist am Montag.\n\ntimeout after 30s at /home/user",
                               turn_failure="timeout after 30s at /home/user/x")
     assert delivered == [("telegram", "Sorry, I can't reply right now. Please try again a little later."),
+                         ("whatsapp", "Sorry, I can't reply right now. Please try again a little later.")]
+
+
+def test_delivery_takes_the_failure_off_as_the_tail_only(delivered):
+    """The recorded failure can end in whitespace the outgoing text no longer has (the
+    tool-call JSON strip trims the text): the trimmed failure is still its tail, and the
+    contact gets the answer. Only the tail is cut: a failure that the answer also holds
+    cannot be told apart from it, so nothing of the turn goes out rather than a cut answer.
+    MUTATION: look the failure up untrimmed - the trailing-newline case sends the fixed
+    sentence instead of the answer, red. MUTATION: cut every occurrence - the answer goes out
+    with a hole in it, red."""
+    hr._deliver_channel_reply(_delivery_task("telegram", from_contact=True),
+                              "Ihr Termin ist am Montag.\n\n" + _KEY_ERROR,
+                              turn_failure=_KEY_ERROR + "\n")
+    short = "timeout"
+    hr._deliver_channel_reply(_delivery_task("whatsapp", from_contact=True),
+                              "Der timeout ist behoben.\n\n" + short, turn_failure=short)
+    assert delivered == [("telegram", "Ihr Termin ist am Montag."),
                          ("whatsapp", "Sorry, I can't reply right now. Please try again a little later.")]

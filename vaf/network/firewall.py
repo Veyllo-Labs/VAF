@@ -41,6 +41,9 @@ FIREWALL_INACTIVE = "inactive"
 # ufw's own switch. World-readable on Ubuntu (measured: -rw-r--r-- root root), never
 # translated, so reading it needs no root and parses no command output.
 UFW_CONF = "/etc/ufw/ufw.conf"
+# ufw's defaults, MANAGE_BUILTINS among them; world-readable as well (measured, Ubuntu 24.04).
+# ufw-init sources this file first and ufw.conf after it, so a value in ufw.conf wins.
+UFW_DEFAULTS = "/etc/default/ufw"
 
 
 def ssh_session_port() -> Optional[int]:
@@ -57,7 +60,8 @@ def ssh_session_port() -> Optional[int]:
 
 
 def ufw_off_advice(ssh_port: Optional[int] = None, *, switch_on: Optional[bool] = None,
-                   unit_stopped: Optional[bool] = None) -> str:
+                   unit_stopped: Optional[bool] = None,
+                   manages_builtins: Optional[bool] = None) -> str:
     """What an operator does about a switched-off ufw; `vaf server provision` and `vaf doctor`
     both say it. SSH and the VPN first: `sudo ufw enable` with no allow for them cuts off the
     session that typed it, and the VPN everybody else comes in through. `ufw allow OpenSSH`
@@ -65,8 +69,9 @@ def ufw_off_advice(ssh_port: Optional[int] = None, *, switch_on: Optional[bool] 
     number: the one this session came in on when it is known.
 
     The steps follow the state ufw is in, read as `host_firewall()` reads it (`switch_on`:
-    ufw.conf may say `ENABLED=yes`; `unit_stopped`: systemd says its unit is `inactive`), both
-    read here when not given. Measured in ufw's own code (0.36, Ubuntu 24.04):
+    ufw.conf may say `ENABLED=yes`; `unit_stopped`: systemd says its unit is `inactive`;
+    `manages_builtins`: `ufw_manages_builtins()`), all read here when not given. Measured in
+    ufw's own code (0.36, Ubuntu 24.04):
     - `ufw enable` writes the switch and runs `ufw-init start` itself; it never starts or
       enables the unit, and only the unit loads the rules at boot. A stopped unit therefore
       also needs `sudo systemctl enable --now ufw` (its start finds the rules loaded and
@@ -76,14 +81,24 @@ def ufw_off_advice(ssh_port: Optional[int] = None, *, switch_on: Optional[bool] 
       leaves, `ufw allow` writes the IPv4 rule and then fails reloading the chains the stop
       deleted, before it writes the IPv6 one. `sudo ufw disable` first turns the switch off
       (its stop tolerates the missing chains), so the allows are recorded whole. An
-      unreadable ufw.conf counts as on here: `ufw disable` only flushes ufw's own chains and
-      sets ACCEPT policies, so it is harmless in every state, and `ufw enable` follows it.
+      unreadable ufw.conf counts as on here: with `MANAGE_BUILTINS=no`, Ubuntu's default,
+      `ufw disable` only flushes ufw's own chains and sets ACCEPT policies until the
+      `ufw enable` that follows it.
+    - With `MANAGE_BUILTINS=yes` ufw's stop and its start both flush every other iptables
+      rule as well, Docker's included, and nothing in ufw restores them. There is no gentler
+      sequence to give, since every ufw start flushes then (the one at boot too, before
+      Docker writes its own), so the advice says so and adds `sudo systemctl restart docker`,
+      which writes Docker's rules again; VAF's containers come back by their restart policy
+      (`unless-stopped`). When /etc/default/ufw cannot be read, it says the same as a
+      condition.
     """
     port = ssh_port if ssh_port is not None else ssh_session_port()
     if switch_on is None:
         switch_on = ufw_enabled() is not False
     if unit_stopped is None:
         unit_stopped = _ufw_unit_inactive()
+    if manages_builtins is None:
+        manages_builtins = ufw_manages_builtins()
     if port == 22:
         ssh = "`sudo ufw allow OpenSSH`"
     elif port:
@@ -91,7 +106,8 @@ def ufw_off_advice(ssh_port: Optional[int] = None, *, switch_on: Optional[bool] 
     else:
         ssh = ("`sudo ufw allow OpenSSH` when it listens on port 22, else "
                "`sudo ufw allow <port>/tcp`")
-    if switch_on and unit_stopped:
+    disable_first = bool(switch_on and unit_stopped)
+    if disable_first:
         steps = ("run `sudo ufw disable` (with ufw's switch on and its unit stopped, "
                  f"`ufw allow` fails), then allow SSH ({ssh})")
     else:
@@ -100,10 +116,20 @@ def ufw_off_advice(ssh_port: Optional[int] = None, *, switch_on: Optional[bool] 
     if unit_stopped:
         start += (" and `sudo systemctl enable --now ufw` (`ufw enable` does not start a "
                   "stopped unit, and only the unit loads the rules at boot)")
-    return ("If the hosting provider's firewall or the router keeps the port closed, that is "
-            f"enough. Otherwise {steps} and the VPN's own port (WireGuard: "
-            "`sudo ufw allow 51820/udp`, or the ListenPort its configuration names; another "
-            f"VPN: its own port), then {start}, then `sudo -v && vaf server provision`.")
+    advice = ("If the hosting provider's firewall or the router keeps the port closed, that is "
+              f"enough. Otherwise {steps} and the VPN's own port (WireGuard: "
+              "`sudo ufw allow 51820/udp`, or the ListenPort its configuration names; another "
+              f"VPN: its own port), then {start}, then `sudo -v && vaf server provision`.")
+    if manages_builtins is not False:
+        flushes = ("`ufw disable` and `ufw enable` also flush" if disable_first
+                   else "`ufw enable` also flushes")
+        why = ("This ufw manages the built-in chains (`MANAGE_BUILTINS=yes` in "
+               "/etc/default/ufw), so " if manages_builtins else
+               "If /etc/default/ufw sets `MANAGE_BUILTINS=yes`, ")
+        advice += (f" {why}{flushes} every other iptables rule, Docker's included: run "
+                   "`sudo systemctl restart docker` after `sudo ufw enable` so Docker writes "
+                   "its rules again.")
+    return advice
 
 
 def _sources(*, narrow_lan: bool = False) -> list:
@@ -471,17 +497,44 @@ def ufw_enabled(conf_path: str = UFW_CONF) -> Optional[bool]:
     Not `ufw status` either: it needs root and prints translated text. Whitespace, quotes
     and case around the value are tolerated; the last `ENABLED=` line wins.
     """
-    try:
-        text = Path(conf_path).read_bytes().decode("utf-8", "replace")
-    except OSError:
+    settings = _ufw_settings(conf_path)
+    if settings is None:
         return None
-    enabled = False
-    for raw in text.splitlines():
-        line = raw.split("#", 1)[0].strip()
-        key, sep, value = line.partition("=")
-        if sep and key.strip().upper() == "ENABLED":
-            enabled = value.strip().strip("\"'").strip().lower() == "yes"
-    return enabled
+    return settings.get("ENABLED", "").lower() == "yes"
+
+
+def ufw_manages_builtins(paths: Optional[tuple] = None) -> Optional[bool]:
+    """Whether ufw manages the built-in chains (`MANAGE_BUILTINS=yes`), read the way
+    ufw-init reads it: /etc/default/ufw, then ufw.conf, the last line wins, and only the exact
+    word `yes` counts (ufw-init compares `= "yes"`). None when a file cannot be read.
+
+    It decides what `ufw disable` and `ufw enable` do to rules that are not ufw's: with `yes`
+    both run `flush_builtins` (ufw-init-functions, in `ufw_stop` and `ufw_start`), which
+    flushes every built-in chain and deletes every other chain, Docker's included. Ubuntu
+    ships `no`, and then ufw touches only its own chains.
+    """
+    settings = _ufw_settings(*(paths or (UFW_DEFAULTS, UFW_CONF)))
+    if settings is None:
+        return None
+    return settings.get("MANAGE_BUILTINS") == "yes"
+
+
+def _ufw_settings(*paths: str) -> Optional[dict]:
+    """The `KEY=value` lines of ufw's shell-sourced config files, read in order so a later
+    line wins, keys upper-cased, values stripped of whitespace and quotes; None when any of
+    the files cannot be read."""
+    settings: dict = {}
+    for path in paths:
+        try:
+            text = Path(path).read_bytes().decode("utf-8", "replace")
+        except OSError:
+            return None
+        for raw in text.splitlines():
+            line = raw.split("#", 1)[0].strip()
+            key, sep, value = line.partition("=")
+            if sep and key.strip():
+                settings[key.strip().upper()] = value.strip().strip("\"'").strip()
+    return settings
 
 
 def _ufw_installed() -> bool:

@@ -651,8 +651,9 @@ def test_only_systemds_inactive_is_trusted(monkeypatch, answer, inactive):
     assert fw._ufw_unit_inactive() is inactive
 
 
-# The state Ubuntu ships ufw in: the switch off (ENABLED=no), the unit running.
-_SHIPPED = {"switch_on": False, "unit_stopped": False}
+# The state Ubuntu ships ufw in: the switch off (ENABLED=no), the unit running, and ufw
+# touching only its own chains (MANAGE_BUILTINS=no).
+_SHIPPED = {"switch_on": False, "unit_stopped": False, "manages_builtins": False}
 
 
 def test_the_ufw_advice_names_the_ssh_port_and_the_vpn_port(monkeypatch):
@@ -699,7 +700,8 @@ def test_a_stopped_unit_is_enabled_and_started_after_ufw_enable():
     next boot and systemd keeps saying `inactive`. MUTATION: leave the unit step out - red;
     name it for a running unit too - red."""
     for switch_on in (False, True):
-        text = fw.ufw_off_advice(22, switch_on=switch_on, unit_stopped=True)
+        text = fw.ufw_off_advice(22, switch_on=switch_on, unit_stopped=True,
+                                 manages_builtins=False)
         assert (text.index("51820/udp") < text.index("`sudo ufw enable`")
                 < text.index("`sudo systemctl enable --now ufw`")
                 < text.index("vaf server provision"))
@@ -711,16 +713,18 @@ def test_with_the_switch_on_and_the_unit_stopped_the_switch_goes_off_first():
     so `ufw allow` writes the IPv4 rule, fails reloading the chains the stop deleted and never
     writes the IPv6 one. `sudo ufw disable` first records the allows whole. MUTATION: drop the
     disable step - red; say it whenever the unit is stopped - red."""
-    text = fw.ufw_off_advice(22, switch_on=True, unit_stopped=True)
+    text = fw.ufw_off_advice(22, switch_on=True, unit_stopped=True, manages_builtins=False)
     assert (text.index("`sudo ufw disable`") < text.index("`sudo ufw allow OpenSSH`")
             < text.index("51820/udp") < text.index("`sudo ufw enable`"))
-    assert "ufw disable" not in fw.ufw_off_advice(22, switch_on=False, unit_stopped=True)
+    assert "ufw disable" not in fw.ufw_off_advice(22, switch_on=False, unit_stopped=True,
+                                                  manages_builtins=False)
     assert "ufw disable" not in fw.ufw_off_advice(22, **_SHIPPED)
 
 
 def test_the_advice_reads_ufws_state_the_way_host_firewall_does(monkeypatch):
     """Called without a state, as provision and the doctor call it, the advice asks the same
     two readers `host_firewall()` asks. MUTATION: default either state to off - red."""
+    monkeypatch.setattr(fw, "ufw_manages_builtins", lambda paths=None: False)
     monkeypatch.setattr(fw, "ufw_enabled", lambda conf_path=fw.UFW_CONF: True)
     monkeypatch.setattr(fw, "_ufw_unit_inactive", lambda: True)
     text = fw.ufw_off_advice(22)
@@ -735,11 +739,57 @@ def test_an_unreadable_switch_with_a_stopped_unit_still_gets_the_disable_step(mo
     """ufw.conf unreadable means the switch may be on, and then `ufw allow` fails before it
     writes the IPv6 rule; `ufw disable` is harmless in every state. MUTATION: read an
     unreadable switch as off (`is True`) - red."""
+    monkeypatch.setattr(fw, "ufw_manages_builtins", lambda paths=None: False)
     monkeypatch.setattr(fw, "ufw_enabled", lambda conf_path=fw.UFW_CONF: None)
     monkeypatch.setattr(fw, "_ufw_unit_inactive", lambda: True)
     text = fw.ufw_off_advice(22)
     assert text.index("`sudo ufw disable`") < text.index("`sudo ufw allow OpenSSH`")
     assert "`sudo systemctl enable --now ufw`" in text
+
+
+@pytest.mark.parametrize("defaults, conf, expected", [
+    ("MANAGE_BUILTINS=no\n", "ENABLED=no\n", False),            # what Ubuntu ships
+    ("MANAGE_BUILTINS=yes\n", "ENABLED=no\n", True),
+    ('MANAGE_BUILTINS="yes"  # managed\n', "ENABLED=no\n", True),
+    ("MANAGE_BUILTINS=YES\n", "ENABLED=no\n", False),           # ufw-init compares "yes"
+    ("MANAGE_BUILTINS=no\n", "MANAGE_BUILTINS=yes\n", True),    # ufw.conf is sourced last
+    ("IPV6=yes\n", "ENABLED=no\n", False),
+    (None, "ENABLED=no\n", None),
+])
+def test_ufw_manages_builtins_is_read_the_way_ufw_init_reads_it(monkeypatch, tmp_path, defaults,
+                                                                conf, expected):
+    """MUTATION: tolerate case in the value; read /etc/default/ufw alone - red."""
+    defaults_path, conf_path = tmp_path / "ufw", tmp_path / "ufw.conf"
+    if defaults is not None:
+        defaults_path.write_bytes(defaults.encode())
+    conf_path.write_bytes(conf.encode())
+    monkeypatch.setattr(fw, "UFW_DEFAULTS", str(defaults_path))
+    monkeypatch.setattr(fw, "UFW_CONF", str(conf_path))
+    assert fw.ufw_manages_builtins() is expected
+
+
+@pytest.mark.parametrize("manages", [True, False, None])
+@pytest.mark.parametrize("disable_first", [True, False])
+def test_the_advice_says_what_a_ufw_that_manages_the_builtins_does_to_docker(monkeypatch, manages,
+                                                                              disable_first):
+    """With MANAGE_BUILTINS=yes ufw's stop and its start both run `flush_builtins`, which also
+    removes Docker's rules, and ufw puts nothing back. Unreadable defaults get the same
+    sentence as a condition; Ubuntu's `no` gets nothing. MUTATION: name it for `yes` only
+    - red (None rows); never - red (True rows); always - red (False rows)."""
+    monkeypatch.setattr(fw, "ufw_manages_builtins", lambda paths=None: manages)
+    text = fw.ufw_off_advice(22, switch_on=disable_first, unit_stopped=disable_first)
+    if manages is False:
+        assert "docker" not in text.lower() and "MANAGE_BUILTINS" not in text
+        return
+    assert text.index("`sudo ufw enable`") < text.index("`sudo systemctl restart docker`")
+    assert "Docker's included" in text
+    if manages:
+        assert "This ufw manages the built-in chains (`MANAGE_BUILTINS=yes`" in text
+    else:
+        assert "If /etc/default/ufw sets `MANAGE_BUILTINS=yes`" in text
+    flushes = ("`ufw disable` and `ufw enable` also flush" if disable_first
+               else "`ufw enable` also flushes")
+    assert flushes in text
 
 
 def test_ufw_counts_as_installed_by_its_config_file(monkeypatch, tmp_path):

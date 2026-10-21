@@ -88,18 +88,16 @@ def test_killpg_only_when_frontend_is_isolated(monkeypatch):
     assert calls and calls[0][0] == 555   # killed the frontend's OWN group, not ours
 
 
-def test_lsof_port_cleanup_never_kills_our_own_pid(monkeypatch):
-    """The real "Killed on every live restart" bug: the tray is CONNECTED to :3000 (its proxy forwards
-    there + the webview renders it), so `lsof -ti :3000` returned the tray's own pid and `kill -9` took
-    VAF down. The cleanup must use -sTCP:LISTEN and skip our own pid."""
-    import os as _os
-    my_pid = _os.getpid()
+def _lsof_cleanup(monkeypatch, listeners):
+    """Run stop_frontend's port cleanup with `listeners` as lsof's answer; the pids `kill -9`
+    was run on."""
     kill_targets = []
 
     def fake_run(cmd, *a, **k):
         if cmd[:2] == ["lsof", "-ti"]:
             assert "-sTCP:LISTEN" in cmd  # only LISTENERS, never connected clients
-            return types.SimpleNamespace(returncode=0, stdout=f"{my_pid}\n888888\n", stderr="")
+            stdout = "".join(f"{pid}\n" for pid in listeners)
+            return types.SimpleNamespace(returncode=0, stdout=stdout, stderr="")
         if cmd[:2] == ["kill", "-9"]:
             kill_targets.append(cmd[2])
             return types.SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -112,8 +110,42 @@ def test_lsof_port_cleanup_never_kills_our_own_pid(monkeypatch):
     fm.port = 3000                       # truthy → run the lsof cleanup
     monkeypatch.setattr(fm, "is_port_in_use", lambda p: False, raising=False)
     monkeypatch.setattr(fm, "get_port_file", lambda: "/nonexistent/vaf-port", raising=False)
-
     fm.stop_frontend(wait_for_exit=False)
+    return kill_targets
 
-    assert str(my_pid) not in kill_targets   # NEVER kill ourselves (the crash)
-    assert "888888" in kill_targets          # but DO free the port from a genuine leftover listener
+
+def test_lsof_port_cleanup_never_kills_our_own_pid(monkeypatch):
+    """The real "Killed on every live restart" bug: the tray is CONNECTED to :3000 (its proxy forwards
+    there + the webview renders it), so `lsof -ti :3000` returned the tray's own pid and `kill -9` took
+    VAF down. The cleanup must use -sTCP:LISTEN and skip our own pid and our own process group.
+
+    Every pid here is derived from ours and the process groups are stubbed: a hardcoded "foreign"
+    pid can be a live thread of this very test run on a busy machine, which the own-group skip then
+    rightly spares. MUTATION: drop -sTCP:LISTEN; drop the kill; drop the own-group skip - red."""
+    my_pid = os.getpid()
+    webview = my_pid + 1    # shares our process group: must never be killed
+    listener = my_pid + 2   # a genuine leftover listener in a foreign group: must be killed
+    our_group, foreign_group = 4242, 4343
+    monkeypatch.setattr(fmmod.os, "getpgid",
+                        lambda pid: our_group if pid in (0, my_pid, webview) else foreign_group,
+                        raising=False)
+
+    kill_targets = _lsof_cleanup(monkeypatch, [my_pid, webview, listener])
+
+    assert kill_targets == [str(listener)]
+
+
+def test_lsof_port_cleanup_spares_our_pid_without_a_process_group(monkeypatch):
+    """Where the process group cannot be read (Windows has no getpgid), the own-pid rule alone
+    keeps the tray alive. MUTATION: drop the own-pid skip - red."""
+    my_pid = os.getpid()
+    listener = my_pid + 2
+
+    def no_group(pid):
+        raise OSError("no process groups here")
+
+    monkeypatch.setattr(fmmod.os, "getpgid", no_group, raising=False)
+
+    kill_targets = _lsof_cleanup(monkeypatch, [my_pid, listener])
+
+    assert kill_targets == [str(listener)]

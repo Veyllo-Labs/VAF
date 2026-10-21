@@ -605,8 +605,9 @@ def test_contained_path_refuses_a_rooted_fragment_under_windows_semantics(tmp_pa
 # fall back to the portable path. Only the patching needs to say so.
 #
 # Two spellings are accepted, both mechanical:
-#   * `raising=False` on the call - the patch becomes a no-op and the test runs
-#     the platform's real fallback, which is the more useful of the two; or
+#   * `raising=False` on the call - where the attribute is missing, pytest creates
+#     it for the test and deletes it afterwards, so the stub runs on Windows too and
+#     the test checks the same thing there, which is the more useful of the two; or
 #   * a module-level skip keyed on `hasattr(os, ...)`, the pattern
 #     tests/test_stop_frontend_safety.py established.
 

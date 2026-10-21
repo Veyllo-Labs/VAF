@@ -44,7 +44,7 @@
     "adminAccountTitle": "Admin-Konto",
     "adminAccountSubtitle": "Es existiert noch kein Admin. Gib den Benutzernamen für den ersten Administrator ein.",
     "setupCodeTitle": "Einrichtungscode",
-    "setupCodeSubtitle": "Dieser Browser ist nicht auf dem Rechner geöffnet, auf dem VAF läuft. Führe dort in einem Terminal vaf setup code aus und gib den angezeigten Code ein.",
+    "setupCodeSubtitle": "Dieser Browser ist nicht auf dem Rechner geöffnet, auf dem VAF läuft. Führe dort in einem Terminal <code>vaf setup code</code> aus und gib den angezeigten Code ein.",
     "setupCodeLabel": "Code",
     "errSetupCode": "Der Einrichtungscode stimmt nicht.",
     "usernameLabel": "Benutzername *",

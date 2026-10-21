@@ -19,6 +19,13 @@ export function retryAfterSeconds(res: Response): number {
 /** "in 15 minutes" below an hour, "in 2 hours" above, in `locale`. */
 export function retryWhen(seconds: number, locale: string): string {
     const rtf = new Intl.RelativeTimeFormat(locale, { numeric: 'always' });
-    if (seconds < 3600) return rtf.format(Math.max(1, Math.ceil(seconds / 60)), 'minute');
-    return rtf.format(Math.ceil(seconds / 3600), 'hour');
+    const phrase = seconds < 3600
+        ? rtf.format(Math.max(1, Math.ceil(seconds / 60)), 'minute')
+        : rtf.format(Math.ceil(seconds / 3600), 'hour');
+    // CLDR puts a space between the number and the counter in Japanese ("15 minutes later"
+    // comes out as digits, space, kanji); Japanese sets them together, as the catalogue's own
+    // style does. Korean keeps its space (it is correct there), Chinese has none.
+    return locale.toLowerCase().startsWith('ja')
+        ? phrase.replace(/(\d)\s+(?=[\u3040-\u30ff\u4e00-\u9fff])/g, '$1')
+        : phrase;
 }

@@ -59,3 +59,59 @@ def test_the_sentences_carry_the_wait():
         for key in ("codeSpent", "sessionEnded", "signInExpired"):
             assert cat["auth"][key], (locale, key)
         assert cat["account"]["errCodeSpent"], locale
+
+
+_TS = ROOT / "web" / "node_modules" / "typescript"
+
+
+def _retry_when(cases):
+    """The web's REAL retryWhen, transpiled with the app's own TypeScript and run in node, so
+    the locale data is the one a browser has (ICU), not a copy of it here."""
+    import shutil
+    import subprocess
+
+    import pytest
+    if shutil.which("node") is None or not _TS.is_dir():
+        pytest.skip("node or web/node_modules/typescript is not installed")
+    script = (
+        "const ts = require(process.argv[1]);"
+        "const fs = require('fs');"
+        "const src = fs.readFileSync(process.argv[2], 'utf8');"
+        "const js = ts.transpileModule(src, {compilerOptions: {module: ts.ModuleKind.CommonJS,"
+        " target: ts.ScriptTarget.ES2019}}).outputText;"
+        "const m = {exports: {}}; new Function('module', 'exports', js)(m, m.exports);"
+        "const cases = JSON.parse(process.argv[3]);"
+        "process.stdout.write(JSON.stringify(cases.map(([s, l]) => m.exports.retryWhen(s, l))));"
+    )
+    out = subprocess.run(["node", "-e", script, str(_TS), str(ROOT / "web" / "lib" / "retryAfter.ts"),
+                          json.dumps(cases)], capture_output=True, text=True, check=True).stdout
+    return json.loads(out)
+
+
+def test_the_wait_reads_naturally_in_japanese_and_stays_as_cldr_writes_it_elsewhere():
+    """CLDR writes the Japanese wait with a space between the number and its counter, which
+    Japanese sets together; Korean's space is correct and stays, Chinese has none. MUTATION:
+    drop the Japanese close-up, or close up every locale's spaces - red."""
+    ja15, ja2h, ko15, zh15, en15 = _retry_when(
+        [[900, "ja"], [7200, "ja"], [900, "ko"], [900, "zh"], [900, "en"]])
+    assert ja15 == "15分後" and ja2h == "2時間後"
+    assert ko15 == "15분 후"
+    assert zh15 == "15分钟后"
+    assert en15 == "in 15 minutes"
+
+
+def test_the_setup_command_is_marked_as_code_and_never_broken():
+    """At phone width the command broke across lines ("vaf / setup code") and nothing showed
+    where it ended. MUTATION: render the subtitle as plain text again - red."""
+    assert "t.rich('setupCodeSubtitle', {" in LOGIN
+    assert re.search(r"code: \(chunks\) => <code className=\"[^\"]*whitespace-nowrap[^\"]*\">\{chunks\}</code>",
+                     LOGIN)
+    for locale in ("en", "de", "ja", "ko", "zh", "tr", "th"):
+        cat = json.loads((ROOT / "web" / "messages" / f"{locale}.json").read_text(encoding="utf-8"))
+        assert "<code>vaf setup code</code>" in cat["onboarding"]["setupCodeSubtitle"], locale
+
+
+def test_the_ended_notice_carries_its_icon():
+    """MUTATION: drop the icon - red."""
+    notice = LOGIN.split("{endedNotice && (", 1)[1].split("</p>", 1)[0]
+    assert "<Info " in notice and "{tAuth('sessionEnded')}" in notice

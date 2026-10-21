@@ -44,7 +44,7 @@
     "adminAccountTitle": "管理员账户",
     "adminAccountSubtitle": "还没有管理员。请输入第一位管理员的用户名。",
     "setupCodeTitle": "设置代码",
-    "setupCodeSubtitle": "此浏览器不在运行 VAF 的机器上。请在那台机器的终端中运行 vaf setup code，然后输入它显示的代码。",
+    "setupCodeSubtitle": "此浏览器不在运行 VAF 的机器上。请在那台机器的终端中运行 <code>vaf setup code</code>，然后输入它显示的代码。",
     "setupCodeLabel": "代码",
     "errSetupCode": "设置代码不正确。",
     "usernameLabel": "用户名 *",

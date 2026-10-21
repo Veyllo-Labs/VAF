@@ -44,7 +44,7 @@
     "adminAccountTitle": "관리자 계정",
     "adminAccountSubtitle": "아직 관리자가 없어요. 첫 관리자의 사용자 이름을 입력해 주세요.",
     "setupCodeTitle": "설정 코드",
-    "setupCodeSubtitle": "이 브라우저는 VAF가 실행 중인 컴퓨터에 있지 않습니다. 그 컴퓨터의 터미널에서 vaf setup code 명령을 실행하고 표시된 코드를 입력하세요.",
+    "setupCodeSubtitle": "이 브라우저는 VAF가 실행 중인 컴퓨터에 있지 않습니다. 그 컴퓨터의 터미널에서 <code>vaf setup code</code> 명령을 실행하고 표시된 코드를 입력하세요.",
     "setupCodeLabel": "코드",
     "errSetupCode": "설정 코드가 올바르지 않습니다.",
     "usernameLabel": "사용자 이름 *",

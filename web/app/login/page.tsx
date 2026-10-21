@@ -9,7 +9,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     User, Lock, Eye, EyeOff, ArrowRight, ShieldCheck,
     Smartphone, CheckCircle, Check, Copy, Globe, KeyRound, ExternalLink,
-    Zap, Cpu, HardDrive, Sun, Moon, SunMoon, Bot, Dices
+    Zap, Cpu, HardDrive, Sun, Moon, SunMoon, Bot, Dices, Info
 } from 'lucide-react';
 import { useTranslations, useLocale } from 'next-intl';
 import { copyText } from '@/lib/clipboard';
@@ -752,7 +752,10 @@ export default function LoginPage() {
                             <div className="p-8">
                                 <h2 className="text-lg font-semibold text-gray-900 mb-6">{tAuth('signInTitle')}</h2>
                                 {endedNotice && (
-                                    <p className="text-sm text-gray-700 bg-gray-50 border border-gray-200 px-3 py-2 rounded-lg mb-5">{tAuth('sessionEnded')}</p>
+                                    <p className="flex items-start gap-2 text-sm text-gray-700 bg-gray-50 border border-gray-200 px-3 py-2 rounded-lg mb-5">
+                                        <Info size={16} className="mt-0.5 shrink-0 text-gray-500" aria-hidden="true" />
+                                        <span>{tAuth('sessionEnded')}</span>
+                                    </p>
                                 )}
                                 <form onSubmit={handleLogin} className="space-y-5">
                                     <div className="space-y-1.5">
@@ -972,7 +975,11 @@ export default function LoginPage() {
                                 {createAdminSubStep === 'setup_code' && (
                                     <form onSubmit={handleSetupCodeStep} className="space-y-5">
                                         <h2 className="text-lg font-semibold text-gray-900 mb-1">{t('setupCodeTitle')}</h2>
-                                        <p className="text-sm text-gray-500 mb-6">{t('setupCodeSubtitle')}</p>
+                                        <p className="text-sm text-gray-500 mb-6">
+                                            {t.rich('setupCodeSubtitle', {
+                                                code: (chunks) => <code className="font-mono text-gray-900 bg-gray-100 px-1 rounded whitespace-nowrap">{chunks}</code>,
+                                            })}
+                                        </p>
                                         <div className="space-y-5">
                                             <div className="space-y-1.5">
                                                 <label className="text-sm font-medium text-gray-700 ml-1">{t('setupCodeLabel')}</label>

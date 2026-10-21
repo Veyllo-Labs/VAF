@@ -651,10 +651,24 @@ def host_firewall() -> Optional[str]:
     switched on but whose unit systemd reports `inactive` counts as off too
     (`_ufw_unit_inactive`): after `systemctl disable --now ufw` its rules are gone and it
     does not come back at the next boot.
+
+    NAMED BOUNDARY: a switch that cannot be read with certainty (`ufw_enabled()` is None)
+    still answers "ufw", so the setup adds its allow rule, which is harmless whether ufw is
+    on or off; answering "ufw_off" instead would leave the port closed to VPN clients on a
+    ufw that is on. What is not known is never reported as guarded: `ufw_switch_unconfirmed()`
+    tells provision and `vaf doctor` to say so and how to check.
     """
     if not Platform.is_linux():
         return None
     return _linux_host_firewall()
+
+
+def ufw_switch_unconfirmed() -> bool:
+    """True when `host_firewall()` answers "ufw" only because ufw's switch could not be read
+    with certainty (`ufw_enabled()` is None: ufw.conf unreadable, or a line other than plain
+    assignments). The allow rule is added all the same; provision and `vaf doctor` ask this
+    so neither reports the port as guarded, and both name `sudo ufw status` as the check."""
+    return host_firewall() == "ufw" and ufw_enabled() is None
 
 
 def _setup_firewall_linux(port: int, port_frontend: int):

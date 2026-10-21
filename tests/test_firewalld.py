@@ -634,6 +634,23 @@ def test_host_firewall_is_one_answer(monkeypatch):
     assert fw.host_firewall() is None
 
 
+@pytest.mark.parametrize("engine, switch, unconfirmed", [
+    ("ufw", None, True),
+    ("ufw", True, False),
+    ("ufw_off", None, False),
+    ("firewalld", None, False),
+    (None, None, False),
+])
+def test_an_uncertain_switch_still_counts_as_ufw_but_is_never_confirmed(monkeypatch, engine,
+                                                                        switch, unconfirmed):
+    """The allow rule is harmless on a ufw that is off and needed on one that is on, so an
+    uncertain switch keeps "ufw"; what reports the result asks this instead of claiming a
+    guard. MUTATION: answer False always; ignore the engine - red."""
+    monkeypatch.setattr(fw, "host_firewall", lambda: engine)
+    monkeypatch.setattr(fw, "ufw_enabled", lambda conf_path=fw.UFW_CONF: switch)
+    assert fw.ufw_switch_unconfirmed() is unconfirmed
+
+
 def test_a_ufw_whose_unit_is_stopped_counts_as_off(monkeypatch):
     """`systemctl disable --now ufw` runs `ufw-init stop`, which flushes the rules, while
     ufw.conf keeps `ENABLED=yes`: provision said "Firewall opened" and the doctor was silent.

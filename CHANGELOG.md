@@ -111,11 +111,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   anything, its live connections included (agent rooms, the interactive browser), and a room
   invitation names a LAN address only while that network is admitted.
   `vaf server provision` turns "VPN only" on when it first sets up a rented server with a
-  public address, and says when ufw is switched off, or when nothing is admitted yet, instead
-  of reporting the port as opened. `vaf doctor`, `vaf server status` and Settings, Local
-  Network, Remote access warn while the machine has a public address. The documentation says
-  it plainly: an agent's login page on the public internet is close to negligent; reach VAF
-  over a VPN. Details: "Scope: private networks only" in `docs/setup/NETWORK_FEATURES.md`.
+  public address, and says when ufw is switched off, when it cannot confirm ufw is on, or
+  when nothing is admitted yet, instead of reporting the port as opened. `vaf doctor`,
+  `vaf server status` and Settings, Local Network, Remote access warn while the machine has a
+  public address. The documentation says it plainly: an agent's login page on the public
+  internet is close to negligent; reach VAF over a VPN. Details: "Scope: private networks
+  only" in `docs/setup/NETWORK_FEATURES.md`.
 
 - **A relay in front of the web UI's port no longer makes its visitors the machine owner.** A
   reverse proxy on the same machine pointed at port 3000 (an nginx for the LAN, Tailscale

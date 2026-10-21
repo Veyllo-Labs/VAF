@@ -273,7 +273,7 @@ def server_provision(
         except Exception as e:
             outcome = False
             UI.warning(f"Firewall setup error: {e}")
-        from vaf.network.firewall import FIREWALL_INACTIVE, ufw_off_advice
+        from vaf.network.firewall import FIREWALL_INACTIVE, ufw_off_advice, ufw_switch_unconfirmed
         if outcome == FIREWALL_INACTIVE:
             # Rules added to a switched-off ufw do nothing; reporting the port as opened was
             # the measured mistake (vaf/network/firewall.py, host_firewall).
@@ -286,6 +286,13 @@ def server_provision(
             UI.warning(f"Firewall not opened for port {access_port}: no network besides this "
                        "machine is admitted yet. Once the VPN is up, run "
                        "`sudo -v && vaf server provision` again so it opens the port for it.")
+        elif outcome and ufw_switch_unconfirmed():
+            # The rule is in ufw either way, but whether ufw runs is not known: neither
+            # "opened" nor "in place" may stand alone (vaf/network/firewall.py, host_firewall).
+            done = "already in place" if outcome == "present" else "added"
+            UI.warning(f"Firewall rule {done} for port {access_port}, but VAF could not confirm "
+                       "that ufw is switched on: /etc/ufw/ufw.conf could not be read with "
+                       "certainty. Check with `sudo ufw status` that it is active.")
         elif outcome == "present":
             UI.success(f"Firewall rule already in place for port {access_port}.")
         elif outcome:

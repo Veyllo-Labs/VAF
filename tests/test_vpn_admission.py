@@ -281,10 +281,11 @@ def test_a_new_vpn_address_gets_a_new_certificate(monkeypatch, tmp_path):
 
 # ── the doctor ─────────────────────────────────────────────────────────────
 
-def _findings(public=(), host=None, events=(), **cfg):
+def _findings(public=(), host=None, events=(), switch=True, **cfg):
     """The doctor's findings for a network-mode config. The checks that read the machine
-    itself (its public addresses, its host firewall, today's security log) are pinned, so
-    the answer does not depend on the runner: Ubuntu runners ship ufw switched off."""
+    itself (its public addresses, its host firewall and ufw's switch, today's security log)
+    are pinned, so the answer does not depend on the runner: Ubuntu runners ship ufw
+    switched off."""
     import vaf.core.security_events as se
     import vaf.network.firewall as fw
     from vaf.core.security_misconfig import collect_security_findings
@@ -294,6 +295,7 @@ def _findings(public=(), host=None, events=(), **cfg):
         mp.setattr(binding, "public_addresses", lambda: list(public))
         mp.setattr(binding, "resolve_lan_access_ports", lambda wait_for_proxy=False: (8443, 8001))
         mp.setattr(fw, "host_firewall", lambda: host)
+        mp.setattr(fw, "ufw_enabled", lambda conf_path=fw.UFW_CONF: switch)
         mp.delenv("SSH_CONNECTION", raising=False)
         mp.setattr(se, "read_security_events", lambda date, limit=100: list(events))
         return {f["code"]: f for f in collect_security_findings({**base, **cfg})}
@@ -394,6 +396,22 @@ def test_doctor_sees_a_public_address_a_switched_off_ufw_and_public_refusals():
         events=[{"kind": "login_failed", "ip": "9.9.9.9"}])
 
 
+def test_doctor_says_when_ufws_switch_cannot_be_confirmed():
+    """An uncertain ufw.conf still counts as ufw, so the allow rule is added, and the doctor
+    said nothing: silence read as a guarded port. MUTATION: drop the finding - red; report
+    it for a confirmed switch, or for a ufw that is off - red."""
+    found = _findings(host="ufw", switch=None)["network_ufw_unknown"]
+    assert found["severity"] == "low"
+    assert "could not confirm that ufw is switched on" in found["message"]
+    assert "`sudo ufw status`" in found["message"]
+    assert "network_ufw_unknown" not in _codes(host="ufw", switch=True)
+    assert "network_ufw_unknown" not in _codes(host="ufw", switch=None,
+                                               local_network_firewall_enabled=False)
+    codes = _codes(host="ufw_off", switch=None)
+    assert "network_ufw_disabled" in codes and "network_ufw_unknown" not in codes
+    assert "network_ufw_unknown" not in _codes(host="firewalld", switch=None)
+
+
 def test_a_port_that_cannot_be_read_keeps_the_public_address_finding(monkeypatch):
     """Only the message hangs on the port; the finding is the machine on the internet.
     MUTATION: let the port read raise again - red."""
@@ -419,3 +437,4 @@ def test_doctor_says_nothing_about_the_internet_in_local_mode():
     assert not _codes(public=PUBLIC, host="ufw_off",
                       events=[{"kind": "ip_blocked", "ip": "9.9.9.9"}], **off) & {
         "network_public_address", "network_ufw_disabled", "network_public_refusals"}
+    assert "network_ufw_unknown" not in _codes(host="ufw", switch=None, **off)

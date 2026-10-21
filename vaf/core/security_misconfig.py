@@ -56,7 +56,8 @@ def _access_port() -> int:
 
 def _internet_findings(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
     """Whether the access port faces the internet: a public address on this machine, a
-    switched-off ufw, public addresses the admission check refused today. Each check reads
+    switched-off ufw or one whose switch cannot be confirmed, public addresses the admission
+    check refused today. Each check reads
     the machine and yields no finding when that read fails."""
     from vaf.network import binding, firewall
     found: List[Dict[str, str]] = []
@@ -81,12 +82,19 @@ def _internet_findings(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
         pass
 
     try:
-        if (bool(cfg.get("local_network_firewall_enabled", False))
-                and firewall.host_firewall() == "ufw_off"):
-            found.append(_finding(
-                "medium", "network_ufw_disabled",
-                "ufw is installed but switched off, so this machine's firewall does not guard "
-                "the access port. " + firewall.ufw_off_advice()))
+        if bool(cfg.get("local_network_firewall_enabled", False)):
+            if firewall.host_firewall() == "ufw_off":
+                found.append(_finding(
+                    "medium", "network_ufw_disabled",
+                    "ufw is installed but switched off, so this machine's firewall does not "
+                    "guard the access port. " + firewall.ufw_off_advice()))
+            elif firewall.ufw_switch_unconfirmed():
+                found.append(_finding(
+                    "low", "network_ufw_unknown",
+                    "VAF could not confirm that ufw is switched on: /etc/ufw/ufw.conf could "
+                    "not be read with certainty (unreadable, or a line other than plain "
+                    "assignments). Its allow rule for the access port is added either way; "
+                    "check with `sudo ufw status` that ufw is active."))
     except Exception:
         pass
 

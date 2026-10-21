@@ -309,6 +309,26 @@ def test_a_refused_client_is_closed_at_once(monkeypatch, quiet_refusals, accept)
     assert app.calls == 0
 
 
+def test_a_refused_upload_still_gets_its_answer(monkeypatch, quiet_refusals):
+    """A refused request with a body keeps its connection while the body passes: closed at
+    once, the connection was reset under a body still arriving and the 403 was lost
+    (measured: an 8 MB POST got ConnectionResetError). The head timer still closes it soon
+    after. MUTATION: Connection: close on every refusal - red (reset)."""
+    from vaf.network.admission import AdmissionGuard
+    monkeypatch.setattr(door, "HEAD_TIMEOUT_S", 0.5)
+    size = 8 * 1000 * 1000
+    with serving(_door_config(AdmissionGuard(_App(), admits=lambda ip: False)),
+                 door.door_event_loop) as (port, _server):
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            s.sendall(b"POST /api/auth/login HTTP/1.1\r\nHost: door\r\n"
+                      b"Content-Type: application/json\r\nContent-Length: %d\r\n\r\n" % size
+                      + b"x" * size)
+            answer = _one_answer(s)
+            assert answer.startswith(b"HTTP/1.1 403"), answer[:80]
+            assert b"\r\nconnection: close\r\n" not in answer.lower()
+            assert closed_within(s, 2.0), "the refused upload kept its connection"
+
+
 def test_a_discarded_body_never_counts_as_head(monkeypatch):
     """The body an early answer leaves unread is discarded, not head: a read that carries the
     rest of it and the start of the next request's head counted whole toward HEAD_MAX_BYTES
@@ -350,6 +370,34 @@ def test_a_pipelined_head_has_the_time_limit_too(quick_head):
         with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
             s.sendall(GET + b"GET / HTTP/1.1\r\n")
             assert closed_within(s, 2.0), "a pipelined head sent in part stayed open"
+
+
+def test_a_connection_may_send_only_so_far_ahead():
+    """uvicorn queues every request of a read before it pauses reading, so pipelined requests
+    whose answers were never read piled up with no limit (measured: one 256 KiB send of
+    minimal requests queued 9,362 of them, RSS 45 to 79 MB, relayed upstream one by one for
+    minutes). Past PIPELINE_MAX the connection is dropped, with no answer over the one still
+    due. MUTATION: no pipeline limit in on_message_begin - red."""
+    app = _App()
+    with serving(_door_config(app), door.door_event_loop) as (port, _server):
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            s.sendall(b"GET / HTTP/1.1\r\nHost: door\r\n\r\n" * 2000)
+            assert closed_within(s, 2.0), "a flood of pipelined requests kept the connection"
+    assert app.calls <= door.PIPELINE_MAX + 1
+
+
+def test_pipelined_requests_up_to_the_limit_are_answered():
+    """The control: one request in flight and PIPELINE_MAX more sent ahead of it are all
+    answered, in order. MUTATION: a limit one lower - red."""
+    app = _App()
+    count = door.PIPELINE_MAX + 1
+    with serving(_door_config(app), door.door_event_loop) as (port, _server):
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            s.sendall(GET * (count - 1) + b"GET / HTTP/1.1\r\nHost: door\r\n"
+                      b"Connection: close\r\n\r\n")
+            answers = _read_until_closed(s, 5.0)
+    assert answers.count(b"HTTP/1.1 200") == count, answers[-200:]
+    assert app.calls == count
 
 
 def test_a_431_never_answers_another_request():
@@ -577,6 +625,69 @@ def test_the_handshake_has_a_limit(cert, monkeypatch):
     with serving(_door_config(_App(), cert), asyncio.new_event_loop) as (port, _server):
         with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
             assert not closed_within(s, 2.0)
+
+
+def _wait_for_200(port, ctx=None, seconds=3.0):
+    """Ask again until a GET answers 200; return the seconds it took, or None."""
+    started = time.monotonic()
+    while time.monotonic() - started < seconds:
+        try:
+            with tls_connect(port, ctx, timeout=2) as s:
+                if http_exchange(s, b"GET / HTTP/1.1\r\nHost: door\r\nConnection: close"
+                                    b"\r\n\r\n", timeout=2).startswith(b"HTTP/1.1 200"):
+                    return time.monotonic() - started
+        except OSError:
+            pass
+        time.sleep(0.2)
+    return None
+
+
+def _wait_for_connections(server, count, seconds=5.0):
+    deadline = time.monotonic() + seconds
+    while len(server.server_state.connections) < count and time.monotonic() < deadline:
+        time.sleep(0.02)
+
+
+def test_an_idle_tls_connection_frees_its_place_at_the_head_timer(cert, monkeypatch):
+    """The head timer drops a silent connection at once: a TLS close waits for the client to
+    answer it, and until then the connection kept its place under the cap (measured: four
+    idle connections at a cap of 4 turned new requests away until 48 s; on Python 3.10 with
+    no limit at all). MUTATION: close instead of abort in _drop - red."""
+    monkeypatch.setattr(door, "MAX_CONNECTIONS", 2)
+    monkeypatch.setattr(door, "HEAD_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(door, "TLS_SHUTDOWN_TIMEOUT_S", 30.0)
+    with serving(_door_config(_App(), cert), door.door_event_loop) as (port, server):
+        idle = [tls_connect(port) for _ in range(2)]
+        try:
+            _wait_for_connections(server, 2)
+            waited = _wait_for_200(port)
+            assert waited is not None, "the idle connections kept their places"
+        finally:
+            for s in idle:
+                s.close()
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="ssl_shutdown_timeout is Python 3.11+")
+def test_a_closed_tls_connection_frees_its_place_soon(cert, monkeypatch):
+    """After an answer that ends its connection, a client that never answers the TLS close
+    held its place under the cap for asyncio's 30 s; the door's loop gives a close
+    TLS_SHUTDOWN_TIMEOUT_S. MUTATION: no ssl_shutdown_timeout in door_event_loop - red."""
+    # uvicorn counts the asking connection itself: at 3, two lingering ones turn a third away.
+    monkeypatch.setattr(door, "MAX_CONNECTIONS", 3)
+    monkeypatch.setattr(door, "TLS_SHUTDOWN_TIMEOUT_S", 0.5)
+    with serving(_door_config(_App(), cert), door.door_event_loop) as (port, server):
+        silent = [tls_connect(port) for _ in range(2)]
+        try:
+            for s in silent:
+                answer = http_exchange(s, b"GET / HTTP/1.1\r\nHost: door\r\n"
+                                          b"Connection: close\r\n\r\n")
+                assert answer.startswith(b"HTTP/1.1 200"), answer[:80]
+            # Neither client answers the close or closes its socket.
+            waited = _wait_for_200(port)
+            assert waited is not None, "the closed connections kept their places"
+        finally:
+            for s in silent:
+                s.close()
 
 
 def test_the_door_answers_503_at_the_cap(monkeypatch):
@@ -850,7 +961,7 @@ def test_the_uvicorn_hooks_exist():
     assert "self.headers" in inspect.getsource(HttpToolsProtocol._get_upgrade)
     state = inspect.getsource(HttpToolsProtocol.__init__)
     for name in ("self.cycle", "self.connections", "self.tasks", "self.limit_concurrency",
-                 "self.logger"):
+                 "self.logger", "self.pipeline"):
         assert name in state, f"uvicorn no longer keeps {name}"
     cycle = inspect.getsource(RequestResponseCycle.__init__)
     assert "self.response_started" in cycle and "self.response_complete" in cycle

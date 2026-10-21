@@ -237,6 +237,18 @@ def test_a_refused_client_keeps_no_connection(admitted, reached, events, headers
     assert reached == []
 
 
+@pytest.mark.parametrize("body", [{"content": b"x" * 10}, {"content": iter([b"x"])}],
+                         ids=["content-length", "chunked"])
+def test_a_refused_request_with_a_body_is_not_closed_under_it(admitted, reached, events, body):
+    """Closed at once, a connection whose body was still arriving was reset and the 403 lost
+    (measured: a refused 8 MB POST got a reset); the door's head timer holds it instead.
+    MUTATION: Connection: close on every refusal - red."""
+    r = _client(_app(reached), "203.0.113.9").post("/login", **body)
+    assert r.status_code == 403
+    assert "connection" not in r.headers
+    assert reached == []
+
+
 def test_the_refusal_names_the_vpn_not_the_local_network_alone():
     """Under "VPN only" the local network is refused too; "only local network clients are
     allowed" was false there."""

@@ -42,11 +42,34 @@ FIREWALL_INACTIVE = "inactive"
 # translated, so reading it needs no root and parses no command output.
 UFW_CONF = "/etc/ufw/ufw.conf"
 
-# What an operator does about a switched-off ufw; `vaf server provision` and `vaf doctor` both
-# say it. SSH first: enabling ufw without an allow for it cuts off the session that typed it.
-UFW_OFF_ADVICE = ("If the hosting provider's firewall or the router keeps the port closed, that is "
-                  "enough. Otherwise allow SSH first (`sudo ufw allow OpenSSH`), then "
-                  "`sudo ufw enable` and `sudo -v && vaf server provision`.")
+
+def ssh_session_port() -> Optional[int]:
+    """The port this SSH session came in on (the last field of `SSH_CONNECTION`, which sshd
+    sets for the session), or None outside one."""
+    parts = (os.environ.get("SSH_CONNECTION") or "").split()
+    if len(parts) == 4 and parts[3].isdigit():
+        return int(parts[3])
+    return None
+
+
+def ufw_off_advice(ssh_port: Optional[int] = None) -> str:
+    """What an operator does about a switched-off ufw; `vaf server provision` and `vaf doctor`
+    both say it. SSH and the VPN first: `sudo ufw enable` with no allow for them cuts off the
+    session that typed it, and the VPN everybody else comes in through. `ufw allow OpenSSH`
+    opens port 22 only (its application profile), so an SSH on another port is named by its
+    number: the one this session came in on when it is known."""
+    port = ssh_port if ssh_port is not None else ssh_session_port()
+    if port == 22:
+        ssh = "`sudo ufw allow OpenSSH`"
+    elif port:
+        ssh = f"`sudo ufw allow {port}/tcp`, the port this SSH session uses"
+    else:
+        ssh = ("`sudo ufw allow OpenSSH` when it listens on port 22, else "
+               "`sudo ufw allow <port>/tcp`")
+    return ("If the hosting provider's firewall or the router keeps the port closed, that is "
+            f"enough. Otherwise allow SSH first ({ssh}) and the VPN's own port (WireGuard: "
+            "`sudo ufw allow 51820/udp`, or the ListenPort its configuration names), then "
+            "`sudo ufw enable` and `sudo -v && vaf server provision`.")
 
 
 def _sources(*, narrow_lan: bool = False) -> list:
@@ -436,22 +459,39 @@ def _ufw_installed() -> bool:
     return os.path.exists(UFW_CONF)
 
 
+def _ufw_unit_inactive() -> bool:
+    """Whether systemd says ufw's unit is `inactive`. Only that answer is trusted: `active`
+    proves nothing (Ubuntu 24.04 says it while ufw.conf says `ENABLED=no`), but `inactive`
+    is what `systemctl disable --now ufw` leaves, and that stop flushes ufw's rules
+    (`ufw-init stop`) while ufw.conf keeps `ENABLED=yes`. The state is one of systemd's fixed
+    words, not translated text. False when systemctl is missing or does not answer."""
+    try:
+        r = subprocess.run(['systemctl', 'is-active', 'ufw'], capture_output=True, timeout=5)
+    except Exception:
+        return False
+    return (r.stdout or b"").decode("ascii", "replace").strip() == "inactive"
+
+
 def _linux_host_firewall() -> str:
     if _firewalld_running():
         return "firewalld"
     if _ufw_installed():
-        return "ufw_off" if ufw_enabled() is False else "ufw"
+        return "ufw_off" if ufw_enabled() is False or _ufw_unit_inactive() else "ufw"
     return "iptables"
 
 
 def host_firewall() -> Optional[str]:
     """Which host firewall guards this machine: "firewalld" (running), "ufw" (installed and
-    on, or its switch unreadable), "ufw_off" (installed but switched off: it guards nothing),
-    "iptables" (neither), or None off Linux. The one answer for the setup and `vaf doctor`.
+    on, or its switch unreadable), "ufw_off" (installed but switched off, or its unit stopped:
+    it guards nothing), "iptables" (neither), or None off Linux. The one answer for the setup
+    and `vaf doctor`.
 
     A switched-off ufw is its own answer because rules added to it do nothing: VAF used to
     take ufw whenever the binary existed and report the port as opened (measured on an
-    Ubuntu server: allows for the access port and 8001 recorded, ufw off).
+    Ubuntu server: allows for the access port and 8001 recorded, ufw off). A ufw that is
+    switched on but whose unit systemd reports `inactive` counts as off too
+    (`_ufw_unit_inactive`): after `systemctl disable --now ufw` its rules are gone and it
+    does not come back at the next boot.
     """
     if not Platform.is_linux():
         return None

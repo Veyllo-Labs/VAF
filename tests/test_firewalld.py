@@ -590,12 +590,14 @@ def test_ufw_enabled_is_unknown_without_the_file(tmp_path):
     assert fw.ufw_enabled(str(tmp_path / "missing.conf")) is None
 
 
-def _engines(monkeypatch, *, firewalld=False, ufw=None, linux=True):
-    """ufw: None when it is not installed, else what its switch says (True or False)."""
+def _engines(monkeypatch, *, firewalld=False, ufw=None, linux=True, unit_inactive=False):
+    """ufw: None when it is not installed, else what its switch says (True or False);
+    unit_inactive: what systemd says of ufw's unit."""
     monkeypatch.setattr(fw.Platform, "is_linux", lambda *a: linux)
     monkeypatch.setattr(fw, "_firewalld_running", lambda: firewalld)
     monkeypatch.setattr(fw, "_ufw_installed", lambda: ufw is not None)
     monkeypatch.setattr(fw, "ufw_enabled", lambda conf_path=fw.UFW_CONF: ufw)
+    monkeypatch.setattr(fw, "_ufw_unit_inactive", lambda: unit_inactive)
 
 
 def test_host_firewall_is_one_answer(monkeypatch):
@@ -613,6 +615,66 @@ def test_host_firewall_is_one_answer(monkeypatch):
     assert fw.host_firewall() == "iptables"
     _engines(monkeypatch, ufw=False, linux=False)
     assert fw.host_firewall() is None
+
+
+def test_a_ufw_whose_unit_is_stopped_counts_as_off(monkeypatch):
+    """`systemctl disable --now ufw` runs `ufw-init stop`, which flushes the rules, while
+    ufw.conf keeps `ENABLED=yes`: provision said "Firewall opened" and the doctor was silent.
+    MUTATION: leave the unit's state out of the answer - red."""
+    _engines(monkeypatch, ufw=True, unit_inactive=True)
+    assert fw.host_firewall() == "ufw_off"
+    _engines(monkeypatch, ufw=True, unit_inactive=False)
+    assert fw.host_firewall() == "ufw"
+
+
+class _Done:
+    def __init__(self, stdout):
+        self.stdout, self.returncode = stdout, 0 if stdout == b"active\n" else 3
+
+
+@pytest.mark.parametrize("answer, inactive", [
+    (b"inactive\n", True),
+    (b"active\n", False),          # proves nothing: Ubuntu says it while ufw is off
+    (b"failed\n", False),
+    (b"unknown\n", False),
+    (FileNotFoundError("systemctl"), False),
+])
+def test_only_systemds_inactive_is_trusted(monkeypatch, answer, inactive):
+    """MUTATION: read the exit code (3 for every state that is not active) - red."""
+    def run(argv, **kw):
+        assert argv == ["systemctl", "is-active", "ufw"]
+        if isinstance(answer, Exception):
+            raise answer
+        return _Done(answer)
+
+    monkeypatch.setattr(fw.subprocess, "run", run)
+    assert fw._ufw_unit_inactive() is inactive
+
+
+def test_the_ufw_advice_names_the_ssh_port_and_the_vpn_port(monkeypatch):
+    """`ufw allow OpenSSH` opens port 22 only, and nothing allowed the VPN's port: following
+    the advice locked out an SSH on another port and cut the VPN. MUTATION: always name
+    OpenSSH; drop the VPN port - red."""
+    on_22 = fw.ufw_off_advice(22)
+    assert "`sudo ufw allow OpenSSH`" in on_22 and "<port>" not in on_22
+    on_2222 = fw.ufw_off_advice(2222)
+    assert "`sudo ufw allow 2222/tcp`" in on_2222 and "OpenSSH" not in on_2222
+    monkeypatch.delenv("SSH_CONNECTION", raising=False)
+    unknown = fw.ufw_off_advice()
+    assert "`sudo ufw allow OpenSSH` when it listens on port 22" in unknown
+    assert "`sudo ufw allow <port>/tcp`" in unknown
+    for text in (on_22, on_2222, unknown):
+        assert text.index("ufw allow") < text.index("51820/udp") < text.index("sudo ufw enable")
+
+
+def test_the_ufw_advice_reads_the_port_this_session_came_in_on(monkeypatch):
+    monkeypatch.setenv("SSH_CONNECTION", "192.168.1.5 50122 192.168.1.10 2222")
+    assert fw.ssh_session_port() == 2222
+    assert "`sudo ufw allow 2222/tcp`" in fw.ufw_off_advice()
+    monkeypatch.setenv("SSH_CONNECTION", "garbage")
+    assert fw.ssh_session_port() is None
+    monkeypatch.delenv("SSH_CONNECTION")
+    assert fw.ssh_session_port() is None
 
 
 def test_ufw_counts_as_installed_by_its_config_file(monkeypatch, tmp_path):

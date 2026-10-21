@@ -45,6 +45,9 @@ def seams(monkeypatch):
     # This machine's own public addresses are read from its interfaces; none unless a test
     # says so, so the output does not depend on where the suite runs.
     monkeypatch.setattr(binding, "public_addresses", lambda: [])
+    # Which host firewall runs, and the SSH session the ufw advice names, are the machine's.
+    monkeypatch.setattr(firewall, "host_firewall", lambda: "ufw")
+    monkeypatch.delenv("SSH_CONNECTION", raising=False)
     return calls
 
 
@@ -85,6 +88,39 @@ def test_a_switched_off_ufw_is_said_by_provision(seams, monkeypatch):
     assert "ufw is installed but switched off, so it does not guard port 8443" in said
     assert said.index("sudo ufw allow OpenSSH") < said.index("sudo ufw enable")
     assert "Firewall opened" not in said
+
+
+@pytest.mark.parametrize("outcome", ["present", "created", True])
+def test_a_firewall_with_nothing_admitted_is_not_reported_as_opened(seams, monkeypatch, outcome):
+    """A fresh server with a public address starts in "VPN only", and with no VPN up nothing
+    besides this machine is admitted: the setup succeeds by opening nothing, and provision
+    said "Firewall rule already in place" or "Firewall opened". MUTATION: drop the empty-
+    sources branch - red."""
+    monkeypatch.setattr(firewall, "setup_firewall", lambda p, pf: outcome)
+    monkeypatch.setattr(binding, "firewall_sources", lambda narrow_lan=False, cfg=None: [])
+    result = runner.invoke(server_cmd.app, ["provision"])
+    assert result.exit_code == 0, result.output
+    said = " ".join(result.output.split())
+    assert ("Firewall not opened for port 8443: no network besides this machine is admitted "
+            "yet.") in said
+    assert "sudo -v && vaf server provision" in said
+    assert "Firewall opened" not in said and "already in place" not in said
+
+
+def test_the_firewall_message_asks_the_networks_the_way_the_setup_does(seams, monkeypatch):
+    """firewalld opens only the LAN subnets this machine sits on, the others all of RFC 1918,
+    so a machine with no LAN interface opens nothing under firewalld only. MUTATION: ask
+    without narrow_lan - red."""
+    asked = []
+    monkeypatch.setattr(binding, "firewall_sources",
+                        lambda narrow_lan=False, cfg=None: asked.append(narrow_lan) or
+                        ([] if narrow_lan else ["10.0.0.0/8"]))
+    monkeypatch.setattr(firewall, "host_firewall", lambda: "firewalld")
+    said = " ".join(runner.invoke(server_cmd.app, ["provision"]).output.split())
+    assert "Firewall not opened for port 8443" in said and asked[0] is True
+    monkeypatch.setattr(firewall, "host_firewall", lambda: "ufw")
+    said = " ".join(runner.invoke(server_cmd.app, ["provision"]).output.split())
+    assert "Firewall opened for port 8443 (admitted networks only)." in said
 
 
 def test_an_opened_port_names_the_admitted_networks(seams):

@@ -294,6 +294,7 @@ def _findings(public=(), host=None, events=(), **cfg):
         mp.setattr(binding, "public_addresses", lambda: list(public))
         mp.setattr(binding, "resolve_lan_access_ports", lambda wait_for_proxy=False: (8443, 8001))
         mp.setattr(fw, "host_firewall", lambda: host)
+        mp.delenv("SSH_CONNECTION", raising=False)
         mp.setattr(se, "read_security_events", lambda date, limit=100: list(events))
         return {f["code"]: f for f in collect_security_findings({**base, **cfg})}
 
@@ -391,6 +392,26 @@ def test_doctor_sees_a_public_address_a_switched_off_ufw_and_public_refusals():
             events=[{"kind": "ip_blocked", "ip": ip, "detail": "/login"}]), ip
     assert "network_public_refusals" not in _codes(
         events=[{"kind": "login_failed", "ip": "9.9.9.9"}])
+
+
+def test_a_port_that_cannot_be_read_keeps_the_public_address_finding(monkeypatch):
+    """Only the message hangs on the port; the finding is the machine on the internet.
+    MUTATION: let the port read raise again - red."""
+    import vaf.core.security_events as se
+    import vaf.network.firewall as fw
+    from vaf.core.security_misconfig import collect_security_findings
+
+    def broken(wait_for_proxy=False):
+        raise OSError("no runtime status")
+
+    monkeypatch.setattr(binding, "public_addresses", lambda: list(PUBLIC))
+    monkeypatch.setattr(binding, "resolve_lan_access_ports", broken)
+    monkeypatch.setattr(fw, "host_firewall", lambda: None)
+    monkeypatch.setattr(se, "read_security_events", lambda date, limit=100: [])
+    found = {f["code"]: f for f in collect_security_findings(
+        {"local_network_enabled": True, "local_network_tls_enabled": True,
+         "local_network_firewall_enabled": True, "local_network_require_2fa": True})}
+    assert "port 8443" in found["network_public_address"]["message"]
 
 
 def test_doctor_says_nothing_about_the_internet_in_local_mode():

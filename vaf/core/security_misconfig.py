@@ -45,8 +45,13 @@ def _admission_findings(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
 
 
 def _access_port() -> int:
-    from vaf.network.binding import resolve_lan_access_ports
-    return resolve_lan_access_ports(wait_for_proxy=False)[0]
+    """The access port for a message. Only words in a finding hang on it, so a failed read
+    says 8443 (the fallback the proxy binds) instead of taking the whole finding with it."""
+    try:
+        from vaf.network.binding import resolve_lan_access_ports
+        return resolve_lan_access_ports(wait_for_proxy=False)[0]
+    except Exception:
+        return 8443
 
 
 def _internet_findings(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -81,7 +86,7 @@ def _internet_findings(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
             found.append(_finding(
                 "medium", "network_ufw_disabled",
                 "ufw is installed but switched off, so this machine's firewall does not guard "
-                "the access port. " + firewall.UFW_OFF_ADVICE))
+                "the access port. " + firewall.ufw_off_advice()))
     except Exception:
         pass
 

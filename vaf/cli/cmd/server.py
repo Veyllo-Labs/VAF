@@ -273,14 +273,21 @@ def server_provision(
         except Exception as e:
             outcome = False
             UI.warning(f"Firewall setup error: {e}")
-        from vaf.network.firewall import FIREWALL_INACTIVE, UFW_OFF_ADVICE
-        if outcome == "present":
-            UI.success(f"Firewall rule already in place for port {access_port}.")
-        elif outcome == FIREWALL_INACTIVE:
+        from vaf.network.firewall import FIREWALL_INACTIVE, ufw_off_advice
+        if outcome == FIREWALL_INACTIVE:
             # Rules added to a switched-off ufw do nothing; reporting the port as opened was
             # the measured mistake (vaf/network/firewall.py, host_firewall).
             UI.warning(f"ufw is installed but switched off, so it does not guard port "
-                       f"{access_port}. {UFW_OFF_ADVICE}")
+                       f"{access_port}. {ufw_off_advice()}")
+        elif outcome and _opened_sources() == []:
+            # "VPN only" with no VPN up admits nobody: the setup succeeded by opening nothing
+            # (and closing what it had opened before), which "opened" or "already in place"
+            # would misreport. After the VPN is up the service cannot re-open it (Layer 1).
+            UI.warning(f"Firewall not opened for port {access_port}: no network besides this "
+                       "machine is admitted yet. Once the VPN is up, run "
+                       "`sudo -v && vaf server provision` again so it opens the port for it.")
+        elif outcome == "present":
+            UI.success(f"Firewall rule already in place for port {access_port}.")
         elif outcome:
             UI.success(f"Firewall opened for port {access_port} (admitted networks only).")
         else:
@@ -335,6 +342,18 @@ def server_provision(
     hint = _first_admin_hint()
     if hint:
         UI.info(hint)
+
+
+def _opened_sources():
+    """The networks the firewall step opens the access port for, picked the way setup_firewall
+    picks them (firewalld only the LAN subnets this machine sits on), or None when that cannot
+    be read."""
+    try:
+        from vaf.network.binding import firewall_sources
+        from vaf.network.firewall import host_firewall
+        return firewall_sources(narrow_lan=host_firewall() == "firewalld")
+    except Exception:
+        return None
 
 
 def _first_admin_hint():

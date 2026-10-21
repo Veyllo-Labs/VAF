@@ -47,7 +47,7 @@ Choose [1/2, default 1]: 2
 The installer then:
 
 1. Optionally asks for a master passphrase (see Credential Encryption below); if given, it is stored owner-only in `~/.vaf/service.env` for the service. Unattended installs can pre-set `VAF_MASTER_PASSPHRASE` in the environment instead.
-2. Runs `vaf server provision`: writes `server_mode: true`, `local_network_enabled: true` and `local_network_tls_enabled: true` through the config layer; on a machine with a public IPv4 address that is set up as a server for the first time it also turns "VPN only" on (on such a machine the private ranges VAF admits by default are the hosting provider's network and the container bridges, not your LAN; a re-run never changes it, and `vaf server vpn-only off` undoes it); it generates the TLS certificates, replaces the published default database passwords with random ones when the database answers (both roles, verified before they are written; `vaf/core/db_credentials.py`, the same rotation as `vaf secure rotate-db`; when it cannot reach the database it says so loudly and names that command; a run that stops part-way names the keys already replaced and the ones still on the default, and a password that was changed but did not verify is printed with the config key to save it under, since it is the only copy), opens the OS firewall for the access port to the admitted networks (subnet-scoped; on Ubuntu, where ufw is installed but switched off by default, it changes nothing and says so, since rules added to a switched-off ufw do nothing), and warns when the LAN IP looks DHCP-assigned. While no admin exists yet, it ends by saying how to create one: `vaf setup` in the terminal, or a browser with the code `vaf setup code` shows.
+2. Runs `vaf server provision`: writes `server_mode: true`, `local_network_enabled: true` and `local_network_tls_enabled: true` through the config layer; on a machine with a public IPv4 address that is set up as a server for the first time it also turns "VPN only" on (on such a machine the private ranges VAF admits by default are the hosting provider's network and the container bridges, not your LAN; a re-run never changes it, and `vaf server vpn-only off` undoes it); it generates the TLS certificates, replaces the published default database passwords with random ones when the database answers (both roles, verified before they are written; `vaf/core/db_credentials.py`, the same rotation as `vaf secure rotate-db`; when it cannot reach the database it says so loudly and names that command; a run that stops part-way names the keys already replaced and the ones still on the default, and a password that was changed but did not verify is printed with the config key to save it under, since it is the only copy), opens the OS firewall for the access port to the admitted networks (subnet-scoped; on Ubuntu, where ufw is installed but switched off by default, it changes nothing and says so, since rules added to a switched-off ufw do nothing; with "VPN only" on and no VPN up nothing besides this machine is admitted, so it opens nothing and says to run it again once the VPN is up), and warns when the LAN IP looks DHCP-assigned. While no admin exists yet, it ends by saying how to create one: `vaf setup` in the terminal, or a browser with the code `vaf setup code` shows.
 3. Enables the Docker daemon at boot (`systemctl enable docker`) so the memory stack comes back after a reboot.
 4. Masks the systemd sleep/suspend targets so a repurposed desktop or laptop stays reachable. Revert with `sudo systemctl unmask sleep.target suspend.target hibernate.target hybrid-sleep.target`.
 5. Warns when the system clock is not NTP-synced (TLS validation and OAuth sign-ins depend on correct time).
@@ -75,8 +75,9 @@ internet rather than behind a router. The setup that fits both:
    provider's firewall:
    1. In the provider's firewall, open only SSH and the VPN's own port (WireGuard's UDP
       port, for one); keep the access port closed.
-   2. Set up the VPN (WireGuard, Tailscale or NetBird; a mesh VPN in `100.64.0.0/10` is
-      admitted with `vaf server networks tailscale on`).
+   2. Set up the VPN (WireGuard, Tailscale or NetBird). Under "VPN only" each is admitted
+      as soon as its interface is up, a mesh VPN in `100.64.0.0/10` included; with "VPN
+      only" off, a mesh VPN is admitted with `vaf server networks tailscale on`.
    3. Restart VAF (`systemctl --user restart vaf`) so the certificate names the VPN address,
       and if this machine's own firewall is on, run `sudo -v && vaf server provision` so it
       opens the port for the VPN.
@@ -192,7 +193,7 @@ VAF listens on `https://<LAN-IP>:8443` in the usual case: the configured HTTPS p
 | 8005 | Internal plain-HTTP backend channel (internal, localhost only) |
 | 8080 | llama-server LLM backend (internal, localhost only) |
 
-Only the HTTPS proxy access port (8443 after a 443 fallback) is exposed on the network interface. All other ports are bound to `127.0.0.1`.
+Only the HTTPS proxy access port (8443 after a 443 fallback) is exposed on the network interface. All other ports are bound to `127.0.0.1`, apart from the sandbox's tool bridge, which listens on a random port for the length of a `python_sandbox` run that calls VAF's tools, guarded by a token per run (a named boundary in [NETWORK_FEATURES.md](NETWORK_FEATURES.md#scope-private-networks-only)).
 
 ## Over a VPN
 
@@ -205,7 +206,8 @@ itself; it recognises the VPN interface and admits its devices
   `vaf server status` lists the interface with its access URL, and the certificate
   carries its address after the next start.
 - **Tailscale, Headscale, NetBird** (addresses in `100.64.0.0/10`): admit them once with
-  `vaf server networks tailscale on`.
+  `vaf server networks tailscale on`. Under "VPN only" they are admitted as a detected VPN
+  already, nothing to set.
 - **Another private network** (a routed site network, a WireGuard set up with `/32`
   addresses): `vaf server networks allow 10.20.0.0/16`. Public networks, `0.0.0.0/0` and
   IPv6 are refused with the reason; `vaf server networks list` shows what is admitted
@@ -359,7 +361,7 @@ Common causes: Python venv path changed after a `git pull` to a different direct
   ```bash
   sudo firewall-cmd --permanent --zone=public --add-rich-rule='rule family="ipv4" source address="<LAN-subnet>/24" port port="8443" protocol="tcp" accept' && sudo firewall-cmd --reload
   ```
-- Ubuntu (ufw fallback), one rule per network `vaf server status` admits, never a world-open `allow 8443/tcp`: `sudo ufw allow from <network> to any port 8443 proto tcp`. Switching ufw on needs SSH allowed first: `sudo ufw allow OpenSSH`, then `sudo ufw enable`.
+- Ubuntu (ufw fallback), one rule per network `vaf server status` admits, never a world-open `allow 8443/tcp`: `sudo ufw allow from <network> to any port 8443 proto tcp`. Switching ufw on needs SSH and the VPN allowed first: `sudo ufw allow OpenSSH` when SSH listens on port 22 (that profile opens 22 only), else `sudo ufw allow <port>/tcp`, and the VPN's own port (WireGuard: `sudo ufw allow 51820/udp`, or the ListenPort its configuration names); then `sudo ufw enable`. `vaf server provision` and `vaf doctor` name the SSH port the session came in on. A ufw whose unit was stopped (`systemctl disable --now ufw`) counts as off as well, since the stop flushed its rules.
 - Without firewalld and ufw, VAF adds iptables rules, which last until the next reboot: the service cannot gain root to add them again, so after a reboot run `sudo -v && vaf server provision`.
 
 **Certificate regeneration:**

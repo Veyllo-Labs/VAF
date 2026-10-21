@@ -187,9 +187,10 @@ def test_the_runners_copies_never_hand_a_failure_to_the_next_turn(engine, monkey
     failed after streaming some text carries the masked key, and its stored text does not
     begin with a marker. The REAL engine streams, the host's REAL cleanup and
     `stored_turn_copy` build the copy, `failed_turn_meta` marks it, and the replay feeds the
-    next turn. MUTATION: store the drain's copy without the mark (`failed_turn_meta(False,
-    "")`) - red. MUTATION: record the raw failure next to a cleaned copy - the chat lane's
-    collapse breaks it on the triple newline, red."""
+    next turn. The runner's wiring of these (which cleanup, the mark on each save) is pinned
+    in `test_the_hosts_that_store_the_stream_mark_a_failed_turn`. MUTATION: record the raw
+    failure next to a cleaned copy - the chat lane's collapse breaks it on the triple
+    newline, red."""
     from vaf.core import headless_runner as hr
     from vaf.core.session import SessionManager, failed_turn_meta, stored_turn_copy
     clean = getattr(hr, cleanup)
@@ -228,6 +229,25 @@ def test_the_runners_copies_never_hand_a_failure_to_the_next_turn(engine, monkey
     assert trace not in context
     if case == "answered-then-raised":
         assert "Der Sub-Agent hat drei Dateien gefunden." in context   # the answer stays
+
+
+def test_the_chat_lane_records_a_failure_only_when_its_copy_is_the_stream():
+    """The chat lane stores the stream, or the turn's return value when nothing streamed or
+    the turn ended at a draft. The return value never holds a failure that followed an
+    answer, so recording one there would make every reader drop the answer the person saw.
+    MUTATION: record the failure for a return-value copy - red."""
+    from vaf.core import headless_runner as hr
+    from vaf.core.session import Message, failed_turn_meta, model_text
+    failure = "[Error] API backend failure: " + _PATH_ERROR
+    copy, recorded = hr._chat_turn_copy(["Der Termin ist Montag.", "\n", failure], "egal",
+                                        ends_at_draft=False, turn_failure=failure)
+    assert recorded == failure and copy.endswith(failure)
+    for parts, ends_at_draft in (([], False), (["Vorher gestreamt."], True)):
+        copy, recorded = hr._chat_turn_copy(parts, "Der Termin ist Montag.",
+                                            ends_at_draft=ends_at_draft, turn_failure=failure)
+        assert (copy, recorded) == ("Der Termin ist Montag.", "")
+        assert model_text(Message(role="assistant", content=copy,
+                                  metadata=failed_turn_meta(False, recorded))) == copy
 
 
 def test_stored_turn_copy_keeps_the_failure_verbatim_whatever_the_cleanup_does():
@@ -506,9 +526,8 @@ def test_the_hosts_that_store_the_stream_mark_a_failed_turn():
     loop = " ".join(inspect.getsource(hr.run_headless_agent).split())
     assert loop.count("metadata=failed_turn_meta(_turn_failed, _stored_failure))") == 2
     assert loop.count('add_message(role="assistant", content=_clean_response') == 2
-    assert ("if response_parts and not _turn_ends_at_draft: # The copy is the stream" in loop
-            and "_clean_response, _stored_failure = stored_turn_copy( _assistant_response, "
-                "_turn_failure, _clean_for_session)" in loop)
+    assert ("_clean_response, _stored_failure = _chat_turn_copy( response_parts, response_text, "
+            "ends_at_draft=_turn_ends_at_draft, turn_failure=_turn_failure)") in loop
     for flag in ('_turn_failed = bool(getattr(agent, "_turn_failed", False))',
                  '_turn_failure = str(getattr(agent, "_turn_failure", "") or "")'):
         assert loop.index(flag) < loop.index("_hallucination_detected = ("), flag

@@ -501,6 +501,20 @@ def _clean_for_session(text: str) -> str:
     return cleaned.strip()
 
 
+def _chat_turn_copy(response_parts, response_text, *, ends_at_draft, turn_failure):
+    """The chat lane's stored copy of a turn and the failure to record with it.
+
+    The copy is the stream, cleaned (`_clean_for_session`); a failure that followed an answer
+    is its tail, cleaned apart and recorded the way the copy holds it (`stored_turn_copy`).
+    When nothing streamed, or the turn ended at a draft (what streamed before the draft is in
+    the tool-call message, and the turn's own answer is the fixed sentence the browser
+    hides), the copy is the turn's return value, which never holds such a failure: nothing
+    is recorded, only the failed-turn mark can apply."""
+    if response_parts and not ends_at_draft:
+        return stored_turn_copy("".join(response_parts), turn_failure, _clean_for_session)
+    return _clean_for_session(str(response_text or "")), ""
+
+
 def _clean_drain_text(text: str) -> str:
     """The sub-agent drain's stored copy of its summary turn: reasoning removed, leaked
     tool-call JSON stripped, blank-line runs collapsed."""
@@ -2788,22 +2802,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         except FileNotFoundError:
                             session = new_session_for_task(task)
                         _user_input = input_text or ""
-                        _assistant_response = "".join(response_parts) if response_parts else str(response_text or "")
-                        if _turn_ends_at_draft:
-                            # What streamed before the draft is in the tool-call message; the
-                            # turn's own answer is the fixed sentence the browser hides.
-                            _assistant_response = response_text
-
-
-                        if response_parts and not _turn_ends_at_draft:
-                            # The copy is the stream: a failure that followed an answer is its
-                            # tail, cleaned apart and recorded the way the copy holds it.
-                            _clean_response, _stored_failure = stored_turn_copy(
-                                _assistant_response, _turn_failure, _clean_for_session)
-                        else:
-                            # The copy is the turn's return value, which never holds a failure
-                            # that followed an answer: only the failed-turn mark applies.
-                            _clean_response, _stored_failure = _clean_for_session(_assistant_response), ""
+                        _clean_response, _stored_failure = _chat_turn_copy(
+                            response_parts, response_text, ends_at_draft=_turn_ends_at_draft,
+                            turn_failure=_turn_failure)
 
                         if _user_input.strip():
                             # Helper to get role/content from Message object or dict

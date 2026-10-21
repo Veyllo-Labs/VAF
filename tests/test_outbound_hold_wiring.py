@@ -541,7 +541,13 @@ def test_the_runner_shows_a_draft_turn_as_the_card():
     assert "final_text = response_text" in branch and "emit_agent_message(" in branch
     assert "or _turn_ends_at_draft) else str(final_text)" in runner, "nothing to speak"
     assert "and not _turn_ends_at_draft and not _turn_closed):" in runner, "no document editor for the sentence"
-    assert "_assistant_response = response_text" in runner.split("if _turn_ends_at_draft:", 2)[-1][:400]
+    # The stored copy is the sentence, not what streamed before the draft.
+    assert "ends_at_draft=_turn_ends_at_draft" in runner
+    from vaf.core import headless_runner as hr
+    from vaf.core.outbound_hold import TURN_ENDS_AT_DRAFT
+    copy, _ = hr._chat_turn_copy(["Ich entwerfe die Mail."], TURN_ENDS_AT_DRAFT,
+                                 ends_at_draft=True, turn_failure="")
+    assert copy == TURN_ENDS_AT_DRAFT.strip()
 
 def test_the_card_carries_no_colour_of_its_own():
     """MUTATION: bring the amber back.

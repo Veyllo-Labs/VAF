@@ -108,7 +108,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **A device outside your local network and your VPN gets a short "not reachable from here"
   page instead of the login page.** The page says to connect through the VPN, or to run
   `vaf server status` on the machine VAF runs on. VAF refuses such a device before it shows
-  anything, its live connections included (agent rooms, the interactive browser).
+  anything, its live connections included (agent rooms, the interactive browser), and a room
+  invitation names a LAN address only while that network is admitted.
   `vaf server provision` turns "VPN only" on when it first sets up a rented server with a
   public address, and says when ufw is switched off, or when nothing is admitted yet, instead
   of reporting the port as opened. `vaf doctor`, `vaf server status` and Settings, Local

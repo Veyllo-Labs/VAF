@@ -80,11 +80,15 @@ def lan_endpoint(room_id: str) -> Dict[str, str]:
 
     Empty while Local Network is off, TLS or not: the HTTPS door and the backend then
     answer this machine only, so a LAN address handed out then is one every peer on
-    another machine is refused at (4003 at the handshake).
+    another machine is refused at (4003 at the handshake). Empty too while the address
+    itself is not admitted (`is_allowed_ip`, the same test `access_addresses()` applies to
+    an interface): under "VPN only" the local network, on a rented server often the
+    hosting provider's private one, is refused the same way, and the invitation would
+    only hand out the server's private address.
     """
     try:
         from vaf.core.config import Config
-        from vaf.network.binding import get_local_network_ip
+        from vaf.network.binding import get_local_network_ip, is_allowed_ip
         from vaf.network.ssl_utils import ca_fingerprint
 
         if not (Config.get_bool("local_network_enabled", False)
@@ -92,7 +96,7 @@ def lan_endpoint(room_id: str) -> Dict[str, str]:
             return {}
         host = str(get_local_network_ip() or "").strip()
         fingerprint = str(ca_fingerprint() or "").strip()
-        if not host or not fingerprint:
+        if not host or not fingerprint or not is_allowed_ip(host):
             return {}
         port, confirmed = _effective_port()
         return {

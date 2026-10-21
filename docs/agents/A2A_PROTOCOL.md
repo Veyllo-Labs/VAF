@@ -965,7 +965,10 @@ this lane only when a wire endpoint exists at all - without Local Network on and
 there is no lane a VAF-less guest could use, because the local lane is the `vaf` command
 itself. With Local Network off the HTTPS door and the backend answer this machine only, so
 `lan_endpoint` names no LAN address then, TLS on or not: every peer on another machine would
-be refused at the handshake (4003).
+be refused at the handshake (4003). The same holds while the address itself is not admitted
+(`is_allowed_ip`): under "VPN only" the local network is refused, on a rented server usually
+the hosting provider's private one, so the invitation names no LAN address there either
+unless that network was admitted by hand.
 
 The client is convenience, never a requirement. The posture of the conformance suite
 stands: this document alone is enough to implement from, and the two example files

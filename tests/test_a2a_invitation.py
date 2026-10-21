@@ -139,6 +139,38 @@ def test_no_lan_address_is_handed_out_while_local_network_is_off(monkeypatch):
     assert invite_mod.lan_endpoint("room-x") == {}
 
 
+@pytest.mark.parametrize("policy, handed_out", [
+    ({"local_network_vpn_only": True}, False),
+    ({"local_network_vpn_only": True, "local_network_allowed_networks": ["192.168.7.0/24"]}, True),
+    ({"local_network_vpn_only": False}, True),
+])
+def test_the_lan_address_is_handed_out_only_while_it_is_admitted(monkeypatch, policy,
+                                                                  handed_out):
+    """Under "VPN only" the local network is refused like the internet, so its address is one
+    every peer on another machine meets 4003 at; an admin who admits that network by hand
+    gets it back. MUTATION: drop the admission test - red (first row); ask the "VPN only"
+    switch in its place - red (second row)."""
+    import vaf.core.a2a.invite as invite_mod
+    from vaf.core.config import Config
+
+    monkeypatch.setattr("vaf.network.binding.get_local_network_ip", lambda: "192.168.7.7")
+    monkeypatch.setattr("vaf.network.binding.local_interfaces", lambda: [])
+    monkeypatch.setattr("vaf.network.ssl_utils.ca_fingerprint", lambda: "ab" * 32)
+    monkeypatch.setattr(Config, "load", classmethod(lambda cls: dict(policy)))
+    monkeypatch.setattr(Config, "get",
+                        classmethod(lambda cls, key, default=None: {
+                            "local_network_enabled": True,
+                            "local_network_tls_enabled": True,
+                            "local_network_https_port": 8443,
+                            **policy,
+                        }.get(key, default)))
+    endpoint = invite_mod.lan_endpoint("room-x")
+    if handed_out:
+        assert endpoint["url"] == "wss://192.168.7.7:8443/ws/a2a/room-x"
+    else:
+        assert endpoint == {}
+
+
 def test_the_briefing_promises_the_remote_lane_exactly_when_it_exists(circle, monkeypatch):
     """MUTATION: print the remote join without an endpoint, or drop it with one.
 

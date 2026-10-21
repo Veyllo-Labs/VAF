@@ -20,6 +20,13 @@ from starlette.testclient import TestClient
 import vaf.network.https_proxy as proxy
 
 
+@pytest.fixture(autouse=True)
+def _machine_named_workstation(monkeypatch):
+    """A fixed host name, so the real machine's name never decides a test."""
+    import socket
+    monkeypatch.setattr(socket, "gethostname", lambda: "Workstation")
+
+
 class _Upstream:
     """The proxy's pooled client, answering with the headers each test hands it."""
 
@@ -71,22 +78,50 @@ def test_backend_responses_get_hsts_only(monkeypatch, path):
     assert r.headers["strict-transport-security"] == "max-age=31536000"
 
 
-@pytest.mark.parametrize("host", ["192.168.1.5:8443", "localhost:8443", "app.localhost:8443",
-                                  "[::1]:8443", "127.0.0.1:8443"])
-def test_no_hsts_for_an_address_or_localhost(monkeypatch, host):
-    """HSTS holds a host name on every port for a year: on localhost it would upgrade every
-    plain-HTTP app there, the Web UI's own port included; browsers ignore it for addresses.
-    MUTATION: send it for every host, or with includeSubDomains - red."""
+@pytest.mark.parametrize("host", ["192.168.1.5:8443", "[::1]:8443", "127.0.0.1:8443"])
+def test_no_hsts_for_an_address(monkeypatch, host):
+    """Browsers ignore HSTS for an address (RFC 6797 8.1.1), and an address is how other
+    devices usually dial VAF. MUTATION: send it for every host - red."""
     r = _get(monkeypatch, "/login", {"content-type": "text/html"}, host=host)
     assert "strict-transport-security" not in r.headers
     assert r.headers["x-frame-options"] == "DENY"
 
 
+@pytest.mark.parametrize("host", ["localhost:8443", "app.localhost:8443", "localhost.:8443"])
+def test_localhost_gets_no_year_and_drops_an_old_pin(monkeypatch, host):
+    """HSTS holds a host name on every port for a year: on localhost it would upgrade every
+    plain-HTTP app there, the Web UI's own port included. max-age=0 drops a pin an earlier
+    version left. MUTATION: send the year for every host, or with includeSubDomains - red."""
+    r = _get(monkeypatch, "/login", {"content-type": "text/html"}, host=host)
+    assert r.headers["strict-transport-security"] == "max-age=0"
+    assert r.headers["x-frame-options"] == "DENY"
+
+
+@pytest.mark.parametrize("host", ["workstation:8443", "workstation.fritz.box:8443",
+                                  "WORKSTATION.local:8443", "workstation.tailnet.ts.net:8443",
+                                  "workstation.:8443"])
+def test_no_hsts_for_this_machines_own_names(monkeypatch, host):
+    """The machine's host name and every name built on it (FQDN, mDNS, a router's or a VPN's)
+    reach every other service on the machine too: a year of HSTS there makes each plain-HTTP
+    one unreachable from that browser. Earlier versions sent that year with
+    includeSubDomains; max-age=0 drops it at the next visit. MUTATION: drop the own-name
+    check, or answer None there (the old pin would stay) - red."""
+    r = _get(monkeypatch, "/login", {"content-type": "text/html"}, host=host)
+    assert r.headers["strict-transport-security"] == "max-age=0"
+    assert r.headers["x-frame-options"] == "DENY"
+
+
 def test_the_backend_scopes_its_hsts_the_same_way():
-    """The backend's own table (web_server._SecurityHeadersMiddleware) asks the same function."""
+    """The backend's own table (web_server._SecurityHeadersMiddleware) asks the same function.
+    A trailing dot is the same name. MUTATION: keep the trailing dot - red."""
     from vaf.network.binding import hsts_for_host
     assert hsts_for_host("vaf.lan:8443") == "max-age=31536000"
-    for host in ("localhost", "192.168.1.5", "[::1]:8443", "", None, "x.localhost"):
+    assert hsts_for_host("vaf.lan.") == "max-age=31536000"
+    assert hsts_for_host("workstation-two.lan") == "max-age=31536000"   # a label, not a prefix
+    for host in ("localhost", "localhost.", "localhost.:3000", "x.localhost.", "x.localhost",
+                 "workstation", "workstation.example.lan."):
+        assert hsts_for_host(host) == "max-age=0", host
+    for host in ("192.168.1.5", "192.168.1.5.", "[::1]:8443", "", None, "."):
         assert hsts_for_host(host) is None, host
     from pathlib import Path
     src = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "web_server.py").read_text(
@@ -103,3 +138,21 @@ def test_the_access_log_keeps_one_request_on_one_line(monkeypatch):
     lines = proxy._access_log_path().read_text(encoding="utf-8").splitlines()
     assert not any(ln.startswith("2026-10-21T00:00:00.000") for ln in lines)
     assert any("GET /page 2026-10-21T00:00:00.000" in ln for ln in lines)
+
+
+def test_the_certificate_carries_the_names_hsts_keeps_off(monkeypatch):
+    """One list for both: the local certificate's DNS names are localhost plus
+    machine_dns_names(), and HSTS is sent for none of them. MUTATION: leave the machine's
+    names out of the certificate - red."""
+    import socket
+
+    from cryptography import x509
+
+    import vaf.network.binding as binding
+    from vaf.network import ssl_utils
+    monkeypatch.setattr(socket, "getfqdn", lambda: "Workstation.example.lan")
+    monkeypatch.setattr(binding, "get_all_local_ips", lambda: [])
+    names = [v.value for v in ssl_utils._collect_sans() if isinstance(v, x509.DNSName)]
+    assert names == ["localhost", "Workstation", "Workstation.example.lan"]
+    for name in names:
+        assert binding.hsts_for_host(f"{name}:8443") == binding.HSTS_CLEAR, name

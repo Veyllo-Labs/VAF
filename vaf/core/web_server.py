@@ -1366,10 +1366,11 @@ class _SecurityHeadersMiddleware(_BaseHM):
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-        # HSTS only when TLS is active, and only for a dialled DNS name that is not localhost
-        # (binding.hsts_for_host: HSTS on localhost would upgrade every plain-HTTP port of
-        # it, the Web UI's included; never includeSubDomains). Behind the integrated proxy the
-        # dialled host arrives as X-Forwarded-Host.
+        # HSTS only when TLS is active, and a year only for a dialled DNS name that is neither
+        # localhost nor one of this machine's own names (binding.hsts_for_host: a year there
+        # would upgrade every plain-HTTP port of that name, the Web UI's included; those get
+        # max-age=0; never includeSubDomains). Behind the integrated proxy the dialled host
+        # arrives as X-Forwarded-Host.
         if Config.get("local_network_tls_enabled", False):
             from vaf.network.binding import hsts_for_host
             _hsts = hsts_for_host(request.headers.get("x-forwarded-host")

@@ -142,9 +142,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   answers carry no `refresh_token`. A client of your own that used it signs in again instead.
 
 - **Pages through the HTTPS port can no longer be framed by another site.** The login and
-  the app served to other devices carried no anti-framing headers; they do now, and HSTS is
-  sent only for a host name other than `localhost` and no longer for its subdomains, so it
-  cannot force plain-HTTP apps on `localhost` to HTTPS.
+  the app served to other devices carried no anti-framing headers; they do now. HSTS is no
+  longer sent for `localhost`, for this machine's own host name and the names built on it,
+  or for subdomains, so it cannot force the other plain-HTTP apps on this machine to HTTPS
+  for a year; a browser that holds such a pin from an earlier version drops it at the next
+  visit.
 
 - **Messages meant for you on Telegram no longer go to a contact.** When a contact you
   allowed, a relay contact or somebody the open Inbound answered wrote to your agent on

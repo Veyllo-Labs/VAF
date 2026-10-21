@@ -170,7 +170,7 @@ All HTTP responses include security headers to protect against common web attack
 | `X-XSS-Protection` | `1; mode=block` | Legacy XSS filter |
 | `Referrer-Policy` | `strict-origin-when-cross-origin` | Limits referrer leakage |
 | `Permissions-Policy` | `camera=(), microphone=(), geolocation=()` | Disables browser APIs |
-| `Strict-Transport-Security` | `max-age=31536000` | HSTS: only when TLS is active, and only for a dialled DNS name that is not `localhost` (see below) |
+| `Strict-Transport-Security` | `max-age=31536000` | HSTS: only when TLS is active, and the year only for a dialled DNS name that is neither `localhost` nor this machine's own (see below) |
 
 Implementation: `_SecurityHeadersMiddleware` in `vaf/core/web_server.py`
 
@@ -182,11 +182,11 @@ That table covers the backend's API responses. The PAGES the integrated HTTPS pr
 | `X-Frame-Options` | `DENY` |
 | `Content-Security-Policy` | `frame-ancestors 'none'` |
 | `Referrer-Policy` | `strict-origin-when-cross-origin` |
-| `Strict-Transport-Security` | `max-age=31536000`, for a dialled DNS name that is not `localhost` |
+| `Strict-Transport-Security` | `max-age=31536000`, for a dialled DNS name that is neither `localhost` nor this machine's own (see below) |
 
 It differs from the backend's table on purpose: no `Permissions-Policy`, because the backend's `microphone=()` would switch off the web UI's own voice input, which runs in these pages; and `frame-ancestors` only on pages, because the interactive browser's viewer (`/api/browser-vnc/`, a backend response under `SAMEORIGIN`) is framed by the UI and a CSP `frame-ancestors` would override that. No page of the UI is framed by the UI (every frame is `srcDoc`, blank or that viewer). Backend responses relayed by the proxy get only HSTS when they lack it.
 
-HSTS is scoped by the host the browser dialled (`hsts_for_host` in `vaf/network/binding.py`, asked by the proxy and by the backend's table): HSTS holds a host name on every port for a year, and the local certificate names `localhost`, the machine's host name and its FQDN besides its addresses. On `localhost` it would make the browser upgrade every plain-HTTP app on any localhost port, the web UI on port 3000 included. So it is never sent for `localhost` or `*.localhost`, never for an IP address (browsers ignore it there, RFC 6797 8.1.1, and other devices usually dial VAF by address), and never with `includeSubDomains`, since other names under the machine's FQDN are not VAF's to decide.
+HSTS is scoped by the host the browser dialled (`hsts_for_host` in `vaf/network/binding.py`, asked by the proxy and by the backend's table): HSTS holds a host name on every port for a year, and the browser then refuses plain HTTP to any port of that name. The local certificate names `localhost`, the machine's host name and its FQDN besides its addresses (`machine_dns_names`, one list for both), and those names are also how every other service on the machine is reached: the web UI on port 3000, a NAS page, a printer, an app on another port. So the year is never sent for `localhost`, `*.localhost` or one of the machine's own names (any name whose first label is its host name: the host name, its FQDN, `<name>.local`, a router's or a VPN's name for it, a trailing dot ignored); those get `max-age=0`, which makes a browser drop a pin that versions before this one left there (they sent a year with `includeSubDomains` for every name). Nothing is sent for an IP address (browsers ignore it there, RFC 6797 8.1.1, and other devices usually dial VAF by address), and never `includeSubDomains`. The year goes only to a name set up for VAF on purpose with a certificate of its own (`local_network_ssl_cert`). NAMED BOUNDARY: on such a name, every other plain-HTTP port is upgraded too, for a year; only the host name is asked, never DNS, since this runs on every answer.
 
 ### Middleware Execution Order
 
@@ -457,7 +457,7 @@ When TLS is active, the following changes take effect across the stack:
 | WebSocket | `ws://host:8001/ws` | LAN: same-origin `wss://<LAN-IP>:8443/ws` (via proxy); desktop: plain `ws://127.0.0.1:8005/ws` |
 | Auth Cookies | `httponly`, `samesite=lax` | `httponly`, `samesite=lax`, **`secure`** |
 | CORS Origins | the Web UI on this machine only (see [CORS Configuration](#cors-configuration)) | Unchanged |
-| Security Headers | Standard set | Standard set + **HSTS** (`max-age=31536000`) |
+| Security Headers | Standard set | Standard set + **HSTS** (`max-age=31536000` for a name set up for VAF, `max-age=0` for `localhost` and the machine's own names) |
 | Frontend Proxy | `http://127.0.0.1:8001` | `http://127.0.0.1:8005` (internal plain channel) |
 
 The WebSocket transport differs by client. Any HTTPS page, and an HTTP page on port 80 or with no explicit port in its URL, dials its own origin, because the proxy that served it relays `/ws`; that is the only answer that survives a port forward or a NAT between the browser and the proxy, where the browser dials a different port than the one the proxy bound. Other pages ask `/api/network/ws-config`, which returns plain `ws://` + the internal `8005` channel for the desktop window, and `wss://` + the effective proxy port for a caller that came through the proxy (identified by the `X-Forwarded-Proto: https` header the proxy stamps). The internal `8005` channel is plain HTTP, always running while TLS is on, and exists so the Next.js proxy and the desktop reach the backend without the self-signed cert.

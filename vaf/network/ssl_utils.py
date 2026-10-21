@@ -21,7 +21,6 @@ Validity: 365 days (auto-renewed on next startup if expired).
 
 import os
 import logging
-import socket
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -118,20 +117,10 @@ def _collect_sans() -> list:
         x509.IPAddress(ipaddress.IPv6Address("::1")),
     ]
 
-    # Add hostname
-    try:
-        hostname = socket.gethostname()
-        if hostname and hostname != "localhost":
-            sans.append(x509.DNSName(hostname))
-            # Also try FQDN
-            try:
-                fqdn = socket.getfqdn()
-                if fqdn and fqdn != hostname and fqdn != "localhost":
-                    sans.append(x509.DNSName(fqdn))
-            except Exception:
-                pass
-    except Exception:
-        pass
+    # The host name and its FQDN (the same list HSTS keeps off, binding.hsts_for_host)
+    from vaf.network.binding import machine_dns_names
+    for name in machine_dns_names():
+        sans.append(x509.DNSName(name))
 
     # Add all local network IPs
     try:

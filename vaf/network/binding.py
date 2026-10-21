@@ -457,32 +457,71 @@ def _host_and_port(value: str | None) -> Optional[Tuple[str, Optional[int]]]:
     return (host, port) if host else None
 
 
+def machine_dns_names() -> List[str]:
+    """This machine's own DNS names besides `localhost`: the host name and, when it differs,
+    the FQDN. The local certificate carries exactly these (ssl_utils._collect_sans)."""
+    names: List[str] = []
+    try:
+        hostname = socket.gethostname()
+        if hostname and hostname != "localhost":
+            names.append(hostname)
+            try:
+                fqdn = socket.getfqdn()
+                if fqdn and fqdn != hostname and fqdn != "localhost":
+                    names.append(fqdn)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return names
+
+
 HSTS_VALUE = "max-age=31536000"
+# max-age=0 makes a browser drop a pin it holds for that name (RFC 6797 6.1.1). Versions
+# before this scoping sent a year with includeSubDomains for every dialled name.
+HSTS_CLEAR = "max-age=0"
 
 
 def hsts_for_host(dialled_host: str | None) -> Optional[str]:
     """The Strict-Transport-Security value for an answer to a request that dialled this host,
     or None when the header must not be sent.
 
-    HSTS applies to a host name on EVERY port, for a year. The local certificate names
-    `localhost`, this machine's host name and its FQDN besides its addresses; HSTS on
-    `localhost` would make the browser upgrade every plain-HTTP app on any localhost port,
-    the Web UI on port 3000 included. So: never for `localhost` or `*.localhost`, never for an
-    IP literal (browsers ignore it there, RFC 6797 8.1.1, and an address is how other devices
-    usually dial VAF), and never `includeSubDomains` (other names under the machine's FQDN are
-    not VAF's to decide). VAF serves the LAN and the VPN only.
+    HSTS applies to a host name on EVERY port, for a year: the browser then refuses plain
+    HTTP to any port of that name. The local certificate names `localhost`, this machine's
+    host name and its FQDN besides its addresses, and those names are how every other service
+    on the machine is reached too (the Web UI on port 3000, a NAS page, a printer, an app on
+    another port); HSTS on them would make each plain-HTTP one unreachable from that browser
+    for a year. So a year is never sent for `localhost` or `*.localhost`, nor for one of this
+    machine's own names (any name whose first label is its host name: the host name itself,
+    its FQDN, `<name>.local`, a router's or a VPN's name for it); those get `max-age=0`
+    (HSTS_CLEAR), so a pin an earlier version left behind is dropped at the next visit.
+    Nothing is sent for an IP literal (browsers ignore it there, RFC 6797 8.1.1, and an
+    address is how other devices usually dial VAF), and never `includeSubDomains`. What gets
+    the year is a name set up for VAF on purpose, with a certificate of its own. VAF serves
+    the LAN and the VPN only.
+
+    Only gethostname() is asked here, never a DNS lookup: this runs on every answer.
     """
     parsed = _host_and_port(dialled_host)
     if not parsed:
         return None
-    host = parsed[0].strip("[]")
+    # A trailing dot is the same name (`localhost.` is `localhost`).
+    host = parsed[0].strip("[]").rstrip(".")
+    if not host:
+        return None
     try:
         ipaddress.ip_address(host)
         return None
     except ValueError:
         pass
     if host == "localhost" or host.endswith(".localhost"):
-        return None
+        return HSTS_CLEAR
+    try:
+        own = socket.gethostname().lower().rstrip(".").split(".")[0]
+    except Exception:
+        own = ""
+    if own and host.split(".")[0] == own:
+        return HSTS_CLEAR
     return HSTS_VALUE
 
 

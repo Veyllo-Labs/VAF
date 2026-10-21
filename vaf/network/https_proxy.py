@@ -96,8 +96,9 @@ FRONTEND_ORIGIN = "http://127.0.0.1:3000"
 #   (/api/browser-vnc/, a backend response with X-Frame-Options: SAMEORIGIN) is framed by the
 #   UI, and a CSP frame-ancestors would override that. No page of the UI is framed by the UI
 #   (every iframe is srcDoc, about:blank or that viewer).
-# HSTS is scoped by the dialled host (binding.hsts_for_host): a DNS name that is not
-# localhost gets it on pages and backend answers alike, an address or localhost never does.
+# HSTS is scoped by the dialled host (binding.hsts_for_host), on pages and backend answers
+# alike: a year for a DNS name set up for VAF, max-age=0 for localhost and this machine's own
+# names, nothing for an address.
 PAGE_SECURITY_HEADERS = (
     ("X-Content-Type-Options", "nosniff"),
     ("X-Frame-Options", "DENY"),

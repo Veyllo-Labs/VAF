@@ -297,6 +297,7 @@ def _findings(public=(), host=None, events=(), switch=True, unit="active", **cfg
         mp.setattr(fw, "host_firewall", host if callable(host) else (lambda: host))
         mp.setattr(fw, "ufw_enabled", lambda paths=None: switch)
         mp.setattr(fw, "_ufw_unit_state", lambda: unit)
+        mp.setattr(fw, "_ufw_command_reads_on", lambda paths=None: True)
         mp.setattr(fw, "UFW_DEFAULTS", "/etc/default/ufw")
         mp.setattr(fw, "UFW_CONF", "/etc/ufw/ufw.conf")
         mp.delenv("SSH_CONNECTION", raising=False)

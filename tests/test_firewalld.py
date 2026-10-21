@@ -706,6 +706,11 @@ def test_host_firewall_is_one_answer(monkeypatch):
     # ufw-init's start aborted (a oneshot unit then says `failed`, measured): which of
     # ufw's rules are loaded is not known.
     ("ufw", True, "failed", "systemd reports its unit as failed"),
+    # Any other state but active says no more: starting, or systemd cannot tell.
+    ("ufw", True, "activating", "systemd reports its unit as activating"),
+    ("ufw", True, "unknown", "systemd reports its unit as unknown"),
+    # No systemd at all (no systemctl, or no answer): not counted, or every such host would be.
+    ("ufw", True, "", None),
     ("ufw_off", None, "failed", None),
     ("firewalld", None, "failed", None),
     (None, None, "failed", None),
@@ -714,13 +719,15 @@ def test_an_uncertain_switch_still_counts_as_ufw_but_is_never_confirmed(monkeypa
                                                                         switch, unit, why):
     """The allow rule is harmless on a ufw that is off and needed on one that is on, so an
     uncertain switch keeps "ufw"; what reports the result asks this instead of claiming a
-    guard, and says why. MUTATION: answer None always; ignore the engine; ignore a failed
-    unit; read the host firewall again when the caller passed it - red."""
+    guard, and says why. MUTATION: answer None always; ignore the engine; count only a
+    failed unit; count an empty answer too; read the host firewall again when the caller
+    passed it - red."""
     monkeypatch.setattr(fw, "UFW_DEFAULTS", "/etc/default/ufw")
     monkeypatch.setattr(fw, "UFW_CONF", "/etc/ufw/ufw.conf")
     monkeypatch.setattr(fw, "host_firewall", lambda: engine)
     monkeypatch.setattr(fw, "ufw_enabled", lambda paths=None: switch)
     monkeypatch.setattr(fw, "_ufw_unit_state", lambda: unit)
+    monkeypatch.setattr(fw, "_ufw_command_reads_on", lambda paths=None: True)
     reason = fw.ufw_switch_unconfirmed()
     if why is None:
         assert reason is None
@@ -733,6 +740,44 @@ def test_an_uncertain_switch_still_counts_as_ufw_but_is_never_confirmed(monkeypa
     monkeypatch.setattr(fw, "host_firewall", read_again)
     if engine is not None:
         assert fw.ufw_switch_unconfirmed(engine) == reason
+
+
+# Each row as ufw 0.36's own `_get_defaults` lines read it (measured with them on a test
+# server); every switch below is on for the shell, so `ufw_enabled()` says True.
+@pytest.mark.parametrize("defaults, conf, command_on", [
+    (UBUNTU_DEFAULT_UFW_DEFAULTS, "ENABLED=yes\n", True),
+    (UBUNTU_DEFAULT_UFW_DEFAULTS, 'ENABLED="yes"\n', True),
+    (UBUNTU_DEFAULT_UFW_DEFAULTS, "ENABLED=YES\n", True),         # lowercased
+    (UBUNTU_DEFAULT_UFW_DEFAULTS, "ENABLED=yes \n", True),        # the line is stripped
+    ("ENABLED=yes\n", "LOGLEVEL=low\n", True),
+    (UBUNTU_DEFAULT_UFW_DEFAULTS, "ENABLED=yes # note\n", False),  # the value `yes # note`
+    (UBUNTU_DEFAULT_UFW_DEFAULTS, "ENABLED='yes'\n", False),      # no match: no ENABLED
+    (UBUNTU_DEFAULT_UFW_DEFAULTS, "  ENABLED=yes\n", False),      # no match at a blank
+    (UBUNTU_DEFAULT_UFW_DEFAULTS, 'ENABLED="ye"s\n', False),      # the value `ye"s`
+    (UBUNTU_DEFAULT_UFW_DEFAULTS, "A=1 ENABLED=yes\n", False),    # read as A
+    (UBUNTU_DEFAULT_UFW_DEFAULTS, "ENABLED=yes\nenabled=no\n", False),  # names lowercased
+])
+def test_a_switch_line_ufws_own_command_reads_as_off_is_unconfirmed(monkeypatch, tmp_path,
+                                                                    defaults, conf, command_on):
+    """ufw-init loads the rules at boot by the shell's reading, but `ufw allow` decides by the
+    command's own pattern whether to apply a rule at once: where that reads off, the rule is
+    only recorded until ufw next starts, while provision said "Firewall opened". MUTATION:
+    leave the command's reading out; read it without lowercasing; take a line with a blank
+    before the name - red."""
+    defaults_path, conf_path = tmp_path / "ufw", tmp_path / "ufw.conf"
+    defaults_path.write_bytes(defaults.encode("utf-8"))
+    conf_path.write_bytes(conf.encode("utf-8"))
+    monkeypatch.setattr(fw, "UFW_DEFAULTS", str(defaults_path))
+    monkeypatch.setattr(fw, "UFW_CONF", str(conf_path))
+    monkeypatch.setattr(fw, "_ufw_unit_state", lambda: "active")
+    assert fw.ufw_enabled() is True
+    assert fw._ufw_command_reads_on() is command_on
+    reason = fw.ufw_switch_unconfirmed("ufw")
+    if command_on:
+        assert reason is None
+    else:
+        assert "ufw's own command reads its ENABLED line as off" in reason
+        assert "`ENABLED=yes`" in reason
 
 
 def test_a_ufw_whose_unit_is_stopped_counts_as_off(monkeypatch):
@@ -755,10 +800,14 @@ class _Done:
     (b"active\n", False, "active"),    # proves nothing: Ubuntu says it while ufw is off
     (b"failed\n", False, "failed"),    # not off: unconfirmed (ufw_switch_unconfirmed)
     (b"unknown\n", False, "unknown"),
+    (b"activating\n", False, "activating"),
+    (b"\xff\xfe\n", False, "unknown"),     # not one of systemd's words: never named as one
+    (b"", False, ""),                     # systemctl answered nothing: no systemd
     (FileNotFoundError("systemctl"), False, ""),
 ])
 def test_only_systemds_inactive_is_trusted(monkeypatch, answer, inactive, state):
-    """MUTATION: read the exit code (3 for every state that is not active) - red."""
+    """MUTATION: read the exit code (3 for every state that is not active); pass an answer
+    that is not one plain word through - red."""
     def run(argv, **kw):
         assert argv == ["systemctl", "is-active", "ufw"]
         if isinstance(answer, Exception):

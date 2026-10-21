@@ -241,10 +241,18 @@ class _BodyRefused(Exception):
         self.status = status
 
 
+_REFUSAL_TEXT = {
+    413: b"Request body too large",
+    408: b"Request body timed out",
+    400: b"Request body incomplete",
+}
+
+
 def _refusal(status: int) -> Response:
-    """A body the relay stopped (413, 408, or 400 for a device that left), with the connection
-    closed: the rest of the body is never read."""
-    return Response(content=b"", status_code=status, headers={"Connection": "close"})
+    """A body the relay stopped (413, 408, or 400 for a device that left), with a sentence a
+    person can read and the connection closed: the rest of the body is never read."""
+    return Response(content=_REFUSAL_TEXT[status], status_code=status, media_type="text/plain",
+                    headers={"Connection": "close"})
 
 
 async def _client_body(request: Request):

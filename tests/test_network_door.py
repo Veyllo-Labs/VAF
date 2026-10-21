@@ -157,11 +157,19 @@ def quick_head(monkeypatch):
     monkeypatch.setattr(door, "HEAD_TIMEOUT_S", 0.5)
 
 
+@pytest.fixture
+def quiet_refusals(monkeypatch):
+    """The admission check records each refusal in the security log; not from these tests."""
+    import vaf.core.security_events as security_events
+    monkeypatch.setattr(security_events, "log_security_event", lambda *_a, **_k: None)
+
+
 def test_a_slow_head_is_closed(cert, quick_head):
     """AC 4: no complete head within HEAD_TIMEOUT_S closes the connection, while a complete
     request on the same listener answers. MUTATION: no arm in connection_made (the idle
-    connection stays open), or none in on_message_begin (the kept-alive dribble stays open)
-    - red."""
+    connection stays open) - red. The kept-alive dribble is held twice over, by the arm on
+    bytes that arrive after an answer and by the one in on_message_begin; each has its own
+    test below (an empty line after an answer, a pipelined head)."""
     app = _App()
     with serving(_door_config(app, cert), door.door_event_loop) as (port, _server):
         with tls_connect(port) as ok:
@@ -192,6 +200,304 @@ def test_a_slow_head_is_closed(cert, quick_head):
     assert app.calls == 2
 
 
+def _read_until_closed(sock: socket.socket, seconds: float = 3.0) -> bytes:
+    """Everything the server sends until it closes (or a reset, or the time is up)."""
+    deadline = time.monotonic() + seconds
+    data = b""
+    while time.monotonic() < deadline:
+        sock.settimeout(max(0.01, deadline - time.monotonic()))
+        try:
+            part = sock.recv(65536)
+        except (socket.timeout, OSError):
+            break
+        if not part:
+            break
+        data += part
+    return data
+
+
+class _Early:
+    """Answers 401 at once without reading the body and keeps the connection alive: the shape
+    of a backend route that refuses a request before its body (``vaf run --web``)."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return
+        self.calls += 1
+        await send({"type": "http.response.start", "status": 401,
+                    "headers": [(b"content-length", b"2")]})
+        await send({"type": "http.response.body", "body": b"no"})
+
+
+class _Reader:
+    """Reads the whole body before it answers 200 with the byte count, like the proxy's relay;
+    records a client that left first."""
+
+    def __init__(self):
+        self.received = []
+        self.disconnected = 0
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return
+        total = 0
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                self.disconnected += 1
+                return
+            total += len(message.get("body", b""))
+            if not message.get("more_body"):
+                break
+        self.received.append(total)
+        body = b"%d" % total
+        await send({"type": "http.response.start", "status": 200,
+                    "headers": [(b"content-length", b"%d" % len(body))]})
+        await send({"type": "http.response.body", "body": body})
+
+
+@pytest.mark.parametrize("answer", ["200", "early 401"])
+def test_an_empty_line_after_an_answer_starts_the_head_timer(quick_head, answer):
+    """uvicorn's data_received cancels its keep-alive timer on any byte and re-arms it only
+    after the next answer, and llhttp skips an empty line between requests without
+    on_message_begin: one CRLF after an answer held the connection forever (measured: open
+    after 45 s; three such connections at a cap of 4 turned every new request away with
+    503). A body still arriving after an early answer did the same. MUTATION: no arm on bytes
+    that arrive while nothing is being answered - red."""
+    app = _App() if answer == "200" else _Early()
+    with serving(_door_config(app), door.door_event_loop) as (port, _server):
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            if answer == "200":
+                assert http_exchange(s, GET).startswith(b"HTTP/1.1 200")
+                s.sendall(b"\r\n")
+                assert closed_within(s, 2.0), "an empty line after the answer held the connection"
+            else:
+                head = b"POST / HTTP/1.1\r\nHost: door\r\nContent-Length: 100000\r\n\r\n"
+                assert http_exchange(s, head).startswith(b"HTTP/1.1 401")
+                started, closed = time.monotonic(), False
+                while time.monotonic() - started < 2.0:
+                    try:
+                        s.sendall(b"a")
+                    except OSError:
+                        closed = True
+                        break
+                    if closed_within(s, 0.1):
+                        closed = True
+                        break
+                assert closed, "a body trickled after an early answer held the connection"
+
+
+@pytest.mark.parametrize("accept", [b"text/html", b"application/json"], ids=["page", "json"])
+def test_a_refused_client_is_closed_at_once(monkeypatch, quiet_refusals, accept):
+    """The admission check's 403 closes the connection itself, long before any timer: a
+    refused client cannot keep a slot of the cap. MUTATION: drop Connection: close from the
+    403 - red (uvicorn keeps the connection alive for 5 s)."""
+    from vaf.network.admission import AdmissionGuard
+    monkeypatch.setattr(door, "HEAD_TIMEOUT_S", 30.0)
+    app = _App()
+    with serving(_door_config(AdmissionGuard(app, admits=lambda ip: False)),
+                 door.door_event_loop) as (port, _server):
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            answer = http_exchange(s, b"GET / HTTP/1.1\r\nHost: door\r\nAccept: " + accept
+                                   + b"\r\n\r\n")
+            assert answer.startswith(b"HTTP/1.1 403"), answer[:80]
+            assert b"\r\nconnection: close\r\n" in answer
+            assert closed_within(s, 1.0), "the refused connection was kept alive"
+    assert app.calls == 0
+
+
+def test_a_discarded_body_never_counts_as_head(monkeypatch):
+    """The body an early answer leaves unread is discarded, not head: a read that carries the
+    rest of it and the start of the next request's head counted whole toward HEAD_MAX_BYTES
+    (a false 431). MUTATION: count every read while a head is pending, or begin a head on the
+    bytes that arrive after an answer - red."""
+    monkeypatch.setattr(door, "HEAD_TIMEOUT_S", 10.0)
+    app = _Early()
+    with serving(_door_config(app), door.door_event_loop) as (port, _server):
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            body = 40 * 1024
+            head = b"POST / HTTP/1.1\r\nHost: door\r\nContent-Length: %d\r\n\r\n" % body
+            answers = http_exchange(s, head)
+            assert answers.startswith(b"HTTP/1.1 401")
+            s.sendall(b"b" * (body - 20 * 1024))
+            time.sleep(0.1)
+            # The last 20 KiB of the body and half of the next head arrive in one read.
+            s.sendall(b"b" * (20 * 1024) + b"GET / HTTP/1.1\r\nHost: door\r\n")
+            time.sleep(0.1)
+            s.sendall(b"Connection: close\r\n\r\n")
+            answers += _read_until_closed(s)
+    assert answers.count(b"HTTP/1.1 401") == 2, answers
+    assert b"431" not in answers and app.calls == 2
+
+
+def test_a_pipelined_head_has_the_time_limit_too(quick_head):
+    """A head that begins while an earlier request is still being answered (pipelined) has
+    the same HEAD_TIMEOUT_S. MUTATION: no arm in on_message_begin - red (the connection waits
+    for the slow answer first)."""
+    class _Slow:
+        async def __call__(self, scope, receive, send):
+            if scope["type"] != "http":
+                return
+            await asyncio.sleep(3.0)
+            await send({"type": "http.response.start", "status": 200,
+                        "headers": [(b"content-length", b"2")]})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+    with serving(_door_config(_Slow()), door.door_event_loop) as (port, _server):
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            s.sendall(GET + b"GET / HTTP/1.1\r\n")
+            assert closed_within(s, 2.0), "a pipelined head sent in part stayed open"
+
+
+def test_a_431_never_answers_another_request():
+    """A head refused while the request before it is still being answered closes the
+    connection without a 431, which the client would read as the earlier request's answer.
+    MUTATION: write the 431 whatever is being answered - red."""
+    class _Slow:
+        calls = 0
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] != "http":
+                return
+            _Slow.calls += 1
+            await asyncio.sleep(1.0)
+            await send({"type": "http.response.start", "status": 200,
+                        "headers": [(b"content-length", b"2")]})
+            await send({"type": "http.response.body", "body": b"ok"})
+
+    with serving(_door_config(_Slow()), door.door_event_loop) as (port, _server):
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            s.sendall(GET + b"GET / HTTP/1.1\r\nHost: door\r\nX-Big: " + b"a" * (20 * 1024)
+                      + b"\r\n\r\n")
+            answer = _read_until_closed(s)
+    assert b"431" not in answer, answer[:80]
+    assert _Slow.calls == 1
+
+
+def _one_answer(sock: socket.socket) -> bytes:
+    """One whole answer: the head, then as many body bytes as its Content-Length says."""
+    sock.settimeout(5)
+    data = b""
+    while b"\r\n\r\n" not in data:
+        part = sock.recv(65536)
+        if not part:
+            return data
+        data += part
+    head, _, body = data.partition(b"\r\n\r\n")
+    length = 0
+    for line in head.split(b"\r\n")[1:]:
+        name, _, value = line.partition(b":")
+        if name.strip().lower() == b"content-length":
+            length = int(value)
+    while len(body) < length:
+        part = sock.recv(65536)
+        if not part:
+            break
+        body += part
+    return head + b"\r\n\r\n" + body
+
+
+def _send_until_the_door_acts(sock: socket.socket, piece: bytes, times: int = 64):
+    """Send `piece` again and again, a read each, until the server answers or closes; stop
+    sending at once then, so the client's further bytes cannot turn the close into a reset
+    that hides the answer. Returns (what the server sent, whether it closed)."""
+    for _ in range(times):
+        try:
+            sock.sendall(piece)
+        except OSError:
+            return b"", True
+        sock.settimeout(0.05)
+        try:
+            part = sock.recv(65536)
+        except socket.timeout:
+            continue
+        except OSError:
+            return b"", True
+        if not part:
+            return b"", True
+        rest = _read_until_closed(sock, 3.0)
+        return part + rest, closed_within(sock, 0.5)
+    return b"", False
+
+
+@pytest.mark.parametrize("app_kind", ["reads the body", "answered early", "refused"])
+def test_an_endless_trailer_is_refused(monkeypatch, quiet_refusals, app_kind):
+    """After the last chunk, httptools gathers a trailer line until it ends, and the raw count
+    stopped with the head: a trailer line that never ended took the process from 50 MB to
+    about 1 GB in 48 s, for an admitted client (until the relay's 60 s stall) and a refused
+    one (with no limit at all). It counts toward HEAD_MAX_BYTES now: 431 while the request
+    has no answer yet, a plain close after one. MUTATION: drop the trailer count - red (the
+    first two rows stay open); no 431 for a trailer - red (reads the body); write the 431
+    after an answer - red (answered early)."""
+    from vaf.network.admission import AdmissionGuard
+    monkeypatch.setattr(door, "HEAD_TIMEOUT_S", 30.0)
+    app = {"reads the body": _Reader(), "answered early": _App(),
+           "refused": AdmissionGuard(_App(), admits=lambda ip: False)}[app_kind]
+    with serving(_door_config(app), door.door_event_loop) as (port, _server):
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            s.sendall(b"POST / HTTP/1.1\r\nHost: door\r\nTransfer-Encoding: chunked\r\n\r\n"
+                      b"5\r\nhello\r\n0\r\nX-Endless: ")
+            if app_kind != "reads the body":
+                first = _one_answer(s)
+                assert first.startswith(b"HTTP/1.1 " + (b"403" if app_kind == "refused"
+                                                        else b"200")), first[:80]
+            then, closed = _send_until_the_door_acts(s, b"a" * 4096)
+    assert closed, "an endless trailer stayed open"
+    if app_kind == "reads the body":
+        assert then.startswith(b"HTTP/1.1 431"), then[:80]
+        assert app.received == [] and app.disconnected == 1
+    else:
+        assert then == b"", then[:80]
+
+
+def test_a_slow_upload_is_not_a_slow_head(quick_head):
+    """The head timer holds bytes only while nothing is being answered: a body the app is
+    reading takes as long as it takes here (the proxy holds it to BODY_STALL_S per part).
+    MUTATION: arm the head timer on any byte when none runs - red."""
+    app = _Reader()
+    with serving(_door_config(app), door.door_event_loop) as (port, _server):
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            s.sendall(b"POST / HTTP/1.1\r\nHost: door\r\nContent-Length: 10\r\n"
+                      b"Connection: close\r\n\r\nabcde")
+            time.sleep(0.6)
+            s.sendall(b"f")
+            time.sleep(0.6)
+            s.sendall(b"ghij")
+            answer = _read_until_closed(s)
+    assert answer.startswith(b"HTTP/1.1 200") and answer.endswith(b"\r\n\r\n10"), answer
+    assert app.received == [10]
+
+
+@pytest.mark.parametrize("chunk", [1000, 1024 * 1024], ids=["small chunks", "large chunks"])
+def test_a_chunked_upload_is_not_a_trailer(chunk):
+    """The control for the trailer count: several MiB of chunked body pass, also when a read
+    ends right after a chunk's size line (an open chunk without body yet, the state the
+    trailer section is told by). MUTATION: count a read that only ends in that state - red
+    (large chunks)."""
+    app = _Reader()
+    total = 4 * 1024 * 1024
+    with serving(_door_config(app), door.door_event_loop) as (port, _server):
+        with socket.create_connection(("127.0.0.1", port), timeout=10) as s:
+            s.sendall(b"POST / HTTP/1.1\r\nHost: door\r\nTransfer-Encoding: chunked\r\n"
+                      b"Connection: close\r\n\r\n")
+            if chunk == 1000:
+                s.sendall((b"%x\r\n" % chunk + b"c" * chunk + b"\r\n") * (total // chunk))
+                rest = total - (total // chunk) * chunk
+                s.sendall(b"%x\r\n" % rest + b"c" * rest + b"\r\n0\r\n\r\n")
+            else:
+                s.sendall(b"%x\r\n" % chunk)
+                for i in range(total // chunk):
+                    time.sleep(0.05)
+                    tail = b"%x\r\n" % chunk if i < total // chunk - 1 else b"0\r\n\r\n"
+                    s.sendall(b"c" * chunk + b"\r\n" + tail)
+            answer = _read_until_closed(s, 10.0)
+    assert answer.startswith(b"HTTP/1.1 200"), answer[:80]
+    assert app.received == [total]
+
+
 @pytest.mark.parametrize("head", [
     b"GET / HTTP/1.1\r\nHost: door\r\nX-Big: " + b"a" * (20 * 1024) + b"\r\n\r\n",
     b"GET /" + b"a" * (20 * 1024) + b" HTTP/1.1\r\nHost: door\r\n\r\n",
@@ -212,7 +518,10 @@ def test_a_large_head_gets_431(cert, head, caplog):
             with tls_connect(port) as s:
                 answer = http_exchange(s, head)
                 assert answer.startswith(b"HTTP/1.1 431"), answer[:80]
-                assert closed_within(s, 2.0)
+                assert b"content-type: text/plain" in answer
+                answer += _read_until_closed(s, 2.0)
+                assert answer.endswith(b"\r\n\r\nRequest header too large"), answer[-80:]
+                assert closed_within(s, 0.5)
     assert app.calls == 0
     assert not [r for r in caplog.records if r.exc_info], "a refused head raised inside uvicorn"
 
@@ -285,13 +594,58 @@ def test_the_door_answers_503_at_the_cap(monkeypatch):
             while len(server.server_state.connections) < 2 and time.monotonic() < deadline:
                 time.sleep(0.02)
             with socket.create_connection(("127.0.0.1", port), timeout=5) as third:
-                answer = http_exchange(third, GET)
+                third.sendall(GET)
+                answer = _read_until_closed(third)
                 assert answer.startswith(b"HTTP/1.1 503"), answer[:80]
                 assert b"connection: close" in answer.lower()
+                # uvicorn's own answer at the cap carries a sentence a person can read.
+                assert answer.endswith(b"\r\n\r\nService Unavailable"), answer[-80:]
         finally:
             for s in idle:
                 s.close()
     assert app.calls == 1
+
+
+UPGRADE = (b"GET /ws HTTP/1.1\r\nHost: door\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n"
+           b"Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")
+
+
+def test_an_upgrade_at_the_cap_gets_503(monkeypatch):
+    """uvicorn decides a WebSocket upgrade before it checks the cap, so sockets went past it
+    (measured: 20 sockets at a cap of 3 while a request got 503), each holding a descriptor,
+    three through the proxy. At the cap an upgrade gets the request's 503 now; below it, it
+    opens. MUTATION: hand every upgrade to uvicorn - red."""
+    monkeypatch.setattr(door, "MAX_CONNECTIONS", 2)
+    opened = []
+
+    async def sockets(scope, receive, send):
+        if scope["type"] != "websocket":
+            return
+        await receive()
+        opened.append(scope["path"])
+        await send({"type": "websocket.accept"})
+        while (await receive())["type"] != "websocket.disconnect":
+            pass
+
+    with serving(_door_config(sockets), door.door_event_loop) as (port, server):
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as alone:
+            assert http_exchange(alone, UPGRADE).startswith(b"HTTP/1.1 101")
+        deadline = time.monotonic() + 5
+        while server.server_state.connections and time.monotonic() < deadline:
+            time.sleep(0.02)
+        idle = [socket.create_connection(("127.0.0.1", port), timeout=5) for _ in range(2)]
+        try:
+            while len(server.server_state.connections) < 2 and time.monotonic() < deadline:
+                time.sleep(0.02)
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as third:
+                third.sendall(UPGRADE)
+                answer = _read_until_closed(third)
+        finally:
+            for s in idle:
+                s.close()
+    assert answer.startswith(b"HTTP/1.1 503"), answer[:80]
+    assert b"connection: close" in answer and answer.endswith(b"Service Unavailable")
+    assert opened == ["/ws"]
 
 
 # --------------------------------------------------------------------------- open files
@@ -470,26 +824,88 @@ def test_both_doors_use_the_options_and_the_loop(monkeypatch, tmp_path, door_loo
 # --------------------------------------------------------------------------- the pin
 
 def test_the_uvicorn_hooks_exist():
-    """AC 18: the protocol overrides asyncio's protocol methods and httptools' parser
-    callbacks of uvicorn's HttpToolsProtocol, which must still exist under these names, and
-    uvicorn must still take a protocol class. A refused head drops the gathered headers so
+    """AC 18: the protocol overrides asyncio's protocol methods, httptools' parser callbacks
+    and handle_websocket_upgrade of uvicorn's HttpToolsProtocol, which must still exist under
+    these names, and reads the state uvicorn keeps under these names; uvicorn must still take a
+    protocol class. The two chunk callbacks are httptools' own, which uvicorn does not define:
+    if it ever does, the door's would hide them. A refused head drops the gathered headers so
     uvicorn's upgrade check (which reads self.headers) cannot start a WebSocket. MUTATION:
     rename one override (on_headers instead of on_header) - red here and in the 431 test."""
     import inspect
 
-    from uvicorn.protocols.http.httptools_impl import HttpToolsProtocol
+    from uvicorn.protocols.http.httptools_impl import HttpToolsProtocol, RequestResponseCycle
     hooks = ("connection_made", "connection_lost", "data_received", "on_message_begin",
-             "on_url", "on_header", "on_headers_complete", "on_body", "on_message_complete")
+             "on_url", "on_header", "on_headers_complete", "on_body", "on_message_complete",
+             "handle_websocket_upgrade")
+    httptools_only = ("on_chunk_header", "on_chunk_complete")
     for name in hooks:
         assert name in vars(HttpToolsProtocol), f"uvicorn no longer defines {name}"
         assert name in vars(door.BoundedHttpToolsProtocol), f"the door does not override {name}"
+    for name in httptools_only:
+        assert not hasattr(HttpToolsProtocol, name), f"uvicorn defines {name} now"
+        assert name in vars(door.BoundedHttpToolsProtocol), f"the door does not define {name}"
     overrides = {n for n, v in vars(door.BoundedHttpToolsProtocol).items()
                  if callable(v) and not n.startswith("_")}
-    assert overrides <= set(hooks), overrides - set(hooks)
+    assert overrides <= set(hooks + httptools_only), overrides - set(hooks + httptools_only)
     assert "self.headers" in inspect.getsource(HttpToolsProtocol._get_upgrade)
+    state = inspect.getsource(HttpToolsProtocol.__init__)
+    for name in ("self.cycle", "self.connections", "self.tasks", "self.limit_concurrency",
+                 "self.logger"):
+        assert name in state, f"uvicorn no longer keeps {name}"
+    cycle = inspect.getsource(RequestResponseCycle.__init__)
+    assert "self.response_started" in cycle and "self.response_complete" in cycle
     config = uvicorn.Config(_App(), http=door.BoundedHttpToolsProtocol, log_config=None)
     config.load()
     assert config.http_protocol_class is door.BoundedHttpToolsProtocol
+
+
+def test_httptools_reports_what_the_door_counts_by():
+    """What the head timer and the trailer count rely on, read from the httptools CI
+    installs: an empty line between requests reaches no callback (so nothing but the door's
+    own timer notices it), the last chunk reports a chunk header with no body, and its
+    trailer lines arrive as headers before the chunk completes."""
+    import httptools
+
+    class _Recorder:
+        def __init__(self):
+            self.events = []
+
+        def on_message_begin(self):
+            self.events.append("begin")
+
+        def on_header(self, name, value):
+            self.events.append(("header", name))
+
+        def on_headers_complete(self):
+            self.events.append("headers")
+
+        def on_body(self, body):
+            self.events.append(("body", len(body)))
+
+        def on_message_complete(self):
+            self.events.append("complete")
+
+        def on_chunk_header(self):
+            self.events.append("chunk")
+
+        def on_chunk_complete(self):
+            self.events.append("chunk done")
+
+    rec = _Recorder()
+    parser = httptools.HttpRequestParser(rec)
+    parser.feed_data(GET)
+    rec.events.clear()
+    parser.feed_data(b"\r\n")
+    assert rec.events == []
+    parser.feed_data(b"POST / HTTP/1.1\r\nHost: door\r\nTransfer-Encoding: chunked\r\n\r\n"
+                     b"5\r\nhello\r\n0\r\nX-T: ")
+    assert rec.events ==["begin", ("header", b"Host"), ("header", b"Transfer-Encoding"),
+                          "headers", "chunk", ("body", 5), "chunk done", "chunk"]
+    rec.events.clear()
+    parser.feed_data(b"a" * 100)
+    assert rec.events == []
+    parser.feed_data(b"\r\n\r\n")
+    assert rec.events == [("header", b"X-T"), "chunk done", "complete"]
 
 
 def test_the_door_reads_no_client_address():

@@ -275,6 +275,7 @@ def test_a_body_over_the_cap_gets_413(relay, monkeypatch):
                                   b"Content-Length: %d\r\n\r\n" % (2 * 1024 * 1024))
     assert answer.startswith(b"HTTP/1.1 413"), answer[:80]
     assert b"connection: close" in answer.lower()
+    assert b"content-type: text/plain" in answer.lower()
     assert upstream.requests == []
 
     # Exactly the cap first, relayed in full; then one byte more. Bytes the door has not read
@@ -290,9 +291,11 @@ def test_a_body_over_the_cap_gets_413(relay, monkeypatch):
             time.sleep(0.02)
         assert upstream.body_bytes(upstream.requests[-1]) == 1024 * 1024
         s.sendall(b"1\r\nb\r\n")
-        status, headers, _body = _response(s)
+        status, headers, body = _response(s)
     assert status.startswith("HTTP/1.1 413"), status
     assert _values(headers, "connection") == ["close"]
+    # A person who ever sees the answer reads a sentence, not a blank page.
+    assert body == b"Request body too large"
 
 
 def test_a_stalled_body_gets_408(relay, monkeypatch):
@@ -303,10 +306,11 @@ def test_a_stalled_body_gets_408(relay, monkeypatch):
     with _connect(port) as s:
         started = time.monotonic()
         s.sendall(b"POST /upload HTTP/1.1\r\nHost: door\r\nContent-Length: 10\r\n\r\nabcde")
-        status, headers, _body = _response(s, timeout=5.0)
+        status, headers, body = _response(s, timeout=5.0)
         assert time.monotonic() - started < 2.0
     assert status.startswith("HTTP/1.1 408"), status
     assert _values(headers, "connection") == ["close"]
+    assert body == b"Request body timed out"
     deadline = time.monotonic() + 2
     while not upstream.requests[-1]["disconnected"] and time.monotonic() < deadline:
         time.sleep(0.02)

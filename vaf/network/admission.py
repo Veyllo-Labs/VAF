@@ -9,8 +9,8 @@ handshake (``binding.connection_client_ip``, so a client relayed over loopback i
 the device the relay named) against ``binding.is_allowed_ip``, the one answer to "who may
 connect" (``inbound_policy()``: this machine, the local networks or with "VPN only" the VPN
 networks, plus the private networks an admin added; never a public address). A client that
-is not admitted gets HTTP 403, or a WebSocket close 4003 before accept, which a browser sees
-as a failed handshake; the app behind it is never called.
+is not admitted gets HTTP 403 with ``Connection: close``, or a WebSocket close 4003 before
+accept, which a browser sees as a failed handshake; the app behind it is never called.
 
 What a refused person sees: a browser that loads a page (a GET outside ``/api`` that accepts
 ``text/html``) gets a short HTML page that says which networks VAF answers and what to do,
@@ -187,12 +187,16 @@ class AdmissionGuard:
             await WebSocketClose(code=4003, reason=reason)(scope, receive, send)
             return
         detail = self._reason or REFUSED_DETAIL
+        # A refused client keeps no connection. Kept alive, a single empty line sent after
+        # the 403 cancelled uvicorn's keep-alive timer, and the connection held a slot of
+        # the door's connection cap for as long as the client liked (measured: three such
+        # connections at a cap of 4 turned every other device away with 503).
         if _wants_page(scope):
             response = HTMLResponse(refusal_page(detail, self._next_step), status_code=403,
-                                    headers=_PAGE_HEADERS)
+                                    headers={**_PAGE_HEADERS, "Connection": "close"})
         else:
             response = JSONResponse(status_code=403, content={"detail": detail},
-                                    headers={"Vary": "Accept"})
+                                    headers={"Vary": "Accept", "Connection": "close"})
         await response(scope, receive, send)
 
 

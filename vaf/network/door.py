@@ -27,36 +27,51 @@ connection, admitted or not, before the admission check reads a single header:
 
 - ``door_event_loop()``: the TLS handshake has ``TLS_HANDSHAKE_TIMEOUT_S``.
 - ``BoundedHttpToolsProtocol``: the request head has ``HEAD_TIMEOUT_S`` from the moment the
-  connection is ready (or from the first byte of a follow-up request on a kept-alive
-  connection) and at most ``HEAD_MAX_BYTES``; above it the answer is 431.
-- ``door_options()``: those plus at most ``connection_cap()`` connections (503 above it),
-  an explicit keep-alive, no ``Server`` header, and no forwarded-header trust of uvicorn's:
-  ``binding.connection_client_ip`` is the only reader of ``X-Forwarded-For`` on a door.
+  connection is ready, or from the first byte that arrives while no request is being
+  answered (a follow-up request, a stray empty line, the rest of a body after an early
+  answer), and at most ``HEAD_MAX_BYTES`` together with the trailers after a chunked body;
+  above it the answer is 431.
+- ``door_options()``: those plus at most ``connection_cap()`` connections (503 above it,
+  for a WebSocket upgrade as for a request), an explicit keep-alive, no ``Server`` header,
+  and no forwarded-header trust of uvicorn's: ``binding.connection_client_ip`` is the only
+  reader of ``X-Forwarded-For`` on a door.
 - ``raise_open_file_limit()``: the process raises its own soft open-file limit.
 
 The request body has its limits where it is read: the proxy streams it and holds it to
-``BODY_MAX_BYTES`` and ``BODY_STALL_S`` (``https_proxy._forward_http``).
+``BODY_MAX_BYTES`` and ``BODY_STALL_S`` (``https_proxy._forward_http``). A refused client
+keeps no connection: the admission check's 403 says ``Connection: close``
+(``admission.AdmissionGuard``).
 
 Named boundaries:
-- The TLS handshake happens before any limit but its own can apply.
+- The TLS handshake happens before any limit but its own can apply, and a connection in
+  its handshake counts toward no cap: it holds one descriptor for up to
+  ``TLS_HANDSHAKE_TIMEOUT_S`` (measured: 60 connections that never started TLS, 60 more
+  descriptors, released at 15 s). The spare descriptors divided by 15 s is the rate of new
+  connections that takes them all: with the soft limit at 65536, about 4,200 a second,
+  sustained; where it stays at 1024 (cap 256, about 200 descriptors at rest), between about
+  3 and 37 a second, by how many of the door's connections are relayed. Only a firewall
+  rate limit in front of the port closes that.
 - One address can fill the connection cap; a per-address count would need a second
   reader of the peer (``tests/test_client_address_has_one_reader.py``) and bookkeeping
   across the WebSocket upgrade, and no incident asks for it.
-- A WebSocket upgrade counts toward the cap but is not refused by it: uvicorn checks the
-  cap after it has decided to upgrade. Every upgrade on the proxy dials the backend first,
-  which refuses a handshake without a session at once.
-- A client that reads a response slowly holds one door connection (and on the proxy one
-  upstream connection) for as long as it keeps reading; a body sent a little at a time,
-  each part inside ``BODY_STALL_S``, does the same while it lasts.
+- A client that reads a response slowly, or never, holds one door connection (and on the
+  proxy one upstream connection) for as long as it keeps the connection open: uvicorn has
+  no write timeout (measured: five clients that never read a streamed answer still held
+  both at 70 s). A body sent a little at a time, each part inside ``BODY_STALL_S``, does the
+  same while it lasts. The cap bounds how many.
 - ``vaf run --web`` serves the backend itself: there the head, handshake and connection
-  limits apply, and a body is held only by the route that reads it.
+  limits apply to every client, the owner's own web UI included, which reaches it through
+  Next.js; a flood that fills the cap turns that UI away too. A body is held only by the
+  route that reads it.
 - Refusals here (431, a closed head, 503) never reach the access log or the security
   log, because a flood must not become a write flood. uvicorn still logs its own
-  one-line warnings.
+  one-line warnings, and the door logs uvicorn's line for an upgrade it turns away.
 - The protocol subclasses uvicorn's ``HttpToolsProtocol`` and overrides only asyncio's
-  protocol methods and httptools' parser callbacks, which are the same from uvicorn 0.27 to
-  0.49; ``tests/test_network_door.py`` pins them, and CI runs against the newest uvicorn
-  ``requirements.txt`` resolves.
+  protocol methods, httptools' parser callbacks and ``handle_websocket_upgrade``; it reads
+  ``cycle``, ``connections``, ``tasks`` and ``limit_concurrency``. All of them are the same
+  from uvicorn 0.27 to 0.54, and httptools 0.8 and 0.9 call the chunk callbacks the trailer
+  count needs; ``tests/test_network_door.py`` pins them, and CI runs against the newest
+  uvicorn ``requirements.txt`` resolves.
 
 The limits are constants, not settings: they are the floor of the door, not a preference,
 and a config key's name is a security decision of its own.
@@ -96,24 +111,50 @@ OPEN_FILES_TARGET = 65536
 # macOS refuses a soft limit above OPEN_MAX (10240) when the hard limit is unlimited.
 OPEN_FILES_FALLBACK = 10240
 
-_HEADER_TOO_LARGE = (b"HTTP/1.1 431 Request Header Fields Too Large\r\n"
-                     b"content-length: 0\r\nconnection: close\r\n\r\n")
+
+def _plain_answer(status_line: bytes, text: bytes) -> bytes:
+    """A whole answer written by the protocol itself, with a short sentence a person can read
+    and the connection closed."""
+    return (status_line + b"content-type: text/plain; charset=utf-8\r\n"
+            + b"content-length: %d\r\nconnection: close\r\n\r\n" % len(text) + text)
+
+
+_HEADER_TOO_LARGE = _plain_answer(b"HTTP/1.1 431 Request Header Fields Too Large\r\n",
+                                  b"Request header too large")
+# The same answer uvicorn gives a request at the cap (flow_control.service_unavailable).
+_SERVICE_UNAVAILABLE = _plain_answer(b"HTTP/1.1 503 Service Unavailable\r\n",
+                                     b"Service Unavailable")
 
 _limit_logged = False
 _cap_warned = False
 
 
 class BoundedHttpToolsProtocol(HttpToolsProtocol):
-    """uvicorn's httptools protocol with a time and a size limit on every request head.
+    """uvicorn's httptools protocol with a time and a size limit on every request head, and
+    a WebSocket upgrade held to the connection cap like any request.
 
-    Overrides only asyncio protocol methods and httptools parser callbacks, always hands on
-    to uvicorn's own, and never reads the client address.
+    Overrides only asyncio protocol methods, httptools parser callbacks and uvicorn's
+    ``handle_websocket_upgrade``, always hands on to uvicorn's own, and never reads the client
+    address.
 
-    The head is counted twice: in the parser callbacks (the URL and each complete header
-    line, so a large head that arrives in one read is caught), and as raw bytes while the
-    head is still incomplete after a read (httptools gathers a header line until it ends
-    before the callback sees it, so a line that never ends would otherwise grow without a
-    bound).
+    The time: the head timer runs from the ready connection, and from the first byte that
+    arrives while no request is being answered: the next request on a kept-alive connection,
+    an empty line (llhttp skips one between requests without ``on_message_begin``), or the
+    rest of a body after an early answer. uvicorn's own ``data_received`` cancels its
+    keep-alive timer on any byte and re-arms it only after the next answer, so one empty line
+    used to hold a kept-alive connection forever (measured: open after 45 s, after a 200 or a
+    refused request alike).
+
+    The size, per request: the head and the trailer section after a chunked body together.
+    They are counted twice: in the parser callbacks (the URL and each complete header or
+    trailer line, so a large head that arrives in one read is caught), and as raw bytes of
+    every read that lies wholly inside an unfinished head or trailer section (httptools
+    gathers a header line until it ends before the callback sees it, so a line that never
+    ends grew without a bound: a trailer line after the last chunk took the process from 50 MB
+    to about 1 GB in 48 s, admitted or not). A read that also carries the end of an earlier
+    request (a pipelined request, the rest of a body) is not counted as raw bytes, so a body
+    never turns into a 431; the line it leaves unfinished is counted from the next read on,
+    which bounds what is gathered to one read plus ``HEAD_MAX_BYTES``.
     """
 
     def __init__(self, *args, **kwargs) -> None:
@@ -124,6 +165,15 @@ class BoundedHttpToolsProtocol(HttpToolsProtocol):
         self._head_pending = False
         self._head_counted = 0
         self._head_received = 0
+        # Where the parser is: requests begun on this connection and whether the last one is
+        # still open; chunks begun, and whether the open one has delivered body bytes. The
+        # last chunk has none: a read that begins and ends inside one open chunk without
+        # body is trailer section.
+        self._messages = 0
+        self._message_open = False
+        self._chunks = 0
+        self._chunk_open = False
+        self._chunk_body = False
 
     # -- asyncio protocol
 
@@ -140,17 +190,52 @@ class BoundedHttpToolsProtocol(HttpToolsProtocol):
     def data_received(self, data: bytes) -> None:
         if self._door_closed:
             return
+        if self._head_timer is None and (self.cycle is None or self.cycle.response_complete):
+            # Nothing is being answered: whatever these bytes are, the head timer holds them.
+            self._arm_head_timer()
+        messages, chunks, between = self._messages, self._chunks, not self._message_open
         super().data_received(data)
-        if self._head_pending and not self._door_closed:
+        if self._door_closed:
+            return
+        if self._head_pending:
+            # The whole read is head when the head began before it, or when it began in this
+            # read with no earlier request open (only empty lines can precede it then).
+            whole = self._messages == messages or (between and self._messages == messages + 1)
+        else:
+            whole = (self._chunk_open and not self._chunk_body
+                     and (self._messages, self._chunks) == (messages, chunks))
+        if whole:
             self._head_received += len(data)
             if self._head_received > HEAD_MAX_BYTES:
                 self._refuse_head()
+
+    # -- uvicorn
+
+    def handle_websocket_upgrade(self) -> None:
+        """At the connection cap, a WebSocket upgrade gets the 503 a request gets. uvicorn
+        decides the upgrade before it checks the cap, so sockets went past it (measured: 20
+        sockets at a cap of 3, while a request got 503); each holds a descriptor, three
+        through the proxy, as long as it stays open."""
+        if self.limit_concurrency is not None and (
+                len(self.connections) >= self.limit_concurrency
+                or len(self.tasks) >= self.limit_concurrency):
+            self.logger.warning("Exceeded concurrency limit.")
+            self._door_closed = True
+            transport = self._door_transport
+            if transport is not None and not transport.is_closing():
+                transport.write(_SERVICE_UNAVAILABLE)
+                transport.close()
+            return
+        super().handle_websocket_upgrade()
 
     # -- httptools parser callbacks
 
     def on_message_begin(self) -> None:
         if self._door_closed:
             return
+        self._messages += 1
+        self._message_open = True
+        self._chunk_open = False
         self._begin_head()
         if self._head_timer is None:
             self._arm_head_timer()
@@ -183,14 +268,27 @@ class BoundedHttpToolsProtocol(HttpToolsProtocol):
         super().on_headers_complete()
 
     def on_body(self, body: bytes) -> None:
+        self._chunk_body = True
         if self._door_closed:
             return
         super().on_body(body)
 
     def on_message_complete(self) -> None:
+        self._message_open = False
+        self._chunk_open = False
         if self._door_closed:
             return
         super().on_message_complete()
+
+    # httptools calls these when the protocol has them; uvicorn's has none.
+
+    def on_chunk_header(self) -> None:
+        self._chunks += 1
+        self._chunk_open = True
+        self._chunk_body = False
+
+    def on_chunk_complete(self) -> None:
+        self._chunk_open = False
 
     # -- the limits
 
@@ -217,15 +315,26 @@ class BoundedHttpToolsProtocol(HttpToolsProtocol):
             transport.close()
 
     def _refuse_head(self) -> None:
-        """431 and close. The parser may still run to the end of the current read; every
-        callback is a no-op from here, and the head gathered so far is dropped, so an
-        upgrade header in it cannot start a WebSocket on a closed connection."""
+        """431 and close, for a head or a trailer section above the limit. The parser may
+        still run to the end of the current read; every callback is a no-op from here, and the
+        head gathered so far is dropped, so an upgrade header in it cannot start a WebSocket on
+        a closed connection.
+
+        The 431 is written only where it answers the request it refuses: never after or in
+        the middle of another answer (an earlier request still being answered, or trailers
+        after the request's own answer began); the connection just closes then."""
         self._cancel_head_timer()
         self._door_closed = True
         self.headers = []
         transport = self._door_transport
         if transport is not None and not transport.is_closing():
-            transport.write(_HEADER_TOO_LARGE)
+            cycle = self.cycle
+            if self._head_pending:
+                answers = cycle is None or cycle.response_complete
+            else:
+                answers = cycle is not None and not cycle.response_started
+            if answers:
+                transport.write(_HEADER_TOO_LARGE)
             transport.close()
 
 
@@ -309,7 +418,8 @@ def door_options() -> dict:
 
     - ``http``: the bounded protocol (head time and size).
     - ``limit_concurrency``: at the cap uvicorn answers 503 with ``connection: close``;
-      WebSocket connections count.
+      WebSocket connections count, and the bounded protocol gives a WebSocket upgrade at the
+      cap the same 503.
     - ``timeout_keep_alive``: ``KEEP_ALIVE_S``.
     - ``server_header=False``: the software is not named; the ``date`` header stays.
     - ``proxy_headers=False``: uvicorn trusted ``FORWARDED_ALLOW_IPS`` and, with ``*``,

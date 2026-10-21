@@ -225,6 +225,18 @@ def test_everything_else_keeps_the_json_answer(admitted, reached, events, method
     assert r.json() == {"detail": admission.REFUSED_DETAIL}
 
 
+@pytest.mark.parametrize("headers", [PAGE, {"Accept": "application/json"}], ids=["page", "json"])
+def test_a_refused_client_keeps_no_connection(admitted, reached, events, headers):
+    """Kept alive after the 403, one empty line from the client cancelled uvicorn's keep-alive
+    timer and the connection held a slot of the door's cap as long as the client liked
+    (measured: three at a cap of 4 turned every other device away with 503). MUTATION: drop
+    Connection: close from the page or the JSON answer - red."""
+    r = _client(_app(reached), "203.0.113.9").get("/login", headers=headers)
+    assert r.status_code == 403
+    assert r.headers["connection"] == "close"
+    assert reached == []
+
+
 def test_the_refusal_names_the_vpn_not_the_local_network_alone():
     """Under "VPN only" the local network is refused too; "only local network clients are
     allowed" was false there."""

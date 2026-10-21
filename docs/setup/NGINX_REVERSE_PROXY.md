@@ -17,7 +17,7 @@ If you want to run VAF in network mode with **HTTPS** (e.g. accessing it from ot
 ## Prerequisites
 
 - Nginx installed (Windows: [nginx for Windows](https://nginx.org/en/docs/windows.html), Linux/macOS: `apt install nginx` / `brew install nginx`).
-- An SSL certificate and key (e.g. from the VAF settings or self-signed).
+- An SSL certificate and key: VAF's own (`~/.vaf/ssl/server.pem` and `server-key.pem`), or one of your own (`vaf server cert show` prints which one VAF serves).
 
 ---
 
@@ -134,4 +134,4 @@ The frontend detects access over port 443 and uses the same origin for the API a
 - **502 Bad Gateway:** VAF (Tray) must be running; frontend on 3000, backend channel on 8005.
 - **403 "Request from another web origin refused":** the forwarding headers above are missing, or `Host` carries a DNS name. See "Why these forwarding headers".
 - **WebSocket closes immediately:** Make sure the `location /ws` block with `Upgrade` and `Connection` is present.
-- **Certificate warning:** For self-signed certificates, choose “Advanced” → “Proceed anyway” once in the browser.
+- **Certificate warning:** install the certificate's authority on the device (with VAF's own certificate that is VAF's authority) after comparing its fingerprint with `vaf server ca`; clicking past the warning encrypts to whoever answered. See [NETWORK_FEATURES.md](NETWORK_FEATURES.md#eliminating-browser-warnings).

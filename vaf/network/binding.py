@@ -14,6 +14,7 @@ SECURITY: This is Layer 1 of the three-layer defense against internet exposure.
 
 import socket
 import ipaddress
+import itertools
 import logging
 import threading
 import time
@@ -470,10 +471,16 @@ def machine_dns_names() -> List[str]:
     """This machine's own DNS names besides `localhost`: the host name and, when it differs,
     the FQDN. The local certificate carries exactly these (ssl_utils._collect_sans).
 
-    Every call is a lookup (getfqdn()) and refreshes the memo own_name_labels() reads, so a
-    certificate issued now and the HSTS scope hold the names of the same lookup."""
-    names: List[str] = []
+    Every call is a lookup (getfqdn()) and renews the memo own_name_labels() reads, unless a
+    lookup that started after this one has landed first: the memo keeps the lookup that
+    started last, not the one that finished last. So a renewal already running when a
+    certificate's lookup begins cannot put older names back once the certificate is issued,
+    and the HSTS scope holds the names of the certificate's lookup or of a newer one."""
     hostname = _host_name()
+    with _OWN_LABELS_LOCK:
+        order = next(_OWN_LABELS_STARTS)
+    started_at = time.monotonic()
+    names: List[str] = []
     if hostname and hostname != "localhost":
         names.append(hostname)
         try:
@@ -482,7 +489,10 @@ def machine_dns_names() -> List[str]:
                 names.append(fqdn)
         except Exception:
             pass
-    _OWN_LABELS[hostname] = (_first_labels(names), time.monotonic())
+    with _OWN_LABELS_LOCK:
+        stored = _OWN_LABELS.get(hostname)
+        if stored is None or stored[2] < order:
+            _OWN_LABELS[hostname] = (_first_labels(names), started_at, order)
     return names
 
 
@@ -491,16 +501,20 @@ def _first_labels(names: List[str]) -> FrozenSet[str]:
                      if label and label != "localhost")
 
 
-# Host name -> (the first labels of machine_dns_names(), time.monotonic() of that lookup).
-# getfqdn() is a DNS lookup and HSTS asks on every answer, so an answer reads this memo; the
-# start fills it (ensure_ssl_certificates(), run_https_proxy()). Deliberately not kept for
-# the process life: when DNS is not up at the start, getfqdn() answers with the bare host
-# name, and the FQDN the certificate may carry would get the year until a restart. An entry
-# older than OWN_NAMES_MAX_AGE_S is looked up again in a thread of its own, one at a time,
-# while the answers go on with the old one.
-_OWN_LABELS: Dict[str, Tuple[FrozenSet[str], float]] = {}
+# Host name -> (the first labels of machine_dns_names(), time.monotonic() when that lookup
+# started, its place in the order the lookups started). getfqdn() is a DNS lookup and HSTS
+# asks on every answer, so an answer reads this memo; the start fills it
+# (ensure_ssl_certificates(), run_https_proxy()). Deliberately not kept for the process life:
+# when DNS is not up at the start, getfqdn() answers with the bare host name, and the FQDN the
+# certificate may carry would get the year until a restart. An entry older than
+# OWN_NAMES_MAX_AGE_S is looked up again in a thread of its own, one at a time, while the
+# answers go on with the old one. The start order is a counter taken under the lock, not the
+# clock: two starts can read the same time.monotonic() value on a coarse clock, and then the
+# clock cannot say which lookup is the newer one.
+_OWN_LABELS: Dict[str, Tuple[FrozenSet[str], float, int]] = {}
 OWN_NAMES_MAX_AGE_S = 60.0
 _OWN_LABELS_LOCK = threading.Lock()
+_OWN_LABELS_STARTS = itertools.count(1)
 _OWN_LABELS_REFRESHER: Optional[threading.Thread] = None
 
 
@@ -521,15 +535,18 @@ def own_name_labels() -> FrozenSet[str]:
     """The first labels, lowercase, of the names the local certificate carries for this
     machine (machine_dns_names(): the host name and the FQDN).
 
-    Read from a memo per host name, so an answer does not wait on DNS: a result older than
-    OWN_NAMES_MAX_AGE_S is handed out once more while a lookup in a thread of its own
-    replaces it. NAMED BOUNDARY: a host name with no entry yet (a host renamed while VAF
-    runs, or an answer that came before the start's lookup) is looked up in front of that
-    one answer."""
+    Read from a memo per host name, so an answer does not wait on DNS: the first answer that
+    finds a result older than OWN_NAMES_MAX_AGE_S starts one lookup in a thread of its own,
+    and every answer gets the old result until that lookup lands. A lookup that never
+    returns (a resolver that hangs) leaves the names as they were, because no second renewal
+    starts while it runs; a certificate issued meanwhile still renews them with its own
+    lookup. NAMED BOUNDARY: a host name with no entry yet (a host renamed while VAF runs, or
+    an answer that came before the start's lookup) is looked up in front of that one
+    answer."""
     entry = _OWN_LABELS.get(_host_name())
     if entry is None:
         return _first_labels(machine_dns_names())
-    labels, looked_up_at = entry
+    labels, looked_up_at, _order = entry
     if time.monotonic() - looked_up_at >= OWN_NAMES_MAX_AGE_S:
         _refresh_own_names_in_background()
     return labels

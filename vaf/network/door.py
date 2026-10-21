@@ -26,14 +26,15 @@ What a door gets here, all in the protocol and the event loop, so it applies to 
 connection, admitted or not, before the admission check reads a single header:
 
 - ``door_event_loop()``: the TLS handshake has ``TLS_HANDSHAKE_TIMEOUT_S``, and on Python
-  3.11 and later a TLS close ``TLS_SHUTDOWN_TIMEOUT_S`` for the client to answer it.
+  3.11 and later asyncio's own limit for a TLS close is ``CLOSE_TIMEOUT_S`` too.
 - ``BoundedHttpToolsProtocol``: the request head has ``HEAD_TIMEOUT_S`` from the moment the
   connection is ready, or from the first byte that arrives while no request is being
   answered (a follow-up request, a stray empty line, the rest of a body after an early
   answer), and at most ``HEAD_MAX_BYTES`` together with the trailers after a chunked body;
   above it the answer is 431. A connection may send at most ``PIPELINE_MAX`` requests ahead
   of their answers. A silent head and a pipeline past the limit drop the connection at once
-  (an abort: a TLS close would wait for the client).
+  (an abort: a close would wait for the client). Every close of the connection, whoever
+  closes, ends within ``CLOSE_TIMEOUT_S`` on every Python version (``_close_with_deadline``).
 - ``door_options()``: those plus at most ``connection_cap()`` connections (503 above it,
   for a WebSocket upgrade as for a request), an explicit keep-alive, no ``Server`` header,
   and no forwarded-header trust of uvicorn's: ``binding.connection_client_ip`` is the only
@@ -51,18 +52,13 @@ Named boundaries:
   its handshake counts toward no cap (measured: 60 connections that never started TLS, 60
   more descriptors, released at 15 s). The cap turns requests away, not connections, so a
   connection it turns away holds a descriptor for at most about 35 s: 15 s for its
-  handshake, 15 s for its head, and ``TLS_SHUTDOWN_TIMEOUT_S`` for the close after the 503.
+  handshake, 15 s for its head, and ``CLOSE_TIMEOUT_S`` for the close after the 503.
   The spare descriptors divided by 35 s is the rate of new connections that takes them all:
   with the soft limit at 65536 (about 200 at rest, three for each of 512 relayed
   connections), about 1,800 a second, sustained; where it stays at 1024 (cap 256), between
   about 1 and 16 a second, by how many of the door's connections are relayed. Only a
   firewall rate limit in front of the port closes that.
-- Python 3.10 has no limit for a TLS close: a connection closed after an answer (a refusal
-  that ends it, the keep-alive expiry, a 431) stays open, counted toward the cap and holding
-  its descriptor, until the client answers the close or goes (measured on 3.10.15: still
-  open after 40 s). The door's own drops do not wait on any version. Python 3.10 reaches its
-  end of life in October 2026; 3.11 and later are needed for the bound above.
-- An answer that ends its connection has ``TLS_SHUTDOWN_TIMEOUT_S`` for its last buffered
+- An answer that ends its connection has ``CLOSE_TIMEOUT_S`` for its last buffered
   part (up to asyncio's 64 KiB write buffer) to reach the client before the close drops
   it; a client slower than about 13 KB/s can lose that part. Browsers keep connections
   alive and are not affected.
@@ -70,10 +66,11 @@ Named boundaries:
   reader of the peer (``tests/test_client_address_has_one_reader.py``) and bookkeeping
   across the WebSocket upgrade, and no incident asks for it.
 - A client that reads a response slowly, or never, holds one door connection (and on the
-  proxy one upstream connection) for as long as it keeps the connection open: uvicorn has
-  no write timeout (measured: five clients that never read a streamed answer still held
-  both at 70 s). A body sent a little at a time, each part inside ``BODY_STALL_S``, does the
-  same while it lasts. The cap bounds how many.
+  proxy one upstream connection) for as long as the answer goes on and it keeps the
+  connection open: uvicorn has no write timeout (measured: five clients that never read a
+  streamed answer still held both at 70 s). Once the door closes the connection, the close
+  deadline ends it. A body sent a little at a time, each part inside ``BODY_STALL_S``, does
+  the same while it lasts. The cap bounds how many.
 - ``vaf run --web`` serves the backend itself: there the head, handshake and connection
   limits apply to every client, the owner's own web UI included, which reaches it through
   Next.js; a flood that fills the cap turns that UI away too. A body is held only by the
@@ -99,6 +96,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+import weakref
 from typing import Optional
 
 from uvicorn.protocols.http.httptools_impl import HttpToolsProtocol
@@ -107,11 +105,12 @@ logger = logging.getLogger(__name__)
 
 # asyncio's own default is 60 s, and uvicorn passes none.
 TLS_HANDSHAKE_TIMEOUT_S = 15.0
-# How long a TLS close waits for the client to answer it (close_notify) before the connection
-# is dropped; until then it holds its descriptor and its place under the cap. asyncio's own
-# default is 30 s (Python 3.11+; 3.10 waits without a limit), and uvicorn passes none. The
-# wait also covers the last buffered part of an answer that ends its connection.
-TLS_SHUTDOWN_TIMEOUT_S = 5.0
+# How long a closed connection may take to end before it is dropped. Until it ends it holds
+# its descriptor and its place under the cap: a TLS close waits for the client to answer it
+# (close_notify; asyncio's own limit is 30 s on Python 3.11+, none on 3.10, and uvicorn passes
+# none), a plain close for the client to read what is still buffered. It also covers the last
+# buffered part of an answer that ends its connection.
+CLOSE_TIMEOUT_S = 5.0
 # From the connection being ready (after the TLS handshake), or from the first byte of a
 # follow-up request on a kept-alive connection, until the head is complete.
 HEAD_TIMEOUT_S = 15.0
@@ -204,6 +203,7 @@ class BoundedHttpToolsProtocol(HttpToolsProtocol):
     # -- asyncio protocol
 
     def connection_made(self, transport) -> None:  # type: ignore[override]
+        _close_with_deadline(transport)
         super().connection_made(transport)
         self._door_transport = transport
         self._begin_head()
@@ -344,8 +344,8 @@ class BoundedHttpToolsProtocol(HttpToolsProtocol):
 
     def _drop(self) -> None:
         """Drop the connection at once: nothing is left to send on it. An abort, not a close,
-        because a TLS close waits for the client to answer it and the connection keeps its
-        place under the cap until then (on Python 3.10 without any limit)."""
+        because a close keeps the connection and its place under the cap until the client
+        answers it or CLOSE_TIMEOUT_S runs out."""
         self._cancel_head_timer()
         self._door_closed = True
         transport = self._door_transport
@@ -374,6 +374,54 @@ class BoundedHttpToolsProtocol(HttpToolsProtocol):
             if answers:
                 transport.write(_HEADER_TOO_LARGE)
             transport.close()
+
+
+def _close_with_deadline(transport) -> None:
+    """Give every close of this transport a deadline: if the connection has not ended
+    ``CLOSE_TIMEOUT_S`` after the first ``close()``, it is aborted.
+
+    One hook on the transport itself, so every close counts: uvicorn's (an answer with
+    ``Connection: close``, the keep-alive expiry, a 400), the door's (a 431, a 503 for an
+    upgrade at the cap), websockets' after an upgrade, and asyncio's own when a plain
+    connection reaches its end.
+    The transport keeps its identity and type, so nothing that reads it changes. Measured
+    without it, a TLS close waited for the client's close_notify for asyncio's 30 s (Python
+    3.11+) and on Python 3.10.15 without any limit (still open after 40 s), counted toward the
+    cap all the while; a plain close waits for a client that reads nothing just the same.
+
+    Only the first ``close()`` is passed on: on Python 3.11+ a second one drops the TLS
+    transport's protocol, and ``abort()`` then does nothing. A transport that takes no
+    attributes (uvloop's, which the door's own loop never uses) keeps its loop's limit.
+    """
+    ref = weakref.ref(transport)
+    close = type(transport).close
+    loop = asyncio.get_running_loop()
+    closing = False
+
+    def _close() -> None:
+        nonlocal closing
+        target = ref()
+        if closing or target is None:
+            return
+        closing = True
+        close(target)
+        # A close from a finalizer can come after the loop stopped; there is nothing left to
+        # hold then.
+        if not loop.is_closed():
+            loop.call_later(CLOSE_TIMEOUT_S, _abort, ref)
+
+    try:
+        transport.close = _close
+    except (AttributeError, TypeError):
+        pass
+
+
+def _abort(ref) -> None:
+    """The deadline of a close: abort the transport if it is still there (an abort after the
+    connection ended does nothing)."""
+    transport = ref()
+    if transport is not None:
+        transport.abort()
 
 
 def raise_open_file_limit() -> Optional[int]:
@@ -478,17 +526,17 @@ def door_options() -> dict:
 def door_event_loop() -> asyncio.AbstractEventLoop:
     """A new event loop (the platform's default kind) whose ``create_server`` gives a TLS
     listener ``TLS_HANDSHAKE_TIMEOUT_S`` for each handshake and, on Python 3.11 and later,
-    ``TLS_SHUTDOWN_TIMEOUT_S`` for each close.
+    ``CLOSE_TIMEOUT_S`` for each TLS close.
 
     uvicorn calls ``loop.create_server(..., ssl=context)`` with neither, so asyncio's 60 s
     applied to the handshake (measured: a TCP connection that never started TLS was still
     open after 25 s) and its 30 s to the close: a connection the door had closed waited that
     long for the client's close_notify, still counted toward the cap (measured: four idle
-    connections at a cap of 4 turned every new request away until 48 s, the 15 s head timer
-    plus 30 s). Python 3.10 has no ``ssl_shutdown_timeout`` and waits without a limit
-    (measured on 3.10.15: still open after 40 s); the door's own drops (``_drop``) abort,
-    which does not wait on any version. Both are asyncio's public parameters; a caller that
-    passes its own keeps it."""
+    connections at a cap of 4 turned every new request away until 45 s, the 15 s head timer
+    plus 30 s). The close limit is a second guarantee next to the protocol's own deadline
+    (``_close_with_deadline``), which also holds on Python 3.10, where asyncio has no
+    ``ssl_shutdown_timeout``. Both are asyncio's public parameters; a caller that passes its
+    own keeps it."""
     loop = asyncio.new_event_loop()
     create_server = loop.create_server
 
@@ -497,7 +545,7 @@ def door_event_loop() -> asyncio.AbstractEventLoop:
             if kwargs.get("ssl_handshake_timeout") is None:
                 kwargs["ssl_handshake_timeout"] = TLS_HANDSHAKE_TIMEOUT_S
             if sys.version_info >= (3, 11) and kwargs.get("ssl_shutdown_timeout") is None:
-                kwargs["ssl_shutdown_timeout"] = TLS_SHUTDOWN_TIMEOUT_S
+                kwargs["ssl_shutdown_timeout"] = CLOSE_TIMEOUT_S
         return await create_server(*args, **kwargs)
 
     loop.create_server = _create_server  # type: ignore[method-assign]

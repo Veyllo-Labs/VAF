@@ -655,7 +655,7 @@ def test_an_idle_tls_connection_frees_its_place_at_the_head_timer(cert, monkeypa
     no limit at all). MUTATION: close instead of abort in _drop - red."""
     monkeypatch.setattr(door, "MAX_CONNECTIONS", 2)
     monkeypatch.setattr(door, "HEAD_TIMEOUT_S", 0.5)
-    monkeypatch.setattr(door, "TLS_SHUTDOWN_TIMEOUT_S", 30.0)
+    monkeypatch.setattr(door, "CLOSE_TIMEOUT_S", 30.0)
     with serving(_door_config(_App(), cert), door.door_event_loop) as (port, server):
         idle = [tls_connect(port) for _ in range(2)]
         try:
@@ -670,11 +670,13 @@ def test_an_idle_tls_connection_frees_its_place_at_the_head_timer(cert, monkeypa
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="ssl_shutdown_timeout is Python 3.11+")
 def test_a_closed_tls_connection_frees_its_place_soon(cert, monkeypatch):
     """After an answer that ends its connection, a client that never answers the TLS close
-    held its place under the cap for asyncio's 30 s; the door's loop gives a close
-    TLS_SHUTDOWN_TIMEOUT_S. MUTATION: no ssl_shutdown_timeout in door_event_loop - red."""
+    held its place under the cap for asyncio's 30 s; the door's loop gives a TLS close
+    CLOSE_TIMEOUT_S. The protocol's own deadline is switched off here, so the loop's limit is
+    the one measured. MUTATION: no ssl_shutdown_timeout in door_event_loop - red."""
     # uvicorn counts the asking connection itself: at 3, two lingering ones turn a third away.
     monkeypatch.setattr(door, "MAX_CONNECTIONS", 3)
-    monkeypatch.setattr(door, "TLS_SHUTDOWN_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(door, "CLOSE_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(door, "_close_with_deadline", lambda _transport: None)
     with serving(_door_config(_App(), cert), door.door_event_loop) as (port, server):
         silent = [tls_connect(port) for _ in range(2)]
         try:
@@ -688,6 +690,96 @@ def test_a_closed_tls_connection_frees_its_place_soon(cert, monkeypatch):
         finally:
             for s in silent:
                 s.close()
+
+
+class _Large:
+    """Answers 200 with a body larger than the socket buffers hold, in one part."""
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return
+        body = b"x" * (32 * 1024 * 1024)
+        await send({"type": "http.response.start", "status": 200,
+                    "headers": [(b"content-length", b"%d" % len(body))]})
+        await send({"type": "http.response.body", "body": body})
+
+
+@pytest.mark.parametrize("kind", ["tls", "plain"])
+def test_every_close_has_a_deadline(cert, monkeypatch, kind):
+    """A close ends within CLOSE_TIMEOUT_S on every Python version, whoever closes. Served on
+    a plain loop, so asyncio's own TLS close limit (30 s on Python 3.11+, none on 3.10) is not
+    what ends it: measured on 3.10.15 with uvicorn 0.48, two clients that never answered the
+    TLS close held their places past 40 s. A plain close waits the same for a client that
+    reads nothing. MUTATION: no close hook in connection_made - red."""
+    monkeypatch.setattr(door, "MAX_CONNECTIONS", 3)
+    monkeypatch.setattr(door, "CLOSE_TIMEOUT_S", 0.5)
+    head = b"GET / HTTP/1.1\r\nHost: door\r\nConnection: close\r\n\r\n"
+    if kind == "tls":
+        with serving(_door_config(_App(), cert), asyncio.new_event_loop) as (port, server):
+            silent = [tls_connect(port) for _ in range(2)]
+            try:
+                for s in silent:
+                    assert http_exchange(s, head).startswith(b"HTTP/1.1 200")
+                # Neither client answers the close or closes its socket.
+                assert _wait_for_200(port) is not None, "the closed connections kept their places"
+            finally:
+                for s in silent:
+                    s.close()
+        return
+    with serving(_door_config(_Large()), asyncio.new_event_loop) as (port, server):
+        reader = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        reader.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        reader.settimeout(5)
+        try:
+            reader.connect(("127.0.0.1", port))
+            reader.sendall(head)
+            # The answer is never read, so the close cannot flush it.
+            deadline = time.monotonic() + 5
+            while not server.server_state.connections and time.monotonic() < deadline:
+                time.sleep(0.02)
+            started = time.monotonic()
+            while server.server_state.connections and time.monotonic() - started < 3.0:
+                time.sleep(0.05)
+            assert not server.server_state.connections, "a close waited on a client that reads nothing"
+        finally:
+            reader.close()
+
+
+def test_a_second_close_does_not_disarm_the_deadline(cert, monkeypatch):
+    """On Python 3.11+ a second close() of a TLS transport drops its protocol, and abort() then
+    does nothing (measured: closed twice, aborted after 1 s, still open after 20 s). The hook
+    passes the first close on only. MUTATION: pass every close on - red on Python 3.11+."""
+    import ssl as ssl_module
+    monkeypatch.setattr(door, "CLOSE_TIMEOUT_S", 0.5)
+    lost = []
+
+    class _Closer(asyncio.Protocol):
+        def connection_made(self, transport):
+            door._close_with_deadline(transport)
+            transport.close()
+            transport.close()
+
+        def connection_lost(self, exc):
+            lost.append(time.monotonic())
+
+    async def _run():
+        context = ssl_module.SSLContext(ssl_module.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert, cert)
+        server = await asyncio.get_running_loop().create_server(_Closer, "127.0.0.1", 0,
+                                                                ssl=context)
+        port = server.sockets[0].getsockname()[1]
+        silent = await asyncio.to_thread(tls_connect, port)
+        try:
+            started = time.monotonic()
+            while not lost and time.monotonic() - started < 3.0:
+                await asyncio.sleep(0.05)
+        finally:
+            silent.close()
+            server.close()
+        return lost and lost[0] - started
+
+    took = asyncio.run(_run())
+    assert took and took < 2.0, "the close never ended"
 
 
 def test_the_door_answers_503_at_the_cap(monkeypatch):

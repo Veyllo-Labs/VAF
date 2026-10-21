@@ -47,7 +47,7 @@ Choose [1/2, default 1]: 2
 The installer then:
 
 1. Optionally asks for a master passphrase (see Credential Encryption below); if given, it is stored owner-only in `~/.vaf/service.env` for the service. Unattended installs can pre-set `VAF_MASTER_PASSPHRASE` in the environment instead.
-2. Runs `vaf server provision`: writes `server_mode: true`, `local_network_enabled: true` and `local_network_tls_enabled: true` through the config layer, generates the TLS certificates, replaces the published default database passwords with random ones when the database answers (both roles, verified before they are written; `vaf/core/db_credentials.py`, the same rotation as `vaf secure rotate-db`; when it cannot reach the database it says so loudly and names that command; a run that stops part-way names the keys already replaced and the ones still on the default, and a password that was changed but did not verify is printed with the config key to save it under, since it is the only copy), opens the OS firewall for the LAN access port (subnet-scoped), and warns when the LAN IP looks DHCP-assigned. While no admin exists yet, it ends by saying how to create one: `vaf setup` in the terminal, or a browser with the code `vaf setup code` shows.
+2. Runs `vaf server provision`: writes `server_mode: true`, `local_network_enabled: true` and `local_network_tls_enabled: true` through the config layer, generates the TLS certificates, replaces the published default database passwords with random ones when the database answers (both roles, verified before they are written; `vaf/core/db_credentials.py`, the same rotation as `vaf secure rotate-db`; when it cannot reach the database it says so loudly and names that command; a run that stops part-way names the keys already replaced and the ones still on the default, and a password that was changed but did not verify is printed with the config key to save it under, since it is the only copy), opens the OS firewall for the access port to the admitted networks (subnet-scoped; on Ubuntu, where ufw is installed but switched off by default, it changes nothing and says so, since rules added to a switched-off ufw do nothing), and warns when the LAN IP looks DHCP-assigned. While no admin exists yet, it ends by saying how to create one: `vaf setup` in the terminal, or a browser with the code `vaf setup code` shows.
 3. Enables the Docker daemon at boot (`systemctl enable docker`) so the memory stack comes back after a reboot.
 4. Masks the systemd sleep/suspend targets so a repurposed desktop or laptop stays reachable. Revert with `sudo systemctl unmask sleep.target suspend.target hibernate.target hybrid-sleep.target`.
 5. Warns when the system clock is not NTP-synced (TLS validation and OAuth sign-ins depend on correct time).
@@ -332,7 +332,7 @@ Common causes: Python venv path changed after a `git pull` to a different direct
   cd <VAF-checkout> && sudo -v && venv/bin/python -m vaf.main server provision
   ```
   (`sudo -v` refreshes the sudo timestamp the headless elevation relies on; in a desktop session a native password dialog appears instead.)
-- Check firewall state: `sudo firewall-cmd --list-rich-rules` (firewalld) or `sudo ufw status`
+- Check firewall state: `sudo firewall-cmd --list-rich-rules` (firewalld) or `sudo ufw status`, which must say `Status: active`; rules VAF adds to a switched-off ufw do nothing, so it adds none there and `vaf server provision` says so
 - VAF also configures the OS firewall at runtime via `vaf/network/firewall.py`, but only where the running process can gain root. On Linux it prefers firewalld when it is running and opens **only** the access port for the LAN subnet (a scoped rich rule), not a blanket world-open. iptables/ufw are used as a fallback when firewalld is not running.
 - Elevation differs by environment:
   - **Desktop session:** when hosting is enabled VAF prompts automatically through a native polkit/pkexec password dialog and adds the rule for you.
@@ -341,7 +341,8 @@ Common causes: Python venv path changed after a `git pull` to a different direct
   ```bash
   sudo firewall-cmd --permanent --zone=public --add-rich-rule='rule family="ipv4" source address="<LAN-subnet>/24" port port="8443" protocol="tcp" accept' && sudo firewall-cmd --reload
   ```
-- Ubuntu (ufw fallback): `sudo ufw allow 8443/tcp`
+- Ubuntu (ufw fallback), one rule per network `vaf server status` admits, never a world-open `allow 8443/tcp`: `sudo ufw allow from <network> to any port 8443 proto tcp`. Switching ufw on needs SSH allowed first: `sudo ufw allow OpenSSH`, then `sudo ufw enable`.
+- Without firewalld and ufw, VAF adds iptables rules, which last until the next reboot: the service cannot gain root to add them again, so after a reboot run `sudo -v && vaf server provision`.
 
 **Certificate regeneration:**
 If the TLS certificate has expired or the LAN IP changed:

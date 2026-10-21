@@ -72,6 +72,24 @@ def test_an_already_present_rule_is_reported_not_reopened(seams, monkeypatch):
     assert "already in place" in result.output
 
 
+def test_a_switched_off_ufw_is_said_by_provision(seams, monkeypatch):
+    """Rules added to a ufw that is off do nothing; provision said "Firewall opened" for any
+    truthy outcome. MUTATION: fall through to the truthy branch - red."""
+    monkeypatch.setattr(firewall, "setup_firewall", lambda p, pf: firewall.FIREWALL_INACTIVE)
+    result = runner.invoke(server_cmd.app, ["provision"])
+    assert result.exit_code == 0, result.output
+    said = " ".join(result.output.split())
+    assert "ufw is installed but switched off, so it does not guard port 8443" in said
+    assert said.index("sudo ufw allow OpenSSH") < said.index("sudo ufw enable")
+    assert "Firewall opened" not in said
+
+
+def test_an_opened_port_names_the_admitted_networks(seams):
+    """Under "VPN only" the opened networks are not the LAN subnet."""
+    result = runner.invoke(server_cmd.app, ["provision"])
+    assert "Firewall opened for port 8443 (admitted networks only)." in " ".join(result.output.split())
+
+
 def test_a_failed_firewall_degrades_to_manual_instructions_with_exit_zero(seams, monkeypatch):
     monkeypatch.setattr(firewall, "setup_firewall", lambda p, pf: False)
     result = runner.invoke(server_cmd.app, ["provision"])

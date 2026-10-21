@@ -4,10 +4,12 @@
 """
 VAF Network Firewall - Cross-Platform Firewall Rules
 
-Creates OS-level firewall rules to ensure VAF is only accessible from local network.
-Supports Windows (netsh), macOS (pf), and Linux (iptables/ufw).
+Creates OS-level firewall rules that open VAF's access port to the admitted networks only.
+Supports Windows (netsh), macOS (pf), and Linux (firewalld, ufw, iptables).
 
-SECURITY: This is Layer 2 of the three-layer defense against internet exposure.
+This is Layer 1 of the network security model (docs/setup/NETWORK_FEATURES.md). It guards
+the port only where the host firewall is on: an installed but switched-off ufw guards
+nothing (`host_firewall()` says so), and VAF's own admission check is what refuses then.
 """
 
 import os
@@ -31,6 +33,14 @@ _windows_firewall_skip: bool = False
 
 # Rule/anchor names for identification
 FIREWALL_RULE_NAME = "VAF-LocalNetwork"
+
+# What setup_firewall returns when the host firewall is installed but switched off: nothing
+# was changed, and nothing guards the port. Not a success; every reader branches on it.
+FIREWALL_INACTIVE = "inactive"
+
+# ufw's own switch. World-readable on Ubuntu (measured: -rw-r--r-- root root), never
+# translated, so reading it needs no root and parses no command output.
+UFW_CONF = "/etc/ufw/ufw.conf"
 
 
 def _sources(*, narrow_lan: bool = False) -> list:
@@ -82,6 +92,11 @@ def apply_lan_firewall(log=None):
     elif result == "in_flight":
         # The twin lifespan of TLS mode is running this very setup; it reports the outcome.
         say(f"Firewall setup for port {port} is already running in this process")
+    elif result == FIREWALL_INACTIVE:
+        # Nothing was changed, so there is nothing to remove at exit either.
+        say(f"Firewall not changed for port {port}: ufw is installed but switched off, so "
+            "this machine's firewall does not guard the port. VAF's own admission check still "
+            "refuses addresses it does not admit.")
     elif result:
         register_cleanup_on_exit()
         say(f"Firewall rules created for ports {port}, {port_frontend}")
@@ -120,9 +135,11 @@ def setup_firewall(port: int, port_frontend: int = 3000):
         (the marker says this install already set the rule up), "created" when
         the Linux firewalld path actually elevated, True from the other
         platform paths, "in_flight" when a twin lifespan is still on the
-        dialog. False on failure - INCLUDING a repeat call after this process
+        dialog. FIREWALL_INACTIVE ("inactive") when ufw is installed but switched
+        off: nothing was changed and nothing guards the port, so it is not a
+        success, and every reader branches on it before it tests truthiness.
+        False on failure - INCLUDING a repeat call after this process
         already failed, so a cancelled dialog can never be logged as success.
-        Callers that only check truthiness keep working.
     """
     # Both lists: firewalld opens the narrow one (the LAN subnet, a WireGuard /24), the
     # other backends the wide one, and a change can show in one only - a network an
@@ -381,19 +398,73 @@ def _cleanup_firewall_macos() -> bool:
 # LINUX IMPLEMENTATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def ufw_enabled(conf_path: str = UFW_CONF) -> Optional[bool]:
+    """Whether ufw is switched on, read from its config file: True for `ENABLED=yes`, False
+    for any other value or no such line, None when the file is missing or unreadable.
+
+    Deliberately not systemd's answer: on Ubuntu 24.04 `systemctl is-active ufw` says
+    `active` and `is-enabled` says `enabled` while ufw itself is off (measured on a server
+    whose ufw.conf said `ENABLED=no`), because the unit only loads the rules ufw would use.
+    Not `ufw status` either: it needs root and prints translated text. Whitespace, quotes
+    and case around the value are tolerated; the last `ENABLED=` line wins.
+    """
+    try:
+        text = Path(conf_path).read_bytes().decode("utf-8", "replace")
+    except OSError:
+        return None
+    enabled = False
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].strip()
+        key, sep, value = line.partition("=")
+        if sep and key.strip().upper() == "ENABLED":
+            enabled = value.strip().strip("\"'").strip().lower() == "yes"
+    return enabled
+
+
+def _ufw_installed() -> bool:
+    try:
+        if subprocess.run(['which', 'ufw'], capture_output=True).returncode == 0:
+            return True
+    except Exception:
+        pass
+    return os.path.exists(UFW_CONF)
+
+
+def _linux_host_firewall() -> str:
+    if _firewalld_running():
+        return "firewalld"
+    if _ufw_installed():
+        return "ufw_off" if ufw_enabled() is False else "ufw"
+    return "iptables"
+
+
+def host_firewall() -> Optional[str]:
+    """Which host firewall guards this machine: "firewalld" (running), "ufw" (installed and
+    on, or its switch unreadable), "ufw_off" (installed but switched off: it guards nothing),
+    "iptables" (neither), or None off Linux. The one answer for the setup and `vaf doctor`.
+
+    A switched-off ufw is its own answer because rules added to it do nothing: VAF used to
+    take ufw whenever the binary existed and report the port as opened (measured on an
+    Ubuntu server: allows for the access port and 8001 recorded, ufw off).
+    """
+    if not Platform.is_linux():
+        return None
+    return _linux_host_firewall()
+
+
 def _setup_firewall_linux(port: int, port_frontend: int):
     """
-    Create Linux iptables rules for LAN-only access.
-    
-    Uses iptables directly. Also checks for ufw as an alternative.
-    Note: Requires root privileges.
+    Open the access port on Linux with the host firewall that guards the machine
+    (`host_firewall()`): firewalld, ufw or iptables. A switched-off ufw gets nothing and the
+    answer is FIREWALL_INACTIVE. Note: requires root privileges.
     """
     logger.info("Setting up Linux firewall rules for local network access")
+    engine = _linux_host_firewall()
 
     # Prefer firewalld when it's the active firewall (most modern Linux desktops). It supports a clean,
-    # LAN-subnet-scoped rich rule and — crucially — pkexec elevation, which pops a NATIVE password dialog
+    # LAN-subnet-scoped rich rule and, crucially, pkexec elevation, which pops a NATIVE password dialog
     # in desktop mode instead of a dead `sudo` TTY prompt. iptables/ufw stay as the fallback.
-    if _firewalld_running():
+    if engine == "firewalld":
         return _setup_firewall_linux_firewalld(port, port_frontend)
 
     # Every branch below runs `sudo -n`, which cannot work in a process that cannot gain
@@ -403,13 +474,11 @@ def _setup_firewall_linux(port: int, port_frontend: int):
         logger.info("firewall: not running ufw or iptables, this process cannot gain root (%s)", reason)
         return False
 
-    # Check if ufw is available and active
-    ufw_available = subprocess.run(
-        ['which', 'ufw'],
-        capture_output=True
-    ).returncode == 0
-
-    if ufw_available:
+    if engine == "ufw_off":
+        logger.info("firewall: ufw is installed but switched off; no rule added for ports %s, %s",
+                    port, port_frontend)
+        return FIREWALL_INACTIVE
+    if engine == "ufw":
         return _setup_firewall_linux_ufw(port, port_frontend)
 
     # Use iptables directly
@@ -779,7 +848,8 @@ def _setup_firewall_linux_ufw(port: int, port_frontend: int) -> bool:
                 'comment', f'VAF-{p}'
             ], check=True)
             
-            # Deny from anywhere else (ufw default deny handles this)
+            # Everything else is refused by ufw's default deny, which holds only while ufw
+            # is enabled: _setup_firewall_linux never comes here for a switched-off ufw.
         
         # Reload ufw
         subprocess.run(['sudo', '-n','ufw', 'reload'], capture_output=True)

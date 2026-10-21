@@ -114,7 +114,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   included; before, a public address got the login page and only the API behind it refused.
   In the backend the same check now covers every WebSocket as well: agent rooms and the
   interactive browser's stream had none, and on `vaf run --web`, which serves the backend on
-  every address, they faced the network without it.
+  every address, they faced the network without it. `vaf server provision` says when ufw is
+  installed but switched off (Ubuntu's default) instead of reporting the port as opened: rules
+  added to a switched-off ufw do nothing.
 
 - **A relay in front of the web UI's port no longer makes its visitors the machine owner.** A
   reverse proxy on the same machine pointed at port 3000 (an nginx for the LAN, Tailscale

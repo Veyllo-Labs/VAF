@@ -552,3 +552,106 @@ def test_apply_says_once_why_the_firewall_was_not_changed(monkeypatch):
     assert fw.apply_lan_firewall(log=lines.append) is False
     assert len(lines) == 1 and "in-app" not in lines[0], lines
     assert cleanups == []
+
+
+# --------------------------------------------------------------------------- ufw that is off
+
+# /etc/ufw/ufw.conf as Ubuntu 24.04.5 ships it (measured on a test server): ufw is off.
+UBUNTU_DEFAULT_UFW_CONF = """# /etc/ufw/ufw.conf
+#
+
+# Set to yes to start on boot. If setting this remotely, be sure to add a rule
+# to allow your remote connection before starting ufw. Eg: 'ufw allow 22/tcp'
+ENABLED=no
+
+# Please use the 'ufw' command to set the loglevel. Eg: 'ufw logging medium'.
+# See 'man ufw' for details.
+LOGLEVEL=low
+"""
+
+
+@pytest.mark.parametrize("text, expected", [
+    (UBUNTU_DEFAULT_UFW_CONF, False),
+    (UBUNTU_DEFAULT_UFW_CONF.replace("ENABLED=no", "ENABLED=yes"), True),
+    ('LOGLEVEL=low\n ENABLED = "YES" \n', True),
+    ("LOGLEVEL=low\n", False),
+    ("# ENABLED=yes\nENABLED=no\n", False),
+])
+def test_ufw_enabled_reads_the_config_file(tmp_path, text, expected):
+    """systemd says `active` and `enabled` for ufw's unit while ufw itself is off, so only
+    ufw's own switch answers. MUTATION: True for any ENABLED= line; False for a missing
+    file - red."""
+    conf = tmp_path / "ufw.conf"
+    conf.write_bytes(text.encode("utf-8"))
+    assert fw.ufw_enabled(str(conf)) is expected
+
+
+def test_ufw_enabled_is_unknown_without_the_file(tmp_path):
+    assert fw.ufw_enabled(str(tmp_path / "missing.conf")) is None
+
+
+def _engines(monkeypatch, *, firewalld=False, ufw=None, linux=True):
+    """ufw: None when it is not installed, else what its switch says (True or False)."""
+    monkeypatch.setattr(fw.Platform, "is_linux", lambda *a: linux)
+    monkeypatch.setattr(fw, "_firewalld_running", lambda: firewalld)
+    monkeypatch.setattr(fw, "_ufw_installed", lambda: ufw is not None)
+    monkeypatch.setattr(fw, "ufw_enabled", lambda conf_path=fw.UFW_CONF: ufw)
+
+
+def test_host_firewall_is_one_answer(monkeypatch):
+    """MUTATION: leave out the ufw_enabled read (the binary alone decided) - red."""
+    _engines(monkeypatch, firewalld=True, ufw=False)
+    assert fw.host_firewall() == "firewalld"
+    _engines(monkeypatch, ufw=False)
+    assert fw.host_firewall() == "ufw_off"
+    _engines(monkeypatch, ufw=True)
+    assert fw.host_firewall() == "ufw"
+    monkeypatch.setattr(fw, "_ufw_installed", lambda: True)
+    monkeypatch.setattr(fw, "ufw_enabled", lambda conf_path=fw.UFW_CONF: None)
+    assert fw.host_firewall() == "ufw", "an unreadable switch keeps the old behaviour"
+    _engines(monkeypatch)
+    assert fw.host_firewall() == "iptables"
+    _engines(monkeypatch, ufw=False, linux=False)
+    assert fw.host_firewall() is None
+
+
+def test_ufw_counts_as_installed_by_its_config_file(monkeypatch, tmp_path):
+    """The service's PATH may lack /usr/sbin, where Ubuntu puts ufw; the file says it too."""
+    monkeypatch.setattr(fw.subprocess, "run",
+                        lambda argv, **kw: type("R", (), {"returncode": 1})())
+    monkeypatch.setattr(fw, "UFW_CONF", str(tmp_path / "ufw.conf"))
+    assert fw._ufw_installed() is False
+    (tmp_path / "ufw.conf").write_bytes(b"ENABLED=no\n")
+    assert fw._ufw_installed() is True
+
+
+def test_a_switched_off_ufw_is_not_reported_as_protecting(monkeypatch, tmp_path):
+    """Rules added to a ufw that is off do nothing, and the port was reported as opened.
+    MUTATIONS: take the ufw path whenever it is installed; let apply_lan_firewall treat
+    "inactive" as a success (the exit cleanup is registered, "created" is logged) - red."""
+    rec = _RunRecorder()
+    monkeypatch.setattr(fw.subprocess, "run", rec)
+    monkeypatch.setattr(fw, "elevation_unavailable", lambda: None)
+    monkeypatch.setattr(fw, "_sources", lambda narrow_lan=False: ["192.168.2.0/24"])
+    monkeypatch.setattr(fw, "_ufw_marker_path", lambda: tmp_path / "ufw_sources.json")
+    _engines(monkeypatch, ufw=False)
+    assert fw._setup_firewall_linux(8443, 8001) == fw.FIREWALL_INACTIVE
+    assert rec.calls == []
+
+    _engines(monkeypatch, ufw=True)
+    assert fw._setup_firewall_linux(8443, 8001) is True
+    assert any(argv[:4] == ["sudo", "-n", "ufw", "allow"] for argv in rec.calls)
+
+    from vaf.core.config import Config
+    import vaf.network.binding as binding
+    cleanups = []
+    monkeypatch.setattr(Config, "get_bool", classmethod(lambda cls, key, default=False: True))
+    monkeypatch.setattr(binding, "resolve_lan_access_ports",
+                        lambda wait_for_proxy=False: (8443, 8001))
+    monkeypatch.setattr(fw, "setup_firewall", lambda port, port_frontend: fw.FIREWALL_INACTIVE)
+    monkeypatch.setattr(fw, "register_cleanup_on_exit", lambda: cleanups.append(1))
+    lines = []
+    assert fw.apply_lan_firewall(log=lines.append) == fw.FIREWALL_INACTIVE
+    assert len(lines) == 1
+    assert "8443" in lines[0] and "switched off" in lines[0] and "created" not in lines[0]
+    assert cleanups == []

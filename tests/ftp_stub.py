@@ -9,7 +9,9 @@ time, which is all a test needs. `pasv_host` is the address the PASV answer NAME
 sets it to one nobody listens on, to see that the client ignores it.
 
 Certificates come from `cryptography` (already a dependency of VAF): `make_ca()` and
-`make_cert()` build a test authority and leaf certificates signed by it or by themselves.
+`make_cert()` build a test authority and leaf certificates signed by it or by themselves;
+`make_cert(..., rsa=True)` gives a leaf an RSA key, which the static-RSA TLS suites need (the
+HTTPS door's cipher tests offer them to see them refused).
 """
 from __future__ import annotations
 
@@ -24,7 +26,10 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 
-def _key():
+def _key(rsa: bool = False):
+    if rsa:
+        from cryptography.hazmat.primitives.asymmetric import rsa as _rsa
+        return _rsa.generate_private_key(public_exponent=65537, key_size=2048)
     from cryptography.hazmat.primitives.asymmetric import ec
     return ec.generate_private_key(ec.SECP256R1())
 
@@ -62,13 +67,14 @@ def make_ca(folder: Path) -> Tuple[Path, object, object]:
     return path, key, cert
 
 
-def make_cert(folder: Path, name: str, ca: Optional[Tuple[Path, object, object]] = None) -> Path:
+def make_cert(folder: Path, name: str, ca: Optional[Tuple[Path, object, object]] = None,
+              rsa: bool = False) -> Path:
     """A leaf certificate for localhost and 127.0.0.1 in one PEM file with its key; signed by
-    `ca`, or by itself without one."""
+    `ca`, or by itself without one. `rsa=True` gives it an RSA key instead of an EC one."""
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes
     from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
-    key = _key()
+    key = _key(rsa)
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
     issuer_key, issuer_name = key, subject
     if ca is not None:

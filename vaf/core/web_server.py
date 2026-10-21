@@ -10029,8 +10029,11 @@ def run_server(host="127.0.0.1", port=8001):
     """Run the Uvicorn server. Uses TLS (HTTPS/WSS) when config has cert/key paths set."""
     mark_webui_process()
 
-    # Store the loop so the TUI thread can schedule updates
-    loop = asyncio.new_event_loop()
+    # Store the loop so the TUI thread can schedule updates. A door's loop: this server is the
+    # CLI lane's whole backend and, in network mode, binds 0.0.0.0 with no proxy in front, so
+    # a TLS handshake gets the door's limit (vaf/network/door.py).
+    from vaf.network import door
+    loop = door.door_event_loop()
     asyncio.set_event_loop(loop)
     manager.set_server_loop(loop)
 
@@ -10055,16 +10058,20 @@ def run_server(host="127.0.0.1", port=8001):
     # Shared constant: the tray and the HTTPS proxy start their own uvicorns and
     # carried the 16 MB default while this value sat only here.
     from vaf.core.log_helper import WS_MAX_SIZE_BYTES, redacted_uvicorn_log_config
+    from vaf.network.ssl_utils import server_tls_options
 
+    # The door's head, connection and forwarded-header settings in both branches, always:
+    # with Local Network on, this listener is what other devices reach.
     if tls_enabled and ssl_cert and ssl_key and os.path.isfile(ssl_cert) and os.path.isfile(ssl_key):
         config = uvicorn.Config(
             app=app, host=host, port=port, loop="asyncio", log_level="error",
-            ssl_certfile=ssl_cert, ssl_keyfile=ssl_key,
+            **server_tls_options(ssl_cert, ssl_key), **door.door_options(),
             ws_max_size=WS_MAX_SIZE_BYTES, log_config=redacted_uvicorn_log_config(),
         )
         log("WebServer", f"Starting with TLS (HTTPS/WSS) on {host}:{port}")
     else:
         config = uvicorn.Config(app=app, host=host, port=port, loop="asyncio", log_level="error",
+                                **door.door_options(),
                                 ws_max_size=WS_MAX_SIZE_BYTES, log_config=redacted_uvicorn_log_config())
         if tls_enabled:
             log("WebServer", f"WARNING: TLS enabled but no certificates available, running HTTP on {host}:{port}")

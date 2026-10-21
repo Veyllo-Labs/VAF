@@ -453,10 +453,14 @@ def start_uvicorn(wait_for_db: bool = True):
             if os.path.isfile(ssl_cert) and os.path.isfile(ssl_key):
                 print(f"[Tray] Starting Uvicorn with TLS (HTTPS/WSS) on port 8001 ({host})...")
                 log("Tray", f"Initializing Uvicorn Config with TLS ({host}:8001)...")
+                # The TLS policy every listener shares. The door limits of the HTTPS proxy
+                # (vaf/network/door.py) stay off this port and 8005: only this machine
+                # reaches them, and they keep uvicorn's forwarded-header defaults.
+                from vaf.network.ssl_utils import server_tls_options
                 config = uvicorn.Config(
                     app, host=host, port=8001, log_level="info", use_colors=False,
                     log_config=_log_cfg,
-                    ssl_certfile=ssl_cert, ssl_keyfile=ssl_key,
+                    **server_tls_options(ssl_cert, ssl_key),
                     ws_max_size=WS_MAX_SIZE_BYTES,
                 )
             else:

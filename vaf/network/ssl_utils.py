@@ -17,10 +17,14 @@ The server cert includes SANs for:
   - Hostname of the machine
 
 Validity: 365 days (auto-renewed on next startup if expired).
+
+``server_tls_options(certfile, keyfile)`` is the one TLS policy of every listener VAF serves
+TLS on (the integrated HTTPS proxy, the desktop's TLS port, ``vaf run --web``).
 """
 
 import os
 import logging
+import ssl
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -35,6 +39,49 @@ logger = logging.getLogger(__name__)
 
 # Default directory for generated certs
 _SSL_DIR_NAME = "ssl"
+
+# The TLS 1.2 suites of Mozilla's "intermediate" profile (server-side TLS guidelines 6.0):
+# forward-secret key exchange (ECDHE) and an AEAD cipher, nothing else. OpenSSL's DEFAULT,
+# which the HTTPS proxy used to ask for, also accepted static RSA key exchange (no forward
+# secrecy: a key stolen later decrypts recorded traffic) and CBC suites with SHA-1 (measured:
+# AES128-SHA, AES128-GCM-SHA256, AES256-SHA256 and ECDHE-RSA-AES128-SHA all accepted).
+SERVER_TLS12_CIPHERS = ":".join((
+    "ECDHE-ECDSA-AES128-GCM-SHA256",
+    "ECDHE-RSA-AES128-GCM-SHA256",
+    "ECDHE-ECDSA-AES256-GCM-SHA384",
+    "ECDHE-RSA-AES256-GCM-SHA384",
+    "ECDHE-ECDSA-CHACHA20-POLY1305",
+    "ECDHE-RSA-CHACHA20-POLY1305",
+))
+
+
+def server_tls_options(certfile: str, keyfile: str) -> dict:
+    """The TLS keyword arguments of a ``uvicorn.Config`` for a listener VAF serves.
+
+    One policy for every TLS listener, so none of them can drift: the integrated HTTPS proxy
+    asked for OpenSSL's DEFAULT, the desktop's TLS port and ``vaf run --web`` for nothing,
+    which means OpenSSL's default list on uvicorn 0.48 and later and uvicorn's own old
+    default ("TLSv1") on the 0.27 to 0.40 releases ``requirements.txt`` still allows.
+
+    - ``ssl_ciphers`` limits TLS 1.2 to ``SERVER_TLS12_CIPHERS``. ``set_ciphers`` does not
+      touch TLS 1.3, whose suites are all AEAD and forward secret.
+    - The key exchange groups stay at OpenSSL's default (on OpenSSL 3.5 the post-quantum
+      hybrid ``X25519MLKEM768`` comes first, measured).
+    - The TLS 1.2 floor is Python's own for ``PROTOCOL_TLS_SERVER`` on every supported
+      version (3.10 and later, measured). It is pinned by a test, not set by a line here: a
+      line that sets what is already set cannot fail its test.
+    - The list drops clients from before about 2014 that know only CBC or static-RSA suites
+      over TLS 1.2 (the oldest the profile keeps: Android 4.4.2, Firefox 27, Chrome 31,
+      IE 11 on Windows 7, Safari 9).
+
+    A context built anew later (a certificate reload) must take the same options.
+    """
+    return {
+        "ssl_certfile": certfile,
+        "ssl_keyfile": keyfile,
+        "ssl_version": ssl.PROTOCOL_TLS_SERVER,
+        "ssl_ciphers": SERVER_TLS12_CIPHERS,
+    }
 
 
 def _get_ssl_dir() -> Path:

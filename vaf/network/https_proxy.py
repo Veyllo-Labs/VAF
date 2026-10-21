@@ -29,7 +29,6 @@ firewall closes that.
 import asyncio
 import logging
 import re
-import ssl
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -42,7 +41,9 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocket
 
+from vaf.network import door
 from vaf.network.admission import AdmissionGuard, ByLocalNetwork, this_machine_only
+from vaf.network.ssl_utils import server_tls_options
 
 logger = logging.getLogger(__name__)
 
@@ -527,21 +528,18 @@ def run_https_proxy(
         from vaf.network.binding import own_name_labels
         own_name_labels()
         app = create_proxy_app()
-        # Compatibility: ensure TLS 1.2 clients can connect.
-        # Some devices fail with ERR_EMPTY_RESPONSE if only TLS 1.3 is effectively negotiated.
         from vaf.core.log_helper import WS_MAX_SIZE_BYTES, redacted_uvicorn_log_config
         # The uvicorn loggers are process-wide: a Config without the redacting log_config
         # re-runs dictConfig with uvicorn's defaults and strips the token filter from EVERY
         # server in the tray (8001 and 8005 included) - measured: full /ws?token=<jwt>
-        # lines in tray_debug.log.
+        # lines in tray_debug.log. TLS: the one policy of every listener (ssl_utils); the
+        # head, handshake and connection limits and no forwarded-header trust: door.py.
         config = uvicorn.Config(
             app,
             host=host,
             port=effective,
-            ssl_certfile=ssl_certfile,
-            ssl_keyfile=ssl_keyfile,
-            ssl_version=ssl.PROTOCOL_TLS_SERVER,
-            ssl_ciphers="DEFAULT",
+            **server_tls_options(ssl_certfile, ssl_keyfile),
+            **door.door_options(),
             log_level="info",
             use_colors=False,
             log_config=redacted_uvicorn_log_config(),
@@ -556,7 +554,7 @@ def run_https_proxy(
         _log(f"HTTPS proxy listening on https://{host}:{effective} (-> 3000, 8005)")
         _write_access(f"PROXY STARTED  host={host} port={effective} cert={ssl_certfile}")
         runtime_status.set_proxy_bound(effective, port)
-        loop = asyncio.new_event_loop()
+        loop = door.door_event_loop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(server.serve())
         _running_server = None

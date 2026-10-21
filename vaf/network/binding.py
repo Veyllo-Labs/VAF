@@ -419,10 +419,11 @@ def effective_client_ip(peer_ip: str | None, forwarded_for: str | None) -> str:
     A relay appends the address it saw, and a client can only write to the LEFT of that, so
     the rightmost entries are the ones no client controls; a loopback hop names this machine
     (one relay handing to the next) and is skipped. The FIRST hop, read before, is whatever
-    the client wrote. uvicorn's default proxy-header handling (trusting 127.0.0.1) already
-    applies the rightmost rule to the peer in the running server; this resolver applies it
-    itself, so the answer does not hang on that default (an embedder's server, proxy_headers
-    off). A hop that is not an IP literal (a name such as "localhost", which is_localhost
+    the client wrote. uvicorn's default proxy-header handling (trusting 127.0.0.1) applies the
+    rightmost rule to the peer on the backend's loopback listeners; the listeners other devices
+    reach switch it off (vaf.network.door.door_options: it trusts FORWARDED_ALLOW_IPS, and with
+    "*" a LAN device that wrote 127.0.0.1 was this machine), so there this resolver is the only
+    rule, and it does not hang on a server default anywhere. A hop that is not an IP literal (a name such as "localhost", which is_localhost
     accepts) ends the walk as "unknown", which is neither local nor admitted.
 
     No hops, or only loopback hops (internal loopback IPC, the desktop through the Next.js

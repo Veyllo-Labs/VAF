@@ -718,29 +718,36 @@ def _ufw_command_reads_on(paths: Optional[tuple] = None) -> Optional[bool]:
 def ufw_switch_unconfirmed(engine: Optional[str] = None) -> Optional[str]:
     """Why `host_firewall()` answers "ufw" while VAF cannot confirm that ufw guards anything,
     or None when nothing is in doubt:
-    - its switch could not be read with certainty (`ufw_enabled()` is None);
+    - its switch could not be read with certainty, by the shell's rules (`ufw_enabled()`) or
+      by ufw's own command's (`_ufw_command_reads_on()`), or it reads as off by now;
     - ufw's own command reads the switch as off while the shell reads it as on
       (`_ufw_command_reads_on`), so `ufw allow` only records the rule until ufw next starts;
     - systemd reports its unit in a state other than `active`: `failed` is what ufw-init's
       start leaves when it aborts at boot, `activating` or `unknown` say no more, so which of
       ufw's rules are loaded is not known.
-    A host without systemd (no systemctl, or no answer) is not counted: that would flag every
-    ufw on such a host, and systemd's answer is only one of the signals here.
+    A switch read as off or a unit read as `inactive` makes `host_firewall()` answer
+    "ufw_off"; here they mean the state changed after the caller read `engine`, and a stop
+    flushes ufw's rules, so neither is confirmed. A host without systemd (no systemctl, or no
+    answer) is not counted: that would flag every ufw on such a host, and systemd's answer is
+    only one of the signals here.
     The allow rule is added all the same; provision and `vaf doctor` put this reason in
     their warning instead of reporting the port as guarded, and both name `sudo ufw status`
     as the check. `engine` is `host_firewall()`'s answer when the caller already has it."""
     if (engine or host_firewall()) != "ufw":
         return None
     switch = ufw_enabled()
-    if switch is None:
+    command = _ufw_command_reads_on() if switch else None
+    if switch is None or (switch and command is None):
         return (f"{UFW_DEFAULTS} or {UFW_CONF} could not be read with certainty (a file "
                 "missing, empty or unreadable, or a line other than plain assignments)")
-    if switch and _ufw_command_reads_on() is False:
+    if not switch:
+        return "its switch reads as off (`ENABLED` is not `yes`)"
+    if not command:
         return ("ufw's own command reads its ENABLED line as off (write it as `ENABLED=yes`, "
                 "the form `ufw enable` writes), so it only records the rule until ufw next "
                 "starts")
     state = _ufw_unit_state()
-    if state not in ("", "active", "inactive"):
+    if state not in ("", "active"):
         return f"systemd reports its unit as {state} (`systemctl status ufw` says why)"
     return None
 

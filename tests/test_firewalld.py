@@ -711,6 +711,10 @@ def test_host_firewall_is_one_answer(monkeypatch):
     ("ufw", True, "unknown", "systemd reports its unit as unknown"),
     # No systemd at all (no systemctl, or no answer): not counted, or every such host would be.
     ("ufw", True, "", None),
+    # The caller read "ufw" before this read: the unit stopped (its stop flushes ufw's rules)
+    # or the switch went off since.
+    ("ufw", True, "inactive", "systemd reports its unit as inactive"),
+    ("ufw", False, "active", "its switch reads as off"),
     ("ufw_off", None, "failed", None),
     ("firewalld", None, "failed", None),
     (None, None, "failed", None),
@@ -720,8 +724,8 @@ def test_an_uncertain_switch_still_counts_as_ufw_but_is_never_confirmed(monkeypa
     """The allow rule is harmless on a ufw that is off and needed on one that is on, so an
     uncertain switch keeps "ufw"; what reports the result asks this instead of claiming a
     guard, and says why. MUTATION: answer None always; ignore the engine; count only a
-    failed unit; count an empty answer too; read the host firewall again when the caller
-    passed it - red."""
+    failed unit; count an empty answer too; confirm a unit read as inactive or a switch read
+    as off; read the host firewall again when the caller passed it - red."""
     monkeypatch.setattr(fw, "UFW_DEFAULTS", "/etc/default/ufw")
     monkeypatch.setattr(fw, "UFW_CONF", "/etc/ufw/ufw.conf")
     monkeypatch.setattr(fw, "host_firewall", lambda: engine)
@@ -740,6 +744,18 @@ def test_an_uncertain_switch_still_counts_as_ufw_but_is_never_confirmed(monkeypa
     monkeypatch.setattr(fw, "host_firewall", read_again)
     if engine is not None:
         assert fw.ufw_switch_unconfirmed(engine) == reason
+
+
+def test_a_switch_ufws_own_command_cannot_read_is_unconfirmed(monkeypatch):
+    """The shell read the files a moment earlier, but whether `ufw allow` applies the rule at
+    once depends on the command's own read, and that one failed. MUTATION: count only a
+    command read of off - red."""
+    monkeypatch.setattr(fw, "UFW_DEFAULTS", "/etc/default/ufw")
+    monkeypatch.setattr(fw, "UFW_CONF", "/etc/ufw/ufw.conf")
+    monkeypatch.setattr(fw, "ufw_enabled", lambda paths=None: True)
+    monkeypatch.setattr(fw, "_ufw_command_reads_on", lambda paths=None: None)
+    monkeypatch.setattr(fw, "_ufw_unit_state", lambda: "active")
+    assert "could not be read with certainty" in fw.ufw_switch_unconfirmed("ufw")
 
 
 # Each row as ufw 0.36's own `_get_defaults` lines read it (measured with them on a test

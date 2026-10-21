@@ -52,7 +52,9 @@ server {
 
     # Required: only the LAN (and your VPN) may connect. VAF checks the address of
     # every /api and /ws request itself, but the pages under / come from the frontend
-    # on port 3000, and nothing there checks who asks. Keep the ranges you use.
+    # on port 3000, and nothing there checks who asks. Keep the ranges you use. A
+    # forward in front of nginx must keep the client's address (or everything arrives as
+    # 127.0.0.1); never expose this server publicly, it is for the LAN and the VPN only.
     allow 127.0.0.1;
     allow 192.168.0.0/16;
     allow 10.0.0.0/8;
@@ -96,7 +98,7 @@ server {
 }
 ```
 
-**Why these forwarding headers.** VAF's origin guard (see [NETWORK_FEATURES.md](NETWORK_FEATURES.md#origin-guard-every-mode)) refuses a browser request whose `Host` is a DNS name, because that is what a DNS-rebinding page looks like. Keep `Host` at the upstream address (`$proxy_host`) and pass the name the browser used as `X-Forwarded-Host`, with `X-Forwarded-Proto` `https`: the browser's `Origin` then matches `https://` + `X-Forwarded-Host` and is recognised as VAF's own. `X-Forwarded-For` is set to `$remote_addr`, which names exactly the client nginx saw. VAF reads that header only from a loopback peer and takes the rightmost hop that is not this machine, so `$proxy_add_x_forwarded_for` is safe as well (whatever a device writes ends up to the left of the address nginx appends), but `$remote_addr` stays the recommendation: one hop, nothing to walk. Never replace nginx with a raw TCP forward (`ssh -R`, socat, a stream block): it writes no header, and VAF then takes every client it carries for the machine itself. This setup is for the LAN or a VPN: VAF refuses public addresses on `/api` and `/ws`, and exposing it to the public internet is not supported. The `allow`/`deny` lines are what keeps the pages to the same devices: nginx serves them from the frontend, which checks no address, so without those lines (or a firewall rule doing the same) a nginx reachable from outside hands the pages to anyone.
+**Why these forwarding headers.** VAF's origin guard (see [NETWORK_FEATURES.md](NETWORK_FEATURES.md#origin-guard-every-mode)) refuses a browser request whose `Host` is a DNS name, because that is what a DNS-rebinding page looks like. Keep `Host` at the upstream address (`$proxy_host`) and pass the name the browser used as `X-Forwarded-Host`, with `X-Forwarded-Proto` `https`: the browser's `Origin` then matches `https://` + `X-Forwarded-Host` and is recognised as VAF's own. `X-Forwarded-For` is set to `$remote_addr`, which names exactly the client nginx saw. VAF reads that header only from a loopback peer and takes the rightmost hop that is not this machine, so `$proxy_add_x_forwarded_for` is safe as well (whatever a device writes ends up to the left of the address nginx appends), but `$remote_addr` stays the recommendation: one hop, nothing to walk. Never replace nginx with a raw TCP forward (`ssh -R`, socat, a stream block): it writes no header, and VAF then takes every client it carries for the machine itself. This setup is for the LAN or a VPN: VAF refuses public addresses on `/api` and `/ws`, and exposing it to the public internet is not supported. The `allow`/`deny` lines are what keeps the pages to the same devices: nginx serves them from the frontend, which checks no address, so without those lines (or a firewall rule doing the same) an nginx reachable from outside hands the pages to anyone. Those lines judge the address nginx sees: anything that forwards connections to nginx (a tunnel, a port forward on this machine) must keep the client's own address, or every client it carries arrives as `127.0.0.1`, passes `allow 127.0.0.1` and is named `127.0.0.1` to VAF as well. Never expose this server publicly; it is for the LAN and the VPN only.
 
 ---
 

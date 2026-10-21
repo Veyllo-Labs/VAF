@@ -16,7 +16,9 @@ server {
 
     # Required: only the LAN (and your VPN) may connect. VAF checks the address of
     # every /api and /ws request itself, but the pages under / come from the frontend
-    # on port 3000, and nothing there checks who asks. Keep the ranges you use.
+    # on port 3000, and nothing there checks who asks. Keep the ranges you use. A
+    # forward in front of nginx must keep the client's address (or everything arrives as
+    # 127.0.0.1); never expose this server publicly, it is for the LAN and the VPN only.
     allow 127.0.0.1;
     allow 192.168.0.0/16;
     allow 10.0.0.0/8;

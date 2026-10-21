@@ -388,7 +388,7 @@ async def test_veyllo_key(body: TestVeylloKeyRequest, request: Request):
 
     # A browser that is not on this machine needs the setup code here as at /bootstrap: this
     # route tests any key against the provider for whoever asks while no admin exists, which
-    # made it a key-validity oracle for every admitted address (security review). The wizard
+    # made it a key-validity oracle for every admitted address. The wizard
     # has the code from its first step. A wrong one is a 401 the address window counts.
     if _setup_code_required(request):
         import asyncio
@@ -534,7 +534,10 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
         if user is not None and not _minted_with_current_password(payload, user):
             _log_auth_failure("twofa_failed", request, username=user.username or "",
                               detail="temp token from before a password change")
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid temp token")
+            # The same answer as an expired step: what the page should say is the same (sign
+            # in again), and a holder of the old token learns nothing more from it.
+            return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED,
+                                content={"detail": "Invalid temp token", "code": "sign_in_expired"})
         if user is not None and not account_seal.check(user, where="/api/auth/verify-2fa",
                                                        ip=_client_ip(request)):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=account_seal.REFUSAL_LOGIN)

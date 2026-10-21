@@ -392,3 +392,54 @@ def test_the_step_up_records_the_callers_address():
     src = (Path(__file__).resolve().parents[1] / "vaf" / "api" / "security_routes.py").read_text(
         encoding="utf-8")
     assert src.count('await _verify_admin_totp(user, str(payload.get("code") or ""), ip=_caller_ip(request))') == 3
+
+
+# ── an attempt that neither failed nor succeeded is taken back ───────────────────
+
+@pytest.mark.parametrize("stop", ["error", "disconnect"])
+def test_an_error_or_a_disconnect_counts_in_neither_window(h, monkeypatch, stop):
+    """A login that ends in an exception (a database error) or is cancelled while it waits
+    (the client went away) proved nothing about the password: both windows take their attempt
+    back, or every store hiccup and every disconnect would count toward locking the caller's
+    own address and account. The disconnect cancels the request's task the way the server does,
+    so the middleware's await itself raises CancelledError. MUTATION: drop the middleware's
+    release on an exception, catch only Exception there, or turn the login's try/finally into
+    straight-line code - red."""
+    import asyncio
+
+    import httpx
+
+    from vaf.api import auth_routes
+    from vaf.auth import rate_limit
+    h.add_user("alice", "alice-password-1", no_second_factor=True)
+    app = h.app()
+
+    async def main():
+        waiting = asyncio.Event()
+
+        async def _password_check(*_a, **_k):
+            if stop == "error":
+                raise RuntimeError("the store went away")
+            waiting.set()
+            await asyncio.Event().wait()          # until the client goes away
+
+        monkeypatch.setattr(auth_routes, "verify_password_async", _password_check)
+        transport = httpx.ASGITransport(app=app, client=auth_harness.PROXY_PEER)
+        async with httpx.AsyncClient(transport=transport, base_url="http://vaf") as c:
+            request = asyncio.ensure_future(c.post(
+                "/api/auth/login", json={"username": "alice", "password": "alice-password-1"},
+                headers={"X-Forwarded-For": "192.168.24.1"}))
+            if stop == "disconnect":
+                await waiting.wait()
+                assert rate_limit._tracker._attempts.get("192.168.24.1")    # counted while in flight
+                request.cancel()
+            try:
+                await request
+            except BaseException as e:            # the error or the cancellation, as raised
+                return type(e).__name__
+            return "answered"
+
+    outcome = asyncio.run(main())
+    assert outcome == {"error": "RuntimeError", "disconnect": "CancelledError"}[stop]
+    assert not rate_limit._tracker._attempts.get("192.168.24.1")
+    assert not rate_limit._account_tracker._attempts.get("alice")

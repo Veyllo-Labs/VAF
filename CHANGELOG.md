@@ -101,19 +101,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   password, and your own correct login no longer resets the count for the address you sign
   in from. An account is held after repeated failed logins from any number of addresses
   (new setting `local_network_rate_limit_account_attempts`, default 10 per window); the
-  machine itself
-  and addresses that signed in to the account before are not held, so nobody who knows your
-  name can lock you out of your own devices. A two-factor code works only once, and five
-  wrong codes hold the account's code wherever it is asked (sign-in, password change, an
-  admin's confirmation), each time longer within a day; a code typed again right after it
-  worked is refused with "wait for the next code" and not counted. A held login says how
-  long to wait, in your language, and is recorded in the security log ("Too many login
-  attempts"). The step between password and code now lasts 15 minutes instead of a day;
-  after that the page says the sign-in took too long, and you sign in again. For your own
-  programs: a wrong code at `POST /api/auth/verify-2fa` now answers 401 (it was 400), and a
-  held request 429 with `Retry-After`. Known and unknown
-  account names now take the same time to answer, and password checks no longer stall
-  other chats while many logins arrive.
+  machine itself and addresses that signed in to the account before are not held, so nobody
+  who knows your name can lock you out of your own devices. A two-factor code works only
+  once, and five wrong codes hold the account's code wherever it is asked (sign-in,
+  password change, an admin's confirmation), each time longer within a day; a code typed
+  again right after it worked is refused with "wait for the next code" and not counted. A
+  held login says how long to wait, in your language, and is recorded in the security log
+  ("Too many login attempts"). The step between password and code now lasts 15 minutes
+  instead of a day; after that the page says the sign-in took too long, and you sign in
+  again. For your own programs: a wrong code at `POST /api/auth/verify-2fa` now answers 401
+  (it was 400), a code that was already used 400 with `"code": "code_spent"`, a step that
+  ran out or began before a password change 401 with `"code": "sign_in_expired"`, and a
+  held request 429 with `Retry-After`. Known and unknown account names now take the same
+  time to answer, and password checks no longer stall other chats while many logins arrive.
 
 - **Signing out really ends a session.** Signing out used to delete the browser's cookie and
   nothing else, and a password change, an admin's reset or a deactivation ended no session at

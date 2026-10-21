@@ -224,7 +224,9 @@ def test_a_temp_token_from_before_a_reset_is_refused(h):
     assert _setup_2fa(h, temp).status_code == 401
     thief_secret = auth_harness.pyotp.random_base32()
     r = h.verify(h.client("192.168.13.5"), temp, auth_harness.pyotp.TOTP(thief_secret).now())
-    assert r.status_code == 401
+    # The same answer as an expired step, so the page says "sign in again" (and the old
+    # token's holder learns nothing more). MUTATION: answer without the code - red.
+    assert r.status_code == 401 and r.json().get("code") == "sign_in_expired", r.text
     # The owner, with the new password, gets a fresh temp token that works.
     fresh = h.login(h.client("192.168.13.6"), "alice", "alice-password-9").json()
     assert fresh["needs_2fa_setup"] is True

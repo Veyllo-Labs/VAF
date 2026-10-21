@@ -235,13 +235,17 @@ def test_the_chat_lane_records_a_failure_only_when_its_copy_is_the_stream():
     """The chat lane stores the stream, or the turn's return value when nothing streamed or
     the turn ended at a draft. The return value never holds a failure that followed an
     answer, so recording one there would make every reader drop the answer the person saw.
-    MUTATION: record the failure for a return-value copy - red."""
+    MUTATION: record the failure for a return-value copy - red. MUTATION: record the raw
+    failure next to the cleaned stream - its blank-line run is collapsed in the copy, so a
+    reader drops the answer, red."""
     from vaf.core import headless_runner as hr
     from vaf.core.session import Message, failed_turn_meta, model_text
-    failure = "[Error] API backend failure: " + _PATH_ERROR
+    failure = "[Error] API backend failure: locked\n\n\n\n" + _PATH_ERROR
     copy, recorded = hr._chat_turn_copy(["Der Termin ist Montag.", "\n", failure], "egal",
                                         ends_at_draft=False, turn_failure=failure)
-    assert recorded == failure and copy.endswith(failure)
+    assert recorded and copy.endswith(recorded)
+    assert model_text(Message(role="assistant", content=copy,
+                              metadata=failed_turn_meta(False, recorded))) == "Der Termin ist Montag."
     for parts, ends_at_draft in (([], False), (["Vorher gestreamt."], True)):
         copy, recorded = hr._chat_turn_copy(parts, "Der Termin ist Montag.",
                                             ends_at_draft=ends_at_draft, turn_failure=failure)

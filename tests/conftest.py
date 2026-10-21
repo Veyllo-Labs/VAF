@@ -248,6 +248,35 @@ def _no_real_imap_server(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_name_lookup(monkeypatch):
+    """No test asks DNS for a machine's FQDN.
+
+    `socket.getfqdn` is a reverse lookup: it waits on the resolver, and its answer is the real
+    machine's name. Counted per test over the 25 files that touch TLS, the proxy or HSTS: 26
+    real calls, 9 for the local certificate's names (`ssl_utils._collect_sans`), 1 for the
+    HSTS scope through the proxy's header path with Host `testserver`, and 16 in
+    `http.server`'s bind of the egress tests' local servers. Here it answers the way it does
+    for a machine without an FQDN: the name it was asked about, or the host name. A test about
+    the FQDN patches it itself, which overrides this.
+
+    The memo of the machine's names (`binding._OWN_LABELS`) is emptied too, so a name one test
+    put there never decides another test's HSTS answer."""
+    import socket
+
+    def _no_fqdn(name=""):
+        name = (name or "").strip()
+        if not name or name in ("0.0.0.0", "::"):
+            name = socket.gethostname()
+        return name
+
+    monkeypatch.setattr(socket, "getfqdn", _no_fqdn)
+    binding = _sys.modules.get("vaf.network.binding")
+    if binding is not None:
+        monkeypatch.setattr(binding, "_OWN_LABELS", {})
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolated_provider_keys(tmp_path, monkeypatch):
     """A provider-key store per TEST, not per session.
 

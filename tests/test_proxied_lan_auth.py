@@ -306,6 +306,34 @@ def test_the_proxy_writes_the_resolved_client(monkeypatch, peer, incoming, writt
     assert values == [written]
 
 
+def test_the_proxys_header_path_asks_no_dns_in_a_test(monkeypatch):
+    """An answer through the proxy decides HSTS for the dialled Host, `testserver` here, a
+    DNS name, so it looks the machine's names up: that was one real reverse lookup in this
+    file (measured), with the real machine's name as its answer. tests/conftest.py answers
+    getfqdn() for every test. MUTATION: drop that fixture - red."""
+    import socket
+
+    import vaf.network.binding as binding
+    import vaf.network.https_proxy as proxy
+    asked = []
+
+    def _gethostbyaddr(*args):
+        asked.append(args)
+        raise OSError("no DNS in a test")
+
+    monkeypatch.setattr(socket, "gethostbyaddr", _gethostbyaddr)
+    monkeypatch.setattr(binding, "_OWN_LABELS", {})
+    upstream = _RecordingUpstream()
+
+    async def _client(_origin):
+        return upstream
+
+    monkeypatch.setattr(proxy, "_get_client", _client)
+    c = TestClient(proxy.create_proxy_app(), client=(LAN_DEVICE, 40000))
+    assert c.get("/api/users").status_code == 200
+    assert asked == []
+
+
 def test_the_socket_relay_always_names_the_client(monkeypatch):
     """The WebSocket half sent the header only when a peer was known, and then the peer
     itself. A relayed handshake without the header reads as the machine; with the peer,

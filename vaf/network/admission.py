@@ -38,7 +38,9 @@ Named boundaries: the TLS handshake happens before any HTTP check, so a client t
 the access port still receives the certificate (whose names list the LAN and VPN addresses
 and the host name); only a firewall, or a bind to the admitted interfaces only, closes that.
 A per-interface bind is not built: a VPN that comes up later would need a rebind. The page
-is English only: it is answered before any session or language exists.
+is English only: it is answered before any session or language exists. It follows the
+system's color scheme (`prefers-color-scheme`), not the theme chosen in VAF: that choice
+lives in the browser's storage, and reading it takes a script, which the page does not run.
 
 Not imported by ``vaf.network``: starlette belongs to the server extra, and ``import
 vaf.network`` must keep working on a slim install.

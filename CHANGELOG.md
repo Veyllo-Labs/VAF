@@ -124,9 +124,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   sign-in at all. The door passes the visitor on now, VAF reads the client a relay names the
   same way on every port, from every `X-Forwarded-For` line a request carries (a relay that
   adds a line of its own puts the visitor in the last one), and the desktop window stays your
-  own as before. Such a relay must
-  write `X-Forwarded-For`; a raw port forward such as `ssh -R` names nobody, so never put one
-  in front of VAF.
+  own as before. Such a relay must write `X-Forwarded-For`; a raw port forward such as
+  `ssh -R` names nobody, so never put one in front of VAF.
 
 - **Sign-ins hold against guessing.** A wrong two-factor code now counts like a wrong
   password, and your own correct login no longer resets the count for the address you sign

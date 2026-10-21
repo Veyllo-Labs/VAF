@@ -281,11 +281,11 @@ def test_a_new_vpn_address_gets_a_new_certificate(monkeypatch, tmp_path):
 
 # ── the doctor ─────────────────────────────────────────────────────────────
 
-def _findings(public=(), host=None, events=(), switch=True, **cfg):
+def _findings(public=(), host=None, events=(), switch=True, unit="active", **cfg):
     """The doctor's findings for a network-mode config. The checks that read the machine
-    itself (its public addresses, its host firewall and ufw's switch, today's security log)
-    are pinned, so the answer does not depend on the runner: Ubuntu runners ship ufw
-    switched off."""
+    itself (its public addresses, its host firewall, ufw's switch and its unit, today's
+    security log) are pinned, so the answer does not depend on the runner: Ubuntu runners
+    ship ufw switched off. `host` may be a function, to count the reads."""
     import vaf.core.security_events as se
     import vaf.network.firewall as fw
     from vaf.core.security_misconfig import collect_security_findings
@@ -294,8 +294,11 @@ def _findings(public=(), host=None, events=(), switch=True, **cfg):
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(binding, "public_addresses", lambda: list(public))
         mp.setattr(binding, "resolve_lan_access_ports", lambda wait_for_proxy=False: (8443, 8001))
-        mp.setattr(fw, "host_firewall", lambda: host)
-        mp.setattr(fw, "ufw_enabled", lambda conf_path=fw.UFW_CONF: switch)
+        mp.setattr(fw, "host_firewall", host if callable(host) else (lambda: host))
+        mp.setattr(fw, "ufw_enabled", lambda paths=None: switch)
+        mp.setattr(fw, "_ufw_unit_state", lambda: unit)
+        mp.setattr(fw, "UFW_DEFAULTS", "/etc/default/ufw")
+        mp.setattr(fw, "UFW_CONF", "/etc/ufw/ufw.conf")
         mp.delenv("SSH_CONNECTION", raising=False)
         mp.setattr(se, "read_security_events", lambda date, limit=100: list(events))
         return {f["code"]: f for f in collect_security_findings({**base, **cfg})}
@@ -397,19 +400,33 @@ def test_doctor_sees_a_public_address_a_switched_off_ufw_and_public_refusals():
 
 
 def test_doctor_says_when_ufws_switch_cannot_be_confirmed():
-    """An uncertain ufw.conf still counts as ufw, so the allow rule is added, and the doctor
-    said nothing: silence read as a guarded port. MUTATION: drop the finding - red; report
-    it for a confirmed switch, or for a ufw that is off - red."""
+    """An uncertain switch still counts as ufw, so the allow rule is added, and the doctor
+    said nothing: silence read as a guarded port. The same for a unit whose start failed.
+    MUTATION: drop the finding - red; report it for a confirmed switch, or for a ufw that is
+    off - red."""
     found = _findings(host="ufw", switch=None)["network_ufw_unknown"]
     assert found["severity"] == "low"
-    assert "could not confirm that ufw is switched on" in found["message"]
+    assert ("could not confirm that ufw is switched on: /etc/default/ufw or /etc/ufw/ufw.conf "
+            "could not be read with certainty") in found["message"]
     assert "`sudo ufw status`" in found["message"]
+    found = _findings(host="ufw", switch=True, unit="failed")["network_ufw_unknown"]
+    assert "systemd reports its unit as failed" in found["message"]
     assert "network_ufw_unknown" not in _codes(host="ufw", switch=True)
     assert "network_ufw_unknown" not in _codes(host="ufw", switch=None,
                                                local_network_firewall_enabled=False)
     codes = _codes(host="ufw_off", switch=None)
     assert "network_ufw_disabled" in codes and "network_ufw_unknown" not in codes
     assert "network_ufw_unknown" not in _codes(host="firewalld", switch=None)
+
+
+def test_doctor_reads_the_host_firewall_once():
+    """The read runs `which` and `systemctl`; the doctor asked it once for the switched-off
+    check and again inside the unconfirmed one. MUTATION: let the second check read it
+    again - red."""
+    reads = []
+    found = _findings(host=lambda: reads.append(1) or "ufw", switch=None)
+    assert "network_ufw_unknown" in found
+    assert len(reads) == 1
 
 
 def test_a_port_that_cannot_be_read_keeps_the_public_address_finding(monkeypatch):

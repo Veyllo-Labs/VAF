@@ -297,6 +297,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   firewall from a login shell. After a change of the admitted networks, the web settings and
   `vaf server networks` say so instead of promising an automatic firewall change, and a
   repair started on a server names the commands to run instead of a sudo error.
+- **Opening the firewall through ufw no longer removes Docker's firewall rules.** After
+  adding its allow rules, `vaf server provision` ran `ufw reload`, which on a running ufw is
+  a stop and a start. Where ufw manages the built-in chains (`MANAGE_BUILTINS=yes` in
+  `/etc/default/ufw`; Ubuntu ships `no`), both flush every iptables rule that is not ufw's,
+  Docker's included, and they stayed gone until Docker was restarted. ufw applies an added
+  rule at once, so the reload is gone, also from a desktop start that opens the firewall.
 - **The web UI connects behind a port forward, and the browser window shows that it is
   starting.** A page reached over HTTPS on a port other than the one VAF's proxy listens on
   (a forwarded port on a rented server or a VM, a NAT, a load balancer) never opened its live

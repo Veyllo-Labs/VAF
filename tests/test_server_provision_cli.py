@@ -47,7 +47,8 @@ def seams(monkeypatch):
     monkeypatch.setattr(binding, "public_addresses", lambda: [])
     # Which host firewall runs, and the SSH session the ufw advice names, are the machine's.
     monkeypatch.setattr(firewall, "host_firewall", lambda: "ufw")
-    monkeypatch.setattr(firewall, "ufw_enabled", lambda conf_path=firewall.UFW_CONF: True)
+    monkeypatch.setattr(firewall, "ufw_enabled", lambda paths=None: True)
+    monkeypatch.setattr(firewall, "_ufw_unit_state", lambda: "active")
     monkeypatch.delenv("SSH_CONNECTION", raising=False)
     return calls
 
@@ -108,26 +109,31 @@ def test_a_firewall_with_nothing_admitted_is_not_reported_as_opened(seams, monke
     assert "Firewall opened" not in said and "already in place" not in said
 
 
-@pytest.mark.parametrize("outcome, done", [("created", "added"), (True, "added"),
-                                           ("present", "already in place")])
-def test_a_ufw_whose_switch_cannot_be_confirmed_is_not_reported_as_guarding(seams, monkeypatch,
-                                                                            outcome, done):
-    """An uncertain ufw.conf still counts as ufw, so the allow rule is added, but nothing knows
-    whether ufw runs: "Firewall opened" or "already in place" alone would claim a guard.
-    MUTATION: drop the branch - red; take it for a confirmed switch too - red (the control)."""
+@pytest.mark.parametrize("outcome", ["created", True])
+@pytest.mark.parametrize("switch, unit, why", [
+    (None, "active", "/etc/default/ufw or /etc/ufw/ufw.conf could not be read with certainty"),
+    (True, "failed", "systemd reports its unit as failed (`systemctl status ufw` says why)"),
+])
+def test_a_ufw_that_cannot_be_confirmed_is_not_reported_as_guarding(seams, monkeypatch, outcome,
+                                                                    switch, unit, why):
+    """An uncertain switch still counts as ufw, so the allow rule is added, but nothing knows
+    whether ufw runs, nor with a unit whose start failed: "Firewall opened" alone would claim
+    a guard. MUTATION: drop the branch - red; take it for a confirmed switch too - red (the
+    control)."""
     monkeypatch.setattr(firewall, "setup_firewall", lambda p, pf: outcome)
-    monkeypatch.setattr(firewall, "ufw_enabled", lambda conf_path=firewall.UFW_CONF: None)
+    monkeypatch.setattr(firewall, "ufw_enabled", lambda paths=None: switch)
+    monkeypatch.setattr(firewall, "_ufw_unit_state", lambda: unit)
     said = " ".join(runner.invoke(server_cmd.app, ["provision"]).output.split())
-    assert (f"Firewall rule {done} for port 8443, but VAF could not confirm that ufw is "
-            "switched on: /etc/ufw/ufw.conf could not be read with certainty.") in said
-    assert "`sudo ufw status`" in said
-    assert "Firewall opened" not in said and "already in place for port 8443." not in said
+    assert ("Firewall rule added for port 8443, but VAF could not confirm that ufw is "
+            f"switched on: {why}") in said
+    assert "Check with `sudo ufw status` that it is active." in said
+    assert "Firewall opened" not in said
 
-    monkeypatch.setattr(firewall, "ufw_enabled", lambda conf_path=firewall.UFW_CONF: True)
+    monkeypatch.setattr(firewall, "ufw_enabled", lambda paths=None: True)
+    monkeypatch.setattr(firewall, "_ufw_unit_state", lambda: "active")
     said = " ".join(runner.invoke(server_cmd.app, ["provision"]).output.split())
     assert "could not confirm" not in said
-    assert ("Firewall opened for port 8443" in said if done == "added"
-            else "Firewall rule already in place for port 8443." in said)
+    assert "Firewall opened for port 8443" in said
 
 
 def test_the_firewall_message_asks_the_networks_the_way_the_setup_does(seams, monkeypatch):

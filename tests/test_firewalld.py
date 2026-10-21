@@ -355,6 +355,16 @@ def test_ufw_closes_a_network_that_is_no_longer_admitted(monkeypatch, tmp_path):
     assert adds == {"10.8.0.0/24"}
 
 
+def test_the_ufw_setup_never_reloads_ufw(monkeypatch, tmp_path):
+    """`ufw reload` on an enabled ufw is a stop and a start (ufw 0.36, frontend.py), and with
+    MANAGE_BUILTINS=yes both flush every built-in chain, Docker's rules included; the allow
+    and the delete already apply at once. MUTATION: put the reload back - red."""
+    seen = _ufw_wire(monkeypatch, tmp_path, ["10.8.0.0/24"])
+    assert fw._setup_firewall_linux_ufw(8443, 8001) is True
+    assert any("allow" in argv and "delete" not in argv for argv in seen)
+    assert not [argv for argv in seen if "reload" in argv]
+
+
 def test_ufw_without_a_marker_assumes_the_old_rfc1918_allows(monkeypatch, tmp_path):
     """An install from before the admitted networks has RFC 1918 allowed on both ports and
     no marker. Switched to "VPN only", those allows must go too."""
@@ -569,6 +579,28 @@ ENABLED=no
 LOGLEVEL=low
 """
 
+# /etc/default/ufw as Ubuntu 24.04 ships it (measured on a test server), its long comments
+# shortened: plain assignments only, no ENABLED line.
+UBUNTU_DEFAULT_UFW_DEFAULTS = """# /etc/default/ufw
+#
+
+# Set to yes to apply rules to support IPv6 (no means only IPv6 on loopback
+# accepted).
+IPV6=yes
+
+DEFAULT_INPUT_POLICY="DROP"
+DEFAULT_OUTPUT_POLICY="ACCEPT"
+DEFAULT_FORWARD_POLICY="DROP"
+DEFAULT_APPLICATION_POLICY="SKIP"
+
+# By default, ufw only touches its own chains. Set this to 'yes' to have ufw
+# manage the built-in chains too.
+MANAGE_BUILTINS=no
+
+IPT_SYSCTL=/etc/ufw/sysctl.conf
+IPT_MODULES=""
+"""
+
 
 @pytest.mark.parametrize("text, expected", [
     (UBUNTU_DEFAULT_UFW_CONF, False),
@@ -591,20 +623,54 @@ LOGLEVEL=low
     ("ENABLED=$ON\n", None),
     ("if false; then\nENABLED=yes\nfi\n", None),
     ("ENABLED=no\nexport LOGLEVEL\n", None),
+    ('ENABLED=yes\nX="$((ENABLED=0))"\n', None),  # dash: the expansion sets ENABLED=0
+    ("Ä=1\nENABLED=yes\n", None),            # dash: `Ä=1` is a command, the start aborts
 ])
 def test_ufw_enabled_reads_the_config_file(tmp_path, text, expected):
     """systemd says `active` and `enabled` for ufw's unit while ufw itself is off, so only
     ufw's own switch answers, and by the shell's rules, since ufw-init sources the file.
     MUTATION: True for any ENABLED= line; False for a missing file; keys case-insensitive;
     `#` a comment anywhere; lowercase the value; split at a carriage return; read on past a
-    line outside plain assignments - red."""
-    conf = tmp_path / "ufw.conf"
+    line outside plain assignments; read a double-quoted `$` literally; take a non-ASCII
+    name for an assignment - red."""
+    defaults, conf = tmp_path / "ufw", tmp_path / "ufw.conf"
+    defaults.write_bytes(UBUNTU_DEFAULT_UFW_DEFAULTS.encode("utf-8"))
     conf.write_bytes(text.encode("utf-8"))
-    assert fw.ufw_enabled(str(conf)) is expected
+    assert fw.ufw_enabled((str(defaults), str(conf))) is expected
 
 
 def test_ufw_enabled_is_unknown_without_the_file(tmp_path):
-    assert fw.ufw_enabled(str(tmp_path / "missing.conf")) is None
+    defaults = tmp_path / "ufw"
+    defaults.write_bytes(UBUNTU_DEFAULT_UFW_DEFAULTS.encode("utf-8"))
+    assert fw.ufw_enabled((str(defaults), str(tmp_path / "missing.conf"))) is None
+
+
+@pytest.mark.parametrize("defaults, conf, expected", [
+    (UBUNTU_DEFAULT_UFW_DEFAULTS, "ENABLED=yes\n", True),
+    (UBUNTU_DEFAULT_UFW_DEFAULTS, "ENABLED=no\n", False),
+    # Each row below as dash reads it in ufw-init's order (ufw.conf, /etc/default/ufw,
+    # ufw.conf) under `set -e` (measured):
+    ("IPV6 = yes\n", "ENABLED=yes\n", None),                 # a command: exit 127
+    ('DEFAULT_FORWARD_POLICY = "ACCEPT"\n', "ENABLED=yes\n", None),
+    (UBUNTU_DEFAULT_UFW_DEFAULTS.replace("\n", "\r\n"), "ENABLED=yes\n", None),  # `\r`: 127
+    ("Ä=1\n", "ENABLED=yes\n", None),
+    ("ENABLED=yes\n", "LOGLEVEL=low\n", True),               # the default file alone: on
+    ("ENABLED=yes\n", "ENABLED=no\n", False),                # ufw.conf is read last
+    ("", "ENABLED=yes\n", None),                              # `[ -s ]` fails: aborted
+    (None, "ENABLED=yes\n", None),
+])
+def test_ufw_enabled_reads_the_default_file_first(monkeypatch, tmp_path, defaults, conf,
+                                                  expected):
+    """ufw-init sources /etc/default/ufw between its two reads of ufw.conf, under `set -e`: a
+    line the shell fails on there aborts the start and ufw stays off, while ufw.conf alone
+    said on, and so did VAF. MUTATION: read ufw.conf alone; take an empty file - red."""
+    defaults_path, conf_path = tmp_path / "ufw", tmp_path / "ufw.conf"
+    if defaults is not None:
+        defaults_path.write_bytes(defaults.encode("utf-8"))
+    conf_path.write_bytes(conf.encode("utf-8"))
+    monkeypatch.setattr(fw, "UFW_DEFAULTS", str(defaults_path))
+    monkeypatch.setattr(fw, "UFW_CONF", str(conf_path))
+    assert fw.ufw_enabled() is expected
 
 
 def _engines(monkeypatch, *, firewalld=False, ufw=None, linux=True, unit_inactive=False):
@@ -613,7 +679,7 @@ def _engines(monkeypatch, *, firewalld=False, ufw=None, linux=True, unit_inactiv
     monkeypatch.setattr(fw.Platform, "is_linux", lambda *a: linux)
     monkeypatch.setattr(fw, "_firewalld_running", lambda: firewalld)
     monkeypatch.setattr(fw, "_ufw_installed", lambda: ufw is not None)
-    monkeypatch.setattr(fw, "ufw_enabled", lambda conf_path=fw.UFW_CONF: ufw)
+    monkeypatch.setattr(fw, "ufw_enabled", lambda paths=None: ufw)
     monkeypatch.setattr(fw, "_ufw_unit_inactive", lambda: unit_inactive)
 
 
@@ -626,7 +692,7 @@ def test_host_firewall_is_one_answer(monkeypatch):
     _engines(monkeypatch, ufw=True)
     assert fw.host_firewall() == "ufw"
     monkeypatch.setattr(fw, "_ufw_installed", lambda: True)
-    monkeypatch.setattr(fw, "ufw_enabled", lambda conf_path=fw.UFW_CONF: None)
+    monkeypatch.setattr(fw, "ufw_enabled", lambda paths=None: None)
     assert fw.host_firewall() == "ufw", "an unreadable switch keeps the old behaviour"
     _engines(monkeypatch)
     assert fw.host_firewall() == "iptables"
@@ -634,21 +700,39 @@ def test_host_firewall_is_one_answer(monkeypatch):
     assert fw.host_firewall() is None
 
 
-@pytest.mark.parametrize("engine, switch, unconfirmed", [
-    ("ufw", None, True),
-    ("ufw", True, False),
-    ("ufw_off", None, False),
-    ("firewalld", None, False),
-    (None, None, False),
+@pytest.mark.parametrize("engine, switch, unit, why", [
+    ("ufw", None, "active", "/etc/default/ufw or /etc/ufw/ufw.conf could not be read"),
+    ("ufw", True, "active", None),
+    # ufw-init's start aborted (a oneshot unit then says `failed`, measured): which of
+    # ufw's rules are loaded is not known.
+    ("ufw", True, "failed", "systemd reports its unit as failed"),
+    ("ufw_off", None, "failed", None),
+    ("firewalld", None, "failed", None),
+    (None, None, "failed", None),
 ])
 def test_an_uncertain_switch_still_counts_as_ufw_but_is_never_confirmed(monkeypatch, engine,
-                                                                        switch, unconfirmed):
+                                                                        switch, unit, why):
     """The allow rule is harmless on a ufw that is off and needed on one that is on, so an
     uncertain switch keeps "ufw"; what reports the result asks this instead of claiming a
-    guard. MUTATION: answer False always; ignore the engine - red."""
+    guard, and says why. MUTATION: answer None always; ignore the engine; ignore a failed
+    unit; read the host firewall again when the caller passed it - red."""
+    monkeypatch.setattr(fw, "UFW_DEFAULTS", "/etc/default/ufw")
+    monkeypatch.setattr(fw, "UFW_CONF", "/etc/ufw/ufw.conf")
     monkeypatch.setattr(fw, "host_firewall", lambda: engine)
-    monkeypatch.setattr(fw, "ufw_enabled", lambda conf_path=fw.UFW_CONF: switch)
-    assert fw.ufw_switch_unconfirmed() is unconfirmed
+    monkeypatch.setattr(fw, "ufw_enabled", lambda paths=None: switch)
+    monkeypatch.setattr(fw, "_ufw_unit_state", lambda: unit)
+    reason = fw.ufw_switch_unconfirmed()
+    if why is None:
+        assert reason is None
+    else:
+        assert why in reason
+
+    def read_again():
+        raise AssertionError("the caller already read the host firewall")
+
+    monkeypatch.setattr(fw, "host_firewall", read_again)
+    if engine is not None:
+        assert fw.ufw_switch_unconfirmed(engine) == reason
 
 
 def test_a_ufw_whose_unit_is_stopped_counts_as_off(monkeypatch):
@@ -666,14 +750,14 @@ class _Done:
         self.stdout, self.returncode = stdout, 0 if stdout == b"active\n" else 3
 
 
-@pytest.mark.parametrize("answer, inactive", [
-    (b"inactive\n", True),
-    (b"active\n", False),          # proves nothing: Ubuntu says it while ufw is off
-    (b"failed\n", False),
-    (b"unknown\n", False),
-    (FileNotFoundError("systemctl"), False),
+@pytest.mark.parametrize("answer, inactive, state", [
+    (b"inactive\n", True, "inactive"),
+    (b"active\n", False, "active"),    # proves nothing: Ubuntu says it while ufw is off
+    (b"failed\n", False, "failed"),    # not off: unconfirmed (ufw_switch_unconfirmed)
+    (b"unknown\n", False, "unknown"),
+    (FileNotFoundError("systemctl"), False, ""),
 ])
-def test_only_systemds_inactive_is_trusted(monkeypatch, answer, inactive):
+def test_only_systemds_inactive_is_trusted(monkeypatch, answer, inactive, state):
     """MUTATION: read the exit code (3 for every state that is not active) - red."""
     def run(argv, **kw):
         assert argv == ["systemctl", "is-active", "ufw"]
@@ -683,6 +767,7 @@ def test_only_systemds_inactive_is_trusted(monkeypatch, answer, inactive):
 
     monkeypatch.setattr(fw.subprocess, "run", run)
     assert fw._ufw_unit_inactive() is inactive
+    assert fw._ufw_unit_state() == state
 
 
 # The state Ubuntu ships ufw in: the switch off (ENABLED=no), the unit running, and ufw
@@ -759,11 +844,11 @@ def test_the_advice_reads_ufws_state_the_way_host_firewall_does(monkeypatch):
     """Called without a state, as provision and the doctor call it, the advice asks the same
     two readers `host_firewall()` asks. MUTATION: default either state to off - red."""
     monkeypatch.setattr(fw, "ufw_manages_builtins", lambda paths=None: False)
-    monkeypatch.setattr(fw, "ufw_enabled", lambda conf_path=fw.UFW_CONF: True)
+    monkeypatch.setattr(fw, "ufw_enabled", lambda paths=None: True)
     monkeypatch.setattr(fw, "_ufw_unit_inactive", lambda: True)
     text = fw.ufw_off_advice(22)
     assert "`sudo ufw disable`" in text and "`sudo systemctl enable --now ufw`" in text
-    monkeypatch.setattr(fw, "ufw_enabled", lambda conf_path=fw.UFW_CONF: None)
+    monkeypatch.setattr(fw, "ufw_enabled", lambda paths=None: None)
     monkeypatch.setattr(fw, "_ufw_unit_inactive", lambda: False)
     text = fw.ufw_off_advice(22)
     assert "ufw disable" not in text and "systemctl" not in text
@@ -774,7 +859,7 @@ def test_an_unreadable_switch_with_a_stopped_unit_still_gets_the_disable_step(mo
     writes the IPv6 rule; `ufw disable` is harmless in every state. MUTATION: read an
     unreadable switch as off (`is True`) - red."""
     monkeypatch.setattr(fw, "ufw_manages_builtins", lambda paths=None: False)
-    monkeypatch.setattr(fw, "ufw_enabled", lambda conf_path=fw.UFW_CONF: None)
+    monkeypatch.setattr(fw, "ufw_enabled", lambda paths=None: None)
     monkeypatch.setattr(fw, "_ufw_unit_inactive", lambda: True)
     text = fw.ufw_off_advice(22)
     assert text.index("`sudo ufw disable`") < text.index("`sudo ufw allow OpenSSH`")

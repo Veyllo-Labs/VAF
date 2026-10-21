@@ -69,7 +69,7 @@ def ufw_off_advice(ssh_port: Optional[int] = None, *, switch_on: Optional[bool] 
     number: the one this session came in on when it is known.
 
     The steps follow the state ufw is in, read as `host_firewall()` reads it (`switch_on`:
-    ufw.conf may say `ENABLED=yes`; `unit_stopped`: systemd says its unit is `inactive`;
+    ufw's switch may say `ENABLED=yes`; `unit_stopped`: systemd says its unit is `inactive`;
     `manages_builtins`: `ufw_manages_builtins()`), all read here when not given. Measured in
     ufw's own code (0.36, Ubuntu 24.04):
     - `ufw enable` writes the switch and runs `ufw-init start` itself; it never starts or
@@ -80,8 +80,8 @@ def ufw_off_advice(ssh_port: Optional[int] = None, *, switch_on: Optional[bool] 
     - With the switch on and the unit stopped, which is what `systemctl disable --now ufw`
       leaves, `ufw allow` writes the IPv4 rule and then fails reloading the chains the stop
       deleted, before it writes the IPv6 one. `sudo ufw disable` first turns the switch off
-      (its stop tolerates the missing chains), so the allows are recorded whole. An
-      unreadable ufw.conf counts as on here: with `MANAGE_BUILTINS=no`, Ubuntu's default,
+      (its stop tolerates the missing chains), so the allows are recorded whole. A switch
+      that cannot be read counts as on here: with `MANAGE_BUILTINS=no`, Ubuntu's default,
       `ufw disable` only flushes ufw's own chains and sets ACCEPT policies until the
       `ufw enable` that follows it.
     - With `MANAGE_BUILTINS=yes` ufw's stop and its start both flush every other iptables
@@ -489,21 +489,25 @@ def _cleanup_firewall_macos() -> bool:
 # LINUX IMPLEMENTATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def ufw_enabled(conf_path: str = UFW_CONF) -> Optional[bool]:
-    """Whether ufw is switched on, read from its config file: True for `ENABLED=yes` or
-    `ENABLED=YES` (the two words ufw-init's start accepts), False for any other value or no
-    such line, None when the file is missing, unreadable, or holds a line `_ufw_settings`
-    cannot be sure of.
+def ufw_enabled(paths: Optional[tuple] = None) -> Optional[bool]:
+    """Whether ufw is switched on, read the way ufw-init reads it: /etc/default/ufw, then
+    /etc/ufw/ufw.conf, the last assignment wins. True for `ENABLED=yes` or `ENABLED=YES` (the
+    two words ufw-init's start accepts), False for any other value or no such line, None when
+    a file is missing, empty or unreadable, or holds a line `_ufw_settings` cannot be sure of.
+
+    Both files, because ufw-init runs under `set -e` and sources /etc/default/ufw between its
+    two reads of ufw.conf: a line the shell fails on there aborts the start, and ufw stays off
+    while ufw.conf alone says on (measured in dash: `IPV6 = yes` and a CRLF copy of the file
+    each exit 127). An `ENABLED=yes` that sits in /etc/default/ufw alone switches ufw on.
 
     Deliberately not systemd's answer: on Ubuntu 24.04 `systemctl is-active ufw` says
     `active` and `is-enabled` says `enabled` while ufw itself is off (measured on a server
     whose ufw.conf said `ENABLED=no`), because the unit only loads the rules ufw would use.
-    Not `ufw status` either: it needs root and prints translated text. The file is read by
-    the shell's rules, because ufw-init sources it and that start is what loads the rules at
-    boot: `enabled=yes` is another variable, `ENABLED=yes#note` is the value `yes#note`, the
-    last assignment wins.
+    Not `ufw status` either: it needs root and prints translated text. The files are read by
+    the shell's rules, because ufw-init sources them and that start is what loads the rules
+    at boot: `enabled=yes` is another variable, `ENABLED=yes#note` is the value `yes#note`.
     """
-    settings = _ufw_settings(conf_path)
+    settings = _ufw_settings(*(paths or (UFW_DEFAULTS, UFW_CONF)))
     value = None if settings is None else _setting(settings, "ENABLED")
     if value is None:
         return None
@@ -572,7 +576,9 @@ def _shell_words(line: str):
 def _ufw_settings(*paths: str) -> Optional[dict]:
     """The variables ufw's shell-sourced config files set, read in order the way ufw-init
     sources them (`. /etc/default/ufw`, then `. /etc/ufw/ufw.conf`), or None when one cannot
-    be read. Measured against dash, the shell ufw-init runs under on Ubuntu:
+    be read or is empty (ufw-init-functions sources a file only when `[ -s ]` holds and
+    aborts the start otherwise). Measured against dash, the shell ufw-init runs under on
+    Ubuntu:
     - names are case-sensitive: `enabled=yes` is another variable than `ENABLED`;
     - a line is followed only when it is blank, a comment, or nothing but `NAME=value` words
       (`A=1 B=2` sets both); `NAME=value command` sets NAME for that command only, and
@@ -583,9 +589,12 @@ def _ufw_settings(*paths: str) -> Optional[dict]:
     settings: dict = {}
     for path in paths:
         try:
-            text = Path(path).read_bytes().decode("utf-8", "replace")
+            data = Path(path).read_bytes()
         except OSError:
             return None
+        if not data:
+            return None
+        text = data.decode("utf-8", "replace")
         if _UNSURE in settings:
             continue
         for line in text.split("\n"):
@@ -618,17 +627,23 @@ def _ufw_installed() -> bool:
     return os.path.exists(UFW_CONF)
 
 
-def _ufw_unit_inactive() -> bool:
-    """Whether systemd says ufw's unit is `inactive`. Only that answer is trusted: `active`
-    proves nothing (Ubuntu 24.04 says it while ufw.conf says `ENABLED=no`), but `inactive`
-    is what `systemctl disable --now ufw` leaves, and that stop flushes ufw's rules
-    (`ufw-init stop`) while ufw.conf keeps `ENABLED=yes`. The state is one of systemd's fixed
-    words, not translated text. False when systemctl is missing or does not answer."""
+def _ufw_unit_state() -> str:
+    """systemd's state of ufw's unit (`active`, `inactive`, `failed`, ...): one of systemd's
+    fixed words, not translated text. "" when systemctl is missing or does not answer."""
     try:
         r = subprocess.run(['systemctl', 'is-active', 'ufw'], capture_output=True, timeout=5)
     except Exception:
-        return False
-    return (r.stdout or b"").decode("ascii", "replace").strip() == "inactive"
+        return ""
+    return (r.stdout or b"").decode("ascii", "replace").strip()
+
+
+def _ufw_unit_inactive() -> bool:
+    """Whether systemd says ufw's unit is `inactive`. Only that answer counts as off: `active`
+    proves nothing (Ubuntu 24.04 says it while ufw.conf says `ENABLED=no`), but `inactive`
+    is what `systemctl disable --now ufw` leaves, and that stop flushes ufw's rules
+    (`ufw-init stop`) while ufw.conf keeps `ENABLED=yes`. False when systemctl is missing or
+    does not answer. A `failed` unit is not off but unconfirmed (`ufw_switch_unconfirmed`)."""
+    return _ufw_unit_state() == "inactive"
 
 
 def _linux_host_firewall() -> str:
@@ -641,9 +656,9 @@ def _linux_host_firewall() -> str:
 
 def host_firewall() -> Optional[str]:
     """Which host firewall guards this machine: "firewalld" (running), "ufw" (installed and
-    on, or its switch unreadable or not certain), "ufw_off" (installed but switched off, or its unit stopped:
-    it guards nothing), "iptables" (neither), or None off Linux. The one answer for the setup
-    and `vaf doctor`.
+    on, or its switch unreadable or not certain), "ufw_off" (installed but switched off, or
+    its unit stopped: it guards nothing), "iptables" (neither), or None off Linux. The one
+    answer for the setup and `vaf doctor`.
 
     A switched-off ufw is its own answer because rules added to it do nothing: VAF used to
     take ufw whenever the binary existed and report the port as opened (measured on an
@@ -653,22 +668,34 @@ def host_firewall() -> Optional[str]:
     does not come back at the next boot.
 
     NAMED BOUNDARY: a switch that cannot be read with certainty (`ufw_enabled()` is None)
-    still answers "ufw", so the setup adds its allow rule, which is harmless whether ufw is
-    on or off; answering "ufw_off" instead would leave the port closed to VPN clients on a
-    ufw that is on. What is not known is never reported as guarded: `ufw_switch_unconfirmed()`
-    tells provision and `vaf doctor` to say so and how to check.
+    still answers "ufw", so the setup adds its allow rule: ufw applies it at once to its own
+    chains when it is on and only records it when it is off; answering "ufw_off" instead
+    would leave the port closed to VPN clients on a ufw that is on. Besides its own allows
+    and deletes the setup runs nothing on ufw, no `ufw reload` in particular (see
+    `_setup_firewall_linux_ufw`). What is not known is never reported as guarded:
+    `ufw_switch_unconfirmed()` tells provision and `vaf doctor` to say so and how to check.
     """
     if not Platform.is_linux():
         return None
     return _linux_host_firewall()
 
 
-def ufw_switch_unconfirmed() -> bool:
-    """True when `host_firewall()` answers "ufw" only because ufw's switch could not be read
-    with certainty (`ufw_enabled()` is None: ufw.conf unreadable, or a line other than plain
-    assignments). The allow rule is added all the same; provision and `vaf doctor` ask this
-    so neither reports the port as guarded, and both name `sudo ufw status` as the check."""
-    return host_firewall() == "ufw" and ufw_enabled() is None
+def ufw_switch_unconfirmed(engine: Optional[str] = None) -> Optional[str]:
+    """Why `host_firewall()` answers "ufw" while VAF cannot confirm that ufw guards anything,
+    or None when nothing is in doubt: its switch could not be read with certainty
+    (`ufw_enabled()` is None), or systemd reports its unit `failed`, which is what ufw-init's
+    start leaves when it aborts at boot, so which of ufw's rules are loaded is not known.
+    The allow rule is added all the same; provision and `vaf doctor` put this reason in
+    their warning instead of reporting the port as guarded, and both name `sudo ufw status`
+    as the check. `engine` is `host_firewall()`'s answer when the caller already has it."""
+    if (engine or host_firewall()) != "ufw":
+        return None
+    if ufw_enabled() is None:
+        return (f"{UFW_DEFAULTS} or {UFW_CONF} could not be read with certainty (a file "
+                "missing, empty or unreadable, or a line other than plain assignments)")
+    if _ufw_unit_state() == "failed":
+        return "systemd reports its unit as failed (`systemctl status ufw` says why)"
+    return None
 
 
 def _setup_firewall_linux(port: int, port_frontend: int):
@@ -1069,9 +1096,11 @@ def _setup_firewall_linux_ufw(port: int, port_frontend: int) -> bool:
             
             # Everything else is refused by ufw's default deny, which holds only while ufw
             # is enabled: _setup_firewall_linux never comes here for a switched-off ufw.
-        
-        # Reload ufw
-        subprocess.run(['sudo', '-n','ufw', 'reload'], capture_output=True)
+
+        # Deliberately no `ufw reload`. On an enabled ufw, `ufw allow` and `ufw delete` apply
+        # the change at once to ufw's own user chains, and on a disabled one a reload does
+        # nothing. A reload is a stop and a start (ufw 0.36, frontend.py `reload`), and with
+        # MANAGE_BUILTINS=yes both flush every built-in chain, Docker's rules included.
         try:
             import json
             marker = _ufw_marker_path()

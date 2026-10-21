@@ -1047,7 +1047,11 @@ that room, and "always" for a host tool is a second one.
 ### A room turn is a turn: it retrieves, and it learns
 
 A room turn runs through the same `chat_step` a chat does. The tool router runs, tools
-are live, and the two memory steps of an ordinary turn apply.
+are live, and the two memory steps of an ordinary turn apply. The turn answers through
+`room_send`; when the model writes plain text instead, the runner posts that text into the
+room (`deliver_stray_room_answer`), except the text of a turn that failed or was stopped
+(`chat_step`'s `_turn_failed`, a loop-protection note): it is the engine's, a provider's raw
+answer or the owner's spend, and every member reads what is posted.
 
 **Retrieval.** The turn is given what this account already knows, through
 `turn_memory_context` - the same primitive the chat queue, automations and thinking runs

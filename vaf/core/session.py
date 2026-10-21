@@ -107,13 +107,41 @@ def failed_turn_meta(failed, failure="") -> Optional[Dict[str, Any]]:
     """The metadata for a stored answer: the failed-turn mark when `failed`, the failure that
     followed an answer when only `failure` is given, else None (an ordinary answer keeps the
     shape it always had). A host passes chat_step's `_turn_failed`, and `_turn_failure` in
-    the form its stored copy holds it: put through the same cleanup as the copy, or left out
-    when the copy is the turn's return value, which never holds it (`model_text`)."""
+    the form its stored copy holds it: as `stored_turn_copy` returns it when the copy is the
+    cleaned stream, or left out when the copy is the turn's return value, which never holds
+    it (`model_text`)."""
     if failed:
         return {FAILED_TURN_KEY: True}
     if failure:
         return {TURN_FAILURE_KEY: str(failure)}
     return None
+
+
+def stored_turn_copy(stream, failure, clean) -> Tuple[str, str]:
+    """A host's stored copy of a turn's streamed text, and the failure to record with it.
+
+    `failure` is chat_step's `_turn_failure`: the failure text that ended a turn which had
+    already answered, as it was streamed. The engine streams it last and returns, so it is
+    the tail of `stream`. The head and the failure go through the host's own `clean` apart
+    and are joined by a blank line, so the recorded failure stands verbatim in the copy by
+    construction, whatever the cleanup does across the boundary (a markup cleanup whose
+    patterns match across brackets, a newline collapse, a strip). Returns (copy, failure to
+    record) for `failed_turn_meta(failed, ...)`; a failure the cleanup removes entirely is
+    not recorded, and the copy then holds none of it. A stream that does not end with the
+    failure records the cleaned failure (the raw one when the cleanup leaves nothing), and a
+    reader that cannot find it drops the message (`model_text`), the safe side."""
+    stream = str(stream or "")
+    failure = str(failure or "")
+    if failure and stream.endswith(failure):
+        head = clean(stream[:-len(failure)]) or ""
+        tail = (clean(failure) or "").strip()
+        if not tail:
+            return head, ""
+        return (f"{head.rstrip()}\n\n{tail}" if head.strip() else tail), tail
+    copy = clean(stream) or ""
+    if not failure:
+        return copy, ""
+    return copy, ((clean(failure) or "").strip() or failure)
 
 
 def is_failed_turn(msg) -> bool:
@@ -146,13 +174,16 @@ def model_text(msg) -> Optional[str]:
     """What a model may read of a stored message, or None when it may read none of it.
 
     None for a failed turn's text (`is_failed_turn`). For an answer that a later round's
-    failure followed (`metadata.turn_failure`), the content without that failure, and None
-    when nothing else is left. A recorded failure the content does not hold verbatim makes
-    the message None, the safe side: the stored copy altered it, and an altered failure need
-    not carry any signature (the CLI's markup cleanup deletes every `[...]` group, `[Error]`
-    and the head of `[API Error from ...` with it, and keeps the rest). So a host records the
-    failure in the form its stored copy holds it (`failed_turn_meta`), or none when its copy
-    never held it. Every other message: its content, as stored.
+    failure followed (`metadata.turn_failure`), the content without that failure, which is
+    its tail (the engine streams it last, and `stored_turn_copy` keeps it last), and None
+    when nothing else is left. Only the tail is taken off: a cleaned failure can be as short
+    as a `<think>` tag the answer holds too. A recorded failure the content does not end
+    with, or holds once more, makes the message None, the safe side: the stored copy altered
+    it, and an altered failure need not carry any signature (the CLI's markup cleanup deletes
+    every `[...]` group, `[Error]` and the head of `[API Error from ...` with it, and keeps the
+    rest). So a host builds its copy and the failure to record with `stored_turn_copy`, or
+    records none when its copy is the turn's return value. Every other message: its content,
+    as stored.
 
     Asked by everything that builds a model's context, or a tool result a model reads, from
     a stored chat: the replay in `CoreAgent.load_session_context`, `Session.get_history`, the
@@ -171,9 +202,12 @@ def model_text(msg) -> Optional[str]:
     meta = get("metadata")
     failure = meta.get(TURN_FAILURE_KEY) if isinstance(meta, dict) else None
     if isinstance(failure, str) and failure:
-        if failure not in content:
+        content = content.rstrip()
+        if not content.endswith(failure):
             return None
-        content = content.replace(failure, "").strip()
+        content = content[:-len(failure)].strip()
+        if failure in content:
+            return None
         return content or None
     return content
 

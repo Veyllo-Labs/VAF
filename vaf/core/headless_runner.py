@@ -23,7 +23,7 @@ from vaf.core.identity_binding import (Identity, bind_identity, identity_from_me
                                        reassert_identity, resolve_scope_identity)
 from vaf.core.task_queue import TaskQueue
 from vaf.core.subagent_ipc import take_result_notification
-from vaf.core.session import (SessionManager, Session, failed_turn_meta,
+from vaf.core.session import (SessionManager, Session, failed_turn_meta, stored_turn_copy,
                               turn_context_messages_since_last_user)
 from vaf.core.tray_context import TrayContext
 from vaf.core.web_interface import get_web_interface
@@ -404,7 +404,15 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
             from vaf.core.completion import is_error_reply, is_stop_note
             if turn_failure and not turn_failed:
                 # Answered, then a later round failed: the answer goes out, the failure not.
-                final_text = str(final_text or "").replace(turn_failure, "").strip()
+                # A failure the outgoing text no longer holds verbatim (the tool-call JSON
+                # strip cut into it) cannot be taken off, so nothing of the turn goes out:
+                # the marker check below would catch a provider failure anyway, a failure
+                # text without a marker it would not.
+                final_text = str(final_text or "")
+                if turn_failure not in final_text:
+                    _send_turn_error_reply(task, final_text, contact=contact)
+                    return
+                final_text = final_text.replace(turn_failure, "").strip()
             visible = _prepare_channel_outbound(final_text)
             if turn_failed or is_error_reply(visible) or is_stop_note(visible):
                 _send_turn_error_reply(task, final_text, contact=contact)
@@ -480,6 +488,25 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
                     pass
     except Exception:
         pass
+
+
+def _clean_for_session(text: str) -> str:
+    """The chat turn's stored copy: full content for display; only redacted blocks removed.
+    <think> blocks stay so the UI can show thinking after reload (the replay in agent.py
+    strips them from the model's context)."""
+    if not text:
+        return ""
+    cleaned = re.sub(r'<redacted_reasoning>.*?</redacted_reasoning>', '', text, flags=re.DOTALL)
+    cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+    return cleaned.strip()
+
+
+def _clean_drain_text(text: str) -> str:
+    """The sub-agent drain's stored copy of its summary turn: reasoning removed, leaked
+    tool-call JSON stripped, blank-line runs collapsed."""
+    text = re.sub(r"<think>.*?</think>", "", str(text or ""), flags=re.DOTALL)
+    text = _strip_tool_calls_json(text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
 def _apply_channel_history_window(agent, source: str) -> None:
@@ -795,11 +822,19 @@ def deliver_stray_room_answer(agent, room_wake: dict, answer, hist_before: int) 
 
     Detection is by the turn's own history: a room_send that ran left a tool
     entry behind. Placeholder returns ("...", empty) are not answers and are
-    not delivered. Returns True when a fallback delivery happened.
+    not delivered, and neither is the text of a turn that failed or was stopped
+    (chat_step's `_turn_failed`, a loop-protection note): it is the engine's, a
+    provider's raw answer or the owner's spend, and the room's other members
+    read what is posted. Returns True when a fallback delivery happened.
     """
     try:
         text = str(answer or "").strip()
         if not text or text == "...":
+            return False
+        from vaf.core.completion import is_stop_note
+        if getattr(agent, "_turn_failed", False) or is_stop_note(text):
+            append_domain_log_always(
+                "headless", f"[ROOM] failed turn not posted room={room_wake.get('room_id')}")
             return False
         history = getattr(agent, "history", []) or []
         for entry in history[hist_before:]:
@@ -2759,17 +2794,16 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             # turn's own answer is the fixed sentence the browser hides.
                             _assistant_response = response_text
 
-                        def _clean_for_session(text: str) -> str:
-                            """Keep full content for display; only strip redacted blocks."""
-                            if not text:
-                                return ""
-                            # Keep <think> blocks so the UI can show thinking after reload.
-                            # <think> is stripped from LLM context in agent.py when replaying history.
-                            cleaned = re.sub(r'<redacted_reasoning>.*?</redacted_reasoning>', '', text, flags=re.DOTALL)
-                            cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
-                            return cleaned.strip()
 
-                        _clean_response = _clean_for_session(_assistant_response)
+                        if response_parts and not _turn_ends_at_draft:
+                            # The copy is the stream: a failure that followed an answer is its
+                            # tail, cleaned apart and recorded the way the copy holds it.
+                            _clean_response, _stored_failure = stored_turn_copy(
+                                _assistant_response, _turn_failure, _clean_for_session)
+                        else:
+                            # The copy is the turn's return value, which never holds a failure
+                            # that followed an answer: only the failed-turn mark applies.
+                            _clean_response, _stored_failure = _clean_for_session(_assistant_response), ""
 
                         if _user_input.strip():
                             # Helper to get role/content from Message object or dict
@@ -2899,7 +2933,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                                       f"{task.session_id}: {type(_ctx_e).__name__}: {_ctx_e}")
                                 if _clean_response:
                                     session.add_message(role="assistant", content=_clean_response,
-                                                        metadata=failed_turn_meta(_turn_failed, _turn_failure))
+                                                        metadata=failed_turn_meta(_turn_failed, _stored_failure))
                                 session_mgr.save(session)
                                 if is_debug_logging_enabled():
                                     logging.getLogger(__name__).debug(f"Session saved: +1 user, +1 assistant for {task.session_id}, turn_count={session.runtime_state.get('user_turn_count', 0)}")
@@ -2911,7 +2945,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         break
                                 if last_assistant_msg != _clean_response:
                                     session.add_message(role="assistant", content=_clean_response,
-                                                        metadata=failed_turn_meta(_turn_failed, _turn_failure))
+                                                        metadata=failed_turn_meta(_turn_failed, _stored_failure))
                                 # sync_state=True ensures the ContextManager state is saved to runtime_state
                                 session_mgr.save(session, sync_state=True)
                     except Exception as e:
@@ -3606,15 +3640,23 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     )
                                 finally:
                                     agent._synthetic_drain_turn = False
+                                # What chat_step left about this turn: read before anything else
+                                # runs a turn on the agent, like the chat lane.
+                                _drain_failed = bool(getattr(agent, "_turn_failed", False))
+                                _drain_failure = str(getattr(agent, "_turn_failure", "") or "")
 
                                 # POST-CHAT: Emit final message + save session
                                 # (mirrors main chat path – ensures browser sees the response even
                                 # if WebSocket dropped during streaming, and persists it for reload)
                                 _result_sid = getattr(agent, "current_session_id", None)
                                 _final_result_text = "".join(response_parts)
-                                _clean_result = re.sub(r"<think>.*?</think>", "", _final_result_text, flags=re.DOTALL)
-                                _clean_result = _strip_tool_calls_json(_clean_result)
-                                _clean_result = re.sub(r"\n{3,}", "\n\n", _clean_result).strip()
+
+
+                                # The stored copy is the cleaned stream; a failure that followed an
+                                # answer is its tail, cleaned apart and recorded the way the copy
+                                # holds it, so no later context reads it back (session.model_text).
+                                _clean_result, _drain_stored_failure = stored_turn_copy(
+                                    _final_result_text, _drain_failure, _clean_drain_text)
 
                                 if _clean_result:
                                     # 1. Final emit – guarantees browser has complete message
@@ -3638,7 +3680,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     try:
                                         if _result_sid:
                                             _saved_sess = session_mgr.load(_result_sid)
-                                            _saved_sess.add_message(role="assistant", content=_clean_result)
+                                            _saved_sess.add_message(
+                                                role="assistant", content=_clean_result,
+                                                metadata=failed_turn_meta(_drain_failed,
+                                                                          _drain_stored_failure))
                                             session_mgr.save(_saved_sess)
                                     except Exception:
                                         pass

@@ -272,15 +272,18 @@ engine's, not something the model said: in the next turn's context the model wou
 provider's raw answer, a masked key or the owner's spend as its own words, to whoever the
 chat is with. So the model also does not know a failure happened: asked "what went wrong?",
 it sees its request with no answer after it and usually answers that request again, which
-is what "try again" needs. The person's screen shows the error. The queue runner and the
-CLI store the streamed text for their transcripts as one message, the way it was shown, and
-mark that copy (`session.failed_turn_meta`); every reader that builds a model's context
-from a stored chat reads it through `session.model_text` (SESSION_MANAGEMENT.md). The runner
-also answers a contact's failed turn with a fixed sentence, and a turn that answered first
-with that answer (FRONT_OFFICE.md). Guard: `tests/test_failed_turn_context.py`.
+is what "try again" needs. The person's screen shows the error. Every host that stores
+the streamed text for a transcript (the queue runner's chat lane and its sub-agent result
+drain, the interactive CLI and the TUI) stores it as one message, the way it was shown,
+builds that copy with `session.stored_turn_copy` and marks it (`session.failed_turn_meta`);
+`vaf run -p` stores the return value and marks only a failed turn. Every reader that builds
+a model's context from a stored chat reads it through `session.model_text`
+(SESSION_MANAGEMENT.md). The runner also answers a contact's failed turn with a fixed
+sentence, and a turn that answered first with that answer (FRONT_OFFICE.md); a room turn
+that failed posts nothing into its room. Guard: `tests/test_failed_turn_context.py`.
 
-Named boundary: other returns end a turn early and keep the old shape (`_turn_failed` stays
-unset). The user's stop (`[Generation stopped by user]` at the top of a round, between tools,
+Named boundary: other failure and stop returns end a turn early and keep the old shape
+(`_turn_failed` stays unset). The user's stop (`[Generation stopped by user]` at the top of a round, between tools,
 after a tool round, and mid-stream, where the partial answer is kept) commits its text: the
 person ended the turn, and what they see is what they asked for. The emergency loop breaker
 (ten tool calls in under five seconds) commits a note that names no internals. The empty

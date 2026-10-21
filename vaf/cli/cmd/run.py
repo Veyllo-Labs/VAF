@@ -15,7 +15,7 @@ from datetime import datetime
 from rich.console import Console
 from rich.panel import Panel
 from vaf.core.agent import Agent
-from vaf.core.session import failed_turn_meta
+from vaf.core.session import failed_turn_meta, stored_turn_copy
 from vaf.cli.ui import UI
 from vaf.core.log_helper import append_crash_log, get_dated_log_path
 import threading
@@ -2580,17 +2580,18 @@ def _process_agent_message(agent, user_input: str, tui, session):
         
         # Save response to session (USE CLEAN TEXT!)
         full_response_raw = "".join(response_parts)
-        # Use the same converter to ensure consistency
-        full_response_clean = convert_rich_to_xml(full_response_raw)
+        # Use the same converter to ensure consistency. A failure that followed an answer is
+        # the tail of the stream; the markup cleanup deletes every [...] group (the head of
+        # "[API Error from ..." and all of "[Error]" with it) and turns [...dim...] groups into
+        # <think>, matching across brackets, so it is converted apart from the answer and
+        # recorded the way this copy then holds it (session.stored_turn_copy, model_text).
+        full_response_clean, _stored_failure = stored_turn_copy(
+            full_response_raw, getattr(agent, "_turn_failure", "") or "", convert_rich_to_xml)
         
-        # A failed turn is marked so a resumed chat does not replay it as an answer, and a
-        # failure that followed an answer is recorded the way this copy holds it: the markup
-        # cleanup deletes every [...] group, the head of "[API Error from ..." and all of
-        # "[Error]" with it, and a reader must find the rest verbatim (session.model_text).
+        # A failed turn is marked so a resumed chat does not replay it as an answer.
         session.add_message("assistant", full_response_clean,
-                            metadata=failed_turn_meta(
-                                getattr(agent, "_turn_failed", False),
-                                convert_rich_to_xml(getattr(agent, "_turn_failure", "") or "").strip()))
+                            metadata=failed_turn_meta(getattr(agent, "_turn_failed", False),
+                                                      _stored_failure))
         
         # AUTO-SAVE SESSION (Critical for Web UI persistence)
         # We assume session object handles its own persistence path if it was loaded/created properly.

@@ -185,8 +185,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   language on their contact record (English when it names none). An answer by mail is not
   sent at all and the mail waits for you. A failed answer also no longer stays in what the
   agent reads on the next message, so it cannot repeat it when asked what happened; that is
-  true in your own chats too. The web UI still shows the error, and your own messenger chats
-  still receive it in full. Restart VAF after updating so the fix takes effect.
+  true in your own chats too, the summary of a finished sub-agent included. In an agent room,
+  a turn that failed no longer posts its error into the room. The web UI still shows the
+  error, and your own messenger chats still receive it in full. Restart VAF after updating
+  so the fix takes effect.
 
 - **Archived chats, agent rooms and word suggestions are encrypted on disk like the chats.**
   Their writers already encrypted every new file, but the start-up sweep that encrypts what

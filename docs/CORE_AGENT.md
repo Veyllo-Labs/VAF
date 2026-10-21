@@ -155,9 +155,11 @@ the real answer; the return value is a status:
   empty. The model never reads that text as its own words in a later turn. A
   caller that stores the streamed text apart from the history marks its copy with
   `session.failed_turn_meta(_turn_failed, failure)`, the failure in the form its copy holds
-  it (put through the same cleanup, or none when the copy is the return value), and the
-  readers that build a model's context from a stored chat read it through
-  `session.model_text()`, which drops a message whose recorded failure it cannot find.
+  it (`session.stored_turn_copy` cleans the answer and the failure apart with the host's
+  own cleanup, or none when the copy is the return value), and the readers that build a
+  model's context from a stored chat read it through `session.model_text()`, which takes
+  the failure off as the copy's tail and drops a message whose recorded failure it cannot
+  find there.
 
 There is no public `stop()`; a running turn is stopped via
 `TaskQueue().request_stop(session_id)` (polled between chunks and tools).

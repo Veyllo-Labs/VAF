@@ -167,3 +167,20 @@ def test_a_room_send_from_an_earlier_turn_does_not_mask_this_one(room):
     delivered = hr.deliver_stray_room_answer(agent, WAKE, "new answer", 1)
     assert delivered is True
     assert room.said == ["new answer"]
+
+
+def test_a_failed_room_turn_posts_nothing(room):
+    """A room turn whose provider failed returns the failure as its text (chat_step's
+    `_turn_failed`), and a loop-protection stop returns the engine's note. The room's other
+    members read what is posted, so neither goes in. MUTATION: drop the gate - the masked
+    key and the owner's spend reach the room, red."""
+    failed = SimpleNamespace(history=[], _turn_failed=True)
+    assert hr.deliver_stray_room_answer(
+        failed, WAKE, "[API Error from openai: Error code: 401 - sk-proj-****abcd]", 0) is False
+    stopped = SimpleNamespace(history=[], _turn_failed=False)
+    assert hr.deliver_stray_room_answer(
+        stopped, WAKE, "⚠️ [LOOP_PROTECTION] Daily API budget reached (~$4.12 of $5.00).", 0) is False
+    assert room.said == []
+    answered = SimpleNamespace(history=[], _turn_failed=False)
+    assert hr.deliver_stray_room_answer(answered, WAKE, "Ich übernehme den zweiten Teil.", 0) is True
+    assert room.said == ["Ich übernehme den zweiten Teil."]

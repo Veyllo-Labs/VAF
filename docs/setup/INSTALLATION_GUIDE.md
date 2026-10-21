@@ -84,6 +84,8 @@ Linux is the one platform where the installer asks, once:
 
 Press **Enter** for **Desktop** (using VAF on this computer). Choose **Server** only for a home server / NAS / headless box that other devices should reach - see [SERVER_MODE.md](SERVER_MODE.md).
 
+Server mode serves VAF to your local network and, through a VPN, to your devices elsewhere. It never serves the public internet: do not forward the port, and on a rented server keep it closed in the provider's firewall ([SERVER_MODE.md](SERVER_MODE.md#on-a-rented-server-vps)). The installer's closing summary lists the LAN and VPN addresses VAF admits (`vaf server status`), never a public one.
+
 The choice can also be made non-interactively with `./install.sh --server` or `./install.sh --desktop` - required for scripted installs, where there is no prompt and the default is Desktop.
 
 The installer then asks for the profile: **Full (local)**, the default, runs the models and the speech containers on this machine; **Lean (API)** runs none of them - for a small server without a GPU. Chat and speech-to-text then go to the API providers you set after the first login; text-to-speech goes to a provider, a TTS server you run elsewhere (`chatterbox`) or the macOS voice. `--profile local` or `--profile api` answers it without a prompt, on any platform (`-InferenceProfile` on Windows); see [INSTALL_PROFILES.md](INSTALL_PROFILES.md). A server install additionally opens the OS firewall for the LAN port, enables Docker at boot, disables sleep/suspend, and offers a master passphrase for headless credential encryption; the details are in [SERVER_MODE.md](SERVER_MODE.md).

@@ -22,8 +22,8 @@ def _enable_lan_keys() -> None:
     Config.set("local_network_tls_enabled", True)
 
 
-def _access_port_suffix() -> str:
-    """URL port suffix for the LAN access port, empty when it is plain 443.
+def _access_port() -> int:
+    """The LAN access port, for what is printed.
 
     Cosmetic by definition, and its callers print it AFTER changing config, so
     it must never be the reason a command ends in a traceback with no
@@ -34,7 +34,28 @@ def _access_port_suffix() -> str:
         access_port, _ = resolve_lan_access_ports(wait_for_proxy=False)
     except Exception:
         access_port = 8443
+    return access_port
+
+
+def _access_port_suffix() -> str:
+    """URL port suffix for the LAN access port, empty when it is plain 443."""
+    access_port = _access_port()
     return "" if access_port == 443 else f":{access_port}"
+
+
+def _public_addresses() -> list:
+    """This machine's public IPv4 addresses as (interface, ip); empty when they cannot be read."""
+    try:
+        from vaf.network.binding import public_addresses
+        return public_addresses()
+    except Exception:
+        return []
+
+
+def _named(addresses) -> str:
+    """The words for the public addresses: the public address 9.9.9.9 (eth0), or several."""
+    plural = "addresses" if len(addresses) > 1 else "address"
+    return f"the public {plural} " + ", ".join(f"{ip} ({iface})" for iface, ip in addresses)
 
 
 @app.command(name="on")
@@ -72,16 +93,18 @@ def server_status():
 
     if enabled:
         try:
-            _print_access(_access_port_suffix())
+            _print_access(_access_port())
         except Exception as e:
             UI.warning(f"Could not read the network interfaces: {e}")
     UI.print()
 
 
-def _print_access(suffix: str) -> None:
-    """Interfaces with their access URL, the admitted networks, and what was refused."""
+def _print_access(access_port: int) -> None:
+    """Interfaces with their access URL, the admitted networks, and what was refused. The one
+    access list: `vaf server status` prints it, and provision closes with it."""
     from vaf.network.binding import (REFUSAL_REASONS, access_addresses, inbound_policy,
                                      local_interfaces)
+    suffix = "" if access_port == 443 else f":{access_port}"
     policy = inbound_policy(detect_vpn=True)
     admitted = {(i.name, i.ip) for i in access_addresses()}
     interfaces = local_interfaces()
@@ -108,6 +131,18 @@ def _print_access(suffix: str) -> None:
     UI.print(f"[bold]VPN only:[/bold] {'[yellow]YES[/yellow]' if policy.vpn_only else 'no'}")
     for value, code in policy.refused:
         UI.warning(f"Ignored entry {value}: {REFUSAL_REASONS.get(code, code)}")
+    public = _public_addresses()
+    if public:
+        UI.warning(f"This machine has {_named(public)}: keep port {access_port} closed in the "
+                   "hosting provider's firewall or the router and reach VAF over a VPN.")
+    if policy.vpn_only and not admitted:
+        # A VPN that comes up later is admitted at once, but its address enters the
+        # certificate only at the next start (ssl_utils re-issues for a missing address).
+        UI.warning("No other device can connect yet. Once the VPN is up, `vaf server status` "
+                   "lists the address to open; restart VAF (`systemctl --user restart vaf`) "
+                   "so the certificate names it.")
+    UI.print("Reach VAF from this machine, your local network or a VPN only. Never forward the "
+             "access port or publish it to the internet.")
 
 
 @app.command(name="provision")
@@ -139,6 +174,10 @@ def server_provision(
         UI.error(f"Unknown profile {profile!r}: use local or api.")
         raise typer.Exit(2)
 
+    # Read before it is set: "VPN only" is chosen for a server set up for the first time, and
+    # never flipped on one that already serves its users (a re-run is the documented step
+    # after every admission change, and would lock them out).
+    was_server = Config.get_bool("server_mode", False)
     _enable_lan_keys()
     Config.set("server_mode", True)
     UI.success("Server mode enabled (LAN hosting with TLS, locked on).")
@@ -207,6 +246,26 @@ def server_provision(
     from vaf.network.binding import resolve_lan_access_ports
     access_port, frontend_port = resolve_lan_access_ports(wait_for_proxy=False)
 
+    # A machine with a public address sits on the internet, where the private ranges VAF
+    # admits by default are the hosting provider's network and the container bridges, not
+    # anybody's home LAN. Before the firewall step, so it opens the port for the VPN only.
+    public = _public_addresses()
+    if public:
+        if not Config.get_bool("local_network_vpn_only", False):
+            if not was_server:
+                Config.set("local_network_vpn_only", True)
+                UI.warning(f"This machine has {_named(public)}, so VAF admits only devices in a "
+                           "VPN (\"VPN only\" is on). Set up WireGuard, Tailscale or NetBird and "
+                           "open VAF at its VPN address; `vaf server vpn-only off` admits the "
+                           "local networks again.")
+            else:
+                UI.warning(f"This machine has {_named(public)}, and \"VPN only\" is off, so "
+                           "every private network it reaches is admitted, a hosting provider's "
+                           "own network and the container bridges included: "
+                           "`vaf server vpn-only on`.")
+        UI.info(f"Keep port {access_port} closed in the hosting provider's firewall; open only "
+                "SSH and the VPN's own port there.")
+
     if open_firewall:
         try:
             from vaf.network.firewall import setup_firewall
@@ -270,15 +329,9 @@ def server_provision(
         UI.info("LAN IP looks statically configured.")
 
     try:
-        from vaf.network.binding import access_addresses
-        reachable = access_addresses()
-    except Exception:
-        reachable = []
-    if reachable:
-        suffix = "" if access_port == 443 else f":{access_port}"
-        UI.print("\n[bold]Access once the service is running:[/bold]")
-        for iface in reachable:
-            UI.print(f"  - https://{iface.ip}{suffix}  ({iface.name})")
+        _print_access(access_port)
+    except Exception as e:
+        UI.warning(f"Could not read the network interfaces: {e}")
     hint = _first_admin_hint()
     if hint:
         UI.info(hint)
@@ -478,6 +531,10 @@ def server_vpn_only(state: str = typer.Argument(..., metavar="on|off")):
     Config.set("local_network_vpn_only", on)
     if not on:
         UI.success("VPN only is off: the local networks are admitted again.")
+        public = _public_addresses()
+        if public:
+            UI.warning(f"This machine has {_named(public)}: the local networks admitted now "
+                       "include a hosting provider's own network and the container bridges.")
         _applied_note()
         return
     from vaf.network.binding import inbound_policy, local_interfaces

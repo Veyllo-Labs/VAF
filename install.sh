@@ -1305,11 +1305,12 @@ if [[ "$SETUP_AUTOSTART" == "true" ]]; then
 fi
 
 if [[ "$SETUP_LAN" == "true" ]]; then
-    _LAN_IP=$(ip route get 1.1.1.1 2>/dev/null | grep -oP 'src \K\S+' || hostname -I 2>/dev/null | awk '{print $1}')
-    echo -e "  ${CYAN}LAN Access (HTTPS):${NC}"
-    echo -e "    - https://${_LAN_IP:-<your-ip>}:8443"
-    echo -e "    - localhost: https://127.0.0.1:8443"
-    echo -e "      (8443 is the usual port; VAF serves plain 443 when it can bind it)"
+    # The addresses come from VAF itself: the LAN and VPN addresses it admits, never the
+    # default route's source address, which on a rented server is the public one.
+    echo -e "  ${CYAN}Access (HTTPS, from this machine, your local network or a VPN only):${NC}"
+    "$PROJECT_ROOT/venv/bin/python3" -m vaf.main server status \
+        || echo -e "    - vaf server status lists the addresses once the service runs"
+    echo -e "    - Never forward this port on your router or publish it to the internet."
     echo -e "    - Accept the self-signed certificate warning on first visit."
     echo ""
 fi

@@ -47,7 +47,7 @@ Choose [1/2, default 1]: 2
 The installer then:
 
 1. Optionally asks for a master passphrase (see Credential Encryption below); if given, it is stored owner-only in `~/.vaf/service.env` for the service. Unattended installs can pre-set `VAF_MASTER_PASSPHRASE` in the environment instead.
-2. Runs `vaf server provision`: writes `server_mode: true`, `local_network_enabled: true` and `local_network_tls_enabled: true` through the config layer, generates the TLS certificates, replaces the published default database passwords with random ones when the database answers (both roles, verified before they are written; `vaf/core/db_credentials.py`, the same rotation as `vaf secure rotate-db`; when it cannot reach the database it says so loudly and names that command; a run that stops part-way names the keys already replaced and the ones still on the default, and a password that was changed but did not verify is printed with the config key to save it under, since it is the only copy), opens the OS firewall for the access port to the admitted networks (subnet-scoped; on Ubuntu, where ufw is installed but switched off by default, it changes nothing and says so, since rules added to a switched-off ufw do nothing), and warns when the LAN IP looks DHCP-assigned. While no admin exists yet, it ends by saying how to create one: `vaf setup` in the terminal, or a browser with the code `vaf setup code` shows.
+2. Runs `vaf server provision`: writes `server_mode: true`, `local_network_enabled: true` and `local_network_tls_enabled: true` through the config layer; on a machine with a public IPv4 address that is set up as a server for the first time it also turns "VPN only" on (on such a machine the private ranges VAF admits by default are the hosting provider's network and the container bridges, not your LAN; a re-run never changes it, and `vaf server vpn-only off` undoes it); it generates the TLS certificates, replaces the published default database passwords with random ones when the database answers (both roles, verified before they are written; `vaf/core/db_credentials.py`, the same rotation as `vaf secure rotate-db`; when it cannot reach the database it says so loudly and names that command; a run that stops part-way names the keys already replaced and the ones still on the default, and a password that was changed but did not verify is printed with the config key to save it under, since it is the only copy), opens the OS firewall for the access port to the admitted networks (subnet-scoped; on Ubuntu, where ufw is installed but switched off by default, it changes nothing and says so, since rules added to a switched-off ufw do nothing), and warns when the LAN IP looks DHCP-assigned. While no admin exists yet, it ends by saying how to create one: `vaf setup` in the terminal, or a browser with the code `vaf setup code` shows.
 3. Enables the Docker daemon at boot (`systemctl enable docker`) so the memory stack comes back after a reboot.
 4. Masks the systemd sleep/suspend targets so a repurposed desktop or laptop stays reachable. Revert with `sudo systemctl unmask sleep.target suspend.target hibernate.target hybrid-sleep.target`.
 5. Warns when the system clock is not NTP-synced (TLS validation and OAuth sign-ins depend on correct time).
@@ -67,13 +67,27 @@ internet rather than behind a router. The setup that fits both:
    instead of 8, and no 7.5 GB speech-to-text image on a small disk. Set the chat
    provider and, if you use speech, the speech providers under Settings after the first
    login; `vaf profile` names anything still missing.
-2. **Reach it over a VPN, not the internet.** Keep the access port closed in the
-   provider's firewall and open only the VPN's own port (and SSH) there, then run
-   `vaf server provision --no-firewall`, since the provider's firewall is the one that
-   faces the internet. See [Over a VPN](#over-a-vpn). The first admin is created either
-   with `vaf setup` over SSH or in the browser with the code `vaf setup code` prints:
-   the private ranges VAF admits include the provider's own network, and without the code
-   the first visitor from there would become the admin.
+2. **Reach it over a VPN, never over the internet.** A rented server has a public address,
+   and VAF's access port must not answer on it: an agent's login page on the internet is
+   attacked around the clock, and behind it are your credentials, your messages and an agent
+   that can act for you. Putting it there is close to negligent. VAF refuses public addresses
+   itself and starts such a server with "VPN only" on, but the first barrier is the
+   provider's firewall:
+   1. In the provider's firewall, open only SSH and the VPN's own port (WireGuard's UDP
+      port, for one); keep the access port closed.
+   2. Set up the VPN (WireGuard, Tailscale or NetBird; a mesh VPN in `100.64.0.0/10` is
+      admitted with `vaf server networks tailscale on`).
+   3. Restart VAF (`systemctl --user restart vaf`) so the certificate names the VPN address,
+      and if this machine's own firewall is on, run `sudo -v && vaf server provision` so it
+      opens the port for the VPN.
+   4. `vaf server status` lists the address to open in a browser on a device in the VPN.
+   5. Create the first admin with `vaf setup` over SSH, or in that browser with the code
+      `vaf setup code` prints.
+
+   A server behind 1:1 NAT (several clouds) sees only a private address, so VAF cannot tell
+   it is on the internet: run `vaf server vpn-only on` there yourself. `vaf doctor` warns
+   while the machine has a public address, when ufw is installed but switched off, and when
+   public addresses reached the port. See [Over a VPN](#over-a-vpn).
 3. **Back it up off the machine.** `vaf server provision` schedules a daily encrypted
    backup with a retention (`vaf backup schedule` changes it), but a backup on the server's
    own disk is lost with the server: copy them elsewhere
@@ -160,11 +174,9 @@ here requires the planned admin API endpoint on the same collector.
 
 ## LAN Access
 
-VAF listens on `https://<LAN-IP>:8443` in the usual case: the configured HTTPS port is 443, and an unprivileged service cannot bind it, so the proxy falls back to 8443. When 443 is bindable (root, `CAP_NET_BIND_SERVICE`), the address is plain `https://<LAN-IP>`. To find your LAN IP:
+VAF listens on `https://<LAN-IP>:8443` in the usual case: the configured HTTPS port is 443, and an unprivileged service cannot bind it, so the proxy falls back to 8443. When 443 is bindable (root, `CAP_NET_BIND_SERVICE`), the address is plain `https://<LAN-IP>`. `vaf server status` lists the addresses to open, one per admitted LAN and VPN interface; it never lists a public address, and warns when the machine has one.
 
-```bash
-ip route get 1.1.1.1 | grep -oP 'src \K\S+'
-```
+**Private networks only.** The access port answers this machine, your local network and the VPNs you admit, and refuses every other address before any page. Never forward it on your router or publish it through a tunnel service.
 
 **TLS certificate:** VAF auto-generates a self-signed certificate on first start (`~/.vaf/ssl/`). Browsers will show a certificate warning on the first visit - this is expected for local networks. Accept the exception once; the certificate is then trusted for that browser.
 
@@ -200,7 +212,13 @@ itself; it recognises the VPN interface and admits its devices
   and what is ignored, `vaf server networks remove` drops an entry.
 - **Only the VPN**: `vaf server vpn-only on` locks the local network out and admits the
   networks of the detected VPN interfaces (plus your entries). With no VPN up, nobody
-  but this machine gets in; the command says so, and so does `vaf doctor`.
+  but this machine gets in; the command says so, and so do `vaf server status` and
+  `vaf doctor`. A server with a public address starts this way (see above).
+
+**Opening it.** Open the web UI in a browser on a device in the VPN, at the address
+`vaf server status` lists. The VAF desktop window shows the VAF on its own machine, not a
+server; Chrome, Edge and Safari can open the site as an app in a window of its own
+(install the page as an app, or add it to the Dock).
 
 The access check takes a change at once, with no restart. The running service does not
 change the OS firewall: it cannot gain root, not even with passwordless sudo (its systemd

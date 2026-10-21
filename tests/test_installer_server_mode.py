@@ -114,3 +114,18 @@ def test_the_alias_goes_where_the_login_shell_reads():
     alias where bash never reads it. MUTATION: choose by the file's existence again - red."""
     assert '[[ -f "$HOME/.zshrc" ]] && SHELL_CONFIG=' not in SH
     assert 'case "$(basename "${SHELL:-bash}")" in' in SH
+
+
+def test_the_summary_prints_lan_and_vpn_addresses_only():
+    """The closing summary printed `https://<default-route source>:8443`, which on a rented
+    server is the PUBLIC address, exactly where VAF must not be reached. It asks VAF now,
+    which lists the LAN and VPN addresses it admits and warns about a public one.
+    MUTATION: put the `ip route get` line back - red."""
+    assert "ip route get" not in SH
+    block = SH[SH.index('if [[ "$SETUP_LAN" == "true" ]]; then\n    # The addresses come'):]
+    block = block[:block.index("\nfi\n")]
+    assert '"$PROJECT_ROOT/venv/bin/python3" -m vaf.main server status' in block
+    assert '|| echo -e "    - vaf server status lists the addresses once the service runs"' in block
+    assert "Never forward this port on your router or publish it to the internet." in block
+    assert 'echo -e "    - Accept the self-signed certificate warning on first visit."' in block
+    assert SH.isascii()

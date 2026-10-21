@@ -42,6 +42,9 @@ def seams(monkeypatch):
     monkeypatch.setattr(firewall, "elevation_unavailable", lambda: None)
     from vaf.core import db_credentials
     monkeypatch.setattr(db_credentials, "shipped_password_in_use", lambda: False)
+    # This machine's own public addresses are read from its interfaces; none unless a test
+    # says so, so the output does not depend on where the suite runs.
+    monkeypatch.setattr(binding, "public_addresses", lambda: [])
     return calls
 
 
@@ -320,3 +323,100 @@ def test_a_stopped_rotation_says_what_is_done_and_what_changed_unsaved(monkeypat
     assert err.value.done == [] and isinstance(err.value.cause, db_credentials.RotationUnsaved)
     assert "postgresql://vaf_app:NEW-app@localhost/m Save it as memory_db_url" in str(err.value.cause)
 
+
+
+# --------------------------------------------------------------------------- a public address
+
+PUBLIC = [("eth0", "9.9.9.9")]
+VPN_ONLY_ON = '"VPN only" is on'
+
+
+def _config(monkeypatch, **values):
+    monkeypatch.setattr(Config, "load", classmethod(lambda cls: {**Config.DEFAULTS, **values}))
+
+
+def _ordered(monkeypatch, seams):
+    """One list for the config writes and the firewall step, to see their order."""
+    order = []
+    monkeypatch.setattr(Config, "set", lambda key, value: order.append((key, value)))
+    monkeypatch.setattr(firewall, "setup_firewall",
+                        lambda p, pf: order.append(("firewall", p)) or "created")
+    return order
+
+
+def test_a_first_server_setup_with_a_public_address_starts_vpn_only(seams, monkeypatch):
+    """On a rented server the private ranges admitted by default are the provider's network
+    and the container bridges. MUTATIONS: set VPN only regardless of a previous server
+    setup; set it after the firewall step - red."""
+    monkeypatch.setattr(binding, "public_addresses", lambda: PUBLIC)
+    _config(monkeypatch, server_mode=False)
+    order = _ordered(monkeypatch, seams)
+    result = runner.invoke(server_cmd.app, ["provision"])
+    assert result.exit_code == 0, result.output
+    said = " ".join(result.output.split())
+    assert order.index(("local_network_vpn_only", True)) < order.index(("firewall", 8443))
+    assert VPN_ONLY_ON in said and "9.9.9.9 (eth0)" in said
+    assert "Keep port 8443 closed in the hosting provider's firewall" in said
+
+
+def test_a_rerun_never_flips_vpn_only(seams, monkeypatch):
+    """A re-run is the documented step after every admission change; flipping admission on a
+    server that already serves its users would lock them out."""
+    monkeypatch.setattr(binding, "public_addresses", lambda: PUBLIC)
+    _config(monkeypatch, server_mode=True, local_network_vpn_only=False)
+    order = _ordered(monkeypatch, seams)
+    result = runner.invoke(server_cmd.app, ["provision"])
+    said = " ".join(result.output.split())
+    assert ("local_network_vpn_only", True) not in order
+    assert "`vaf server vpn-only on`" in said and VPN_ONLY_ON not in said
+
+    _config(monkeypatch, server_mode=False, local_network_vpn_only=True)
+    order = _ordered(monkeypatch, seams)
+    result = runner.invoke(server_cmd.app, ["provision"])
+    assert not [k for k, _v in order if k == "local_network_vpn_only"]
+
+
+def test_without_a_public_address_vpn_only_is_left_alone(seams, monkeypatch):
+    _config(monkeypatch, server_mode=False)
+    order = _ordered(monkeypatch, seams)
+    result = runner.invoke(server_cmd.app, ["provision"])
+    said = " ".join(result.output.split())
+    assert not [k for k, _v in order if k == "local_network_vpn_only"]
+    assert VPN_ONLY_ON not in said and "vpn-only on" not in said
+    assert "hosting provider" not in said
+
+
+def _status_and_provision(monkeypatch, **cfg):
+    _config(monkeypatch, local_network_enabled=True, local_network_tls_enabled=True, **cfg)
+    status = runner.invoke(server_cmd.app, ["status"])
+    provision = runner.invoke(server_cmd.app, ["provision"])
+    assert status.exit_code == 0 and provision.exit_code == 0, (status.output, provision.output)
+    return " ".join(status.output.split()), " ".join(provision.output.split())
+
+
+def test_status_and_provision_print_one_access_list(seams, monkeypatch):
+    """MUTATION: keep provision's own access loop (it lacks the stance line) - red."""
+    monkeypatch.setattr(binding, "local_interfaces", lambda: [])
+    stance = "Never forward the access port or publish it to the internet"
+    for said in _status_and_provision(monkeypatch, server_mode=True):
+        assert stance in said
+        assert "public address" not in said
+
+    monkeypatch.setattr(binding, "public_addresses", lambda: PUBLIC)
+    for said in _status_and_provision(monkeypatch, server_mode=True, local_network_vpn_only=True):
+        assert stance in said
+        assert ("This machine has the public address 9.9.9.9 (eth0): keep port 8443 closed in "
+                "the hosting provider's firewall") in said
+        assert "No other device can connect yet" in said
+        assert "systemctl --user restart vaf" in said
+
+
+def test_vpn_only_off_names_the_provider_network(monkeypatch):
+    monkeypatch.setattr(Config, "set", lambda key, value: None)
+    monkeypatch.setattr(server_cmd, "_applied_note", lambda: None)
+    monkeypatch.setattr(binding, "public_addresses", lambda: PUBLIC)
+    said = " ".join(runner.invoke(server_cmd.app, ["vpn-only", "off"]).output.split())
+    assert "9.9.9.9 (eth0)" in said and "hosting provider's own network" in said
+    monkeypatch.setattr(binding, "public_addresses", lambda: [])
+    said = " ".join(runner.invoke(server_cmd.app, ["vpn-only", "off"]).output.split())
+    assert "hosting provider" not in said

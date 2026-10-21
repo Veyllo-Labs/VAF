@@ -6,9 +6,11 @@ Authentication, IP validation and origin middleware for the web server.
 
 Middleware stack as ``vaf/core/web_server.py`` registers it (outermost -> innermost; Starlette
 puts the LAST ``add_middleware`` call outermost):
-  SecurityHeaders -> ForeignOriginGuard -> AuthMiddleware -> IPValidationMiddleware
-    -> RateLimitMiddleware -> OwnOriginCORSMiddleware -> route handler
-The three in the middle exist only in network mode; the guard and CORS always.
+  SecurityHeaders -> ForeignOriginGuard -> NetworkModeLayers -> OwnOriginCORSMiddleware
+    -> route handler
+NetworkModeLayers is registered in every mode and chooses on every request: in network mode
+AuthMiddleware -> IPValidationMiddleware -> RateLimitMiddleware, with Local Network off this
+machine only.
 
 ForeignOriginGuard refuses what a browser marks as coming from another web page (HTTP and
 WebSocket alike), before any identity is looked at.
@@ -28,6 +30,10 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import HTTPConnection, Request
 from starlette.responses import JSONResponse
 from starlette.websockets import WebSocketClose
+
+# Module level on purpose: network mode must never start without its rate limit, so a failed
+# import fails the web server's import instead of leaving the checks out.
+from vaf.auth.rate_limit import RateLimitMiddleware
 
 
 logger = logging.getLogger(__name__)
@@ -99,8 +105,8 @@ class ForeignOriginGuard:
 
     Why this is a door and not a route check: the trust it protects is handed out in many
     places. A tokenless request from this machine is the owner (the local-admin fallback lives
-    in route helpers all over ``vaf/api``, and in single-user mode AuthMiddleware is not even
-    registered), and the ``vaf_token`` cookie rides along to every localhost port. Neither can
+    in route helpers all over ``vaf/api``, and in single-user mode AuthMiddleware does not even
+    run), and the ``vaf_token`` cookie rides along to every localhost port. Neither can
     tell the desktop from another page open in the same browser; only the browser's own marks
     can (``Origin``, ``Sec-Fetch-Site``, the ``Host`` it dialled), and those are read ONCE here,
     by ``vaf.network.binding.foreign_request_reason``.
@@ -192,6 +198,66 @@ class IPValidationMiddleware(BaseHTTPMiddleware):
             )
 
         return await call_next(request)
+
+
+# ---------------------------------------------------------------------------
+# The network layers, chosen per request
+# ---------------------------------------------------------------------------
+
+class NetworkModeLayers:
+    """Sign-in check, address check and rate limit for network mode, chosen on every request.
+
+    Why per request: these layers used to be added to the app at import time, and only when
+    Local Network was on then. The tray serves a settings toggle by starting a new uvicorn on
+    the SAME app object, so a VAF started with Local Network off and switched on later ran the
+    HTTPS proxy in front of an app without them (measured: a relayed `203.0.113.9` got
+    `GET /api/config` with every key, the admin-only remote-access route and the account list,
+    200, as the local admin) until the next full restart. The `/ws` handler reads the setting
+    per connection and was not affected.
+
+    Network mode: Auth -> IP check -> rate limit -> the app, the order network mode always had.
+    Local Network off: this machine only. A request from anywhere else is refused (HTTP 403,
+    WebSocket 4003 before accept), as the `/ws` handler has always refused one. Off must not
+    mean "no checks": the HTTPS proxy outlives the switch by the frontend's restart (the tray
+    restarts the frontend first and stops the proxy after it), `vaf run --web` keeps its
+    0.0.0.0 bind for its whole run, and a `config.json` that does not parse reads as the
+    defaults, so a device that needed a sign-in a moment ago would otherwise get the local
+    admin's route floors.
+
+    Cost: one config read per request (about 0.15 ms measured with every key stored). Both
+    chains are built once here; the rate limiter's windows are module state either way.
+    Scopes other than http and websocket (lifespan) go straight to the app.
+    """
+
+    def __init__(self, app) -> None:
+        self._local = app
+        self._network = AuthMiddleware(IPValidationMiddleware(RateLimitMiddleware(app)))
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") not in ("http", "websocket"):
+            await self._local(scope, receive, send)
+            return
+        from vaf.core.config import Config
+
+        if Config.get_bool("local_network_enabled", False):
+            await self._network(scope, receive, send)
+            return
+        from vaf.network.binding import connection_client_ip, is_localhost
+
+        ip = connection_client_ip(HTTPConnection(scope))
+        if is_localhost(ip):
+            await self._local(scope, receive, send)
+            return
+        path = scope.get("path") or ""
+        logger.debug("Refused %s from %s %s: Local Network is off", scope["type"], ip, path)
+        _emit_security_event("ip_blocked", ip=ip, detail=f"local network off: {path[:200]}")
+        if scope["type"] == "websocket":
+            await WebSocketClose(code=4003, reason="Local network feature is disabled")(
+                scope, receive, send)
+            return
+        await JSONResponse(status_code=403,
+                           content={"detail": "Local network feature is disabled"})(
+            scope, receive, send)
 
 
 # ---------------------------------------------------------------------------

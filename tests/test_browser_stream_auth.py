@@ -78,8 +78,10 @@ def test_the_asset_leg_sends_the_credential(with_secret, monkeypatch):
     from fastapi.testclient import TestClient
     from vaf.core.web_server import app
     # Without `with`: that would run the server's startup, whose background loops (thinking,
-    # automations, backups ...) outlive this test and act inside the ones after it.
-    client = TestClient(app)
+    # automations, backups ...) outlive this test and act inside the ones after it. The viewer
+    # runs on this machine: with Local Network off the app serves nothing else, and the test
+    # client's default peer ("testclient") is no address at all.
+    client = TestClient(app, client=("127.0.0.1", 50000))
     r = client.get("/api/browser-vnc/t/tkt/index.html")
 
     assert r.status_code == 200
@@ -118,7 +120,8 @@ def test_the_stream_leg_sends_the_credential(with_secret, monkeypatch):
 
     from fastapi.testclient import TestClient
     from vaf.core.web_server import app
-    client = TestClient(app)        # not `with`: no server startup, see the asset leg
+    # Not `with` (no server startup) and on this machine: see the asset leg.
+    client = TestClient(app, client=("127.0.0.1", 50000))
     try:
         with client.websocket_connect("/api/browser-vnc/t/tkt/websockify"):
             pass

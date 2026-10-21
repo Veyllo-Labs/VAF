@@ -110,7 +110,9 @@ def client():
     from fastapi.testclient import TestClient
 
     from vaf.core.web_server import app
-    return TestClient(app)
+    # A client on this machine: with Local Network off the app serves nothing else, and the
+    # test client's default peer ("testclient") is no address at all.
+    return TestClient(app, client=("127.0.0.1", 50000))
 
 
 def test_the_host_serves_the_client_file_byte_for_byte(client):

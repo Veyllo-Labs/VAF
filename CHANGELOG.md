@@ -100,6 +100,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   your LAN and your VPN only: the app refuses public addresses, and putting it on the public
   internet is not supported.
 
+- **Switching on Local Network in the settings no longer opens VAF without a sign-in.** The
+  network checks (sign-in, address check, rate limit) were set up only when VAF started, so a
+  VAF started with Local Network off and switched on later served other devices with none of
+  them until it was restarted, every request as the machine's admin (measured: the whole
+  configuration answered a device that had not signed in). They now follow the setting on
+  every request. With Local Network off, VAF now answers this machine only, so a port that
+  stays open for a moment after the switch, or a relay of your own in front of VAF, no longer
+  hands other devices the machine's admin either.
+
 - **A relay in front of the web UI's port no longer makes its visitors the machine owner.** A
   reverse proxy on the same machine pointed at port 3000 (an nginx for the LAN, Tailscale
   Serve inside your tailnet) connects to VAF from the machine itself, and the web UI's API

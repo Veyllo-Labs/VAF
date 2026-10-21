@@ -59,7 +59,7 @@ Every HTTP request passes through `IPValidationMiddleware` which validates the c
 - Rejects any IP outside the admitted networks with HTTP 403 (recorded as `ip_blocked` with the device's address); under "VPN only" that includes the home network
 - Judges the REAL client, not the socket peer: the integrated proxy relays every device over loopback, so the peer is `127.0.0.1` for all of them. The address comes from `connection_client_ip` in `vaf/network/binding.py`, which honors `X-Forwarded-For` only when the peer is loopback (see [Who the client is](#who-the-client-is)). This check used to read the peer and therefore passed every relayed request, a public address on the proxy port included (measured: 200 through the proxy, 403 only on a direct connection), while the WebSocket handshake already refused it.
 - Admitted are this machine, the local networks (RFC 1918) and the networks an admin added; with "VPN only" the networks of the detected VPN interfaces replace the local ones. WireGuard and OpenVPN clients (`10.x`) pass by default; mesh VPNs that hand out `100.64.0.0/10` (Tailscale, Headscale, NetBird) pass once that network is admitted. The decision is `inbound_policy()` in `vaf/network/binding.py`, read on every request, so a change applies without a restart - see [Remote access over a VPN](#remote-access-over-a-vpn).
-- Active only in network mode (localhost mode skips this layer)
+- Active in network mode. With Local Network off the backend serves this machine only: every other client is refused with 403, a WebSocket with 4003 before accept (see [Middleware Execution Order](#middleware-execution-order))
 - Named boundary: the check sits in the backend, so it covers `/api` and `/ws`. Page loads go from the proxy straight to the Next.js frontend and do not pass it; a client outside the allowed networks still receives the login screen, but every API call that screen makes is refused. The pages carry no data, only the fact that VAF runs there.
 
 `connection_client_ip` is the only place in `vaf/` that reads a connection's client address; the auth middleware, the rate limiter, the login routes, the WebSocket handshake, the OAuth callback and the security log entries all ask it. `tests/test_client_address_has_one_reader.py` refuses a direct read anywhere else, the integrated proxy included: it writes `X-Forwarded-For` from the same resolver (a device that connects directly as itself, a relay on this machine as the client that relay named), after dropping every copy the client sent, and on its WebSocket relay it sends the header on every handshake (`unknown` when there is no client, which fails closed).
@@ -193,10 +193,15 @@ HSTS is scoped by the host the browser dialled (`hsts_for_host` in `vaf/network/
 Requests pass through middleware from outermost to innermost. Starlette puts the middleware added LAST outermost, so this is the reverse of the `add_middleware` order in `vaf/core/web_server.py` (measured on `app.user_middleware`):
 
 ```
-Request -> SecurityHeaders -> ForeignOriginGuard -> AuthMiddleware -> IPValidationMiddleware -> RateLimitMiddleware -> OwnOriginCORSMiddleware -> Route Handler
+Request -> SecurityHeaders -> ForeignOriginGuard -> NetworkModeLayers -> OwnOriginCORSMiddleware -> Route Handler
+                                                      |
+                     network mode:  AuthMiddleware -> IPValidationMiddleware -> RateLimitMiddleware
+                     Local Network off:  this machine only (403, WebSocket 4003)
 ```
 
-`AuthMiddleware`, `IPValidationMiddleware` and `RateLimitMiddleware` are registered only in network mode; the guard and CORS always. The guard sits outside CORS, so a preflight from a foreign page is refused before CORS could answer it.
+All four are registered in every mode. `NetworkModeLayers` (`vaf/auth/middleware.py`) reads `local_network_enabled` on every request and picks the chain: in network mode the sign-in check, the address check and the rate limit, in that order; with Local Network off, a request from this machine goes straight on and any other is refused. The guard sits outside CORS, so a preflight from a foreign page is refused before CORS could answer it.
+
+Why per request: the three network layers used to be added when the backend module was imported, and only when Local Network was on at that moment. The tray serves a settings toggle by starting a new uvicorn on the SAME app, so a VAF started with Local Network off and switched on later ran the HTTPS proxy in front of an app without them (measured: a client the proxy relayed from `203.0.113.9` got `GET /api/config` with every key, the admin-only `/api/network/remote-access` and the account list, 200, as the local admin) until a full restart. And "off" means this machine only, not "no checks": the proxy outlives the switch by the frontend's restart (the tray restarts the frontend first and stops the proxy after it), `vaf run --web` keeps its `0.0.0.0` bind for its whole run, and a `config.json` that does not parse reads as the defaults; in each case a device that needed a sign-in a moment before would otherwise reach the local admin's route floors. The cost is one config read per request, about 0.15 ms.
 
 ### Security Event Log
 
@@ -537,6 +542,8 @@ With this lock enabled, attempts to disable hosting in the UI/API are ignored an
 
 Changes to network settings trigger an automatic, orchestrated restart of the frontend and backend services to apply new bindings (e.g., switching from `127.0.0.1` to `0.0.0.0`). Enabling or disabling Local Network flips several config keys in one save; VAF coalesces them into a single restart. Disabling Local Network actually **stops** the integrated HTTPS proxy (8443) and the internal 8005 channel, so LAN access truly closes. The permanent firewalld rule remains (harmless - nothing is listening on the port).
 
+The backend's own checks need no restart at all: the sign-in check, the address check and the rate limit follow `local_network_enabled` on every request ([Middleware Execution Order](#middleware-execution-order)), so they are in place from the first request after the switch, before the restart has finished.
+
 Who is admitted (`local_network_allowed_networks`, `local_network_vpn_only`) restarts nothing: the IP check reads it on every request, and the running app tries to re-apply the OS firewall for the new networks (`apply_lan_firewall` in `vaf/network/firewall.py`, also what the start runs) where it can gain root; the server's service cannot and logs once why instead. The key lists live once in `vaf/core/config.py` (`NETWORK_RESTART_KEYS`, `NETWORK_ADMISSION_KEYS`); the tray and its file poll read them.
 
 When TLS is enabled, firewall setup uses the effective HTTPS access port (`local_network_https_port`, or `8443` when `443` is privileged on any platform) so LAN clients can reach the proxy entry point. On Linux, firewalld is preferred: it opens only that effective proxy port for the LAN subnet via a rich rule, elevating through pkexec (desktop GUI dialog) or `sudo -n` (headless); a process that cannot gain root (`elevation_unavailable()`: the no-new-privileges flag, or a user namespace without root, as in the server's systemd service) does not try and logs once why.
@@ -553,7 +560,7 @@ Auto-generated TLS certificates carry the machine's hostname and FQDN as DNS SAN
 ```
 vaf/
   auth/
-    middleware.py        # ForeignOriginGuard, OwnOriginCORSMiddleware, AuthMiddleware, IPValidationMiddleware
+    middleware.py        # ForeignOriginGuard, OwnOriginCORSMiddleware, NetworkModeLayers, AuthMiddleware, IPValidationMiddleware
     rate_limit.py        # RateLimitMiddleware (brute-force protection)
     crypto.py            # Argon2, JWT, AES-256-GCM for TOTP
     models.py            # SQLAlchemy models (LocalUser, UserSession)
@@ -589,7 +596,7 @@ Integrated HTTPS proxy (0.0.0.0:8443 or 443)  [connection-pooled httpx clients]
     |
     v (for /api, /sounds, and /ws)
 Uvicorn + FastAPI (127.0.0.1:8005)
-    +-- SecurityHeaders, ForeignOriginGuard, AuthMiddleware, IPValidationMiddleware, RateLimitMiddleware, OwnOriginCORSMiddleware
+    +-- SecurityHeaders, ForeignOriginGuard, NetworkModeLayers (AuthMiddleware, IPValidationMiddleware, RateLimitMiddleware), OwnOriginCORSMiddleware
     v
 Route Handler (reads request.state.user for identity & scoping)
 ```

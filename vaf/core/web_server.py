@@ -94,9 +94,8 @@ async def json_exception_handler(request, exc):
 # is the innermost layer: ForeignOriginGuard, registered further down, refuses a foreign
 # preflight before this ever answers it (docs/setup/NETWORK_FEATURES.md, CORS Configuration).
 from vaf.auth.middleware import (  # noqa: E402
-    AuthMiddleware,
     ForeignOriginGuard,
-    IPValidationMiddleware,
+    NetworkModeLayers,
     OwnOriginCORSMiddleware,
     token_account_stands,
 )
@@ -1309,24 +1308,15 @@ try:
 except Exception as e:
     log("WebServer", f"Failed to mount Agent Brain routes: {e}")
 
-# Add authentication middleware if local network is enabled
+# The sign-in check, the address check and the rate limit, in every mode: NetworkModeLayers
+# reads the Local Network setting on every request, so a toggle at runtime (the tray restarts
+# uvicorn on this same app object) takes effect without a new import, and with the setting off
+# only this machine is served. Inside ForeignOriginGuard, outside CORS (vaf/auth/middleware.py
+# docstring has the whole stack). The layers are imported at module level there: a failure
+# fails this import, it never leaves network mode without its checks.
+app.add_middleware(NetworkModeLayers)
+
 if Config.get("local_network_enabled", False):
-    try:
-        from vaf.auth.rate_limit import RateLimitMiddleware
-
-        # Starlette puts the LAST add_middleware call outermost, so the order below runs
-        # Auth -> IPValidation -> RateLimit -> CORS -> route (vaf/auth/middleware.py
-        # docstring has the whole stack).
-        app.add_middleware(RateLimitMiddleware)
-        app.add_middleware(IPValidationMiddleware)
-        app.add_middleware(AuthMiddleware)
-
-        log("WebServer", "Authentication middleware enabled for local network mode")
-    except ImportError as e:
-        log("WebServer", f"WARNING: Auth middleware import failed - network mode is INSECURE: {e}")
-    except Exception as e:
-        log("WebServer", f"WARNING: Failed to add auth middleware - network mode is INSECURE: {e}")
-
     # Auto-generate SSL certificates if TLS enabled but no certs configured
     if Config.get("local_network_tls_enabled", False):
         try:

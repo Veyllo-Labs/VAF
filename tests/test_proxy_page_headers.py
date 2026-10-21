@@ -283,10 +283,11 @@ def test_a_certificate_issued_now_and_hsts_hold_the_same_lookup(monkeypatch):
 
 def test_a_renewal_landing_after_the_certificates_lookup_puts_no_older_names_back(monkeypatch):
     """The start's own warm-up can find the memo old and start a renewal, and the certificate's
-    lookup runs a moment later. When the renewal began before DNS was up and lands after the
-    certificate's lookup, it put the bare host name back, and the FQDN the certificate carries
-    got the year. The memo keeps the lookup that started last, not the one that finished
-    last. MUTATION: let every lookup replace the entry, or order by the finish - red."""
+    lookup runs a moment later. When the renewal began before the machine's FQDN changed and
+    lands after the certificate's lookup, it put the old FQDN back, and the new one the
+    certificate carries got the year. The memo keeps the lookup that started last, not the
+    one that finished last. MUTATION: let every lookup replace the entry, or order by the
+    finish - red."""
     import socket
     import threading
 
@@ -296,7 +297,7 @@ def test_a_renewal_landing_after_the_certificates_lookup_puts_no_older_names_bac
     from vaf.network import ssl_utils
     entered = threading.Event()
     release = threading.Event()
-    answer = {"fqdn": "Workstation"}
+    answer = {"fqdn": "old.example.lan"}
     lookups = []
 
     def _getfqdn(*_a):
@@ -304,12 +305,12 @@ def test_a_renewal_landing_after_the_certificates_lookup_puts_no_older_names_bac
         if threading.current_thread().name == "vaf-own-names":
             entered.set()
             release.wait(5)
-            return "Workstation"            # its query began before DNS was up
+            return "old.example.lan"        # its query began before the FQDN changed
         return answer["fqdn"]
 
     monkeypatch.setattr(socket, "getfqdn", _getfqdn)
     monkeypatch.setattr(binding, "get_all_local_ips", lambda: [])
-    assert binding.own_name_labels() == frozenset({"workstation"})      # the start
+    assert binding.own_name_labels() == frozenset({"workstation", "old"})   # the start
     labels, looked_up_at, order = binding._OWN_LABELS["Workstation"]
     binding._OWN_LABELS["Workstation"] = (labels, looked_up_at - binding.OWN_NAMES_MAX_AGE_S,
                                           order)
@@ -317,7 +318,7 @@ def test_a_renewal_landing_after_the_certificates_lookup_puts_no_older_names_bac
     try:
         assert binding.hsts_for_host("nas.example.lan:8443") == binding.HSTS_VALUE  # starts it
         assert entered.wait(5)
-        answer["fqdn"] = "nas.example.lan"  # DNS is up for the certificate's lookup
+        answer["fqdn"] = "nas.example.lan"  # the FQDN the certificate's lookup sees
         names = [v.value for v in ssl_utils._collect_sans() if isinstance(v, x509.DNSName)]
         assert "nas.example.lan" in names
         assert binding.hsts_for_host("nas.example.lan:8443") == binding.HSTS_CLEAR
@@ -327,6 +328,48 @@ def test_a_renewal_landing_after_the_certificates_lookup_puts_no_older_names_bac
     assert not binding._OWN_LABELS_REFRESHER.is_alive()
     assert lookups.count("vaf-own-names") == 1 and len(lookups) == 3
     assert binding._OWN_LABELS["Workstation"][0] == frozenset({"workstation", "nas"})
+    assert binding.hsts_for_host("nas.example.lan:8443") == binding.HSTS_CLEAR
+
+
+def test_a_renewal_during_a_dns_outage_keeps_the_fqdn(monkeypatch):
+    """While DNS is down, getfqdn() answers with the bare host name. A renewal in that moment
+    replaced the names with the host name alone, and the FQDN, which the certificate carries,
+    got the year until the next renewal (measured: max-age=0 before the outage, the year
+    after it). A lookup that finds no FQDN keeps the names the memo holds and renews only
+    their time. MUTATION: let it replace the names, or leave the entry's time old - red."""
+    import socket
+
+    from cryptography import x509
+
+    import vaf.network.binding as binding
+    from vaf.network import ssl_utils
+    dns = {"up": True}
+    lookups = []
+
+    def _getfqdn(*_a):
+        lookups.append(1)
+        return "nas.example.lan" if dns["up"] else "Workstation"
+
+    monkeypatch.setattr(socket, "getfqdn", _getfqdn)
+    monkeypatch.setattr(binding, "get_all_local_ips", lambda: [])
+    assert binding.own_name_labels() == frozenset({"workstation", "nas"})   # the start
+    labels, looked_up_at, order = binding._OWN_LABELS["Workstation"]
+    binding._OWN_LABELS["Workstation"] = (labels, looked_up_at - binding.OWN_NAMES_MAX_AGE_S,
+                                          order)
+
+    dns["up"] = False
+    assert binding.hsts_for_host("nas.example.lan:8443") == binding.HSTS_CLEAR  # starts it
+    binding._OWN_LABELS_REFRESHER.join(5)
+    assert len(lookups) == 2
+    assert binding._OWN_LABELS["Workstation"][0] == frozenset({"workstation", "nas"})
+    for _ in range(20):
+        assert binding.hsts_for_host("nas.example.lan:8443") == binding.HSTS_CLEAR
+    binding._OWN_LABELS_REFRESHER.join(5)
+    assert len(lookups) == 2                 # the time was renewed: no lookup per answer
+
+    # A certificate issued during the outage names no FQDN; HSTS still keeps the FQDN off.
+    names = [v.value for v in ssl_utils._collect_sans() if isinstance(v, x509.DNSName)]
+    assert names == ["localhost", "Workstation"]
     assert binding.hsts_for_host("nas.example.lan:8443") == binding.HSTS_CLEAR
 
 

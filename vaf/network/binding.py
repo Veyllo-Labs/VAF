@@ -475,7 +475,13 @@ def machine_dns_names() -> List[str]:
     lookup that started after this one has landed first: the memo keeps the lookup that
     started last, not the one that finished last. So a renewal already running when a
     certificate's lookup begins cannot put older names back once the certificate is issued,
-    and the HSTS scope holds the names of the certificate's lookup or of a newer one."""
+    and the HSTS scope holds the names of the certificate's lookup or of a newer one.
+
+    A lookup that finds no FQDN (getfqdn() failed, or answered the host name itself, which
+    is also its answer while DNS is down) keeps the names the memo already holds for this
+    host name and renews only their time: a short DNS outage at a renewal would otherwise
+    drop the FQDN and hand that name, which the certificate carries, a year of HSTS. On the
+    safe side, an FQDN that is removed while VAF runs keeps max-age=0 until a restart."""
     hostname = _host_name()
     with _OWN_LABELS_LOCK:
         order = next(_OWN_LABELS_STARTS)
@@ -489,10 +495,15 @@ def machine_dns_names() -> List[str]:
                 names.append(fqdn)
         except Exception:
             pass
+    labels = _first_labels(names)
     with _OWN_LABELS_LOCK:
         stored = _OWN_LABELS.get(hostname)
         if stored is None or stored[2] < order:
-            _OWN_LABELS[hostname] = (_first_labels(names), started_at, order)
+            if stored is not None and len(names) < 2:
+                # No FQDN found: the old names stay, the time is renewed all the same, so a
+                # machine without an FQDN is not looked up again on every answer.
+                labels = stored[0]
+            _OWN_LABELS[hostname] = (labels, started_at, order)
     return names
 
 
@@ -580,11 +591,13 @@ def hsts_for_host(dialled_host: str | None) -> Optional[str]:
     LAN and the VPN only.
 
     The machine's names come from a memo (own_name_labels()) that the start fills and a
-    lookup beside the answers renews once a minute at most. NAMED BOUNDARY: an FQDN that
+    lookup beside the answers renews once a minute at most. A renewal that finds no FQDN
+    (DNS down for a moment) keeps the names the memo holds. NAMED BOUNDARY: an FQDN that
     did not resolve at the start (DNS not up yet) or that changes while VAF runs counts
     from the first renewal after it, so the answers before that use the names of the
-    previous lookup; and the one answer that waits on DNS is the first for a host name
-    with no lookup yet (a host renamed while VAF runs, or an answer ahead of the start's).
+    previous lookup; an FQDN removed while VAF runs keeps max-age=0 until a restart; and
+    the one answer that waits on DNS is the first for a host name with no lookup yet (a
+    host renamed while VAF runs, or an answer ahead of the start's).
     """
     parsed = _host_and_port(dialled_host)
     if not parsed:

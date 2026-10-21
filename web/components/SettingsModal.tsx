@@ -38,6 +38,7 @@ import FtpSection from './settings/FtpSection';
 import AccountSection from './settings/AccountSection';
 import SandboxSection from './settings/SandboxSection';
 import RemoteAccessSection from './settings/RemoteAccessSection';
+import CertificateSection from './settings/CertificateSection';
 import StandingGrantsSection from './settings/StandingGrantsSection';
 import { PickerSelect } from '@/components/ui/PickerDialog';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
@@ -1235,7 +1236,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         addSecs('interface', [tInterface('language'), tInterface('dateTime'), tInterface('automation')]);
         addSecs('advanced', [tAdvanced('failover'), tAdvanced('attachments'), tAdvanced('system'), tAdvanced('updateRepair'), tAdvanced('backups'), tAdvanced('browserPool')]);
         addSecs('automations', [tAutomations('scheduled')]);
-        addSecs('local_network', [tLocalNet('networkSettings'), tLocalNet('remoteAccess.title'), tLocalNet('userManagement'), tLocalNet('connectionDetails'), tLocalNet('networkTopology')]);
+        addSecs('local_network', [tLocalNet('networkSettings'), tLocalNet('remoteAccess.title'), tLocalNet('certificate.title'), tLocalNet('userManagement'), tLocalNet('connectionDetails'), tLocalNet('networkTopology')]);
         addSecs('about', [tAbout('principles'), tAbout('credits')]);
         return out;
     })();
@@ -4808,6 +4809,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     {/* Who may connect besides the home network: VPN connections and admitted
                                         networks. Self-loading like the SSH section; saves through its own route. */}
                                     <RemoteAccessSection sectionId={slugifySection(tLocalNet('remoteAccess.title'))} />
+                                    {/* The certificate every device is served and VAF's authority; self-loading,
+                                        changes through its own route (vaf/api/network_routes.py). */}
+                                    <CertificateSection sectionId={slugifySection(tLocalNet('certificate.title'))} />
                                     <Section title={tLocalNet('userManagement')}>
                                         <div className="flex flex-col gap-4">
                                             {/* Toolbar */}

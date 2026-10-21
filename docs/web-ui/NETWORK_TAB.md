@@ -24,6 +24,15 @@ The **Local Network** tab is the central command center for managing local netwo
 *   **Lockout protection:** A change that would shut out the address the page is open from (switching to "VPN only" from the home network, removing the network one is connected through) comes back as `409`; the section shows "This locks you out" with the address and saves only on "Save anyway".
 *   **What VAF does not do:** it runs no VPN server. The design, the detection rules and the named boundaries are in [NETWORK_FEATURES.md](../setup/NETWORK_FEATURES.md#remote-access-over-a-vpn); the CLI half is `vaf server networks` / `vaf server vpn-only`.
 
+#### **A3. Certificate**
+*   **Element:** "Certificate" section below "Remote access (VPN)" (`web/components/settings/CertificateSection.tsx`), admin-only like the whole tab, dimmed while hosting is off, self-loading from `GET /api/network/certificate` and hidden on 401/403 like the section above it. The terminal half is `vaf server cert` and `vaf server ca`; the design is in [NETWORK_FEATURES.md](../setup/NETWORK_FEATURES.md#your-own-certificate).
+*   **In use:** whether the served certificate is VAF's own or the person's own, its issuer, the names it carries (wrapping chips), the date it is valid until with the days left (amber under 30 days, red once expired, which is still served), and its SHA-256 fingerprint in colon form with a copy button. Fingerprints wrap only after a colon. Below it, in amber, the admitted addresses and the host name it does not name. When a configured own certificate cannot be used, a red banner (`role="alert"`) gives the reason in the person's language and says that VAF serves its own until the file is fixed.
+*   **VAF's certificate authority:** its fingerprint with copy, the line to compare it with what the device shows or with `vaf server ca` on the machine and never with a page loaded over the connection being checked, whether it is restricted to private addresses and names (green) or not (amber), and "Download" (`vaf-authority.pem` from `/api/a2a/ca.pem`, offered only while VAF's own certificate is served, because that route serves the authority of the served chain). An unrestricted authority offers "Restrict to private addresses", which opens an amber `alertdialog`: every device installs the new authority, rooms on other machines trust its new fingerprint, the old one can be removed from the devices.
+*   **Use your own certificate:** three file pickers (the certificate, which may carry the chain and the key; the private key; the intermediate certificates), read in the browser with a 64 KiB cap each, under the hint to upload a private key only from this machine or over a connection already verified (else `vaf server cert set` on the machine). "Check" (`POST /api/network/certificate/check`) shows the report: errors in red, warnings in amber, and the subject, issuer, names, end date and the authority's fingerprint. "Use this certificate" is offered only for a report without errors, under the line that devices which do not trust the issuer warn from their next connection, this page included. Every code is worded in the person's language; a code the catalogue does not know shows the server's English text.
+*   **Back to VAF's own certificate:** offered while an own certificate is configured, served or not, with the same warning before it.
+*   **Second factor:** for a signed-in admin (`step_up_required`), applying, going back and renewing the authority ask for the 6-digit code from the authenticator app first; a request without a token comes from this machine and needs none. A wrong code, too many codes and an account without 2FA each get their own sentence.
+*   **After a change:** the note says whether the running VAF serves it now (no restart), once encryption is on, or that VAF still serves the previous certificate and needs a restart, and the section reloads its state.
+
 #### **B. Network Topology Visualization**
 *   **Element:** "Open Network Map" Button & Full-Screen Modal.
 *   **Visualization:** Interactive node graph (`ReactFlow`) with the VAF Host at the centre and one node per remote device that currently has a live connection. The map polls `GET /api/network/connections` (every 4s while the full-screen map modal is open, 15s while the tab is open), de-duplicates by IP (keeping the most recently active connection), and filters out localhost/the host itself, so a device only appears while it is actually connected, and there is no separate offline state on map nodes.
@@ -74,7 +83,7 @@ The Login Portal is the entry point for other devices on the network. It simulat
 ### 2.1 Authentication Flow
 
 #### **Step 1: Primary Authentication**
-*   **URL (LAN devices):** `https://<LAN-IP>:8443/login` (TLS via the integrated HTTPS proxy; accept the self-signed certificate once). The desktop app reaches the local UI directly at `http://127.0.0.1:3000`; port 3000 is localhost-only and not reachable from the LAN.
+*   **URL (LAN devices):** `https://<LAN-IP>:8443/login` (TLS via the integrated HTTPS proxy; install VAF's certificate authority on the device first, after comparing its fingerprint, see section A3). The desktop app reaches the local UI directly at `http://127.0.0.1:3000`; port 3000 is localhost-only and not reachable from the LAN.
 *   **UI:** Clean, branded login form.
 *   **Inputs:** Username & Password.
 *   **Logic:**
@@ -188,7 +197,7 @@ To turn these Dummy UIs into functional features, the following backend logic is
 The goal is a security model suitable for a local application.
 
 1.  **Admin** opens Settings on their PC, enables "Local Network", creates a user `colleague`.
-2.  **Colleague** opens `https://<LAN-IP>:8443` on their iPad (TLS via the integrated HTTPS proxy) and accepts the self-signed certificate once.
+2.  **Colleague** installs VAF's certificate authority on their iPad (fingerprint compared with the one the admin reads in section A3) and opens `https://<LAN-IP>:8443` (TLS via the integrated HTTPS proxy).
 3.  **Colleague** logs in with temp password.
 4.  **Colleague** is forced to scan a QR code with their iPhone.
 5.  **Colleague** enters the code and gains access to the specific Tools/Memories allowed by the Admin.

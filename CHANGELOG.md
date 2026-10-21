@@ -93,12 +93,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   from a script or the agent. `vaf users list` shows the accounts. Every password reset, in the
   terminal or by an admin in Settings, now appears in the security log.
 
-- **Your own certificate, checked and served at once.** `vaf server cert set --cert FILE --key
-  FILE` checks a certificate before using it (key, chain, expiry, which of your addresses it
-  names) and the running VAF serves it without a restart; `vaf server cert reset` goes back to
-  VAF's own. `vaf server ca` shows the fingerprint of VAF's certificate authority, so you can
-  compare it with what a device shows before you trust it. Room invitations to other machines
-  now name the authority of the certificate you serve.
+- **Your own certificate, checked and served at once.** Settings, Local Network, Certificate (or
+  `vaf server cert set --cert FILE --key FILE`) checks a certificate before using it (key, chain,
+  expiry, which of your addresses it names) and serves it without a restart; `vaf server cert
+  reset` or "Back to VAF's own certificate" goes back to VAF's own. `vaf server ca` and the
+  settings show the fingerprint of VAF's certificate authority, so you can compare it with what
+  a device shows before you trust it. Room invitations to other machines now name the authority
+  of the certificate you serve.
 
 ### Security
 
@@ -322,7 +323,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **VAF's certificate authority can only vouch for private addresses.** A newly created
   authority cannot sign a certificate for a public name or address, so a copy of its key cannot
   impersonate other sites on your devices. An existing authority is kept, so your devices keep
-  working; `vaf server ca renew` replaces it when you choose.
+  working; `vaf server ca renew` (or "Restrict to private addresses" in the settings) replaces
+  it when you choose.
 
 ### Fixed
 

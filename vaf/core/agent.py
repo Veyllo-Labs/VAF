@@ -14051,7 +14051,8 @@ class Agent:
         ``vaf.TurnStatus(failed, failure)``.
 
         ``failed``: the turn produced no answer (the backend failed, or loop protection
-        stopped it); its return value is the engine's text, which the history does not hold.
+        stopped it; a reply a guard had sent back for correction is no answer yet); its
+        return value is the engine's text, which the history does not hold.
         ``failure``: the failure text as it was streamed, the tail of what the stream
         callback received, also for a turn that answered before a later round failed (that
         turn is not failed and returns its answer). Before the first turn, both are empty.

@@ -28,8 +28,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `docs/EMBEDDING.md`.
 
 - **`agent.last_turn` says how the last turn ended.** This only matters for code that
-  builds on VAF as a library. `agent.last_turn.failed` is True when the turn gave no
-  answer, because the provider failed or loop protection stopped it.
+  builds on VAF as a library. `agent.last_turn.failed` is True when the provider failed or
+  loop protection stopped the turn before it had an answer. A reply that VAF's checks sent
+  back for correction is not an answer yet, so a turn that fails during that correction
+  has failed too.
   `agent.last_turn.failure` is the error text that `on_token` received, if there was one.
   It is also set when the agent answered first and a later step failed; `run()` then
   returns only the answer, never the error after it. If you keep your own record of what

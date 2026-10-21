@@ -476,14 +476,15 @@ class Agent:
         ``vaf.TurnStatus(failed, failure)``. Same name on the engine.
 
         ``failed`` is True when the turn produced no answer (a provider failed, or loop
-        protection stopped it): ``run()`` then returned the engine's text, which is not part
-        of the conversation. ``failure`` is the failure text as ``on_token`` received it,
-        also when the turn had answered before a later round failed; ``run()`` returned the
-        answer then, and only the stream carries the failure. Read it after ``run()`` and
-        before the next one. A transcript of your own built from ``on_token`` stores
-        ``vaf.stored_turn_copy(streamed, agent.last_turn)`` and reads it back with
-        ``vaf.model_text``. Before the first run (no engine yet) nothing failed, and reading
-        this builds no engine.
+        protection stopped it; a reply a guard had sent back for correction is no answer
+        yet): ``run()`` then returned the engine's text, which is not part of the
+        conversation. ``failure`` is the failure text as ``on_token`` received it, also when
+        the turn had answered before a later round failed; ``run()`` returned the answer
+        then, and only the stream carries the failure. Read it after ``run()`` and before the
+        next one. A transcript of your own built from ``on_token`` stores
+        ``vaf.stored_turn_copy("".join(streamed), agent.last_turn)``, ``streamed`` being the
+        chunks ``on_token`` received, and reads it back with ``vaf.model_text``. Before the
+        first run (no engine yet) nothing failed, and reading this builds no engine.
         """
         if self._agent is None:
             from vaf.core.session import TurnStatus

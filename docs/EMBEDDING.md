@@ -461,7 +461,8 @@ answer: a provider failure then reached `on_token` only, a stop note nothing.
 
 `agent.last_turn`, read after `run()`, says which of these happened: a frozen
 `vaf.TurnStatus` whose `failed` is True when the turn produced no answer (a provider
-failure or a loop-protection stop), and whose `failure` is the failure text exactly as
+failure or a loop-protection stop; a reply that a guard had sent back for correction is no
+answer yet), and whose `failure` is the failure text exactly as
 `on_token` received it, also for a turn that answered first. If you store `run()`'s return
 value, `failed` is all you need: that value never holds a failure that followed an answer.
 If you keep a transcript of what `on_token` received, see "Your own transcript of the
@@ -528,7 +529,8 @@ message: None for a failed turn, the answer without its failure for a turn that 
 first, the text otherwise. The stored copy keeps the whole stream, failure included, so
 your record shows what happened. VAF's own runner and terminal store their transcripts
 exactly this way. With `agent` from the example above, and `reply` standing for however
-your application answers the person:
+your application answers the person (`run()` can still raise; wrap it as that example
+does):
 
 ```python
 import logging
@@ -539,7 +541,7 @@ log = logging.getLogger(__name__)
 transcript = []  # your own record of the conversation
 
 prompt = "When is my appointment?"
-transcript.append({"role": "user", "content": prompt})
+transcript.append({"role": "user", "content": prompt, "metadata": None})
 streamed = []
 answer = agent.run(prompt, on_token=streamed.append)
 if agent.last_turn.failed:

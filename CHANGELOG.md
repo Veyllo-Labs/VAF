@@ -27,6 +27,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   same holds for a loop-protection stop. See "A complete example, with error handling" in
   `docs/EMBEDDING.md`.
 
+- **`agent.last_turn` says how the last turn ended**, beside its text: whether it failed
+  (a provider failure or a loop-protection stop) and which part of what `on_token` received
+  was the failure, also when the turn had answered before a later round failed. If you keep
+  your own transcript of the stream, `vaf.stored_turn_copy(streamed, agent.last_turn)`
+  stores it the way the person saw it, and `vaf.model_text(message)` gives back only what a
+  model may read of it later. VAF's own runner and terminal now use these same names. In
+  that answered-then-failed case, `run()` now always returns the answer without the
+  failure, also when it has to rebuild the answer from the stream. See "A complete example,
+  with error handling" in `docs/EMBEDDING.md`.
+
 - **A restore shows in the security log.** `vaf backup restore` replaces every account, key
   and chat of the machine; it is now the security event "Backup restored", with the backup,
   the proof the person gave in the terminal and whose backup it was. A restore that did not

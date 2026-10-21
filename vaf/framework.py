@@ -413,6 +413,8 @@ class Agent:
         return value collapses to a placeholder ("..."). So we accumulate the
         stream and, when the direct return is empty/degenerate, fall back to the
         reasoning-stripped streamed text. For non-reasoning models the two agree.
+        A failure that a later round streamed after the answer (``last_turn.failure``)
+        is taken off that fallback, so the return value is the answer either way.
         """
         buf: list[str] = []
 
@@ -431,21 +433,26 @@ class Agent:
             self._bind_identity(core)
         result = core.chat_step(prompt, stream_callback=_sink)
         result = result.strip() if isinstance(result, str) else ""
+        # A bare ellipsis (or empty) is the core's placeholder when the real
+        # answer was streamed instead of returned: prefer the streamed answer.
+        if result and not set(result) <= {".", "…"}:
+            return result
 
         streamed = "".join(buf)
+        turn = core.last_turn if streamed else None
+        if turn is not None and turn.failure and not turn.failed:
+            # The turn answered, then a later round's failure was streamed after the
+            # answer: the fallback is that answer, never the failure. The one tail rule
+            # the stored copies follow; the stream is dropped when it does not apply.
+            from vaf.core.session import take_off_turn_failure
+            streamed = take_off_turn_failure(streamed, turn.failure) or ""
         cleaned_stream = ""
         if streamed:
             try:
                 cleaned_stream = self.core._clean_reasoning(streamed).strip()
             except Exception:
                 cleaned_stream = streamed.strip()
-
-        # A bare ellipsis (or empty) is the core's placeholder when the real
-        # answer was streamed instead of returned — prefer the streamed answer.
-        degenerate = (not result) or set(result) <= {".", "…"}
-        if degenerate and cleaned_stream:
-            return cleaned_stream
-        return result or cleaned_stream
+        return cleaned_stream or result
 
     async def run_async(
         self, prompt: str, on_token: Optional[Callable[[str], None]] = None
@@ -462,3 +469,23 @@ class Agent:
         import asyncio
 
         return await asyncio.to_thread(self.run, prompt, on_token)
+
+    @property
+    def last_turn(self):
+        """How the most recent ``run()`` ended, beside its text: a frozen
+        ``vaf.TurnStatus(failed, failure)``. Same name on the engine.
+
+        ``failed`` is True when the turn produced no answer (a provider failed, or loop
+        protection stopped it): ``run()`` then returned the engine's text, which is not part
+        of the conversation. ``failure`` is the failure text as ``on_token`` received it,
+        also when the turn had answered before a later round failed; ``run()`` returned the
+        answer then, and only the stream carries the failure. Read it after ``run()`` and
+        before the next one. A transcript of your own built from ``on_token`` stores
+        ``vaf.stored_turn_copy(streamed, agent.last_turn)`` and reads it back with
+        ``vaf.model_text``. Before the first run (no engine yet) nothing failed, and reading
+        this builds no engine.
+        """
+        if self._agent is None:
+            from vaf.core.session import TurnStatus
+            return TurnStatus()
+        return self._agent.last_turn

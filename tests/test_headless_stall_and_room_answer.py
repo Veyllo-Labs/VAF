@@ -20,6 +20,7 @@ from types import SimpleNamespace
 import pytest
 
 import vaf.core.headless_runner as hr
+from vaf.core.session import TurnStatus
 from vaf.core.task_queue import TaskQueue
 
 
@@ -127,7 +128,7 @@ def room(monkeypatch):
 
 
 def _agent(history):
-    return SimpleNamespace(history=history)
+    return SimpleNamespace(history=history, last_turn=TurnStatus())
 
 
 WAKE = {"room_id": "room-x", "scope": "aaaa1111-2222-3333-4444-555555555555"}
@@ -170,17 +171,17 @@ def test_a_room_send_from_an_earlier_turn_does_not_mask_this_one(room):
 
 
 def test_a_failed_room_turn_posts_nothing(room):
-    """A room turn whose provider failed returns the failure as its text (chat_step's
-    `_turn_failed`), and a loop-protection stop returns the engine's note. The room's other
-    members read what is posted, so neither goes in. MUTATION: drop the gate - the masked
-    key and the owner's spend reach the room, red."""
-    failed = SimpleNamespace(history=[], _turn_failed=True)
+    """A room turn whose provider failed returns the failure as its text (the agent's
+    `last_turn.failed`), and a loop-protection stop returns the engine's note. The room's
+    other members read what is posted, so neither goes in. MUTATION: drop the gate - the
+    masked key and the owner's spend reach the room, red."""
+    failed = SimpleNamespace(history=[], last_turn=TurnStatus(failed=True))
     assert hr.deliver_stray_room_answer(
         failed, WAKE, "[API Error from openai: Error code: 401 - sk-proj-****abcd]", 0) is False
-    stopped = SimpleNamespace(history=[], _turn_failed=False)
+    stopped = _agent([])
     assert hr.deliver_stray_room_answer(
         stopped, WAKE, "⚠️ [LOOP_PROTECTION] Daily API budget reached (~$4.12 of $5.00).", 0) is False
     assert room.said == []
-    answered = SimpleNamespace(history=[], _turn_failed=False)
+    answered = _agent([])
     assert hr.deliver_stray_room_answer(answered, WAKE, "Ich übernehme den zweiten Teil.", 0) is True
     assert room.said == ["Ich übernehme den zweiten Teil."]

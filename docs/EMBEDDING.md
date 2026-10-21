@@ -88,7 +88,8 @@ agent.run("Explain async/await.", on_token=lambda s: print(s, end="", flush=True
 
 `on_token` receives text deltas as they arrive. For reasoning models the deltas
 may include the model's `<think>...</think>` block; the value returned by `run()`
-is always the cleaned final answer.
+is always the cleaned final answer. A turn's failure reaches `on_token` too;
+`agent.last_turn` says whether one did (see "A complete example, with error handling").
 
 ### Stateful conversations
 
@@ -456,9 +457,39 @@ its own words when asked what happened) nor does `save_session()` store it. The 
 for a loop-protection stop (`vaf.markers.LOOP_PROTECTION`): its note can name your daily
 API spend and a config key. When the turn had already answered in an earlier round (the
 pending-task auto-continue) and a later round failed or was stopped, `run()` returns that
-answer: a provider failure then reached `on_token` only, a stop note nothing. If you keep
-your own transcript of what `on_token` streamed, keep these out of whatever you hand a
-model later.
+answer: a provider failure then reached `on_token` only, a stop note nothing.
+
+`agent.last_turn`, read after `run()`, says which of these happened: a frozen
+`vaf.TurnStatus` whose `failed` is True when the turn produced no answer (a provider
+failure or a loop-protection stop), and whose `failure` is the failure text exactly as
+`on_token` received it, also for a turn that answered first. If you store `run()`'s return
+value, `failed` is all you need: that value never holds a failure that followed an answer.
+If you keep your own transcript of what `on_token` streamed, store the stream with
+`vaf.stored_turn_copy` and hand a model only what `vaf.model_text` returns for it: None for
+a failed turn, the answer without its failure for a turn that answered first, the text
+otherwise. The copy keeps the whole stream, the way the person saw it. VAF's own runner and
+terminal store their transcripts exactly this way.
+
+```python
+import vaf
+
+streamed = []
+answer = agent.run(prompt, on_token=streamed.append)
+copy, metadata = vaf.stored_turn_copy("".join(streamed), agent.last_turn)
+transcript.append({"role": "assistant", "content": copy, "metadata": metadata})
+
+# later, what a model may read of that transcript:
+readable = [{"role": m["role"], "content": text}
+            for m in transcript if (text := vaf.model_text(m)) is not None]
+```
+
+Store `metadata` beside the copy as it is (None for most turns) and hand it back with the
+message; its keys are VAF's own and not part of the promise. If you clean the stream before
+you store it (strip reasoning, collapse blank lines), pass that function as the third
+argument, `vaf.stored_turn_copy(streamed, agent.last_turn, clean)`: the answer and the
+failure are cleaned apart, so the failure stays the copy's exact tail and still comes off.
+Cleaning the stored copy afterwards can change the failure, and a message whose recorded
+failure is no longer its tail is left out entirely, the safe side.
 Some other *handled* failures (e.g. the API returning empty responses repeatedly) also
 come back as a short status string instead of raising:
 
@@ -505,6 +536,8 @@ Notes:
   check the returned string for that marker. A provider failure is the other
   string `run()` returns instead of raising; `vaf.is_error_reply()` (above) is
   the check for it, and `on_token` has already streamed its text by then.
+  `agent.last_turn.failed` says the same without reading the text, and also covers a
+  loop-protection stop.
 - **Streaming + errors.** An exception during a streamed run can arrive after
   some `on_token` deltas were already delivered; treat partial output as
   non-final until `run()` returns.
@@ -2196,7 +2229,7 @@ server is not supported today. See
 
 Stable public surface (safe to build on):
 
-- `from vaf import Agent` - the façade: `Agent(config=..., system_prompt=..., user_scope=..., session=...)`, `.run(prompt, on_token=...)`, `.run_async(...)`, `.complete(prompt, ...)`, `.add_tool(tool)`, `.set_tool_authorizer(fn)`, `.set_allowed_tools(names)`, `.on_event(cb)`, `.on_compaction(cb)`, `.save_session()`, `.core`.
+- `from vaf import Agent` - the façade: `Agent(config=..., system_prompt=..., user_scope=..., session=...)`, `.run(prompt, on_token=...)`, `.run_async(...)`, `.complete(prompt, ...)`, `.add_tool(tool)`, `.set_tool_authorizer(fn)`, `.set_allowed_tools(names)`, `.on_event(cb)`, `.on_compaction(cb)`, `.save_session()`, `.last_turn`, `.core`.
 - `vaf.markers` - the special-return-value constants.
 - `vaf.CoreAgent` - the engine, for advanced embedding.
 - `CoreAgent.chat_step(user_input, ..., memory_context=...)` - the documented turn
@@ -2349,6 +2382,14 @@ Stable public surface (safe to build on):
   `[Error] ` status or a provider's `[API Error from` sentinel anywhere in it, also
   after text an earlier round streamed. A reply that quotes either marker counts as a
   failure, the safe side. Never raises; anything but a non-empty string is False.
+- `last_turn` on both `Agent` and `CoreAgent`, a frozen `vaf.TurnStatus(failed, failure)`,
+  with `vaf.stored_turn_copy(stream, turn, clean=None) -> (copy, metadata)` and
+  `vaf.model_text(message) -> Optional[str]` - how the most recent turn ended, beside its
+  text, and the rule for a transcript kept from the stream. The promise: the two fields
+  and what they mean, `last_turn` is empty before the first turn and reset by every turn,
+  the copy keeps the whole stream, and `model_text` (a `{"role", "content", "metadata"}`
+  dict) returns None for a failed turn, the answer without its failure for a turn that
+  answered first and the content otherwise. The metadata's keys are not.
 - The `vaf.tools` entry-point group.
 
 Everything else under `vaf.core.*` is internal and may change between releases.
@@ -2359,7 +2400,8 @@ Both are engine-internal by design: VAF exposes no session enumeration on the
 façade, and no embedder has asked for one. If you need it, say so - the export is
 one lazy branch away, and it is not being added on speculation.
 `vaf.ToolCaller`, `vaf.ToolRequest`, `vaf.set_account_allowlist_resolver`,
-`vaf.extract_pdf_markdown`, `vaf.install_thread_excepthook` and `vaf.is_error_reply`
+`vaf.extract_pdf_markdown`, `vaf.install_thread_excepthook`, `vaf.is_error_reply`,
+`vaf.TurnStatus`, `vaf.stored_turn_copy` and `vaf.model_text`
 are the deliberate exceptions: they live in `vaf.core` but are re-exported on the façade, and the
 façade names are the ones to import.
 

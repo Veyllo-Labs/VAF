@@ -21,6 +21,7 @@ from vaf.cli.tui_app.agent_bridge import AgentBridge
 from vaf.cli.tui_app.app import TuiEvents, VafApp
 from vaf.cli.tui_app.screens import GateScreen, PaletteScreen, SettingsScreen
 from vaf.cli.tui_app.widgets import AgentMessage, UserMessage
+from vaf.core.session import TurnStatus
 
 
 class _FakeSession:
@@ -39,6 +40,7 @@ class _FakeAgent:
     def __init__(self):
         self.history = []
         self.current_session_id = "sess-smoke-1"
+        self.last_turn = TurnStatus()     # the engine's public turn reading
         self.sink = None
         self.script = None            # optional: (stream_callback) -> reply
 

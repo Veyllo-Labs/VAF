@@ -114,12 +114,17 @@ This is the contract. Treat it as a stable API.
 
 **Stable (safe to build on; changes are versioned and announced):**
 
-- `from vaf import Agent` - `Agent(config=...)`, `.run(prompt, on_token=...)`, `.run_async(...)`, `.complete(prompt, ...)`, `.add_tool(tool)`, `.on_event(cb)`, `.save_session()`, `.core`
+- `from vaf import Agent` - `Agent(config=...)`, `.run(prompt, on_token=...)`, `.run_async(...)`, `.complete(prompt, ...)`, `.add_tool(tool)`, `.on_event(cb)`, `.save_session()`, `.last_turn`, `.core`
 - `vaf.CoreAgent`
 - `BaseTool` and its declared attributes (`name`, `description`, `parameters`,
   `permission_level`, `side_effect_class`, `admin_only`, `channel_restrictions`,
   `coder_only`, `identity_kwargs`, `run`)
 - `vaf.markers` - the special-return-value constants
+- `last_turn` on both `Agent` and `CoreAgent` (a frozen `vaf.TurnStatus`), with
+  `vaf.stored_turn_copy` and `vaf.model_text` - whether the last turn failed and which
+  streamed text was its failure, and the rule that keeps that failure out of what a model
+  reads from a transcript kept from the stream; `vaf.is_error_reply` asks the same of a
+  text (contract in [EMBEDDING.md](EMBEDDING.md))
 - `vaf.user_jail` - turning a declared identity into a file boundary, and
   `vaf.jail_allows` - asking that same boundary from outside a tool run, for a
   route that serves or stores a file on an account's behalf
@@ -149,7 +154,8 @@ The authoritative list is `vaf.__all__` plus that page; this one is a summary.
   (`CoreAgent`, `ToolCaller`, `ToolRequest`, `VoiceTurnEngine`, `TurnOutcome`,
   `extract_pdf_markdown`, `set_account_allowlist_resolver`,
   `account_allows_tool`, `contained_path`, `safe_entry_name`,
-  `PathEscape`) are the deliberate
+  `PathEscape`, `is_error_reply`, `TurnStatus`, `stored_turn_copy`,
+  `model_text`) are the deliberate
   exceptions - import them from `vaf`, not from `vaf.core`.
 - private methods and attributes (leading underscore)
 

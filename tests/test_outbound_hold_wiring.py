@@ -545,8 +545,9 @@ def test_the_runner_shows_a_draft_turn_as_the_card():
     assert "ends_at_draft=_turn_ends_at_draft" in runner
     from vaf.core import headless_runner as hr
     from vaf.core.outbound_hold import TURN_ENDS_AT_DRAFT
+    from vaf.core.session import TurnStatus
     copy, _ = hr._chat_turn_copy(["Ich entwerfe die Mail."], TURN_ENDS_AT_DRAFT,
-                                 ends_at_draft=True, failed=False, turn_failure="")
+                                 ends_at_draft=True, turn=TurnStatus())
     assert copy == TURN_ENDS_AT_DRAFT.strip()
 
 def test_the_card_carries_no_colour_of_its_own():

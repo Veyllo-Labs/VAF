@@ -9629,13 +9629,14 @@ class Agent:
         # True once this turn ended without an answer from the model: the backend failed or
         # loop protection stopped it. The return value (and the stream) is then the engine's
         # own text, which is not committed to the history, and a host that stores the streamed
-        # text apart from the history marks its copy (session.failed_turn_meta) so no later
-        # context reads it back as something the model said.
+        # text apart from the history marks its copy (session.stored_turn_copy) so no later
+        # context reads it back as something the model said. Hosts read it, and the next
+        # field, only through `last_turn`.
         self._turn_failed = False
-        # The failure or stop text that ended this turn, as streamed (or returned). Set with
-        # `_turn_failed`, and ALSO when the turn had already answered: then the answer stands,
-        # the turn is not failed, and a host strips this text from its stored copy and from
-        # what it sends (session.failed_turn_meta / session.model_text).
+        # The failure text that ended this turn, as streamed. Set with `_turn_failed`, and ALSO
+        # when the turn had already answered: then the answer stands, the turn is not failed,
+        # and a host strips this text from its stored copy and from what it sends
+        # (session.stored_turn_copy / session.model_text).
         self._turn_failure = ""
         # Forced-resolution node (thinking-mode decision tree): when the caller forces a tool call, also
         # block the gather tools immediately so "required" can ONLY be satisfied by a decisive/progress
@@ -14043,6 +14044,25 @@ class Agent:
         """
         self._allowed_tools = _normalize_allowed_tools(names)
         self._active_tools = None
+
+    @property
+    def last_turn(self):
+        """How this agent's most recent turn ended, beside its text: a frozen
+        ``vaf.TurnStatus(failed, failure)``.
+
+        ``failed``: the turn produced no answer (the backend failed, or loop protection
+        stopped it); its return value is the engine's text, which the history does not hold.
+        ``failure``: the failure text as it was streamed, the tail of what the stream
+        callback received, also for a turn that answered before a later round failed (that
+        turn is not failed and returns its answer). Before the first turn, both are empty.
+
+        Read it right after the turn and before another one runs on this agent: every
+        ``chat_step`` resets it at its start. A host that keeps the stream builds its stored
+        copy from this reading (``vaf.stored_turn_copy``), and a reader takes the failure off
+        it (``vaf.model_text``)."""
+        from vaf.core.session import TurnStatus
+        return TurnStatus(failed=getattr(self, "_turn_failed", False),
+                          failure=getattr(self, "_turn_failure", ""))
 
     def set_event_sink(self, sink):
         """Set an optional event sink for structured outputs (e.g. stream-json).

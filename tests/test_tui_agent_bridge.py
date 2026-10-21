@@ -19,6 +19,7 @@ from types import SimpleNamespace
 import pytest
 
 from vaf.cli.tui_app.agent_bridge import AgentBridge, _inline_attachments
+from vaf.core.session import TurnStatus
 
 
 def _wait_for(pred, timeout=5.0):
@@ -79,6 +80,7 @@ class FakeAgent:
     def __init__(self, script="Hello world"):
         self.script = script
         self.history = []
+        self.last_turn = TurnStatus()                 # the engine's public turn reading
         self.current_session_id = "sess-tui-test"
         self.seen_inputs = []
         self.seen_kwargs = []

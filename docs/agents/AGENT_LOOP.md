@@ -260,7 +260,9 @@ closure, `_end_turn_without_answer`: NOTHING of the text is committed to the his
 the turn ends. A backend failure is in the stream; a loop-protection note and the local
 server's statuses are not (they reach the person as the turn's text or an event), and only
 a streamed text is recorded in the turn-local `_turn_failure`, so a host takes off its stored
-copy exactly what that copy holds. What the turn returns depends on whether it had already
+copy exactly what that copy holds. Hosts read both flags through the public `last_turn`, a
+frozen `TurnStatus(failed, failure)` (CORE_AGENT.md), never the fields themselves
+(`tests/test_turn_status_layering.py`). What the turn returns depends on whether it had already
 answered. A turn whose newest kept answer passed the final-answer path (the pending-task
 auto-continue re-entered after it) has answered: it returns its answers and is not failed.
 Any other turn failed, `_turn_failed` is set and the text is the return value; that
@@ -275,9 +277,10 @@ it sees its request with no answer after it and usually answers that request aga
 is what "try again" needs. The person's screen shows the error. Every host that stores
 the streamed text for a transcript (the queue runner's chat lane and its sub-agent result
 drain, the interactive CLI and the TUI) stores it as one message, the way it was shown, and
-builds that copy and its mark with `session.stored_turn_copy` (a stream that does not end
-with its failure is marked failed); `vaf run -p` stores the return value and marks only a
-failed turn. Every reader that builds a model's context from a stored chat reads it
+builds that copy and its mark with `stored_turn_copy(stream, agent.last_turn, clean)` (a
+stream that does not end with its failure is marked failed); `vaf run -p` stores the return
+value and marks only a failed turn. Both names are on the facade, with `model_text`, so an
+application that keeps its own transcript of the stream does the same. Every reader that builds a model's context from a stored chat reads it
 through `session.model_text` (SESSION_MANAGEMENT.md). The runner also answers a contact's failed turn with a fixed
 sentence, and a turn that answered first with that answer (FRONT_OFFICE.md); a room turn
 that failed posts nothing into its room. Guard: `tests/test_failed_turn_context.py`.

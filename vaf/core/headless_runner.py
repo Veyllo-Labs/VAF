@@ -23,8 +23,8 @@ from vaf.core.identity_binding import (Identity, bind_identity, identity_from_me
                                        reassert_identity, resolve_scope_identity)
 from vaf.core.task_queue import TaskQueue
 from vaf.core.subagent_ipc import take_result_notification
-from vaf.core.session import (SessionManager, Session, failed_turn_meta, stored_turn_copy,
-                              turn_context_messages_since_last_user)
+from vaf.core.session import (SessionManager, Session, TurnStatus, failed_turn_meta,
+                              stored_turn_copy, turn_context_messages_since_last_user)
 from vaf.core.tray_context import TrayContext
 from vaf.core.web_interface import get_web_interface
 from vaf.core.platform import Platform
@@ -374,18 +374,18 @@ def _send_turn_error_reply(task, error, contact=None) -> None:
 
 
 def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=None,
-                           turn_failed: bool = False, turn_failure: str = "") -> None:
+                           turn: TurnStatus = TurnStatus()) -> None:
     """Send a finished turn's answer back where the task came from: Telegram, Discord,
     WhatsApp, or the mail outbox (`_deliver_email_reply`); a web turn sends nothing here.
 
     A contact's turn that produced no answer is not sent: the contact gets the fixed
     sentence `_send_turn_error_reply` sends for a turn that raised, and a mail nothing.
-    That is a turn the engine marked (`turn_failed`, chat_step's `_turn_failed`: the backend
+    That is a turn the engine marked (`turn.failed`, the agent's `last_turn`: the backend
     failed or loop protection stopped it), or one whose outgoing text is a failure
     (`completion.is_error_reply`, which also covers the runner's own "[Error] No response
     ...") or a stop note (`completion.is_stop_note`). A turn that had answered before such a
-    failure ended it (`turn_failure`, chat_step's `_turn_failure`) is sent its answer, without
-    that text. The text is judged as the contact would receive it, after
+    failure ended it (`turn.failure`) is sent its answer, without that text. The text is
+    judged as the contact would receive it, after
     `_prepare_channel_outbound`: the model's reasoning never leaves, so reasoning that quotes
     an "[Error] ..." tool result does not decide the turn. The owner's own chats get the text
     as it is, and so does the web UI, which the runner fed before this. `contact` is the
@@ -402,7 +402,7 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
             pass
         if meta.get("from_contact"):
             from vaf.core.completion import is_error_reply, is_stop_note
-            if turn_failure and not turn_failed:
+            if turn.failure and not turn.failed:
                 # Answered, then a later round failed: the answer goes out, the failure not,
                 # taken off as the text's tail by the same rule the stored copy follows. A
                 # failure the outgoing text does not end with (the tool-call JSON strip cut
@@ -410,13 +410,13 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
                 # turn goes out: the marker check below would catch a provider failure anyway,
                 # a failure text without a marker it would not.
                 from vaf.core.session import take_off_turn_failure
-                answer = take_off_turn_failure(final_text, turn_failure)
+                answer = take_off_turn_failure(final_text, turn.failure)
                 if answer is None:
                     _send_turn_error_reply(task, str(final_text or ""), contact=contact)
                     return
                 final_text = answer
             visible = _prepare_channel_outbound(final_text)
-            if turn_failed or is_error_reply(visible) or is_stop_note(visible):
+            if turn.failed or is_error_reply(visible) or is_stop_note(visible):
                 _send_turn_error_reply(task, final_text, contact=contact)
                 return
         if task_source == "telegram" and chat_id:
@@ -503,8 +503,9 @@ def _clean_for_session(text: str) -> str:
     return cleaned.strip()
 
 
-def _chat_turn_copy(response_parts, response_text, *, ends_at_draft, failed, turn_failure):
-    """The chat lane's stored copy of a turn and the metadata to store it with.
+def _chat_turn_copy(response_parts, response_text, *, ends_at_draft, turn):
+    """The chat lane's stored copy of a turn and the metadata to store it with; `turn` is the
+    agent's `last_turn`, read right after the turn.
 
     The copy is the stream, cleaned (`_clean_for_session`); a failure that followed an answer
     is its tail, cleaned apart and recorded the way the copy holds it (`stored_turn_copy`).
@@ -513,16 +514,17 @@ def _chat_turn_copy(response_parts, response_text, *, ends_at_draft, failed, tur
     hides), the copy is the turn's return value, which never holds such a failure: nothing
     is recorded, only the failed-turn mark can apply."""
     if response_parts and not ends_at_draft:
-        return stored_turn_copy("".join(response_parts), failed, turn_failure, _clean_for_session)
-    return _clean_for_session(str(response_text or "")), failed_turn_meta(failed)
+        return stored_turn_copy("".join(response_parts), turn, _clean_for_session)
+    return _clean_for_session(str(response_text or "")), failed_turn_meta(turn.failed)
 
 
-def _drain_turn_copy(response_parts, *, failed, turn_failure):
+def _drain_turn_copy(response_parts, *, turn):
     """The sub-agent drain's stored copy of its summary turn and the metadata to store it
     with: the stream through `_clean_drain_text`, a failure that followed an answer cleaned
     apart as its tail (`stored_turn_copy`). The summary turn is a turn like any other, so a
-    failed one is marked and an answered-then-failed one records its failure."""
-    return stored_turn_copy("".join(response_parts or []), failed, turn_failure, _clean_drain_text)
+    failed one is marked and an answered-then-failed one records its failure. `turn` is the
+    agent's `last_turn`, read right after the summary turn."""
+    return stored_turn_copy("".join(response_parts or []), turn, _clean_drain_text)
 
 
 def _clean_drain_text(text: str) -> str:
@@ -847,7 +849,7 @@ def deliver_stray_room_answer(agent, room_wake: dict, answer, hist_before: int) 
     Detection is by the turn's own history: a room_send that ran left a tool
     entry behind. Placeholder returns ("...", empty) are not answers and are
     not delivered, and neither is the text of a turn that failed or was stopped
-    (chat_step's `_turn_failed`, a loop-protection note): it is the engine's, a
+    (the agent's `last_turn.failed`, a loop-protection note): it is the engine's, a
     provider's raw answer or the owner's spend, and the room's other members
     read what is posted. Returns True when a fallback delivery happened.
     """
@@ -856,7 +858,7 @@ def deliver_stray_room_answer(agent, room_wake: dict, answer, hist_before: int) 
         if not text or text == "...":
             return False
         from vaf.core.completion import is_stop_note
-        if getattr(agent, "_turn_failed", False) or is_stop_note(text):
+        if agent.last_turn.failed or is_stop_note(text):
             append_domain_log_always(
                 "headless", f"[ROOM] failed turn not posted room={room_wake.get('room_id')}")
             return False
@@ -2559,11 +2561,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # what the tool declared, not a text the person asked to have written.
                     _turn_closed = bool(getattr(agent, "_turn_closed_by_tool", False))
                     # The turn produced no answer (backend failure, loop-protection stop), or
-                    # answered and then such a failure ended it (`_turn_failure`, the text as
+                    # answered and then such a failure ended it (`failure`, the text as
                     # streamed): read NOW, before anything below runs another chat_step on the
                     # same agent.
-                    _turn_failed = bool(getattr(agent, "_turn_failed", False))
-                    _turn_failure = str(getattr(agent, "_turn_failure", "") or "")
+                    _turn_status = agent.last_turn
                     if response_text.startswith("[ASYNC_ACK]"):
                         clean_ack = response_text.replace("[ASYNC_ACK]", "").strip()
                         final_text = clean_ack or response_text
@@ -2760,7 +2761,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         _deliver_channel_reply(
                             task, final_text, session_mgr=session_mgr,
                             contact=getattr(agent, "_front_office_contact", None),
-                            turn_failed=_turn_failed, turn_failure=_turn_failure)
+                            turn=_turn_status)
 
                     # Send token/context stats to WebUI
                     try:
@@ -2814,7 +2815,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         _user_input = input_text or ""
                         _clean_response, _turn_meta = _chat_turn_copy(
                             response_parts, response_text, ends_at_draft=_turn_ends_at_draft,
-                            failed=_turn_failed, turn_failure=_turn_failure)
+                            turn=_turn_status)
 
                         if _user_input.strip():
                             # Helper to get role/content from Message object or dict
@@ -3653,8 +3654,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     agent._synthetic_drain_turn = False
                                 # What chat_step left about this turn: read before anything else
                                 # runs a turn on the agent, like the chat lane.
-                                _drain_failed = bool(getattr(agent, "_turn_failed", False))
-                                _drain_failure = str(getattr(agent, "_turn_failure", "") or "")
+                                _drain_status = agent.last_turn
 
                                 # POST-CHAT: Emit final message + save session
                                 # (mirrors main chat path – ensures browser sees the response even
@@ -3663,7 +3663,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 # The stored copy is the cleaned stream, marked so no later
                                 # context reads a failure back (session.model_text).
                                 _clean_result, _drain_meta = _drain_turn_copy(
-                                    response_parts, failed=_drain_failed, turn_failure=_drain_failure)
+                                    response_parts, turn=_drain_status)
 
                                 if _clean_result:
                                     # 1. Final emit – guarantees browser has complete message

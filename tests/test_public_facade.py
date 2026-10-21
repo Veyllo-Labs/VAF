@@ -53,8 +53,8 @@ def test_facade_exports_exactly_the_documented_surface():
         "EgressRefused", "EnvironmentManager", "NON_CONVERSATION_KINDS",
         "PathEscape", "RemoteRefused", "RemoteRoom",
         "Room", "RoomError", "RoomTriggerWatch", "SOUL_CONTINUITY_ADDENDUM", "StoreError",
-        "ToolCallHooks", "ToolCaller", "ToolRequest", "TurnOutcome", "UnsafeName",
-        "UploadVerdict",
+        "ToolCallHooks", "ToolCaller", "ToolRequest", "TurnOutcome", "TurnStatus",
+        "UnsafeName", "UploadVerdict",
         "VoiceTurnEngine",
         "__version__",
         "account_allows_tool", "add_revocation_listener", "build_capability_addendum",
@@ -65,11 +65,12 @@ def test_facade_exports_exactly_the_documented_surface():
         "install_thread_excepthook", "invited_rooms", "is_error_reply", "jail_allows",
         "joined_rooms",
         "list_standing_grants", "mark_trusted_dir",
-        "markers", "participant_key", "record_threat", "remove_revocation_listener",
+        "markers", "model_text", "participant_key", "record_threat",
+        "remove_revocation_listener",
         "restore_account", "revoke_account", "revoke_standing_grants", "room_invitation",
         "safe_entry_name", "set_account_allowlist_resolver",
         "set_account_directory_resolver", "set_confirmation_bypass_resolver",
-        "set_tool_policy", "stop_account_work", "stop_session",
+        "set_tool_policy", "stop_account_work", "stop_session", "stored_turn_copy",
         "unread_counts", "user_jail",
     ]
     assert dir(vaf) == sorted(vaf.__all__)
@@ -115,6 +116,7 @@ def test_the_authorizer_has_the_same_name_on_the_facade_and_the_engine():
     assert callable(CoreAgent.set_tool_authorizer)
     assert callable(Agent.complete)
     assert callable(CoreAgent.complete)
+    assert isinstance(Agent.last_turn, property) and isinstance(CoreAgent.last_turn, property)
 
 
 def test_an_authorizer_survives_being_set_before_the_engine_exists():

@@ -12,7 +12,7 @@ import random
 import threading
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Iterator, List, Optional, Tuple
+from typing import Callable, Dict, Any, Iterator, List, Optional, Tuple
 from dataclasses import dataclass, field, asdict, fields
 
 from vaf.core.channels import CHANNEL_LABELS, CHAT_CHANNELS
@@ -89,17 +89,42 @@ class Message:
         return cls(**{k: v for k, v in data.items() if k in known})
 
 
+@dataclass(frozen=True)
+class TurnStatus:
+    """How an agent's most recent turn ended, beside its text: `Agent.last_turn` and
+    `CoreAgent.last_turn` (on the facade as `vaf.TurnStatus`).
+
+    `failed`: the turn produced no answer. The backend failed (a provider's `[API Error from
+    ...]`, the engine's `[Error] ...`) or loop protection stopped it; the turn's text is the
+    engine's, not the model's, and the history does not hold it. `failure`: the failure text
+    as it was STREAMED, the tail of what the stream callback received. It is set for a failed
+    turn whose failure was streamed, and also for a turn that had answered before a later
+    round failed (the pending-task auto-continue): that turn is not failed, it returns its
+    answer, and only its stream carries the failure. A loop-protection note is never
+    streamed, so it leaves `failure` empty. Both empty: the turn answered and nothing failed.
+
+    Frozen, so a host reads the turn once, right after it, and keeps that reading while the
+    same agent runs its next turn. Values are coerced here, at the boundary, because a host
+    and an embedder build one too (`stored_turn_copy` takes it)."""
+    failed: bool = False
+    failure: str = ""
+
+    def __post_init__(self):
+        object.__setattr__(self, "failed", bool(self.failed))
+        object.__setattr__(self, "failure", str(self.failure or ""))
+
+
 # The metadata key a stored assistant message carries when it stands in for an answer the
 # turn never produced: the backend failed (a provider's `[API Error from ...]`, the engine's
 # `[Error] ...`) or loop protection stopped the turn. `chat_step` keeps such a text out of
-# the history and says so in its turn-local `_turn_failed`; a host that stores the STREAMED
-# text apart from the history (the queue runner and the CLI, for their transcripts) marks its
-# copy with this, so the transcript still shows it and no model context reads it back.
+# the history and says so in `last_turn.failed`; a host that stores the STREAMED text apart
+# from the history (the queue runner and the CLI, for their transcripts) marks its copy with
+# this, so the transcript still shows it and no model context reads it back.
 FAILED_TURN_KEY = "turn_failed"
-# The key for a turn that HAD answered when a later round failed or was stopped (chat_step's
-# `_turn_failure` with `_turn_failed` unset): its value is the failure text as streamed. The
-# stored message keeps the whole text, so the transcript shows it as one bubble, the way the
-# person saw it; a model reads the message without that part (`model_text`).
+# The key for a turn that HAD answered when a later round failed or was stopped
+# (`last_turn.failure` with `last_turn.failed` unset): its value is the failure text as
+# streamed. The stored message keeps the whole text, so the transcript shows it as one bubble,
+# the way the person saw it; a model reads the message without that part (`model_text`).
 TURN_FAILURE_KEY = "turn_failure"
 
 
@@ -108,7 +133,7 @@ def failed_turn_meta(failed, failure="") -> Optional[Dict[str, Any]]:
     followed an answer when only `failure` is given, else None (an ordinary answer keeps the
     shape it always had). A host whose copy is the cleaned stream gets it from
     `stored_turn_copy`; one whose copy is the turn's return value, which never holds a
-    failure that followed an answer, passes chat_step's `_turn_failed` alone (`model_text`)."""
+    failure that followed an answer, passes `last_turn.failed` alone (`model_text`)."""
     if failed:
         return {FAILED_TURN_KEY: True}
     if failure:
@@ -136,28 +161,36 @@ def take_off_turn_failure(text, failure) -> Optional[str]:
     return rest or None
 
 
-def stored_turn_copy(stream, failed, failure, clean) -> Tuple[str, Optional[Dict[str, Any]]]:
-    """A host's stored copy of a turn's streamed text, and the metadata to store it with.
+def stored_turn_copy(stream, turn: TurnStatus,
+                     clean: Optional[Callable[[str], str]] = None
+                     ) -> Tuple[str, Optional[Dict[str, Any]]]:
+    """A stored copy of a turn's streamed text, and the metadata to store it with.
 
-    `failed` and `failure` are chat_step's `_turn_failed` and `_turn_failure`: whether the
-    turn produced no answer, and the failure text that ended a turn which had answered, as
-    it was streamed. The engine streams such a failure last and returns, so it is the tail of
-    `stream`. The head and the failure go through the host's own `clean` apart and are
-    joined by a blank line, so the recorded failure stands verbatim as the copy's tail by
-    construction, whatever the cleanup does across the boundary (a markup cleanup whose
-    patterns match across brackets, a newline collapse, a strip); a failure the cleanup
-    removes entirely is not recorded, and the copy then holds none of it. A stream that does
-    not end with its failure has been changed after the engine's last chunk, and whether the
-    cleanup kept failure text across the boundary cannot be told, so the copy is marked as a
-    failed turn: no reader takes any of it. Returns (copy, `failed_turn_meta(...)`)."""
+    `stream` is what the stream callback received, joined; `turn` is the agent's `last_turn`,
+    read right after that turn: whether it produced no answer, and the failure text that
+    ended it, as it was streamed. The engine streams such a failure last and returns, so it
+    is the tail of `stream`. `clean` is the host's own cleanup of the copy (None keeps the
+    stream as it was). The head and the failure go through it apart and are joined by a
+    blank line, so the recorded failure stands verbatim as the copy's tail by construction,
+    whatever the cleanup does across the boundary (a markup cleanup whose patterns match
+    across brackets, a newline collapse, a strip); a failure the cleanup removes entirely is
+    not recorded, and the copy then holds none of it. A stream that does not end with its
+    failure has been changed after the engine's last chunk, and whether the cleanup kept
+    failure text across the boundary cannot be told, so the copy is marked as a failed turn:
+    no reader takes any of it. Returns (copy, `failed_turn_meta(...)`); `model_text` reads
+    the pair back. A copy that is the turn's RETURN value needs neither: it never holds a
+    failure that followed an answer, and only `turn.failed` applies to it."""
+    if clean is None:
+        def clean(text):
+            return text
     stream = str(stream or "")
-    failure = str(failure or "")
+    failure = turn.failure
     if failure and stream.endswith(failure):
         head = clean(stream[:-len(failure)]) or ""
         tail = (clean(failure) or "").strip()
         copy = (f"{head.rstrip()}\n\n{tail}" if head.strip() else tail) if tail else head
-        return copy, failed_turn_meta(failed, tail)
-    return clean(stream) or "", failed_turn_meta(failed or bool(failure))
+        return copy, failed_turn_meta(turn.failed, tail)
+    return clean(stream) or "", failed_turn_meta(turn.failed or bool(failure))
 
 
 def is_failed_turn(msg) -> bool:
@@ -210,7 +243,10 @@ def model_text(msg) -> Optional[str]:
     does not ask: the person keeps seeing what their chat showed. Named boundary: the voice
     call's chat digest (`voice_agent.build_chat_digest`) does not ask either; it serves the
     owner's own open chat and reads nothing on the live path today, because it receives
-    `Message` objects where it expects dicts. Accepts a `Message` or its dict form."""
+    `Message` objects where it expects dicts. Accepts a `Message` or its dict form, so an
+    application that keeps a transcript of its own (`vaf.stored_turn_copy`, then
+    `vaf.model_text({"role": "assistant", "content": copy, "metadata": metadata})`) reads it
+    by the same rule."""
     if is_failed_turn(msg):
         return None
     get = msg.get if isinstance(msg, dict) else (lambda k, d=None: getattr(msg, k, d))

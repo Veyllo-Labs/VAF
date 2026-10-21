@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from .core.completion import is_error_reply
     from .core.environments import EnvironmentManager, get_environment_manager
     from .core.pdf_extract import extract_pdf_markdown
+    from .core.session import TurnStatus, model_text, stored_turn_copy
     from .core.revocation import (add_revocation_listener, remove_revocation_listener,
                                   restore_account, revoke_account, stop_account_work,
                                   stop_session)
@@ -40,6 +41,7 @@ __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_K
            "RemoteRoom", "Room", "RoomError", "RoomTriggerWatch",
            "SOUL_CONTINUITY_ADDENDUM",
            "StoreError", "ToolCallHooks", "ToolCaller", "ToolRequest", "TurnOutcome",
+           "TurnStatus",
            "UnsafeName",
            "UploadVerdict", "VoiceTurnEngine",
            "account_allows_tool", "add_revocation_listener", "build_capability_addendum",
@@ -49,13 +51,13 @@ __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_K
            "inspect_upload",
            "install_thread_excepthook", "invited_rooms", "is_error_reply", "jail_allows",
            "joined_rooms",
-           "list_standing_grants", "mark_trusted_dir", "markers",
+           "list_standing_grants", "mark_trusted_dir", "markers", "model_text",
            "participant_key", "record_threat", "remove_revocation_listener",
            "restore_account", "revoke_account", "revoke_standing_grants", "room_invitation",
            "safe_entry_name", "set_account_allowlist_resolver",
            "set_account_directory_resolver",
            "set_confirmation_bypass_resolver", "set_tool_policy", "stop_account_work",
-           "stop_session", "unread_counts", "user_jail"]
+           "stop_session", "stored_turn_copy", "unread_counts", "user_jail"]
 
 
 def __getattr__(name):
@@ -133,6 +135,19 @@ def __getattr__(name):
         # module level. See docs/EMBEDDING.md.
         from .core.completion import is_error_reply
         return is_error_reply
+    if name in ("TurnStatus", "model_text", "stored_turn_copy"):
+        # How a turn ended, beside its text, and the rule for keeping its failure out of
+        # what a model reads later. `Agent.last_turn` / `CoreAgent.last_turn` hand out the
+        # TurnStatus; a transcript kept from the stream is stored with `stored_turn_copy`
+        # and read back with `model_text`. Exported because VAF's own hosts that keep the
+        # stream - the queue runner's chat lane and its sub-agent drain, the interactive
+        # CLI and the TUI, `vaf run -p` - read the engine's private turn fields for it, and
+        # five in-tree readers of a stored chat already ask `model_text`. Module-level
+        # imports are stdlib, typer (a base dependency) and the channel registry, so the
+        # slim base is unaffected. See docs/EMBEDDING.md.
+        from .core.session import TurnStatus, model_text, stored_turn_copy
+        return {"TurnStatus": TurnStatus, "model_text": model_text,
+                "stored_turn_copy": stored_turn_copy}[name]
     if name == "ToolRequest":
         # What an authorizer is handed: the caller's identity, which is trustworthy, and the
         # model's arguments, which are not. Exported so an application can type-annotate its

@@ -910,7 +910,7 @@ def prompt_once(prompt: str, output_format: str = "text", session: str = None,
                 # The stored text is the turn's return value, which never holds a failure
                 # that followed an answer: only the failed-turn mark applies.
                 s.add_message("assistant", result_text or "",
-                              metadata=failed_turn_meta(getattr(agent, "_turn_failed", False)))
+                              metadata=failed_turn_meta(agent.last_turn.failed))
                 mgr.save(s)
             raise typer.Exit(0)
 
@@ -921,7 +921,7 @@ def prompt_once(prompt: str, output_format: str = "text", session: str = None,
         s = mgr.new(model=agent.config.get("model", ""), project_path=os.getcwd())
         s.add_message("user", prompt)
         s.add_message("assistant", result_text or "",
-                      metadata=failed_turn_meta(getattr(agent, "_turn_failed", False)))
+                      metadata=failed_turn_meta(agent.last_turn.failed))
         mgr.save(s)
         ndjson_emit({"type": "session_saved", "id": s.id})
 
@@ -2586,8 +2586,7 @@ def _process_agent_message(agent, user_input: str, tui, session):
         # <think>, matching across brackets, so it is converted apart from the answer and
         # recorded the way this copy then holds it (session.stored_turn_copy, model_text).
         full_response_clean, _turn_meta = stored_turn_copy(
-            full_response_raw, getattr(agent, "_turn_failed", False),
-            getattr(agent, "_turn_failure", "") or "", convert_rich_to_xml)
+            full_response_raw, agent.last_turn, convert_rich_to_xml)
         
         # A failed turn is marked so a resumed chat does not replay it as an answer.
         session.add_message("assistant", full_response_clean, metadata=_turn_meta)

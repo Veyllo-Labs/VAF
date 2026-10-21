@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from vaf.core import headless_runner as hr
+from vaf.core.session import TurnStatus
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -242,7 +243,7 @@ def test_the_runner_delivers_through_the_one_function():
     assert ('_deliver_channel_reply(\n                            task, final_text, '
             'session_mgr=session_mgr,\n                            '
             'contact=getattr(agent, "_front_office_contact", None),\n                            '
-            'turn_failed=_turn_failed, turn_failure=_turn_failure)') in loop
+            'turn=_turn_status)') in loop
     assert "_deliver_email_reply(" not in loop
 
 
@@ -266,12 +267,12 @@ def test_a_contact_is_never_sent_a_loop_protection_stop(delivered, channel):
 def test_a_turn_the_engine_marked_failed_is_not_sent_to_a_contact(delivered, channel):
     """A stop after a tool round leaves the round's own words as the turn's text ("One
     moment, I'll check."), with no marker in it; the engine's flag says the turn failed.
-    MUTATION: drop `turn_failed or` - red. The owner's chat still gets the text."""
+    MUTATION: drop `turn.failed or` - red. The owner's chat still gets the text."""
     hr._deliver_channel_reply(_delivery_task(channel, from_contact=True),
-                              "Einen Moment, ich schaue nach.", turn_failed=True,
+                              "Einen Moment, ich schaue nach.", turn=TurnStatus(failed=True),
                               contact={"preferred_language": "de"})
     hr._deliver_channel_reply(_delivery_task(channel, from_contact=False),
-                              "Einen Moment, ich schaue nach.", turn_failed=True)
+                              "Einen Moment, ich schaue nach.", turn=TurnStatus(failed=True))
     expected = [] if channel == "email" else [(channel, _FIXED_DE)]
     assert delivered == expected + [(channel, "Einen Moment, ich schaue nach.")]
 
@@ -311,12 +312,13 @@ def test_a_failed_turn_after_a_telegram_voice_note_is_not_read_out(delivered):
 
 
 def test_a_contact_gets_the_answer_a_later_failure_followed(delivered):
-    """The turn answered, then a later round failed (chat_step's `_turn_failure`, the turn
-    not failed): the contact gets the answer and never the failure. MUTATION: do not take
-    `turn_failure` off the text - the sentinel is in it, so the contact gets the fixed
+    """The turn answered, then a later round failed (`last_turn.failure`, the turn not
+    failed): the contact gets the answer and never the failure. MUTATION: do not take
+    `turn.failure` off the text - the sentinel is in it, so the contact gets the fixed
     sentence instead of the answer, red."""
     hr._deliver_channel_reply(_delivery_task("whatsapp", from_contact=True),
-                              "Ihr Termin ist am Montag.\n\n" + _KEY_ERROR, turn_failure=_KEY_ERROR)
+                              "Ihr Termin ist am Montag.\n\n" + _KEY_ERROR,
+                              turn=TurnStatus(failure=_KEY_ERROR))
     assert delivered == [("whatsapp", "Ihr Termin ist am Montag.")]
 
 
@@ -340,10 +342,10 @@ def test_a_failure_delivery_cannot_take_off_is_never_sent(delivered):
     left_in = "Ihr Termin ist am Montag.\n\n" + _KEY_ERROR + "\n\nNoch etwas."
     assert is_error_reply(left_in)            # the marker is found mid-text
     hr._deliver_channel_reply(_delivery_task("telegram", from_contact=True), left_in,
-                              turn_failure=_KEY_ERROR)
+                              turn=TurnStatus(failure=_KEY_ERROR))
     hr._deliver_channel_reply(_delivery_task("whatsapp", from_contact=True),
                               "Ihr Termin ist am Montag.\n\ntimeout after 30s at /home/user",
-                              turn_failure="timeout after 30s at /home/user/x")
+                              turn=TurnStatus(failure="timeout after 30s at /home/user/x"))
     assert delivered == [("telegram", "Sorry, I can't reply right now. Please try again a little later."),
                          ("whatsapp", "Sorry, I can't reply right now. Please try again a little later.")]
 
@@ -358,9 +360,10 @@ def test_delivery_takes_the_failure_off_as_the_tail_only(delivered):
     with a hole in it, red."""
     hr._deliver_channel_reply(_delivery_task("telegram", from_contact=True),
                               "Ihr Termin ist am Montag.\n\n" + _KEY_ERROR,
-                              turn_failure=_KEY_ERROR + "\n")
+                              turn=TurnStatus(failure=_KEY_ERROR + "\n"))
     short = "timeout"
     hr._deliver_channel_reply(_delivery_task("whatsapp", from_contact=True),
-                              "Der timeout ist behoben.\n\n" + short, turn_failure=short)
+                              "Der timeout ist behoben.\n\n" + short,
+                              turn=TurnStatus(failure=short))
     assert delivered == [("telegram", "Ihr Termin ist am Montag."),
                          ("whatsapp", "Sorry, I can't reply right now. Please try again a little later.")]

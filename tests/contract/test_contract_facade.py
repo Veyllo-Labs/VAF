@@ -37,6 +37,7 @@ EXPORTED = [
     "ToolCaller",
     "ToolRequest",
     "TurnOutcome",
+    "TurnStatus",
     "UnsafeName",
     "UploadVerdict",
     "VoiceTurnEngine",
@@ -63,6 +64,7 @@ EXPORTED = [
     "list_standing_grants",
     "mark_trusted_dir",
     "markers",
+    "model_text",
     "participant_key",
     "record_threat",
     "remove_revocation_listener",
@@ -77,6 +79,7 @@ EXPORTED = [
     "set_tool_policy",
     "stop_account_work",
     "stop_session",
+    "stored_turn_copy",
     "unread_counts",
     "user_jail",
 ]

@@ -8,7 +8,7 @@ control. Design map of the turn loop: [AGENT_LOOP.md](agents/AGENT_LOOP.md).
 
 Stability: `CoreAgent` is part of the declared stable surface at the level
 documented HERE (constructor, lifecycle, `chat_step`, `complete`, `execute_tool`,
-`set_tool_authorizer`, `set_allowed_tools`, `set_event_sink`, `set_compaction_hook`, the accessors below). Underscore-prefixed attributes are
+`set_tool_authorizer`, `set_allowed_tools`, `set_event_sink`, `set_compaction_hook`, `last_turn`, the accessors below). Underscore-prefixed attributes are
 internal; the ones listed at the end are known extension points that may
 change with a changelog note.
 
@@ -146,22 +146,22 @@ the real answer; the return value is a status:
 - A turn that ends without the model's answer, a backend failure (either shape above,
   the provider's sentinel arriving as its own chunk) or a loop-protection stop, commits
   NOTHING to the history: `history[-1]` is then not an answer, the failure or stop text
-  is the return value only, and the turn-local `_turn_failed` is True. When the turn's
-  newest kept answer had passed the final-answer path (the pending-task auto-continue
-  re-entered after it), it has answered: it returns its answers and `_turn_failed` stays
-  False. A turn whose newest kept reply was still under correction (a guard flagged it)
-  fails. `_turn_failure` holds the failure text when it was streamed (a backend failure);
-  a loop-protection note and the local server's statuses are never streamed, and leave it
-  empty. The model never reads that text as its own words in a later turn. A
-  caller that stores the streamed text apart from the history builds its copy and the
-  metadata to store it with through `session.stored_turn_copy(stream, _turn_failed,
-  _turn_failure, clean)`: the answer and the failure are cleaned apart with the host's own
-  cleanup, the failure is recorded as the copy's tail, and a stream that does not end with
-  its failure is marked failed. A copy that is the return value is marked with
-  `session.failed_turn_meta(_turn_failed)` alone. The readers that build a model's context
-  from a stored chat read it through `session.model_text()`, which takes the failure off
-  as the copy's tail (`session.take_off_turn_failure`) and drops a message whose recorded
-  failure it cannot take off there.
+  is the return value only, and `last_turn.failed` is True. When the turn's newest kept
+  answer had passed the final-answer path (the pending-task auto-continue re-entered after
+  it), it has answered: it returns its answers and `last_turn.failed` stays False. A turn
+  whose newest kept reply was still under correction (a guard flagged it) fails.
+  `last_turn.failure` holds the failure text when it was streamed (a backend failure); a
+  loop-protection note and the local server's statuses are never streamed, and leave it
+  empty. The model never reads that text as its own words in a later turn. A caller that
+  stores the streamed text apart from the history builds its copy and the metadata to
+  store it with through `vaf.stored_turn_copy(stream, agent.last_turn, clean)`: the answer
+  and the failure are cleaned apart with the caller's own cleanup (None keeps the stream),
+  the failure is recorded as the copy's tail, and a stream that does not end with its
+  failure is marked failed. A copy that is the return value needs `last_turn.failed`
+  alone: it never holds a failure that followed an answer. Whatever builds a model's
+  context from a stored chat reads each message through `vaf.model_text()`, which leaves a
+  failed turn out, takes the failure off as the copy's tail and drops a message whose
+  recorded failure it cannot take off there. VAF's own readers and hosts do exactly this.
 
 There is no public `stop()`; a running turn is stopped via
 `TaskQueue().request_stop(session_id)` (polled between chunks and tools).
@@ -292,6 +292,11 @@ still runs a hidden tool, but never one outside the allowed set.
   `gate_required`/`gate_decision` events; full schema in
   [OBSERVABILITY.md](OBSERVABILITY.md).
 - `get_token_usage() -> (used, max)` - provider-appropriate context usage.
+- `last_turn` - how the most recent `chat_step` ended, beside its text: a frozen
+  `vaf.TurnStatus(failed, failure)` (see the return contract above). Reset at the start of
+  every `chat_step`; read it right after the turn, before another one runs on this agent.
+  Before the first turn both fields are empty. The facade's `Agent.last_turn` is the same
+  reading.
 - `history` - the OpenAI-style message list (the system prompt is
   `history[0]`).
 - `get_live_session_subagents()` - session-scoped, heartbeat-verified list of

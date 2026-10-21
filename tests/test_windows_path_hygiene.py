@@ -611,37 +611,49 @@ def test_contained_path_refuses_a_rooted_fragment_under_windows_semantics(tmp_pa
 #   * a skip keyed on `hasattr(os, ...)` that covers the patching test: on the test
 #     itself (`_posix_only` in tests/test_stop_frontend_safety.py), on its class, or
 #     as the module's `pytestmark`. A skip on one test covers no other test in the
-#     file; the scan reads each function with `_functions_run_on_windows`, the same
-#     reading the executable-stub guard in section 5 uses.
+#     file. The scan reads each function with `_windows_runs` (section 5), the
+#     reading the executable-stub guard uses, and only up to a statement that skips
+#     the test on Windows: a patch before it fails there first.
+# Each call is read from the syntax tree, so `raising=False` counts only in that
+# call's own arguments, never on a neighbouring line.
 
+# Absent on Windows (Python's os docs: "Availability: Unix"). getppid is not here: it
+# exists on Windows too.
 _POSIX_ONLY_OS_ATTRS = (
     "getpgid", "killpg", "setsid", "getuid", "geteuid", "getgid", "setpgrp",
-    "fork", "forkpty", "getppid", "nice", "wait3", "wait4", "WIFEXITED",
+    "fork", "forkpty", "nice", "wait3", "wait4", "WIFEXITED",
 )
 
-_POSIX_PATCH_RE = re.compile(
-    r"monkeypatch\.setattr\(\s*[^,]*\bos\s*,\s*[\"'](" + "|".join(_POSIX_ONLY_OS_ATTRS) + r")[\"']"
-)
+
+def _posix_patch(call) -> Optional[str]:
+    """The attribute a `<anything>.setattr(<...>os, "<POSIX-only name>", ...)` call patches
+    without `raising=False` among its own arguments, or None."""
+    if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+            and call.func.attr == "setattr" and len(call.args) >= 2
+            and re.search(r"\bos$", ast.unparse(call.args[0]))
+            and isinstance(call.args[1], ast.Constant)
+            and call.args[1].value in _POSIX_ONLY_OS_ATTRS):
+        return None
+    raising = next((k.value for k in call.keywords if k.arg == "raising"),
+                   call.args[3] if len(call.args) > 3 else None)
+    if isinstance(raising, ast.Constant) and raising.value is False:
+        return None
+    return call.args[1].value
 
 
 def _posix_patches_without_a_guard(path: Path):
     """(line_no, attr) for each patch of a POSIX-only os attribute without `raising=False`
-    in a function the Windows leg runs (`_functions_run_on_windows`, section 5)."""
+    that the Windows leg reaches (`_windows_runs`, section 5)."""
     source = path.read_text(encoding="utf-8")
-    if not _POSIX_PATCH_RE.search(source):
+    if "setattr" not in source:
         return []
     out = []
-    lines = source.splitlines()
-    for node in _functions_run_on_windows(ast.parse(source)):
-        for i in range(node.lineno, node.end_lineno + 1):
-            m = _POSIX_PATCH_RE.search(lines[i - 1])
-            if not m:
-                continue
-            # the call may wrap; look at it and the next two lines for raising=False
-            window = "\n".join(lines[i - 1:i + 2])
-            if "raising=False" not in window:
-                out.append((i, m.group(1)))
-    return out
+    for fn, last_line in _windows_runs(ast.parse(source)):
+        for call in ast.walk(fn):
+            attr = _posix_patch(call)
+            if attr and call.lineno <= last_line:
+                out.append((call.lineno, attr))
+    return sorted(out)
 
 
 def test_the_class_is_real_on_this_platform():
@@ -654,21 +666,39 @@ def test_the_class_is_real_on_this_platform():
 def test_the_posix_patch_scanner_reads_each_tests_own_skip(tmp_path):
     """A skip covers the test it sits on, its class's tests, or the module's: one test's mark
     exempted the whole file, so an unmarked test beside it went unscanned. A root-only skip
-    (`hasattr(os, "geteuid") and os.geteuid() == 0`) does not skip on Windows. MUTATION: go
-    back to the whole-file exemption; ignore a skip bound to a name; ignore `hasattr` - red."""
-    patch = "    monkeypatch." + 'setattr(m.os, "getpgid", lambda pid: 1)\n'  # split: no hit here
+    (`hasattr(os, "geteuid") and os.geteuid() == 0`) does not skip on Windows, nor does one
+    keyed on `getppid`, which Windows has. A statement that skips in the body comes after
+    what runs before it, and `raising=False` counts in its own call only. MUTATION: go back
+    to the whole-file exemption; ignore a skip bound to a name, in a decorator or in a
+    `pytestmark`; ignore `hasattr`; count getppid as absent; leave out a function that skips
+    in its body; read `raising` from the neighbouring lines - red."""
+    patch = "    monkeypatch." + 'setattr(m.os, "getpgid", lambda pid: 1)\n'
     posix_only = 'pytest.mark.skipif(not hasattr(os, "killpg"), reason="r")'
     head = "import os\n\nimport pytest\n\n"
+    windows_skip = '    if os.name == "nt":\n        pytest.skip("r")\n'
     cases = {
         "named": (head + f"_posix_only = {posix_only}\n\n\n@_posix_only\n"
                   "def test_marked(monkeypatch):\n" + patch +
                   "\n\ndef test_unmarked(monkeypatch):\n" + patch, [14]),
         "direct": (head + f"@{posix_only}\ndef test_marked(monkeypatch):\n" + patch, []),
         "module": (head + f"pytestmark = {posix_only}\n\n\ndef test_x(monkeypatch):\n" + patch, []),
+        "module_named": (head + f"_posix_only = {posix_only}\npytestmark = [_posix_only]\n\n\n"
+                         "def test_x(monkeypatch):\n" + patch, []),
+        "class_named": (head + f"_posix_only = {posix_only}\n\n\nclass TestX:\n"
+                        "    pytestmark = _posix_only\n\n    def test_x(self, monkeypatch):\n"
+                        "    " + patch, []),
         "root_only": (head + '@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0,'
                       ' reason="r")\ndef test_x(monkeypatch):\n' + patch, [7]),
+        "getppid": (head + '@pytest.mark.skipif(not hasattr(os, "getppid"), reason="r")\n'
+                    "def test_x(monkeypatch):\n" + patch, [7]),
+        "before_skip": (head + "def test_x(monkeypatch):\n" + patch + windows_skip, [6]),
+        "after_skip": (head + "def test_x(monkeypatch):\n" + windows_skip + patch, []),
         "raising": (head + "def test_x(monkeypatch):\n"
                     + patch.replace("lambda pid: 1)", "lambda pid: 1, raising=False)"), []),
+        "raising_positional": (head + "def test_x(monkeypatch):\n"
+                               + patch.replace("lambda pid: 1)", "lambda pid: 1, False)"), []),
+        "neighbour": (head + "def test_x(monkeypatch):\n" + patch + "    monkeypatch."
+                      + 'setattr(m.os, "killpg", lambda *a: None, raising=False)\n', [6]),
     }
     for name, (source, lines) in cases.items():
         path = tmp_path / f"test_{name}.py"
@@ -773,14 +803,17 @@ def _operand(node):
     return None
 
 
-def _skips_windows(node) -> bool:
+def _skips_windows(node, named=frozenset()) -> bool:
     """True when ``node`` (a decorator, a `pytestmark` value or a list of marks) IS a `skipif`
-    whose condition is true on Windows. Only the mark itself: a skip inside a parametrize
-    case (`pytest.param(..., marks=...)`) skips that case, and the others still run there.
-    A string condition (`skipif("sys.platform == 'win32'")`, which pytest evaluates) is
-    parsed and read the same way, never executed."""
+    whose condition is true on Windows, or a name in ``named`` (`_named_skips`). Only the
+    mark itself: a skip inside a parametrize case (`pytest.param(..., marks=...)`) skips that
+    case, and the others still run there. A string condition
+    (`skipif("sys.platform == 'win32'")`, which pytest evaluates) is parsed and read the same
+    way, never executed."""
+    if isinstance(node, ast.Name):
+        return node.id in named
     if isinstance(node, (ast.List, ast.Tuple)):
-        return any(_skips_windows(e) for e in node.elts)
+        return any(_skips_windows(e, named) for e in node.elts)
     if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
             and node.func.attr == "skipif"):
         condition = node.args[0] if node.args else next(
@@ -798,16 +831,17 @@ def _marks_something_executable(segment: str) -> bool:
     return any(int(m.group(1), 8) & 0o111 for m in _OCTAL_MODE.finditer(segment))
 
 
-def _pytestmark_skips_windows(body) -> bool:
+def _pytestmark_skips_windows(body, named=frozenset()) -> bool:
     """A `pytestmark` among these statements (a module's, a test class's) that skips on
-    Windows. Read from the statements themselves: the text before the first `def` also holds
-    that function's decorators, and a skip on the first test would then have exempted every
-    test after it."""
+    Windows, a mark bound to a name included (`pytestmark = _posix_only`, or in a list). Read
+    from the statements themselves: the text before the first `def` also holds that
+    function's decorators, and a skip on the first test would then have exempted every test
+    after it."""
     for node in body:
         if (isinstance(node, (ast.Assign, ast.AnnAssign))
                 and any(getattr(t, "id", "") == "pytestmark"
                         for t in (node.targets if isinstance(node, ast.Assign) else [node.target]))
-                and node.value is not None and _skips_windows(node.value)):
+                and node.value is not None and _skips_windows(node.value, named)):
             return True
     return False
 
@@ -834,32 +868,54 @@ def _skips_imperatively(body) -> bool:
     return False
 
 
-def _functions_run_on_windows(tree: ast.Module):
-    """Every outermost function (a test, a helper, a method) the Windows leg runs: not under
-    the module's skip (its `pytestmark`, or a statement that skips there), an enclosing
-    class's skip (its decorator or its own `pytestmark`), its own skip decorator, or a skip
-    in its own body. A function nested in one is part of it. A skip bound to a name at
-    module level (`_posix_only = pytest.mark.skipif(...)`) skips where it decorates."""
-    named = {target.id for stmt in tree.body if isinstance(stmt, ast.Assign)
-             and _skips_windows(stmt.value)
-             for target in stmt.targets if isinstance(target, ast.Name)}
+def _named_skips(tree: ast.Module) -> frozenset:
+    """Names bound at module level to a skip that fires on Windows
+    (`_posix_only = pytest.mark.skipif(...)`), read in order, so a name bound to such a
+    name counts too. A decorator or a `pytestmark` naming one skips like the mark itself."""
+    named: set = set()
+    for stmt in tree.body:
+        if isinstance(stmt, ast.Assign) and _skips_windows(stmt.value, frozenset(named)):
+            named.update(t.id for t in stmt.targets if isinstance(t, ast.Name))
+    return frozenset(named)
 
-    def skips(decorator) -> bool:
-        return _skips_windows(decorator) or getattr(decorator, "id", None) in named
+
+def _windows_runs(tree: ast.Module):
+    """(function, last line) for every outermost function (a test, a helper, a method) the
+    Windows leg enters: not under the module's skip (its `pytestmark`, or a statement that
+    skips there), an enclosing class's skip (its decorator or its own `pytestmark`), or its
+    own skip decorator. A function nested in one is part of it. A function that skips itself
+    with a statement in its body runs on Windows up to that statement, so its last line is
+    the one before it; otherwise it is the function's last line."""
+    named = _named_skips(tree)
+
+    def last_line(fn) -> int:
+        for stmt in fn.body:
+            if _skips_imperatively([stmt]):
+                return stmt.lineno - 1
+        return fn.end_lineno
 
     def walk(node, skipped):
         for child in ast.iter_child_nodes(node):
             if isinstance(child, ast.ClassDef):
                 yield from walk(child, skipped
-                                or any(skips(d) for d in child.decorator_list)
-                                or _pytestmark_skips_windows(child.body))
+                                or any(_skips_windows(d, named) for d in child.decorator_list)
+                                or _pytestmark_skips_windows(child.body, named))
             elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                if not (skipped or any(skips(d) for d in child.decorator_list)
-                        or _skips_imperatively(child.body)):
-                    yield child
+                if not (skipped or any(_skips_windows(d, named) for d in child.decorator_list)):
+                    yield child, last_line(child)
             else:
                 yield from walk(child, skipped)
-    yield from walk(tree, _pytestmark_skips_windows(tree.body) or _skips_imperatively(tree.body))
+    yield from walk(tree, _pytestmark_skips_windows(tree.body, named)
+                    or _skips_imperatively(tree.body))
+
+
+def _functions_run_on_windows(tree: ast.Module):
+    """Every function `_windows_runs` yields that also runs to its end on Windows: one that
+    skips itself in its body is left out whole, since what these scans look for (a stub
+    started, a literal asserted) may come after the skip."""
+    for fn, _ in _windows_runs(tree):
+        if not _skips_imperatively(fn.body):
+            yield fn
 
 
 def _exec_stub_functions(path: Path):

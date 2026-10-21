@@ -267,8 +267,13 @@ def server_provision(
                 "SSH and the VPN's own port there.")
 
     if open_firewall:
+        # Which firewall the setup takes, read once: every report below asks about this
+        # answer. A later read of a ufw that went off after its rule was added says
+        # "ufw_off", and the check for an unconfirmed ufw would then stay silent.
+        engine = None
         try:
-            from vaf.network.firewall import setup_firewall
+            from vaf.network.firewall import host_firewall, setup_firewall
+            engine = host_firewall()
             outcome = setup_firewall(access_port, frontend_port)
         except Exception as e:
             outcome = False
@@ -279,14 +284,14 @@ def server_provision(
             # the measured mistake (vaf/network/firewall.py, host_firewall).
             UI.warning(f"ufw is installed but switched off, so it does not guard port "
                        f"{access_port}. {ufw_off_advice()}")
-        elif outcome and _opened_sources() == []:
+        elif outcome and _opened_sources(engine) == []:
             # "VPN only" with no VPN up admits nobody: the setup succeeded by opening nothing
             # (and closing what it had opened before), which "opened" or "already in place"
             # would misreport. After the VPN is up the service cannot re-open it (Layer 1).
             UI.warning(f"Firewall not opened for port {access_port}: no network besides this "
                        "machine is admitted yet. Once the VPN is up, run "
                        "`sudo -v && vaf server provision` again so it opens the port for it.")
-        elif outcome and (unconfirmed := ufw_switch_unconfirmed()):
+        elif outcome and (unconfirmed := ufw_switch_unconfirmed(engine)):
             # The rule is in ufw either way, but whether ufw runs is not known, so "opened"
             # may not stand alone (vaf/network/firewall.py, host_firewall). The ufw path
             # answers True or False only; "present" comes from firewalld alone.
@@ -351,14 +356,13 @@ def server_provision(
         UI.info(hint)
 
 
-def _opened_sources():
+def _opened_sources(engine):
     """The networks the firewall step opens the access port for, picked the way setup_firewall
-    picks them (firewalld only the LAN subnets this machine sits on), or None when that cannot
-    be read."""
+    picks them for `engine`, `host_firewall()`'s answer (firewalld only the LAN subnets this
+    machine sits on), or None when that cannot be read."""
     try:
         from vaf.network.binding import firewall_sources
-        from vaf.network.firewall import host_firewall
-        return firewall_sources(narrow_lan=host_firewall() == "firewalld")
+        return firewall_sources(narrow_lan=engine == "firewalld")
     except Exception:
         return None
 

@@ -143,6 +143,32 @@ def test_a_ufw_that_cannot_be_confirmed_is_not_reported_as_guarding(seams, monke
     assert "Firewall opened for port 8443" in said
 
 
+@pytest.mark.parametrize("switch, unit, why", [
+    (False, "active", "its switch reads as off"),
+    (True, "inactive", "systemd reports its unit as inactive"),
+])
+def test_a_ufw_that_went_off_after_its_rule_was_added_is_not_reported_as_opened(
+        seams, monkeypatch, switch, unit, why):
+    """Provision read the host firewall again for its report: a ufw switched off or stopped
+    after the rule went in answered "ufw_off" there, the unconfirmed check stayed silent and
+    provision said "Firewall opened". It now asks about the answer the setup was taken on.
+    MUTATION: read the host firewall again for the report - red."""
+    reads = []
+
+    def host_firewall():
+        reads.append(1)
+        return "ufw" if len(reads) == 1 else "ufw_off"
+
+    monkeypatch.setattr(firewall, "host_firewall", host_firewall)
+    monkeypatch.setattr(firewall, "ufw_enabled", lambda paths=None: switch)
+    monkeypatch.setattr(firewall, "_ufw_unit_state", lambda: unit)
+    said = " ".join(runner.invoke(server_cmd.app, ["provision"]).output.split())
+    assert ("Firewall rule added for port 8443, but VAF could not confirm that ufw is "
+            f"switched on: {why}") in said
+    assert "Firewall opened" not in said
+    assert len(reads) == 1
+
+
 def test_the_firewall_message_asks_the_networks_the_way_the_setup_does(seams, monkeypatch):
     """firewalld opens only the LAN subnets this machine sits on, the others all of RFC 1918,
     so a machine with no LAN interface opens nothing under firewalld only. MUTATION: ask

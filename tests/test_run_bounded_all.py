@@ -132,3 +132,49 @@ def test_a_queued_key_stays_queued_for_the_next_caller():
         release.set()
     assert pool.submit(lambda: "after").result(timeout=5) == "after"
     assert later < 0.2 and ran == ["b"], (later, ran)
+
+
+def test_a_callers_own_timeout_caps_its_wait_for_a_shared_key():
+    """A shared key waited until the deadline of the caller that started it, so a caller
+    with 0.2 s returned after 2.90 s. MUTATION: wait for the starter's deadline only - red."""
+    import time
+
+    release = threading.Event()
+    pool, in_flight = DaemonPool(2, "test-bounded-own-timeout"), InFlight()
+    starter = threading.Thread(target=run_bounded_all, args=({"k": lambda: release.wait(10)},),
+                               kwargs={"timeout": 3.0, "pool": pool, "in_flight": in_flight})
+    starter.start()
+    try:
+        time.sleep(0.1)
+        later = time.monotonic()
+        assert run_bounded_all({"k": lambda: 1}, timeout=0.2, pool=pool,
+                               in_flight=in_flight) == {}
+        later = time.monotonic() - later
+    finally:
+        release.set()
+        starter.join(5)
+    # 0.2 s plus timer slack on a loaded runner, far below the starter's 3 s.
+    assert later < 1.2, later
+
+
+def test_join_wait_caps_the_wait_for_a_call_another_caller_started():
+    """A caller that joins a running call waits for it at most ``join_wait``; a call that
+    ends late then costs only the caller that started it. MUTATION: ignore join_wait - red
+    (the joiner waits out the starter's 3 s)."""
+    import time
+
+    release = threading.Event()
+    pool, in_flight = DaemonPool(2, "test-bounded-join"), InFlight(join_wait=0.1)
+    starter = threading.Thread(target=run_bounded_all, args=({"k": lambda: release.wait(10)},),
+                               kwargs={"timeout": 3.0, "pool": pool, "in_flight": in_flight})
+    starter.start()
+    try:
+        time.sleep(0.1)
+        later = time.monotonic()
+        assert run_bounded_all({"k": lambda: 1}, timeout=5.0, pool=pool,
+                               in_flight=in_flight) == {}
+        later = time.monotonic() - later
+    finally:
+        release.set()
+        starter.join(5)
+    assert later < 1.2, later

@@ -265,11 +265,18 @@ class DaemonPool(Executor):
 class InFlight:
     """The calls of ``run_bounded_all`` still running, by key, each with the deadline of the
     caller that started it. Shared by the callers whose calls mean the same thing for the
-    same key (a lookup of one name), so a key runs once at a time."""
+    same key (a lookup of one name), so a key runs once at a time.
 
-    def __init__(self) -> None:
+    ``join_wait`` caps how long a caller waits for a call that another caller started (None:
+    until that caller's deadline). A quick answer still reaches it, while a call that ends
+    late, or fails late, costs only the caller that started it: with lookups that failed
+    after 1.5 s, every invitation that joined one waited those 1.5 s, and the invitations
+    of other accounts queued behind them (measured)."""
+
+    def __init__(self, join_wait: Optional[float] = None) -> None:
         self._lock = threading.Lock()
         self._calls: Dict[Hashable, Any] = {}
+        self.join_wait = None if join_wait is None else max(0.0, float(join_wait))
 
 
 def run_bounded_all(calls: Mapping[Hashable, Callable[[], Any]], *, timeout: float,
@@ -287,14 +294,16 @@ def run_bounded_all(calls: Mapping[Hashable, Callable[[], Any]], *, timeout: flo
 
     With ``in_flight``, a key whose call another caller started and has not finished, running
     or queued, is not started again: this caller waits for that call, but only until the
-    deadline of the one who started it. A call still queued when the time is up stays queued
+    deadline of the one who started it or its own, whichever comes first (its own ``timeout``
+    caps its wait either way). A call still queued when the time is up stays queued
     for whoever asks next, instead of being cancelled, so at most one call per key waits. So
     while calls hang, only the caller that starts one pays the time, and the others return
     at once without it. Measured before: every later caller waited the full time again,
     because it started the calls cancelled from the queue once more (another account's
     invitation waited 32 s at 60 connections).
     """
-    deadline = time.monotonic() + max(0.0, float(timeout))
+    now = time.monotonic()
+    deadline = now + max(0.0, float(timeout))
     futures: Dict[Hashable, Future] = {}
     until: Dict[Hashable, float] = {}
     started = set()
@@ -308,12 +317,16 @@ def run_bounded_all(calls: Mapping[Hashable, Callable[[], Any]], *, timeout: flo
                 running = in_flight._calls.get(key)
                 if running is not None and not running[0].done():
                     futures[key], until[key] = running
+                    if in_flight.join_wait is not None:
+                        until[key] = min(until[key], now + in_flight.join_wait)
                     continue
                 futures[key], until[key] = pool.submit(fn), deadline
                 in_flight._calls[key] = (futures[key], deadline)
                 started.add(key)
     if futures:
-        wait(list(futures.values()), timeout=max(0.0, max(until.values()) - time.monotonic()))
+        # The latest deadline among the keys, but never past this caller's own.
+        stop = min(deadline, max(until.values()))
+        wait(list(futures.values()), timeout=max(0.0, stop - time.monotonic()))
     answers: Dict[Hashable, Any] = {}
     for key, future in futures.items():
         if future.done() and not future.cancelled() and future.exception() is None:

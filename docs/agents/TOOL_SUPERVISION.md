@@ -46,7 +46,8 @@ they are made, and none of them holds up the exit of the process (the workers of
 cap once it started, so a thread that could not start does not hold its place. With an
 `InFlight` shared by the callers, a key whose call is still running or queued is not started
 again: a later caller waits for it only until the time of the caller that started it is up,
-and a queued call stays queued for the next one instead of being cancelled (at most one per
+or its own, whichever comes first, and at most `InFlight(join_wait=...)` when that is set, and
+a queued call stays queued for the next one instead of being cancelled (at most one per
 key), so while calls hang only the caller that starts one pays the time.
 
 The per-call budget is DECLARED by the tool: `BaseTool.timeout_seconds`, or `budget_seconds(args)`

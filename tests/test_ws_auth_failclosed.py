@@ -168,3 +168,23 @@ def test_a_program_token_opens_the_socket_by_its_address(monkeypatch):
         pass
     assert seen == [(str(h.user("alice").user_scope_id), "alice")]
     assert asyncio.run(sessions.session_standing_async(program)) == "live"
+
+
+def test_a_session_of_this_machine_opens_no_socket_elsewhere(monkeypatch):
+    """The desktop window's session stands only for this machine: its cookie copied to another
+    device opens no socket there. MUTATION: drop client_ip from the network lane's check - red."""
+    from auth_harness import JWT_SECRET, Harness
+
+    import vaf.auth.crypto as crypto
+    h = Harness(monkeypatch)
+    monkeypatch.setattr(crypto, "get_jwt_secret", lambda: JWT_SECRET)
+    h.add_user("alice", "alice-password-1", no_second_factor=True)
+    desk = h.sign_in(h.client(None), "alice", "alice-password-1", None)
+    _enable_network(monkeypatch)
+    calls = _spy_connect(monkeypatch)
+    c = TestClient(app, client=LAN)
+    c.cookies.set("vaf_token", desk)
+    with pytest.raises(WebSocketDisconnect) as ei:
+        with c.websocket_connect("/ws"):
+            pass
+    assert ei.value.code == 4001 and calls == []

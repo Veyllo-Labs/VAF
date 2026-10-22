@@ -199,3 +199,26 @@ def test_device_labels(agent, label):
     """MUTATION: ask Chrome before Edge (an Edge agent reads "Chrome") - red."""
     from vaf.auth.sessions import device_label
     assert device_label(agent) == label
+
+
+def test_a_session_of_this_machine_opens_nothing_elsewhere(monkeypatch):
+    """The window on this machine gets 30 days and no inactivity limit because the person is at
+    their own desk. That reason holds where the token is USED, not where it was minted: the same
+    token presented by another device is refused, fresh or idle, while it keeps working here.
+    MUTATION: drop the address check from the standing - red."""
+    h, app, t = _world(monkeypatch)
+    here = t["here"]
+    lan = h.client("192.168.50.9", app=app)
+    assert lan.get("/api/probe", headers={"Authorization": f"Bearer {here}"}).status_code == 401
+    _clock(monkeypatch, timedelta(days=20))
+    assert lan.get("/api/probe", headers={"Authorization": f"Bearer {here}"}).status_code == 401
+    local = h.client(None, app=app)
+    r = local.get("/api/probe", headers={"Authorization": f"Bearer {here}"})
+    assert r.status_code == 200 and r.json()["user"]["username"] == "alice"
+    # A session from another device and a token for programs are not bound to an address.
+    assert lan.get("/api/probe", headers={"Authorization": f"Bearer {t['program']}"}).status_code == 200
+    # The room door, the third reader of an account's token, applies the same rule.
+    from vaf.main import _a2a_credential_verifier
+    _clock(monkeypatch, timedelta(0))
+    assert _a2a_credential_verifier(here, client_ip="192.168.50.9") is None
+    assert _a2a_credential_verifier(here, client_ip="127.0.0.1")["username"] == "alice"

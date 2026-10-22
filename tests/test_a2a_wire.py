@@ -395,6 +395,30 @@ def test_a_verifier_that_crashes_is_not_a_verifier_that_approved(monkeypatch):
         resolve_account(_token())
 
 
+def test_a_verifier_that_asks_for_the_client_is_told_who_it_is(monkeypatch):
+    """Whether an account credential may open a session can depend on where it is used (the
+    machine's own window stands only for the machine), so the door hands a verifier that asks
+    for it the real client's address; a verifier of one argument keeps working, and the room
+    endpoint passes the address it resolved. MUTATION: never pass client_ip - red."""
+    from pathlib import Path
+
+    import vaf.core.a2a.wire as wire_mod
+    seen = []
+
+    def _with_client(credential, client_ip=None):
+        seen.append(client_ip)
+        return {"user_scope_id": "scope-1"}
+
+    monkeypatch.setattr(wire_mod, "_verifier", _with_client)
+    assert resolve_account("t", client_ip="192.168.7.7")["user_scope_id"] == "scope-1"
+    assert seen == ["192.168.7.7"]
+
+    monkeypatch.setattr(wire_mod, "_verifier", lambda credential: {"user_scope_id": "scope-2"})
+    assert resolve_account("t", client_ip="192.168.7.7")["user_scope_id"] == "scope-2"
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    assert 'await asyncio.to_thread(admit, room, credential or "", client_ip=client_ip)' in src
+
+
 def test_the_harness_registers_a_verifier_that_demands_an_access_token():
     """MUTATION: register a verifier without the type check, or forget to register.
 
@@ -518,7 +542,7 @@ def test_the_room_door_asks_the_session_and_the_standing(monkeypatch):
     async def _account(_scope):
         return now["account"]
 
-    async def _session(_token):
+    async def _session(_token, **_kw):
         return now["session"]
 
     monkeypatch.setattr(permissions, "account_standing_async", _account)

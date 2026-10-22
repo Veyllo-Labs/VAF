@@ -28,7 +28,10 @@ LIFETIMES. A row is one of three kinds (`device_info.device_type` and its addres
   `local_network_session_idle_days` (7) without use. Only a session that can outlive a day
   makes an inactivity limit mean something; both limits are the token's and the row's.
 - the window on this machine (`web` from loopback): 30 days, no inactivity limit; the
-  person is at their own desk.
+  person is at their own desk. That reason holds only where the token is USED, so such a
+  session opens nothing for a client that is not this machine (`session_standing_async`
+  with `from_this_machine=False` answers `ended`): a copied desktop cookie does not carry
+  the exemption to another device, fresh or idle.
 - a token for programs (`program`): 7, 30, 90 or 365 days, chosen when it is made, and no
   inactivity limit: a backup script that runs monthly must not die of disuse.
 This departs from NIST 800-63B-4 at AAL2 (24 hours overall and one hour of inactivity, both
@@ -78,11 +81,14 @@ NAMED BOUNDARIES:
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 LIVE = "live"
 ENDED = "ended"
@@ -104,7 +110,7 @@ PROGRAM_TOKEN_DAYS = (7, 30, 90, 365)
 PROGRAM_NAME_MAX = 60
 _IDLE_DAYS_DEFAULT = 7
 
-_cache: dict = {}        # token hash -> (monotonic ts, standing)
+_cache: dict = {}        # token hash -> (monotonic ts, standing, bound to this machine)
 _cache_lock = threading.Lock()
 # Hashes of the sessions this process ended, newest last. A session never comes back (a
 # reactivation revives none), so the answer stays right; bounded, oldest dropped first: a
@@ -212,9 +218,19 @@ async def open_session(db, user, access_token: str, *, ip: str = "", user_agent:
     return str(row_id)
 
 
-async def session_standing_async(token: str) -> str:
-    """`live`, `ended` (no row, ended, or expired) or `unknown` (the store cannot be asked).
-    Never raises."""
+def _for_client(answer: str, machine_bound: bool, from_this_machine: Optional[bool]) -> str:
+    """A live session of the window on this machine opens nothing for another client."""
+    if answer == LIVE and machine_bound and from_this_machine is False:
+        logger.warning("A session of this machine was presented by another address; refused")
+        return ENDED
+    return answer
+
+
+async def session_standing_async(token: str, *, from_this_machine: Optional[bool] = None) -> str:
+    """`live`, `ended` (no row, ended, expired, idle too long, or a session of this machine
+    presented by another client: `from_this_machine=False`) or `unknown` (the store cannot be
+    asked). `from_this_machine=None` (the caller does not know the client) skips the address
+    rule. Never raises."""
     from vaf.auth.crypto import token_hash_for_db
 
     key = token_hash_for_db(str(token or ""))
@@ -224,7 +240,7 @@ async def session_standing_async(token: str) -> str:
             return ENDED
         hit = _cache.get(key)
         if hit and now - hit[0] < _ttl():
-            return hit[1]
+            return _for_client(hit[1], hit[2], from_this_machine)
     try:
         from sqlalchemy import select
 
@@ -238,17 +254,18 @@ async def session_standing_async(token: str) -> str:
             current = _utc_naive()
             live = row is not None and session_row_live(row[0], row[1], row[2], row[3], current)
             answer = LIVE if live else ENDED
-            if live:
+            machine_bound = row is not None and session_kind(row[3]) == KIND_THIS_MACHINE
+            if live and not (machine_bound and from_this_machine is False):
                 await _touch(db, key, row[2], current)
     except Exception:
         return UNKNOWN
     with _cache_lock:
-        _cache[key] = (now, answer)
+        _cache[key] = (now, answer, machine_bound)
         if len(_cache) > 1024:
             cutoff = now - _ttl()
             for k in [k for k, v in _cache.items() if v[0] < cutoff]:
                 _cache.pop(k, None)
-    return answer
+    return _for_client(answer, machine_bound, from_this_machine)
 
 
 async def _touch(db, key: str, last_activity, now: datetime) -> None:

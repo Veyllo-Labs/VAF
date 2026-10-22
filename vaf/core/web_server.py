@@ -4281,7 +4281,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             # requires the token, so a deactivated or demoted account's token would otherwise
             # keep the identity and the role it was issued with. A standing check that fails
             # lands in the except below and closes - never in the local-admin fallback.
-            if not await token_account_stands(payload, token):
+            if not await token_account_stands(payload, token, client_ip=client_ip):
                 log("API", f"WebSocket (localhost) rejected: account no longer stands for {payload.get('username')}")
                 _emit_sec_ws("revoked account", ip=client_ip)
                 await websocket.close(code=4001, reason="Account access changed")
@@ -4347,7 +4347,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     
                     # The account must still stand: deactivated, deleted or demoted since
                     # the token was issued is refused, like the HTTP lane (middleware).
-                    if not await token_account_stands(payload, token):
+                    if not await token_account_stands(payload, token, client_ip=client_ip):
                         log("API", f"WebSocket rejected: account no longer stands for {payload.get('username')}")
                         _emit_sec_ws("revoked account", ip=client_ip)
                         await websocket.close(code=4001, reason="Account access changed")
@@ -9530,7 +9530,7 @@ async def a2a_room_endpoint(websocket: WebSocket, room_id: str,
         # loop is the one every socket shares - a remote client's connect storm
         # must not stall the WebUI beside it.
         room = await asyncio.to_thread(open_room, room_id)
-        identity, seat = await asyncio.to_thread(admit, room, credential or "")
+        identity, seat = await asyncio.to_thread(admit, room, credential or "", client_ip=client_ip)
     except HandshakeRefused as refusal:
         # Mirrored into the security log exactly like a refused WebUI handshake. A room
         # is the one door a stranger can knock on from another machine, so a refusal

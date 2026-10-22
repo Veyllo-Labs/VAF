@@ -176,7 +176,7 @@ def test_the_socket_handshake_asks_the_same_question():
         encoding="utf-8")
     handshake = src[src.index("async def websocket_endpoint"):]
     handshake = handshake[:handshake.index("elif type == ")]
-    assert handshake.count("await token_account_stands(payload, token)") == 2
+    assert handshake.count("await token_account_stands(payload, token, client_ip=client_ip)") == 2
 
 
 # ── the admin route ──────────────────────────────────────────────────────────

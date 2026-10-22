@@ -194,7 +194,7 @@ def test_the_middleware_asks_the_session(monkeypatch):
     async def _account(_scope):
         return ("active", "admin")      # the token's own role: only the session decides here
 
-    async def _session(_token):
+    async def _session(_token, **_kw):
         return now["session"]
 
     monkeypatch.setattr(permissions, "account_standing_async", _account)

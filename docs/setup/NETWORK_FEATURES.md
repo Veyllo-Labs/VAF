@@ -315,7 +315,12 @@ Rejections from the layers above are recorded in an always-on security event log
     and it ends after `local_network_session_idle_days` (7) without use. Use is any request
     that checks the token (its last use is written at most once an hour); a socket that only
     stays open does not count, its reconnect does.
-  - the window on this machine: 30 days, no inactivity limit.
+  - the window on this machine: 30 days, no inactivity limit, and only from this machine. The
+    reason, the person at their own desk, holds where the token is used: such a session
+    presented by another device is refused (401, a socket 4001, a room door refusal), fresh or
+    idle, so a copied desktop cookie does not carry the exemption elsewhere. Every reader of a
+    token passes the real client to the standing check (`token_account_stands(...,
+    client_ip=...)`; the room door's verifier receives it through `admit`).
   - a token for programs: the 7, 30, 90 or 365 days it was made with, no inactivity limit.
 - **Sessions end** (`vaf/auth/sessions.py`, the one owner of `user_sessions`): a logout ends
   the presented token's session, the account's own password change every other one (the

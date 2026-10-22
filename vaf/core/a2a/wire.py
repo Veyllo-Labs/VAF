@@ -62,6 +62,12 @@ def set_credential_verifier(verify) -> None:
     ``user_scope_id`` for a VERIFIED credential that is allowed to open a session, or
     None for anything else. Deciding what "allowed to open a session" means - the token
     type, an expiry, a revoked session - belongs to whoever owns the accounts.
+
+    A verifier that takes a ``client_ip`` keyword is also told the real client's address
+    (the door's own resolver, ``binding.connection_client_ip``), because whether a
+    credential may open a session can depend on where it is used: VAF's own sessions of the
+    window on the machine itself stand only for that machine. A verifier with the one
+    argument keeps working unchanged.
     """
     global _verifier
     _verifier = verify
@@ -89,7 +95,16 @@ def looks_like_ticket(credential: str) -> bool:
     return str(credential or "").startswith(TICKET_PREFIX)
 
 
-def resolve_account(credential: str) -> dict:
+def _accepts_client_ip(verify) -> bool:
+    import inspect
+    try:
+        params = inspect.signature(verify).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == "client_ip" or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
+
+
+def resolve_account(credential: str, *, client_ip: Optional[str] = None) -> dict:
     """A verified account from a credential, or a refusal.
 
     The verification itself belongs to whoever owns the accounts and arrives through
@@ -103,7 +118,10 @@ def resolve_account(credential: str) -> dict:
         raise HandshakeRefused("no credential verifier is registered")
 
     try:
-        claims = _verifier(str(credential or ""))
+        if client_ip is not None and _accepts_client_ip(_verifier):
+            claims = _verifier(str(credential or ""), client_ip=client_ip)
+        else:
+            claims = _verifier(str(credential or ""))
     except Exception:
         # A verifier that crashed is not a verifier that approved.
         raise HandshakeRefused("the credential could not be checked") from None
@@ -120,7 +138,8 @@ def resolve_account(credential: str) -> dict:
     }
 
 
-def admit(room: Room, credential: str, *, display: str = "") -> tuple:
+def admit(room: Room, credential: str, *, display: str = "",
+          client_ip: Optional[str] = None) -> tuple:
     """Turn a credential into a member of THIS room, or refuse.
 
     Returns ``(identity, seat)``. The seat is a durable way back in, minted exactly
@@ -157,7 +176,7 @@ def admit(room: Room, credential: str, *, display: str = "") -> tuple:
         except TicketInvalid as e:
             raise HandshakeRefused(str(e), code=4003) from None
 
-    account = resolve_account(credential)
+    account = resolve_account(credential, client_ip=client_ip)
     key = participant_key("remote", account["user_scope_id"])
     peer_id = derive_peer_id(key, room.room_id)
 

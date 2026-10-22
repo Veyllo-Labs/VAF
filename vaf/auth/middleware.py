@@ -23,7 +23,7 @@ Public paths (login, bootstrap, needs-setup, static assets) are exempt from auth
 """
 
 import logging
-from typing import Callable
+from typing import Callable, Optional
 
 from starlette.datastructures import Headers
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -215,7 +215,7 @@ class NetworkModeLayers(ByLocalNetwork):
 # Layer 3: JWT Authentication Middleware
 # ---------------------------------------------------------------------------
 
-async def token_account_stands(payload: dict, token: str) -> bool:
+async def token_account_stands(payload: dict, token: str, *, client_ip: Optional[str] = None) -> bool:
     """Whether the account behind a decoded access token still stands, and the token's own
     session has not ended.
 
@@ -226,13 +226,21 @@ async def token_account_stands(payload: dict, token: str) -> bool:
     deactivation ends it (vaf/auth/sessions.py), and before, none of them ended a token at
     all. Every token reader asks this one function - the HTTP middleware below, both
     WebSocket lanes (`vaf/core/web_server.py`) and the A2A room door (`vaf/main.py`). An auth
-    store that cannot be asked keeps the token (`unknown`, the desktop default)."""
+    store that cannot be asked keeps the token (`unknown`, the desktop default).
+
+    `client_ip` is the real client (`binding.connection_client_ip`): a session of the window on
+    this machine stands only for this machine (vaf/auth/sessions.py). Every reader passes it;
+    None skips that rule."""
     from vaf.auth.permissions import account_standing_async, token_still_stands
     if not token_still_stands(await account_standing_async(payload.get("user_scope_id")),
                               payload.get("role")):
         return False
     from vaf.auth.sessions import ENDED, session_standing_async
-    return await session_standing_async(token) != ENDED
+    from_this_machine = None
+    if client_ip is not None:
+        from vaf.network.binding import is_localhost
+        from_this_machine = is_localhost(client_ip)
+    return await session_standing_async(token, from_this_machine=from_this_machine) != ENDED
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -307,7 +315,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
                         )
                     payload = None
 
-            if payload and payload.get("type") == "access" and not await token_account_stands(payload, token):
+            if (payload and payload.get("type") == "access"
+                    and not await token_account_stands(payload, token, client_ip=client_ip)):
                 payload = None
 
             if payload and payload.get("type") == "access":

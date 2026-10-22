@@ -235,8 +235,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   (`local_network_jwt_expiry_hours`, now 720; a stored 24, the old default, becomes 720 at the
   first start). The desktop window on the machine itself now really stays signed in for 30
   days, with no inactivity limit. An admin who wants a daily sign-in sets
-  `local_network_jwt_expiry_hours` to 24. Signing in again in the same browser now ends the
-  session it replaces, which used to stay valid for its whole life.
+  `local_network_jwt_expiry_hours` to 24. That window's session opens nothing from another
+  device, so a copied cookie of it does not carry the 30 days elsewhere. Signing in again in
+  the same browser now ends the session it replaces, which used to stay valid for its whole
+  life.
 
 - **You hear about new sign-ins and guessing.** A sign-in from an address your account has
   not used in 30 days, repeated wrong passwords, and wrong 2FA codes after a correct

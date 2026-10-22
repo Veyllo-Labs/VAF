@@ -327,7 +327,7 @@ set_agent_persona_resolver(_agent_persona_resolver)
 from vaf.core.a2a.wire import set_credential_verifier as _set_credential_verifier
 
 
-def _a2a_credential_verifier(credential: str):
+def _a2a_credential_verifier(credential: str, client_ip=None):
     from vaf.auth.crypto import decode_token, second_factor_done
     payload = decode_token(credential)
     if not payload or payload.get("type") != "access":
@@ -342,7 +342,8 @@ def _a2a_credential_verifier(credential: str):
     # call from a running loop raises, which the room door reads as a refusal.
     import asyncio
     from vaf.auth.middleware import token_account_stands
-    if not asyncio.run(token_account_stands(payload, credential)):
+    # `client_ip`: a session of the window on this machine opens a room only for this machine.
+    if not asyncio.run(token_account_stands(payload, credential, client_ip=client_ip)):
         return None
     return payload
 

@@ -468,7 +468,7 @@ async def test_veyllo_key(body: TestVeylloKeyRequest, request: Request):
     return {"ok": ok}
 
 
-async def _second_factor_step_token(token: str) -> Optional[dict]:
+async def _second_factor_step_token(token: str, client_ip: Optional[str] = None) -> Optional[dict]:
     """The decoded token a 2FA step (/setup-2fa, /verify-2fa) was called with, or None.
 
     Both routes are exempt from the middleware, so they make its check themselves. They used
@@ -483,7 +483,7 @@ async def _second_factor_step_token(token: str) -> Optional[dict]:
         return None
     if payload.get("is_2fa_verified") is True:
         from vaf.auth.middleware import token_account_stands
-        if not await token_account_stands(payload, token):
+        if not await token_account_stands(payload, token, client_ip=client_ip):
             return None
     return payload
 
@@ -509,7 +509,7 @@ async def setup_2fa(request: Request):
     if not auth:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     token = auth.replace("Bearer ", "").strip() if isinstance(auth, str) else auth
-    payload = await _second_factor_step_token(token)
+    payload = await _second_factor_step_token(token, _client_ip(request))
     if payload is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
@@ -557,7 +557,7 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
     Verify the code and complete the sign-in (_complete_sign_in). The session's token goes into
     the HttpOnly cookie only, never into JSON: a page script must not be able to read it.
     """
-    payload = await _second_factor_step_token(body.temp_token)
+    payload = await _second_factor_step_token(body.temp_token, _client_ip(request))
     if payload is None:
         _log_auth_failure("twofa_failed", request, detail="invalid temp token")
         # The code lets the page say what happened: most often the 15 minutes of the step ran

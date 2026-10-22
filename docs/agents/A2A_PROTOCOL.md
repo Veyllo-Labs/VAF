@@ -731,10 +731,11 @@ account's access token is a token for programs: made in Settings, Account with t
 account's 2FA code, or with `vaf users token NAME --label TEXT` in a terminal on the host
 (see "Tokens for programs" in [NETWORK_FEATURES.md](../setup/NETWORK_FEATURES.md#authentication-details));
 the web UI's own sign-in is an HttpOnly cookie a program never sees. The door tells the
-registered verifier the real client's address when the verifier takes a `client_ip` keyword
-(`admit(..., client_ip=...)`, `set_credential_verifier` in `vaf/core/a2a/wire.py`; a
-parameter that accepts it by keyword, or `**kwargs`: a positional-only one is called with the
-credential alone), and VAF's
+registered verifier the real client's address when the verifier names a `client_ip` parameter
+or takes `**kwargs` (`admit(..., client_ip=...)`, `set_credential_verifier` in
+`vaf/core/a2a/wire.py`): by position when that parameter is positional-only right after the
+credential, by keyword otherwise, and never left out, since a missing address would skip an
+address rule; only a verifier with neither is called with the credential alone. VAF's
 verifier refuses a session of the window on the host machine presented from another address. **There is no fallback**: no credential
 means no connection. An access token is refused when it was minted before the second
 factor, when its account no longer stands (deactivated, deleted, demoted) or when its

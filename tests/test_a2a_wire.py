@@ -572,28 +572,60 @@ def test_the_standing_lookups_hold_nothing_bound_to_a_loop():
             assert not isinstance(value, loop_bound), f"{module.__name__}.{name}"
 
 
-def test_the_client_goes_only_to_a_verifier_that_takes_it_by_keyword(monkeypatch):
-    """A positional-only `client_ip` cannot take the keyword the door passes: that verifier is
-    called with the credential alone instead of raising and refusing every admission. A
-    keyword-only one and `**kwargs` are told the client. MUTATION: accept any parameter named
-    client_ip - red."""
+def test_every_verifier_that_names_the_client_is_given_it(monkeypatch):
+    """A missing client means "not known" and skips an address rule, so a verifier that names
+    `client_ip` must never be left without it: positional-only gets it by position, the other
+    kinds by keyword, `**kwargs` through it, and wrappers, partials and callable objects keep
+    receiving it. Each one here refuses an address that is not the machine's, so a dropped
+    address would admit the LAN client. Only a verifier that names neither gets the credential
+    alone, and a positional-only `client_ip` the door cannot hand the address to is refused.
+    MUTATION: call a positional-only client_ip with the credential alone - red."""
+    import functools
+
     import vaf.core.a2a.wire as wire_mod
-    seen = []
+
+    def _rule(client_ip, scope):
+        return None if client_ip not in (None, "127.0.0.1") else {"user_scope_id": scope}
 
     def _positional_only(credential, client_ip=None, /):
-        seen.append(("positional", client_ip))
-        return {"user_scope_id": "scope-1"}
+        return _rule(client_ip, "scope-1")
+
+    def _either(credential, client_ip=None):
+        return _rule(client_ip, "scope-2")
 
     def _keyword_only(credential, *, client_ip=None):
-        seen.append(("keyword", client_ip))
-        return {"user_scope_id": "scope-2"}
+        return _rule(client_ip, "scope-3")
 
     def _any_keyword(credential, **kw):
-        seen.append(("kwargs", kw.get("client_ip")))
-        return {"user_scope_id": "scope-3"}
+        return _rule(kw.get("client_ip"), "scope-4")
 
-    for verify, scope in ((_positional_only, "scope-1"), (_keyword_only, "scope-2"),
-                          (_any_keyword, "scope-3")):
+    def _wrapped(verify):
+        @functools.wraps(verify)
+        def inner(*a, **k):
+            return verify(*a, **k)
+        return inner
+
+    class _Callable:
+        def __call__(self, credential, client_ip=None):
+            return _rule(client_ip, "scope-5")
+
+    def _prefixed(prefix, credential, client_ip=None, /):
+        return _rule(client_ip, prefix)
+
+    for verify in (_positional_only, _either, _keyword_only, _any_keyword,
+                   _wrapped(_positional_only), _wrapped(_either),
+                   functools.partial(_prefixed, "scope-6"), _Callable()):
         monkeypatch.setattr(wire_mod, "_verifier", verify)
-        assert resolve_account("t", client_ip="192.168.7.7")["user_scope_id"] == scope
-    assert seen == [("positional", None), ("keyword", "192.168.7.7"), ("kwargs", "192.168.7.7")]
+        with pytest.raises(HandshakeRefused):
+            resolve_account("t", client_ip="192.168.50.9")
+        assert resolve_account("t", client_ip="127.0.0.1")["user_scope_id"].startswith("scope-")
+
+    monkeypatch.setattr(wire_mod, "_verifier", lambda credential: {"user_scope_id": "scope-7"})
+    assert resolve_account("t", client_ip="192.168.50.9")["user_scope_id"] == "scope-7"
+
+    def _misplaced(credential, other=None, client_ip=None, /):
+        return {"user_scope_id": "scope-8"}
+
+    monkeypatch.setattr(wire_mod, "_verifier", _misplaced)
+    with pytest.raises(HandshakeRefused):
+        resolve_account("t", client_ip="192.168.50.9")

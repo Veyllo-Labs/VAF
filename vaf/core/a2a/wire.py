@@ -63,12 +63,13 @@ def set_credential_verifier(verify) -> None:
     None for anything else. Deciding what "allowed to open a session" means - the token
     type, an expiry, a revoked session - belongs to whoever owns the accounts.
 
-    A verifier that takes a ``client_ip`` keyword (a parameter of that name that accepts a
-    keyword, or ``**kwargs``) is also told the real client's address (the door's own
-    resolver, ``binding.connection_client_ip``), because whether a credential may open a
-    session can depend on where it is used: VAF's own sessions of the window on the machine
-    itself stand only for that machine. A verifier with the one argument, or with a
-    positional-only ``client_ip``, is called with the credential alone and keeps working.
+    A verifier that names a ``client_ip`` parameter (or takes ``**kwargs``) is also told the
+    real client's address (the door's own resolver, ``binding.connection_client_ip``),
+    because whether a credential may open a session can depend on where it is used: VAF's
+    own sessions of the window on the machine itself stand only for that machine. It gets
+    the address however it declares the parameter, by position right after the credential
+    when it is positional-only (``_call_verifier``), and is never left without it. A
+    verifier with the one argument is called with the credential alone and keeps working.
     """
     global _verifier
     _verifier = verify
@@ -96,18 +97,32 @@ def looks_like_ticket(credential: str) -> bool:
     return str(credential or "").startswith(TICKET_PREFIX)
 
 
-def _accepts_client_ip(verify) -> bool:
-    """Whether `verify` can be called with ``client_ip=``: a parameter of that name that takes
-    a keyword, or ``**kwargs``. A positional-only ``client_ip`` cannot (the call raises, and
-    every admission through that verifier would be refused), so it gets the credential alone."""
+def _call_verifier(verify, credential: str, client_ip: Optional[str]):
+    """Call the verifier, handing it the client however it takes ``client_ip``.
+
+    A verifier that names the parameter is never left without it: ``None`` there means "the
+    client is not known" and skips an address rule (VAF's own verifier does exactly that), so
+    dropping the address would fail open. A positional-only ``client_ip`` right after the
+    credential gets it by position, any other ``client_ip`` by keyword, and ``**kwargs``
+    through it; wrappers (``functools.wraps``), partials and callable objects show the
+    signature they forward to and are called the same way. Only a verifier that takes neither
+    gets the credential alone. A positional-only ``client_ip`` anywhere else cannot be handed
+    the address, so the call raises and the door reads that as a refusal."""
     import inspect
+    if client_ip is None:
+        return verify(credential)
     try:
-        params = inspect.signature(verify).parameters.values()
+        params = list(inspect.signature(verify).parameters.values())
     except (TypeError, ValueError):
-        return False
-    by_keyword = (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
-    return any((p.name == "client_ip" and p.kind in by_keyword)
-               or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
+        return verify(credential)
+    named = next((p for p in params if p.name == "client_ip"), None)
+    if named is not None and named.kind is inspect.Parameter.POSITIONAL_ONLY:
+        if params.index(named) != 1:
+            raise TypeError("a positional-only client_ip must follow the credential")
+        return verify(credential, client_ip)
+    if named is not None or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params):
+        return verify(credential, client_ip=client_ip)
+    return verify(credential)
 
 
 def resolve_account(credential: str, *, client_ip: Optional[str] = None) -> dict:
@@ -124,10 +139,7 @@ def resolve_account(credential: str, *, client_ip: Optional[str] = None) -> dict
         raise HandshakeRefused("no credential verifier is registered")
 
     try:
-        if client_ip is not None and _accepts_client_ip(_verifier):
-            claims = _verifier(str(credential or ""), client_ip=client_ip)
-        else:
-            claims = _verifier(str(credential or ""))
+        claims = _call_verifier(_verifier, str(credential or ""), client_ip)
     except Exception:
         # A verifier that crashed is not a verifier that approved.
         raise HandshakeRefused("the credential could not be checked") from None

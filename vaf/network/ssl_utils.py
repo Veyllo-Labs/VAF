@@ -1261,8 +1261,9 @@ def room_host_choice(address: str, cfg: Optional[dict] = None) -> Tuple[Optional
     if all(c in silent for c in candidates):
         return None, (f"the served certificate names {listed}, and the lookups on the host "
                       "gave no answer in time (they were still running, or the resolver "
-                      "failed; it may be down for now): an invitation made about a minute "
-                      "after it answers again has the lane")
+                      "failed; it may be down for now): try again in about a minute, and if "
+                      "the lane is still missing then, check that one of these names "
+                      "resolves to the host's address")
     one = len(candidates) == 1 and not wildcards
     head = (f"the served certificate names {listed}, but it is not the host's name and does "
             f"not resolve to its address {address} on the host" if one else

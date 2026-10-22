@@ -268,13 +268,17 @@ class InFlight:
     same key (a lookup of one name), so a key runs once at a time.
 
     ``join_wait`` caps how long a caller that only joins calls waits for them (None: until the
-    deadline of the caller that started them). A quick answer still reaches it, while a call
-    that ends late, or fails late, costs only the caller that started it: with lookups that
-    failed after 1.5 s, every invitation that joined one waited those 1.5 s, and the
-    invitations of other accounts queued behind them (measured). A caller that also started
-    a call of its own waits for all of them until its own deadline, the joined ones too: it
-    waits that long for its own call anyway, and when calls fail or hang its own does as
-    well, so a cap per key would not shorten its wait."""
+    deadline of the caller that started them, or its own, whichever comes first). A quick
+    answer still reaches it, while a call that ends late, or fails late, costs only the
+    caller that started it: with lookups that failed after 1.5 s, every invitation that
+    joined one waited those 1.5 s, and the invitations of other accounts queued behind them
+    (measured).
+
+    A caller that joins calls and also starts one of its own is not capped: it waits for all
+    of them until its own deadline, so it may return a joined call's answer that arrived
+    after the deadline of the caller that started it. It waits up to its own deadline (2 s
+    in the host choice) for its own call in any case, and when calls fail or hang its own
+    does as well, so a cap per key would not shorten its wait."""
 
     def __init__(self, join_wait: Optional[float] = None) -> None:
         self._lock = threading.Lock()

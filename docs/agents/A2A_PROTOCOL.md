@@ -842,8 +842,9 @@ again, and a DNS change shows in an invitation made at most a minute later; only
 does not exist is remembered as an answer. A resolver failure (`EAI_AGAIN`, which a timeout or
 SERVFAIL gives) is no answer: it is held for 5 s, doubling with each failure of the name in a
 row up to 60 s, and an answer ends the series (RFC 9520 asks resolvers to hold a failure and
-back off). So after a long outage the lane returns up to a minute after the resolver answers
-again, and the reason says to try again then. A choice that also started a lookup of its own
+back off). So after a long outage the lane can return up to a minute after the resolver answers
+again, and the reason says to try again then, and to check that one of the names resolves to
+the host's address if the lane is still missing. A choice that also started a lookup of its own
 waits for the ones it joined until its own 2 s are up, as it does for its own. The web UI
 builds an invitation on a small pool of its own (four threads), off the server's event loop and
 off the default executor the A2A wire and the voice feed use. NAMED BOUNDARY: those four

@@ -515,7 +515,11 @@ def test_the_room_host_lookups_share_one_budget_and_run_once_per_name(tmp_path, 
     finally:
         release.set()
     assert host is None and "gave no answer in time (they were still running" in why
-    assert "about a minute after it answers again" in why, "when to try again"
+    # When to try again, and what to check if it still fails: an answer that is not the
+    # host's address leaves no lane, so the hint promises none (MUTATION: the old "has the
+    # lane" promise - red).
+    assert "try again in about a minute" in why and "has the lane" not in why
+    assert "check that one of these names resolves to the host's address" in why
     assert took < 2.0, took
     counts = Counter(looked_up)
     assert set(counts) <= {"example.org", "a.example.org", "b.example.org"}

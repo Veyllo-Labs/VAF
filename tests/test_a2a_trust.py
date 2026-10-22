@@ -514,7 +514,7 @@ def test_the_room_host_lookups_share_one_budget_and_run_once_per_name(tmp_path, 
         took = time.monotonic() - started
     finally:
         release.set()
-    assert host is None and "gave no answer within 0.3 s" in why
+    assert host is None and "gave no answer (they took longer than 0.3 s" in why
     assert took < 2.0, took
     counts = Counter(looked_up)
     assert set(counts) <= {"example.org", "a.example.org", "b.example.org"}
@@ -707,3 +707,32 @@ def test_a_name_that_does_not_exist_is_remembered(tmp_path, monkeypatch):
         host, why = ssl_utils.room_host_choice("192.168.1.20")
         assert host is None and "hosts file" in why
     assert sorted(asked) == ["a.example.org", "b.example.org"]
+
+
+def test_a_name_without_an_answer_gets_a_sentence_of_its_own(tmp_path, monkeypatch):
+    """No answer covers a slow lookup and a resolver that failed at once, so the text names
+    both, in a sentence of its own after the fix. MUTATION: the old "; ... gave no answer
+    within 2 s" tail - red."""
+    import threading
+
+    import vaf.network.binding as binding
+    _served(tmp_path, monkeypatch, ("a.example.org", "b.example.org"))
+    monkeypatch.setattr(ssl_utils, "_LOOKUP_POOL", None)
+    monkeypatch.setattr(ssl_utils, "_LOOKUP_IN_FLIGHT", None)
+    monkeypatch.setattr(ssl_utils, "_LOOKUP_BUDGET_S", 0.2)
+    release = threading.Event()
+
+    def _lookup(name):
+        if name == "b.example.org":
+            release.wait(5)
+        return frozenset({"203.0.113.7"})
+
+    monkeypatch.setattr(ssl_utils, "_addresses_of", _lookup)
+    monkeypatch.setattr(binding, "machine_dns_names", lambda: ["vaf"])
+    try:
+        host, why = ssl_utils.room_host_choice("192.168.1.20")
+    finally:
+        release.set()
+    assert host is None
+    assert (". No answer came for b.example.org (the lookup took longer than 0.2 s, or the "
+            "resolver failed)") in why

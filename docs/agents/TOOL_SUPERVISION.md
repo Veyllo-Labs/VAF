@@ -36,7 +36,8 @@ and return early - see "Cooperative cancel" below.
 Several independent calls that may hang, such as the DNS lookups behind the host a room
 invitation names, go through `run_bounded_all(calls, *, timeout, pool, in_flight=None)` instead:
 it returns the answers that arrived within the time in all, leaves out a call that raised or
-was too slow, and cancels the ones still queued, so they never start. Its `pool` is a
+was too slow, and, without `in_flight`, cancels the ones still queued, so they never start
+(with one, they stay queued for the next caller, see below). Its `pool` is a
 `DaemonPool(workers, name)`: at most `workers` daemon threads, started as work arrives and
 shared by every caller of that pool, so calls that hang occupy that many threads however often
 they are made, and none of them holds up the exit of the process (the workers of a

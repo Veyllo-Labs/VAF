@@ -103,11 +103,12 @@ def test_a_key_already_running_is_not_started_again():
     try:
         assert run_bounded_all({"k": _hang}, timeout=0.2, pool=pool, in_flight=in_flight) == {}
         later = time.monotonic()
-        assert run_bounded_all({"k": _hang}, timeout=0.2, pool=pool, in_flight=in_flight) == {}
+        assert run_bounded_all({"k": _hang}, timeout=0.6, pool=pool, in_flight=in_flight) == {}
         later = time.monotonic() - later
     finally:
         release.set()
-    assert started == [1] and later < 0.1, (started, later)
+    # At once is under 0.2 s even on a loaded runner; a call started again waits its 0.6 s.
+    assert started == [1] and later < 0.2, (started, later)
 
 
 def test_a_queued_key_stays_queued_for_the_next_caller():
@@ -124,10 +125,10 @@ def test_a_queued_key_stays_queued_for_the_next_caller():
         run_bounded_all({"a": lambda: release.wait(5), "b": lambda: ran.append("b")},
                         timeout=0.1, pool=pool, in_flight=in_flight)
         later = time.monotonic()
-        run_bounded_all({"b": lambda: ran.append("b again")}, timeout=0.3, pool=pool,
+        run_bounded_all({"b": lambda: ran.append("b again")}, timeout=0.6, pool=pool,
                         in_flight=in_flight)
         later = time.monotonic() - later
     finally:
         release.set()
     assert pool.submit(lambda: "after").result(timeout=5) == "after"
-    assert later < 0.05 and ran == ["b"], (later, ran)
+    assert later < 0.2 and ran == ["b"], (later, ran)

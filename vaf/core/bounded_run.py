@@ -279,10 +279,11 @@ def run_bounded_all(calls: Mapping[Hashable, Callable[[], Any]], *, timeout: flo
 
     ``run_bounded`` bounds ONE call and answers a tool's timeout text; this is for several
     independent calls whose answers count each on its own, so the ones that arrived in time
-    are kept. A call that raised is left out, and so is one that was still queued (it is
-    cancelled, so it never starts) or still running when the time was up (it is abandoned
-    like ``run_bounded``'s worker and finishes on its own). Give it a ``DaemonPool`` of its
-    own when the calls can hang, so their threads stay capped and never hold up the exit.
+    are kept. A call that raised is left out, and so is one that was still queued (without
+    ``in_flight`` it is cancelled, so it never starts; with one it stays queued, below) or
+    still running when the time was up (it is abandoned like ``run_bounded``'s worker and
+    finishes on its own). Give it a ``DaemonPool`` of its own when the calls can hang, so
+    their threads stay capped and never hold up the exit.
 
     With ``in_flight``, a key whose call another caller started and has not finished, running
     or queued, is not started again: this caller waits for that call, but only until the

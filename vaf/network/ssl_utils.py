@@ -1210,8 +1210,10 @@ def room_host_choice(address: str, cfg: Optional[dict] = None) -> Tuple[Optional
     silent = [c for c in candidates if "dns:" + c not in answers]
     if "machine" not in answers:
         silent.append("the host's own names")
-    late = (f"; {', '.join(silent)} gave no answer within {_LOOKUP_BUDGET_S:g} s"
-            if silent else "")
+    # No answer covers both a lookup that took longer than the budget and a resolver that
+    # failed at once (EAI_AGAIN), so the text names both rather than "within 2 s".
+    late = (f". No answer came for {', '.join(silent)} (the lookup took longer than "
+            f"{_LOOKUP_BUDGET_S:g} s, or the resolver failed)" if silent else "")
     if not candidates:
         example = "vaf" + wildcards[0][1:]
         return None, (f"the served certificate names only {', '.join(wildcards)}, and none of "
@@ -1220,8 +1222,9 @@ def room_host_choice(address: str, cfg: Optional[dict] = None) -> Tuple[Optional
     listed = ", ".join([*candidates, *wildcards])
     if all(c in silent for c in candidates):
         return None, (f"the served certificate names {listed}, and the lookups on the host "
-                      f"gave no answer within {_LOOKUP_BUDGET_S:g} s (its resolver may be "
-                      "down for now): an invitation made once it answers has the lane")
+                      f"gave no answer (they took longer than {_LOOKUP_BUDGET_S:g} s, or the "
+                      "resolver failed; it may be down for now): an invitation made once it "
+                      "answers has the lane")
     one = len(candidates) == 1 and not wildcards
     head = (f"the served certificate names {listed}, but it is not the host's name and does "
             f"not resolve to its address {address} on the host" if one else

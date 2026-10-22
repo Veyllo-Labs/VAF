@@ -25,12 +25,15 @@ unreachable, image unknown - the caller falls back to the shared container and
 its handover scrub, so the pool can only ever ADD isolation, never lose the
 browser entirely.
 
-Instances are cloned from the shared container's own image and network (read
+Instances are cloned from the shared container's image name and network (read
 via docker inspect at first use), published loopback-only on ephemeral host
 ports exactly like the shared one, and named by a scope HASH - a container
 listing must not leak who uses the machine. Stopped instances keep their
 container and profile volume; the reaper only ever `docker stop`s an idle
-instance, it never removes data.
+instance, it never removes data. A container is removed in one case only: its
+image ID differs from the one that image name points to now (a rebuild moved
+the tag). It is then recreated on the current image before it is handed out,
+on the same profile volume.
 """
 
 from __future__ import annotations
@@ -39,7 +42,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 from vaf.core import containers
 from vaf.core.log_helper import append_domain_log
@@ -182,6 +185,11 @@ def _vnc_wait_s() -> float:
         return 8.0
 
 
+def _short_image_id(image_id: str) -> str:
+    """An image ID as docker lists it: the first 12 hex digits, without `sha256:`."""
+    return image_id.split(":", 1)[-1][:12]
+
+
 class BrowserPool:
     """Singleton allocator of per-user browser containers."""
 
@@ -204,12 +212,13 @@ class BrowserPool:
 
     # -- template ----------------------------------------------------------
     def _resolve_template(self) -> Optional[tuple]:
-        """Image and network for new instances, read from the shared container.
+        """Image name and network for new instances, read from the shared container.
 
-        The shared vaf-browser is the source of truth for both: it always runs
-        the image this checkout built, and its network is the isolated
-        browser-only net (never the DB net). Reading instead of hardcoding
-        keeps the pool correct across compose project names and rebuilds."""
+        The shared vaf-browser is the source of truth for both: its image name
+        (`.Config.Image`, the tag, not an ID) is the one the stack start builds
+        from this checkout, and its network is the isolated browser-only net
+        (never the DB net). Reading instead of hardcoding keeps the pool correct
+        across compose project names and rebuilds."""
         with self._lock:
             if self._template is not None:
                 return self._template
@@ -262,27 +271,40 @@ class BrowserPool:
             raise PoolExhausted(reason)
         return None
 
-    def _image_is_stale(self, name: str) -> bool:
-        """True when this container runs an image the shared browser no longer uses.
+    def _outdated_image(self, name: str) -> Optional[Tuple[str, str]]:
+        """(have, want) image IDs when this container runs an image other than the
+        current one; None when it is current or either side cannot be read.
 
         A container is pinned to the image ID it was created from, for life.
-        The shared browser is rebuilt and recreated (the stack start's --build,
-        and the age gate's --pull --no-cache), but a pooled instance would keep
-        serving the old binary forever - so the per-user browsers, the ones a
-        person actually banks in, would be the LAST to receive a Chromium
-        security fix instead of the first. Compared by image ID, not tag: both
-        sides are :latest, and the tag is exactly what a rebuild moves."""
+        The stack start rebuilds the browser image (its --build, and the age
+        gate's cache-less rebuild), but a pooled instance would keep serving the
+        old binary forever - so the per-user browsers, the ones a person actually
+        banks in, would be the LAST to receive a Chromium security fix instead of
+        the first. Compared by image ID, not tag: both sides are :latest, and the
+        tag is exactly what a rebuild moves.
+
+        "Current" is the image the shared container's image NAME points to now,
+        not the image the shared container happens to run: `_create` starts a new
+        instance from that same name, so a recreate always lands on what this
+        check wanted. Against the running shared container instead, a start that
+        moved the tag without recreating it (an optional `up --build` that failed
+        or was cancelled by a quit) would recreate the instance at every use.
+
+        A failed lookup answers None on purpose: the instance is adopted, never
+        thrown away on a docker hiccup."""
         try:
             template = self._resolve_template()
             if template is None:
-                return False
+                return None
             r = containers.docker(["inspect", template[0], "--format", "{{.Id}}"], timeout=20)
             want = (r.stdout or "").strip() if r.returncode == 0 else ""
             r = containers.docker(["inspect", name, "--format", "{{.Image}}"], timeout=20)
             have = (r.stdout or "").strip() if r.returncode == 0 else ""
-            return bool(want and have and want != have)
+            if want and have and want != have:
+                return have, want
+            return None
         except Exception:
-            return False
+            return None
 
     def _take_ownership(self, scope: str, name: str) -> bool:
         """Record a container this pool just started or adopted. False when the pool is
@@ -306,13 +328,18 @@ class BrowserPool:
         name = _NAME_PREFIX + containers.scope_hash(scope)
 
         state = containers.container_state(name)
-        if state in ("running", "exited") and self._image_is_stale(name):
+        outdated = self._outdated_image(name) if state in ("running", "exited") else None
+        if outdated is not None:
             # Recreate rather than adopt. The PROFILE VOLUME is untouched by
             # this (it is named and mounted afresh), so the person's logins,
             # history and bookmarks come back with the new container; only the
-            # stale binary is thrown away.
+            # stale binary is thrown away. Both IDs go into the line: a recreate
+            # at every start, with no change to the image, shows up as a new
+            # "current" ID each time.
+            have, want = outdated
             append_domain_log("webui", f"[browser_pool] instance for scope hash {containers.scope_hash(scope)} "
-                                       "runs an outdated image; recreating on the current one")
+                                       f"runs an outdated image (have {_short_image_id(have)}, "
+                                       f"current {_short_image_id(want)}); recreating on the current one")
             containers.docker(["rm", "-f", name], timeout=60)
             with self._lock:
                 self._instances.pop(scope, None)

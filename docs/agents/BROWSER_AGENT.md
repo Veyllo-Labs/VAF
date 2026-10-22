@@ -51,6 +51,8 @@ created without it has no working interactive stream. See
 
 On first run, Docker builds the `vaf-browser` image from `docker/browser/Dockerfile` (~30 seconds). Later starts pass `--build` too: an unchanged build context is a cache hit and costs seconds, while a changed one is rebuilt rather than silently reused. Without that, a checkout that moves ahead of its images keeps running the old ones with nothing to show for it.
 
+A cache hit also keeps the image's ID, because VAF's start builds with buildx's default attestations off (`BUILDX_NO_DEFAULT_ATTESTATIONS=1`). With them, on an engine that uses the containerd image store, every build got a new image ID even when nothing in the image had changed: the browser and TTS containers were recreated at every start, and every per-user browser looked outdated (see "A personal browser follows the image" below). A value of the variable already in VAF's environment is kept. A hand-run `--build` such as the one above gives the image a new ID once on such an engine, which costs one recreation at the next VAF start; see [DOCKER_SERVICES.md](../setup/DOCKER_SERVICES.md#start-the-services).
+
 ### Verify it's running
 
 ```bash
@@ -828,12 +830,16 @@ govern it, all admin-only:
 
 **A personal browser follows the image.** A container is pinned for life to the image ID
 it was created from, so without this the per-user browsers - the ones people actually work
-in - would be the LAST to receive a Chromium security fix, while the shared browser is
+in - would be the LAST to receive a Chromium security fix, while the browser image is
 rebuilt by the stack start and by the age gate above. Before an instance is adopted, its
-image ID is compared against the one the shared container runs; on a mismatch the
-container is removed and recreated on the current image. The profile volume is named and
-remounted, so history, logins and bookmarks come back with it - only the stale binary is
-thrown away.
+image ID is compared with the image that the shared container's image name points to now
+(the tag the stack start builds), which is the same name a recreated instance is started
+from; on a mismatch the container is removed and recreated on the current image. The
+profile volume is named and remounted, so history, logins and bookmarks come back with
+it - only the stale binary is thrown away. The recreate line in the `webui` log names
+both short image IDs (`have ..., current ...`). Because a cache hit keeps the image's ID
+(see [Start the browser container](#start-the-browser-container)), this happens once per
+real image change (a Dockerfile change, the age gate), not at every start.
 
 **Fallbacks are visible, and strict mode refuses them.** With the pool active, every
 resolution that ends on the shared container (capacity, memory floor, docker trouble)

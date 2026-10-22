@@ -41,6 +41,12 @@ On the Full profile that is every service; on the Lean profile the speech contai
 are left out. A compose command without the service names starts them anyway, and on a
 Lean installation that pulls the 7.5 GB speech-to-text image the profile exists to avoid.
 
+On an engine that uses the containerd image store, a hand-run `--build` without
+`BUILDX_NO_DEFAULT_ATTESTATIONS=1` in the environment gives the built images a new ID
+even when nothing in them changed, so VAF's next start recreates their containers and
+every per-user browser once (VAF's own start sets the variable; see the `--build` notes
+under [Auto-Start & Smart Update](#auto-start--smart-update)).
+
 > **Redis and the browser need their secrets.** The compose file starts Redis with
 > `--requirepass` only when `REDIS_PASSWORD` is set, while VAF's client always sends the
 > password it keeps in the data keyring; the browser's stream takes
@@ -351,6 +357,19 @@ When a runtime is present (or has just been set up), the installer manages the s
      checkout that moves ahead of its images keeps running the old ones and nothing says so.
      An unchanged build context is a cache hit and costs seconds. Note that `vaf update` never
      builds an image either, so an image cannot be repaired by updating.
+   - A cache hit also keeps the image's ID, because every build of VAF's start (the
+     `--build` and the age gate below) runs with buildx's default attestations off
+     (`BUILDX_NO_DEFAULT_ATTESTATIONS=1`, set in `_compose_env` in
+     `vaf/core/service_stack.py`). With them, on an engine that uses the containerd image
+     store, every build is stored as an index whose provenance attestation differs per
+     build, so a full cache hit still got a new image ID: compose recreated `vaf-browser`
+     and `vaf-tts` at every start although nothing in them had changed, and the browser
+     pool, which compares image IDs, recreated every per-user browser the first time it
+     was opened afterwards. A value of `BUILDX_NO_DEFAULT_ATTESTATIONS` already in VAF's
+     environment is kept, and on such an engine it brings that per-start recreation back.
+     The installers' first build and a hand-run `--build` from these docs attach the
+     attestation, which costs one recreation at the next VAF start. On the classic image
+     store builds carry no such index, and nothing changes.
    - The cache hit has a second face for the browser: its apt layer installs an UNPINNED
      Debian Chromium, and a cached `--build` never re-runs that layer, so the browser engine
      would age forever while `--build` reports success. The age gate closes that class: once

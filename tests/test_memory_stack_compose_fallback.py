@@ -188,3 +188,65 @@ def test_optional_services_are_rebuilt_while_core_services_are_not(monkeypatch):
     assert core_only, "the core services were never started"
     for cmd in core_only:
         assert "--build" not in cmd, f"core services must not rebuild on every start: {cmd}"
+
+
+def _no_compose_secrets(monkeypatch):
+    """`_compose_env` reads two secrets lazily; neither belongs in an env assertion."""
+    import vaf.core.browser_interactive as bi
+    import vaf.memory.cache as cache
+    monkeypatch.setattr(cache, "redis_password", lambda: "")
+    monkeypatch.setattr(bi, "browser_vnc_secret", lambda: "")
+
+
+def test_compose_builds_without_the_default_attestation(monkeypatch):
+    """On an engine with the containerd image store buildx attaches a provenance
+    attestation to every build, and it differs per build: even a full cache hit gave
+    the browser and TTS images a new ID at every start, so compose recreated both
+    containers and the browser pool found every per-user browser outdated.
+
+    MUTATION: delete the BUILDX_NO_DEFAULT_ATTESTATIONS line in `_compose_env`."""
+    _no_compose_secrets(monkeypatch)
+    monkeypatch.delenv("BUILDX_NO_DEFAULT_ATTESTATIONS", raising=False)
+    assert stack._compose_env()["BUILDX_NO_DEFAULT_ATTESTATIONS"] == "1"
+
+
+def test_an_operator_value_for_the_attestation_switch_is_kept(monkeypatch):
+    """A value already in the environment is the operator's and wins.
+
+    MUTATION: assign the variable unconditionally instead of keeping it."""
+    _no_compose_secrets(monkeypatch)
+    monkeypatch.setenv("BUILDX_NO_DEFAULT_ATTESTATIONS", "0")
+    assert stack._compose_env()["BUILDX_NO_DEFAULT_ATTESTATIONS"] == "0"
+
+
+def test_every_build_of_the_start_runs_without_the_default_attestation(monkeypatch):
+    """Both build lanes of one start, the age gate's cache-less build and the optional
+    `up --build`, must get the switch: either one alone still hands the image a new ID
+    at every start.
+
+    MUTATION: pass `dict(os.environ)` instead of `_compose_env()` to the start's
+    subprocess kwargs."""
+    _no_compose_secrets(monkeypatch)
+    monkeypatch.delenv("BUILDX_NO_DEFAULT_ATTESTATIONS", raising=False)
+    # Force the age gate: an image older than its budget.
+    monkeypatch.setattr(stack, "_browser_image_max_age_days", lambda: 14)
+    monkeypatch.setattr(stack, "_browser_image_age_days", lambda: 30.0)
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((list(cmd), kwargs))
+        return _Result(0)
+
+    _hermetic(monkeypatch, fake_run)
+    assert stack.ensure_service_stack() is True
+
+    builds = [(c, kw) for c, kw in calls if "build" in c or "--build" in c]
+    gate = [c for c, _ in builds if "build" in c and "--no-cache" in c]
+    optional_up = [c for c, _ in builds if "up" in c and "--build" in c]
+    assert gate, f"the age gate's build never ran; calls: {[c for c, _ in calls]}"
+    assert optional_up, f"the optional up --build never ran; calls: {[c for c, _ in calls]}"
+    for cmd, kwargs in builds:
+        env = kwargs.get("env") or {}
+        assert env.get("BUILDX_NO_DEFAULT_ATTESTATIONS") == "1", (
+            f"a build ran with the default attestation, so its image gets a new ID "
+            f"at every start: {cmd}")

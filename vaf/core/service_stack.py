@@ -339,13 +339,28 @@ def _compose_plugin_missing(stderr: str) -> bool:
 
 
 def _compose_env() -> dict:
-    """Environment for `compose up`, carrying the Redis password from the keyring.
+    """Environment for every compose call of the stack start (`up`, the optional
+    `up --build`, the age gate's `build`): the process environment plus the two
+    secrets compose interpolates and the switch that keeps a built image's ID stable.
 
     Redis caches DECRYPTED memory content and persists it, and it shipped with no
     password, no ACL and no TLS. The password is generated once into the keyring
     and handed to compose here, so it never reaches config.json or a shell history.
+    The browser's stream credential travels the same way.
     """
     env = dict(os.environ)
+    # Every build of the start runs without buildx's default provenance attestation.
+    # On an engine with the containerd image store a build carrying it is stored as
+    # an OCI index, and the attestation differs per build, so even a full cache hit
+    # got a new image ID at every start: compose then recreated vaf-browser and tts
+    # although nothing in them had changed, and the browser pool, which compares
+    # image IDs, found every per-user browser outdated and recreated it at its next
+    # use. Without the attestation the ID is the manifest's own digest and moves only
+    # with the content (measured: identical across cached builds, new after
+    # --no-cache). `build.provenance: false` in the compose file does not do this on
+    # Compose 5.3.1 (measured: still an index, still a new ID per build).
+    # setdefault: a value the operator put in the environment is theirs to keep.
+    env.setdefault("BUILDX_NO_DEFAULT_ATTESTATIONS", "1")
     try:
         from vaf.memory.cache import redis_password
         password = redis_password()

@@ -621,13 +621,27 @@ def test_every_resolve_caller_names_the_strict_refusal():
         assert "PoolExhausted" in src, f"{rel} lost its strict-pool handling"
 
 
+_OLD_ID = "sha256:0123456789ab" + "c" * 52
+_NEW_ID = "sha256:fedcba987654" + "3" * 52
+
+
 def test_a_pooled_instance_on_an_outdated_image_is_recreated(pool, monkeypatch):
     """A container is pinned to its image ID for life, so the browser people
     actually bank in would be the LAST to get a Chromium security fix: the
     stack start rebuilds and recreates the SHARED browser, and the pooled
     instance kept serving the old binary forever. The profile volume is named
     and remounted, so logins survive the recreate - only the binary is
-    thrown away."""
+    thrown away.
+
+    The recreate line names both IDs, because a recreate at every start with no
+    change to the image (a build that hands an unchanged image a new ID) is only
+    visible as a new "current" ID each time. And the check stays one `{{.Id}}`
+    and one `{{.Image}}` inspect per resolve: it sits on the blocking path of
+    opening a browser.
+
+    MUTATIONS: drop the IDs from the log line (red on content); read the IDs a
+    second time, by a second helper or a second call of the check (red on the
+    count)."""
     monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "2")
     first = pool.resolve("scope-a")
     assert first is not None
@@ -635,20 +649,61 @@ def test_a_pooled_instance_on_an_outdated_image_is_recreated(pool, monkeypatch):
 
     # The shared browser has been rebuilt: same tag, new image ID.
     real = pool._test_docker.__call__
+    inspects = []
 
     def aged(args, timeout=60):
         if args[0] == "inspect" and args[-1] == "{{.Image}}":
-            return types.SimpleNamespace(returncode=0, stdout="sha256:OLD\n", stderr="")
+            inspects.append(list(args))
+            return types.SimpleNamespace(returncode=0, stdout=_OLD_ID + "\n", stderr="")
         if args[0] == "inspect" and args[-1] == "{{.Id}}":
-            return types.SimpleNamespace(returncode=0, stdout="sha256:NEW\n", stderr="")
+            inspects.append(list(args))
+            return types.SimpleNamespace(returncode=0, stdout=_NEW_ID + "\n", stderr="")
         return real(args, timeout=timeout)
 
+    logs = []
+    monkeypatch.setattr(bp, "append_domain_log", lambda domain, msg: logs.append((domain, msg)))
     monkeypatch.setattr(pool._test_docker, "__call__", aged, raising=False)
     monkeypatch.setattr("vaf.core.containers.docker", aged)
     again = pool.resolve("scope-a")
     assert again is not None
     calls = [c for c in pool._test_docker.calls if c[0] == "rm"]
     assert any(name in c for c in calls), "the outdated container was adopted instead of recreated"
+
+    outdated = [msg for domain, msg in logs if domain == "webui" and "outdated image" in msg]
+    assert len(outdated) == 1, f"expected one recreate line, got: {logs}"
+    line = outdated[0]
+    assert "have 0123456789ab" in line and "current fedcba987654" in line, (
+        f"the recreate line does not name both short image IDs: {line}")
+    assert "sha256:" not in line and "0123456789abc" not in line, (
+        f"the IDs are not shortened to docker's 12 hex digits: {line}")
+    assert [a for a in inspects if a[-1] == "{{.Id}}"] == [["inspect", "vaf-vaf-browser", "--format", "{{.Id}}"]]
+    assert [a for a in inspects if a[-1] == "{{.Image}}"] == [["inspect", name, "--format", "{{.Image}}"]]
+
+
+@pytest.mark.parametrize("failing", ["{{.Id}}", "{{.Image}}"])
+def test_an_instance_whose_image_cannot_be_read_is_adopted(pool, monkeypatch, failing):
+    """A failed lookup is not evidence of an outdated image. Throwing the person's
+    container away on a docker hiccup would cost them a recreate for nothing, so
+    either side failing means: adopt.
+
+    MUTATION: treat a failed lookup as outdated (compare without the emptiness
+    guard of that side)."""
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "2")
+    assert pool.resolve("scope-a") is not None
+    real = pool._test_docker.__call__
+    answers = {"{{.Id}}": _NEW_ID, "{{.Image}}": _OLD_ID}
+
+    def broken(args, timeout=60):
+        if args[0] == "inspect" and args[-1] in answers:
+            if args[-1] == failing:
+                return types.SimpleNamespace(returncode=1, stdout="", stderr="no such object")
+            return types.SimpleNamespace(returncode=0, stdout=answers[args[-1]] + "\n", stderr="")
+        return real(args, timeout=timeout)
+
+    monkeypatch.setattr("vaf.core.containers.docker", broken)
+    assert pool.resolve("scope-a") is not None
+    assert not [c for c in pool._test_docker.calls if c[0] == "rm"], (
+        "an instance was removed although its image ID could not be read")
 
 
 def test_a_pooled_instance_on_the_current_image_is_adopted(pool, monkeypatch):

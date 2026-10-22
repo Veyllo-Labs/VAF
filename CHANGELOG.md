@@ -484,6 +484,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   by-hand command with `--env-file` and the profile's service list. The installers made the
   same call on every upgrade, until VAF's next start put the password back; they now pass
   the file too.
+- **Your own browser is no longer rebuilt after every start.** On Docker installations that
+  use the containerd image store, every VAF start gave the browser and text-to-speech images
+  a new identity although nothing in them had changed. Both containers were recreated at
+  each start, and each person's own browser was thrown away and recreated the first time it
+  was opened afterwards: logins survived, but opening it took longer. The images now keep
+  their identity until their content really changes, for example when the browser receives
+  its periodic security update.
 
 ## [0.1.0a33] - 2026-10-11
 

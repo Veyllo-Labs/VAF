@@ -292,6 +292,17 @@ def test_no_trust_command_for_a_host_the_certificate_does_not_name(home, running
     assert _flat("cannot reach it now") in flat
 
 
+def test_the_reason_for_no_trust_command_prints_as_text(home, monkeypatch, capsys):
+    """The reason quotes the certificate's names, which whoever made the certificate chose:
+    a name with console markup prints as it is. MUTATION: drop the escape of the reason -
+    red."""
+    marked = "[bold red]VERIFIED[/bold red]"
+    monkeypatch.setattr(ssl_utils, "room_host_choice",
+                        lambda _address: (None, f"your certificate names {marked}"))
+    server_cmd._peer_trust_line("ab" * 32)
+    assert _flat(marked) in _flat(capsys.readouterr().out)
+
+
 def test_renewing_lists_the_names_left_out(home, monkeypatch):
     """MUTATION: drop the list from ca renew - red."""
     import vaf.network.binding as binding

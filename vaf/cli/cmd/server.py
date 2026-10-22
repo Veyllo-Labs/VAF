@@ -787,7 +787,10 @@ def _peer_trust_line(fingerprint: str) -> None:
     except Exception:
         pass
     if why:
-        UI.warning(f"Other machines that joined a room on this VAF cannot reach it now: {why}.")
+        # The reason quotes the certificate's names, which come from whoever made it: a
+        # SAN like "[link=...]vafhost[/link]" would otherwise print as markup.
+        UI.warning("Other machines that joined a room on this VAF cannot reach it now: "
+                   f"{escape(why)}.")
         return
     _line("Other machines that joined a room on this VAF trust the new authority again with:")
     _line(f"  vaf a2a trust wss://{escape(host)}{_access_port_suffix()} --ca-fp "

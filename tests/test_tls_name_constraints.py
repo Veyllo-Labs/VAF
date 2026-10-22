@@ -99,8 +99,30 @@ def test_the_constraints_come_from_the_admission_ranges(tmp_path, host):
     names = [s.value for s in permitted if isinstance(s, x509.DNSName)]
     assert networks == [*PRIVATE_RANGES, CGNAT_RANGE, *LOCALHOST_RANGES,
                         ipaddress.ip_network("::1/128")]
-    assert names == ["localhost", "vafhost", "lan", "local", "home.arpa", "internal"]
+    assert names == ["localhost", "local", "home.arpa", "internal", "lan"]
     assert ext.value.excluded_subtrees is None
+
+
+@needs_openssl
+@pytest.mark.parametrize("host, foreign", [("studio", "www.google.studio"),
+                                           ("example.com", "www.google.example.com")])
+def test_a_host_named_like_a_public_domain_permits_no_public_name(tmp_path, host, foreign,
+                                                                  monkeypatch):
+    """A DNS constraint permits every name below it. With the machine's own names in the
+    constraints, a host called "studio" (a public TLD) let the CA vouch for
+    www.google.studio, and a server named after its domain for www.google.example.com
+    (measured, OpenSSL and Python strict). MUTATION: put machine_dns_names() back into the
+    permitted names - red."""
+    import vaf.network.binding as binding
+    monkeypatch.setattr(binding, "machine_dns_names", lambda: [host])
+    ssl_dir = tmp_path / "ssl"
+    ssl_dir.mkdir()
+    ca_key, ca_cert = ssl_utils._generate_ca(ssl_dir)
+    leaf_file, key_file = _foreign_leaf(tmp_path, ca_cert, ca_key, foreign)
+    assert "permitted subtree violation" in _openssl_strict(ssl_dir / "ca.pem", leaf_file)
+    with pytest.raises(ssl.SSLCertVerificationError):
+        handshake(server_context(leaf_file, key_file),
+                  strict_client((ssl_dir / "ca.pem").read_bytes()))
 
 
 def test_an_existing_unrestricted_ca_is_kept(tmp_path, monkeypatch, host):
@@ -130,13 +152,12 @@ def test_an_existing_unrestricted_ca_is_kept(tmp_path, monkeypatch, host):
 
 @needs_openssl
 def test_the_leaf_stays_inside_the_constraints(tmp_path, monkeypatch, host, caplog):
-    """AC 6. A host renamed after its CA was made: the new name is outside the CA's
-    subtrees, and one name outside makes a strict verifier refuse the WHOLE certificate.
+    """AC 6. The machine's host name is outside a restricted CA's subtrees (only names under
+    local, home.arpa, internal and lan are in), and one name outside makes a strict verifier
+    refuse the WHOLE certificate, so the leaf leaves it out, at WARNING.
     MUTATION: remove the SAN filter - red (strict verification fails)."""
     ssl_dir = isolated_home(tmp_path, monkeypatch, **TLS_ON)
-    ssl_utils.ensure_ssl_certificates()                     # restricted CA for "vafhost"
-    host[:] = ["renamed-box"]
-    (ssl_dir / "server.pem").unlink()
+    host[:] = ["renamed-box", "vafhost.lan"]
 
     with caplog.at_level(logging.WARNING, logger="vaf.network.ssl_utils"):
         ssl_utils.ensure_ssl_certificates()
@@ -144,8 +165,8 @@ def test_the_leaf_stays_inside_the_constraints(tmp_path, monkeypatch, host, capl
     leaf = ssl_utils._leaf_of(str(ssl_dir / "server.pem"))
     dns = leaf.extensions.get_extension_for_class(
         x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName)
-    assert "renamed-box" not in dns and "localhost" in dns
-    assert any("renamed-box" in r.getMessage() and "vaf server ca renew" in r.getMessage()
+    assert dns == ["localhost", "vafhost.lan"], "a name under lan stays, the bare host name goes"
+    assert any("renamed-box" in r.getMessage() and "certificate warning" in r.getMessage()
                for r in caplog.records if r.levelno == logging.WARNING)
     assert _openssl_strict(ssl_dir / "ca.pem", ssl_dir / "server.pem").endswith("OK")
 

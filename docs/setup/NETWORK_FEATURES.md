@@ -11,7 +11,7 @@ VAF (Veyllo Agent Framework) includes robust networking capabilities designed to
 | `/sounds/*` | `http://127.0.0.1:8005` | Notification sound files (GET/HEAD) |
 | Everything else | `http://127.0.0.1:3000` | Next.js frontend |
 
-The proxy relays bodies **as they arrive, in both directions** (a live stream reaches the device as it is written), through **shared httpx clients with connection pooling** (as many connections as the door serves, 20 keep-alive) for both frontend and backend targets, avoiding the overhead of opening a new TCP connection for every resource request. Every connection to it is held to the limits in [The HTTPS door holds](#the-https-door-holds). The desktop app window loads the frontend directly over plain HTTP at `http://127.0.0.1:3000` (it must not use the proxy URL, whose self-signed cert QtWebEngine rejects). The proxy URL (`https://<LAN-IP>:8443`, or `:443` when bindable) is for devices on the LAN or a VPN, never the internet (see [Scope](#scope-private-networks-only)), and works without an external proxy. Optional: [NGINX_REVERSE_PROXY.md](NGINX_REVERSE_PROXY.md) and `docs/setup/nginx-vaf-https.conf.example`.
+The proxy relays bodies **as they arrive, in both directions** (a live stream reaches the device as it is written), through **shared httpx clients with connection pooling** (as many connections as the door serves, 20 keep-alive) for both frontend and backend targets, avoiding the overhead of opening a new TCP connection for every resource request. Every connection to it is held to the limits in [The HTTPS door holds](#the-https-door-holds). The desktop app window loads the frontend directly over plain HTTP at `http://127.0.0.1:3000` (it must not use the proxy URL, whose certificate comes from an authority QtWebEngine does not trust). The proxy URL (`https://<LAN-IP>:8443`, or `:443` when bindable) is for devices on the LAN or a VPN, never the internet (see [Scope](#scope-private-networks-only)), and works without an external proxy. Optional: [NGINX_REVERSE_PROXY.md](NGINX_REVERSE_PROXY.md) and `docs/setup/nginx-vaf-https.conf.example`.
 
 ## Security Model
 
@@ -415,7 +415,7 @@ With TLS on and no own certificate configured, VAF's `ssl_utils` module:
    - Includes Subject Alternative Names (SANs) for:
      - `localhost` / `127.0.0.1` / `::1`
      - Every detected LAN and VPN address (e.g. `192.168.1.100`, `10.8.0.1`, `100.101.102.103`)
-     - Machine hostname and FQDN
+     - Machine hostname and FQDN; under a restricted CA only when they lie under `local`, `home.arpa`, `internal` or `lan` (see [Restricting the Authority](#restricting-the-authority))
 
 3. **Keeps both in `~/.vaf/ssl/`**
    - On each start the server certificate is checked: under 30 days left, unusable to strict verifiers (see below) or missing a current address means a new one, from the same CA
@@ -457,31 +457,38 @@ let a copy of its key sign a certificate for any name, a bank's included, and th
 would accept it. So a CA VAF creates carries critical name constraints: it may vouch for
 the addresses the admission check serves (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
 `100.64.0.0/10`, `127.0.0.0/8`, `::1`; the constants in `vaf/network/binding.py`) and for
-the DNS names `localhost`, this machine's host name and FQDN, and everything under `lan`,
-`local`, `home.arpa` and `internal`. Both name types are listed, because RFC 5280 leaves a
-type without permitted names unconstrained.
+the DNS name `localhost` and everything under `local`, `home.arpa`, `internal` and `lan`.
+Both name types are listed, because RFC 5280 leaves a type without permitted names
+unconstrained. This machine's own host name and FQDN are deliberately not among them: a name
+constraint permits every name below it, and a host called `studio` (a public top-level
+domain) or a server named after its domain (`example.com`) let the CA vouch for
+`www.google.studio` or `www.google.example.com` (measured, OpenSSL and Python strict).
 
 Measured under strict verification (`openssl verify -x509_strict` and a Python handshake with
 `VERIFY_X509_STRICT`), with certificates signed by such a CA:
 
 | Certificate for | Result |
 |---|---|
-| VAF's own names (`localhost`, host name, FQDN, 127.0.0.1, ::1, a LAN and a VPN address) | OK |
+| VAF's own names (`localhost`, `vafhost.lan`, 127.0.0.1, ::1, a LAN and a VPN address) | OK |
 | `www.examplebank.com` | refused, "permitted subtree violation" |
+| `www.google.studio` on a machine named `studio` | refused, "permitted subtree violation" |
 | `203.0.113.9`, `2001:db8::1` | refused, "permitted subtree violation" |
 | private names plus one public address | refused as a whole |
 
 Because one name outside the constraints refuses the whole certificate, VAF's own server
-certificate carries only the names inside them: a host renamed after its CA was created is
-left out with a warning that names `vaf server ca renew`.
+certificate carries only the names inside them: a host name or FQDN outside (`mypc`,
+`mypc.fritz.box`) is left out with a warning, and a device that opens VAF by it gets a
+certificate warning. Open VAF by its address, as the access URL does, or by a name under
+`local` (mDNS: `mypc.local`), `home.arpa`, `internal` or `lan`. The settings and
+`vaf server cert show` list the names it leaves out.
 
 **An existing CA is kept as it is**, so devices that installed it keep working.
 `vaf server ca` and the settings show whether it is restricted, and `vaf doctor` reports an
 unrestricted one (`network_ca_unrestricted`, low). `vaf server ca renew`, or "Restrict to
 private addresses" in Settings, Local Network, Certificate, replaces it with a restricted
-one: every device then installs the new authority, machines in rooms here trust its new
-fingerprint (`vaf a2a trust ... --ca-fp <new>`), and the old one can be removed from the
-devices. An own certificate stays served through a renewal.
+one: every device then installs the new authority, other machines that joined a room on
+this VAF trust its new fingerprint (`vaf a2a trust ... --ca-fp <new>`), and the old one can be
+removed from the devices. An own certificate stays served through a renewal.
 
 Named boundaries:
 - **Clients that enforce the constraints.** OpenSSL and Python (measured), Chrome on Linux
@@ -489,6 +496,9 @@ Named boundaries:
   and Safari. A client that ignores them is no worse off than with an unrestricted CA.
 - **The CA key is an unencrypted owner-only file.** The constraints limit what a copy of it
   can sign; they do not make it secret again.
+- **`lan` is not a reserved name.** `local`, `home.arpa` and `internal` are set aside for
+  private use; `lan`, which routers hand out (OpenWrt's default), is only a name no public
+  registry has delegated. It is kept for the networks that use it.
 
 ### Certificate Lifecycle
 
@@ -527,9 +537,17 @@ certificate that is the local CA. Get it from Settings, Local Network, Certifica
 `~/.vaf/ssl/ca.pem`.
 
 **Compare the fingerprint before you trust it.** A file fetched over the connection you are
-about to trust proves nothing on its own: compare the SHA-256 fingerprint the device shows
-with the one `vaf server ca` prints on this machine, or the one the settings show on this
-machine. Never compare it with a page loaded over the connection you are checking.
+about to trust proves nothing on its own. For VAF's own certificate, compare the SHA-256
+fingerprint the device shows for the authority with the one `vaf server ca` prints on this
+machine, or the one the settings show on this machine. Never compare it with a page loaded
+over the connection you are checking.
+
+**Your own certificate** comes from another authority, so `vaf server ca` names the wrong one
+for it. A certificate from a public authority (Let's Encrypt) needs nothing installed: devices
+trust that authority already. One from an authority of your company or your own: install that
+authority, and compare its fingerprint with what its operator gives you by a channel of its
+own (`vaf server cert show` prints the authority of the served chain on this machine, which
+tells you what VAF serves, not whether that authority is the right one).
 
 **Reached by name, install first.** A browser that once received VAF's HSTS header for a
 host name (a year for a DNS name set up for VAF) does not let a certificate warning for that
@@ -617,10 +635,15 @@ previous one (restart it).
 - **The private key travels with an upload.** Upload it in the settings only from this
   machine or over a connection you already verified; otherwise use `vaf server cert set` on
   the machine.
-- **Rooms on other machines** pin the authority of the served chain (its last certificate,
-  [A2A_PROTOCOL.md](../agents/A2A_PROTOCOL.md#trust-between-machines)). Switching to an own
-  certificate, back, or renewing the CA changes it; those machines run `vaf a2a trust` again
-  with the new fingerprint.
+- **Rooms on other machines** pin the authority of the served chain (its last certificate)
+  and check that the certificate names the host the invitation carries
+  ([A2A_PROTOCOL.md](../agents/A2A_PROTOCOL.md#trust-between-machines)): the pin alone would
+  accept any certificate a public authority issued, for anybody. So the invitation names an
+  address your certificate covers, or, when it covers none, its first DNS name (not a
+  wildcard), which the other machine's network must resolve to this one; a certificate that
+  names neither gets no invitation for other machines. Switching to an own certificate, back,
+  or renewing the CA changes the authority; those machines run `vaf a2a trust` again with the
+  new fingerprint.
 
 **Renewing automatically.** VAF runs no ACME client. A DNS-01 client (certbot with a DNS
 plugin, acme.sh, lego) can renew a certificate for a name inside your network and run
@@ -642,7 +665,7 @@ When TLS is active, the following changes take effect across the stack:
 | Security Headers | Standard set | Standard set + **HSTS** (`max-age=31536000` for a name set up for VAF, `max-age=0` for `localhost` and the machine's own names) |
 | Frontend Proxy | `http://127.0.0.1:8001` | `http://127.0.0.1:8005` (internal plain channel) |
 
-The WebSocket transport differs by client. Any HTTPS page, and an HTTP page on port 80 or with no explicit port in its URL, dials its own origin, because the proxy that served it relays `/ws`; that is the only answer that survives a port forward or a NAT between the browser and the proxy, where the browser dials a different port than the one the proxy bound. Other pages ask `/api/network/ws-config`, which returns plain `ws://` + the internal `8005` channel for the desktop window, and `wss://` + the effective proxy port for a caller that came through the proxy (identified by the `X-Forwarded-Proto: https` header the proxy stamps). The internal `8005` channel is plain HTTP, always running while TLS is on, and exists so the Next.js proxy and the desktop reach the backend without the self-signed cert.
+The WebSocket transport differs by client. Any HTTPS page, and an HTTP page on port 80 or with no explicit port in its URL, dials its own origin, because the proxy that served it relays `/ws`; that is the only answer that survives a port forward or a NAT between the browser and the proxy, where the browser dials a different port than the one the proxy bound. Other pages ask `/api/network/ws-config`, which returns plain `ws://` + the internal `8005` channel for the desktop window, and `wss://` + the effective proxy port for a caller that came through the proxy (identified by the `X-Forwarded-Proto: https` header the proxy stamps). The internal `8005` channel is plain HTTP, always running while TLS is on, and exists so the Next.js proxy and the desktop reach the backend without trusting the certificate's authority.
 
 ### TLS Configuration Reference
 
@@ -731,7 +754,7 @@ Who is admitted (`local_network_allowed_networks`, `local_network_vpn_only`) res
 When TLS is enabled, firewall setup uses the effective HTTPS access port (`local_network_https_port`, or `8443` when `443` is privileged on any platform) so LAN clients can reach the proxy entry point. On Linux, firewalld is preferred: it opens only that effective proxy port for the LAN subnet via a rich rule, elevating through pkexec (desktop GUI dialog) or `sudo -n` (headless); a process that cannot gain root (`elevation_unavailable()`: the no-new-privileges flag, or a user namespace without root, as in the server's systemd service) does not try and logs once why.
 On Windows, creating firewall rules via `netsh advfirewall` requires elevated rights. If VAF is not started as Administrator, LAN access can fail even when hosting is enabled.
 The integrated HTTPS proxy, like every TLS listener of VAF, accepts TLS 1.2 with forward-secret AEAD suites only, and TLS 1.3; a device from before about 2014 that knows only CBC or static-RSA suites cannot connect ([The HTTPS door holds](#the-https-door-holds)).
-VAF's own TLS certificate carries the machine's hostname and FQDN as DNS SANs plus every LAN and VPN address, and is re-issued at start when an address is missing (a changed LAN IP, a VPN that came up), so the IP SANs stay aligned with the access addresses (a hostname change alone does not trigger re-issuance - the freshness check covers IP SANs only). `vaf server cert reset` re-issues it at once, without a restart. A certificate of your own is never re-issued or replaced ([Your Own Certificate](#your-own-certificate)).
+VAF's own TLS certificate carries every LAN and VPN address, plus the machine's hostname and FQDN as DNS SANs where its authority may vouch for them ([Restricting the Authority](#restricting-the-authority)), and is re-issued at start when an address is missing (a changed LAN IP, a VPN that came up), so the IP SANs stay aligned with the access addresses (a hostname change alone does not trigger re-issuance - the freshness check covers IP SANs only). `vaf server cert reset` re-issues it at once, without a restart. A certificate of your own is never re-issued or replaced ([Your Own Certificate](#your-own-certificate)).
 
 ---
 
@@ -862,7 +885,7 @@ Real runtime state of LAN hosting: whether the integrated HTTPS proxy actually b
 ### 4. Get WebSocket Config
 **GET** `/api/network/ws-config`
 
-Tells the caller which WebSocket transport to use; the answer differs per client so one frontend build works on the desktop and over the LAN. TLS off -> `{ "useWss": false, "port": 8001 }`; TLS on with `X-Forwarded-Proto: https` (a LAN client behind the proxy) -> `{ "useWss": true, "port": <effective proxy port> }`; TLS on without that header (the local desktop on `http://127.0.0.1:3000`) -> `{ "useWss": false, "port": 8005 }` (the internal plain channel, since QtWebEngine rejects the proxy's self-signed cert).
+Tells the caller which WebSocket transport to use; the answer differs per client so one frontend build works on the desktop and over the LAN. TLS off -> `{ "useWss": false, "port": 8001 }`; TLS on with `X-Forwarded-Proto: https` (a LAN client behind the proxy) -> `{ "useWss": true, "port": <effective proxy port> }`; TLS on without that header (the local desktop on `http://127.0.0.1:3000`) -> `{ "useWss": false, "port": 8005 }` (the internal plain channel, since QtWebEngine does not trust the authority of the proxy's certificate).
 
 ### 5. Remote access (VPN)
 **GET** `/api/network/remote-access`

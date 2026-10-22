@@ -90,19 +90,33 @@ def lan_endpoint(room_id: str) -> Dict[str, str]:
     (`ssl_utils.served_authority`): the local CA, or the top of an own certificate's chain.
     The local CA alone would name an authority the served chain does not end in, and every
     `vaf a2a trust` from another machine would refuse.
+
+    The host is one the served certificate names (`ssl_utils.served_room_host`), because the
+    peer checks the certificate against it: the LAN address, or for a certificate of the
+    person's own that does not name it, a DNS name that certificate carries. Empty when the
+    certificate names neither, with a warning in the log that says what to do.
     """
     try:
         from vaf.core.config import Config
         from vaf.network.binding import get_local_network_ip, is_allowed_ip
-        from vaf.network.ssl_utils import served_authority
+        from vaf.network.ssl_utils import served_authority, served_room_host
 
         if not (Config.get_bool("local_network_enabled", False)
                 and Config.get_bool("local_network_tls_enabled", False)):
             return {}
-        host = str(get_local_network_ip() or "").strip()
+        address = str(get_local_network_ip() or "").strip()
         authority = served_authority()
         fingerprint = str(authority[1] if authority else "").strip()
-        if not host or not fingerprint or not is_allowed_ip(host):
+        if not address or not fingerprint or not is_allowed_ip(address):
+            return {}
+        host = served_room_host(address)
+        if not host:
+            import logging
+            logging.getLogger(__name__).warning(
+                "No room invitation for other machines: the certificate VAF serves names "
+                "neither %s nor a DNS name a peer could dial. `vaf server cert reset` issues "
+                "VAF's own with the current addresses; a certificate of your own must name "
+                "this address or a name your network resolves to it.", address)
             return {}
         port, confirmed = _effective_port()
         return {

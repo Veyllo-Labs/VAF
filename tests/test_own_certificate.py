@@ -407,3 +407,53 @@ def test_without_certificate_keys_drops_both():
                "theme": "dark"}
     assert ssl_utils.without_certificate_keys(payload) == {"theme": "dark"}
     assert ssl_utils.without_certificate_keys({"theme": "dark"}) == {"theme": "dark"}
+
+
+# ── untrusted bytes, read safely ─────────────────────────────────────────────
+
+def _broken_names_certificate():
+    """A certificate whose subject alternative name extension does not parse."""
+    from datetime import datetime, timedelta, timezone
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.x509.oid import ExtensionOID, NameOID
+    root, root_key = make_ca()
+    key = make_key()
+    now = datetime.now(timezone.utc)
+    cert = (x509.CertificateBuilder().subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "x")]))
+            .issuer_name(root.subject).public_key(key.public_key()).serial_number(5)
+            .not_valid_before(now - timedelta(days=1)).not_valid_after(now + timedelta(days=100))
+            .add_extension(x509.UnrecognizedExtension(ExtensionOID.SUBJECT_ALTERNATIVE_NAME,
+                                                      b"\x30\x03\x82\x05ab"), critical=False)
+            .sign(root_key, hashes.SHA256()))
+    return cert, key, root
+
+
+def test_a_certificate_whose_names_do_not_parse_is_unreadable(tmp_path, monkeypatch,
+                                                              no_interfaces):
+    """cryptography parses extensions on first access, and a broken one raised from the
+    middle of the check: a 500 on the routes and a traceback in the terminal. MUTATION: drop
+    the extension parse in _read_bundle - red."""
+    cert, key, root = _broken_names_certificate()
+    report = _inspect(pem(cert, root), key_pem(key))
+    assert [i.code for i in report.errors] == ["unreadable"]
+    cert_file, key_file = _write_pair(tmp_path / "mine", pem(cert, root), key_pem(key))
+    isolated_home(tmp_path, monkeypatch, **TLS_ON, local_network_ssl_cert=str(cert_file),
+                  local_network_ssl_key=str(key_file))
+    # OpenSSL does not load it either: VAF's own is served, with the problem said.
+    state = ssl_utils.certificate_state()
+    assert state["source"] == "automatic" and state["problem"] is not None
+
+
+def test_the_pem_scan_is_linear():
+    """A lazy regex with a back reference took 770 ms on one 64 KiB part of repeated BEGIN
+    lines (measured); the scan is one pass. MUTATION: the regex again - red (seconds)."""
+    import time
+    blob = b"-----BEGIN CERTIFICATE-----\n" * (256 * 1024 // 28)
+    started = time.monotonic()
+    assert ssl_utils._pem_blocks(blob) == ([], [])
+    assert time.monotonic() - started < 1.0
+    leaf, key, inter, root = own_chain()
+    certs, keys = ssl_utils._pem_blocks(b"junk\n" + pem(leaf) + key_pem(key) + pem(inter, root))
+    assert len(certs) == 3 and len(keys) == 1

@@ -252,3 +252,27 @@ def test_nobody_reads_the_certificate_keys():
         if "local_network_ssl_cert" in text or "local_network_ssl_key" in text:
             readers.append(rel)
     assert readers == []
+
+
+def test_a_load_the_listener_never_got_to_is_cancelled(monkeypatch):
+    """A listener whose loop is blocked past the wait: the load is cancelled, so the answer
+    (timeout) is true afterwards too; it said "failed" while the queued load could still
+    apply the pair later. MUTATION: drop the cancel - red (the load runs once the loop is
+    free)."""
+    import threading
+    monkeypatch.setattr(ssl_utils, "_RELOAD_WAIT_S", 0.3)
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    while not loop.is_running():
+        time.sleep(0.01)
+    release = threading.Event()
+    loop.call_soon_threadsafe(lambda: release.wait(5))
+    ran = []
+    assert ssl_utils._run_on_loop(loop, lambda: ran.append(1) or "loaded") == "timeout"
+    release.set()
+    time.sleep(0.3)
+    loop.call_soon_threadsafe(loop.stop)
+    thread.join(timeout=5)
+    loop.close()
+    assert ran == []

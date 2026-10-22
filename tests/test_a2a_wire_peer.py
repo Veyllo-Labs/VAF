@@ -849,4 +849,23 @@ def test_a_pinned_intermediate_verifies_without_the_interpreter_default(peer, mo
     context = peer.pinned_context(pem(inter).decode("ascii"))
 
     assert context.verify_flags & ssl.VERIFY_X509_PARTIAL_CHAIN
-    handshake(server_context(tmp_path / "chain.pem", tmp_path / "leaf.key"), context)
+    handshake(server_context(tmp_path / "chain.pem", tmp_path / "leaf.key"), context,
+              server_hostname="127.0.0.1")
+
+
+def test_another_certificate_from_the_same_authority_is_refused(peer, tmp_path):
+    """The guest client checks the host too: a pinned public intermediate vouches for anybody
+    with a certificate from it. MUTATION: check_hostname = False in pinned_context - red."""
+    from cert_factory import handshake, key_pem, make_ca, make_leaf, pem, server_context
+    root, root_key = make_ca("Public Root")
+    inter, inter_key = make_ca("Public Intermediate R10", issuer=root, issuer_key=root_key)
+    for name, names in (("host", ("192.168.1.20",)), ("attacker", ("attacker.example.net",))):
+        leaf, key = make_leaf(inter, inter_key, names=names)
+        (tmp_path / f"{name}.pem").write_bytes(pem(leaf, inter))
+        (tmp_path / f"{name}.key").write_bytes(key_pem(key))
+    anchor = pem(inter).decode("ascii")
+    handshake(server_context(tmp_path / "host.pem", tmp_path / "host.key"),
+              peer.pinned_context(anchor), server_hostname="192.168.1.20")
+    with pytest.raises(ssl.SSLCertVerificationError):
+        handshake(server_context(tmp_path / "attacker.pem", tmp_path / "attacker.key"),
+                  peer.pinned_context(anchor), server_hostname="192.168.1.20")

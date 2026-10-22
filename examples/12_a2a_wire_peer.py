@@ -159,17 +159,18 @@ def fetch_ca(host: str, port: int, timeout: float = 10.0) -> str:
 
 
 def pinned_context(ca_pem: str) -> ssl.SSLContext:
-    """Verify the pinned authority and nothing less. Hostname checking is off
-    because rooms are dialled by IP; what replaces it is stronger - only the
-    machine whose CA the invitation named can present a certificate this
-    context accepts."""
+    """Verify the pinned authority and the host, and nothing less. The chain must
+    end in the authority the invitation named, and the certificate must name the
+    host dialled (the room URL's address or name; every caller passes it). The pin
+    alone is not enough: a host serving a certificate of its own may name a public
+    authority, which vouches for other hosts too."""
     context = ssl.create_default_context(cadata=ca_pem)
     context.verify_flags |= ssl.VERIFY_X509_STRICT
     # The pinned authority may be an intermediate (a host serving a certificate of its
     # own); verification ends at it only with PARTIAL_CHAIN, which Python 3.13 sets by
     # default and 3.10-3.12 do not.
     context.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
-    context.check_hostname = False
+    context.check_hostname = True
     return context
 
 

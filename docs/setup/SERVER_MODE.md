@@ -366,13 +366,16 @@ Common causes: Python venv path changed after a `git pull` to a different direct
 
 **Certificate regeneration:**
 VAF's own certificate is issued again at a start that finds it with under 30 days left or
-missing a current address. To issue a new one at once, without a restart:
+missing a current address. While VAF's own certificate is in use, this issues a new one at
+once, without a restart:
 ```bash
 vaf server cert reset
 ```
 It comes from the same authority, so devices that installed it keep trusting the server.
 Do not delete `~/.vaf/ssl/`: that also replaces the authority every device trusts. A
-certificate of your own is never replaced; `vaf doctor` warns 30 days before it expires.
+certificate of your own is never replaced, and `vaf server cert reset` would switch to VAF's
+own (another authority for your devices): renew yours and install it with
+`vaf server cert set`; `vaf doctor` warns 30 days before it expires.
 
 **LAN IP changed (DHCP):**
-The access URL, the certificate's IP SANs and the subnet-scoped firewall rule are all bound to the address. Give the server a static LAN IP, or reserve its address in the router's DHCP settings; `vaf server provision` warns during installation when the address looks DHCP-assigned. After an IP change: restart VAF or run `vaf server cert reset` so the certificate names the new address (see above), and re-run `vaf server provision` so the firewall rule matches the new subnet. Alternatively use the hostname instead of the IP: the auto-generated certificate carries the machine's hostname and FQDN as DNS SANs, so a name that resolves on your network keeps working across IP changes (note the certificate is NOT re-issued when the hostname itself changes - only IP changes trigger regeneration).
+The access URL, the certificate's IP SANs and the subnet-scoped firewall rule are all bound to the address. Give the server a static LAN IP, or reserve its address in the router's DHCP settings; `vaf server provision` warns during installation when the address looks DHCP-assigned. After an IP change: with VAF's own certificate, restart VAF or run `vaf server cert reset` so the certificate names the new address (see above); with a certificate of your own, get one that names the new address (or reach the server by a name it carries) and install it with `vaf server cert set`. Then re-run `vaf server provision` so the firewall rule matches the new subnet. Alternatively use a name instead of the IP: VAF's own certificate carries the machine's hostname and FQDN as DNS SANs when they lie under a name its authority may vouch for (`local`, `home.arpa`, `internal`, `lan`; an authority created before that restriction carries them all), so such a name that resolves on your network keeps working across IP changes (note the certificate is NOT re-issued when the hostname itself changes - only IP changes trigger regeneration).

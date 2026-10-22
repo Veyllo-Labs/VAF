@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import vaf.network.binding as binding
-from cert_factory import isolated_home, key_pem, make_key, own_chain, pem
+from cert_factory import fingerprint, isolated_home, key_pem, make_key, own_chain, pem
 from vaf.api import network_routes, security_routes
 from vaf.core.config import Config
 from vaf.network import ssl_utils
@@ -161,11 +161,107 @@ def test_the_authority_is_renewed_only_once_confirmed(home, step_up):
     assert ssl_utils.ca_fingerprint() != before
 
 
-def test_a_body_over_the_cap_is_refused(home):
-    payload = {"certificate": "A" * (64 * 1024 + 1), "key": "", "code": ""}
-    assert _client().put("/api/network/certificate", json=payload).status_code == 422
-    assert _client().post("/api/network/certificate/check", json=payload).status_code == 422
+def test_a_part_over_the_cap_is_refused_without_echoing_it(home):
+    """AC 20. The cap is the check's (too_large); the answer carries the code, not the part.
+    A pydantic max_length answered 422 with the whole refused value in "input", which for an
+    oversized key was the private key (measured). MUTATION: give the routes a model with
+    max_length again - red."""
+    _payload, key = _upload()
+    oversized = key_pem(key).decode() + "A" * (64 * 1024)
+    payload = {"certificate": _payload["certificate"], "key": oversized, "code": ""}
+    put = _client().put("/api/network/certificate", json=payload)
+    check = _client().post("/api/network/certificate/check", json=payload)
+    assert put.status_code == 422 and put.json()["detail"]["code"] == "refused"
+    assert "too_large" in [e["code"] for e in put.json()["detail"]["report"]["errors"]]
+    assert check.status_code == 200 and not check.json()["ok"]
+    body = key_pem(key).decode().splitlines()[1]
+    for answer in (put, check):
+        assert "PRIVATE KEY" not in answer.text and body not in answer.text
     assert not (home / "custom").exists()
+
+
+@pytest.mark.parametrize("payload", [["-----BEGIN PRIVATE KEY-----"],
+                                     {"certificate": "x", "key": ["-----BEGIN PRIVATE KEY-----"]}])
+def test_a_body_of_the_wrong_shape_is_refused_without_echoing_it(home, payload):
+    answer = _client().put("/api/network/certificate", json=payload)
+    assert answer.status_code == 422 and answer.json()["detail"]["code"] == "invalid"
+    assert "PRIVATE KEY" not in answer.text
+
+
+def test_the_ca_download_never_reads_the_private_key(home, monkeypatch):
+    """/api/a2a/ca.pem is open to every admitted device without an account: it serves the
+    chain the running listener loaded and never loads a key (it read and parsed the key on
+    every request, 945 ms with an RSA 4096 key, measured on the event loop). MUTATION: read
+    served_certificate() (the key check) in served_chain while a listener runs - red."""
+    import ssl as _ssl
+    import types
+
+    from cryptography.hazmat.primitives import serialization
+
+    import vaf.core.web_server as web_server
+    payload, _key = _upload()
+    _client().put("/api/network/certificate", json=payload)
+    served = ssl_utils.served_certificate()
+    server = types.SimpleNamespace(started=True, should_exit=False, config=types.SimpleNamespace(
+        ssl=object(), ssl_certfile=served.cert_path, ssl_keyfile=served.key_path))
+    ssl_utils.register_tls_listener("proxy", server, None)
+
+    loads = []
+    real_key, real_chain = serialization.load_pem_private_key, _ssl.SSLContext.load_cert_chain
+    monkeypatch.setattr(serialization, "load_pem_private_key",
+                        lambda *a, **kw: loads.append("key") or real_key(*a, **kw))
+    monkeypatch.setattr(_ssl.SSLContext, "load_cert_chain",
+                        lambda self, *a, **kw: loads.append("pair") or real_chain(self, *a, **kw))
+    monkeypatch.setattr(ssl_utils, "_PAIR_CHECKS", {})
+    answer = TestClient(web_server.app, client=PEER).get("/api/a2a/ca.pem")
+    assert answer.status_code == 200
+    assert loads == [], "the download read a private key"
+    assert ssl_utils.fingerprint_of(answer.content) == fingerprint(_root_of(served.cert_path))
+
+
+def _root_of(path):
+    from cryptography import x509
+    blocks = ssl_utils._pem_blocks(Path(path).read_bytes())[0]
+    return x509.load_pem_x509_certificate(blocks[-1])
+
+
+def test_the_pair_check_is_cached_until_a_file_changes(home, monkeypatch):
+    """served_certificate() is asked by the settings, the doctor and the remote access
+    section; the check of an own pair reads the key, so it is answered from a cache while
+    neither file changed. MUTATION: drop the cache - red."""
+    payload, _key = _upload()
+    _client().put("/api/network/certificate", json=payload)
+    calls = []
+    real = ssl_utils._check_pair
+    monkeypatch.setattr(ssl_utils, "_check_pair", lambda c, k: calls.append(c) or real(c, k))
+    monkeypatch.setattr(ssl_utils, "_PAIR_CHECKS", {})
+    ssl_utils.served_certificate()
+    ssl_utils.served_certificate()
+    assert len(calls) == 1
+    served = ssl_utils.served_certificate()
+    from pathlib import Path as _P
+    _P(served.cert_path).write_bytes(_P(served.cert_path).read_bytes() + b"\n")
+    ssl_utils.served_certificate()
+    assert len(calls) == 2
+
+
+def test_tokenless_from_this_machine_is_not_signed_in_behind_the_real_layers(home, monkeypatch):
+    """_signed_in reads request.state.user. Behind the real NetworkModeLayers (AuthMiddleware
+    in network mode), a tokenless request from this machine leaves it unset, so the desktop
+    is not asked for a code it has no account for."""
+    from vaf.auth.middleware import NetworkModeLayers
+    from vaf.core.config import Config as _Config
+    real_get_bool = _Config.get_bool.__func__
+    for network in (True, False):
+        monkeypatch.setattr(_Config, "get_bool", classmethod(
+            lambda cls, key, default=False, _n=network: _n if key == "local_network_enabled"
+            else real_get_bool(cls, key, default)))
+        app = FastAPI()
+        app.add_middleware(NetworkModeLayers)
+        app.include_router(network_routes.router)
+        answer = TestClient(app, client=PEER).get("/api/network/certificate")
+        assert answer.status_code == 200, answer.text
+        assert answer.json()["step_up_required"] is False
 
 
 def test_no_answer_carries_key_material(home):

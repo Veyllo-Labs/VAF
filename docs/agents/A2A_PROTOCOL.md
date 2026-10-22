@@ -793,6 +793,15 @@ The pinning contexts (`trust.client_context`, the guest client's `pinned_context
 intermediate only with it, Python 3.13 sets it by default and 3.10 to 3.12 do not (measured:
 "unable to get issuer certificate" without it).
 
+**The pin names the authority, the name check names the host.** A local CA vouches for one
+machine, but the top of an own certificate's chain may be a public intermediate or root that
+vouches for anybody holding a certificate from it: pinned alone, a certificate for
+`attacker.example.net` from the same intermediate passed the pin and the handshake at the
+room address (measured). So both contexts also check the certificate against the host the
+peer dials (`check_hostname`, the room URL's address or name): a certificate from the pinned
+authority that does not name that host is refused ("IP address mismatch", "Hostname
+mismatch").
+
 **A changed authority breaks the pins.** The host switching to an own certificate, back to
 VAF's own (`vaf server cert reset`), or renewing its CA (`vaf server ca renew`) changes the
 fingerprint; every machine in a room there runs `vaf a2a trust` again with the new one. The
@@ -802,8 +811,13 @@ There is no way to say "connect anyway". An unverified channel turns a join tick
 credential somebody else can harvest, so "encrypted" without verification means
 "encrypted to whoever answered the address".
 
-The address printed in an invitation comes from the same source the certificate's subject
-names are built from, so a printed address is always one the certificate covers.
+The host an invitation names is one the served certificate covers
+(`ssl_utils.served_room_host`): the machine's LAN address, which VAF's own certificate names
+(it carries every address the machine had when it was issued; an address that came later
+enters it at the next start or with `vaf server cert reset`), or, for a certificate of the
+host's own that does not name that address, its first DNS name that is not a wildcard, which
+the joining machine's network must resolve to the host. When the certificate names neither,
+the invitation carries no lane for other machines and the host's log says why.
 
 A room is joined from this machine, the local network or an admitted VPN, never from the
 internet: the HTTPS door and the backend refuse every other address at the handshake of

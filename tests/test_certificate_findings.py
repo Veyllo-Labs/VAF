@@ -99,3 +99,20 @@ def test_the_check_is_read_only(tmp_path, monkeypatch, machine):
     assert _ours() == {}
     assert not ssl_dir.exists()
     assert Config.CONFIG_FILE.read_bytes() == before
+
+
+def test_nothing_about_a_certificate_while_tls_is_off(tmp_path, monkeypatch, machine):
+    """No listener serves a certificate then, nor one from the local CA; network_tls_disabled
+    is the finding. MUTATION: drop the TLS gate - red (the unrestricted CA is reported)."""
+    from cryptography.hazmat.primitives import serialization
+    ssl_dir = isolated_home(tmp_path, monkeypatch, local_network_enabled=True,
+                            local_network_tls_enabled=True, local_network_firewall_enabled=False)
+    ssl_dir.mkdir(parents=True)
+    old, old_key = make_ca("VAF Local Network CA")
+    (ssl_dir / "ca.pem").write_bytes(pem(old))
+    (ssl_dir / "ca-key.pem").write_bytes(old_key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption()))
+    assert _ours() == {"network_ca_unrestricted": "low"}
+    cfg = dict(Config.load(), local_network_tls_enabled=False)
+    assert _ours(cfg) == {}

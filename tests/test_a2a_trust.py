@@ -262,7 +262,8 @@ def test_an_own_chain_is_the_authority_peers_pin(tmp_path, monkeypatch, with_roo
         assert pinned == expected
         context = client_context(url)
         with socket.create_connection(("127.0.0.1", port), timeout=5) as raw:
-            with context.wrap_socket(raw) as tls:
+            # As every room client does: the host of the room URL, which the name check reads.
+            with context.wrap_socket(raw, server_hostname="127.0.0.1") as tls:
                 assert tls.getpeercert(binary_form=True)
     finally:
         stop()
@@ -325,4 +326,89 @@ def test_a_pinned_intermediate_verifies_without_the_interpreter_default(anchored
 
     assert context.verify_flags & _ssl.VERIFY_X509_PARTIAL_CHAIN
     assert context.verify_flags & _ssl.VERIFY_X509_STRICT
-    handshake(server_context(tmp_path / "chain.pem", tmp_path / "leaf.key"), context)
+    handshake(server_context(tmp_path / "chain.pem", tmp_path / "leaf.key"), context,
+              server_hostname="192.168.1.42")
+
+
+# ── the pin names the authority, the name check names the host ─────────────────
+
+def _public_chain(tmp_path):
+    """A host certificate and an attacker's, both from one public-style intermediate."""
+    from cert_factory import key_pem, make_ca, make_leaf, pem
+    root, root_key = make_ca("Public Root")
+    inter, inter_key = make_ca("Public Intermediate R10", issuer=root, issuer_key=root_key)
+    files = {}
+    for name, names in (("host", ("vafhost.example.org", "192.168.1.20")),
+                        ("attacker", ("attacker.example.net",))):
+        leaf, key = make_leaf(inter, inter_key, names=names)
+        (tmp_path / f"{name}.pem").write_bytes(pem(leaf, inter))
+        (tmp_path / f"{name}.key").write_bytes(key_pem(key))
+        files[name] = (tmp_path / f"{name}.pem", tmp_path / f"{name}.key")
+    (tmp_path / "inter.pem").write_bytes(pem(inter))
+    return inter, files
+
+
+@pytest.mark.parametrize("url, host", [("wss://192.168.1.20:8443", "192.168.1.20"),
+                                       ("wss://vafhost.example.org:8443", "vafhost.example.org")])
+def test_another_certificate_from_the_same_authority_is_refused(tmp_path, monkeypatch, url,
+                                                                host):
+    """With a certificate from a public authority the invitation pins that authority, which
+    vouches for anybody: a leaf for attacker.example.net from the same intermediate passed
+    the pin and the handshake (measured). The certificate must name the host dialled.
+    MUTATION: check_hostname = False in client_context - red."""
+    import ssl as _ssl
+
+    from cert_factory import fingerprint, handshake, server_context
+    monkeypatch.setattr(trust_mod, "trust_dir", lambda: tmp_path)
+    inter, files = _public_chain(tmp_path)
+    pin_authority(url, expected_fingerprint=fingerprint(inter), ca_file=tmp_path / "inter.pem")
+
+    handshake(server_context(*files["host"]), client_context(url), server_hostname=host)
+    with pytest.raises(_ssl.SSLCertVerificationError) as refused:
+        handshake(server_context(*files["attacker"]), client_context(url), server_hostname=host)
+    assert "mismatch" in str(refused.value)
+
+
+def _served(tmp_path, monkeypatch, names, *, own=True):
+    import vaf.network.binding as binding
+    from cert_factory import isolated_home, key_pem, own_chain, pem
+    monkeypatch.setattr(binding, "get_all_local_ips", lambda: [("enp3s0", "192.168.1.20")])
+    monkeypatch.setattr(binding, "local_interfaces", lambda: [])
+    isolated_home(tmp_path, monkeypatch, local_network_enabled=True,
+                  local_network_tls_enabled=True)
+    if own:
+        leaf, key, inter, root = own_chain(names=names)
+        ssl_utils.install_certificate(pem(leaf, inter, root), key_pem(key))
+    else:
+        ssl_utils.ensure_ssl_certificates()
+
+
+@pytest.mark.parametrize("names, expected", [
+    (("vaf.office.example", "192.168.1.20"), "192.168.1.20"),
+    (("*.office.example", "vaf.office.example"), "vaf.office.example"),
+    (("*.office.example",), None),
+])
+def test_the_invitation_names_a_host_the_certificate_covers(tmp_path, monkeypatch, names,
+                                                            expected):
+    """The peer checks the certificate against the host the invitation names, so the
+    invitation names one the served certificate covers: the LAN address, else a DNS name of
+    an own certificate (never a wildcard). MUTATION: return the address unchecked - red."""
+    _served(tmp_path, monkeypatch, names)
+    assert ssl_utils.served_room_host("192.168.1.20") == expected
+
+
+def test_vafs_own_certificate_without_the_address_names_no_host(tmp_path, monkeypatch, caplog):
+    """An address that came after the certificate was issued is not in it; the invitation
+    then has no lane for other machines and the log says what to do."""
+    import logging
+
+    import vaf.core.a2a.invite as invite_mod
+    import vaf.network.binding as binding
+    _served(tmp_path, monkeypatch, (), own=False)
+    assert ssl_utils.served_room_host("192.168.1.20") == "192.168.1.20"
+    assert ssl_utils.served_room_host("192.168.9.9") is None
+    monkeypatch.setattr(binding, "get_local_network_ip", lambda: "192.168.9.9")
+    monkeypatch.setattr(binding, "is_allowed_ip", lambda _ip: True)
+    with caplog.at_level(logging.WARNING):
+        assert invite_mod.lan_endpoint("room-x") == {}
+    assert any("vaf server cert reset" in r.getMessage() for r in caplog.records)

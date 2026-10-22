@@ -316,18 +316,10 @@ def put_remote_access(body: RemoteAccessUpdate, request: Request):
 # and the config file, which any process of this user can write, so it needs none. No
 # answer carries key material, and the key is never logged.
 
-# One part of an upload, as ssl_utils holds it (a chain of a few KiB fits many times over).
-_PEM_MAX = 64 * 1024
-
-
-class CertificateParts(BaseModel):
-    certificate: str = Field(..., max_length=_PEM_MAX)
-    key: str = Field("", max_length=_PEM_MAX)
-    chain: str = Field("", max_length=_PEM_MAX)
-
-
-class CertificateUpload(CertificateParts):
-    code: str = Field("", max_length=16)
+# The PEM parts are read from the raw JSON (_parts), not a pydantic model: a model's 422 echoes
+# the refused value in its "input" field, and for an oversized or mistyped "key" that was the
+# private key sent back (measured). The size cap is the check's own (ssl_utils
+# PEM_PART_MAX_BYTES, "too_large").
 
 
 class CertificateStepUp(BaseModel):
@@ -358,9 +350,26 @@ def _state(request: Request) -> dict:
     return certificate_state(step_up_required=_signed_in(request))
 
 
-def _parts(body: CertificateParts) -> tuple:
-    return (body.certificate.encode("utf-8"), body.key.encode("utf-8"),
-            body.chain.encode("utf-8"))
+async def _parts(request: Request) -> tuple:
+    """(certificate, key, chain, code) from the JSON body. 422 ``invalid`` without the body's
+    content for anything else than an object of strings."""
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = None
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail={"code": "invalid"})
+    values = []
+    for name in ("certificate", "key", "chain", "code"):
+        value = payload.get(name, "")
+        if value is None:
+            value = ""
+        if not isinstance(value, str):
+            raise HTTPException(status_code=422, detail={"code": "invalid", "field": name})
+        values.append(value)
+    certificate, key, chain, code = values
+    return (certificate.encode("utf-8"), key.encode("utf-8"), chain.encode("utf-8"),
+            code[:16])
 
 
 def _refused(report) -> HTTPException:
@@ -374,15 +383,18 @@ def get_certificate(request: Request):
 
 
 @router.post("/certificate/check", dependencies=[Depends(require_admin)])
-def check_certificate(body: CertificateParts):
+async def check_certificate(request: Request):
     """The check alone (ssl_utils.inspect_certificate): nothing is written."""
+    from starlette.concurrency import run_in_threadpool
+
     from vaf.network.ssl_utils import inspect_certificate
-    return inspect_certificate(*_parts(body)).to_dict()
+    cert_pem, key_pem, chain_pem, _code = await _parts(request)
+    report = await run_in_threadpool(inspect_certificate, cert_pem, key_pem, chain_pem)
+    return report.to_dict()
 
 
 @router.put("/certificate")
-async def put_certificate(body: CertificateUpload, request: Request,
-                          user: dict = Depends(require_admin)):
+async def put_certificate(request: Request, user: dict = Depends(require_admin)):
     """Serve this certificate from now on, without a restart.
 
     422 ``refused`` with the report when the check finds an error, before the code is asked
@@ -392,11 +404,11 @@ async def put_certificate(body: CertificateUpload, request: Request,
 
     from vaf.network.ssl_utils import (CertificateRefused, inspect_certificate,
                                        install_certificate)
-    cert_pem, key_pem, chain_pem = _parts(body)
+    cert_pem, key_pem, chain_pem, code = await _parts(request)
     report = await run_in_threadpool(inspect_certificate, cert_pem, key_pem, chain_pem)
     if not report.ok:
         raise _refused(report)
-    await _step_up(request, user, body.code)
+    await _step_up(request, user, code)
     try:
         result = await run_in_threadpool(lambda: install_certificate(
             cert_pem, key_pem, chain_pem, username=str(user.get("username") or ""),

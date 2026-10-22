@@ -212,7 +212,10 @@ def collect_security_findings(config: Dict[str, Any] | None = None) -> List[Dict
         # every server.
         findings.extend(_admission_findings(cfg))
         findings.extend(_internet_findings(cfg))
-        findings.extend(_certificate_findings(cfg))
+        # With TLS off no listener serves a certificate, so none of them is about one in use
+        # (network_tls_disabled above is the finding then).
+        if tls_enabled:
+            findings.extend(_certificate_findings(cfg))
 
     # The one state that means "somebody the owner never decided about is answered": the
     # channel switch. The expert modes this used to warn about are gone (they said the same

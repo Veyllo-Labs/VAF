@@ -9302,10 +9302,14 @@ async def a2a_guest_client():
 
 
 @app.get("/api/a2a/ca.pem")
-async def a2a_guest_ca():
+def a2a_guest_ca():
     """The authority a guest pins, checked against the invitation's fingerprint: the last
     certificate of the chain this machine serves (the local CA, or the top of an own
-    certificate's chain), the same one the invitation names (ssl_utils.served_authority)."""
+    certificate's chain), the same one the invitation names (ssl_utils.served_authority).
+
+    Open to every admitted device without an account, so it never reads the private key
+    (served_chain reads the file the running listeners loaded), and it is a plain def:
+    the file read runs in the thread pool, not on the event loop every request shares."""
     from fastapi.responses import Response as _Response
 
     from vaf.network.ssl_utils import served_authority

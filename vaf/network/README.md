@@ -99,7 +99,8 @@ It never dials loopback, where a tokenless request is the owner.
   wants to serve (`inspect_certificate`), the switch (`install_certificate`,
   `reset_certificate`, `renew_authority`) and the live reload into every running listener
   (`register_tls_listener`, `reload_certificate`); `served_authority`, what a room peer
-  pins; and `server_tls_options(cert, key)`, the one TLS policy of every listener VAF serves
+  pins, and `served_room_host`, the host its invitation names, which the peer checks the
+  certificate against; and `server_tls_options(cert, key)`, the one TLS policy of every listener VAF serves
   TLS on (TLS 1.2 with forward-secret AEAD suites only, and TLS 1.3). Named boundary: not on
   the facade, its three listeners are VAF's own doors.
 - **egress.py**: outbound fetches that never reach this machine.

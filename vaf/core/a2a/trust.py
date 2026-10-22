@@ -15,6 +15,13 @@ the last certificate of the chain the host serves: its local CA, or the top of t
 a certificate of the host's own (`ssl_utils.served_authority`), which may be an
 intermediate.
 
+THE AUTHORITY ALONE DOES NOT NAME THE HOST. A local CA vouches for one machine, but the top
+of an own certificate's chain may be a public intermediate or root that vouches for anybody
+with a certificate from it: pinned alone, a certificate for attacker.example.net from the
+same intermediate was accepted at the room address (measured). So the certificate must also
+name the host the peer dials, the address or name the invitation carries
+(`ssl_utils.served_room_host`): a name check against the pinned authority.
+
 There is no way to say "connect anyway". A connection whose certificate cannot be
 verified is refused, and a test greps this module for the shapes that would undo that -
 because "just this once" is how verification dies, and an unverified channel turns a join
@@ -122,12 +129,13 @@ def pin_authority(url: str, *, expected_fingerprint: str,
 def client_context(url: str) -> ssl.SSLContext:
     """A TLS context that verifies the pinned authority for this host, and nothing less.
 
-    Hostname checking is off and the reason is not laziness: rooms are dialled by IP
-    address, and the certificate's names cover the addresses this machine had when it
-    was issued. What replaces it is stronger than a name match, because the authority
-    is pinned per host rather than taken from a store of hundreds: only the machine
-    whose CA was carried across in the invitation can present a certificate this
-    context accepts.
+    Two checks, both needed: the chain ends in the authority pinned for this host (not a
+    store of hundreds), and the certificate names the host the peer dials, by address or by
+    name (``check_hostname``; the connection passes the host of the room URL). The pin
+    alone is not enough once the authority is a public one: any certificate it issued, for
+    any name, would pass. The invitation names a host the served certificate covers
+    (``ssl_utils.served_room_host``); VAF's own certificate names every address the machine
+    had when it was issued.
     """
     anchor = anchor_path(url)
     if not anchor.exists():
@@ -146,5 +154,5 @@ def client_context(url: str) -> ssl.SSLContext:
     # with this flag, which 3.13 sets by default and 3.10-3.12 do not (measured: "unable to
     # get issuer certificate" without it).
     context.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
-    context.check_hostname = False
+    context.check_hostname = True
     return context

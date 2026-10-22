@@ -339,16 +339,22 @@ def test_every_membership_check_in_the_web_server_skips_the_door():
 
 def test_the_browser_mints_invitations_off_the_event_loop():
     """Choosing the host may look names up for up to the budget, and every browser connection
-    shares the server's event loop: both commands that build an invitation run it on an
-    executor, like the account lookup beside them. MUTATION: call invitation() directly
-    again - red."""
+    shares the server's event loop: both commands that build an invitation run it on a
+    pool of their own, so neither the loop nor the default executor the A2A wire and the
+    voice feed use waits for the lookups. MUTATIONS: call invitation() directly again -
+    red; run them on the default executor (None) again - red."""
     import re
     source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
     branches = source.split('elif type == "room_invite_agent":')[1].split(
         "# The panel repaints from the store")[0]
-    assert re.search(r"run_in_executor\(\s*None, lambda: invitation\(room", branches)
-    assert re.search(r"run_in_executor\(\s*None, invitation_text, room, record\)", branches)
+    assert re.search(r"run_in_executor\(\s*_room_invite_pool\(\),\s*lambda: invitation\(room",
+                     branches)
+    assert re.search(r"run_in_executor\(\s*_room_invite_pool\(\), invitation_text, room, record\)",
+                     branches)
     assert not re.search(r"=\s*invitation(_text)?\(", branches)
+    from vaf.core import web_server
+    from vaf.core.bounded_run import DaemonPool
+    assert isinstance(web_server._room_invite_pool(), DaemonPool)
 
 
 def test_the_browser_forwards_the_door_and_draws_it():

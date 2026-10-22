@@ -819,18 +819,30 @@ The host an invitation names is one the served certificate covers
 (`ssl_utils.room_host_choice`): the machine's LAN address, which VAF's own certificate names
 (it carries every address the machine had when it was issued; an address that came later
 enters it at the next start or with `vaf server cert reset`), or, for a certificate of the
-host's own that does not name that address, a DNS name of it that is this machine: the only
-DNS name of a certificate without a wildcard, else the host name, FQDN or `<host>.local`
-where the certificate covers it (a wildcard counts), else one of its names that resolves to
-the address on the host. Never the apex beside a wildcard (usually the public website), a
-wildcard, `localhost` or an address written as a DNS name. The lookups (the machine's names
-and each of the certificate's names, once) run together and get 2 s in all
-(`_LOOKUP_BUDGET_S`); an answer that comes later is not waited for, because `getaddrinfo` has
-no timeout of its own (an unanswered `.local` name took 10 s). The web UI builds an
-invitation on an executor, off the server's event loop. The joining machine's network must
-resolve the name to the host. When the certificate names none, the invitation carries no lane
-for other machines: its briefing says so and why, `vaf a2a invite` returns the reason as
-`remote_unavailable`, and the host's log says it too.
+host's own that does not name that address, a DNS name of it that is this machine: the host
+name, FQDN or `<host>.local` where the certificate covers it (a wildcard counts), else one of
+its names that resolves on the host to the LAN address or another admitted address (a VPN
+name resolves to the VPN address). The only name of a certificate is checked like any other:
+a certificate made for a website names the website, and a peer sent there would hand its
+ticket to that server. Never the apex beside a wildcard (usually the public website), a
+wildcard, `localhost` or an address written as a DNS name. Where the host uses another DNS
+than the devices (split DNS), a name the devices resolve may not resolve on the host: a line
+in its hosts file, or the name as its host name, makes it count, and the reason says so.
+
+The lookups (the machine's names and each of the certificate's names, once) run on one pool
+of eight daemon threads for the whole process (`bounded_run.DaemonPool`, through
+`run_bounded_all`), and a choice waits 2 s for them in all (`_LOOKUP_BUDGET_S`): `getaddrinfo`
+has no timeout of its own (an unanswered `.local` name took 10 s). Lookups that hang occupy
+those eight threads and no more, and the ones queued behind them are cancelled when the time
+is up, so the invitation then has no lane and says that the names did not answer. An answer
+is reused for 60 s, so repeated invitations do not ask the resolver again, and a DNS change
+shows in an invitation made at most a minute later. The web UI builds an invitation on a
+small pool of its own (four threads), off the server's event loop and off the default
+executor the A2A wire and the voice feed use. The joining machine's network must resolve the
+name to the host. When the certificate names none, the invitation carries no lane for other
+machines: its briefing says so and why, `vaf a2a invite` returns the reason as
+`remote_unavailable`, and the host's log says it too. A member's `vaf a2a howto` is the
+command reference and shows no lane, so it chooses none.
 
 A room is joined from this machine, the local network or an admitted VPN, never from the
 internet: the HTTPS door and the backend refuse every other address at the handshake of

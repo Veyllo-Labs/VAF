@@ -4157,6 +4157,21 @@ def _ws_client_ip(websocket) -> str:
     return connection_client_ip(websocket)
 
 
+# Room invitations are built on threads of their own: choosing the host a peer dials may
+# look names up for up to 2 s, and on the loop's default executor a member who opened many
+# connections kept the A2A wire, the voice feed and uploads waiting behind those lookups
+# (measured: 5.8 s at 60 connections). Four at a time; more wait for each other only.
+_ROOM_INVITE_POOL = None
+
+
+def _room_invite_pool():
+    global _ROOM_INVITE_POOL
+    if _ROOM_INVITE_POOL is None:
+        from vaf.core.bounded_run import DaemonPool
+        _ROOM_INVITE_POOL = DaemonPool(4, "vaf-room-invite")
+    return _ROOM_INVITE_POOL
+
+
 def _emit_sec_ws(detail: str, ip: str = "") -> None:
     """Security-event mirror for rejected NETWORK WebSocket handshakes (lazy, never raises)."""
     try:
@@ -5038,10 +5053,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             ttl = max(300, min(ttl, 7 * 86400))
                             # Off the loop, like the account lookup above: choosing the
                             # host may look names up (ssl_utils.room_host_choice, bounded
-                            # but not instant), and every connection shares this loop.
+                            # but not instant), and every connection shares this loop. On
+                            # a pool of its own, not the default executor (see the pool).
                             minted = await asyncio.get_running_loop().run_in_executor(
-                                None, lambda: invitation(room, identity, display=display[:60],
-                                                         ttl_s=float(ttl)))
+                                _room_invite_pool(),
+                                lambda: invitation(room, identity, display=display[:60],
+                                                   ttl_s=float(ttl)))
                             await websocket.send_json({
                                 "type": "room_invitation",
                                 "roomId": room.room_id,
@@ -5065,7 +5082,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             try:
                                 # Off the loop for the same reason as the minting above.
                                 text = await asyncio.get_running_loop().run_in_executor(
-                                    None, invitation_text, room, record)
+                                    _room_invite_pool(), invitation_text, room, record)
                             except ValueError as _text_err:
                                 await websocket.send_json({"type": "error",
                                                            "message": str(_text_err)})

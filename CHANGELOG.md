@@ -343,10 +343,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   your devices. Your machine's own host name is not among them unless it is under one of those
   (a host named after a public domain would otherwise open that whole domain): open VAF by its
   address, or by `<host>.local`, which VAF's certificate now carries, where your devices
-  resolve mDNS names. An existing authority keeps carrying every name until you renew it, and
-  the renewal lists the names it leaves out. An existing authority is kept, so your devices keep
-  working; `vaf server ca renew` (or "Restrict to private addresses" in the settings) replaces
-  it when you choose.
+  resolve mDNS names. An existing authority is kept and keeps carrying every name, so your
+  devices keep working; `vaf server ca renew` (or "Restrict to private addresses" in the
+  settings) replaces it when you choose and lists the names the new one leaves out.
 
 ### Fixed
 

@@ -68,10 +68,18 @@ def set_credential_verifier(verify) -> None:
     because whether a credential may open a session can depend on where it is used: VAF's
     own sessions of the window on the machine itself stand only for that machine. It gets
     the address however it declares the parameter, by position right after the credential
-    when it is positional-only (``_call_verifier``), and is never left without it. A
-    verifier with the one argument is called with the credential alone and keeps working.
+    when it is positional-only, and is never left without it, since a missing address
+    skips an address rule. So two shapes are refused here with a TypeError, because the
+    door could not hand them the address (``_client_slot``): a verifier whose signature
+    cannot be read (compiled code, a ``__signature__`` that raises or is not a Signature),
+    which may take ``client_ip`` unseen, and one whose positional-only ``client_ip`` is not
+    right after the credential. Wrap such a verifier in a Python function that names
+    ``client_ip``. A verifier with the one argument is called with the credential alone and
+    keeps working.
     """
     global _verifier
+    if verify is not None:
+        _client_slot(verify)
     _verifier = verify
 
 
@@ -97,30 +105,49 @@ def looks_like_ticket(credential: str) -> bool:
     return str(credential or "").startswith(TICKET_PREFIX)
 
 
-def _call_verifier(verify, credential: str, client_ip: Optional[str]):
-    """Call the verifier, handing it the client however it takes ``client_ip``.
+_WRAP_HINT = ("wrap it in a Python function that names client_ip, e.g. "
+              "def verify(credential, client_ip=None): return compiled(credential, client_ip)")
 
-    A verifier that names the parameter is never left without it: ``None`` there means "the
-    client is not known" and skips an address rule (VAF's own verifier does exactly that), so
-    dropping the address would fail open. A positional-only ``client_ip`` right after the
-    credential gets it by position, any other ``client_ip`` by keyword, and ``**kwargs``
-    through it; wrappers (``functools.wraps``), partials and callable objects show the
-    signature they forward to and are called the same way. Only a verifier that takes neither
-    gets the credential alone. A positional-only ``client_ip`` anywhere else cannot be handed
-    the address, so the call raises and the door reads that as a refusal."""
+
+def _client_slot(verify) -> Optional[str]:
+    """How `verify` takes the client's address: ``"position"`` (a positional-only
+    ``client_ip`` right after the credential), ``"keyword"`` (any other ``client_ip``, or
+    ``**kwargs``) or None (it names neither and gets the credential alone). Wrappers
+    (``functools.wraps``), partials and callable objects show the signature they forward to.
+
+    Raises TypeError when the address could not be handed over: a signature that cannot be
+    read may hide a ``client_ip``, and a positional-only ``client_ip`` anywhere else has no
+    place for it. Calling either with the credential alone would leave a verifier that takes
+    the address without it, and a missing address means "not known" and skips an address
+    rule (VAF's own verifier does exactly that): it would admit a client it means to refuse."""
     import inspect
-    if client_ip is None:
-        return verify(credential)
     try:
         params = list(inspect.signature(verify).parameters.values())
-    except (TypeError, ValueError):
-        return verify(credential)
+    except Exception as e:  # inspect raises TypeError or ValueError; a __signature__ may raise anything
+        raise TypeError(f"the credential verifier's signature cannot be read ({e}); "
+                        f"{_WRAP_HINT}") from None
     named = next((p for p in params if p.name == "client_ip"), None)
     if named is not None and named.kind is inspect.Parameter.POSITIONAL_ONLY:
         if params.index(named) != 1:
-            raise TypeError("a positional-only client_ip must follow the credential")
-        return verify(credential, client_ip)
+            raise TypeError("the credential verifier's positional-only client_ip is not right "
+                            f"after the credential; {_WRAP_HINT}")
+        return "position"
     if named is not None or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params):
+        return "keyword"
+    return None
+
+
+def _call_verifier(verify, credential: str, client_ip: Optional[str]):
+    """Call the verifier, handing it the client the way `_client_slot` says it takes it. A
+    verifier whose way cannot be told raises here too (one set past `set_credential_verifier`,
+    or whose signature changed after it), and the door reads that as a refusal: the address
+    is never dropped."""
+    if client_ip is None:
+        return verify(credential)
+    slot = _client_slot(verify)
+    if slot == "position":
+        return verify(credential, client_ip)
+    if slot == "keyword":
         return verify(credential, client_ip=client_ip)
     return verify(credential)
 

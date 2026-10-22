@@ -629,3 +629,44 @@ def test_every_verifier_that_names_the_client_is_given_it(monkeypatch):
     monkeypatch.setattr(wire_mod, "_verifier", _misplaced)
     with pytest.raises(HandshakeRefused):
         resolve_account("t", client_ip="192.168.50.9")
+
+
+def test_a_verifier_the_door_cannot_hand_the_client_to_is_refused(monkeypatch):
+    """A verifier whose signature cannot be read (compiled code; here a `__signature__` that
+    raises, and one that is not a Signature) may take `client_ip` unseen, and a positional-only
+    `client_ip` after another parameter has no place for it. Both are refused at registration
+    with a TypeError that says how to wrap them, and one that reaches the door anyway (set past
+    the registration, or changed after it) is refused there, never called without the address.
+    MUTATION: skip the check at registration; call an unreadable verifier with the credential
+    alone - red."""
+    import vaf.core.a2a.wire as wire_mod
+
+    class _Compiled:
+        @property
+        def __signature__(self):
+            raise ValueError("no signature found for builtin")
+
+        def __call__(self, credential, client_ip=None):
+            # VAF's own rule: a missing client skips the address rule.
+            return None if client_ip not in (None, "127.0.0.1") else {"user_scope_id": "scope-1"}
+
+    class _Mislabelled(_Compiled):
+        __signature__ = "not a signature"
+
+    def _misplaced(credential, other=None, client_ip=None, /):
+        return {"user_scope_id": "scope-2"}
+
+    monkeypatch.setattr(wire_mod, "_verifier", None)
+    for verify in (_Compiled(), _Mislabelled(), _misplaced):
+        with pytest.raises(TypeError, match="Python function that names client_ip"):
+            wire_mod.set_credential_verifier(verify)
+        assert wire_mod.credential_verifier() is None
+    for verify in (_Compiled(), _Mislabelled()):
+        monkeypatch.setattr(wire_mod, "_verifier", verify)
+        with pytest.raises(HandshakeRefused):
+            resolve_account("t", client_ip="192.168.50.9")
+    # VAF's own verifier and a verifier of the credential alone register.
+    from vaf.main import _a2a_credential_verifier
+    wire_mod.set_credential_verifier(_a2a_credential_verifier)
+    assert wire_mod.credential_verifier() is _a2a_credential_verifier
+    wire_mod.set_credential_verifier(lambda credential: None)

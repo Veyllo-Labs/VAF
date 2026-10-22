@@ -735,7 +735,12 @@ registered verifier the real client's address when the verifier names a `client_
 or takes `**kwargs` (`admit(..., client_ip=...)`, `set_credential_verifier` in
 `vaf/core/a2a/wire.py`): by position when that parameter is positional-only right after the
 credential, by keyword otherwise, and never left out, since a missing address would skip an
-address rule; only a verifier with neither is called with the credential alone. VAF's
+address rule; only a verifier with neither is called with the credential alone. The door
+could not hand the address to two shapes, so `set_credential_verifier` refuses them with a
+`TypeError`: a verifier whose signature cannot be read (compiled code), which may take
+`client_ip` unseen, and one whose positional-only `client_ip` is not right after the
+credential, which would make every admission refuse. Wrap such a verifier in a Python
+function that names `client_ip`. VAF's
 verifier refuses a session of the window on the host machine presented from another address. **There is no fallback**: no credential
 means no connection. An access token is refused when it was minted before the second
 factor, when its account no longer stands (deactivated, deleted, demoted) or when its

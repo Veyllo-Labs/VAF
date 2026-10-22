@@ -13,6 +13,11 @@ Endpoints:
 - POST /api/auth/verify-2fa
 - POST /api/auth/logout
 - GET  /api/auth/me
+- POST /api/auth/change-password
+- GET  /api/auth/sessions                    the caller's own live sessions
+- DELETE /api/auth/sessions/{session_id}     end one of them
+- POST /api/auth/sessions/end-others         end every one but the presenting session
+- POST /api/auth/tokens                      a token for programs (the 2FA code)
 """
 
 import io
@@ -202,6 +207,12 @@ class Verify2FARequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password: str
+    code: str = ""
+
+
+class ProgramTokenRequest(BaseModel):
+    name: str = ""
+    days: int = 30
     code: str = ""
 
 
@@ -952,6 +963,141 @@ async def logout(request: Request, response: Response):
     return {"ok": True}
 
 
+async def _caller_account(db, request: Request):
+    """The account an own-account route acts on: the authenticated caller's, and for the
+    tokenless desktop the machine owner's account (by its configured name). None when there
+    is no such active account. One resolution for the password change, the session list and
+    tokens for programs."""
+    caller = getattr(request.state, "user", None) or {}
+    if caller.get("user_id"):
+        try:
+            wanted = uuid_module.UUID(str(caller["user_id"]))
+        except (ValueError, TypeError):
+            return None
+        return (await db.execute(select(LocalUser).where(
+            LocalUser.id == wanted, LocalUser.is_active == True))).scalar_one_or_none()  # noqa: E712
+    return (await db.execute(select(LocalUser).where(
+        func.lower(LocalUser.username) == get_local_admin_username().lower(),
+        LocalUser.is_active == True))).scalar_one_or_none()  # noqa: E712
+
+
+def _presented_token(request: Request) -> Optional[str]:
+    from vaf.auth.middleware import _extract_token
+    return _extract_token(request)
+
+
+_NO_ACCOUNT = "No account to show the sessions of"
+
+
+@router.get("/sessions")
+async def own_sessions(request: Request):
+    """The caller's live sessions (browsers, this computer, tokens for programs), most recent
+    use first; `current` marks the one this request came with. Never a token or its hash."""
+    from vaf.auth import sessions
+    async with get_auth_db() as db:
+        user = await _caller_account(db, request)
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_NO_ACCOUNT)
+        listed = await sessions.list_account_sessions(db, user.id,
+                                                       current_token=_presented_token(request))
+    return {"sessions": listed, "idle_days": sessions.idle_days()}
+
+
+@router.delete("/sessions/{session_id}")
+async def end_own_session(session_id: str, request: Request):
+    """Sign one device out, or revoke one token for programs: only a session of the caller's
+    own account (404 for an unknown one or another account's), and not the session this
+    request came with (409 `current`; signing out is the way there). Its open sockets close."""
+    from vaf.auth import sessions
+    from vaf.auth.models import UserSession
+    async with get_auth_db() as db:
+        user = await _caller_account(db, request)
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_NO_ACCOUNT)
+        try:
+            wanted = uuid_module.UUID(session_id)
+        except ValueError:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such session")
+        row = (await db.execute(select(UserSession.token_hash).where(
+            UserSession.id == wanted, UserSession.user_id == user.id,
+            UserSession.is_active == True))).first()  # noqa: E712
+        if row is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such session")
+        current = _presented_token(request)
+        if current and row[0] == token_hash_for_db(current):
+            return JSONResponse(status_code=status.HTTP_409_CONFLICT, content={
+                "detail": "This is the session you are using; sign out instead.", "code": "current"})
+        ended = await sessions.end_account_session(db, user.id, wanted)
+    if not ended:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such session")
+    close_session_sockets(token_hash=ended)
+    return {"ok": True}
+
+
+@router.post("/sessions/end-others")
+async def end_other_sessions(request: Request):
+    """Every session of the caller's account but the one this request came with ends: the
+    other devices and the tokens for programs. The account's open sockets close; the current
+    device reconnects with its cookie, as after a password change."""
+    async with get_auth_db() as db:
+        user = await _caller_account(db, request)
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_NO_ACCOUNT)
+        ended = await end_account_sessions(db, user.id, keep_token=_presented_token(request))
+        scope = str(user.user_scope_id or "")
+    close_account_sockets(scope)
+    return {"ended": ended}
+
+
+@router.post("/tokens", status_code=status.HTTP_201_CREATED)
+async def create_program_token(body: ProgramTokenRequest, request: Request):
+    """A token for a program of the caller's own (Settings, Account): a name, a lifetime of
+    7, 30, 90 or 365 days and the account's 2FA code. Shown once; it acts as the account and
+    is listed and revoked with the sessions. The tokenless desktop gives the code too: a process
+    on this machine (the agent's shell with a host grant) reaches the backend tokenless and must
+    not turn that into a credential that works from the network. A wrong code is a 401, counted
+    by the address window (`_RATE_LIMITED_PATHS`) and the account's second-factor window."""
+    from vaf.auth import second_factor, sessions
+    async with get_auth_db() as db:
+        user = await _caller_account(db, request)
+        if user is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_NO_ACCOUNT)
+        # The name and the lifetime are judged BEFORE the code: checking the code spends it.
+        try:
+            name = sessions.program_token_name(body.name)
+            days = sessions.program_token_days(body.days)
+        except sessions.ProgramTokenRefused as e:
+            return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST,
+                                content={"detail": e.message, "code": e.code})
+        if not (user.totp_secret and user.totp_nonce and not user.requires_2fa_setup):
+            return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={
+                "detail": "Set up 2FA for this account first: a token is confirmed with its code.",
+                "code": "twofa_not_set_up"})
+        ip = _client_ip(request)
+        reason = second_factor.check_second_factor(user, body.code, ip=ip, where="token for programs")
+        if reason == second_factor.THROTTLED:
+            from vaf.auth.rate_limit import too_many_attempts
+            return too_many_attempts(second_factor.held_for(user))
+        if reason == second_factor.UNREADABLE:
+            return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={
+                "detail": "The 2FA secret cannot be read on this machine", "code": "twofa_unreadable"})
+        if reason == second_factor.SPENT:
+            return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST,
+                                content={"detail": SPENT_CODE_TEXT, "code": "code_spent"})
+        if reason is not None:
+            return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED,
+                                content={"detail": "The 2FA code is not right", "code": "wrong_code"})
+        try:
+            token, session_id = await sessions.mint_program_token(
+                db, user, name=name, days=days, ip=ip,
+                user_agent=request.headers.get("user-agent", ""), where="Settings")
+        except sessions.ProgramTokenRefused as e:
+            status_code = (status.HTTP_403_FORBIDDEN if e.code == "record_changed"
+                           else status.HTTP_400_BAD_REQUEST)
+            return JSONResponse(status_code=status_code, content={"detail": e.message, "code": e.code})
+    return {"token": token, "session": session_id}
+
+
 @router.post("/change-password")
 async def change_password(body: ChangePasswordRequest, request: Request):
     """The caller changes their OWN password: the current one, and the 2FA code when 2FA is set
@@ -960,17 +1106,9 @@ async def change_password(body: ChangePasswordRequest, request: Request):
     wrong password or code counts against the same window."""
     from vaf.auth.rate_limit import client_key, record_login_failure
     from vaf.auth.user_admin import UserAdminError, change_own_password
-    caller = getattr(request.state, "user", None) or {}
     try:
         async with get_auth_db() as db:
-            if caller.get("user_id"):
-                user = (await db.execute(select(LocalUser).where(
-                    LocalUser.id == uuid_module.UUID(str(caller["user_id"])),
-                    LocalUser.is_active == True))).scalar_one_or_none()  # noqa: E712
-            else:
-                user = (await db.execute(select(LocalUser).where(
-                    func.lower(LocalUser.username) == get_local_admin_username().lower(),
-                    LocalUser.is_active == True))).scalar_one_or_none()  # noqa: E712
+            user = await _caller_account(db, request)
             if user is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                                     detail="No account to change the password of")

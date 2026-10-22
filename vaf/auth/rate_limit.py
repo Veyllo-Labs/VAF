@@ -70,6 +70,9 @@ _RATE_LIMITED_PATHS: set[str] = {
     "/api/auth/test-veyllo-key",
     # The first-run setup code: 80 bits, and every wrong one is a 401 counted here.
     "/api/auth/setup-code",
+    # A token for programs is confirmed with the 2FA code; a wrong one is a 401 counted here
+    # (and in the account's second-factor window).
+    "/api/auth/tokens",
 }
 
 

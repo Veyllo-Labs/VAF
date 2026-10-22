@@ -330,7 +330,7 @@ compose with it; see [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md).
 - **Web UI**: unchanged - login, JWT, 2FA.
 - **Interactive terminal** (`vaf run`, the TUI, and the whole `vaf session`,
   `inbox`, `outbox`, `secrets`, `ssh`, `ftp` and `env` groups, plus
-  `vaf users list`): asks for the admin password, verified offline against the
+  `vaf users list`, `sessions` and `sign-out`): asks for the admin password, verified offline against the
   hash mirrored into the keyring, so a stopped database cannot lock you out.
   `vaf session export/search/list/load` prints the very chats the encryption
   protects, so gating only `vaf run` would lock the front door and leave the
@@ -344,7 +344,7 @@ compose with it; see [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md).
   and "no terminal" let it through, so any account's agent could run
   `vaf session export` or `vaf outbox send` as the machine owner. Each such
   command now carries a mark in its environment (`agent_env` in
-  `vaf/core/processes.py`), and the door, and `vaf users reset-password`,
+  `vaf/core/processes.py`), and the door, and `vaf users reset-password` and `token`,
   refuse it before anything else, whatever `cli_password_gate` or
   `VAF_SKIP_PASSWORD_GATE` say: the agent is never the person at the terminal,
   and it has tools of its own that know whose turn it is. NAMED BOUNDARY: a

@@ -146,3 +146,25 @@ def test_the_cookie_alone_opens_the_socket(monkeypatch):
             pass
     assert ei.value.code == 4001
     assert len(seen) == 1
+
+
+def test_a_program_token_opens_the_socket_by_its_address(monkeypatch):
+    """A program has no cookie: its token for programs goes in the address (`?token=`), which
+    stays for exactly that. MUTATION: stop reading the token query parameter - red."""
+    import asyncio
+
+    from vaf.auth import sessions
+    h, _token, seen = _signed_in_socket_world(monkeypatch)
+
+    async def _mint(db):
+        return await sessions.mint_program_token(db, h.user("alice"), name="sync", days=7)
+
+    program, _id = h.run_db(_mint)
+    c = TestClient(app, client=LAN)
+    try:
+        with c.websocket_connect(f"/ws?token={program}"):
+            pass
+    except Exception:
+        pass
+    assert seen == [(str(h.user("alice").user_scope_id), "alice")]
+    assert asyncio.run(sessions.session_standing_async(program)) == "live"

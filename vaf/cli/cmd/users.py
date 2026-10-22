@@ -16,6 +16,19 @@ opens for a caller without a terminal, and it asks for exactly the password that
 The reset sets a new password, makes the second factor be set up again at the next login,
 and re-seals the record as it stands now; a record that was changed outside VAF is shown
 and asked about first. Every reset is the security event `password_changed`.
+
+`sessions NAME` lists the account's live sessions (browsers, this computer, tokens for
+programs) and `sign-out NAME` ends every one of them, both behind the terminal door; the
+running VAF is asked to close the account's open chats, as after a reset.
+
+`token NAME --label TEXT` makes a token for programs: a script or a program on another
+machine sends it as `Authorization: Bearer <token>` and acts as the account. It needs what a
+reset needs (a person at the terminal, the admin password or the recovery key), because the
+terminal door alone opens for a caller without a terminal. The token is printed once; it is
+listed with the sessions and revoked there, in Settings, Account, or by `sign-out`. Every
+token is the security event `program_token_created`, which names the proof.
+
+Output is ASCII only: a Windows console in cp1252 cannot print more.
 """
 import asyncio
 import getpass
@@ -72,14 +85,15 @@ def list_users():
         print(f"{r['username']}: {r['role']}, {twofa}{state}{record}")
 
 
-def _proof(recovery_key: bool) -> str:
-    """What proved the caller, or '' when nothing did. A person at the terminal only."""
+def _proof(recovery_key: bool, action: str = "password reset") -> str:
+    """What proved the caller, or '' when nothing did. A person at the terminal only.
+    `action` names what is being proved for, in the refusals and the security log."""
     from vaf.cli.gate import _stored_hash, is_interactive, refuse_agent_command
     if refuse_agent_command():
         # Before the terminal check: the agent can give its command a terminal of its own.
         return ""
     if not is_interactive():
-        UI.error("A password reset needs a person at the terminal: it does not run from a "
+        UI.error(f"A {action} needs a person at the terminal: it does not run from a "
                  "script or the agent's shell.")
         return ""
     if recovery_key:
@@ -91,7 +105,7 @@ def _proof(recovery_key: bool) -> str:
         if secret and unwrap_with_secret(secret) is not None:
             return "recovery key"
         UI.error("That key does not open the recovery file.")
-        _log_failed_proof("recovery key")
+        _log_failed_proof("recovery key", action)
         return ""
     stored, unreadable = _stored_hash()
     if unreadable:
@@ -111,15 +125,15 @@ def _proof(recovery_key: bool) -> str:
         if entered and verify_password(stored, entered):
             return "admin password"
         UI.error(f"Wrong password. {remaining - 1} attempt(s) left.")
-    _log_failed_proof("admin password")
+    _log_failed_proof("admin password", action)
     return ""
 
 
-def _log_failed_proof(what: str) -> None:
+def _log_failed_proof(what: str, action: str = "password reset") -> None:
     try:
         from vaf.core.security_events import log_security_event
         log_security_event("cli_password_gate_failed",
-                           detail=f"Password reset refused at the terminal: wrong {what}")
+                           detail=f"{action[:1].upper()}{action[1:]} refused at the terminal: wrong {what}")
     except Exception:
         pass
 
@@ -255,3 +269,156 @@ def _refused(exc: BaseException) -> bool:
         stack += [getattr(e, "reason", None), e.__cause__, e.__context__]
         stack += [a for a in getattr(e, "args", ()) if isinstance(a, BaseException)]
     return False
+
+
+# ── sessions, signing out, tokens for programs ───────────────────────────────────────
+
+_KIND_WORDS = {"browser": "browser", "this_machine": "this computer", "program": "program"}
+
+
+def _ascii(text) -> str:
+    """For a console that may be cp1252: anything outside ASCII becomes '?'."""
+    return str(text or "").encode("ascii", "replace").decode("ascii")
+
+
+def _day(iso) -> str:
+    return str(iso or "")[:16].replace("T", " ") or "-"
+
+
+@app.command("sessions")
+def list_sessions(username: str = typer.Argument(..., help="The account whose sessions to show")):
+    """The account's live sessions: browsers, this computer and tokens for programs."""
+    from vaf.cli.gate import require_admin_password
+    if not require_admin_password():
+        raise typer.Exit(1)
+    from vaf.auth import sessions
+    from vaf.auth.database import get_auth_db
+
+    async def _load():
+        found = None
+        async with get_auth_db() as db:
+            from vaf.auth.user_admin import find_user
+            user = await find_user(db, username)
+            if user is not None:
+                found = await sessions.list_account_sessions(db, user.id)
+        return found
+
+    try:
+        rows = asyncio.run(_load())
+    except Exception as e:
+        UI.error(f"The sessions could not be read: {e}")
+        raise typer.Exit(1)
+    if rows is None:
+        UI.error(f"No account named {username!r}. `vaf users list` shows them.")
+        raise typer.Exit(1)
+    if not rows:
+        print(f"{_ascii(username)} has no live session.")
+        return
+    for s in rows:
+        what = s["name"] if s["kind"] == "program" else s["device"]
+        until = (f"ends {_day(s['idle_until'])} unless used, at the latest {_day(s['expires_at'])}"
+                 if s["idle_until"] else f"valid until {_day(s['expires_at'])}")
+        print(_ascii(f"{_KIND_WORDS.get(s['kind'], s['kind'])}: {what}, {s['ip'] or 'no address'}, "
+                     f"last used {_day(s['last_used_at'])}, {until}  [{s['id']}]"))
+
+
+@app.command("sign-out")
+def sign_out(username: str = typer.Argument(..., help="The account to sign out everywhere")):
+    """End every session of an account: its devices, this computer and its tokens for programs."""
+    from vaf.cli.gate import require_admin_password
+    if not require_admin_password():
+        raise typer.Exit(1)
+    from vaf.auth.database import get_auth_db
+    from vaf.auth.sessions import end_account_sessions
+    from vaf.auth.user_admin import find_user
+
+    async def _end():
+        async with get_auth_db() as db:
+            user = await find_user(db, username)
+            if user is None:
+                return None
+            return str(user.id), await end_account_sessions(db, user.id)
+
+    try:
+        done = asyncio.run(_end())
+    except Exception as e:
+        UI.error(f"The sessions could not be ended: {e}")
+        raise typer.Exit(1)
+    if done is None:
+        UI.error(f"No account named {username!r}. `vaf users list` shows them.")
+        raise typer.Exit(1)
+    user_id, ended = done
+    why_not = _close_open_connections(user_id)
+    UI.success(f"{ended} session(s) of {_ascii(username)} ended.")
+    if why_not is None:
+        print("Its open chats are disconnected; every device signs in again.")
+    else:
+        UI.warning(f"VAF did not confirm that the account's open connections were closed ({why_not}). "
+                   "A device with a chat still open keeps it until VAF restarts: restart VAF now.")
+
+
+def _access_hint() -> str:
+    """The address another machine reaches VAF by, for the example call; a placeholder when
+    none is known."""
+    try:
+        from vaf.network.binding import access_addresses, resolve_lan_access_ports
+        port, _ = resolve_lan_access_ports(wait_for_proxy=False)
+        addresses = access_addresses()
+        if addresses:
+            return f"https://{addresses[0].ip}" + ("" if port == 443 else f":{port}")
+    except Exception:
+        pass
+    return "https://<VAF's address>"
+
+
+@app.command("token")
+def make_token(
+    username: str = typer.Argument(..., help="The account the token acts as"),
+    label: str = typer.Option(..., "--label", help="A name to recognise the token by (1-60 characters)"),
+    days: int = typer.Option(30, "--days", help="How long it lives: 7, 30, 90 or 365"),
+    recovery_key: bool = typer.Option(False, "--recovery-key",
+                                      help="Prove it with the recovery key from VAF-BackThisUp.md "
+                                           "instead of the admin password"),
+):
+    """A token for programs: a script sends it as Authorization: Bearer and acts as the account."""
+    from vaf.auth import sessions
+    try:
+        name = sessions.program_token_name(label)
+        days = sessions.program_token_days(days)
+    except sessions.ProgramTokenRefused as e:
+        UI.error(e.message)
+        raise typer.Exit(1)
+    proof = _proof(recovery_key, "token for programs")
+    if not proof:
+        raise typer.Exit(1)
+    from vaf.auth.database import get_auth_db
+    from vaf.auth.user_admin import find_user
+
+    async def _mint():
+        async with get_auth_db() as db:
+            user = await find_user(db, username)
+            if user is None or not user.is_active:
+                return None
+            return await sessions.mint_program_token(
+                db, user, name=name, days=days, ip="127.0.0.1",
+                where=f"a terminal on this machine ({proof})")
+
+    try:
+        minted = asyncio.run(_mint())
+    except sessions.ProgramTokenRefused as e:
+        UI.error(e.message)
+        raise typer.Exit(1)
+    except Exception as e:
+        UI.error(f"The token could not be made: {e}")
+        raise typer.Exit(1)
+    if minted is None:
+        UI.error(f"No active account named {username!r}. `vaf users list` shows them.")
+        raise typer.Exit(1)
+    token, _session = minted
+    print(f"Token for programs '{_ascii(name)}', valid {days} days. It is shown only now:")
+    print()
+    print(token)
+    print()
+    print(f'Use it as: curl -H "Authorization: Bearer <token>" {_access_hint()}/api/auth/me')
+    print(f"The token acts as {_ascii(username)}. Revoke it in Settings, Account, or with "
+          f"`vaf users sign-out {_ascii(username)}`.")

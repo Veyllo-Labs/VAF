@@ -323,6 +323,32 @@ Rejections from the layers above are recorded in an always-on security event log
   nothing ended a token (measured: the old token answered 200 after a logout and after a
   password change). See "Taking access away" in
   [USER_ISOLATION.md](../security/USER_ISOLATION.md).
+- **Sessions you can see and end**: Settings, Account lists every live session of the
+  signed-in account (`GET /api/auth/sessions`): browsers on other devices with their device
+  ("Firefox on Linux"), address, last use and the day they end without use, this computer, and
+  tokens for programs; never a token or its hash. "Sign out" ends one
+  (`DELETE /api/auth/sessions/{id}`, only the account's own, 409 for the session the request
+  came with) and closes the sockets it opened; "Sign out all other devices"
+  (`POST /api/auth/sessions/end-others`) ends every other session, tokens for programs
+  included, and closes the account's sockets (this device reconnects with its cookie). An
+  admin signs an account out everywhere in the user editor (`POST /api/users/{id}/sign-out`),
+  and a terminal on the machine does the same with `vaf users sessions NAME` and
+  `vaf users sign-out NAME` (behind the terminal door; the command asks the running VAF to
+  close the open chats, as after a reset).
+- **Tokens for programs**: the browser keeps no readable token, so a script or a program on
+  another machine gets one of its own: in Settings, Account (`POST /api/auth/tokens` with a
+  name, a lifetime of 7, 30, 90 or 365 days and the account's 2FA code; the tokenless desktop
+  gives the code too, because a process on this machine, the agent's shell with a host grant
+  among them, reaches the backend tokenless and must not turn that into a credential that
+  works from the network), or in a terminal with `vaf users token NAME --label TEXT [--days N]`
+  (a person at the terminal and the admin password or the recovery key, like a reset). It is
+  shown once, sent as `Authorization: Bearer <token>` (or `?token=` on a socket, and as the
+  credential of an agent room), acts as the account with its full rights, does not end from
+  disuse, and is listed with the sessions and revoked there. A wrong code is a 401 counted by
+  the address window and the account's second-factor window; five hold the code (429).
+  Minting asks the account's seal. Each one is the security event `program_token_created`
+  (the name, the days and where it was made; never the token). Tokens limited to some routes
+  are not built.
 - **2FA**: TOTP (RFC 6238), secrets encrypted at rest with AES-256-GCM; a code works once and wrong codes are held per account (Layer 4)
 - **Session Tracking**: one row per completed sign-in, keyed by the token's hash (SHA-256), no plaintext tokens in DB; a token with no live row is refused. A store that cannot be asked keeps the token (the desktop default: failing closed would sign every device out on each database restart, and the refused cookie is deleted, so the sign-out would stick), except a token whose session this process ended: those hashes are remembered and refused without asking the store, so a token signed out here cannot ride on a store that went away afterwards. The sign-out route records the endings the terminal's reset wrote in its own process.
 - **Cookies**: `vaf_token` cookie with `httponly`, `samesite=lax`, and `secure` flag (when TLS active). The cookie's `max-age` is always derived from the token's own `exp` claim at the single set point (`_cookie_max_age_for` in `auth_routes.py`), so the cookie can never outlive the JWT it carries. The login form's `remember_me` flag changes nothing: the lifetime is the token's (above), and a session ends earlier when it is signed out or idle. Do not reintroduce a hardcoded longer cookie lifetime: a present-but-expired cookie desyncs the server-side route gate from the bearer token and causes a login redirect loop (live incident 2026-07-22).
@@ -1011,4 +1037,8 @@ only and needs none. A change is the security event `tls_certificate_changed`.
 | POST | `/api/auth/setup-2fa` | Bearer (the step token) | Generate TOTP QR code |
 | POST | `/api/auth/verify-2fa` | Temp Token | Verify the code; answers `{ok: true}` and sets the session's `vaf_token` cookie. No answer carries the session's token in JSON |
 | POST | `/api/auth/logout` | Bearer/Cookie (tokenless from this machine) | End the session of each presented token, clear the auth cookie |
+| GET | `/api/auth/sessions` | Bearer/Cookie (tokenless: the local admin's) | `{sessions, idle_days}`: the caller's live sessions, each `{id, kind (browser, this_machine, program), name, device, ip, created_at, last_used_at, expires_at, idle_until, current}` |
+| DELETE | `/api/auth/sessions/{id}` | Bearer/Cookie | End one of the caller's sessions: `{ok}`, 404 unknown or another account's, 409 `{code: "current"}` for the presenting one |
+| POST | `/api/auth/sessions/end-others` | Bearer/Cookie | End every other session of the caller's account: `{ended}` |
+| POST | `/api/auth/tokens` | Bearer/Cookie, and the 2FA code | `{name, days, code}`: a token for programs, 201 `{token, session}`; 400 `invalid` (name, days), `twofa_not_set_up`, `code_spent`; 401 `wrong_code`; 429 held; 403 seal |
 | GET | `/api/auth/me` | Bearer/Cookie | Get current user info; if both are sent, **Bearer is tried before** the `vaf_token` cookie so a stale cookie does not invalidate a valid header token. |

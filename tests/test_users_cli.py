@@ -390,3 +390,64 @@ def test_the_close_reads_the_answer(monkeypatch):
     monkeypatch.setattr(requests.Session, "post", lambda self, *a, **k: answers.pop(0))
     assert cmd._close_open_connections("u1") is None
     assert cmd._close_open_connections("u1") == "it answered 500"
+
+
+# ── sessions, signing out and tokens for programs, against the real session store ───
+
+def test_sessions_sign_out_and_token(monkeypatch):
+    """`vaf users sessions` lists the live sessions, `sign-out` ends them and asks the running
+    VAF to close the open chats, and `token` needs a person at the terminal and the proof
+    before it mints anything. All output is ASCII. MUTATION: mint before the proof; print
+    nothing for the token - red."""
+    import re
+
+    from auth_harness import Harness
+
+    import vaf.cli.gate as gate
+    from vaf.auth.crypto import hash_password
+    h = Harness(monkeypatch)
+    user_id, _ = h.add_user("alice", "alice-password-1", no_second_factor=True)
+    a = h.sign_in(h.client("192.168.81.1"), "alice", "alice-password-1", None)
+    b = h.sign_in(h.client("192.168.81.2"), "alice", "alice-password-1", None)
+    closed = []
+    monkeypatch.setattr(users_cmd, "_close_open_connections", lambda uid: closed.append(uid) or None)
+    monkeypatch.setattr(gate, "require_admin_password", lambda **_k: True)
+
+    r = _run(["sessions", "alice"])
+    assert r.exit_code == 0, r.output
+    assert "192.168.81.1" in r.output and "192.168.81.2" in r.output and "browser" in r.output
+    assert r.output.isascii()
+    assert _run(["sessions", "nobody"]).exit_code == 1
+
+    def _probe(token):
+        return h.client("192.168.81.9").get("/api/probe",
+                                            headers={"Authorization": f"Bearer {token}"}).status_code
+
+    r = _run(["sign-out", "alice"])
+    assert r.exit_code == 0 and "2 session(s) of alice ended" in r.output, r.output
+    assert closed == [user_id] and _probe(a) == 401 and _probe(b) == 401
+
+    # The token: no terminal, then a wrong proof, then the right one.
+    rows_before = len(h.sessions())
+    monkeypatch.setattr(gate, "is_interactive", lambda: False)
+    r = _run(["token", "alice", "--label", "backup"])
+    assert r.exit_code == 1 and len(h.sessions()) == rows_before
+    monkeypatch.setattr(gate, "is_interactive", lambda: True)
+    monkeypatch.setattr(gate, "_stored_hash", lambda: (hash_password("the-admin-password"), False))
+    answers = ["guess-1", "guess-2", "guess-3"]
+    monkeypatch.setattr(users_cmd.getpass, "getpass", lambda _p="": answers.pop(0))
+    r = _run(["token", "alice", "--label", "backup"])
+    assert r.exit_code == 1 and len(h.sessions()) == rows_before
+    assert not h.kinds("program_token_created")
+    answers[:] = ["the-admin-password"]
+    r = _run(["token", "alice", "--label", "backup", "--days", "90"])
+    assert r.exit_code == 0, r.output
+    assert r.output.isascii()
+    tokens = re.findall(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$", r.output, re.M)
+    assert len(tokens) == 1
+    me = h.client("192.168.81.3").get("/api/auth/me", headers={"Authorization": f"Bearer {tokens[0]}"})
+    assert me.status_code == 200 and me.json()["username"] == "alice"
+    created = h.kinds("program_token_created")
+    assert len(created) == 1 and "admin password" in created[0]["detail"]
+    assert "90 days" in created[0]["detail"] and tokens[0] not in str(created)
+    assert _run(["token", "alice", "--label", "x", "--days", "14"]).exit_code == 1

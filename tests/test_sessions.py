@@ -467,3 +467,66 @@ def test_the_sign_out_route_remembers_an_ending_written_elsewhere(h, monkeypatch
     assert h.client(None).post(f"/api/users/{user_id}/sign-out").status_code == 200
     _store_goes_away(monkeypatch)
     assert _probe(h, a) == 401
+
+
+# ── the list, one session by id, the admin's sign-out ────────────────────────────
+
+def test_the_list_is_live_own_and_hashless(h):
+    """Only the account's own live rows, the fields the pages show, `current` for the
+    presenting token, never a token hash. MUTATION: list ended rows - red."""
+    from vaf.auth import sessions
+    _id, a, b = _two_devices(h)
+    h.add_user("bob", "bob-password-12", no_second_factor=True)
+    h.sign_in(h.client("192.168.17.1"), "bob", "bob-password-12", None)
+    h.client("192.168.11.2").post("/api/auth/logout", headers={"Authorization": f"Bearer {b}"})
+
+    async def _list(db):
+        return await sessions.list_account_sessions(db, h.user("alice").id, current_token=a)
+
+    listed = h.run_db(_list)
+    assert len(listed) == 1 and listed[0]["current"] is True and listed[0]["ip"] == "192.168.11.1"
+    assert set(listed[0]) == {"id", "kind", "name", "device", "ip", "created_at", "last_used_at",
+                              "expires_at", "idle_until", "current"}
+    assert listed[0]["kind"] == "browser" and listed[0]["idle_until"]
+
+
+def test_one_session_ends_by_id(h):
+    """Only the account's own row. MUTATION: end another account's row - red."""
+    from vaf.auth import sessions
+    from vaf.auth.crypto import token_hash_for_db
+    _id, a, b = _two_devices(h)
+    h.add_user("bob", "bob-password-12", no_second_factor=True)
+    c = h.sign_in(h.client("192.168.17.2"), "bob", "bob-password-12", None)
+    ids = {r.token_hash: r.id for r in h.sessions()}
+
+    async def _end(db, owner, row):
+        return await sessions.end_account_session(db, h.user(owner).id, row)
+
+    assert h.run_db(lambda db: _end(db, "alice", ids[token_hash_for_db(c)])) is None
+    assert _probe(h, c) == 200
+    assert h.run_db(lambda db: _end(db, "alice", ids[token_hash_for_db(b)])) == token_hash_for_db(b)
+    assert _probe(h, b) == 401 and _probe(h, a) == 200
+    assert h.run_db(lambda db: _end(db, "alice", ids[token_hash_for_db(b)])) is None
+
+
+def test_admin_signs_out_an_account(h, monkeypatch):
+    """Settings' "Sign out everywhere" and the terminal's sign-out ask this route: every token of
+    the account ends, its sockets close; admin only; an unknown account is 404.
+    MUTATION: no close_account_sockets call; no require_admin - red."""
+    import uuid
+    from vaf.core.web_interface import WebInterfaceManager
+    closed = []
+    monkeypatch.setattr(WebInterfaceManager, "close_account_connections",
+                        lambda self, scope: closed.append(scope))
+    user_id, a, b = _two_devices(h)
+    admin = h.client(None)
+    assert admin.post(f"/api/users/{uuid.uuid4()}/sign-out").status_code == 404
+    assert admin.post("/api/users/not-an-id/sign-out").status_code == 404
+    other = h.sign_in(h.client("192.168.17.3"), "alice", "alice-password-1", None)
+    r = h.client("192.168.17.3").post(f"/api/users/{user_id}/sign-out",
+                                      headers={"Authorization": f"Bearer {other}"})
+    assert r.status_code == 403
+    r = admin.post(f"/api/users/{user_id}/sign-out")
+    assert r.status_code == 200 and r.json() == {"ended": 3}
+    assert _probe(h, a) == 401 and _probe(h, b) == 401 and _probe(h, other) == 401
+    assert closed == [str(h.user("alice").user_scope_id)]

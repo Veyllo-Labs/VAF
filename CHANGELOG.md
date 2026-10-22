@@ -13,6 +13,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
+- **Tokens for programs**, under Settings, Account, Tokens for programs and
+  `vaf users token`: a script or a program on another machine gets a token of its own,
+  confirmed with your 2FA code, shown once and revoked like a device. **Session list and
+  sign-out**, under Settings, Account and `vaf users sessions|sign-out`.
+
 - **`Agent.set_allowed_tools(names)`** fixes which tools an agent offers and runs, for every
   identity, until lifted with `None`, so an agent that answers a stranger cannot use your
   own tools, and a turn under the set never answers a question the agent has open for your
@@ -214,7 +219,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   page load. For your own programs: sign-in, the 2FA step and the first-run setup no longer
   return an access token (`POST /api/auth/verify-2fa` answers `{"ok": true}`,
   `POST /api/auth/login` without a second factor `{"user": ...}`, `POST /api/auth/bootstrap`
-  `{"temp_token", "user"}`). The machine itself still needs no token.
+  `{"temp_token", "user"}`). Create a token for your script under Settings, Account, Tokens
+  for programs (or `vaf users token NAME --label TEXT` on the machine) and send it as
+  `Authorization: Bearer <token>`. A token acts as its account, lives 7 to 365 days and can
+  be revoked there. The machine itself still needs no token.
+
+- **See and end your sessions.** Settings, Account lists every device signed in to your
+  account, with its address and last use, and your tokens for programs. Sign out one device
+  or all others; an admin can sign an account out everywhere, and `vaf users sessions` and
+  `vaf users sign-out` do the same in a terminal.
 
 - **A sign-in on another device ends after a week without use, and lasts a month at most.**
   It used to last a day whether used or not. It now ends after 7 days without use

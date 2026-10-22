@@ -726,7 +726,11 @@ is not a preference: `Authorization` headers and subprotocols are stripped on th
 leg of the integrated proxy, silently and with no error anywhere.
 
 The credential is either an access token (an account on the host machine) or a join
-ticket (an invitation to exactly this room). **There is no fallback**: no credential
+ticket (an invitation to exactly this room). For a program on another machine, the
+account's access token is a token for programs: made in Settings, Account with the
+account's 2FA code, or with `vaf users token NAME --label TEXT` in a terminal on the host
+(see "Tokens for programs" in [NETWORK_FEATURES.md](../setup/NETWORK_FEATURES.md#authentication-details));
+the web UI's own sign-in is an HttpOnly cookie a program never sees. **There is no fallback**: no credential
 means no connection. An access token is refused when it was minted before the second
 factor, when its account no longer stands (deactivated, deleted, demoted) or when its
 session ended (a logout, a password change, a reset): the same check the HTTP lanes and

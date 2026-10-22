@@ -461,6 +461,15 @@ def program_token_name(name) -> str:
     return cleaned
 
 
+def program_token_days(days) -> int:
+    """A lifetime a token for programs may have (PROGRAM_TOKEN_DAYS). Raises
+    ProgramTokenRefused('invalid')."""
+    if isinstance(days, bool) or days not in PROGRAM_TOKEN_DAYS:
+        raise ProgramTokenRefused(
+            "invalid", "The lifetime is one of " + ", ".join(map(str, PROGRAM_TOKEN_DAYS)) + " days.")
+    return int(days)
+
+
 async def mint_program_token(db, user, *, name: str, days: int, ip: str = "",
                              user_agent: str = "", where: str = "") -> Tuple[str, str]:
     """A token for a program of the account's own, after the caller proved it is the account
@@ -473,9 +482,7 @@ async def mint_program_token(db, user, *, name: str, days: int, ip: str = "",
     from vaf.auth.crypto import create_access_token
 
     cleaned = program_token_name(name)
-    if isinstance(days, bool) or days not in PROGRAM_TOKEN_DAYS:
-        raise ProgramTokenRefused(
-            "invalid", "The lifetime is one of " + ", ".join(map(str, PROGRAM_TOKEN_DAYS)) + " days.")
+    days = program_token_days(days)
     if not account_seal.check(user, where="token for programs", ip=ip):
         raise ProgramTokenRefused("record_changed", account_seal.REFUSAL_LOGIN)
     token = create_access_token(str(user.id), user.username, user.role, str(user.user_scope_id),

@@ -1050,8 +1050,10 @@ _LOOKUP_MEMO_S = 60.0
 # the 60 s of an answer, and an answer ends the series (RFC 9520 asks resolvers to hold a
 # failure at least 1 s, and to back off). Not holding it at all let every choice start every
 # name again: with a resolver that answers SERVFAIL after 1.5 s, another account's
-# invitation waited 10 s at 20 connections, and one member drove about 230 queries/s at a
-# resolver that fails in 0.05 s (measured).
+# invitation waited up to 12 s at 20 connections, and one member drove about 230 queries/s
+# at a resolver that fails in 0.05 s (measured; A2A_PROTOCOL.md has the table). After a long
+# outage the hold has grown, so the lane returns up to a minute after the resolver answers
+# again; the reasons say so.
 _LOOKUP_FAILURE_HOLD_S = 5.0
 _NO_ANSWER = object()
 _LOOKUP_MEMO: Dict[str, Tuple[float, Any, float]] = {}
@@ -1066,10 +1068,11 @@ _LOOKUP_IN_FLIGHT = None
 # How long a choice waits for a lookup another choice started: a working resolver answers
 # within it, and a lookup that fails late, or never ends, then costs only the choice that
 # started it (InFlight.join_wait). With a resolver that answers SERVFAIL after 1.5 s, the
-# joining choices held the four invitation threads: another account waited up to 3.22 s at
-# 20 connections without this cap, 2.87 s with 0.5 s and 1.43 s with 0.1 s (measured). A
-# choice that joins a slower lookup gets no answer for that name (no lane), and the next
-# one reads it from the memo.
+# joining choices held the four invitation threads: in one comparison run at 20 connections,
+# another account waited up to 3.22 s without this cap, 2.87 s with 0.5 s and 1.43 s with
+# 0.1 s (the final figures, 1.31 s among them, are the table in A2A_PROTOCOL.md). A choice
+# that joins a slower lookup gets no answer for that name (no lane), and the next one reads
+# it from the memo.
 _LOOKUP_JOIN_WAIT_S = 0.1
 # The failures of getaddrinfo that are an answer: the name does not exist, or has no
 # address. Anything else (EAI_AGAIN, a resolver that timed out or failed for now, among
@@ -1245,8 +1248,10 @@ def room_host_choice(address: str, cfg: Optional[dict] = None) -> Tuple[Optional
     # No answer covers a lookup still running when the choice stopped waiting (its budget,
     # or the join cap for one another choice started) and a resolver that failed at once
     # (EAI_AGAIN), so the text names both rather than "within 2 s".
+    # The retry hint says a minute: a failure is held up to that long after an outage.
     late = (f". No answer came in time for {', '.join(silent)} (the lookup was still "
-            "running, or the resolver failed)" if silent else "")
+            "running, or the resolver failed); an invitation made about a minute later "
+            "can use the answer" if silent else "")
     if not candidates:
         example = "vaf" + wildcards[0][1:]
         return None, (f"the served certificate names only {', '.join(wildcards)}, and none of "
@@ -1256,8 +1261,8 @@ def room_host_choice(address: str, cfg: Optional[dict] = None) -> Tuple[Optional
     if all(c in silent for c in candidates):
         return None, (f"the served certificate names {listed}, and the lookups on the host "
                       "gave no answer in time (they were still running, or the resolver "
-                      "failed; it may be down for now): an invitation made once it answers "
-                      "has the lane")
+                      "failed; it may be down for now): an invitation made about a minute "
+                      "after it answers again has the lane")
     one = len(candidates) == 1 and not wildcards
     head = (f"the served certificate names {listed}, but it is not the host's name and does "
             f"not resolve to its address {address} on the host" if one else

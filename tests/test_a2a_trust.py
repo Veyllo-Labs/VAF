@@ -515,6 +515,7 @@ def test_the_room_host_lookups_share_one_budget_and_run_once_per_name(tmp_path, 
     finally:
         release.set()
     assert host is None and "gave no answer in time (they were still running" in why
+    assert "about a minute after it answers again" in why, "when to try again"
     assert took < 2.0, took
     counts = Counter(looked_up)
     assert set(counts) <= {"example.org", "a.example.org", "b.example.org"}
@@ -702,9 +703,9 @@ def test_a_resolver_failure_is_held_briefly_then_asked_again(tmp_path, monkeypat
 
 def test_the_failure_hold_backs_off_and_an_answer_ends_the_series(monkeypatch):
     """Each failure of a name in a row doubles its hold, up to the minute an answer is kept;
-    an answer starts the series over. With a 5 s hold that never grew, a resolver that
-    fails after 1.5 s still made another account wait 7.5 s at 20 connections; backing off
-    brought that to 3.2 s (measured). MUTATION: hold every failure 5 s - red."""
+    an answer starts the series over. In one comparison run with a 5 s hold that never grew,
+    a resolver that fails after 1.5 s still made another account wait 7.5 s at 20
+    connections; backing off brought that to 3.2 s. MUTATION: hold every failure 5 s - red."""
     monkeypatch.setattr(ssl_utils, "_LOOKUP_MEMO", {})
     monkeypatch.setattr(ssl_utils, "_LOOKUP_FAILURES", {})
 
@@ -766,4 +767,4 @@ def test_a_name_without_an_answer_gets_a_sentence_of_its_own(tmp_path, monkeypat
         release.set()
     assert host is None
     assert (". No answer came in time for b.example.org (the lookup was still running, or "
-            "the resolver failed)") in why
+            "the resolver failed); an invitation made about a minute later can use the answer") in why

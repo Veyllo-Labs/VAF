@@ -230,16 +230,19 @@ async def token_account_stands(payload: dict, token: str, *, client_ip: Optional
 
     `client_ip` is the real client (`binding.connection_client_ip`): a session of the window on
     this machine stands only for this machine (vaf/auth/sessions.py). Every reader passes it;
-    None skips that rule."""
-    from vaf.auth.permissions import account_standing_async, token_still_stands
-    if not token_still_stands(await account_standing_async(payload.get("user_scope_id")),
-                              payload.get("role")):
-        return False
-    from vaf.auth.sessions import ENDED, session_standing_async
+    None skips that rule. A token that says it is such a session (its claim) is refused for
+    another client first, from the token alone, before the account lookup asks the store."""
+    from vaf.auth.sessions import ENDED, refused_by_claim, session_standing_async
     from_this_machine = None
     if client_ip is not None:
         from vaf.network.binding import is_localhost
         from_this_machine = is_localhost(client_ip)
+    if refused_by_claim(payload, from_this_machine):
+        return False
+    from vaf.auth.permissions import account_standing_async, token_still_stands
+    if not token_still_stands(await account_standing_async(payload.get("user_scope_id")),
+                              payload.get("role")):
+        return False
     return await session_standing_async(token, from_this_machine=from_this_machine,
                                         claims=payload) != ENDED
 

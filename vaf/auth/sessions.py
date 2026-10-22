@@ -223,11 +223,28 @@ async def open_session(db, user, access_token: str, *, ip: str = "", user_agent:
     return str(row_id)
 
 
+def _refused_elsewhere() -> str:
+    logger.warning("A session of this machine was presented by another address; refused")
+    return ENDED
+
+
+def refused_by_claim(claims, from_this_machine: Optional[bool]) -> bool:
+    """Whether a token's verified claims say it is a session of the window on this machine
+    (`crypto.THIS_MACHINE_CLAIM`) while another client presents it. Decided from the token
+    alone, with no I/O, so a reader refuses it before it asks any store (the account lookup
+    included); logs the refusal. `session_standing_async` asks the same."""
+    from vaf.auth.crypto import THIS_MACHINE_CLAIM
+    if (from_this_machine is False and isinstance(claims, dict)
+            and claims.get(THIS_MACHINE_CLAIM) is True):
+        _refused_elsewhere()
+        return True
+    return False
+
+
 def _for_client(answer: str, machine_bound: bool, from_this_machine: Optional[bool]) -> str:
     """A live session of the window on this machine opens nothing for another client."""
     if answer == LIVE and machine_bound and from_this_machine is False:
-        logger.warning("A session of this machine was presented by another address; refused")
-        return ENDED
+        return _refused_elsewhere()
     return answer
 
 
@@ -238,11 +255,10 @@ async def session_standing_async(token: str, *, from_this_machine: Optional[bool
     asked). `from_this_machine=None` (the caller does not know the client) skips the address
     rule. `claims` is the token's verified payload: one that says it is a session of this
     machine is refused for another client before the store is asked. Never raises."""
-    from vaf.auth.crypto import THIS_MACHINE_CLAIM, token_hash_for_db
+    from vaf.auth.crypto import token_hash_for_db
 
-    if (from_this_machine is False and isinstance(claims, dict)
-            and claims.get(THIS_MACHINE_CLAIM) is True):
-        return _for_client(LIVE, True, False)
+    if refused_by_claim(claims, from_this_machine):
+        return ENDED
     key = token_hash_for_db(str(token or ""))
     now = time.monotonic()
     with _cache_lock:

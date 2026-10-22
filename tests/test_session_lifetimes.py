@@ -253,3 +253,31 @@ def test_a_session_of_this_machine_is_refused_elsewhere_without_the_store(monkey
     assert _a2a_credential_verifier(t["here"], client_ip="192.168.50.9") is None
     assert asyncio.run(sessions.session_standing_async(
         t["here"], from_this_machine=True, claims=decode_token(t["here"]))) == sessions.UNKNOWN
+
+
+def test_a_claimed_session_elsewhere_is_refused_before_any_lookup(monkeypatch):
+    """A token that says it is the machine's, presented by another client, is refused from the
+    token alone: neither the account lookup nor the session store is asked, so a slow or
+    stopped store cannot hold the refusal up. From this machine both are asked as before.
+    MUTATION: the account lookup before the claim check again - red."""
+    import vaf.auth.permissions as permissions
+    from vaf.auth import sessions
+    from vaf.auth.crypto import THIS_MACHINE_CLAIM
+    from vaf.auth.middleware import token_account_stands
+    asked = []
+
+    async def _account(scope):
+        asked.append("account")
+        return ("active", "user")
+
+    async def _session(token, **kw):
+        asked.append("session")
+        return sessions.LIVE
+
+    monkeypatch.setattr(permissions, "account_standing_async", _account)
+    monkeypatch.setattr(sessions, "session_standing_async", _session)
+    payload = {"user_scope_id": "scope-1", "role": "user", THIS_MACHINE_CLAIM: True}
+    assert asyncio.run(token_account_stands(payload, "t", client_ip="192.168.50.9")) is False
+    assert asked == []
+    assert asyncio.run(token_account_stands(payload, "t", client_ip="127.0.0.1")) is True
+    assert asked == ["account", "session"]

@@ -43,17 +43,24 @@ terminal confirmation prompt; set the env var yourself for headless use.
 
 ```python
 agent = CoreAgent(register_signals=False, config_overrides={...})
-agent.init_chat()      # builds the system prompt, RESETS history
+agent.init_chat()      # builds the system prompt, RESETS history and the chat's
+                       # context state (summary, decisions, goal)
 agent.load_model()     # local provider only: download + start/reuse the one
                        # llama server on 127.0.0.1:8080; no-op for API providers
 ...
 agent.shutdown()       # idempotent cleanup; safe to call manually
 ```
 
-- `init_chat()` rebuilds the system prompt from the current tools/config,
-  loads `VAF.md` project context from the cwd (capped), and resets
+- `init_chat(*, keep_chat_state=False)` rebuilds the system prompt from the current
+  tools/config, loads `VAF.md` project context from the cwd (capped), and resets
   `agent.history` to just the system message. Call it once before the first
-  `chat_step`, and again only when you want a fresh conversation. The
+  `chat_step`, and again only when you want a fresh conversation. A fresh
+  conversation also drops the previous one's context state: the compressed summary,
+  the key decisions, the goal and the files and errors noted there, which otherwise
+  reach the model on every turn. `keep_chat_state=True` rebuilds the prompt for the
+  SAME conversation and leaves that state alone; the engine uses it in exactly two
+  places, `load_session_context` after it restored the session's own state, and
+  `reload_local_model`, which re-attaches the history. The
   `VAF.md` section is resolved again on every turn (`_project_context_block`):
   from the cwd upward when no chat source is set (a terminal, an embedder), and
   in VAF's runner (web, messaging channels; it sets `_current_chat_source`)
@@ -302,8 +309,12 @@ still runs a hidden tool, but never one outside the allowed set.
 - `get_live_session_subagents()` - session-scoped, heartbeat-verified list of
   running sub-agents (use this, never process-global state).
 - `load_session_context(session_id, *, force=False)` - swap the agent onto a persisted
-  session: rebinds identity from session metadata, re-inits the prompt, and
-  replays messages preserving tool-call linkage. It returns immediately when the
+  session: declares the session first (so the system prompt is built for its workspace
+  and its working memory, never for the chat being left), starts from a clean context
+  state and restores the session's own saved one when it has one, rebinds identity from
+  session metadata, re-inits the prompt, and replays messages preserving tool-call
+  linkage. A session without saved context state (no file yet, a new chat) carries
+  nothing of the chat the agent served before. It returns immediately when the
   agent is already on that session; `force=True` rebuilds anyway, which is what a
   rewind or any out-of-band edit of the stored transcript needs, because the
   in-memory history is otherwise authoritative and the agent would keep answering
@@ -339,8 +350,9 @@ still runs a hidden tool, but never one outside the allowed set.
   fully served** by this method, a **local model change is served by
   `reload_local_model()`** (below), and only **`n_ctx` still needs a new agent**.
   Calling `init_chat()` to "finish" a reload is a trap: it resets `history` to the
-  system message, which is fine when the caller already discarded the agent and
-  destroys the conversation when it did not. VAF's terminal app uses both reload
+  system message and drops the conversation's context state, which is fine when the
+  caller already discarded the agent and destroys the conversation when it did not.
+  VAF's terminal app uses both reload
   methods and leaves `n_ctx` to a restart.
 - `reload_local_model() -> bool` is the weight-swap counterpart: it re-resolves
   `filename`/`model_path` from the live config, makes the ONE llama server hold that
@@ -349,7 +361,8 @@ still runs a hidden tool, but never one outside the allowed set.
   the user's sizing to the defaults), recomputes the identity the tool-call parser gates on
   (`model_display_name` / `is_gemma_local` / `model_mode`, via
   `_apply_local_model_identity`, the same single source `__init__` uses), rebuilds
-  the system prompt through `init_chat()` and RE-ATTACHES the conversation tail, then
+  the system prompt through `init_chat(keep_chat_state=True)` and RE-ATTACHES the
+  conversation tail, so the conversation keeps its context state as well, then
   re-points session persistence. It refuses (False, untouched) under a
   `VAF_MODEL_OVERRIDE` env pin, a non-local provider, or library mode (`self.llm`
   holds the weights in-process). A failed server start also returns False but keeps

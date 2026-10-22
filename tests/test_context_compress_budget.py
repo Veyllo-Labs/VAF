@@ -161,7 +161,7 @@ def test_session_load_compresses_replayed_history(archive_dir, monkeypatch):
     a.state_registry = None
     a.current_session_id = "other-session"
     a.get_token_usage = lambda: (2000, 128000)
-    a.init_chat = lambda: a.__dict__.__setitem__("history", [{"role": "system", "content": "sys"}])
+    a.init_chat = lambda **kw: a.__dict__.__setitem__("history", [{"role": "system", "content": "sys"}])
     a._bind_session_persistence = lambda sid: None
     a._broadcast_context_status = lambda: None
 

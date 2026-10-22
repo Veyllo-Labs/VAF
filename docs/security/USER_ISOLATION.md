@@ -218,7 +218,7 @@ that zero times - they write with a raw `open()` or a container copy into a dire
 themselves. `filesystem.py` calls it fourteen times, which is why `write_file` IS covered. So a
 wrong session id upstream is not caught downstream: the directory decision is the boundary.
 - **Broadcasting:** Updates are sent only to connections subscribed to that session (`broadcast_to_session`); session list refreshes are sent only to that user's connections (`broadcast_to_user`). See [SESSION_MANAGEMENT.md](../memory/SESSION_MANAGEMENT.md).
-- **Agent context store:** Each chat's working memory - intent, plan, tasks, notes, and team state - is stored per session under `.vaf/main/sessions/<session_id>/`, so it is isolated between chats (and therefore between users). See [SESSION_MANAGEMENT.md](../memory/SESSION_MANAGEMENT.md) and [CONTEXT_GLUE.md](../memory/CONTEXT_GLUE.md).
+- **Agent context store:** Each chat's working memory - intent, plan, tasks, notes, and team state - is stored per session under `.vaf/main/sessions/<session_id>/`, so it is isolated between chats (and therefore between users). The context manager's state (the compressed summary, key decisions, goal, and the files and errors noted) is per chat too, although one agent and its one manager serve every chat of a runner worker: `load_session_context` clears it before the chat's own saved state is restored, so a chat without one, a contact's first message on a channel included, starts empty. It used to keep the previous chat's state, which then went to the model with every message of the new chat and was saved as that chat's own, across accounts. See [SESSION_MANAGEMENT.md](../memory/SESSION_MANAGEMENT.md) and [CONTEXT_GLUE.md](../memory/CONTEXT_GLUE.md).
 
 ## 3. Cache Isolation (Redis)
 

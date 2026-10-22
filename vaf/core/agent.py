@@ -1479,7 +1479,9 @@ class Agent:
         `filename`/`model_path` from the fresh config, recomputes the model
         identity the tool-call parser gates on, rebuilds the system prompt and
         KEEPS the running conversation by re-attaching the history tail -
-        `init_chat()` alone resets the history to the system message.
+        `init_chat()` alone resets the history to the system message, which is why
+        it is called with `keep_chat_state=True`: the context state (summary,
+        decisions, goal) is the same conversation's and stays as well.
 
         Returns True when the running agent now serves the configured model.
         Refusals (False, nothing touched): a non-local provider (no weights to
@@ -1520,9 +1522,11 @@ class Agent:
             self._apply_local_model_identity()
             # Rebuild the system prompt for the new identity, keep the chat:
             # init_chat is reused verbatim (prompt manager, VAF.md, identity)
-            # and the conversation tail is re-attached afterwards.
+            # and the conversation tail is re-attached afterwards, together with
+            # its context state (summary, decisions, goal), which is the same
+            # conversation's.
             tail = list(getattr(self, "history", []) or [])[1:]
-            self.init_chat()
+            self.init_chat(keep_chat_state=True)
             self.history.extend(tail)
             sid = getattr(self, "current_session_id", None)
             if sid:
@@ -5460,14 +5464,50 @@ class Agent:
         self.model_path = path
         self.filename = os.path.basename(path)
 
-    def init_chat(self):
+    def _reset_chat_state(self) -> None:
+        """Drop the per-chat context state the previous conversation left on this agent.
+
+        The context manager's intent and state (summary, key decisions, goal, noted
+        files, errors and tools) reach the model on every turn: the context glue in the
+        system prompt, the router's "Current Goal", the next compression's "Previous
+        Summary". One agent serves every chat of a runner worker, so without this a chat
+        with nothing saved yet - a contact's first message, another account's new web
+        chat - started with the previous chat's state, and the runner's next save
+        stored it as that chat's own. Reset in place (`ContextManager.reset_chat_state`),
+        so the state registry keeps serializing the live manager.
+
+        A no-op without a context manager (stub agents built with `Agent.__new__`).
+
+        NAMED BOUNDARY: only the `context` state provider is reset. The two others a real
+        agent registers hold nothing per chat: `tool_activity` has no writer anywhere in
+        the tree, and `python_sandbox` registers only for a tool named `python`, which
+        does not exist. A tool that registers its own provider through
+        `create_state_provider` (no in-tree implementer, documented nowhere) keeps its
+        state across a switch of a `CoreAgent`; the facade binds one session per agent
+        and never switches.
+        """
+        cm = getattr(self, "context_manager", None)
+        if cm is not None:
+            cm.reset_chat_state()
+
+    def init_chat(self, *, keep_chat_state: bool = False):
         """Build the system prompt and start a fresh conversation.
 
         Rebuilds the prompt manager from the current tools/config/session
         identity, loads project context (VAF.md in the cwd, capped), and
         RESETS ``self.history`` to just the system message. Call once before
         the first chat_step; calling again discards the running conversation.
+
+        A fresh conversation also drops the previous one's context state (the
+        compressed summary, key decisions, goal, noted files and errors; see
+        `_reset_chat_state`). ``keep_chat_state=True`` rebuilds the prompt for the
+        SAME conversation instead and leaves that state alone: the session loader
+        after it restored the chat's own state, and the local model swap, which
+        re-attaches the history afterwards.
         """
+        if not keep_chat_state:
+            self._reset_chat_state()
+
         # Initialize Prompt Manager
         n_ctx = max(self.config.get("n_ctx", 32768), 32768)  # 32768 minimum for local models
 
@@ -5588,6 +5628,22 @@ class Agent:
         # before its turn, and until then no VAF.md is anybody's (_project_context_block).
         self._chat_project_dir = ""
 
+        # Declare the target BEFORE anything is built for it. init_chat below builds the
+        # system message from current_session_id (the workspace line) and its prompt
+        # manager binds the working memory of the session the context variable names;
+        # declared after the build, as before, the new chat's system message named the
+        # chat being left, and a caller that had not declared the session first (the
+        # runner's result drain) handed it that chat's working memory too.
+        self.current_session_id = session_id
+        set_current_session_id(session_id)
+        self._bind_session_persistence(session_id)
+
+        # Start from a clean context state, then let the load restore THIS chat's own.
+        # The restore only touches the providers a snapshot carries, and a chat without
+        # one (no file yet, a file the web wrote without runtime_state, a runtime_state
+        # holding only sidebar documents) used to keep whatever the previous chat left.
+        self._reset_chat_state()
+
         # Load new session data
         from vaf.core.session import SessionManager
         # CRITICAL: Pass state_registry so runtime state (ContextManager, etc.) is restored
@@ -5617,8 +5673,9 @@ class Agent:
                 getattr(m, "role", None) in ("user", "assistant")
                 for m in (session.messages or [])
             )
-            # Reset Context (System Prompt)
-            self.init_chat()
+            # Reset Context (System Prompt). Keep the context state: it is the one the load
+            # just restored for this chat, or the clean one when the chat has none.
+            self.init_chat(keep_chat_state=True)
 
             # Replay History (session.messages are Message dataclass instances: .role, .content)
             for msg in session.messages:
@@ -5695,7 +5752,8 @@ class Agent:
             self._bind_session_persistence(session_id)
 
         except Exception:
-            # New/Empty session — definitely no prior history
+            # New/Empty session, definitely no prior history. A plain init_chat: a chat
+            # that has no file, or one that cannot be read, starts from a clean state.
             self._is_new_session = True
             self.init_chat()
             self.current_session_id = session_id

@@ -30,7 +30,7 @@ def _dummy(monkeypatch, *, config_model="qwen-test.gguf", swap_ok=True,
            provider="local", llm=None, session_id="green123456"):
     """A minimal stand-in driven through the UNBOUND method, with the two
     module seams (Config.load, ensure_local_model) recorded."""
-    calls = {"swap": [], "bind": [], "init": 0}
+    calls = {"swap": [], "bind": [], "init": 0, "init_kwargs": []}
 
     monkeypatch.delenv("VAF_MODEL_OVERRIDE", raising=False)
     monkeypatch.setattr(agent_mod.Config, "load",
@@ -57,8 +57,9 @@ def _dummy(monkeypatch, *, config_model="qwen-test.gguf", swap_ok=True,
         d.filename = config_model
         d.model_path = f"/models/{config_model}"
 
-    def _init_chat():
+    def _init_chat(**kw):
         calls["init"] += 1
+        calls["init_kwargs"].append(kw)
         d.history = [{"role": "system", "content": "NEW"}]
 
     d.ensure_model_exists = _resolve
@@ -80,6 +81,15 @@ def test_the_swap_keeps_the_conversation(monkeypatch):
     assert d._tokenizer_instance is None
     assert calls["bind"] == ["green123456"], (
         "session persistence was not re-pointed after the prompt rebuild")
+
+
+def test_the_swap_keeps_the_conversations_context_state(monkeypatch):
+    """A plain `init_chat()` starts a fresh conversation and drops the compressed summary,
+    the decisions and the goal with it. The swap keeps the conversation, so it keeps those
+    too. MUTATION: call a plain `init_chat()` in `reload_local_model` - red."""
+    d, calls = _dummy(monkeypatch)
+    assert Agent.reload_local_model(d) is True
+    assert calls["init_kwargs"] == [{"keep_chat_state": True}]
 
 
 def test_the_parser_identity_follows_the_weights(monkeypatch):

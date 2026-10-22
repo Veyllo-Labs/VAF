@@ -151,7 +151,7 @@ VAF uses a **Cursor-style context management system** that tracks, compresses, a
 └─────────────────────────────────────────────────────────────┘
 ```
 
-When a session is loaded (e.g. on Web UI session switch or when processing a chat task), the ContextManager state (intent, state, narrative summary) is restored from the session’s `runtime_state` if present. So the agent keeps high-level context across session switches; see **SESSION_MANAGEMENT.md** (Session switch / LOAD_SESSION).
+When a session is loaded (e.g. on Web UI session switch or when processing a chat task), the ContextManager's per-chat state (intent, state, narrative summary) is first cleared (`ContextManager.reset_chat_state`, in place on the one manager) and then restored from the session’s `runtime_state` if it has one. One agent serves every chat of a runner worker, so the clear is what keeps a chat to its own high-level context: a chat without saved state (a new web chat, a contact's first message, another account's new chat) starts empty instead of with the previous chat's summary, decisions and goal. `init_chat()` clears it the same way, which is what `clear` in the terminal apps calls. See **SESSION_MANAGEMENT.md** (Session switch / LOAD_SESSION).
 
 ### Real-Time API Token Tracking (Self-Calibration)
 

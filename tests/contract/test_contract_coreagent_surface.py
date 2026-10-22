@@ -134,6 +134,14 @@ def test_the_documented_lifecycle_and_reload_methods_exist_on_the_class():
         assert callable(method), f"CoreAgent.{name} is no longer callable"
 
 
+def test_init_chat_keeps_its_keyword_only_flag_for_the_same_conversation():
+    """CORE_AGENT.md documents `init_chat(*, keep_chat_state=False)`: a fresh conversation
+    drops the previous one's context state, and the flag rebuilds the prompt for the SAME
+    conversation. An embedder spells it by keyword; it must stay keyword-only with a
+    default that starts fresh."""
+    assert_params(vaf.CoreAgent.init_chat, {"keep_chat_state": (KW_ONLY, False)})
+
+
 def test_module_level_reload_all_api_backends_exists_with_keyword_only_force():
     """The process-wide broadcast is documented in CORE_AGENT.md as living at
     module level in vaf.core.agent and as deliberately NOT on the facade

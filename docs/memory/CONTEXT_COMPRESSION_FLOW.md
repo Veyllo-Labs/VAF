@@ -189,6 +189,13 @@ checkpoint or compression made before a restart keeps its effect instead of
 being replayed away. Before this pass existed as a budget-aware lane, a restart
 silently rebuilt the full history and every later round-trip resent it.
 
+The summary it reuses is only ever the loaded session's own. The loader clears
+the context manager before the load restores anything (`Agent._reset_chat_state`),
+so a session without saved state starts with no summary at all rather than with
+the one the agent built for the chat it served before; one agent serves every
+chat of a runner worker, and that summary used to reach the next chat's prompt
+and its first "Previous Summary" merge.
+
 ---
 
 ## 8. Edge cases and safeguards

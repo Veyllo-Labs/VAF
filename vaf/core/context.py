@@ -432,7 +432,31 @@ class ContextManager:
             # Ultra-large windows (e.g. Gemini 1M+, Claude 200k)
             self.trigger_threshold = 0.90
             self.recent_memory_size = 200
-    
+
+    def reset_chat_state(self) -> None:
+        """Forget what this manager noted about the conversation it served.
+
+        The intent (goal, sub-goals, constraints, keywords) and the state (narrative
+        summary, key decisions, errors, files created/read/modified, tools used, code
+        snippets) belong to ONE chat, while one agent, and so one manager, serves every
+        chat of a runner worker. A switch to another chat or a fresh conversation starts
+        here; the session loader then restores the chat's own saved state, if it has one.
+
+        Replaced in place on THIS manager, never by building a new one: the
+        `ContextStateProvider` registered with the agent's state registry holds the
+        manager, so a new instance would leave the registry serializing the old one
+        (the same reason `set_max_tokens` exists).
+
+        Deliberately kept: `max_tokens`, `trigger_threshold` and `recent_memory_size`
+        (limits of the agent and its model, not of a chat), `archive` (the in-memory
+        snapshots `/restore` reads; they do not record their chat, so which chat they
+        may go back to is a question for `/restore`, not for a switch), and
+        `created_archives` (the files this instance wrote, which `cleanup()` and
+        `forget()` still have to find).
+        """
+        self.intent = IntentContext()
+        self.state = StateContext()
+
     # ═══════════════════════════════════════════════════════════════════════════
     # TOKEN ESTIMATION
     # ═══════════════════════════════════════════════════════════════════════════

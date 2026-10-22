@@ -415,6 +415,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   devices keep working; `vaf server ca renew` (or "Restrict to private addresses" in the
   settings) replaces it when you choose and lists the names the new one leaves out.
 
+- **A new chat no longer starts with what the agent noted in the chat before.** When the
+  agent moved to a chat with nothing saved yet (a new web chat, a contact's first message on
+  WhatsApp, Telegram, Discord or mail, or a new chat of another account on the same server),
+  that chat took over the previous chat's summary, its decisions, its goal and the files and
+  errors noted there. They went to the model with every message and were saved as the new
+  chat's own. A new chat now starts with none of it, and a chat with saved state gets back
+  only its own. `clear` in the terminal app now forgets that summary too, for a chat started
+  in the terminal. Restart VAF after updating so the fix takes effect.
+
 ### Fixed
 
 - **The server service no longer calls sudo at every start.** The installed service cannot

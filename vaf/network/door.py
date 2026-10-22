@@ -46,8 +46,9 @@ connection, admitted or not, before the admission check reads a single header:
   connection.
 - ``door_options()``: those plus at most ``connection_cap()`` connections (503 above it,
   for a WebSocket upgrade as for a request), an explicit keep-alive, no ``Server`` header,
-  and no forwarded-header trust of uvicorn's: ``binding.connection_client_ip`` is the only
-  reader of ``X-Forwarded-For`` on a door.
+  no forwarded-header trust of uvicorn's (``binding.connection_client_ip`` is the only
+  reader of ``X-Forwarded-For`` on a door), and a WebSocket implementation that makes a
+  sender wait while its client reads nothing (``_websocket_protocol``).
 - ``raise_open_file_limit()``: the process raises its own soft open-file limit.
 
 The request body has its limits where it is read: the proxy streams it and holds it to
@@ -99,6 +100,13 @@ Named boundaries:
   1 MB answer written 0.5 s later reached such a client, and of a streamed answer only the
   part written before its end did, the first 64 KiB piece of 1 MB on a door listener and
   nothing through the proxy. Browsers do not half-close.
+- uvicorn's sans-I/O WebSocket protocol does nothing at its client's own end
+  (``eof_received``), so its app learns of it only when the connection ends. Over TLS
+  asyncio then ends the TLS layer by itself and closes the TCP connection under it, and that
+  close's watch bounds it: a client that sent close_notify and reads nothing is dropped
+  after ``SEND_TIMEOUT_S`` (measured: 30.0 s at a limit of 30 s and 60.1 s at 60 s, uvicorn
+  0.49 and 0.54, Python 3.13). The legacy protocol closes at once and drops it after its own
+  close timeout, 10 s.
 - ``vaf run --web`` serves the backend itself: there the head, handshake and connection
   limits apply to every client, the owner's own web UI included, which reaches it through
   Next.js; a flood that fills the cap turns that UI away too. A body is held only by the
@@ -116,6 +124,8 @@ Named boundaries:
   ``requirements.txt`` resolves. The door reaches the TCP transport under a TLS one through
   asyncio's private ``_ssl_protocol._transport``, to read its progress (Python 3.11+) and to
   hook its close (every version); the pin test and the TLS WebSocket test fail if it moves.
+  The WebSocket choice reads whether uvicorn's sans-I/O protocol defines ``pause_writing``
+  (0.53 and later); the door's WebSocket tests run on both implementations.
 
 The limits are constants, not settings: they are the floor of the door, not a preference,
 and a config key's name is a security decision of its own.
@@ -723,6 +733,37 @@ def connection_cap() -> int:
     return cap
 
 
+# uvicorn's names (``uvicorn.config.WS_PROTOCOLS``) for its two WebSocket implementations on
+# the ``websockets`` library: the sans-I/O one and the legacy one.
+_WS_SANSIO = "websockets-sansio"
+_WS_LEGACY = "websockets"
+
+
+def _websocket_protocol() -> str:
+    """The WebSocket implementation a door serves: uvicorn's sans-I/O one where it makes a
+    sender wait while its client reads nothing, the legacy one otherwise.
+
+    uvicorn's own choice (``ws="auto"``) moved under the door: up to 0.49 it is the legacy
+    protocol, from 0.50 the sans-I/O one, which until 0.52 never told a sender to wait (it
+    defines no ``pause_writing``). A WebSocket app that sent in a loop to a client that read
+    nothing never waited there, and the process grew until the kernel's out-of-memory killer
+    ended it (measured with uvicorn 0.49's sans-I/O protocol, the same code, Python 3.13).
+    From 0.53 it waits, and uvicorn deprecates the legacy protocol and will point its name at
+    the sans-I/O one. So the door asks the protocol, not the version: the sans-I/O one where
+    it has its own ``pause_writing``, the legacy one where it has none or does not exist
+    (uvicorn before 0.35). The two differ at a client's own end (the module's named
+    boundaries)."""
+    try:
+        from uvicorn.protocols.websockets.websockets_sansio_impl import (
+            WebSocketsSansIOProtocol,
+        )
+    except ImportError:
+        return _WS_LEGACY
+    if WebSocketsSansIOProtocol.pause_writing is asyncio.BaseProtocol.pause_writing:
+        return _WS_LEGACY
+    return _WS_SANSIO
+
+
 def door_options() -> dict:
     """The ``uvicorn.Config`` keyword arguments of a door (raises the open-file limit first).
 
@@ -736,6 +777,8 @@ def door_options() -> dict:
       turned a device that wrote ``X-Forwarded-For: 127.0.0.1`` into this machine. The
       resolver in ``binding.py`` is the only reader of that header on a door; it honours it
       from a loopback peer only.
+    - ``ws``: ``_websocket_protocol()``, an implementation that makes a sender wait while its
+      client reads nothing, whatever uvicorn's own default is.
     """
     raise_open_file_limit()
     return {
@@ -744,6 +787,7 @@ def door_options() -> dict:
         "timeout_keep_alive": KEEP_ALIVE_S,
         "server_header": False,
         "proxy_headers": False,
+        "ws": _websocket_protocol(),
     }
 
 

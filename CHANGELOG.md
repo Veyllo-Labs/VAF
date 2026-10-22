@@ -163,6 +163,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   refused for its network is disconnected after its first refusal. Restart VAF after
   updating.
 
+- **A live connection to a device that reads nothing no longer piles up in memory, whichever
+  uvicorn is installed.** On the HTTPS port and under `vaf run --web`, VAF now picks the
+  WebSocket handling itself. With uvicorn 0.50 to 0.52, the default handling never made VAF
+  wait for a slow device, so whatever it sent to one was kept in memory without a limit.
+  Restart VAF after updating.
+
 - **A relay in front of the web UI's port no longer makes its visitors the machine owner.** A
   reverse proxy on the same machine pointed at port 3000 (an nginx for the LAN, Tailscale
   Serve inside your tailnet) connects to VAF from the machine itself, and the web UI's API

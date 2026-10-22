@@ -25,7 +25,7 @@ import time
 import pytest
 import uvicorn
 
-from door_harness import http_exchange, serving
+from door_harness import WS_IMPLEMENTATIONS, http_exchange, serving
 from vaf.network import door
 import vaf.network.https_proxy as proxy
 
@@ -100,9 +100,10 @@ class _Upstream:
 
 
 @pytest.fixture
-def relay(monkeypatch):
+def relay(monkeypatch, request):
     """(proxy port, upstream): the real proxy app on a door listener, both origins pointed at
-    the mock upstream."""
+    the mock upstream. Parametrized indirectly, the parameter replaces the door's WebSocket
+    implementation."""
     upstream = _Upstream()
     monkeypatch.setattr(proxy, "_frontend_client", None)
     monkeypatch.setattr(proxy, "_backend_client", None)
@@ -110,8 +111,10 @@ def relay(monkeypatch):
         origin = f"http://127.0.0.1:{up_port}"
         monkeypatch.setattr(proxy, "FRONTEND_ORIGIN", origin)
         monkeypatch.setattr(proxy, "BACKEND_ORIGIN", origin)
+        options = door.door_options()
+        options["ws"] = getattr(request, "param", options["ws"])
         config = uvicorn.Config(proxy.create_proxy_app(), lifespan="on", log_config=None,
-                                **door.door_options())
+                                **options)
         with serving(config, door.door_event_loop) as (port, _server):
             yield port, upstream
 
@@ -370,6 +373,7 @@ def test_the_pools_match_the_door(monkeypatch):
 
 # --------------------------------------------------------------------------- WebSocket
 
+@pytest.mark.parametrize("relay", WS_IMPLEMENTATIONS, indirect=True)
 def test_a_refused_socket_fails_at_the_handshake(relay):
     """AC 20: a socket the backend refuses before accept fails at the handshake (HTTP 403)
     instead of opening and closing with 1000, and an accepted one still relays both ways.

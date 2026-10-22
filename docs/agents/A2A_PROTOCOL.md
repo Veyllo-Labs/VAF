@@ -732,7 +732,9 @@ account's 2FA code, or with `vaf users token NAME --label TEXT` in a terminal on
 (see "Tokens for programs" in [NETWORK_FEATURES.md](../setup/NETWORK_FEATURES.md#authentication-details));
 the web UI's own sign-in is an HttpOnly cookie a program never sees. The door tells the
 registered verifier the real client's address when the verifier takes a `client_ip` keyword
-(`admit(..., client_ip=...)`, `set_credential_verifier` in `vaf/core/a2a/wire.py`), and VAF's
+(`admit(..., client_ip=...)`, `set_credential_verifier` in `vaf/core/a2a/wire.py`; a
+parameter that accepts it by keyword, or `**kwargs`: a positional-only one is called with the
+credential alone), and VAF's
 verifier refuses a session of the window on the host machine presented from another address. **There is no fallback**: no credential
 means no connection. An access token is refused when it was minted before the second
 factor, when its account no longer stands (deactivated, deleted, demoted) or when its

@@ -63,11 +63,12 @@ def set_credential_verifier(verify) -> None:
     None for anything else. Deciding what "allowed to open a session" means - the token
     type, an expiry, a revoked session - belongs to whoever owns the accounts.
 
-    A verifier that takes a ``client_ip`` keyword is also told the real client's address
-    (the door's own resolver, ``binding.connection_client_ip``), because whether a
-    credential may open a session can depend on where it is used: VAF's own sessions of the
-    window on the machine itself stand only for that machine. A verifier with the one
-    argument keeps working unchanged.
+    A verifier that takes a ``client_ip`` keyword (a parameter of that name that accepts a
+    keyword, or ``**kwargs``) is also told the real client's address (the door's own
+    resolver, ``binding.connection_client_ip``), because whether a credential may open a
+    session can depend on where it is used: VAF's own sessions of the window on the machine
+    itself stand only for that machine. A verifier with the one argument, or with a
+    positional-only ``client_ip``, is called with the credential alone and keeps working.
     """
     global _verifier
     _verifier = verify
@@ -96,12 +97,17 @@ def looks_like_ticket(credential: str) -> bool:
 
 
 def _accepts_client_ip(verify) -> bool:
+    """Whether `verify` can be called with ``client_ip=``: a parameter of that name that takes
+    a keyword, or ``**kwargs``. A positional-only ``client_ip`` cannot (the call raises, and
+    every admission through that verifier would be refused), so it gets the credential alone."""
     import inspect
     try:
         params = inspect.signature(verify).parameters.values()
     except (TypeError, ValueError):
         return False
-    return any(p.name == "client_ip" or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
+    by_keyword = (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    return any((p.name == "client_ip" and p.kind in by_keyword)
+               or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)
 
 
 def resolve_account(credential: str, *, client_ip: Optional[str] = None) -> dict:

@@ -570,3 +570,30 @@ def test_the_standing_lookups_hold_nothing_bound_to_a_loop():
     for module in (middleware, permissions, sessions, account_seal):
         for name, value in vars(module).items():
             assert not isinstance(value, loop_bound), f"{module.__name__}.{name}"
+
+
+def test_the_client_goes_only_to_a_verifier_that_takes_it_by_keyword(monkeypatch):
+    """A positional-only `client_ip` cannot take the keyword the door passes: that verifier is
+    called with the credential alone instead of raising and refusing every admission. A
+    keyword-only one and `**kwargs` are told the client. MUTATION: accept any parameter named
+    client_ip - red."""
+    import vaf.core.a2a.wire as wire_mod
+    seen = []
+
+    def _positional_only(credential, client_ip=None, /):
+        seen.append(("positional", client_ip))
+        return {"user_scope_id": "scope-1"}
+
+    def _keyword_only(credential, *, client_ip=None):
+        seen.append(("keyword", client_ip))
+        return {"user_scope_id": "scope-2"}
+
+    def _any_keyword(credential, **kw):
+        seen.append(("kwargs", kw.get("client_ip")))
+        return {"user_scope_id": "scope-3"}
+
+    for verify, scope in ((_positional_only, "scope-1"), (_keyword_only, "scope-2"),
+                          (_any_keyword, "scope-3")):
+        monkeypatch.setattr(wire_mod, "_verifier", verify)
+        assert resolve_account("t", client_ip="192.168.7.7")["user_scope_id"] == scope
+    assert seen == [("positional", None), ("keyword", "192.168.7.7"), ("kwargs", "192.168.7.7")]

@@ -147,7 +147,8 @@ def test_an_existing_unrestricted_ca_is_kept(tmp_path, monkeypatch, host):
     leaf = ssl_utils._leaf_of(str(ssl_dir / "server.pem"))
     dns = leaf.extensions.get_extension_for_class(
         x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName)
-    assert dns == ["localhost", "renamed-box"], "an unrestricted CA issues today's names"
+    assert dns == ["localhost", "renamed-box", "renamed-box.local"], (
+        "an unrestricted CA issues today's names, and the mDNS name with them")
 
 
 @needs_openssl
@@ -165,9 +166,13 @@ def test_the_leaf_stays_inside_the_constraints(tmp_path, monkeypatch, host, capl
     leaf = ssl_utils._leaf_of(str(ssl_dir / "server.pem"))
     dns = leaf.extensions.get_extension_for_class(
         x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName)
-    assert dns == ["localhost", "vafhost.lan"], "a name under lan stays, the bare host name goes"
-    assert any("renamed-box" in r.getMessage() and "certificate warning" in r.getMessage()
-               for r in caplog.records if r.levelno == logging.WARNING)
+    assert dns == ["localhost", "vafhost.lan", "renamed-box.local"], (
+        "a name under lan stays, the bare host name goes, its mDNS name stays")
+    warning = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
+               and "renamed-box" in r.getMessage()]
+    assert warning and "or by renamed-box.local" in warning[0]
+    assert "localhost, local, home.arpa, internal, lan" in warning[0], (
+        "the warning names what the CA in use vouches for")
     assert _openssl_strict(ssl_dir / "ca.pem", ssl_dir / "server.pem").endswith("OK")
 
 

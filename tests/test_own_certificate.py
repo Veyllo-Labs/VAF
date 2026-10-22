@@ -457,3 +457,29 @@ def test_the_pem_scan_is_linear():
     leaf, key, inter, root = own_chain()
     certs, keys = ssl_utils._pem_blocks(b"junk\n" + pem(leaf) + key_pem(key) + pem(inter, root))
     assert len(certs) == 3 and len(keys) == 1
+
+
+def test_a_key_algorithm_cryptography_does_not_know_is_unreadable():
+    """The public key is parsed on first access too; an unknown algorithm raised out of the
+    check (a 500 on the routes). MUTATION: drop the public_key() touch in _read_bundle -
+    red."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import serialization
+    leaf, key, inter, root = own_chain(names=("vaf", "192.168.1.20"))
+    der = leaf.public_bytes(serialization.Encoding.DER)
+    rsa_oid = bytes.fromhex("06092a864886f70d010101")
+    assert der.count(rsa_oid) == 1
+    unknown = x509.load_der_x509_certificate(der.replace(rsa_oid, rsa_oid[:-1] + b"\x63"))
+    report = _inspect(pem(unknown, inter, root), key_pem(key))
+    assert [i.code for i in report.errors] == ["unreadable"]
+
+
+def test_a_renewal_names_the_machine_names_it_leaves_out(tmp_path, monkeypatch):
+    """A new authority vouches for no plain host name; the names it would leave out of VAF's
+    certificate are listed before anybody renews, and <host>.local is not among them.
+    MUTATION: list every machine name - red."""
+    import vaf.network.binding as binding
+    monkeypatch.setattr(binding, "machine_dns_names", lambda: ["mypc", "mypc.fritz.box"])
+    assert ssl_utils.names_a_new_authority_leaves_out() == ["mypc", "mypc.fritz.box"]
+    monkeypatch.setattr(binding, "machine_dns_names", lambda: ["mypc", "mypc.lan"])
+    assert ssl_utils.names_a_new_authority_leaves_out() == ["mypc"]

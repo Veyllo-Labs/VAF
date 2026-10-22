@@ -383,18 +383,69 @@ def _served(tmp_path, monkeypatch, names, *, own=True):
         ssl_utils.ensure_ssl_certificates()
 
 
-@pytest.mark.parametrize("names, expected", [
-    (("vaf.office.example", "192.168.1.20"), "192.168.1.20"),
-    (("*.office.example", "vaf.office.example"), "vaf.office.example"),
-    (("*.office.example",), None),
+@pytest.mark.parametrize("names, machine, resolves, expected", [
+    (("vaf.office.example", "192.168.1.20"), [], [], "192.168.1.20"),
+    (("vaf.office.example",), [], [], "vaf.office.example"),
+    # The apex beside a wildcard is usually the public website, not this machine.
+    (("*.example.org", "example.org"), [], [], None),
+    (("example.org", "www.example.org", "vaf.example.org"), [], [], None),
+    (("example.org", "vaf.example.org"), ["vaf", "vaf.example.org"], [], "vaf.example.org"),
+    (("example.org", "vaf.example.org"), [], ["vaf.example.org"], "vaf.example.org"),
+    (("*.office.example",), [], [], None),
+    # An address written as a DNS name: TLS checks an address against address names only.
+    (("192.168.1.20.example", "192.168.1.21"), [], [], "192.168.1.20.example"),
 ])
 def test_the_invitation_names_a_host_the_certificate_covers(tmp_path, monkeypatch, names,
-                                                            expected):
+                                                            machine, resolves, expected):
     """The peer checks the certificate against the host the invitation names, so the
-    invitation names one the served certificate covers: the LAN address, else a DNS name of
-    an own certificate (never a wildcard). MUTATION: return the address unchecked - red."""
+    invitation names one the served certificate covers and that is this machine: the LAN
+    address, else a DNS name equal to the machine's name, else one that resolves to the
+    address, else the only name a certificate without a wildcard carries. MUTATION: take the
+    first DNS name again - red (the apex)."""
+    import vaf.network.binding as binding
     _served(tmp_path, monkeypatch, names)
+    monkeypatch.setattr(binding, "machine_dns_names", lambda: list(machine))
+    monkeypatch.setattr(ssl_utils, "_resolves_to", lambda name, _a: name in resolves)
     assert ssl_utils.served_room_host("192.168.1.20") == expected
+
+
+def test_a_dns_name_that_is_an_address_is_not_a_room_host(tmp_path, monkeypatch):
+    """A DNS SAN "192.168.1.20" is no name a peer can dial by: TLS checks the dialled address
+    against the IP names. MUTATION: drop the IP-literal skip - red."""
+    from cryptography import x509 as _x509
+    from cert_factory import isolated_home, key_pem, make_ca, make_leaf, pem
+    import vaf.network.binding as binding
+    monkeypatch.setattr(binding, "get_all_local_ips", lambda: [("enp3s0", "192.168.1.20")])
+    monkeypatch.setattr(binding, "local_interfaces", lambda: [])
+    isolated_home(tmp_path, monkeypatch, local_network_enabled=True,
+                  local_network_tls_enabled=True)
+    root, root_key = make_ca()
+    leaf, key = make_leaf(root, root_key, names=("vafhost.lan",))
+    # Rebuild the leaf with the address as a DNS name, which make_leaf would turn into an IP.
+    from datetime import datetime, timedelta, timezone
+    from cryptography.hazmat.primitives import hashes as _hashes
+    now = datetime.now(timezone.utc)
+    leaf = (_x509.CertificateBuilder().subject_name(leaf.subject).issuer_name(root.subject)
+            .public_key(key.public_key()).serial_number(7)
+            .not_valid_before(now - timedelta(days=1)).not_valid_after(now + timedelta(days=100))
+            .add_extension(_x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .add_extension(_x509.SubjectAlternativeName([_x509.DNSName("192.168.1.20")]),
+                           critical=False)
+            .add_extension(_x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
+                           critical=False)
+            .add_extension(_x509.AuthorityKeyIdentifier.from_issuer_public_key(
+                root_key.public_key()), critical=False)
+            .sign(root_key, _hashes.SHA256()))
+    cert_file, key_file = tmp_path / "c.pem", tmp_path / "k.pem"
+    cert_file.write_bytes(pem(leaf, root))
+    key_file.write_bytes(key_pem(key))
+    from vaf.core.config import Config
+    with Config._locked():
+        cfg = Config.load()
+        cfg["local_network_ssl_cert"], cfg["local_network_ssl_key"] = str(cert_file), str(key_file)
+        Config.save(cfg)
+    host, why = ssl_utils.room_host_choice("192.168.1.20")
+    assert host is None and "neither" in why
 
 
 def test_vafs_own_certificate_without_the_address_names_no_host(tmp_path, monkeypatch, caplog):
@@ -412,3 +463,5 @@ def test_vafs_own_certificate_without_the_address_names_no_host(tmp_path, monkey
     with caplog.at_level(logging.WARNING):
         assert invite_mod.lan_endpoint("room-x") == {}
     assert any("vaf server cert reset" in r.getMessage() for r in caplog.records)
+    endpoint, gap = invite_mod.lan_lane("room-x")
+    assert endpoint == {} and "vaf server cert reset" in gap

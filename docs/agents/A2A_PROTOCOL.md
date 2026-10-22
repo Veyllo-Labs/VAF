@@ -782,10 +782,10 @@ invitation and `/api/a2a/ca.pem` read the same function (`ssl_utils.served_autho
 they name what the host really serves.
 
 An invitation carries the authority's FINGERPRINT, not the authority. Joining pins it only if
-it matches:
+it matches, for the host and port the invitation names (an address, or a DNS name):
 
 ```
-vaf a2a trust wss://<ip>:<port> --ca-fp <sha256>
+vaf a2a trust wss://<host>:<port> --ca-fp <sha256>
 ```
 
 The pinning contexts (`trust.client_context`, the guest client's `pinned_context`) demand
@@ -800,7 +800,11 @@ vouches for anybody holding a certificate from it: pinned alone, a certificate f
 room address (measured). So both contexts also check the certificate against the host the
 peer dials (`check_hostname`, the room URL's address or name): a certificate from the pinned
 authority that does not name that host is refused ("IP address mismatch", "Hostname
-mismatch").
+mismatch"). What still passes is any certificate from the pinned authority that names the
+dialled host: with a public authority that takes control of the name, with a company
+authority anybody it issued that private address to, and private addresses repeat across
+sites and VPNs, so a company-issued certificate is better reached by a DNS name than by an
+address.
 
 **A changed authority breaks the pins.** The host switching to an own certificate, back to
 VAF's own (`vaf server cert reset`), or renewing its CA (`vaf server ca renew`) changes the
@@ -815,9 +819,14 @@ The host an invitation names is one the served certificate covers
 (`ssl_utils.served_room_host`): the machine's LAN address, which VAF's own certificate names
 (it carries every address the machine had when it was issued; an address that came later
 enters it at the next start or with `vaf server cert reset`), or, for a certificate of the
-host's own that does not name that address, its first DNS name that is not a wildcard, which
-the joining machine's network must resolve to the host. When the certificate names neither,
-the invitation carries no lane for other machines and the host's log says why.
+host's own that does not name that address, a DNS name of it that is this machine: one equal
+to its host name or FQDN, else one that resolves to the address on the host, else the only
+name of a certificate without a wildcard. Never the apex beside a wildcard (usually the
+public website), a wildcard, `localhost` or an address written as a DNS name. The joining
+machine's network must resolve the name to the host. When the certificate names none, the
+invitation carries no lane for other machines: its briefing says so and that the host can
+fix it, `vaf a2a invite` returns the reason as `remote_unavailable`, and the host's log says
+it too.
 
 A room is joined from this machine, the local network or an admitted VPN, never from the
 internet: the HTTPS door and the backend refuse every other address at the handshake of

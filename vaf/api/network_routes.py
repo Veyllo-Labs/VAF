@@ -350,9 +350,24 @@ def _state(request: Request) -> dict:
     return certificate_state(step_up_required=_signed_in(request))
 
 
+# What the two routes read, for OpenAPI only (they parse the body themselves, _parts).
+_PEM_BODY_DOC = {"requestBody": {"required": True, "content": {"application/json": {"schema": {
+    "type": "object", "required": ["certificate"],
+    "properties": {
+        "certificate": {"type": "string", "description": "PEM; may carry the chain and the key"},
+        "key": {"type": "string", "description": "PEM private key without a passphrase"},
+        "chain": {"type": "string", "description": "PEM intermediate certificates"},
+        "code": {"type": "string", "description": "2FA code of a signed-in admin (PUT)"},
+    }}}}}}
+
+
 async def _parts(request: Request) -> tuple:
     """(certificate, key, chain, code) from the JSON body. 422 ``invalid`` without the body's
-    content for anything else than an object of strings."""
+    content for anything else than an object of strings sent as ``application/json`` (the
+    type a cross-site form cannot send without a preflight)."""
+    content_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
+    if content_type != "application/json":
+        raise HTTPException(status_code=422, detail={"code": "invalid"})
     try:
         payload = await request.json()
     except Exception:
@@ -382,7 +397,8 @@ def get_certificate(request: Request):
     return _state(request)
 
 
-@router.post("/certificate/check", dependencies=[Depends(require_admin)])
+@router.post("/certificate/check", dependencies=[Depends(require_admin)],
+             openapi_extra=_PEM_BODY_DOC)
 async def check_certificate(request: Request):
     """The check alone (ssl_utils.inspect_certificate): nothing is written."""
     from starlette.concurrency import run_in_threadpool
@@ -393,7 +409,7 @@ async def check_certificate(request: Request):
     return report.to_dict()
 
 
-@router.put("/certificate")
+@router.put("/certificate", openapi_extra=_PEM_BODY_DOC)
 async def put_certificate(request: Request, user: dict = Depends(require_admin)):
     """Serve this certificate from now on, without a restart.
 

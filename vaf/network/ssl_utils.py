@@ -20,8 +20,8 @@ or past its expiry is still served: serving another authority instead teaches pe
 click warnings away.
 
 VAF's own server certificate carries ``localhost``, 127.0.0.1, ::1, every LAN and VPN
-address, and the host name and FQDN (under a restricted CA only when they lie under one of
-its private names), is valid for 365 days and is issued again at a start that finds it under
+address, ``<host>.local`` (the mDNS name), and the host name and FQDN (under a restricted CA
+only when they lie under one of its private names), is valid for 365 days and is issued again at a start that finds it under
 30 days, unusable to strict verifiers, or missing an address. The CA is kept across those
 re-issues: every device that installed it keeps trusting the machine.
 
@@ -153,6 +153,9 @@ def server_tls_options(certfile: str, keyfile: str) -> dict:
 # again (the tray's restart) replaces its entry.
 _LISTENERS: Dict[str, Tuple[Any, Any]] = {}
 _LISTENERS_LOCK = threading.Lock()
+# name -> the certificate file's bytes as that listener loaded them (register_tls_listener,
+# replaced only by a load that succeeded).
+_LOADED_CHAINS: Dict[str, bytes] = {}
 # One change of the served pair at a time in this process: install, reset, renewal, reload.
 _CHANGE_LOCK = threading.RLock()
 # How long a listener's own loop may take to load the new pair.
@@ -165,9 +168,19 @@ def register_tls_listener(name: str, server: Any, loop: Any = None) -> None:
     ``server`` is the ``uvicorn.Server`` built from ``server_tls_options``; ``loop`` is the
     event loop it serves on. The new pair is loaded on that loop: OpenSSL does not promise
     that a context can be changed while another thread runs a handshake on it, and every
-    handshake of the listener runs on its loop."""
+    handshake of the listener runs on its loop.
+
+    The certificate file it is about to load is read here too: ``served_chain`` reports what
+    a listener loaded, never a file replaced since (a ``vaf server cert reset`` or renewal
+    rewrites ``server.pem`` in place, and a listener whose reload timed out still serves the
+    previous one)."""
+    try:
+        chain = Path(str(server.config.ssl_certfile)).read_bytes()
+    except Exception:
+        chain = b""
     with _LISTENERS_LOCK:
         _LISTENERS[str(name)] = (server, loop)
+        _LOADED_CHAINS[str(name)] = chain
 
 
 def _no_passphrase() -> bytes:
@@ -379,10 +392,16 @@ def _collect_sans() -> list:
         x509.IPAddress(ipaddress.IPv6Address("::1")),
     ]
 
-    # The host name and its FQDN (the same list HSTS keeps off, binding.hsts_for_host)
+    # The host name and its FQDN (the same list HSTS keeps off, binding.hsts_for_host), and
+    # the name mDNS gives the machine, <host>.local: a restricted CA vouches for that one,
+    # so a device keeps a name to open VAF by when the host name itself is left out.
     from vaf.network.binding import machine_dns_names
-    for name in machine_dns_names():
+    names = machine_dns_names()
+    for name in names:
         sans.append(x509.DNSName(name))
+    mdns = _mdns_name(names)
+    if mdns and x509.DNSName(mdns) not in sans:
+        sans.append(x509.DNSName(mdns))
 
     # Add all local network IPs
     try:
@@ -401,22 +420,72 @@ def _collect_sans() -> list:
     return sans
 
 
+_MDNS_LABEL = re.compile(r"(?!-)[a-z0-9-]{1,63}(?<!-)")
+
+
+def _mdns_name(names: List[str]) -> Optional[str]:
+    """``<host>.local``, the name mDNS (Avahi, Bonjour) gives this machine, from the first of
+    ``machine_dns_names()`` (the host name), or None."""
+    label = str(names[0] if names else "").strip().lower().split(".")[0]
+    if not label or label == "localhost" or not _MDNS_LABEL.fullmatch(label):
+        return None
+    return f"{label}.local"
+
+
 def _sans_inside(constraints: Optional[x509.NameConstraints], sans: list) -> list:
     """The names a CA with these constraints may sign. One name outside makes a strict
     verifier refuse the whole certificate (measured: private names plus one public address,
-    "permitted subtree violation"), so a name outside is left off, at WARNING."""
+    "permitted subtree violation"), so a name outside is left off, at WARNING, with the names
+    this CA does vouch for (an authority from before the restriction carries every name)."""
     if constraints is None:
         return list(sans)
     kept, dropped = [], []
     for name in sans:
         (kept if _permits(constraints, name) else dropped).append(name)
     if dropped:
+        permitted = [s.value for s in constraints.permitted_subtrees or []
+                     if isinstance(s, x509.DNSName)]
+        local = [n.value for n in kept if isinstance(n, x509.DNSName)
+                 and n.value.lower().endswith(".local")]
         logger.warning(
-            "The local CA vouches only for private addresses, localhost and names under %s, "
-            "so the server certificate leaves out %s: a device that opens VAF there sees a "
-            "certificate warning. Open VAF by its address, or by a name under one of those.",
-            ", ".join(_PRIVATE_DNS_SUFFIXES), ", ".join(str(n.value) for n in dropped))
+            "The local CA vouches only for private addresses and for %s and the names under "
+            "them, so the server certificate leaves out %s: a device that opens VAF there sees "
+            "a certificate warning. Open VAF by its address%s instead. (An authority created "
+            "before VAF restricted them keeps carrying every name.)",
+            ", ".join(permitted), ", ".join(str(n.value) for n in dropped),
+            f" or by {local[0]}" if local else "")
     return kept
+
+
+def names_a_new_authority_leaves_out() -> List[str]:
+    """This machine's names that a newly created local CA (``_authority_constraints``) may
+    not vouch for, so its server certificate leaves them out: what a renewal takes away from
+    a device that opens VAF by name. Looks up the FQDN (``machine_dns_names``)."""
+    try:
+        from vaf.network.binding import machine_dns_names
+        names = machine_dns_names()
+    except Exception:
+        return []
+    constraints = _authority_constraints()
+    left: List[str] = []
+    for name in [*names, _mdns_name(names)]:
+        if not name or name in left:
+            continue
+        try:
+            if not _permits(constraints, x509.DNSName(name)):
+                left.append(name)
+        except Exception:
+            left.append(name)
+    return left
+
+
+def mdns_name() -> Optional[str]:
+    """``<host>.local`` for this machine, or None (no lookup: the host name only)."""
+    import socket as _socket
+    try:
+        return _mdns_name([_socket.gethostname()])
+    except Exception:
+        return None
 
 
 def _generate_server_cert(ssl_dir: Path, ca_key, ca_cert) -> tuple[Path, Path]:
@@ -911,34 +980,37 @@ def fingerprints_match(left: str, right: str) -> bool:
     return hmac.compare_digest(a, b)
 
 
-def _loaded_cert_path() -> Optional[str]:
-    """The certificate file a running listener of this process loaded, or None."""
+def _loaded_chain() -> Optional[bytes]:
+    """The certificate bytes a running listener of this process loaded, or None."""
     with _LISTENERS_LOCK:
-        listeners = list(_LISTENERS.values())
-    for server, _loop in listeners:
+        listeners = [(name, entry, _LOADED_CHAINS.get(name)) for name, entry in _LISTENERS.items()]
+    for _name, (server, _loop), chain in listeners:
         config = getattr(server, "config", None)
         if (getattr(config, "ssl", None) is not None and getattr(server, "started", False)
-                and not getattr(server, "should_exit", False)
-                and getattr(config, "ssl_certfile", None)):
-            return str(config.ssl_certfile)
+                and not getattr(server, "should_exit", False) and chain):
+            return chain
     return None
 
 
 def served_chain(cfg: Optional[dict] = None) -> List[x509.Certificate]:
-    """The certificates of the served file, leaf first; empty while TLS is off or when there
-    is none to read. Never reads the private key: the file a running listener of this
-    process loaded when there is one (what devices get), else ``served_certificate``'s,
-    whose key check is cached."""
+    """The certificates devices are served, leaf first; empty while TLS is off or when there
+    is none to read. Never reads the private key: what a running listener of this process
+    loaded when there is one (kept until a reload succeeds: the file may have been replaced
+    by a change whose reload timed out), else ``served_certificate``'s file, whose key check
+    is cached."""
     if not _flag(_cfg_get(cfg, "local_network_tls_enabled", False)):
         return []
-    path = _loaded_cert_path() if cfg is None else None
-    if path is None:
+    data = _loaded_chain() if cfg is None else None
+    if data is None:
         served = served_certificate(cfg)
         if served.source == "none" or not served.cert_path:
             return []
-        path = served.cert_path
+        try:
+            data = Path(served.cert_path).read_bytes()
+        except OSError:
+            return []
     try:
-        return [x509.load_pem_x509_certificate(b) for b in _pem_blocks(Path(path).read_bytes())[0]]
+        return [x509.load_pem_x509_certificate(b) for b in _pem_blocks(data)[0]]
     except Exception:
         return []
 
@@ -960,33 +1032,84 @@ def served_authority(cfg: Optional[dict] = None) -> Optional[Tuple[bytes, str]]:
     return pem, top.fingerprint(hashes.SHA256()).hex()
 
 
-def served_room_host(address: str, cfg: Optional[dict] = None) -> Optional[str]:
-    """The host a room invitation names for a peer on another machine, or None.
+def _resolves_to(name: str, address: str) -> bool:
+    """Whether ``name`` resolves to ``address`` here (a DNS lookup)."""
+    try:
+        return any(info[4][0] == address for info in socket.getaddrinfo(name, None))
+    except Exception:
+        return False
+
+
+def room_host_choice(address: str, cfg: Optional[dict] = None) -> Tuple[Optional[str], Optional[str]]:
+    """(the host a room invitation names for a peer on another machine, or None; why not).
 
     A peer checks the served certificate against the host it dials, so the invitation names
     one the certificate covers: ``address`` (this machine's LAN address) when the served leaf
-    names it, otherwise, for a certificate of the person's own, the first DNS name it carries
-    that is not a wildcard or ``localhost`` (a name the peer's network must resolve to this
-    machine). None when neither: VAF's own certificate names every address this machine had
-    when it was issued, and an address that came later enters it at the next start or with
-    ``vaf server cert reset``."""
+    names it. Otherwise, for a certificate of the person's own (its chain does not end in the
+    local CA), one of its DNS names that is this machine: a name equal to the host name or
+    FQDN, else one that resolves to ``address`` here, else the only name it carries when it
+    has no wildcard. Not the apex beside a wildcard (``example.org`` next to
+    ``*.example.org`` is usually the public website), not a wildcard, ``localhost`` or an
+    address written as a DNS name (TLS checks an address against the address names only).
+    VAF's own certificate names every address this machine had when it was issued; an
+    address that came later enters it at the next start or with ``vaf server cert reset``."""
     chain = served_chain(cfg)
     if not chain:
-        return None
+        return None, "TLS serves no certificate"
     try:
         names = _san_names(chain[0])
     except Exception:
-        return None
+        return None, "the served certificate's names cannot be read"
     if address and _covers(names, address):
-        return address
-    if served_certificate(cfg).source != "own":
-        return None
+        return address, None
+    local_ca = ca_fingerprint()
+    if local_ca and fingerprints_match(chain[-1].fingerprint(hashes.SHA256()).hex(), local_ca):
+        return None, (f"VAF's own certificate does not name {address}, which came after it "
+                      "was issued: `vaf server cert reset` issues one that names it, without "
+                      "a restart")
+    candidates: List[str] = []
+    wildcard = False
     for name in names:
-        if isinstance(name, x509.DNSName):
-            value = name.value.strip().rstrip(".").lower()
-            if value and not value.startswith("*") and value != "localhost":
-                return value
-    return None
+        if not isinstance(name, x509.DNSName):
+            continue
+        value = name.value.strip().rstrip(".").lower()
+        if not value or value == "localhost":
+            continue
+        if value.startswith("*"):
+            wildcard = True
+            continue
+        try:
+            ipaddress.ip_address(value)
+            continue
+        except ValueError:
+            pass
+        if value not in candidates:
+            candidates.append(value)
+    if not candidates:
+        return None, (f"your certificate names neither {address} nor a DNS name a peer could "
+                      "dial: serve one that names this address")
+    try:
+        from vaf.network.binding import machine_dns_names
+        mine = {n.lower().rstrip(".") for n in machine_dns_names()}
+    except Exception:
+        mine = set()
+    for candidate in candidates:
+        if candidate in mine:
+            return candidate, None
+    for candidate in candidates:
+        if _resolves_to(candidate, address):
+            return candidate, None
+    if len(candidates) == 1 and not wildcard:
+        return candidates[0], None
+    return None, (f"your certificate names {', '.join(candidates)}, but none is this "
+                  f"machine's name or resolves to {address} here: make one of them this "
+                  "machine's host name, or point it at that address in your DNS")
+
+
+def served_room_host(address: str, cfg: Optional[dict] = None) -> Optional[str]:
+    """The host a room invitation names for a peer on another machine, or None
+    (``room_host_choice`` says why)."""
+    return room_host_choice(address, cfg)[0]
 
 
 # ── the check of a certificate somebody wants to serve ──────────────────────
@@ -1211,10 +1334,12 @@ def _read_bundle(cert_pem: bytes, key_pem: bytes, chain_pem: bytes,
         return None
     try:
         certs = [x509.load_pem_x509_certificate(b) for b in blocks]
-        # cryptography parses the extensions on first access; one that does not parse (a
-        # broken subject alternative name) raised from the middle of the check before.
+        # cryptography parses the extensions and the public key on first access; one that
+        # does not parse (a broken subject alternative name, a key algorithm it does not
+        # know) raised from the middle of the check before.
         for cert in certs:
             _ = cert.extensions
+            _ = cert.public_key()
     except Exception:
         report.errors.append(_item("unreadable"))
         return None
@@ -1373,7 +1498,9 @@ def _run_on_loop(loop, fn):
 
     A loop that does not get to it within ``_RELOAD_WAIT_S`` (a blocked listener) has it
     cancelled, so the pair it serves stays as it is and the answer says so: ``timeout``. One
-    that started it and did not finish in time may still apply it: ``unconfirmed``."""
+    that started it and did not finish in time may still apply it: ``unconfirmed``. Which of
+    the two is decided under one lock with the call itself, so a call that starts while the
+    wait ends is either cancelled or reported as started, never both."""
     import asyncio
     import concurrent.futures
     try:
@@ -1383,10 +1510,14 @@ def _run_on_loop(loop, fn):
     if loop is None or running is loop or not getattr(loop, "is_running", lambda: False)():
         return fn()
     done: "concurrent.futures.Future" = concurrent.futures.Future()
-    started = threading.Event()
+    gate = threading.Lock()
+    state = {"started": False, "cancelled": False}
 
     def _call() -> None:
-        started.set()
+        with gate:
+            if state["cancelled"]:
+                return
+            state["started"] = True
         try:
             done.set_result(fn())
         except BaseException as e:  # noqa: BLE001 - handed back to the waiting thread
@@ -1396,13 +1527,17 @@ def _run_on_loop(loop, fn):
     try:
         return done.result(timeout=_RELOAD_WAIT_S)
     except concurrent.futures.TimeoutError:
+        with gate:
+            if state["started"]:
+                return "unconfirmed"
+            state["cancelled"] = True
         handle.cancel()
-        return "unconfirmed" if started.is_set() else "timeout"
+        return "timeout"
     except Exception:
         return "failed"
 
 
-def _reload_listener(server, loop, cert: str, key: str) -> str:
+def _reload_listener(name: str, server, loop, cert: str, key: str, chain: bytes) -> str:
     config = getattr(server, "config", None)
     context = getattr(config, "ssl", None)
     if (context is None or not getattr(server, "started", False)
@@ -1422,6 +1557,8 @@ def _reload_listener(server, loop, cert: str, key: str) -> str:
             except Exception:
                 return "failed"
         config.ssl_certfile, config.ssl_keyfile = cert, key
+        with _LISTENERS_LOCK:
+            _LOADED_CHAINS[name] = chain
         return "loaded"
 
     return _run_on_loop(loop, _load)
@@ -1473,11 +1610,15 @@ def reload_certificate() -> ReloadResult:
             logger.error("Certificate reload refused, nothing changed: %s",
                          REPORT_REASONS.get(problem, problem))
             return ReloadResult(refused=problem, source=source)
+        try:
+            chain = Path(cert).read_bytes()
+        except OSError:
+            return ReloadResult(refused="missing", source=source)
         with _LISTENERS_LOCK:
             listeners = list(_LISTENERS.items())
         result = ReloadResult(source=source)
         for name, (server, loop) in listeners:
-            result.listeners[name] = _reload_listener(server, loop, cert, key)
+            result.listeners[name] = _reload_listener(name, server, loop, cert, key, chain)
         for name, status in result.listeners.items():
             if status in ("restored", "failed"):
                 logger.error("Certificate reload: the %s listener %s.", name,
@@ -1600,7 +1741,8 @@ def without_certificate_keys(payload):
 # ── the state, for the settings, the CLI and the doctor ─────────────────────
 
 def local_authority() -> Optional[Dict[str, Any]]:
-    """The local CA: path, fingerprint, valid until, restricted. Read-only."""
+    """The local CA: path, fingerprint, valid until, restricted, and for an unrestricted one
+    the machine's names a renewal would leave out of VAF's own certificate. Read-only."""
     path = ca_certificate_path()
     if path is None:
         return None
@@ -1608,9 +1750,11 @@ def local_authority() -> Optional[Dict[str, Any]]:
         cert = x509.load_pem_x509_certificate(path.read_bytes())
     except Exception:
         return None
+    restricted = _constraints_of(cert) is not None
     return {"path": str(path), "fingerprint": cert.fingerprint(hashes.SHA256()).hex(),
             "not_after": cert.not_valid_after_utc.isoformat(),
-            "restricted": _constraints_of(cert) is not None}
+            "restricted": restricted,
+            "left_out_on_renewal": [] if restricted else names_a_new_authority_leaves_out()}
 
 
 def certificate_state(cfg: Optional[dict] = None, *, step_up_required: bool = False) -> Dict[str, Any]:
@@ -1628,6 +1772,7 @@ def certificate_state(cfg: Optional[dict] = None, *, step_up_required: bool = Fa
         "authority": None,
         "local_ca": local_authority(),
         "uncovered": [],
+        "mdns_name": mdns_name(),
         "step_up_required": bool(step_up_required),
     }
     if served.source == "none" or not served.cert_path:

@@ -101,9 +101,10 @@ def test_the_check_is_read_only(tmp_path, monkeypatch, machine):
     assert Config.CONFIG_FILE.read_bytes() == before
 
 
-def test_nothing_about_a_certificate_while_tls_is_off(tmp_path, monkeypatch, machine):
-    """No listener serves a certificate then, nor one from the local CA; network_tls_disabled
-    is the finding. MUTATION: drop the TLS gate - red (the unrestricted CA is reported)."""
+def test_with_tls_off_only_the_authority_is_reported(tmp_path, monkeypatch, machine):
+    """No listener serves a certificate then (network_tls_disabled is that finding), but the
+    devices that installed the local CA trust it all the same, so an unrestricted one is
+    still reported. MUTATION: gate the authority finding on TLS too - red."""
     from cryptography.hazmat.primitives import serialization
     ssl_dir = isolated_home(tmp_path, monkeypatch, local_network_enabled=True,
                             local_network_tls_enabled=True, local_network_firewall_enabled=False)
@@ -115,4 +116,31 @@ def test_nothing_about_a_certificate_while_tls_is_off(tmp_path, monkeypatch, mac
         serialization.NoEncryption()))
     assert _ours() == {"network_ca_unrestricted": "low"}
     cfg = dict(Config.load(), local_network_tls_enabled=False)
-    assert _ours(cfg) == {}
+    assert _ours(cfg) == {"network_ca_unrestricted": "low"}
+    own_tmp = tmp_path / "own"
+    own_tmp.mkdir()
+    _own(own_tmp, monkeypatch, days=-3)
+    ssl_utils.ensure_ssl_certificates()
+    assert "network_certificate_expired" in _ours()
+    cfg = dict(Config.load(), local_network_tls_enabled=False)
+    assert "network_certificate_expired" not in _ours(cfg)
+
+
+def test_the_unrestricted_authority_finding_names_what_a_renewal_leaves_out(tmp_path,
+                                                                            monkeypatch,
+                                                                            machine):
+    """MUTATION: drop the names from the finding - red."""
+    from cryptography.hazmat.primitives import serialization
+    monkeypatch.setattr(binding, "machine_dns_names", lambda: ["mypc", "mypc.fritz.box"])
+    ssl_dir = isolated_home(tmp_path, monkeypatch, local_network_enabled=True,
+                            local_network_tls_enabled=True, local_network_firewall_enabled=False)
+    ssl_dir.mkdir(parents=True)
+    old, old_key = make_ca("VAF Local Network CA")
+    (ssl_dir / "ca.pem").write_bytes(pem(old))
+    (ssl_dir / "ca-key.pem").write_bytes(old_key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption()))
+    found = [f for f in collect_security_findings(Config.load())
+             if f["code"] == "network_ca_unrestricted"]
+    assert found and "mypc, mypc.fritz.box" in found[0]["message"]
+    assert "public sites" in found[0]["message"]

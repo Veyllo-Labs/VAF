@@ -416,6 +416,7 @@ With TLS on and no own certificate configured, VAF's `ssl_utils` module:
      - `localhost` / `127.0.0.1` / `::1`
      - Every detected LAN and VPN address (e.g. `192.168.1.100`, `10.8.0.1`, `100.101.102.103`)
      - Machine hostname and FQDN; under a restricted CA only when they lie under `local`, `home.arpa`, `internal` or `lan` (see [Restricting the Authority](#restricting-the-authority))
+     - `<host>.local`, the name mDNS gives the machine (both kinds of CA vouch for it)
 
 3. **Keeps both in `~/.vaf/ssl/`**
    - On each start the server certificate is checked: under 30 days left, unusable to strict verifiers (see below) or missing a current address means a new one, from the same CA
@@ -478,9 +479,17 @@ Measured under strict verification (`openssl verify -x509_strict` and a Python h
 Because one name outside the constraints refuses the whole certificate, VAF's own server
 certificate carries only the names inside them: a host name or FQDN outside (`mypc`,
 `mypc.fritz.box`) is left out with a warning, and a device that opens VAF by it gets a
-certificate warning. Open VAF by its address, as the access URL does, or by a name under
-`local` (mDNS: `mypc.local`), `home.arpa`, `internal` or `lan`. The settings and
-`vaf server cert show` list the names it leaves out.
+certificate warning. Open VAF by its address, as the access URL does. VAF's own certificate
+also carries `<host>.local` (`mypc.local`), the name mDNS gives the machine, so a device that
+resolves mDNS names can open VAF by that name. That needs both ends: the VAF machine
+announces its name (Avahi on Linux: measured on a Linux desktop with Avahi and nss-mdns,
+where `mypc.local` resolved; built into macOS; a Linux server without Avahi does not), and the
+device resolves `.local` names (macOS, iOS and Linux desktops with nss-mdns do; current
+Windows resolves them by its documentation, not measured here). The settings and
+`vaf server cert show` list the names the certificate leaves out, and before a renewal
+`vaf server ca renew`, the settings' "Restrict" dialog and `vaf doctor` list the names a new
+authority would leave out. An authority created before VAF restricted them keeps carrying
+every name, so nothing changes for devices until it is renewed.
 
 **An existing CA is kept as it is**, so devices that installed it keep working.
 `vaf server ca` and the settings show whether it is restricted, and `vaf doctor` reports an
@@ -638,12 +647,18 @@ previous one (restart it).
 - **Rooms on other machines** pin the authority of the served chain (its last certificate)
   and check that the certificate names the host the invitation carries
   ([A2A_PROTOCOL.md](../agents/A2A_PROTOCOL.md#trust-between-machines)): the pin alone would
-  accept any certificate a public authority issued, for anybody. So the invitation names an
-  address your certificate covers, or, when it covers none, its first DNS name (not a
-  wildcard), which the other machine's network must resolve to this one; a certificate that
-  names neither gets no invitation for other machines. Switching to an own certificate, back,
-  or renewing the CA changes the authority; those machines run `vaf a2a trust` again with the
-  new fingerprint.
+  accept any certificate a public authority issued, for anybody. What still passes is any
+  certificate from the pinned authority that names the host dialled: with a public authority
+  that means control of the name (public authorities issue no private addresses); with a
+  company authority, whoever it issues that private address to, and private addresses repeat
+  across sites and VPNs, so give such a certificate a DNS name and reach VAF by it. The
+  invitation names an address your certificate covers; when it covers none, a DNS name of it
+  that is this machine (one equal to its host name or FQDN, else one that resolves to its
+  address here, else the only name of a certificate without a wildcard; never the apex beside
+  a wildcard, which is usually the public website), which the other machine's network must
+  resolve to this one. A certificate that names neither gets no lane for other machines, and
+  the invitation says so. Switching to an own certificate, back, or renewing the CA changes
+  the authority; those machines run `vaf a2a trust` again with the new fingerprint.
 
 **Renewing automatically.** VAF runs no ACME client. A DNS-01 client (certbot with a DNS
 plugin, acme.sh, lego) can renew a certificate for a name inside your network and run
@@ -937,7 +952,7 @@ Every route is admin-only; no answer carries key material.
 
 | Method | Endpoint | Second factor | Description |
 |--------|----------|---------------|-------------|
-| GET | `/api/network/certificate` | - | `certificate_state()`: `tls`, `source` (`own`, `automatic`, `none`), `own_path`, `problem` (`{code, text}` when the configured own certificate does not load), `certificate` (subject, issuer, names, dates, `days_left`, key, `sha256`, the authority's subject and `sha256`, chain length), `authority`, `local_ca` (`path`, `fingerprint`, `not_after`, `restricted`), `uncovered` (admitted addresses and the host name the certificate does not name), `step_up_required` |
+| GET | `/api/network/certificate` | - | `certificate_state()`: `tls`, `source` (`own`, `automatic`, `none`), `own_path`, `problem` (`{code, text}` when the configured own certificate does not load), `certificate` (subject, issuer, names, dates, `days_left`, key, `sha256`, the authority's subject and `sha256`, chain length), `authority`, `local_ca` (`path`, `fingerprint`, `not_after`, `restricted`, and for an unrestricted one `left_out_on_renewal`: this machine's names a new authority would leave out), `uncovered` (admitted addresses and the host name the certificate does not name), `mdns_name` (`<host>.local`), `step_up_required` |
 | POST | `/api/network/certificate/check` | - | `{certificate, key?, chain?}` (PEM, each at most 64 KiB): the report (`ok`, `errors` and `warnings` as `{code, text, params}`, `facts`); nothing is written |
 | PUT | `/api/network/certificate` | signed-in admin | `{certificate, key?, chain?, code?}`: install and reload. `422` `{code: "refused", report}` before the code is asked for, nothing written |
 | DELETE | `/api/network/certificate` | signed-in admin | `{code?}`: back to VAF's own, freshly issued from the kept CA |

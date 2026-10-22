@@ -70,7 +70,8 @@ def guest_client_sha256() -> Optional[str]:
 
 
 def lan_endpoint(room_id: str) -> Dict[str, str]:
-    """Where a peer on another machine reaches this room, or an empty dict.
+    """Where a peer on another machine reaches this room, or an empty dict
+    (``lan_lane`` also says why, when the reason is the certificate).
 
     The address comes from the SAME source the certificate's subject names are built
     from, so an address printed here is guaranteed to be one the certificate actually
@@ -91,42 +92,48 @@ def lan_endpoint(room_id: str) -> Dict[str, str]:
     The local CA alone would name an authority the served chain does not end in, and every
     `vaf a2a trust` from another machine would refuse.
 
-    The host is one the served certificate names (`ssl_utils.served_room_host`), because the
+    The host is one the served certificate names (`ssl_utils.room_host_choice`), because the
     peer checks the certificate against it: the LAN address, or for a certificate of the
-    person's own that does not name it, a DNS name that certificate carries. Empty when the
-    certificate names neither, with a warning in the log that says what to do.
+    person's own that does not name it, a DNS name of it that is this machine. Empty when
+    there is none, with a warning in the log that says what to do.
     """
+    return lan_lane(room_id)[0]
+
+
+def lan_lane(room_id: str) -> "tuple[Dict[str, str], str]":
+    """(``lan_endpoint``, why there is none although Local Network and TLS are on, or "").
+
+    The reason is only given for the case a person can fix and would not guess: the
+    certificate names no host a peer could dial. Local Network or TLS off and an address
+    that is not admitted are choices, and say nothing here."""
     try:
         from vaf.core.config import Config
         from vaf.network.binding import get_local_network_ip, is_allowed_ip
-        from vaf.network.ssl_utils import served_authority, served_room_host
+        from vaf.network.ssl_utils import room_host_choice, served_authority
 
         if not (Config.get_bool("local_network_enabled", False)
                 and Config.get_bool("local_network_tls_enabled", False)):
-            return {}
+            return {}, ""
         address = str(get_local_network_ip() or "").strip()
         authority = served_authority()
         fingerprint = str(authority[1] if authority else "").strip()
         if not address or not fingerprint or not is_allowed_ip(address):
-            return {}
-        host = served_room_host(address)
+            return {}, ""
+        host, why = room_host_choice(address)
         if not host:
             import logging
             logging.getLogger(__name__).warning(
-                "No room invitation for other machines: the certificate VAF serves names "
-                "neither %s nor a DNS name a peer could dial. `vaf server cert reset` issues "
-                "VAF's own with the current addresses; a certificate of your own must name "
-                "this address or a name your network resolves to it.", address)
-            return {}
+                "No room invitation for other machines: %s.", why)
+            return {}, f"No machine on another network can join yet: {why}."
         port, confirmed = _effective_port()
         return {
             "origin": f"wss://{host}:{port}",
             "url": f"wss://{host}:{port}/ws/a2a/{room_id}",
             "ca_fingerprint": fingerprint,
             "port_confirmed": confirmed,
-        }
+        }, ""
     except Exception:
-        return {}
+        return {}, ""
 
 
 def _effective_port() -> "tuple[int, bool]":
@@ -358,7 +365,7 @@ def briefing(*, room_id: str, ticket: str, role: str, display: str,
              room_kind: str = "round", topic: str = "",
              endpoint: Optional[Dict[str, str]] = None,
              workspace: Optional[str] = None,
-             already_in: str = "") -> str:
+             already_in: str = "", remote_unavailable: str = "") -> str:
     """The block a human pastes into another agent's session, verbatim.
 
     Written to be read by a model with a shell and no knowledge of VAF: every step is
@@ -373,6 +380,10 @@ def briefing(*, room_id: str, ticket: str, role: str, display: str,
     text, because an agent that lost the briefing and gets a differently worded
     second one has to work out which of the two is current - and there is no
     reason for there ever to be two.
+
+    `remote_unavailable` (``lan_lane``'s reason) says, in place of the lane for another
+    machine, that there is none yet and that the host can fix it: an invitation that
+    silently left the lane out read as a room only this machine could join.
     """
     endpoint = endpoint or {}
     caps = _capability_lines(role)
@@ -404,6 +415,12 @@ def briefing(*, room_id: str, ticket: str, role: str, display: str,
                 "host falls back from 443 to 8443."
             )
         where += _guest_block(endpoint, room_id=room_id, ticket=ticket)
+    elif remote_unavailable:
+        where += (
+            "\n\nNOTE: this invitation has no lane for another machine yet. The host's "
+            "certificate names no address or name a peer could check it against. On another "
+            "machine, ask the host to run `vaf server cert reset` (or to serve a certificate "
+            "that names its address) and to invite you again.")
 
     headline = f"You have been invited into an agent room called {room_id}."
     if already_in:
@@ -541,12 +558,14 @@ def invitation_text(room: Room, record: Dict[str, Any]) -> str:
         workspace = room.workspace_dir(create=False)
     except Exception:
         workspace = None
+    endpoint = lan_endpoint(room.room_id)
+    gap = "" if endpoint else lan_lane(room.room_id)[1]
     return briefing(
         room_id=room.room_id, ticket=ticket, role=role,
         display=str(record.get("display") or "guest"),
         room_kind=room.kind, topic=str(room.manifest.get("topic") or ""),
-        endpoint=lan_endpoint(room.room_id),
-        workspace=str(workspace) if workspace else None,
+        endpoint=endpoint, workspace=str(workspace) if workspace else None,
+        remote_unavailable=gap,
     )
 
 
@@ -561,6 +580,7 @@ def invitation(room: Room, identity: Identity, *, display: str = "guest",
     """
     ticket = room.mint_ticket(identity, display=display, ttl_s=float(ttl_s))
     endpoint = lan_endpoint(room.room_id)
+    gap = "" if endpoint else lan_lane(room.room_id)[1]
 
     # The guest's role is decided by the room when the ticket is redeemed. A round
     # makes peers of everyone; in a chain an invited agent arrives as a worker, and
@@ -593,6 +613,9 @@ def invitation(room: Room, identity: Identity, *, display: str = "guest",
         checksum = guest_client_sha256()
         if checksum:
             row["client_sha256"] = checksum
+    elif gap:
+        # For the inviter (`vaf a2a invite` prints the row): why no other machine can join.
+        row["remote_unavailable"] = gap
     # Created at invite time, because an invitation is the moment file sharing
     # becomes likely - and a briefing must never name a directory that is not there.
     try:
@@ -605,5 +628,6 @@ def invitation(room: Room, identity: Identity, *, display: str = "guest",
         room_id=room.room_id, ticket=ticket, role=role, display=display,
         room_kind=room.kind, topic=str(room.manifest.get("topic") or ""),
         endpoint=endpoint, workspace=str(workspace) if workspace else None,
+        remote_unavailable=gap,
     )
     return row

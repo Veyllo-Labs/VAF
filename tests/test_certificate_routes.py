@@ -326,3 +326,27 @@ def test_both_save_lanes_pass_the_filter():
     route = patch[patch.index("async def patch_config"):]
     route = route[:route.index("Config.save(merged)")]
     assert "without_certificate_keys(" in route
+
+
+@pytest.mark.parametrize("content_type", ["text/plain", None])
+def test_a_body_that_is_not_json_is_refused(home, content_type):
+    """The routes read the body themselves: only application/json, the type a cross-site
+    form cannot send without a preflight. MUTATION: drop the content-type check - red."""
+    import json as _json
+    payload, _key = _upload()
+    headers = {"Content-Type": content_type} if content_type else {}
+    answer = _client().post("/api/network/certificate/check",
+                            content=_json.dumps(payload).encode(), headers=headers)
+    assert answer.status_code == 422 and answer.json()["detail"]["code"] == "invalid"
+
+
+def test_the_upload_routes_document_their_body():
+    """OpenAPI shows what the two routes read, although they parse the body themselves.
+    MUTATION: drop openapi_extra from the PUT route - red."""
+    app = FastAPI()
+    app.include_router(network_routes.router)
+    paths = app.openapi()["paths"]
+    for method, path in (("put", "/api/network/certificate"),
+                         ("post", "/api/network/certificate/check")):
+        schema = paths[path][method]["requestBody"]["content"]["application/json"]["schema"]
+        assert {"certificate", "key", "chain"} <= set(schema["properties"])

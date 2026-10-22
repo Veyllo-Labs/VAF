@@ -257,8 +257,9 @@ def test_nobody_reads_the_certificate_keys():
 def test_a_load_the_listener_never_got_to_is_cancelled(monkeypatch):
     """A listener whose loop is blocked past the wait: the load is cancelled, so the answer
     (timeout) is true afterwards too; it said "failed" while the queued load could still
-    apply the pair later. MUTATION: drop the cancel - red (the load runs once the loop is
-    free)."""
+    apply the pair later. MUTATION: drop the cancel and the cancelled flag - red (the load
+    runs once the loop is free). The flag alone closes the window between the wait's end
+    and the cancel, which no test can interleave on purpose."""
     import threading
     monkeypatch.setattr(ssl_utils, "_RELOAD_WAIT_S", 0.3)
     loop = asyncio.new_event_loop()
@@ -276,3 +277,36 @@ def test_a_load_the_listener_never_got_to_is_cancelled(monkeypatch):
     thread.join(timeout=5)
     loop.close()
     assert ran == []
+
+
+def test_what_a_listener_loaded_is_served_until_a_load_succeeds(tmp_path, monkeypatch):
+    """`vaf server cert reset` and a renewal rewrite server.pem in place; a listener whose
+    reload then timed out still serves the previous certificate, and the invitation and
+    /api/a2a/ca.pem must name that one, not the file. MUTATION: read the listener's file
+    path again in served_chain - red."""
+    import types
+    from cert_factory import fingerprint
+    ssl_dir = isolated_home(tmp_path, monkeypatch, **TLS_ON)
+    import vaf.network.binding as binding
+    monkeypatch.setattr(binding, "get_all_local_ips", lambda: [("enp3s0", "192.168.1.20")])
+    monkeypatch.setattr(binding, "local_interfaces", lambda: [])
+    cert, key = ssl_utils.ensure_ssl_certificates()
+    first = ssl_utils.served_authority()[1]
+
+    class _Context:
+        def load_cert_chain(self, *_a, **_kw):
+            raise AssertionError("not reached: the wait times out first")
+
+    server = types.SimpleNamespace(started=True, should_exit=False, config=types.SimpleNamespace(
+        ssl=_Context(), ssl_certfile=cert, ssl_keyfile=key))
+    ssl_utils.register_tls_listener("proxy", server, None)
+    monkeypatch.setattr(ssl_utils, "_run_on_loop", lambda _loop, _fn: "timeout")
+    result = ssl_utils.renew_authority()                        # rewrites server.pem in place
+
+    assert result.reload.listeners == {"proxy": "timeout"}
+    assert fingerprint(ssl_utils._leaf_of(cert)) != fingerprint(ssl_utils.served_chain()[0])
+    assert ssl_utils.served_authority()[1] == first, "the authority the listener serves"
+    monkeypatch.setattr(ssl_utils, "_run_on_loop", lambda _loop, fn: fn())
+    server.config.ssl = types.SimpleNamespace(load_cert_chain=lambda *_a, **_kw: None)
+    assert ssl_utils.reload_certificate().listeners == {"proxy": "loaded"}
+    assert ssl_utils.served_authority()[1] == result.new_authority

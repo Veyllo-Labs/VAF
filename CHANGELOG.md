@@ -100,8 +100,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   settings show the fingerprint of VAF's certificate authority, so you can compare it with what
   a device shows before you trust it. Room invitations to other machines now name the authority
   of the certificate you serve, and a joining machine also checks that the certificate names
-  the host it dials. Restart VAF after updating; your existing authority is kept, so devices
-  that trust it keep working.
+  the host it dials. Installing this update takes one restart of VAF (and the web rebuild
+  `vaf update` does) for the section to appear; after that a certificate change needs none,
+  except under `vaf run --web`, which loads a change made in a terminal at its next start.
+  Your existing authority is kept, so devices that trust it keep working.
 
 ### Security
 
@@ -331,10 +333,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 - **VAF's certificate authority can only vouch for private addresses.** A newly created
   authority can sign only for private addresses, `localhost` and names under `local`,
-  `home.arpa`, `internal` and `lan`, so a copy of its key cannot impersonate other sites on
+  `home.arpa`, `internal` and `lan`, so a copy of its key cannot impersonate public sites on
   your devices. Your machine's own host name is not among them unless it is under one of those
-  (a host named after a public domain would otherwise open that whole domain), so open VAF by
-  its address or by such a name. An existing authority is kept, so your devices keep
+  (a host named after a public domain would otherwise open that whole domain): open VAF by its
+  address, or by `<host>.local`, which VAF's certificate now carries, where your devices
+  resolve mDNS names. An existing authority keeps carrying every name until you renew it, and
+  the renewal lists the names it leaves out. An existing authority is kept, so your devices keep
   working; `vaf server ca renew` (or "Restrict to private addresses" in the settings) replaces
   it when you choose.
 

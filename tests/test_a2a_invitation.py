@@ -94,7 +94,7 @@ def test_the_printed_address_comes_from_the_certificate_s_own_source(monkeypatch
 
     monkeypatch.setattr("vaf.network.binding.get_local_network_ip", lambda: "192.168.7.7")
     monkeypatch.setattr("vaf.network.ssl_utils.served_authority", lambda: (b"", "ab" * 32))
-    monkeypatch.setattr("vaf.network.ssl_utils.served_room_host", lambda address: address)
+    monkeypatch.setattr("vaf.network.ssl_utils.room_host_choice", lambda address: (address, None))
     monkeypatch.setattr("vaf.core.config.Config.get",
                         staticmethod(lambda key, default=None: {
                             "local_network_enabled": True,
@@ -131,7 +131,7 @@ def test_no_lan_address_is_handed_out_while_local_network_is_off(monkeypatch):
 
     monkeypatch.setattr("vaf.network.binding.get_local_network_ip", lambda: "192.168.7.7")
     monkeypatch.setattr("vaf.network.ssl_utils.served_authority", lambda: (b"", "ab" * 32))
-    monkeypatch.setattr("vaf.network.ssl_utils.served_room_host", lambda address: address)
+    monkeypatch.setattr("vaf.network.ssl_utils.room_host_choice", lambda address: (address, None))
     monkeypatch.setattr("vaf.core.config.Config.get",
                         staticmethod(lambda key, default=None: {
                             "local_network_enabled": False,
@@ -158,7 +158,7 @@ def test_the_lan_address_is_handed_out_only_while_it_is_admitted(monkeypatch, po
     monkeypatch.setattr("vaf.network.binding.get_local_network_ip", lambda: "192.168.7.7")
     monkeypatch.setattr("vaf.network.binding.local_interfaces", lambda: [])
     monkeypatch.setattr("vaf.network.ssl_utils.served_authority", lambda: (b"", "ab" * 32))
-    monkeypatch.setattr("vaf.network.ssl_utils.served_room_host", lambda address: address)
+    monkeypatch.setattr("vaf.network.ssl_utils.room_host_choice", lambda address: (address, None))
     monkeypatch.setattr(Config, "load", classmethod(lambda cls: dict(policy)))
     monkeypatch.setattr(Config, "get",
                         classmethod(lambda cls, key, default=None: {
@@ -209,6 +209,28 @@ def test_without_an_endpoint_the_briefing_stays_on_this_machine(circle, monkeypa
     assert "join_remote" not in row
     assert "--url" not in row["briefing"], (
         "the briefing names a wire the host is not offering")
+
+
+def test_a_missing_lane_for_other_machines_is_said_and_why(circle, monkeypatch):
+    """With Local Network and TLS on, a certificate that names no host a peer could dial
+    left the lane out silently: the invitation read as a room only this machine could join.
+    The inviter gets the reason, the invited agent a note that the host can fix it.
+    MUTATION: drop the note from the briefing - red."""
+    import vaf.core.a2a.invite as invite_mod
+    reason = "No machine on another network can join yet: some reason."
+    monkeypatch.setattr(invite_mod, "lan_endpoint", lambda room_id: {})
+    monkeypatch.setattr(invite_mod, "lan_lane", lambda room_id: ({}, reason))
+    room, owner = circle
+    row = invitation(room, owner)
+    assert row["remote_unavailable"] == reason
+    assert "no lane for another machine yet" in row["briefing"]
+    assert "vaf server cert reset" in row["briefing"]
+    assert "no lane for another machine yet" in invite_mod.invitation_text(
+        room, {"kind": "agent", "status": "pending", "id": row["ticket"]})
+
+    monkeypatch.setattr(invite_mod, "lan_lane", lambda room_id: ({}, ""))
+    row = invitation(room, owner)
+    assert "remote_unavailable" not in row and "no lane for another machine" not in row["briefing"]
 
 
 # ── the briefing describes the role the room will enforce ──────────────────

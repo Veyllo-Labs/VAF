@@ -156,7 +156,7 @@ def test_the_certificate_carries_the_names_hsts_keeps_off(monkeypatch):
     from vaf.network import ssl_utils
     monkeypatch.setattr(binding, "get_all_local_ips", lambda: [])
     names = [v.value for v in ssl_utils._collect_sans() if isinstance(v, x509.DNSName)]
-    assert names == ["localhost", "Workstation", "Workstation.example.lan"]
+    assert names == ["localhost", "Workstation", "Workstation.example.lan", "workstation.local"]
     for name in names:
         assert binding.hsts_for_host(f"{name}:8443") == binding.HSTS_CLEAR, name
 
@@ -368,7 +368,7 @@ def test_a_renewal_during_a_dns_outage_keeps_the_fqdn(monkeypatch):
 
     # A certificate issued during the outage names no FQDN; HSTS still keeps the FQDN off.
     names = [v.value for v in ssl_utils._collect_sans() if isinstance(v, x509.DNSName)]
-    assert names == ["localhost", "Workstation"]
+    assert names == ["localhost", "Workstation", "workstation.local"]
     assert binding.hsts_for_host("nas.example.lan:8443") == binding.HSTS_CLEAR
 
 
@@ -412,7 +412,7 @@ def test_a_renewal_without_an_fqdn_does_not_outrank_the_certificates_lookup(monk
     assert binding.own_name_labels() == frozenset({"workstation"})          # the start
     certificate["issuing"] = True
     names = [v.value for v in ssl_utils._collect_sans() if isinstance(v, x509.DNSName)]
-    assert names == ["localhost", "Workstation", "nas.example.lan"]
+    assert names == ["localhost", "Workstation", "nas.example.lan", "workstation.local"]
     assert lookups == ["direct", "direct", "renewal"]
     assert binding._OWN_LABELS["Workstation"][0] == frozenset({"workstation", "nas"})
     assert binding.hsts_for_host("nas.example.lan:8443") == binding.HSTS_CLEAR

@@ -124,8 +124,10 @@ def _internet_findings(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
 
 
 def _certificate_findings(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
-    """What is wrong with the certificate every device is served, and with the local CA
-    (vaf/network/ssl_utils.py certificate_state, which creates and writes nothing)."""
+    """What is wrong with the certificate every device is served (certificate_state names
+    none while TLS is off: no listener serves one then), and with the local CA (also while
+    TLS is off: devices that installed it trust it all the same). Read from
+    vaf/network/ssl_utils.py certificate_state, which creates and writes nothing."""
     try:
         from vaf.network.ssl_utils import RENEW_BEFORE_DAYS, certificate_state
         state = certificate_state(cfg)
@@ -158,12 +160,17 @@ def _certificate_findings(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
                 f"The certificate VAF serves expires on {until}, in {days} days: {renew}."))
     authority = state.get("local_ca")
     if authority and not authority.get("restricted"):
+        left = list(authority.get("left_out_on_renewal") or [])
+        names = (f" The new one leaves {', '.join(left)} out of VAF's certificate: open VAF "
+                 "by its address" + (f" or by {state['mdns_name']}" if state.get("mdns_name")
+                                     and state["mdns_name"] not in left else "")
+                 + " instead." if left else "")
         found.append(_finding(
             "low", "network_ca_unrestricted",
             "VAF's local certificate authority may vouch for any name, so a copy of its key "
-            "could impersonate other sites on a device that installed it. `vaf server ca "
+            "could impersonate public sites on a device that installed it. `vaf server ca "
             "renew` replaces it with one restricted to private addresses and names; every "
-            "device then installs the new one."))
+            "device then installs the new one." + names))
     return found
 
 
@@ -212,10 +219,9 @@ def collect_security_findings(config: Dict[str, Any] | None = None) -> List[Dict
         # every server.
         findings.extend(_admission_findings(cfg))
         findings.extend(_internet_findings(cfg))
-        # With TLS off no listener serves a certificate, so none of them is about one in use
-        # (network_tls_disabled above is the finding then).
-        if tls_enabled:
-            findings.extend(_certificate_findings(cfg))
+        # With TLS off no listener serves a certificate (network_tls_disabled above is that
+        # finding); the local CA is still trusted by the devices that installed it.
+        findings.extend(_certificate_findings(cfg))
 
     # The one state that means "somebody the owner never decided about is answered": the
     # channel switch. The expert modes this used to warn about are gone (they said the same

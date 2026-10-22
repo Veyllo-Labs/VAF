@@ -138,22 +138,28 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **The HTTPS port holds against a device on the same network.** A connection that does not
   finish its request headers within 15 seconds is closed. One that sends more than 16 KiB of
   request headers, a body larger than 128 MiB, or an upload that stalls for a minute gets a
-  short sentence saying why, and is closed once the rest of its upload has passed (VAF reads
-  and discards it for up to 30 seconds, so the sentence is not lost). A device that sends
-  more than 16 requests without waiting for the answers is disconnected; browsers never do.
-  Once 512 connections are open, the port turns new requests and live connections away until
-  some close. VAF raises its own open-file limit at start (a systemd service starts with
-  1024), so slow connections fill those 512 places instead of starving the whole service;
-  only a flood of more than a thousand new connections a second still needs a firewall in
-  front. When VAF closes a connection, a device still reading the answer gets all of it as
-  long as it keeps reading; one that takes nothing for a minute, or never answers the end of
-  the connection within 10 seconds, is disconnected. A device refused for its network is
-  disconnected after its first refusal. Very old devices, from before about 2014, can no
-  longer connect: every HTTPS listener of VAF now accepts only modern encryption. With the
-  `FORWARDED_ALLOW_IPS` environment variable set to `*`, a device on the network counted as
-  this machine on the port and under `vaf run --web`; that variable no longer decides it.
-  Restart VAF after updating. Details: "The HTTPS door holds" in
+  short sentence saying why. A device that sends more than 16 requests without waiting for
+  the answers is disconnected; browsers never do. Once 512 connections are open, the port
+  turns new requests and live connections away until some close. VAF raises its own
+  open-file limit at start (a systemd service starts with 1024), so slow connections fill
+  those 512 places instead of starving the whole service; only a flood of several hundred
+  new connections a second still needs a firewall in front. Very old devices, from before
+  about 2014, can no longer connect: every HTTPS listener of VAF now accepts only modern
+  encryption. With the `FORWARDED_ALLOW_IPS` environment variable set to `*`, a device on
+  the network counted as this machine on the port and under `vaf run --web`; that variable
+  no longer decides it. Restart VAF after updating. Details: "The HTTPS door holds" in
   `docs/setup/NETWORK_FEATURES.md`.
+
+- **When the HTTPS port ends a connection, the device still gets what it is owed, and no
+  device can keep the connection open.** A refused upload gets its short sentence: VAF reads
+  and discards the rest of the upload for up to 30 seconds before it closes, so the sentence
+  is not lost; an upload that is still going after that, or pauses for 5 seconds and then
+  sends again, may see a reset instead. A device still reading the last answer gets all of
+  it while it keeps reading, unless it reads only a few kilobytes a second; one that takes
+  nothing for a minute, or never answers the end of the connection within 10 seconds, is
+  disconnected, and so is a device that ends its own side and then reads nothing. A device
+  refused for its network is disconnected after its first refusal. Restart VAF after
+  updating.
 
 - **A relay in front of the web UI's port no longer makes its visitors the machine owner.** A
   reverse proxy on the same machine pointed at port 3000 (an nginx for the LAN, Tailscale

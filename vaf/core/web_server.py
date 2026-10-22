@@ -4191,9 +4191,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
     """
     WebSocket endpoint with optional token authentication.
     
-    Token from: query param (?token=<jwt>) or cookie (vaf_token). Cookie is used when
-    frontend connects without query (e.g. same-host login); ensures user_scope_id is
-    set for RAG/memory so "No memories found" does not happen for logged-in users.
+    Token from: the HttpOnly cookie (vaf_token), which is all the web UI sends, or the query
+    param (?token=<jwt>) a program uses with its token for programs; ensures user_scope_id
+    is set for RAG/memory so "No memories found" does not happen for logged-in users.
     
     When local_network_enabled=True, non-localhost requires valid JWT.
     When local_network_enabled=False, only localhost is allowed.
@@ -4365,7 +4365,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     
                 except jwt.ExpiredSignatureError:
                     if is_localhost_client:
-                        # The desktop window keeps its last token past the 24h
+                        # The desktop window keeps its last token past its
                         # expiry, and a hard reject here locks the desktop out
                         # of its own machine in an endless retry loop: the WS
                         # lane refuses while the HTTP routes floor localhost to

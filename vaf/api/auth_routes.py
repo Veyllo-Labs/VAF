@@ -130,7 +130,7 @@ def _cookie_max_age_for(token: str) -> int:
     """Cookie lifetime derived from the token's own exp claim.
 
     INVARIANT: the cookie must never outlive the JWT inside it. Hardcoded cookie
-    lifetimes (30 days) longer than the JWT expiry (default 24h) left a
+    lifetimes (30 days) longer than the JWT expiry (then 24h by default) left a
     present-but-expired cookie in the jar; the server-side route gate
     (web/proxy.ts) correctly rejected it while a still-accepted bearer token
     bounced the client back - the / <-> /login navigation loop of the

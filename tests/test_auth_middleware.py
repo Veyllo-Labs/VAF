@@ -100,16 +100,48 @@ def test_a_token_from_before_the_second_factor_opens_nothing(monkeypatch):
     assert c.get("/api/auth/login", headers={"Authorization": "Bearer x"}).status_code == 200
 
 
-def test_the_verified_token_and_a_2fa_free_setup_still_pass(monkeypatch):
-    from vaf.core.config import Config
+def test_the_verified_token_passes(monkeypatch):
     _pre_2fa(monkeypatch, verified=True)
     c = TestClient(_app(), client=LAN)
     assert c.get("/api/supervisor/status", headers={"Authorization": "Bearer x"}).status_code == 200
+
+
+def test_two_factor_has_no_switch(monkeypatch, tmp_path):
+    """A config.json an older install left with the 2FA switch off changes nothing: a token
+    from before the second factor still opens no route for a network client, and the rule
+    reads no configuration. MUTATION: restore the Config.get in second_factor_done - red."""
+    import json
+
+    from vaf.auth.crypto import second_factor_done
+    from vaf.core.config import Config
+    raw = tmp_path / "config.json"
+    raw.write_text(json.dumps({"local_network_" + "require_2fa": False}), encoding="utf-8")
+    monkeypatch.setattr(Config, "CONFIG_FILE", raw)
+    assert Config.get("local_network_" + "require_2fa") is False   # the stale value is read
     _pre_2fa(monkeypatch, verified=False)
-    real_get = Config.get
-    monkeypatch.setattr(Config, "get", staticmethod(
-        lambda k, d=None: False if k == "local_network_require_2fa" else real_get(k, d)))
-    assert c.get("/api/supervisor/status", headers={"Authorization": "Bearer x"}).status_code == 200
+    c = TestClient(_app(), client=LAN)
+    r = c.get("/api/supervisor/status", headers={"Authorization": "Bearer x"})
+    assert r.status_code == 403 and r.json()["detail"] == "2FA verification required"
+    assert second_factor_done({"is_2fa_verified": False}) is False
+    assert second_factor_done({"is_2fa_verified": True}) is True
+
+
+def test_the_2fa_switch_is_gone():
+    """No reader, no default, no doctor finding: the key is not named in vaf/ or web/.
+    MUTATION: put the key back into Config.DEFAULTS - red."""
+    from pathlib import Path
+
+    from vaf.core.config import Config
+    key = "local_network_" + "require_2fa"
+    assert key not in Config.DEFAULTS
+    root = Path(__file__).resolve().parents[1]
+    hits = []
+    for top in ("vaf", "web/app", "web/components", "web/lib", "web/messages"):
+        for path in (root / top).rglob("*"):
+            if path.suffix in (".py", ".ts", ".tsx", ".json") and path.is_file():
+                if key in path.read_bytes().decode("utf-8", "ignore"):
+                    hits.append(path.relative_to(root).as_posix())
+    assert hits == [], hits
 
 
 def test_every_token_reader_asks_the_same_question():

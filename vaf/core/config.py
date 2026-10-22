@@ -692,7 +692,6 @@ class Config:
         "local_network_port": 8001,                                # Backend port for local network
         "local_network_port_frontend": 3000,                       # Frontend port for local network
         "local_network_firewall_enabled": True,                    # Enable OS firewall rules
-        "local_network_require_2fa": True,                         # Require 2FA for network users
         "local_network_jwt_secret": "",                            # JWT secret (auto-generated if empty)
         "local_network_jwt_expiry_hours": 24,                      # JWT token expiry in hours
         "local_network_rate_limit_attempts": 5,                    # Max failed login attempts

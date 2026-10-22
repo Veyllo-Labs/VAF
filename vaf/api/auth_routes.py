@@ -773,11 +773,6 @@ async def _sign_in(body: LoginRequest, request: Request, response: Response,
     }
 
 
-def _clear_auth_cookie(response: Response) -> None:
-    """Clear the auth cookie so the client stops sending a stale token."""
-    response.delete_cookie(key=COOKIE_NAME, path="/")
-
-
 def _authorization_bearer(request: Request) -> str:
     """Return Bearer token from Authorization header, or empty string."""
     auth = (request.headers.get("Authorization") or "").strip()
@@ -804,10 +799,15 @@ def _access_token_candidates(request: Request) -> list[str]:
     return out
 
 
-async def _me_user_from_token(request: Request, response: Response, token: str) -> dict | None:
+async def _me_user_from_token(token: str) -> dict | None:
     """Resolve current user for one access JWT, or None to try the next candidate."""
     payload = decode_token(token)
     if not payload or payload.get("type") != "access":
+        return None
+    # A token from before the second factor opens only the 2FA steps, here as on every other
+    # route (the one rule, `second_factor_done`; it has no session row either).
+    from vaf.auth.crypto import second_factor_done
+    if not second_factor_done(payload):
         return None
     user_id_str = payload.get("sub")
     if not user_id_str:
@@ -845,24 +845,6 @@ async def _me_user_from_token(request: Request, response: Response, token: str) 
                 session = session_result.scalar_one_or_none()
                 if not session:
                     return None
-
-                require_2fa = Config.get("local_network_require_2fa", True)
-                if require_2fa and not payload.get("is_2fa_verified", False):
-                    # The admin physically at the machine is exempt from re-proving 2FA here.
-                    # Must be the REAL client: behind the proxy every LAN device also looks like
-                    # 127.0.0.1, which extended the exemption to remote admins.
-                    client_ip = _client_ip(request) or "unknown"
-                    try:
-                        from vaf.network.binding import is_localhost
-                    except ImportError:
-                        is_localhost = lambda ip: ip in ("127.0.0.1", "::1", "localhost")
-
-                    if not is_localhost(client_ip) or user.role != "admin":
-                        _clear_auth_cookie(response)
-                        raise HTTPException(
-                            status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="2FA verification required",
-                        )
 
                 return {
                     "id": str(user.id),
@@ -911,7 +893,7 @@ async def me(request: Request, response: Response):
     """Get current user from JWT (Bearer preferred, then cookie). Validates user and session exist in DB."""
     try:
         for token in _access_token_candidates(request):
-            user_dict = await _me_user_from_token(request, response, token)
+            user_dict = await _me_user_from_token(token)
             if user_dict:
                 return user_dict
         # Return JSONResponse directly so Set-Cookie (clear) is preserved.

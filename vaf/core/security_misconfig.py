@@ -187,7 +187,6 @@ def collect_security_findings(config: Dict[str, Any] | None = None) -> List[Dict
     if network_enabled:
         tls_enabled = bool(cfg.get("local_network_tls_enabled", False))
         firewall_enabled = bool(cfg.get("local_network_firewall_enabled", False))
-        require_2fa = bool(cfg.get("local_network_require_2fa", False))
 
         if not tls_enabled:
             findings.append(
@@ -205,14 +204,9 @@ def collect_security_findings(config: Dict[str, Any] | None = None) -> List[Dict
                     "Local network mode is enabled but firewall checks are disabled.",
                 )
             )
-        if not require_2fa:
-            findings.append(
-                _finding(
-                    "medium",
-                    "network_2fa_not_required",
-                    "Local network mode is enabled but 2FA is not required.",
-                )
-            )
+        # No check for "2FA not required": there is no such switch. Every account is created
+        # needing a second factor and the sign-in asks for it by the account's own state
+        # (vaf/auth/crypto.py second_factor_done); the key this check read switched nothing.
         # No check for "login not required": network mode has no such switch. The auth
         # middleware demands a token from every network client unconditionally, and the
         # check that stood here read a key registered nowhere, so it reported HIGH on

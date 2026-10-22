@@ -169,11 +169,14 @@ def second_factor_done(payload: dict[str, Any]) -> bool:
     `/login` answers a correct password with a full access token minted BEFORE the
     second factor (`is_2fa_verified: False`, the `temp_token`); only `/setup-2fa` and
     `/verify-2fa` may take it, and they check it themselves. Every other reader of a
-    token asks here, so a password alone never opens the API. When 2FA is not
-    required (`local_network_require_2fa` off), every access token counts as done.
+    token asks here, so a password alone never opens the API.
+
+    There is no switch. Every account is created needing a second factor
+    (vaf/auth/user_admin.py) and `/login` asks for it by the account's own state, so a
+    setting that made a token from before the code count as done could only ever open
+    the API to a password alone. The configuration key that did it is gone, and a value
+    an older install left in config.json is ignored.
     """
-    if not Config.get("local_network_require_2fa", True):
-        return True
     return payload.get("is_2fa_verified") is True
 
 

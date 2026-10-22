@@ -290,7 +290,7 @@ def _findings(public=(), host=None, events=(), switch=True, unit="active", **cfg
     import vaf.network.firewall as fw
     from vaf.core.security_misconfig import collect_security_findings
     base = {"local_network_enabled": True, "local_network_tls_enabled": True,
-            "local_network_firewall_enabled": True, "local_network_require_2fa": True}
+            "local_network_firewall_enabled": True}
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(binding, "public_addresses", lambda: list(public))
         mp.setattr(binding, "resolve_lan_access_ports", lambda wait_for_proxy=False: (8443, 8001))
@@ -315,6 +315,15 @@ def test_doctor_no_longer_claims_login_is_not_required():
     MUTATION: put the check back - red."""
     assert "network_login_not_required" not in _codes()
     assert _codes() == set()
+
+
+def test_doctor_has_no_2fa_switch_finding():
+    """There is no 2FA switch any more: every account needs its second factor. A config an
+    older install left with the key off must not bring the finding back.
+    MUTATION: put the network_2fa_not_required check back - red."""
+    old = "local_network_" + "require_2fa"
+    assert "network_2fa_not_required" not in _codes()
+    assert "network_2fa_not_required" not in _codes(**{old: False})
 
 
 def test_doctor_reports_ignored_entries_and_a_vpn_only_without_vpn(monkeypatch):
@@ -446,7 +455,7 @@ def test_a_port_that_cannot_be_read_keeps_the_public_address_finding(monkeypatch
     monkeypatch.setattr(se, "read_security_events", lambda date, limit=100: [])
     found = {f["code"]: f for f in collect_security_findings(
         {"local_network_enabled": True, "local_network_tls_enabled": True,
-         "local_network_firewall_enabled": True, "local_network_require_2fa": True})}
+         "local_network_firewall_enabled": True})}
     assert "port 8443" in found["network_public_address"]["message"]
 
 

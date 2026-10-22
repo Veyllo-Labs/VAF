@@ -207,6 +207,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   VAF, it says so: restart VAF then). A window whose session ended shows the sign-in page
   and says why. Signing in twice in the same second no longer fails.
 
+- **2FA is required for every account, with no switch.** The `local_network_require_2fa`
+  setting no longer changed anything (every account already had to set up its second factor
+  at its first sign-in) and is gone, together with its `vaf doctor` warning. A value left in
+  an older `config.json` is ignored.
+
 - **The first visitor can no longer make themselves the admin.** While no admin existed,
   any device VAF admits could open the setup page and create the admin account, on a rented
   server the provider's own network included. A browser on another device now needs a setup

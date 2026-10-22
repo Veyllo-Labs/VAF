@@ -18,13 +18,11 @@ LOCALHOST = ("127.0.0.1", 40000)
 
 
 def _enable_network(monkeypatch):
-    """Force network mode + 2FA-required at call time (the endpoint reads Config.get live)."""
+    """Force network mode at call time (the endpoint reads Config.get live)."""
     from vaf.core.config import Config
     real_get = Config.get
     def fake(key, default=None):
         if key == "local_network_enabled":
-            return True
-        if key == "local_network_require_2fa":
             return True
         return real_get(key, default)
     monkeypatch.setattr(Config, "get", staticmethod(fake))

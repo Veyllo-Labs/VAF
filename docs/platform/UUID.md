@@ -147,7 +147,7 @@ request.state.user = {
 }
 ```
 
-**Flow order:** the token is extracted **before** the IP check, so an authenticated client is identified regardless of whether its peer IP looks like loopback. 2FA enforcement lives **inside** the valid access-token branch: when `local_network_require_2fa` is set and the token was minted before the second factor (`is_2fa_verified` is not true, see `vaf.auth.crypto.second_factor_done`), a network client is rejected with `403 "2FA verification required"` before any identity is attached, and a localhost client falls through to the tokenless path. A token that is present but invalid/expired rejects a network client with `401`, but a localhost client falls through to the tokenless localhost path instead of being hard-locked (a stale desktop cookie does not lock the local user out).
+**Flow order:** the token is extracted **before** the IP check, so an authenticated client is identified regardless of whether its peer IP looks like loopback. 2FA enforcement lives **inside** the valid access-token branch, with no switch: when the token was minted before the second factor (`is_2fa_verified` is not true, see `vaf.auth.crypto.second_factor_done`), a network client is rejected with `403 "2FA verification required"` before any identity is attached, and a localhost client falls through to the tokenless path. A token that is present but invalid/expired rejects a network client with `401`, but a localhost client falls through to the tokenless localhost path instead of being hard-locked (a stale desktop cookie does not lock the local user out).
 
 **Rules:**
 - All downstream code reads `request.state.user` - never re-parses the JWT.

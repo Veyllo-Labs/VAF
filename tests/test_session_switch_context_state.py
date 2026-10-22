@@ -148,8 +148,13 @@ def _runner_save(agent, session_id, task=None):
 @pytest.fixture
 def make_agent(monkeypatch, tmp_path):
     import vaf.core.session as session_module
+    import vaf.core.subagent_ipc as ipc
     from vaf.core.context import ContextManager
 
+    # The loader declares the session in the context variable, which outlives the test on
+    # this thread; a later test resolving "the current session" would read ours.
+    monkeypatch.delenv("VAF_SESSION_ID", raising=False)
+    token = ipc._session_ctx.set(ipc._UNSET)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path / "data"))
     monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: tmp_path / "vaf"))
@@ -171,7 +176,8 @@ def make_agent(monkeypatch, tmp_path):
         monkeypatch.setattr(agent, "_try_workflow", lambda *args, **kw: None)
         agent.init_chat()
         return agent
-    return _make
+    yield _make
+    ipc._session_ctx.reset(token)
 
 
 def _on_the_owners_chat(agent):

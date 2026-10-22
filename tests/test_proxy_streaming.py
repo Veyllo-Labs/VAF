@@ -269,6 +269,8 @@ def test_a_body_over_the_cap_gets_413(relay, monkeypatch):
     count (the chunked body passes) - red."""
     monkeypatch.setattr(door, "BODY_MAX_BYTES", 1024 * 1024)
     monkeypatch.setattr(door, "BODY_STALL_S", 3.0)
+    # The door lingers for the rest of a body after the 413, then closes.
+    monkeypatch.setattr(door, "LINGER_TIMEOUT_S", 0.5)
     port, upstream = relay
     with _connect(port) as s:
         answer = http_exchange(s, b"POST /upload HTTP/1.1\r\nHost: door\r\n"
@@ -298,10 +300,30 @@ def test_a_body_over_the_cap_gets_413(relay, monkeypatch):
     assert body == b"Request body too large"
 
 
+def test_a_413_stays_readable_while_the_body_still_arrives(relay, monkeypatch):
+    """The 413 ends its connection while the device is still sending: the door reads and
+    discards the rest of the body before it closes, so the sentence arrives. Closed at once,
+    the connection was reset under the arriving body (measured: a 40 MiB upload at a 1 MiB cap
+    got ConnectionResetError on its next send). MUTATION: close without lingering - red."""
+    monkeypatch.setattr(door, "BODY_MAX_BYTES", 1024 * 1024)
+    monkeypatch.setattr(door, "LINGER_TIMEOUT_S", 0.5)
+    port, upstream = relay
+    size = 40 * 1024 * 1024
+    with _connect(port) as s:
+        s.sendall(b"POST /upload HTTP/1.1\r\nHost: door\r\nContent-Length: %d\r\n\r\n" % size)
+        s.sendall(b"u" * size)
+        status, headers, body = _response(s)
+    assert status.startswith("HTTP/1.1 413"), status
+    assert body == b"Request body too large"
+    assert upstream.requests == []
+
+
 def test_a_stalled_body_gets_408(relay, monkeypatch):
     """AC 16: a body that sends nothing for BODY_STALL_S gets 408 and the upstream request
     ends. MUTATION: no wait limit per part - red (the read times out instead)."""
     monkeypatch.setattr(door, "BODY_STALL_S", 0.5)
+    # The door lingers for the rest of the stalled body after the 408, then closes.
+    monkeypatch.setattr(door, "LINGER_TIMEOUT_S", 0.5)
     port, upstream = relay
     with _connect(port) as s:
         started = time.monotonic()

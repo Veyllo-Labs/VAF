@@ -259,35 +259,17 @@ class _Reader:
         await send({"type": "http.response.body", "body": body})
 
 
-@pytest.mark.parametrize("answer", ["200", "early 401"])
-def test_an_empty_line_after_an_answer_starts_the_head_timer(quick_head, answer):
+def test_an_empty_line_after_an_answer_starts_the_head_timer(quick_head):
     """uvicorn's data_received cancels its keep-alive timer on any byte and re-arms it only
     after the next answer, and llhttp skips an empty line between requests without
     on_message_begin: one CRLF after an answer held the connection forever (measured: open
     after 45 s; three such connections at a cap of 4 turned every new request away with
-    503). A body still arriving after an early answer did the same. MUTATION: no arm on bytes
-    that arrive while nothing is being answered - red."""
-    app = _App() if answer == "200" else _Early()
-    with serving(_door_config(app), door.door_event_loop) as (port, _server):
+    503). MUTATION: no arm on bytes that arrive while nothing is being answered - red."""
+    with serving(_door_config(_App()), door.door_event_loop) as (port, _server):
         with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
-            if answer == "200":
-                assert http_exchange(s, GET).startswith(b"HTTP/1.1 200")
-                s.sendall(b"\r\n")
-                assert closed_within(s, 2.0), "an empty line after the answer held the connection"
-            else:
-                head = b"POST / HTTP/1.1\r\nHost: door\r\nContent-Length: 100000\r\n\r\n"
-                assert http_exchange(s, head).startswith(b"HTTP/1.1 401")
-                started, closed = time.monotonic(), False
-                while time.monotonic() - started < 2.0:
-                    try:
-                        s.sendall(b"a")
-                    except OSError:
-                        closed = True
-                        break
-                    if closed_within(s, 0.1):
-                        closed = True
-                        break
-                assert closed, "a body trickled after an early answer held the connection"
+            assert http_exchange(s, GET).startswith(b"HTTP/1.1 200")
+            s.sendall(b"\r\n")
+            assert closed_within(s, 2.0), "an empty line after the answer held the connection"
 
 
 @pytest.mark.parametrize("accept", [b"text/html", b"application/json"], ids=["page", "json"])
@@ -309,48 +291,125 @@ def test_a_refused_client_is_closed_at_once(monkeypatch, quiet_refusals, accept)
     assert app.calls == 0
 
 
-def test_a_refused_upload_still_gets_its_answer(monkeypatch, quiet_refusals):
-    """A refused request with a body keeps its connection while the body passes: closed at
-    once, the connection was reset under a body still arriving and the 403 was lost
-    (measured: an 8 MB POST got ConnectionResetError). The head timer still closes it soon
-    after. MUTATION: Connection: close on every refusal - red (reset)."""
+def _refused():
     from vaf.network.admission import AdmissionGuard
-    monkeypatch.setattr(door, "HEAD_TIMEOUT_S", 0.5)
+    return AdmissionGuard(_App(), admits=lambda ip: False)
+
+
+def _trickle(sock: socket.socket, seconds: float, piece: bytes = b"x" * 100) -> bool:
+    """Send a piece every 0.1 s for at most `seconds`; return whether the server closed."""
+    started = time.monotonic()
+    while time.monotonic() - started < seconds:
+        try:
+            sock.sendall(piece)
+        except OSError:
+            return True
+        if closed_within(sock, 0.1):
+            return True
+    return False
+
+
+def test_a_refusal_lingers_for_its_body(monkeypatch, quiet_refusals):
+    """An answer that ends its connection while the request's body still arrives (here the
+    admission check's 403 with Connection: close) reads and discards the rest before it
+    closes, so the answer stays readable: closed at once, the connection was reset under the
+    arriving body and the 403 lost (measured: an 8 MB POST got ConnectionResetError). It
+    closes once the body has stopped for LINGER_TIMEOUT_S. MUTATION: close without lingering
+    - red (reset)."""
+    monkeypatch.setattr(door, "LINGER_TIMEOUT_S", 0.5)
     size = 8 * 1000 * 1000
-    with serving(_door_config(AdmissionGuard(_App(), admits=lambda ip: False)),
-                 door.door_event_loop) as (port, _server):
+    with serving(_door_config(_refused()), door.door_event_loop) as (port, _server):
         with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
             s.sendall(b"POST /api/auth/login HTTP/1.1\r\nHost: door\r\n"
                       b"Content-Type: application/json\r\nContent-Length: %d\r\n\r\n" % size
                       + b"x" * size)
             answer = _one_answer(s)
             assert answer.startswith(b"HTTP/1.1 403"), answer[:80]
-            assert b"\r\nconnection: close\r\n" not in answer.lower()
+            assert b"\r\nconnection: close\r\n" in answer.lower()
             assert closed_within(s, 2.0), "the refused upload kept its connection"
 
 
-def test_a_discarded_body_never_counts_as_head(monkeypatch):
-    """The body an early answer leaves unread is discarded, not head: a read that carries the
-    rest of it and the start of the next request's head counted whole toward HEAD_MAX_BYTES
-    (a false 431). MUTATION: count every read while a head is pending, or begin a head on the
-    bytes that arrive after an answer - red."""
-    monkeypatch.setattr(door, "HEAD_TIMEOUT_S", 10.0)
+def test_a_repeat_refused_client_is_closed(quiet_refusals):
+    """A refused client that sent a request with a small body every few seconds kept one
+    connection for good (measured: 10 refused answers over 40 s on one connection). Every 403
+    ends its connection now. MUTATION: keep the 403 alive - red (a second answer)."""
+    request = b"POST /api/x HTTP/1.1\r\nHost: door\r\nContent-Length: 2\r\n\r\nab"
+    with serving(_door_config(_refused()), door.door_event_loop) as (port, _server):
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            s.sendall(request)
+            assert _one_answer(s).startswith(b"HTTP/1.1 403")
+            time.sleep(0.3)
+            try:
+                s.sendall(request)
+            except OSError:
+                pass
+            rest = _read_until_closed(s, 3.0)
+            assert b"HTTP/1.1 403" not in rest, "a second refused request was answered"
+            assert closed_within(s, 0.5)
+
+
+def test_lingering_ends_when_the_body_stops(monkeypatch, quiet_refusals):
+    """Lingering waits at most LINGER_TIMEOUT_S between two reads: a client that sent part of
+    its body and then nothing is closed then. MUTATION: no wait limit between reads - red."""
+    monkeypatch.setattr(door, "LINGER_TIMEOUT_S", 0.5)
+    with serving(_door_config(_refused()), door.door_event_loop) as (port, _server):
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            s.sendall(b"POST / HTTP/1.1\r\nHost: door\r\nContent-Length: 100000\r\n\r\n"
+                      + b"x" * 10)
+            assert _one_answer(s).startswith(b"HTTP/1.1 403")
+            assert closed_within(s, 2.0), "lingering outlived a body that stopped"
+
+
+def test_lingering_has_a_total_time(monkeypatch, quiet_refusals):
+    """Lingering lasts at most LINGER_TIME_S in all, however steadily the rest of the body
+    arrives. MUTATION: no total limit - red."""
+    monkeypatch.setattr(door, "LINGER_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(door, "LINGER_TIME_S", 1.0)
+    with serving(_door_config(_refused()), door.door_event_loop) as (port, _server):
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            s.sendall(b"POST / HTTP/1.1\r\nHost: door\r\nContent-Length: 10000000\r\n\r\n"
+                      + b"x" * 10)
+            assert _one_answer(s).startswith(b"HTTP/1.1 403")
+            assert _trickle(s, 3.0), "a body trickled after the answer kept the connection"
+
+
+def test_an_early_answer_kept_alive_lingers_too(monkeypatch):
+    """An app that answers before reading the body and keeps the connection alive (a backend
+    route's 401 under vaf run --web) gets the same lingering: the rest of the body is read and
+    discarded, never parsed, and the connection closes after it. MUTATION: no lingering after
+    a kept-alive early answer - red (the trickle keeps the connection)."""
+    monkeypatch.setattr(door, "HEAD_TIMEOUT_S", 30.0)
+    monkeypatch.setattr(door, "LINGER_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(door, "LINGER_TIME_S", 1.0)
     app = _Early()
     with serving(_door_config(app), door.door_event_loop) as (port, _server):
         with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
+            s.sendall(b"POST / HTTP/1.1\r\nHost: door\r\nContent-Length: 10000000\r\n\r\n")
+            answer = _one_answer(s)
+            assert answer.startswith(b"HTTP/1.1 401") and b"connection: close" not in answer
+            assert _trickle(s, 3.0), "a body trickled after an early answer kept the connection"
+    assert app.calls == 1
+
+
+def test_a_read_with_an_earlier_body_is_not_counted_as_head(monkeypatch):
+    """A read that carries the end of one request's body and the start of the next request's
+    head counted whole toward HEAD_MAX_BYTES (a false 431). MUTATION: count every read while
+    a head is pending - red."""
+    monkeypatch.setattr(door, "HEAD_TIMEOUT_S", 10.0)
+    app = _Reader()
+    with serving(_door_config(app), door.door_event_loop) as (port, _server):
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
             body = 40 * 1024
-            head = b"POST / HTTP/1.1\r\nHost: door\r\nContent-Length: %d\r\n\r\n" % body
-            answers = http_exchange(s, head)
-            assert answers.startswith(b"HTTP/1.1 401")
-            s.sendall(b"b" * (body - 20 * 1024))
+            s.sendall(b"POST / HTTP/1.1\r\nHost: door\r\nContent-Length: %d\r\n\r\n" % body
+                      + b"b" * (body - 20 * 1024))
             time.sleep(0.1)
             # The last 20 KiB of the body and half of the next head arrive in one read.
             s.sendall(b"b" * (20 * 1024) + b"GET / HTTP/1.1\r\nHost: door\r\n")
             time.sleep(0.1)
             s.sendall(b"Connection: close\r\n\r\n")
-            answers += _read_until_closed(s)
-    assert answers.count(b"HTTP/1.1 401") == 2, answers
-    assert b"431" not in answers and app.calls == 2
+            answers = _read_until_closed(s)
+    assert answers.count(b"HTTP/1.1 200") == 2, answers[:200]
+    assert b"431" not in answers and app.received == [body, 0]
 
 
 def test_a_pipelined_head_has_the_time_limit_too(quick_head):
@@ -471,19 +530,32 @@ def _send_until_the_door_acts(sock: socket.socket, piece: bytes, times: int = 64
     return b"", False
 
 
-@pytest.mark.parametrize("app_kind", ["reads the body", "answered early", "refused"])
+class _Started:
+    """Starts its answer at once and keeps it open while it waits for the body."""
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"part", "more_body": True})
+        while (await receive())["type"] != "http.disconnect":
+            pass
+
+
+@pytest.mark.parametrize("app_kind", ["reads the body", "answer started", "refused"])
 def test_an_endless_trailer_is_refused(monkeypatch, quiet_refusals, app_kind):
     """After the last chunk, httptools gathers a trailer line until it ends, and the raw count
     stopped with the head: a trailer line that never ended took the process from 50 MB to
     about 1 GB in 48 s, for an admitted client (until the relay's 60 s stall) and a refused
     one (with no limit at all). It counts toward HEAD_MAX_BYTES now: 431 while the request
-    has no answer yet, a plain close after one. MUTATION: drop the trailer count - red (the
-    first two rows stay open); no 431 for a trailer - red (reads the body); write the 431
-    after an answer - red (answered early)."""
-    from vaf.network.admission import AdmissionGuard
+    has no answer yet, a plain close once its answer has begun. A refused request lingers
+    instead: the trailer is discarded unparsed for LINGER_TIME_S at most. MUTATION: drop the
+    trailer count - red (the first two rows stay open); no 431 for a trailer - red (reads the
+    body); write the 431 after an answer began - red (answer started)."""
     monkeypatch.setattr(door, "HEAD_TIMEOUT_S", 30.0)
-    app = {"reads the body": _Reader(), "answered early": _App(),
-           "refused": AdmissionGuard(_App(), admits=lambda ip: False)}[app_kind]
+    monkeypatch.setattr(door, "LINGER_TIME_S", 1.0)
+    app = {"reads the body": _Reader(), "answer started": _Started(),
+           "refused": _refused()}[app_kind]
     with serving(_door_config(app), door.door_event_loop) as (port, _server):
         with socket.create_connection(("127.0.0.1", port), timeout=5) as s:
             s.sendall(b"POST / HTTP/1.1\r\nHost: door\r\nTransfer-Encoding: chunked\r\n\r\n"
@@ -492,13 +564,19 @@ def test_an_endless_trailer_is_refused(monkeypatch, quiet_refusals, app_kind):
                 first = _one_answer(s)
                 assert first.startswith(b"HTTP/1.1 " + (b"403" if app_kind == "refused"
                                                         else b"200")), first[:80]
+            if app_kind == "answer started":
+                # The first part of the open answer, read before the flood, so that only the
+                # door's own reaction ends the flood.
+                s.settimeout(5)
+                while b"part" not in first:
+                    first += s.recv(4096)
             then, closed = _send_until_the_door_acts(s, b"a" * 4096)
     assert closed, "an endless trailer stayed open"
     if app_kind == "reads the body":
         assert then.startswith(b"HTTP/1.1 431"), then[:80]
         assert app.received == [] and app.disconnected == 1
     else:
-        assert then == b"", then[:80]
+        assert b"431" not in then, then[:80]
 
 
 def test_a_slow_upload_is_not_a_slow_head(quick_head):
@@ -627,7 +705,7 @@ def test_the_handshake_has_a_limit(cert, monkeypatch):
             assert not closed_within(s, 2.0)
 
 
-def _wait_for_200(port, ctx=None, seconds=3.0):
+def _wait_for_200(port, ctx=None, seconds=8.0):
     """Ask again until a GET answers 200; return the seconds it took, or None."""
     started = time.monotonic()
     while time.monotonic() - started < seconds:
@@ -651,11 +729,12 @@ def _wait_for_connections(server, count, seconds=5.0):
 def test_an_idle_tls_connection_frees_its_place_at_the_head_timer(cert, monkeypatch):
     """The head timer drops a silent connection at once: a TLS close waits for the client to
     answer it, and until then the connection kept its place under the cap (measured: four
-    idle connections at a cap of 4 turned new requests away until 48 s; on Python 3.10 with
+    idle connections at a cap of 4 turned new requests away until 45 s; on Python 3.10 with
     no limit at all). MUTATION: close instead of abort in _drop - red."""
     monkeypatch.setattr(door, "MAX_CONNECTIONS", 2)
     monkeypatch.setattr(door, "HEAD_TIMEOUT_S", 0.5)
     monkeypatch.setattr(door, "CLOSE_TIMEOUT_S", 30.0)
+    monkeypatch.setattr(door, "SEND_TIMEOUT_S", 30.0)
     with serving(_door_config(_App(), cert), door.door_event_loop) as (port, server):
         idle = [tls_connect(port) for _ in range(2)]
         try:
@@ -667,95 +746,125 @@ def test_an_idle_tls_connection_frees_its_place_at_the_head_timer(cert, monkeypa
                 s.close()
 
 
-@pytest.mark.skipif(sys.version_info < (3, 11), reason="ssl_shutdown_timeout is Python 3.11+")
-def test_a_closed_tls_connection_frees_its_place_soon(cert, monkeypatch):
-    """After an answer that ends its connection, a client that never answers the TLS close
-    held its place under the cap for asyncio's 30 s; the door's loop gives a TLS close
-    CLOSE_TIMEOUT_S. The protocol's own deadline is switched off here, so the loop's limit is
-    the one measured. MUTATION: no ssl_shutdown_timeout in door_event_loop - red."""
-    # uvicorn counts the asking connection itself: at 3, two lingering ones turn a third away.
+class _Large:
+    """Answers 200 with a body of `size` bytes, in one part, as Starlette's Response does."""
+
+    def __init__(self, size: int):
+        self.size = size
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return
+        await send({"type": "http.response.start", "status": 200,
+                    "headers": [(b"content-length", b"%d" % self.size)]})
+        await send({"type": "http.response.body", "body": b"x" * self.size})
+
+
+def test_a_drained_close_waits_only_for_the_goodbye(cert, monkeypatch):
+    """Once everything is sent, a closing connection waits CLOSE_TIMEOUT_S for the client to
+    end it and is dropped then, on every Python version. Served on a plain loop, so asyncio's
+    own TLS close limit is not what ends it: measured on Python 3.10.15 with uvicorn 0.48,
+    two clients that never answered the TLS close held their places past 40 s. MUTATION: no
+    drop once the answer is out - red."""
     monkeypatch.setattr(door, "MAX_CONNECTIONS", 3)
     monkeypatch.setattr(door, "CLOSE_TIMEOUT_S", 0.5)
-    monkeypatch.setattr(door, "_close_with_deadline", lambda _transport: None)
-    with serving(_door_config(_App(), cert), door.door_event_loop) as (port, server):
+    monkeypatch.setattr(door, "SEND_TIMEOUT_S", 30.0)
+    head = b"GET / HTTP/1.1\r\nHost: door\r\nConnection: close\r\n\r\n"
+    with serving(_door_config(_App(), cert), asyncio.new_event_loop) as (port, _server):
         silent = [tls_connect(port) for _ in range(2)]
         try:
             for s in silent:
-                answer = http_exchange(s, b"GET / HTTP/1.1\r\nHost: door\r\n"
-                                          b"Connection: close\r\n\r\n")
-                assert answer.startswith(b"HTTP/1.1 200"), answer[:80]
+                assert http_exchange(s, head).startswith(b"HTTP/1.1 200")
             # Neither client answers the close or closes its socket.
-            waited = _wait_for_200(port)
-            assert waited is not None, "the closed connections kept their places"
+            assert _wait_for_200(port) is not None, "the closed connections kept their places"
         finally:
             for s in silent:
                 s.close()
 
 
-class _Large:
-    """Answers 200 with a body larger than the socket buffers hold, in one part."""
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            return
-        body = b"x" * (32 * 1024 * 1024)
-        await send({"type": "http.response.start", "status": 200,
-                    "headers": [(b"content-length", b"%d" % len(body))]})
-        await send({"type": "http.response.body", "body": body})
-
-
-@pytest.mark.parametrize("kind", ["tls", "plain"])
-def test_every_close_has_a_deadline(cert, monkeypatch, kind):
-    """A close ends within CLOSE_TIMEOUT_S on every Python version, whoever closes. Served on
-    a plain loop, so asyncio's own TLS close limit (30 s on Python 3.11+, none on 3.10) is not
-    what ends it: measured on 3.10.15 with uvicorn 0.48, two clients that never answered the
-    TLS close held their places past 40 s. A plain close waits the same for a client that
-    reads nothing. MUTATION: no close hook in connection_made - red."""
-    monkeypatch.setattr(door, "MAX_CONNECTIONS", 3)
-    monkeypatch.setattr(door, "CLOSE_TIMEOUT_S", 0.5)
+def test_a_close_that_stops_moving_is_dropped(monkeypatch):
+    """A closing connection whose answer stops moving (the client reads nothing) is dropped
+    after SEND_TIMEOUT_S without progress; a plain close waited for it for ever. MUTATION: no
+    drop while bytes are unsent - red."""
+    monkeypatch.setattr(door, "SEND_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(door, "CLOSE_TIMEOUT_S", 30.0)
     head = b"GET / HTTP/1.1\r\nHost: door\r\nConnection: close\r\n\r\n"
-    if kind == "tls":
-        with serving(_door_config(_App(), cert), asyncio.new_event_loop) as (port, server):
-            silent = [tls_connect(port) for _ in range(2)]
-            try:
-                for s in silent:
-                    assert http_exchange(s, head).startswith(b"HTTP/1.1 200")
-                # Neither client answers the close or closes its socket.
-                assert _wait_for_200(port) is not None, "the closed connections kept their places"
-            finally:
-                for s in silent:
-                    s.close()
-        return
-    with serving(_door_config(_Large()), asyncio.new_event_loop) as (port, server):
+    with serving(_door_config(_Large(32 * 1024 * 1024)), asyncio.new_event_loop) as (port, server):
         reader = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         reader.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
         reader.settimeout(5)
         try:
             reader.connect(("127.0.0.1", port))
             reader.sendall(head)
-            # The answer is never read, so the close cannot flush it.
-            deadline = time.monotonic() + 5
-            while not server.server_state.connections and time.monotonic() < deadline:
-                time.sleep(0.02)
+            _wait_for_connections(server, 1)
             started = time.monotonic()
-            while server.server_state.connections and time.monotonic() - started < 3.0:
+            while server.server_state.connections and time.monotonic() - started < 4.0:
                 time.sleep(0.05)
             assert not server.server_state.connections, "a close waited on a client that reads nothing"
         finally:
             reader.close()
 
 
+@pytest.mark.parametrize("kind,keep", [("tls", True), ("plain", False)],
+                         ids=["tls kept alive", "plain closed"])
+def test_a_close_waits_while_the_answer_still_moves(cert, monkeypatch, kind, keep):
+    """uvicorn closes as soon as an answer is handed to the transport, not when the client has
+    it, and a close that ended a fixed time after it began cut an answer the client was still
+    reading (measured: 65 to 89 % of a 4 MB one-piece answer read at 200 KB/s, plain and TLS,
+    kept alive or closed, on Python 3.13 and 3.10.15). A close now waits while the unsent
+    bytes shrink. Served on the door's own loop, so asyncio's TLS close limit is pinned too.
+    MUTATION: a close limit counted from the close, the TCP transport under TLS left
+    uncounted, or asyncio's TLS close limit at CLOSE_TIMEOUT_S - red."""
+    # Linux reports a socket writable only once a large share of its buffer is free, so the
+    # unsent bytes shrink in steps about a second apart at this pace.
+    monkeypatch.setattr(door, "SEND_TIMEOUT_S", 3.0)
+    monkeypatch.setattr(door, "CLOSE_TIMEOUT_S", 0.25)
+    monkeypatch.setattr(door, "KEEP_ALIVE_S", 0.5)
+    size = 4 * 1000 * 1000
+    with serving(_door_config(_Large(size), cert if kind == "tls" else None),
+                 door.door_event_loop) as (port, _server):
+        if kind == "tls":
+            s = tls_connect(port)
+        else:
+            s = socket.create_connection(("127.0.0.1", port), timeout=5)
+        with s:
+            s.sendall(b"GET / HTTP/1.1\r\nHost: door\r\n"
+                      + (b"" if keep else b"Connection: close\r\n") + b"\r\n")
+            s.settimeout(10)
+            got, head = 0, b""
+            while got < size:
+                try:
+                    part = s.recv(50000)
+                except OSError:
+                    break
+                if not part:
+                    break
+                if not head:
+                    head, _, part = part.partition(b"\r\n\r\n")
+                got += len(part)
+                time.sleep(0.05)   # about 1 MB/s
+    assert got == size, f"{100 * got // size} % of the answer arrived"
+
+
+class _NoLinger:
+    def _linger(self, close_now):
+        return False
+
+
 def test_a_second_close_does_not_disarm_the_deadline(cert, monkeypatch):
     """On Python 3.11+ a second close() of a TLS transport drops its protocol, and abort() then
     does nothing (measured: closed twice, aborted after 1 s, still open after 20 s). The hook
-    passes the first close on only. MUTATION: pass every close on - red on Python 3.11+."""
+    passes the first close on only, and the close watch still drops the connection.
+    MUTATION: pass every close on - red on Python 3.11+."""
     import ssl as ssl_module
     monkeypatch.setattr(door, "CLOSE_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(door, "SEND_TIMEOUT_S", 30.0)
     lost = []
+    owner = _NoLinger()
 
     class _Closer(asyncio.Protocol):
         def connection_made(self, transport):
-            door._close_with_deadline(transport)
+            door._install_close_hook(transport, owner)
             transport.close()
             transport.close()
 
@@ -780,6 +889,59 @@ def test_a_second_close_does_not_disarm_the_deadline(cert, monkeypatch):
 
     took = asyncio.run(_run())
     assert took and took < 2.0, "the close never ended"
+
+
+class _Streaming:
+    """Answers /slow with a stream of parts for up to 5 s and records when it learns that the
+    connection is gone (what ends a relay's upstream request); answers anything else at once."""
+
+    def __init__(self):
+        self.told_after = None
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return
+        if scope["path"] != "/slow":
+            await send({"type": "http.response.start", "status": 200,
+                        "headers": [(b"content-length", b"2")]})
+            await send({"type": "http.response.body", "body": b"ok"})
+            return
+        started = time.monotonic()
+
+        async def listen():
+            while (await receive())["type"] != "http.disconnect":
+                pass
+            self.told_after = time.monotonic() - started
+
+        listening = asyncio.ensure_future(listen())
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        for _ in range(100):
+            if listening.done():
+                return
+            await send({"type": "http.response.body", "body": b"x" * 100, "more_body": True})
+            await asyncio.sleep(0.05)
+        listening.cancel()
+        await send({"type": "http.response.body", "body": b""})
+
+
+def test_a_dropped_pipeline_tells_the_request_in_flight(cert, caplog):
+    """Dropping a pipeline past PIPELINE_MAX tells the request still being answered that the
+    connection is gone. uvicorn tells only the last request it parsed, so the one in flight
+    kept running (its upstream request too) and its next write into the dropped connection
+    logged a traceback per connection (measured: Python 3.13 and 3.10.15). MUTATION: drop
+    without telling the requests being answered - red."""
+    app = _Streaming()
+    with caplog.at_level(logging.ERROR):
+        with serving(_door_config(app, cert), door.door_event_loop) as (port, _server):
+            with tls_connect(port) as s:
+                s.sendall(b"GET /slow HTTP/1.1\r\nHost: door\r\n\r\n" + GET * 40)
+                deadline = time.monotonic() + 3.0
+                while app.told_after is None and time.monotonic() < deadline:
+                    time.sleep(0.05)
+            time.sleep(0.5)
+    assert app.told_after is not None and app.told_after < 2.0, "the request in flight ran on"
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR], \
+        [r.getMessage() for r in caplog.records]
 
 
 def test_the_door_answers_503_at_the_cap(monkeypatch):
@@ -1038,9 +1200,9 @@ def test_the_uvicorn_hooks_exist():
     import inspect
 
     from uvicorn.protocols.http.httptools_impl import HttpToolsProtocol, RequestResponseCycle
-    hooks = ("connection_made", "connection_lost", "data_received", "on_message_begin",
-             "on_url", "on_header", "on_headers_complete", "on_body", "on_message_complete",
-             "handle_websocket_upgrade")
+    hooks = ("connection_made", "connection_lost", "data_received", "eof_received",
+             "on_message_begin", "on_url", "on_header", "on_headers_complete", "on_body",
+             "on_message_complete", "handle_websocket_upgrade", "on_response_complete")
     httptools_only = ("on_chunk_header", "on_chunk_complete")
     for name in hooks:
         assert name in vars(HttpToolsProtocol), f"uvicorn no longer defines {name}"
@@ -1054,10 +1216,12 @@ def test_the_uvicorn_hooks_exist():
     assert "self.headers" in inspect.getsource(HttpToolsProtocol._get_upgrade)
     state = inspect.getsource(HttpToolsProtocol.__init__)
     for name in ("self.cycle", "self.connections", "self.tasks", "self.limit_concurrency",
-                 "self.logger", "self.pipeline"):
+                 "self.logger", "self.pipeline", "self.flow"):
         assert name in state, f"uvicorn no longer keeps {name}"
     cycle = inspect.getsource(RequestResponseCycle.__init__)
-    assert "self.response_started" in cycle and "self.response_complete" in cycle
+    for name in ("self.response_started", "self.response_complete", "self.disconnected",
+                 "self.message_event"):
+        assert name in cycle, f"uvicorn's answer cycle no longer keeps {name}"
     config = uvicorn.Config(_App(), http=door.BoundedHttpToolsProtocol, log_config=None)
     config.load()
     assert config.http_protocol_class is door.BoundedHttpToolsProtocol

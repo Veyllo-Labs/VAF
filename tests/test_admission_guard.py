@@ -225,27 +225,21 @@ def test_everything_else_keeps_the_json_answer(admitted, reached, events, method
     assert r.json() == {"detail": admission.REFUSED_DETAIL}
 
 
-@pytest.mark.parametrize("headers", [PAGE, {"Accept": "application/json"}], ids=["page", "json"])
-def test_a_refused_client_keeps_no_connection(admitted, reached, events, headers):
+@pytest.mark.parametrize("method,headers,body", [
+    ("GET", PAGE, None), ("GET", {"Accept": "application/json"}, None),
+    ("POST", {"Accept": "application/json"}, b"x" * 10),
+], ids=["page", "json", "json with a body"])
+def test_a_refused_client_keeps_no_connection(admitted, reached, events, method, headers, body):
     """Kept alive after the 403, one empty line from the client cancelled uvicorn's keep-alive
     timer and the connection held a slot of the door's cap as long as the client liked
-    (measured: three at a cap of 4 turned every other device away with 503). MUTATION: drop
-    Connection: close from the page or the JSON answer - red."""
-    r = _client(_app(reached), "203.0.113.9").get("/login", headers=headers)
+    (measured: three at a cap of 4 turned every other device away with 503), and a request
+    with a body every 4 s kept one connection for good. A door lingers for a body still
+    arriving before it closes. MUTATION: drop Connection: close from the page or the JSON
+    answer - red."""
+    r = _client(_app(reached), "203.0.113.9").request(method, "/login", headers=headers,
+                                                      content=body)
     assert r.status_code == 403
     assert r.headers["connection"] == "close"
-    assert reached == []
-
-
-@pytest.mark.parametrize("body", [{"content": b"x" * 10}, {"content": iter([b"x"])}],
-                         ids=["content-length", "chunked"])
-def test_a_refused_request_with_a_body_is_not_closed_under_it(admitted, reached, events, body):
-    """Closed at once, a connection whose body was still arriving was reset and the 403 lost
-    (measured: a refused 8 MB POST got a reset); the door's head timer holds it instead.
-    MUTATION: Connection: close on every refusal - red."""
-    r = _client(_app(reached), "203.0.113.9").post("/login", **body)
-    assert r.status_code == 403
-    assert "connection" not in r.headers
     assert reached == []
 
 

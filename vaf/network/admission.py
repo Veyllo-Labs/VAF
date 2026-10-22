@@ -9,9 +9,10 @@ handshake (``binding.connection_client_ip``, so a client relayed over loopback i
 the device the relay named) against ``binding.is_allowed_ip``, the one answer to "who may
 connect" (``inbound_policy()``: this machine, the local networks or with "VPN only" the VPN
 networks, plus the private networks an admin added; never a public address). A client that
-is not admitted gets HTTP 403 (with ``Connection: close`` when it sends no body), or a
-WebSocket close 4003 before accept, which a browser sees as a failed handshake; the app
-behind it is never called.
+is not admitted gets HTTP 403 with ``Connection: close``, or a WebSocket close 4003 before
+accept, which a browser sees as a failed handshake; the app behind it is never called. On a
+door (``vaf.network.door``) a body still arriving is read and discarded before the close, so
+the 403 stays readable.
 
 What a refused person sees: a browser that loads a page (a GET outside ``/api`` that accepts
 ``text/html``) gets a short HTML page that says which networks VAF answers and what to do,
@@ -146,18 +147,6 @@ def _wants_page(scope) -> bool:
     return "text/html" in Headers(scope=scope).get("accept", "").lower()
 
 
-def _sends_body(scope) -> bool:
-    """Whether the request declared a body (a Content-Length above 0, or a Transfer-Encoding),
-    the rule the HTTPS proxy's relay uses too."""
-    headers = Headers(scope=scope)
-    if "transfer-encoding" in headers:
-        return True
-    try:
-        return int(headers.get("content-length") or 0) > 0
-    except ValueError:
-        return False
-
-
 def _socket_reason(text: str) -> str:
     raw = text.encode("utf-8")
     if len(raw) <= _SOCKET_REASON_MAX_BYTES:
@@ -200,19 +189,17 @@ class AdmissionGuard:
             await WebSocketClose(code=4003, reason=reason)(scope, receive, send)
             return
         detail = self._reason or REFUSED_DETAIL
-        # A refused request without a body closes its connection: kept alive, a single empty
-        # line after the 403 cancelled uvicorn's keep-alive timer and held a slot of the door's
-        # cap (measured: three such connections at a cap of 4 turned every other device away
-        # with 503). One with a body stays open while the body passes and is discarded, held
-        # by the door's head timer: closed while the body still arrived, the connection was
-        # reset and the 403 lost (measured: a refused 8 MB POST got a reset, not the answer).
-        closing = {} if _sends_body(scope) else {"Connection": "close"}
+        # A refused client keeps no connection. Kept alive, a single empty line sent after the
+        # 403 cancelled uvicorn's keep-alive timer and held a slot of the door's cap (measured:
+        # three such connections at a cap of 4 turned every other device away with 503), and a
+        # request with a body every 4 s kept one connection for good. The door lingers for a
+        # body still arriving before it closes (BoundedHttpToolsProtocol._linger).
         if _wants_page(scope):
             response = HTMLResponse(refusal_page(detail, self._next_step), status_code=403,
-                                    headers={**_PAGE_HEADERS, **closing})
+                                    headers={**_PAGE_HEADERS, "Connection": "close"})
         else:
             response = JSONResponse(status_code=403, content={"detail": detail},
-                                    headers={"Vary": "Accept", **closing})
+                                    headers={"Vary": "Accept", "Connection": "close"})
         await response(scope, receive, send)
 
 

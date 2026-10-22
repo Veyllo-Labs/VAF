@@ -57,6 +57,14 @@ COOKIE_NAME = "vaf_token"
 # The life of the token /login answers a correct password with before the second factor.
 TEMP_TOKEN_HOURS = 0.25
 
+# A sign-in on the machine VAF runs on: the person is at their own desk, so 30 days and no
+# inactivity limit (vaf/auth/sessions.py). Every other device gets the configured lifetime.
+LOCAL_SESSION_HOURS = 30 * 24
+
+# The first admin's own session from the wizard. It is past the second factor before one
+# exists, so it lives only as long as the wizard needs; the wizard's 2FA step replaces it.
+BOOTSTRAP_SESSION_HOURS = 1
+
 # A second-factor code works once (vaf/auth/second_factor.py).
 SPENT_CODE_TEXT = "This code was already used. Wait for the next code in your authenticator app."
 
@@ -91,14 +99,14 @@ def close_account_sockets(user_scope_id: str) -> None:
         logger.debug("Closing the account's sockets failed: %s", e)
 
 
-def close_session_sockets(token: str) -> None:
-    """Close the open WebSockets that were opened with this access token (its session just
-    ended). Never raises."""
-    if not token:
+def close_session_sockets(token: str = "", *, token_hash: str = "") -> None:
+    """Close the open WebSockets that were opened with this access token, or with the token of
+    this hash (its session just ended). Never raises."""
+    if not token and not token_hash:
         return
     try:
         from vaf.core.web_interface import WebInterfaceManager
-        WebInterfaceManager().close_session_connections(token_hash_for_db(token))
+        WebInterfaceManager().close_session_connections(token_hash or token_hash_for_db(token))
     except Exception as e:
         logger.debug("Closing the session's sockets failed: %s", e)
 
@@ -314,11 +322,15 @@ async def bootstrap(body: BootstrapRequest, request: Request, response: Response
                 return JSONResponse(status_code=e.http_status,
                                     content={"detail": e.message, "code": e.code})
 
+            # The wizard's own session, for its remaining steps (the soul, the settings). It is
+            # past the second factor before one exists, so it lives an hour, not the 30 days a
+            # sign-in gets; the wizard's 2FA step ends it (_complete_sign_in).
             access = create_access_token(
                 str(new_user.id),
                 new_user.username,
                 new_user.role,
                 str(new_user.user_scope_id),
+                expires_hours=BOOTSTRAP_SESSION_HOURS,
                 is_2fa_verified=True,
             )
             await open_session(db, new_user, access, ip=_client_ip(request),
@@ -576,23 +588,50 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
         user.last_login = datetime.utcnow()
         await db.commit()
 
-        access = create_access_token(
-            str(user.id),
-            user.username,
-            user.role,
-            str(user.user_scope_id),
-            is_2fa_verified=True,
-        )
-        await open_session(db, user, access, ip=_client_ip(request),
-                           user_agent=request.headers.get("user-agent", ""))
+        access = await _complete_sign_in(db, request, response, user)
 
-    _set_auth_cookie(request, response, access)
     return {"access_token": access}
 
 
 # How long an address that completed a sign-in for an account stays exempt from that
 # account's window: the owner's own devices keep working while a stranger holds the name.
 _KNOWN_ADDRESS_DAYS = 30
+
+
+def _sign_in_hours(request: Request) -> Optional[float]:
+    """The lifetime of a completed sign-in: 30 days on this machine, else the configured one
+    (None). Keyed on the REAL client: behind the integrated HTTPS proxy every LAN device also
+    arrives as 127.0.0.1."""
+    from vaf.network.binding import is_localhost
+    return LOCAL_SESSION_HOURS if is_localhost(_client_ip(request)) else None
+
+
+async def _complete_sign_in(db, request: Request, response: Response, user) -> str:
+    """The one place a sign-in after the second factor ends: `/verify-2fa` and `/login` for an
+    account without one both come here (they each minted, opened the session and set the
+    cookie by hand, and the 30 days for the machine itself sat only in the branch no account
+    VAF creates reaches). Mints the token, opens the session, ends the session of the cookie
+    this browser carried (every sign-in left the previous one of the same browser live for its
+    whole life), and sets the cookie. Returns the token."""
+    ip = _client_ip(request)
+    access = create_access_token(
+        str(user.id),
+        user.username,
+        user.role,
+        str(user.user_scope_id),
+        expires_hours=_sign_in_hours(request),
+        is_2fa_verified=True,
+    )
+    await open_session(db, user, access, ip=ip, user_agent=request.headers.get("user-agent", ""))
+    previous = (request.cookies.get(COOKIE_NAME) or "").strip()
+    if previous and previous != access:
+        try:
+            await end_session(db, previous)
+            close_session_sockets(previous)
+        except Exception as e:
+            logger.warning("The session this browser signed in over was not ended: %s", e)
+    _set_auth_cookie(request, response, access)
+    return access
 
 
 async def _account_window_refusal(request: Request, username: str):
@@ -721,47 +760,31 @@ async def _sign_in(body: LoginRequest, request: Request, response: Response,
         needs_2fa_setup = user.requires_2fa_setup
         is_2fa_verified = not (needs_2fa_setup or has_2fa_configured)
 
-        # Logins from the machine VAF runs on always get a long-lived token — the user is at
-        # their own desk, 24h expiry serves no security purpose there. This must key on the REAL
-        # client: behind the integrated HTTPS proxy every LAN device also arrives as 127.0.0.1,
-        # so the peer address handed a 30-day token to phones and laptops the rule never meant.
-        from vaf.network.binding import is_localhost
-        client_ip = _client_ip(request)
-        _is_localhost = is_localhost(client_ip)
-        _localhost_expiry_hours = 30 * 24  # 30 days
-        if is_2fa_verified:
-            expires_hours = _localhost_expiry_hours if _is_localhost else None
-        else:
+        if not is_2fa_verified:
             # The temp token only reaches /setup-2fa and /verify-2fa: a quarter of an hour
             # for the code, not the day it used to live.
-            expires_hours = TEMP_TOKEN_HOURS
-        access = create_access_token(
-            str(user.id),
-            user.username,
-            user.role,
-            str(user.user_scope_id),
-            expires_hours=expires_hours,
-            is_2fa_verified=is_2fa_verified,
-            # A token from before the second factor is bound to this password.
-            password_version=None if is_2fa_verified else password_fingerprint(user.password_hash),
-        )
+            temp = create_access_token(
+                str(user.id),
+                user.username,
+                user.role,
+                str(user.user_scope_id),
+                expires_hours=TEMP_TOKEN_HOURS,
+                is_2fa_verified=False,
+                # A token from before the second factor is bound to this password.
+                password_version=password_fingerprint(user.password_hash),
+            )
 
     if not is_2fa_verified:
         return {
             "requires_2fa": True,
             "needs_2fa_setup": needs_2fa_setup,  # True = show QR code, False = only code input
-            "temp_token": access,
+            "temp_token": temp,
         }
 
-    # The session row: every reader of the token asks it (vaf/auth/sessions.py).
+    # An account without a second factor: the sign-in completes here, as after the code.
+    # remember_me changes nothing: the lifetime is the token's (vaf/auth/sessions.py).
     async with get_auth_db() as db:
-        await open_session(db, user, access, ip=_client_ip(request),
-                           user_agent=request.headers.get("user-agent", ""))
-
-    # NOTE: remember_me cannot extend the session beyond the JWT expiry - a cookie
-    # that outlives its token only recreates the login-loop desync. A real
-    # remember-me needs a longer-lived token (local_network_jwt_expiry_hours).
-    _set_auth_cookie(request, response, access)
+        access = await _complete_sign_in(db, request, response, user)
     return {
         "access_token": access,
         "user": {

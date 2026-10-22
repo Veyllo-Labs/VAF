@@ -496,7 +496,8 @@ there too - cleared before the commit, a lookup in between re-cached the old ans
   process ended (a logout, a password change, a reset, a sign-out) stays refused even then:
   the hashes of the sessions it ended are remembered in the process.
 - **Sessions end.** Every completed sign-in opens one session row for exactly its token
-  (`open_session`, the one writer; each token carries a unique `jti`). A logout ends the
+  (`open_session`, the one writer; each token carries a unique `jti`). A new sign-in in the
+  same browser ends the session of the cookie it replaces. A logout ends the
   presented token's session; the account's own password change ends every other session
   and keeps the one that made it; an admin's reset of the password or the second factor, a
   deactivation and the terminal's `vaf users reset-password` end every session of the

@@ -284,15 +284,20 @@ Rejections from the layers above are recorded in an always-on security event log
 
 - **Passwords**: every new password needs at least 12 characters and may not be one of the 10,000 most common passwords of that length (`vaf/auth/data/common_passwords.txt`, from SecLists under MIT, compared lowercased; `scripts/build_common_passwords.py` rebuilds it from the pinned source), one rule (`validate_password` in `vaf/auth/user_admin.py`) for the first admin from the browser and from `vaf setup`, an admin's new account, the account's own change in Settings and `vaf users reset-password`. A refusal carries `"code": "password_too_short"` or `"password_common"`. Passwords set before the rule keep working: VAF stores only an Argon2 hash and cannot see a stored password's length, so change a shorter one in Settings, Account. Not built: a check against the account name, a breached-password service (an outbound call), a forced change.
 - **Password Hashing**: Argon2id (time_cost=2, memory_cost=64MB), run on a thread pool of its own (`vaf-argon2`, two workers, so at most 128 MB however many logins arrive) instead of the event loop that carries every chat and socket (measured before: 40 concurrent wrong logins delayed an unrelated request by about a second; after: under 0.1 s). Every login that passes the windows does exactly one verification, a name without an account against a dummy hash, so known and unknown names take the same time (measured before: 3.5 ms against 28.6 ms). No database session is open while a login waits for the pool: the lookup, the check and the writes are three steps (the writes check that the account and its password did not change meanwhile). A login held its session, a database connection on the service's engines, for the whole wait, so a burst of logins from many addresses for many names (which no window limits) held one connection each (measured: 40 at once for 40 logins), and could take the connections every other request needs. `verify_password_async` / `hash_password_async` in `vaf/auth/crypto.py`; the blocking functions stay for the terminal.
-- **JWT Tokens**: HS256, each access token with a unique `jti`. How long one lives depends on
-  where the session is (`vaf/auth/sessions.py`, one rule `session_row_live` for the standing
-  check, the session list and `/api/auth/me`):
-  - a sign-in from another device: `local_network_jwt_expiry_hours` (720, 30 days) at most,
-    and it ends after `local_network_session_idle_days` (7) without use. Use is any request
-    that checks the token (its last use is written at most once an hour); a socket that only
-    stays open does not count, its reconnect does.
-  - the window on this machine: 30 days, no inactivity limit.
-  - a token for programs: the 7, 30, 90 or 365 days it was made with, no inactivity limit.
+- **JWT Tokens**: HS256, each access token with a unique `jti`. There is no refresh token:
+  `/api/auth/refresh` minted a 7-day credential that was stored nowhere, survived a logout and
+  a password change, and no client used; it was removed, and a token it minted earlier has no
+  session and is refused. A valid signature is not enough: every token reader (the HTTP
+  middleware, both WebSocket lanes, the A2A room door) also checks that the token's account
+  still exists, is active and holds the token's role, and that the token's session has not
+  ended (`token_account_stands`; both cached a few seconds and cleared by whatever ends them),
+  so a deactivation, a deletion or a demotion ends the token at once instead of at its expiry.
+- **Session lifetimes**: every sign-in after the second factor ends in one place,
+  `_complete_sign_in` in `vaf/api/auth_routes.py` (`/verify-2fa` and `/login` for an account
+  without one), which mints the token with the lifetime of its door, opens the session, ends
+  the session of the cookie the same browser carried before (every sign-in used to leave it
+  live for its whole life) and sets the cookie. The first-run wizard's own session lives one
+  hour: it is past the second factor before one exists, and the wizard's 2FA step replaces it.
   This departs from NIST 800-63B-4 at AAL2 (24 hours overall and one hour of inactivity, both
   SHOULD), and the reasons are written down as ASVS 7.1.1 asks: VAF answers only the LAN and
   VPNs, the second factor is always required, the token sits in an HttpOnly cookie no page
@@ -300,13 +305,15 @@ Rejections from the layers above are recorded in an always-on security event log
   is announced. A week-long inactivity limit only means something when a session can outlive
   a day, which is why the default went from 24 hours to 30 days; a stored `24` is rewritten
   once (config format 3). An admin who wants a daily sign-in sets the key to `24`, and the
-  inactivity limit then never applies. There is no refresh token: `/api/auth/refresh` minted a 7-day credential that was
-  stored nowhere, survived a logout and a password change, and no client used; it was
-  removed, and a token it minted earlier has no session and is refused. A valid signature is not enough: every token reader (the HTTP
-  middleware, both WebSocket lanes, the A2A room door) also checks that the token's account
-  still exists, is active and holds the token's role, and that the token's session has not
-  ended (`token_account_stands`; both cached a few seconds and cleared by whatever ends them),
-  so a deactivation, a deletion or a demotion ends the token at once instead of at its expiry.
+  inactivity limit then never applies. How long a session lives depends on where it is
+  (`vaf/auth/sessions.py`, one rule `session_row_live` for the standing check, the session
+  list and `/api/auth/me`):
+  - a sign-in from another device: `local_network_jwt_expiry_hours` (720, 30 days) at most,
+    and it ends after `local_network_session_idle_days` (7) without use. Use is any request
+    that checks the token (its last use is written at most once an hour); a socket that only
+    stays open does not count, its reconnect does.
+  - the window on this machine: 30 days, no inactivity limit.
+  - a token for programs: the 7, 30, 90 or 365 days it was made with, no inactivity limit.
 - **Sessions end** (`vaf/auth/sessions.py`, the one owner of `user_sessions`): a logout ends
   the presented token's session, the account's own password change every other one (the
   device that made it stays signed in), an admin's password or 2FA reset, a deactivation and

@@ -21,6 +21,7 @@ Design rules carried over from the dashboard plan:
 """
 import os
 import re
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -1145,3 +1146,93 @@ async def security_overview(admin: Dict[str, Any] = Depends(require_admin)) -> D
         "security_latest_ts": security_latest_ts,
         "security_events_today": security_events_today,
     }
+
+
+# ── the page policy's reports ─────────────────────────────────────────────────
+
+# What a page's report-only script policy would have blocked (web/lib/csp.ts), written to the
+# webui log so the policy can be enforced once the list is clean. Bounded, because any page a
+# signed-in account opens can send reports: a body over CSP_REPORT_MAX_BYTES is refused unread
+# past that, each distinct (directive, blocked, page) is written once per day and process, and
+# at most CSP_REPORT_DAILY_LINES lines a day, then one line that says the rest is dropped.
+CSP_REPORT_MAX_BYTES = 16 * 1024
+CSP_REPORT_DAILY_LINES = 200
+_csp_lock = threading.Lock()
+_csp_day = {"day": "", "seen": set(), "dropped_said": False}
+
+
+def _origin_and_path(value: Any) -> str:
+    """A URL as origin and path, with no query or fragment (they can carry tokens and
+    personal data); a keyword such as `inline` or `eval` as it is. Control characters become
+    spaces, so one report is one log line."""
+    from urllib.parse import urlsplit
+    text = str(value or "").strip()[:500]
+    if "://" in text:
+        parts = urlsplit(text)
+        text = f"{parts.scheme}://{parts.netloc}{parts.path}"
+    elif text.startswith("/"):
+        text = urlsplit(text).path
+    return "".join(ch if ch.isprintable() else " " for ch in text)[:300] or "-"
+
+
+def _csp_fields(report: Any) -> Optional[tuple]:
+    """(directive, blocked, page) of one report, in the legacy `csp-report` shape or the
+    Reporting API's `csp-violation` shape; None for anything else."""
+    if isinstance(report, dict) and isinstance(report.get("csp-report"), dict):
+        body = report["csp-report"]
+        directive = body.get("effective-directive") or body.get("violated-directive")
+        return (_origin_and_path(directive).split(" ")[0], _origin_and_path(body.get("blocked-uri")),
+                _origin_and_path(body.get("document-uri")))
+    if isinstance(report, dict) and report.get("type") == "csp-violation" and isinstance(report.get("body"), dict):
+        body = report["body"]
+        return (_origin_and_path(body.get("effectiveDirective")).split(" ")[0],
+                _origin_and_path(body.get("blockedURL")), _origin_and_path(body.get("documentURL")))
+    return None
+
+
+def _record_csp(fields: tuple) -> None:
+    from vaf.core.log_helper import append_domain_log
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _csp_lock:
+        if _csp_day["day"] != today:
+            _csp_day.update(day=today, seen=set(), dropped_said=False)
+        if fields in _csp_day["seen"]:
+            return
+        if len(_csp_day["seen"]) >= CSP_REPORT_DAILY_LINES:
+            if _csp_day["dropped_said"]:
+                return
+            _csp_day["dropped_said"] = True
+            line = (f"[CSP] {CSP_REPORT_DAILY_LINES} reports today; further CSP reports today "
+                    "are dropped")
+        else:
+            _csp_day["seen"].add(fields)
+            directive, blocked, page = fields
+            line = f"[CSP] {directive} blocked {blocked} on {page}"
+    append_domain_log("webui", line)
+
+
+@router.post("/csp-report")
+async def csp_report(request: Request):
+    """A browser's report of what the page's report-only policy would have blocked. Taken from
+    any signed-in account (the auth middleware asks for the token like on every route), never
+    from a foreign page (the origin guard). Answers 204; 413 for a body over 16 KiB, which is
+    not written."""
+    from starlette.responses import Response
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > CSP_REPORT_MAX_BYTES:
+        return Response(status_code=413)
+    raw = b""
+    async for chunk in request.stream():
+        raw += chunk
+        if len(raw) > CSP_REPORT_MAX_BYTES:
+            return Response(status_code=413)
+    try:
+        import json
+        payload = json.loads(raw.decode("utf-8") or "null")
+    except Exception:
+        return Response(status_code=204)
+    for report in (payload if isinstance(payload, list) else [payload])[:20]:
+        fields = _csp_fields(report)
+        if fields:
+            _record_csp(fields)
+    return Response(status_code=204)

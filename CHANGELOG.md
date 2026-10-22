@@ -244,6 +244,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   language. The last two also go to the admin. A sign-in from a new address is also the
   security event "Sign-in from a new address".
 
+- **A script policy, reporting first.** Pages now carry a content security policy for scripts
+  in report-only mode: nothing is blocked yet, and what it would block is written to the
+  webui log (Logs window, lines starting with `[CSP]`), so the policy can be enforced once
+  those reports are clean. Pages are now rendered per request, which the policy needs.
+
 - **2FA is required for every account, with no switch.** The `local_network_require_2fa`
   setting no longer changed anything (every account already had to set up its second factor
   at its first sign-in) and is gone, together with its `vaf doctor` warning. A value left in

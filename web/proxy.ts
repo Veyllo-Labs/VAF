@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
+import { newNonce, reportOnlyPolicy } from '@/lib/csp';
 
 /**
  * Enforce a single public entry point for WebUI usage.
@@ -94,8 +95,25 @@ function applyAuthGuards(request: NextRequest): NextResponse {
   }
 
   // Login route while unauthenticated: render the login page, dropping any stale cookie.
-  const res = NextResponse.next();
+  const res = pageWithPolicy(request);
   if (hasStaleToken) res.cookies.set('vaf_token', '', { path: '/', maxAge: 0 });
+  return res;
+}
+
+/**
+ * A page the server renders: a fresh nonce and the report-only script policy (web/lib/csp.ts),
+ * on the forwarded request (Next.js reads the nonce from it and puts it on its own scripts;
+ * the layout reads x-nonce for the one inline script of its own) and on the response. Only
+ * pages come here: /api, /_next and the static files return before.
+ */
+function pageWithPolicy(request: NextRequest): NextResponse {
+  const nonce = newNonce();
+  const policy = reportOnlyPolicy(nonce, process.env.NODE_ENV === 'development');
+  const forwarded = new Headers(request.headers);
+  forwarded.set('x-nonce', nonce);
+  forwarded.set('Content-Security-Policy-Report-Only', policy);
+  const res = NextResponse.next({ request: { headers: forwarded } });
+  res.headers.set('Content-Security-Policy-Report-Only', policy);
   return res;
 }
 

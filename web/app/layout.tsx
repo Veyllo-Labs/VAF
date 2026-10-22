@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 import type { Metadata, Viewport } from "next";
+import { headers } from "next/headers";
 import "./globals.css";
 import HostnameNormalizer from "@/components/HostnameNormalizer";
 import IntlProviderWrapper from "@/components/IntlProviderWrapper";
@@ -21,11 +22,16 @@ export const viewport: Viewport = {
   interactiveWidget: "resizes-content",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // The page's nonce (web/proxy.ts). Reading the request headers also renders every page per
+  // request, which is when Next.js puts the nonce on its own scripts: a page rendered at build
+  // time has no request and no nonce. A self-hosted app with a handful of users can afford
+  // that. The one inline script below carries it too.
+  const nonce = (await headers()).get("x-nonce") || undefined;
   return (
     <html lang="de" className="light" suppressHydrationWarning>
       <body className="antialiased min-h-screen bg-background text-foreground">
@@ -41,6 +47,7 @@ export default function RootLayout({
             right one frame earlier, and a code the app does not support is
             harmless because the wrapper overwrites it on mount. */}
         <script
+          nonce={nonce}
           dangerouslySetInnerHTML={{
             __html:
               "try{if(localStorage.getItem('vaf_theme')==='dark'){var c=document.documentElement.classList;c.remove('light');c.add('dark')}}catch(e){}"

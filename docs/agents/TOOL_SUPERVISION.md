@@ -43,12 +43,15 @@ shared by every caller of that pool, so calls that hang occupy that many threads
 they are made, and none of them holds up the exit of the process (the workers of a
 `ThreadPoolExecutor` are joined at exit: a process with a 3-second call left on one ended after
 3.04 s, with the call left on a `DaemonPool` after 0.24 s, measured). A worker counts toward the
-cap once it started, so a thread that could not start does not hold its place. With an
-`InFlight` shared by the callers, a key whose call is still running or queued is not started
-again: a later caller waits for it only until the time of the caller that started it is up,
-or its own, whichever comes first, and at most `InFlight(join_wait=...)` when that is set, and
-a queued call stays queued for the next one instead of being cancelled (at most one per
-key), so while calls hang only the caller that starts one pays the time.
+cap once it started, so a thread that could not start does not hold its place.
+
+With an `InFlight` shared by the callers, a key whose call is still running or queued is not
+started again. A later caller waits for it until the time of the caller that started it is
+up, or its own, whichever comes first. With `InFlight(join_wait=...)` set, a caller that only
+joins calls waits for them at most that long; a caller that also started a call of its own
+waits for all of them until its own deadline, as it does for its own call. A queued call
+stays queued for the next caller instead of being cancelled, at most one per key. So while
+calls hang, with `join_wait` set, only the caller that starts one pays the time.
 
 The per-call budget is DECLARED by the tool: `BaseTool.timeout_seconds`, or `budget_seconds(args)`
 when it follows the call's own arguments (`vaf.core.bounded_run.tool_budget_seconds` resolves it;

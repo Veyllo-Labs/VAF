@@ -139,13 +139,20 @@ def test_a_callers_own_timeout_caps_its_wait_for_a_shared_key():
     with 0.2 s returned after 2.90 s. MUTATION: wait for the starter's deadline only - red."""
     import time
 
-    release = threading.Event()
+    release, running = threading.Event(), threading.Event()
+
+    def _started_then_hang():
+        # Set once the call runs: the starter submitted it under in_flight's lock and
+        # registers it before letting go, and the later caller needs that lock to look.
+        running.set()
+        release.wait(10)
+
     pool, in_flight = DaemonPool(2, "test-bounded-own-timeout"), InFlight()
-    starter = threading.Thread(target=run_bounded_all, args=({"k": lambda: release.wait(10)},),
+    starter = threading.Thread(target=run_bounded_all, args=({"k": _started_then_hang},),
                                kwargs={"timeout": 3.0, "pool": pool, "in_flight": in_flight})
     starter.start()
     try:
-        time.sleep(0.1)
+        assert running.wait(10), "the starter's call never ran"
         later = time.monotonic()
         assert run_bounded_all({"k": lambda: 1}, timeout=0.2, pool=pool,
                                in_flight=in_flight) == {}
@@ -163,13 +170,18 @@ def test_join_wait_caps_the_wait_for_a_call_another_caller_started():
     (the joiner waits out the starter's 3 s)."""
     import time
 
-    release = threading.Event()
+    release, running = threading.Event(), threading.Event()
+
+    def _started_then_hang():
+        running.set()  # registered by now (see the test above)
+        release.wait(10)
+
     pool, in_flight = DaemonPool(2, "test-bounded-join"), InFlight(join_wait=0.1)
-    starter = threading.Thread(target=run_bounded_all, args=({"k": lambda: release.wait(10)},),
+    starter = threading.Thread(target=run_bounded_all, args=({"k": _started_then_hang},),
                                kwargs={"timeout": 3.0, "pool": pool, "in_flight": in_flight})
     starter.start()
     try:
-        time.sleep(0.1)
+        assert running.wait(10), "the starter's call never ran"
         later = time.monotonic()
         assert run_bounded_all({"k": lambda: 1}, timeout=5.0, pool=pool,
                                in_flight=in_flight) == {}

@@ -657,10 +657,18 @@ def _posix_patches_without_a_guard(path: Path):
 
 
 def test_the_class_is_real_on_this_platform():
-    """Windows has none of these; this host has them all, which is the whole gap."""
+    """The list names what Windows lacks: a POSIX host has every one of them and Windows has
+    none (measured on the Windows runner, Python 3.12), which is the whole gap - a test that
+    patches one passes here and fails there. It used to ask for at least one of them, and a
+    Windows host has none, so it failed there. MUTATION: add a name Windows has (startfile) -
+    red on a POSIX host."""
     import os as _os
-    assert any(hasattr(_os, a) for a in _POSIX_ONLY_OS_ATTRS), \
-        "the guard below would be vacuous if this host had none of them either"
+    present = [a for a in _POSIX_ONLY_OS_ATTRS if hasattr(_os, a)]
+    if _os.name == "nt":
+        assert present == [], f"Windows has {present}: not POSIX-only"
+    else:
+        assert present == list(_POSIX_ONLY_OS_ATTRS), \
+            f"this host lacks {sorted(set(_POSIX_ONLY_OS_ATTRS) - set(present))}"
 
 
 def test_the_posix_patch_scanner_reads_each_tests_own_skip(tmp_path):

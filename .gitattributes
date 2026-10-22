@@ -7,3 +7,9 @@
 # interpreter on macOS/Linux ("bad interpreter: /bin/bash^M"). Force LF.
 *.sh text eol=lf
 *.command text eol=lf
+
+# Data a test reproduces byte for byte from its generator: a Windows checkout with autocrlf
+# would turn it into CRLF and the comparison would fail there only. Pinned to LF on every
+# checkout; tests/test_byte_pinned_files_keep_lf.py refuses a new byte-pinned file without
+# such a rule.
+vaf/auth/data/*.txt text eol=lf

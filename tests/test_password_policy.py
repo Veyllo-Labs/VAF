@@ -232,3 +232,16 @@ def test_the_list_is_read_once(monkeypatch):
         with pytest.raises(user_admin.UserAdminError):
             user_admin.validate_password(COMMON)
     assert len(reads) == 1
+
+
+def test_a_crlf_checkout_of_the_list_still_refuses(monkeypatch, tmp_path):
+    """What a Windows checkout without the line-end rule would ship: the loader reads the same
+    set from a CRLF copy, so the rule only keeps the byte-for-byte test honest there."""
+    from vaf.auth import user_admin
+    crlf = tmp_path / "common_passwords.txt"
+    crlf.write_bytes(LIST.read_bytes().replace(b"\n", b"\r\n"))
+    monkeypatch.setattr(user_admin, "_COMMON_PASSWORDS_FILE", crlf)
+    monkeypatch.setattr(user_admin, "_common", None)
+    assert user_admin._common_passwords() == frozenset(_entries())
+    with pytest.raises(user_admin.UserAdminError):
+        user_admin.validate_password(COMMON)

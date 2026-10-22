@@ -13,11 +13,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
-- **Tokens for programs**, under Settings, Account, Tokens for programs and
-  `vaf users token`: a script or a program on another machine gets a token of its own,
-  confirmed with your 2FA code, shown once and revoked like a device. **Session list and
-  sign-out**, under Settings, Account and `vaf users sessions|sign-out`.
-
 - **`Agent.set_allowed_tools(names)`** fixes which tools an agent offers and runs, for every
   identity, until lifted with `None`, so an agent that answers a stranger cannot use your
   own tools, and a turn under the set never answers a question the agent has open for your
@@ -222,12 +217,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `{"temp_token", "user"}`). Create a token for your script under Settings, Account, Tokens
   for programs (or `vaf users token NAME --label TEXT` on the machine) and send it as
   `Authorization: Bearer <token>`. A token acts as its account, lives 7 to 365 days and can
-  be revoked there. The machine itself still needs no token.
+  be revoked there. The machine itself still needs no token. Restart VAF after updating;
+  `vaf update` rebuilds the web UI at that start.
 
 - **See and end your sessions.** Settings, Account lists every device signed in to your
   account, with its address and last use, and your tokens for programs. Sign out one device
   or all others; an admin can sign an account out everywhere, and `vaf users sessions` and
-  `vaf users sign-out` do the same in a terminal.
+  `vaf users sign-out` do the same in a terminal. Restart VAF after updating; `vaf update`
+  rebuilds the web UI at that start.
 
 - **A sign-in on another device ends after a week without use, and lasts a month at most.**
   It used to last a day whether used or not. It now ends after 7 days without use
@@ -238,23 +235,24 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `local_network_jwt_expiry_hours` to 24. That window's session opens nothing from another
   device, so a copied cookie of it does not carry the 30 days elsewhere. Signing in again in
   the same browser now ends the session it replaces, which used to stay valid for its whole
-  life.
+  life. Restart VAF after updating.
 
 - **You hear about new sign-ins and guessing.** A sign-in from an address your account has
   not used in 30 days, repeated wrong passwords, and wrong 2FA codes after a correct
   password each send a message to your main messenger and the notifications, in your
   language. The last two also go to the admin. A sign-in from a new address is also the
-  security event "Sign-in from a new address".
+  security event "Sign-in from a new address". Restart VAF after updating.
 
 - **A script policy, reporting first.** Pages now carry a content security policy for scripts
   in report-only mode: nothing is blocked yet, and what it would block is written to the
   webui log (Logs window, lines starting with `[CSP]`), so the policy can be enforced once
   those reports are clean. Pages are now rendered per request, which the policy needs.
+  Restart VAF after updating; `vaf update` rebuilds the web UI at that start.
 
 - **2FA is required for every account, with no switch.** The `local_network_require_2fa`
   setting no longer changed anything (every account already had to set up its second factor
   at its first sign-in) and is gone, together with its `vaf doctor` warning. A value left in
-  an older `config.json` is ignored.
+  an older `config.json` is ignored. Restart VAF after updating.
 
 - **Passwords need 12 characters and may not be a common one.** Every new password, from
   the setup wizard, `vaf setup`, an admin's new account, your own change in Settings or
@@ -262,11 +260,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   length. Existing passwords keep working; change a shorter one in Settings, Account. For
   your own programs: a refusal carries `"code": "password_too_short"` or
   `"password_common"`, and `POST /api/auth/bootstrap` now answers every refusal with
-  `{"detail", "code"}`.
+  `{"detail", "code"}`. Restart VAF after updating; `vaf update` rebuilds the web UI at that
+  start.
 
 - **The API documentation needs a sign-in.** `/docs` and `/openapi.json` were open to every
   device on the network when VAF ran with `vaf run --web`. The machine itself still opens
-  them without one.
+  them without one. Restart VAF after updating.
 
 - **The first visitor can no longer make themselves the admin.** While no admin existed,
   any device VAF admits could open the setup page and create the admin account, on a rented

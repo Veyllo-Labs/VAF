@@ -4,7 +4,7 @@
 """Creating local accounts: the rules, in one place.
 
 WHY THIS MODULE EXISTS. Account creation lived in two HTTP routes that had
-drifted apart while nobody was comparing them:
+drifted apart while nobody was comparing them (the rules as they were then):
 
     /api/auth/bootstrap   duplicate check case-INsensitive, password >= 8,
                           keyring mirror unconditional, config identity written

@@ -40,7 +40,8 @@ connection, admitted or not, before the admission check reads a single header:
   lingering_close), and the connection closes after it. Then the close watch: while unsent
   bytes remain, the connection is dropped only when they have not shrunk for
   ``SEND_TIMEOUT_S`` (modelled on nginx's send_timeout, no limit on the whole answer); once
-  all is out, it waits ``CLOSE_TIMEOUT_S`` for the client to end it.
+  all is out, it waits ``CLOSE_TIMEOUT_S`` for the client to end it. The client's own end (a
+  FIN or a TLS close_notify) goes through the same hook (``eof_received``).
 - ``door_options()``: those plus at most ``connection_cap()`` connections (503 above it,
   for a WebSocket upgrade as for a request), an explicit keep-alive, no ``Server`` header,
   and no forwarded-header trust of uvicorn's: ``binding.connection_client_ip`` is the only
@@ -56,20 +57,30 @@ Named boundaries:
 - The TLS handshake happens before any limit but its own can apply, and a connection in
   its handshake counts toward no cap (measured: 60 connections that never started TLS, 60
   more descriptors, released at 15 s). The cap turns requests away, not connections, so a
-  connection it turns away holds a descriptor for at most about 40 s: 15 s for its
-  handshake, 15 s for its head, and ``CLOSE_TIMEOUT_S`` for the close after the 503 (the
-  503 is small, so it is out at once). The spare descriptors divided by 40 s is the rate of
-  new connections that takes them all. With the soft limit at 65536: 65536 less about 200
-  at rest and three for each of the cap's 512 connections, about 63,800, so about 1,600 a
-  second, sustained. Where it stays at 1024 (cap 256): 1024 less about 200 at rest and 256
-  to 768 for the cap's connections (one descriptor each when idle, three when relayed), 45
-  to 557, so between about 1 and 14 a second. Only a firewall rate limit in front of the
-  port closes that.
-- A close while an answer is still being sent has no limit as long as the answer moves: a
-  client that takes nothing for ``SEND_TIMEOUT_S`` is dropped, with what is still unsent
-  lost. Measured with the real limits: a 4 MB one-piece answer read at 200 KB/s arrives
-  whole, plain and TLS, kept alive or with ``Connection: close``, on Python 3.13 and 3.10;
-  a client that stops reading is dropped after 60 s.
+  connection it turns away holds a descriptor for at most about 70 s: 15 s for its
+  handshake, 15 s for its head, ``LINGER_TIME_S`` when its body still arrives after the 503
+  (the 503 is uvicorn's own answer, which lingers like any other; telling it apart would
+  repeat uvicorn's cap check), and ``CLOSE_TIMEOUT_S`` for the close (the 503 is small, so
+  it is out at once). The spare descriptors divided by 70 s is the rate of new connections
+  that takes them all. With the soft limit at 65536: 65536 less 211 at rest (measured) and
+  three for each of the cap's 512 connections, 63,789, so about 900 a second, sustained.
+  Where it stays at 1024 (cap 256): 1024 less 211 at rest and 256 to 768 for the cap's
+  connections (one descriptor each when idle, three when relayed), 45 to 557, so between
+  about 0.6 and 8 a second. Only a firewall rate limit in front of the port closes that.
+- A close while an answer is still being sent has no limit as long as the answer moves, and
+  a client that takes nothing for ``SEND_TIMEOUT_S`` is dropped, with what is still unsent
+  lost. Progress counts when the kernel takes more of the answer, and Linux takes more only
+  once a large share of its send buffer has drained, so a client must take about that share
+  within each ``SEND_TIMEOUT_S``. Measured with the real limits on loopback, where that
+  buffer grows to megabytes: a 4 MB one-piece answer read at 200 KB/s arrives whole, plain
+  and TLS, kept alive or with ``Connection: close``, on Python 3.13 and 3.10; readers at 5
+  and 10 KB/s were dropped after 60 s, having read 0.3 and 0.6 MB (65 % of the answer
+  reached the 5 KB/s reader in all, from the kernel's buffers); a client that stops reading
+  is dropped after 60 s.
+- On Windows, asyncio's Proactor transport counts a whole pending send until it completes
+  (``proactor_events``), so the watch sees no progress inside one large send: a one-piece
+  answer its client needs longer than ``SEND_TIMEOUT_S`` to take is dropped there. Read in
+  asyncio's code, not measured on Windows.
 - One address can fill the connection cap; a per-address count would need a second
   reader of the peer (``tests/test_client_address_has_one_reader.py``) and bookkeeping
   across the WebSocket upgrade, and no incident asks for it.
@@ -256,7 +267,17 @@ class BoundedHttpToolsProtocol(HttpToolsProtocol):
         # The client has sent all it will: nothing is left to linger for.
         if self._lingering:
             self._end_linger()
-        return super().eof_received()
+        result = super().eof_received()
+        # The client's own end goes through the close hook too, so the close watch bounds it.
+        # Over TLS on Python 3.11+, asyncio ends the TLS layer by itself after a FIN or a
+        # close_notify, uvicorn then sees the transport closing and never closes it, and the
+        # TCP transport waits for a client that reads nothing without any limit (measured:
+        # still held after 130 s, both ways). A client that half-closes and keeps reading
+        # still gets its whole answer: the watch drops only a close that stops moving.
+        transport = self._door_transport
+        if transport is not None and not transport.is_closing():
+            transport.close()
+        return result
 
     def data_received(self, data: bytes) -> None:
         if self._lingering:

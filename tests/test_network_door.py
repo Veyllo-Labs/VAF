@@ -816,8 +816,9 @@ def test_a_close_waits_while_the_answer_still_moves(cert, monkeypatch, kind, kee
     MUTATION: a close limit counted from the close, the TCP transport under TLS left
     uncounted, or asyncio's TLS close limit at CLOSE_TIMEOUT_S - red."""
     # Linux reports a socket writable only once a large share of its buffer is free, so the
-    # unsent bytes shrink in steps about a second apart at this pace.
-    monkeypatch.setattr(door, "SEND_TIMEOUT_S", 3.0)
+    # unsent bytes shrink in steps about a second apart at this pace; Windows counts a whole
+    # pending send until it completes. 8 s leaves room for both on a slow runner.
+    monkeypatch.setattr(door, "SEND_TIMEOUT_S", 8.0)
     monkeypatch.setattr(door, "CLOSE_TIMEOUT_S", 0.25)
     monkeypatch.setattr(door, "KEEP_ALIVE_S", 0.5)
     size = 4 * 1000 * 1000
@@ -844,6 +845,114 @@ def test_a_close_waits_while_the_answer_still_moves(cert, monkeypatch, kind, kee
                 got += len(part)
                 time.sleep(0.05)   # about 1 MB/s
     assert got == size, f"{100 * got // size} % of the answer arrived"
+
+
+@pytest.mark.parametrize("how", ["fin", "close_notify"])
+def test_a_tls_client_that_ends_its_side_is_still_watched(cert, monkeypatch, how):
+    """A TLS client that takes a large one-piece answer, ends its own side (a TCP FIN, or a TLS
+    close_notify) and reads nothing more was held without any limit on Python 3.11+: asyncio
+    ends the TLS layer by itself, uvicorn then never closes the transport, and the close watch
+    never started (measured: still held after 130 s, both ways). The client's end now goes
+    through the close hook. MUTATION: no close in eof_received - red on Python 3.11+."""
+    monkeypatch.setattr(door, "SEND_TIMEOUT_S", 1.0)
+    monkeypatch.setattr(door, "CLOSE_TIMEOUT_S", 1.0)
+    with serving(_door_config(_Large(8 * 1000 * 1000), cert),
+                 door.door_event_loop) as (port, server):
+        raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        raw.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        raw.settimeout(5)
+        raw.connect(("127.0.0.1", port))
+        s = tls_client().wrap_socket(raw)
+        try:
+            s.sendall(b"GET / HTTP/1.1\r\nHost: door\r\n\r\n")
+            assert s.recv(200).startswith(b"HTTP/1.1 200")
+            time.sleep(0.5)          # the whole answer is with the server's transport
+            if how == "fin":
+                socket.socket.shutdown(s, socket.SHUT_WR)
+            else:
+                s.setblocking(False)
+                try:
+                    s.unwrap()       # sends close_notify; nothing more is read
+                except (ssl.SSLError, OSError):
+                    pass
+            started = time.monotonic()
+            while server.server_state.connections and time.monotonic() - started < 8.0:
+                time.sleep(0.1)
+            assert not server.server_state.connections, "the half-closed connection was held"
+        finally:
+            s.close()
+
+
+@pytest.mark.parametrize("kind", ["tls", "plain"])
+def test_a_half_closing_reader_gets_the_whole_answer(cert, monkeypatch, kind):
+    """A client that ends its own side and keeps reading (shutdown(SHUT_WR)) gets its whole
+    answer: its end starts the close watch, which drops only a close that stops moving.
+    MUTATION: drop the connection at the client's end - red."""
+    monkeypatch.setattr(door, "SEND_TIMEOUT_S", 8.0)
+    monkeypatch.setattr(door, "CLOSE_TIMEOUT_S", 0.25)
+    size = 4 * 1000 * 1000
+    with serving(_door_config(_Large(size), cert if kind == "tls" else None),
+                 door.door_event_loop) as (port, _server):
+        s = tls_connect(port) if kind == "tls" else socket.create_connection(("127.0.0.1", port),
+                                                                            timeout=5)
+        with s:
+            s.sendall(b"GET / HTTP/1.1\r\nHost: door\r\n\r\n")
+            s.settimeout(10)
+            got, head, ended = 0, b"", False
+            while got < size:
+                try:
+                    part = s.recv(50000)
+                except OSError:
+                    break
+                if not part:
+                    break
+                if not head:
+                    head, _, part = part.partition(b"\r\n\r\n")
+                got += len(part)
+                if not ended and got >= 1000 * 1000:
+                    socket.socket.shutdown(s, socket.SHUT_WR)
+                    ended = True
+                time.sleep(0.02)
+    assert got == size, f"{100 * got // size} % of the answer arrived"
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="3.10's TLS transport counts the TCP buffer itself")
+def test_a_tls_transport_shows_the_tcp_transport_under_it(cert):
+    """The close watch reads a TLS close's progress on the TCP transport under the TLS one,
+    through asyncio's private _ssl_protocol._transport: on Python 3.11+ the TLS transport
+    counts only its own encryption backlog (measured: 0 against 1.6 MB right after a 4 MB
+    write). Pinned directly, so a change in asyncio fails here and not as a slow reader."""
+    import ssl as ssl_module
+    seen = {}
+
+    class _Peek(asyncio.Protocol):
+        def connection_made(self, transport):
+            transport.write(b"x" * (4 * 1024 * 1024))
+            inner = getattr(getattr(transport, "_ssl_protocol", None), "_transport", None)
+            seen["inner"] = inner
+            seen["tls"] = transport.get_write_buffer_size()
+            seen["unsent"] = door._unsent_bytes(transport)
+            transport.abort()
+
+    async def _run():
+        context = ssl_module.SSLContext(ssl_module.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(cert, cert)
+        server = await asyncio.get_running_loop().create_server(_Peek, "127.0.0.1", 0,
+                                                                ssl=context)
+        port = server.sockets[0].getsockname()[1]
+        client = await asyncio.to_thread(tls_connect, port)
+        try:
+            deadline = time.monotonic() + 5
+            while "inner" not in seen and time.monotonic() < deadline:
+                await asyncio.sleep(0.02)
+        finally:
+            client.close()
+            server.close()
+
+    asyncio.run(_run())
+    inner = seen["inner"]
+    assert inner is not None and callable(getattr(inner, "get_write_buffer_size", None))
+    assert seen["unsent"] > seen["tls"], "the TCP transport's bytes were not counted"
 
 
 class _NoLinger:

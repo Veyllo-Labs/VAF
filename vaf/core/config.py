@@ -693,7 +693,8 @@ class Config:
         "local_network_port_frontend": 3000,                       # Frontend port for local network
         "local_network_firewall_enabled": True,                    # Enable OS firewall rules
         "local_network_jwt_secret": "",                            # JWT secret (auto-generated if empty)
-        "local_network_jwt_expiry_hours": 24,                      # JWT token expiry in hours
+        "local_network_jwt_expiry_hours": 720,                     # Admin-only. A network sign-in's lifetime at most, in hours (30 days); the window on this machine always gets 30 days
+        "local_network_session_idle_days": 7,                      # Admin-only. A sign-in from another device ends after this many days without use (1..365); not the window on this machine, not tokens for programs
         "local_network_rate_limit_attempts": 5,                    # Max failed login attempts
         "local_network_rate_limit_window_minutes": 15,             # Rate limit window in minutes
         "local_network_rate_limit_account_attempts": 10,           # Failed logins per account name, any address

@@ -12,12 +12,40 @@ working for its 24 hours (30 days for one minted on the machine itself), and cha
 compromised password did not throw the intruder out.
 
 WHAT. Every completed sign-in opens one row here (`open_session`, the one writer; the three
-routes each built it by hand). Every reader of a token asks `session_standing_async`: a token
-whose row is missing, inactive or expired has `ended`. Ending writes `user_sessions` only
+routes each built it by hand), and so does every token for programs (`mint_program_token`).
+Every reader of a token asks `session_standing_async`: a token whose row is missing,
+inactive, expired or idle too long has `ended`. One rule decides that, `session_row_live`,
+asked by the standing check, the session list and `/me`. Ending writes `user_sessions` only
 (a Core UPDATE, never `local_users`, so the account seal is untouched):
 - `end_session`: the presented token (logout);
+- `end_account_session`: one session of an account, by its id (Settings, Account);
 - `end_account_sessions`: every session of an account, or every other one (a password
-  change keeps the session that made it).
+  change and "sign out all other devices" keep the session that made it).
+
+LIFETIMES. A row is one of three kinds (`device_info.device_type` and its address):
+- a browser on another device (`web`, an address that is not this machine): it lives
+  `local_network_jwt_expiry_hours` (30 days) at most and ends after
+  `local_network_session_idle_days` (7) without use. Only a session that can outlive a day
+  makes an inactivity limit mean something; both limits are the token's and the row's.
+- the window on this machine (`web` from loopback): 30 days, no inactivity limit; the
+  person is at their own desk.
+- a token for programs (`program`): 7, 30, 90 or 365 days, chosen when it is made, and no
+  inactivity limit: a backup script that runs monthly must not die of disuse.
+This departs from NIST 800-63B-4 at AAL2 (24 hours overall and one hour of inactivity, both
+SHOULD) for a server that only the LAN and VPNs reach, with the second factor always on, the
+token in an HttpOnly cookie a page script cannot read, every session listed and endable, and
+a sign-in from a new address announced (ASVS 7.1.1 asks for the reason to be written down).
+
+LAST USE. A standing check that asks the store (a cache miss) writes `last_activity = now`
+when the row is live and its last use is older than TOUCH_EVERY_S, at most once an hour per
+session; a failed write never changes the answer, and an ended row is never written, so a
+session that idled out cannot be revived by a retry.
+
+THE LIST AND TOKENS FOR PROGRAMS. `list_account_sessions` answers an account's live sessions
+for Settings, Account and `vaf users sessions`, never a token hash. `mint_program_token`
+makes a token for a script of the account's own after the caller proved it (the 2FA code in
+the web UI, the terminal's proof in `vaf users token`): the token is shown once, acts as
+the account, and is listed and revoked like a device.
 
 The standing is cached per token for the permission lookups' few seconds and cleared by every
 ending in this process, so an ending here takes effect on the next request.
@@ -37,17 +65,44 @@ NAMED BOUNDARIES:
   says so and names a restart.
 - The rows are not sealed: whoever can write the database can reactivate an ended session of
   a token they hold.
+- A socket does not count as use: a tab that only chats over its open socket is not touched
+  and keeps working until it reconnects; its reconnect is a standing check like any other.
+- An admin's open tab counts as use: it polls `/api/security/alert-count` every minute.
+- Devices behind one address (a router's VPN, a household NAT) share one "known address"
+  for the new-sign-in alert and the account window's exemption (`signed_in_from`).
+- A token for programs carries the account's full rights; tokens limited to some routes are
+  not built.
+- Accounts, sign-in and sessions are not on the framework facade: an embedder authenticates
+  its own users and asserts `user_scope` (docs/EMBEDDING.md), so nothing an embedder needs
+  is missing here.
 """
 from __future__ import annotations
 
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Optional, Tuple
 
 LIVE = "live"
 ENDED = "ended"
 UNKNOWN = "unknown"
+
+# `device_info.device_type`: a sign-in (`web`, a browser or the window on this machine) or a
+# token for programs.
+WEB = "web"
+PROGRAM = "program"
+# How a session is shown and limited (`list_account_sessions`).
+KIND_BROWSER = "browser"
+KIND_PROGRAM = "program"
+KIND_THIS_MACHINE = "this_machine"
+
+# Last use is written at most this often per session (seconds).
+TOUCH_EVERY_S = 3600
+# The lifetimes a token for programs may be given, in days.
+PROGRAM_TOKEN_DAYS = (7, 30, 90, 365)
+PROGRAM_NAME_MAX = 60
+_IDLE_DAYS_DEFAULT = 7
 
 _cache: dict = {}        # token hash -> (monotonic ts, standing)
 _cache_lock = threading.Lock()
@@ -89,23 +144,72 @@ def forget_cached_sessions() -> None:
         _cache.clear()
 
 
-async def open_session(db, user, access_token: str, *, ip: str = "", user_agent: str = "") -> None:
-    """The row of one completed sign-in, for exactly this token. Commits."""
+def idle_days() -> int:
+    """`local_network_session_idle_days`, read on every call and held to 1..365."""
+    try:
+        from vaf.core.config import Config
+        days = int(Config.get("local_network_session_idle_days", _IDLE_DAYS_DEFAULT))
+    except Exception:
+        days = _IDLE_DAYS_DEFAULT
+    return max(1, min(365, days))
+
+
+def _from_this_machine(ip) -> bool:
+    if not ip:
+        return False
+    from vaf.network.binding import is_localhost
+    return is_localhost(str(ip))
+
+
+def _info(device_info) -> dict:
+    return device_info if isinstance(device_info, dict) else {}
+
+
+def _idle_limited(device_info) -> bool:
+    """A sign-in from another device: the only kind that ends after a time without use."""
+    info = _info(device_info)
+    return info.get("device_type") != PROGRAM and not _from_this_machine(info.get("ip"))
+
+
+def session_row_live(is_active, expires_at, last_activity, device_info, now: datetime) -> bool:
+    """The one rule for whether a session row still opens anything: active, not expired, and,
+    for a sign-in from another device, used within the inactivity limit."""
+    if not is_active:
+        return False
+    if expires_at is not None and expires_at <= now:
+        return False
+    if _idle_limited(device_info):
+        if last_activity is None or now - last_activity > timedelta(days=idle_days()):
+            return False
+    return True
+
+
+async def open_session(db, user, access_token: str, *, ip: str = "", user_agent: str = "",
+                       kind: str = WEB, name: str = "") -> str:
+    """The row of one completed sign-in (or one token for programs, `kind=PROGRAM`), for
+    exactly this token. Returns the row's id. Commits."""
     from vaf.auth.crypto import decode_token, token_hash_for_db
     from vaf.auth.models import UserSession
 
     payload = decode_token(access_token) or {}
     exp = payload.get("exp")
-    expires_at = (datetime.fromtimestamp(exp, tz=timezone.utc) if isinstance(exp, (int, float))
-                  else datetime.now(timezone.utc) + timedelta(hours=24)).replace(tzinfo=None)
+    now = _utc_naive()
+    expires_at = (datetime.fromtimestamp(exp, tz=timezone.utc).replace(tzinfo=None)
+                  if isinstance(exp, (int, float)) else now + timedelta(hours=24))
+    row_id = uuid.uuid4()
     db.add(UserSession(
+        id=row_id,
         user_id=user.id,
         token_hash=token_hash_for_db(access_token),
-        device_info={"ip": ip or None, "user_agent": user_agent or "", "device_type": "web"},
+        device_info={"ip": ip or None, "user_agent": user_agent or "", "device_type": kind,
+                     "name": name or ""},
+        created_at=now,
+        last_activity=now,
         expires_at=expires_at,
         is_2fa_verified=bool(payload.get("is_2fa_verified")),
     ))
     await db.commit()
+    return str(row_id)
 
 
 async def session_standing_async(token: str) -> str:
@@ -128,12 +232,14 @@ async def session_standing_async(token: str) -> str:
         from vaf.auth.models import UserSession
         async with get_auth_db() as db:
             row = (await db.execute(
-                select(UserSession.is_active, UserSession.expires_at)
+                select(UserSession.is_active, UserSession.expires_at, UserSession.last_activity,
+                       UserSession.device_info)
                 .where(UserSession.token_hash == key))).first()
-        if row is None or not row[0] or (row[1] is not None and row[1] <= _utc_naive()):
-            answer = ENDED
-        else:
-            answer = LIVE
+            current = _utc_naive()
+            live = row is not None and session_row_live(row[0], row[1], row[2], row[3], current)
+            answer = LIVE if live else ENDED
+            if live:
+                await _touch(db, key, row[2], current)
     except Exception:
         return UNKNOWN
     with _cache_lock:
@@ -143,6 +249,32 @@ async def session_standing_async(token: str) -> str:
             for k in [k for k, v in _cache.items() if v[0] < cutoff]:
                 _cache.pop(k, None)
     return answer
+
+
+async def _touch(db, key: str, last_activity, now: datetime) -> None:
+    """Last use, at most once per TOUCH_EVERY_S. Only a live row reaches here, and the write
+    keeps to an active, unexpired row, so an ended session is never revived. Never raises."""
+    cutoff = now - timedelta(seconds=TOUCH_EVERY_S)
+    if last_activity is not None and last_activity >= cutoff:
+        return
+    try:
+        from sqlalchemy import update
+
+        from vaf.auth.models import UserSession
+        await db.execute(
+            update(UserSession)
+            .where(UserSession.token_hash == key,
+                   UserSession.is_active == True,  # noqa: E712 - SQLAlchemy column comparison
+                   UserSession.expires_at > now,
+                   UserSession.last_activity < cutoff)
+            .values(last_activity=now)
+            .execution_options(synchronize_session=False))
+        await db.commit()
+    except Exception:
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
 
 async def end_session(db, token: str) -> int:
@@ -163,6 +295,32 @@ async def end_session(db, token: str) -> int:
     _remember_ended([key])
     forget_cached_sessions()
     return int(result.rowcount or 0)
+
+
+async def end_account_session(db, user_id, session_id) -> Optional[str]:
+    """End one session of an account, by its row id: only when the row is that account's.
+    Returns the ended session's token hash (to close the sockets it opened), or None when no
+    such live row of this account exists. Commits."""
+    from sqlalchemy import update
+
+    from vaf.auth.models import UserSession
+    try:
+        wanted = session_id if isinstance(session_id, uuid.UUID) else uuid.UUID(str(session_id))
+    except (ValueError, TypeError):
+        return None
+    result = await db.execute(
+        update(UserSession)
+        .where(UserSession.id == wanted,
+               UserSession.user_id == user_id,
+               UserSession.is_active == True)  # noqa: E712 - SQLAlchemy column comparison
+        .values(is_active=False)
+        .returning(UserSession.token_hash)
+        .execution_options(synchronize_session=False))
+    ended = [h for h in result.scalars().all()]
+    await db.commit()
+    _remember_ended(ended)
+    forget_cached_sessions()
+    return ended[0] if ended else None
 
 
 async def end_account_sessions(db, user_id, *, keep_token: Optional[str] = None) -> int:
@@ -223,3 +381,147 @@ async def signed_in_from(db, username: str, ip: str, *, days: int = 30) -> bool:
                UserSession.created_at >= _utc_naive() - timedelta(days=days))
     )).all()
     return any(isinstance(r[0], dict) and r[0].get("ip") == ip for r in rows)
+
+
+# ── the list, and tokens for programs ─────────────────────────────────────────────
+
+def _iso(value: Optional[datetime]) -> Optional[str]:
+    return value.replace(tzinfo=timezone.utc).isoformat() if value is not None else None
+
+
+def session_kind(device_info) -> str:
+    """How a session is shown: a browser on another device, the window on this machine, or a
+    token for programs."""
+    info = _info(device_info)
+    if info.get("device_type") == PROGRAM:
+        return KIND_PROGRAM
+    return KIND_THIS_MACHINE if _from_this_machine(info.get("ip")) else KIND_BROWSER
+
+
+async def list_account_sessions(db, user_id, *, current_token: Optional[str] = None) -> list:
+    """The live sessions of one account, most recent use first. `current` marks the session
+    of `current_token`. Never a token hash."""
+    from sqlalchemy import select
+
+    from vaf.auth.crypto import token_hash_for_db
+    from vaf.auth.models import UserSession
+
+    now = _utc_naive()
+    current = token_hash_for_db(current_token) if current_token else None
+    rows = (await db.execute(
+        select(UserSession)
+        .where(UserSession.user_id == user_id,
+               UserSession.is_active == True))).scalars().all()  # noqa: E712
+    out = []
+    for row in rows:
+        if not session_row_live(row.is_active, row.expires_at, row.last_activity,
+                                row.device_info, now):
+            continue
+        info = _info(row.device_info)
+        limited = _idle_limited(info)
+        out.append({
+            "id": str(row.id),
+            "kind": session_kind(info),
+            "name": str(info.get("name") or ""),
+            "device": device_label(str(info.get("user_agent") or "")),
+            "ip": info.get("ip") or "",
+            "created_at": _iso(row.created_at),
+            "last_used_at": _iso(row.last_activity),
+            "expires_at": _iso(row.expires_at),
+            "idle_until": (_iso(row.last_activity + timedelta(days=idle_days()))
+                           if limited and row.last_activity is not None else None),
+            "current": bool(current) and row.token_hash == current,
+            "_sort": row.last_activity or row.created_at or now,
+        })
+    out.sort(key=lambda s: s["_sort"], reverse=True)
+    for entry in out:
+        entry.pop("_sort")
+    return out
+
+
+class ProgramTokenRefused(ValueError):
+    """A token for programs was not made. `code`: `invalid` (a name or a lifetime the rule
+    does not take) or `record_changed` (the account's seal does not verify)."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def program_token_name(name) -> str:
+    """The name a token for programs is listed by: stripped, 1 to PROGRAM_NAME_MAX characters,
+    no control characters. Raises ProgramTokenRefused('invalid')."""
+    import unicodedata
+    cleaned = str(name or "").strip()
+    if (not cleaned or len(cleaned) > PROGRAM_NAME_MAX
+            or any(unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") for ch in cleaned)):
+        raise ProgramTokenRefused(
+            "invalid", f"A name of 1 to {PROGRAM_NAME_MAX} characters, on one line.")
+    return cleaned
+
+
+async def mint_program_token(db, user, *, name: str, days: int, ip: str = "",
+                             user_agent: str = "", where: str = "") -> Tuple[str, str]:
+    """A token for a program of the account's own, after the caller proved it is the account
+    (the 2FA code in the web UI, the terminal's proof for `vaf users token`). It acts as the
+    account, lives `days` (one of PROGRAM_TOKEN_DAYS) with no inactivity limit, and is listed
+    and revoked like a device. Returns (token, session id); the token is never logged. The
+    security event `program_token_created` names the account, the name, the days and `where`.
+    Raises ProgramTokenRefused."""
+    from vaf.auth import account_seal
+    from vaf.auth.crypto import create_access_token
+
+    cleaned = program_token_name(name)
+    if isinstance(days, bool) or days not in PROGRAM_TOKEN_DAYS:
+        raise ProgramTokenRefused(
+            "invalid", "The lifetime is one of " + ", ".join(map(str, PROGRAM_TOKEN_DAYS)) + " days.")
+    if not account_seal.check(user, where="token for programs", ip=ip):
+        raise ProgramTokenRefused("record_changed", account_seal.REFUSAL_LOGIN)
+    token = create_access_token(str(user.id), user.username, user.role, str(user.user_scope_id),
+                                expires_hours=days * 24, is_2fa_verified=True)
+    session_id = await open_session(db, user, token, ip=ip, user_agent=user_agent,
+                                    kind=PROGRAM, name=cleaned)
+    try:
+        from vaf.core.security_events import log_security_event
+        log_security_event("program_token_created", ip=ip, username=str(user.username or ""),
+                           detail=f"{cleaned}, {days} days" + (f", {where}" if where else ""))
+    except Exception:
+        pass
+    return token, session_id
+
+
+# ── a person's word for a user agent ──────────────────────────────────────────────
+
+# Order matters: Edge and every Chromium browser carry "Chrome/", and Chrome carries
+# "Safari/", so the more specific marks are asked first.
+_BROWSERS = (
+    ("Edge", ("Edg/", "EdgA/", "EdgiOS/", "Edge/")),
+    ("Firefox", ("Firefox/", "FxiOS/")),
+    ("Chrome", ("Chrome/", "CriOS/", "Chromium/")),
+    ("Safari", ("Safari/",)),
+)
+_SYSTEMS = (
+    ("iOS", ("iPhone", "iPad", "iPod")),
+    ("Android", ("Android",)),
+    ("Windows", ("Windows",)),
+    ("macOS", ("Macintosh", "Mac OS X")),
+    ("Linux", ("Linux", "X11", "CrOS")),
+)
+
+
+def device_label(user_agent: str) -> str:
+    """"Firefox on Linux", "Safari on iOS": what a person recognises their device by. A client
+    that is not a browser shows its product name ("curl"); no agent at all is "Unknown
+    device". Pure."""
+    ua = str(user_agent or "").strip()
+    if not ua:
+        return "Unknown device"
+    browser = next((label for label, marks in _BROWSERS if any(m in ua for m in marks)), None)
+    system = next((label for label, marks in _SYSTEMS if any(m in ua for m in marks)), None)
+    if browser is None:
+        if not ua.startswith("Mozilla/"):
+            product = ua.split("/", 1)[0].split(" ", 1)[0][:40]
+            return product or "Unknown device"
+        browser = "Browser"
+    return f"{browser} on {system}" if system else browser

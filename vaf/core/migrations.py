@@ -19,7 +19,7 @@ Rules for a migration function ``fn(config: dict) -> dict``:
 """
 from typing import Callable, List, Tuple
 
-CONFIG_FORMAT_VERSION = 2
+CONFIG_FORMAT_VERSION = 3
 
 
 def _v2_lift_lexical_scan_cap(cfg: dict) -> dict:
@@ -39,9 +39,24 @@ def _v2_lift_lexical_scan_cap(cfg: dict) -> dict:
     return cfg
 
 
+def _v3_network_sessions_last_a_month(cfg: dict) -> dict:
+    """Lift local_network_jwt_expiry_hours from the old default 24 to 720 (30 days).
+
+    A sign-in from another device now also ends after local_network_session_idle_days (7)
+    without use, and that limit only means something when a session can outlive a day.
+    Full-config saves wrote the old default out explicitly, so the DEFAULTS change alone
+    never reaches an existing install (the same reason as v2). Only the old default is
+    rewritten; any other value stays. Idempotent: after the rewrite the value is not 24.
+    """
+    if cfg.get("local_network_jwt_expiry_hours") == 24:
+        cfg["local_network_jwt_expiry_hours"] = 720
+    return cfg
+
+
 # Applied in order to any config whose stored version is below the target.
 CONFIG_MIGRATIONS: List[Tuple[int, Callable[[dict], dict]]] = [
     (2, _v2_lift_lexical_scan_cap),
+    (3, _v3_network_sessions_last_a_month),
 ]
 
 

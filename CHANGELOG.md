@@ -207,6 +207,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   VAF, it says so: restart VAF then). A window whose session ended shows the sign-in page
   and says why. Signing in twice in the same second no longer fails.
 
+- **A sign-in on another device ends after a week without use, and lasts a month at most.**
+  It used to last a day whether used or not. It now ends after 7 days without use
+  (`local_network_session_idle_days`) and after 30 days at the latest
+  (`local_network_jwt_expiry_hours`, now 720; a stored 24, the old default, becomes 720 at the
+  first start). The desktop window on the machine itself now really stays signed in for 30
+  days, with no inactivity limit. An admin who wants a daily sign-in sets
+  `local_network_jwt_expiry_hours` to 24.
+
 - **2FA is required for every account, with no switch.** The `local_network_require_2fa`
   setting no longer changed anything (every account already had to set up its second factor
   at its first sign-in) and is gone, together with its `vaf doctor` warning. A value left in

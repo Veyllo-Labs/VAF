@@ -37,15 +37,29 @@ def test_cookie_max_age_matches_token_exp():
     assert 2 * 3600 - 30 <= max_age <= 2 * 3600 + 30
 
 
-def test_cookie_max_age_never_the_old_hardcoded_month():
-    """A default token (config expiry, 24h unless raised) must not get a 30-day cookie."""
+def _configured_hours(monkeypatch, hours):
+    from vaf.core.config import Config
+    real_get = Config.get
+    monkeypatch.setattr(Config, "get", staticmethod(
+        lambda key, default=None: hours if key == "local_network_jwt_expiry_hours"
+        else real_get(key, default)))
+
+
+def test_cookie_max_age_never_a_hardcoded_lifetime(monkeypatch):
+    """A default token gets the configured lifetime, and its cookie that same life: with the
+    configuration at two days, neither is the month a hardcoded value used to give."""
+    _configured_hours(monkeypatch, 48)
     token = create_access_token("u1", "alice", "admin", "s1")
-    assert _cookie_max_age_for(token) < 30 * 24 * 3600
+    assert 48 * 3600 - 30 <= _cookie_max_age_for(token) <= 48 * 3600
 
 
-def test_undecodable_token_falls_back_to_configured_expiry():
-    max_age = _cookie_max_age_for("not-a-jwt")
-    assert 0 < max_age <= 7 * 24 * 3600  # config default (24h) territory, never 30d
+def test_undecodable_token_falls_back_to_configured_expiry(monkeypatch):
+    """The configured lifetime, not a constant: 30 days by default (a network session's
+    longest life), and whatever an admin set instead."""
+    from vaf.core.config import Config
+    assert _cookie_max_age_for("not-a-jwt") == int(Config.DEFAULTS["local_network_jwt_expiry_hours"]) * 3600
+    _configured_hours(monkeypatch, 48)
+    assert _cookie_max_age_for("not-a-jwt") == 48 * 3600
 
 
 def test_set_auth_cookie_writes_exp_aligned_max_age():

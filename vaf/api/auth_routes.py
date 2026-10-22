@@ -137,7 +137,7 @@ def _cookie_max_age_for(token: str) -> int:
     # mirror the configured JWT expiry rather than any longer hardcoded value.
     try:
         from vaf.core.config import Config
-        return int(float(Config.get("local_network_jwt_expiry_hours", 24)) * 3600)
+        return int(float(Config.get("local_network_jwt_expiry_hours", 720)) * 3600)
     except Exception:
         return 24 * 3600
 
@@ -833,17 +833,15 @@ async def _me_user_from_token(token: str) -> dict | None:
                 if not user or not account_seal.check(user, where="/api/auth/me"):
                     return None
 
-                token_hash = token_hash_for_db(token)
-                now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-                session_result = await db.execute(
-                    select(UserSession).where(
-                        UserSession.token_hash == token_hash,
-                        UserSession.is_active == True,
-                        UserSession.expires_at > now_utc,
-                    )
-                )
-                session = session_result.scalar_one_or_none()
-                if not session:
+                # The one liveness rule (vaf/auth/sessions.py): active, not expired, and for a
+                # sign-in from another device used within the inactivity limit.
+                from vaf.auth import sessions as _sessions
+                session = (await db.execute(
+                    select(UserSession).where(UserSession.token_hash == token_hash_for_db(token))
+                )).scalar_one_or_none()
+                if session is None or not _sessions.session_row_live(
+                        session.is_active, session.expires_at, session.last_activity,
+                        session.device_info, _sessions._utc_naive()):
                     return None
 
                 return {

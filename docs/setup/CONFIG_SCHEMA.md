@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (377 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (378 keys).
 
 ## How configuration is set
 
@@ -365,7 +365,8 @@ See [docs/setup/SERVER_MODE.md](SERVER_MODE.md) and
 | `local_network_tls_enabled` | `False` | Enable TLS. |
 | `local_network_ssl_cert` / `_ssl_key` | `""` | Admin-only. Your own certificate (PEM, may carry the chain) and its private key; empty means VAF's own, issued by the local CA. VAF never writes them and never replaces a certificate they name; one that does not load is answered with VAF's own for that run, the keys untouched. Set through `vaf server cert set` or Settings, Local Network, Certificate, which check it first; the generic settings save cannot set them. See [NETWORK_FEATURES.md](NETWORK_FEATURES.md#your-own-certificate). |
 | `local_network_jwt_secret` | `""` | Managed; JWT signing secret. Held in the data keyring, not in this file: a value left here by an older install is adopted on first use and the plaintext entry is then blanked. |
-| `local_network_jwt_expiry_hours` | `24` | JWT lifetime. |
+| `local_network_jwt_expiry_hours` | `720` | Admin-only. The longest a sign-in from another device lives, in hours (30 days); the window on this machine always gets 30 days and a token for programs the days it was made with. A stored `24`, the old default, is rewritten to `720` once (config format 3), any other value stays. |
+| `local_network_session_idle_days` | `7` | Admin-only. A sign-in from another device ends after this many days without use (read as 1 to 365). Not the window on this machine and not tokens for programs. See [NETWORK_FEATURES.md](NETWORK_FEATURES.md#authentication-details). |
 | `local_network_rate_limit_attempts` | `5` | Login attempts per window. |
 | `local_network_rate_limit_window_minutes` | `15` | Rate-limit window. |
 | `local_network_rate_limit_account_attempts` | `10` | Failed logins per account name in one window, from any number of addresses; a held name answers 429 to new addresses (the machine itself and addresses that signed in to the account within 30 days are not held). |

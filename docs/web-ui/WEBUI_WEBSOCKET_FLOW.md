@@ -118,9 +118,10 @@ Every rejected NETWORK handshake (`_emit_sec_ws` in `vaf/core/web_server.py`) al
 mirrored human-readably into `security_<date>.log`); the trusted-localhost rejection paths in
 network-disabled mode do not emit.
 
-**Why an expired token from localhost is not a rejection.** A login is valid for
-`local_network_jwt_expiry_hours` (24 by default), and the desktop window keeps the token it
-was given. Rejecting it here while the HTTP routes floor the same caller to the local admin
+**Why an expired token from localhost is not a rejection.** A login on the machine itself is
+valid for 30 days (one from another device for `local_network_jwt_expiry_hours`, 720 hours
+by default, and it ends sooner after `local_network_session_idle_days` without use), and the
+desktop window keeps the token it was given. Rejecting it here while the HTTP routes floor the same caller to the local admin
 (`get_current_user_or_local_admin`) put the two lanes in disagreement, and the disagreement
 was a deadlock: the socket was refused, the client's `/api/auth/me` re-check answered `200`,
 so it never routed to `/login` and retried forever - and with no client ever connected, the

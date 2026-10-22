@@ -137,7 +137,7 @@ def create_access_token(
     """Create JWT access token. `password_version` (`password_fingerprint`) is set on a token
     from before the second factor, binding it to the password it was minted with."""
     if expires_hours is None:
-        expires_hours = float(Config.get("local_network_jwt_expiry_hours", 24))
+        expires_hours = float(Config.get("local_network_jwt_expiry_hours", 720))
     now = datetime.now(timezone.utc)
     exp = now + timedelta(hours=expires_hours)
     payload = {

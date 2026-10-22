@@ -45,7 +45,7 @@ def test_v2_lifts_only_the_old_lexical_scan_default():
     the first assertion goes red."""
     out, applied = mig.run_config_migrations(
         {"memory_hybrid_lexical_scan_limit": 400}, 1)
-    assert out["memory_hybrid_lexical_scan_limit"] == 2000 and applied == [2]
+    assert out["memory_hybrid_lexical_scan_limit"] == 2000 and applied[0] == 2
 
     # A deliberate custom value is not touched.
     out, _ = mig.run_config_migrations({"memory_hybrid_lexical_scan_limit": 800}, 1)
@@ -56,8 +56,50 @@ def test_v2_lifts_only_the_old_lexical_scan_default():
     assert "memory_hybrid_lexical_scan_limit" not in out
 
     # Idempotent: a second pass over the migrated value changes nothing.
-    out2, applied2 = mig.run_config_migrations(dict(out), 2)
+    out2, applied2 = mig.run_config_migrations(dict(out), mig.CONFIG_FORMAT_VERSION)
     assert applied2 == []
+
+
+def test_v3_lifts_only_the_old_token_default():
+    """A sign-in from another device now ends after a week without use, which only means
+    something when a session can outlive a day: the old 24-hour default becomes 30 days.
+    Full-config saves wrote 24 out explicitly, so only a value migration reaches existing
+    installs. MUTATION: rewrite 48 too; leave the version at 2 - red."""
+    assert mig.CONFIG_FORMAT_VERSION == 3
+    out, applied = mig.run_config_migrations({"local_network_jwt_expiry_hours": 24}, 2)
+    assert out["local_network_jwt_expiry_hours"] == 720 and applied == [3]
+    out, _ = mig.run_config_migrations({"local_network_jwt_expiry_hours": 48}, 2)
+    assert out["local_network_jwt_expiry_hours"] == 48
+    out, _ = mig.run_config_migrations({}, 2)
+    assert "local_network_jwt_expiry_hours" not in out
+    again, applied = mig.run_config_migrations({"local_network_jwt_expiry_hours": 720}, 2)
+    assert again["local_network_jwt_expiry_hours"] == 720
+
+
+def test_a_stored_day_long_lifetime_becomes_a_month_on_load(tmp_path, monkeypatch):
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(json.dumps({"config_format_version": 2,
+                                    "local_network_jwt_expiry_hours": 24}))
+    monkeypatch.setattr(Config, "CONFIG_FILE", cfg_file)
+    assert Config.get("local_network_jwt_expiry_hours") == 720
+    raw = json.loads(cfg_file.read_text())
+    assert raw["local_network_jwt_expiry_hours"] == 720 and raw["config_format_version"] == 3
+
+
+def test_the_session_keys_are_registered():
+    """The two session keys in DEFAULTS and in CONFIG_SCHEMA.md, the deleted 2FA switch in
+    neither, and the schema's key count true. MUTATION: keep the deleted row - red."""
+    import re
+    from pathlib import Path
+    assert Config.DEFAULTS["local_network_jwt_expiry_hours"] == 720
+    assert Config.DEFAULTS["local_network_session_idle_days"] == 7
+    schema = (Path(__file__).resolve().parents[1] / "docs" / "setup" / "CONFIG_SCHEMA.md"
+              ).read_text(encoding="utf-8")
+    assert "| `local_network_session_idle_days` | `7` |" in schema
+    assert "| `local_network_jwt_expiry_hours` | `720` |" in schema
+    assert "local_network_" + "require_2fa" not in schema
+    count = int(re.search(r"`Config\.DEFAULTS` \((\d+) keys\)", schema).group(1))
+    assert count == len(Config.DEFAULTS)
 
 
 def test_config_load_runs_and_persists_migration(tmp_path, monkeypatch):

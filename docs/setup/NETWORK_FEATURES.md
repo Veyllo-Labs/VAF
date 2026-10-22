@@ -284,8 +284,23 @@ Rejections from the layers above are recorded in an always-on security event log
 
 - **Passwords**: every new password needs at least 12 characters and may not be one of the 10,000 most common passwords of that length (`vaf/auth/data/common_passwords.txt`, from SecLists under MIT, compared lowercased; `scripts/build_common_passwords.py` rebuilds it from the pinned source), one rule (`validate_password` in `vaf/auth/user_admin.py`) for the first admin from the browser and from `vaf setup`, an admin's new account, the account's own change in Settings and `vaf users reset-password`. A refusal carries `"code": "password_too_short"` or `"password_common"`. Passwords set before the rule keep working: VAF stores only an Argon2 hash and cannot see a stored password's length, so change a shorter one in Settings, Account. Not built: a check against the account name, a breached-password service (an outbound call), a forced change.
 - **Password Hashing**: Argon2id (time_cost=2, memory_cost=64MB), run on a thread pool of its own (`vaf-argon2`, two workers, so at most 128 MB however many logins arrive) instead of the event loop that carries every chat and socket (measured before: 40 concurrent wrong logins delayed an unrelated request by about a second; after: under 0.1 s). Every login that passes the windows does exactly one verification, a name without an account against a dummy hash, so known and unknown names take the same time (measured before: 3.5 ms against 28.6 ms). No database session is open while a login waits for the pool: the lookup, the check and the writes are three steps (the writes check that the account and its password did not change meanwhile). A login held its session, a database connection on the service's engines, for the whole wait, so a burst of logins from many addresses for many names (which no window limits) held one connection each (measured: 40 at once for 40 logins), and could take the connections every other request needs. `verify_password_async` / `hash_password_async` in `vaf/auth/crypto.py`; the blocking functions stay for the terminal.
-- **JWT Tokens**: HS256, configurable expiry (default 24h), each access token with a unique
-  `jti`. There is no refresh token: `/api/auth/refresh` minted a 7-day credential that was
+- **JWT Tokens**: HS256, each access token with a unique `jti`. How long one lives depends on
+  where the session is (`vaf/auth/sessions.py`, one rule `session_row_live` for the standing
+  check, the session list and `/api/auth/me`):
+  - a sign-in from another device: `local_network_jwt_expiry_hours` (720, 30 days) at most,
+    and it ends after `local_network_session_idle_days` (7) without use. Use is any request
+    that checks the token (its last use is written at most once an hour); a socket that only
+    stays open does not count, its reconnect does.
+  - the window on this machine: 30 days, no inactivity limit.
+  - a token for programs: the 7, 30, 90 or 365 days it was made with, no inactivity limit.
+  This departs from NIST 800-63B-4 at AAL2 (24 hours overall and one hour of inactivity, both
+  SHOULD), and the reasons are written down as ASVS 7.1.1 asks: VAF answers only the LAN and
+  VPNs, the second factor is always required, the token sits in an HttpOnly cookie no page
+  script can read, every session is listed and can be ended, and a sign-in from a new address
+  is announced. A week-long inactivity limit only means something when a session can outlive
+  a day, which is why the default went from 24 hours to 30 days; a stored `24` is rewritten
+  once (config format 3). An admin who wants a daily sign-in sets the key to `24`, and the
+  inactivity limit then never applies. There is no refresh token: `/api/auth/refresh` minted a 7-day credential that was
   stored nowhere, survived a logout and a password change, and no client used; it was
   removed, and a token it minted earlier has no session and is refused. A valid signature is not enough: every token reader (the HTTP
   middleware, both WebSocket lanes, the A2A room door) also checks that the token's account
@@ -302,7 +317,7 @@ Rejections from the layers above are recorded in an always-on security event log
   [USER_ISOLATION.md](../security/USER_ISOLATION.md).
 - **2FA**: TOTP (RFC 6238), secrets encrypted at rest with AES-256-GCM; a code works once and wrong codes are held per account (Layer 4)
 - **Session Tracking**: one row per completed sign-in, keyed by the token's hash (SHA-256), no plaintext tokens in DB; a token with no live row is refused. A store that cannot be asked keeps the token (the desktop default: failing closed would sign every device out on each database restart, and the refused cookie is deleted, so the sign-out would stick), except a token whose session this process ended: those hashes are remembered and refused without asking the store, so a token signed out here cannot ride on a store that went away afterwards. The sign-out route records the endings the terminal's reset wrote in its own process.
-- **Cookies**: `vaf_token` cookie with `httponly`, `samesite=lax`, and `secure` flag (when TLS active). The cookie's `max-age` is always derived from the token's own `exp` claim at the single set point (`_cookie_max_age_for` in `auth_routes.py`), so the cookie can never outlive the JWT it carries. The login form's `remember_me` flag does NOT extend the session - a longer session requires raising `local_network_jwt_expiry_hours`. Do not reintroduce a hardcoded longer cookie lifetime: a present-but-expired cookie desyncs the server-side route gate from the bearer token and causes a login redirect loop (live incident 2026-07-22).
+- **Cookies**: `vaf_token` cookie with `httponly`, `samesite=lax`, and `secure` flag (when TLS active). The cookie's `max-age` is always derived from the token's own `exp` claim at the single set point (`_cookie_max_age_for` in `auth_routes.py`), so the cookie can never outlive the JWT it carries. The login form's `remember_me` flag changes nothing: the lifetime is the token's (above), and a session ends earlier when it is signed out or idle. Do not reintroduce a hardcoded longer cookie lifetime: a present-but-expired cookie desyncs the server-side route gate from the bearer token and causes a login redirect loop (live incident 2026-07-22).
 
 **2FA persistence after restart:** Your 2FA setup is stored in two places that must persist across restarts:
 1. **Key store** (`<data_dir>/data_keys.enc` plus its master key, by default the `secure_store.kek` file in `~/.vaf` or `VAF_CONFIG_DIR`): the JWT secret that encrypts TOTP secrets lives in the data keyring, not in `config.json`, and both halves must be kept. If either is lost (new install, different user, a backup restored without the keyring), the server cannot decrypt existing 2FA data. See [ENCRYPTION_AT_REST.md](../security/ENCRYPTION_AT_REST.md) for what to back up.
@@ -759,7 +774,8 @@ With this lock enabled, attempts to disable hosting in the UI/API are ignored an
 | `local_network_port_frontend` | `int` | `3000` | Frontend port |
 | `local_network_firewall_enabled` | `bool` | `true` | Auto-configure OS firewall rules |
 | `local_network_jwt_secret` | `string` | `""` | JWT signing secret. It lives in the data keyring, not here: a legacy config value is adopted byte-identically on first use and the plaintext copy is then blanked, so `""` is the normal state. Never regenerate it - the TOTP encryption key is derived from it (`vaf/auth/crypto.py`), so a new secret invalidates every stored second factor. |
-| `local_network_jwt_expiry_hours` | `int` | `24` | Access token TTL in hours |
+| `local_network_jwt_expiry_hours` | `int` | `720` | The longest a sign-in from another device lives, in hours (30 days). The window on this machine gets 30 days, a token for programs its own 7 to 365 days. A stored `24` (the old default) is rewritten to `720` once |
+| `local_network_session_idle_days` | `int` | `7` | A sign-in from another device ends after this many days without use (1 to 365); not the window on this machine, not tokens for programs |
 | `local_network_rate_limit_attempts` | `int` | `5` | Failed login attempts per address before blocking |
 | `local_network_rate_limit_account_attempts` | `int` | `10` | Failed logins per account name from any address before new addresses are held (see Layer 4) |
 | `local_network_rate_limit_window_minutes` | `int` | `15` | Rate limit sliding window |

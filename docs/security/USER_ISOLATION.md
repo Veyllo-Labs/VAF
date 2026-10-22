@@ -487,7 +487,9 @@ there too - cleared before the commit, a lookup in between re-cached the old ans
 - **The token stops working.** The HTTP middleware, the WebSocket handshake and the A2A room
   door check that the token's account still exists, is active and still holds the token's
   role (`permissions.account_standing_async`, cached a few seconds and cleared with the
-  allowlists), and that the token's own session has not ended (`vaf/auth/sessions.py`). A
+  allowlists), and that the token's own session has not ended (`vaf/auth/sessions.py`; a
+  sign-in from another device also ends after `local_network_session_idle_days` without
+  use, the window on this machine and tokens for programs do not). A
   network client then gets 401 (a socket: close code 4001, and a `ws_rejected` event); the
   real localhost client falls back to the tokenless lane as before. An unreachable auth
   store keeps the token: the same desktop default as the allowlist lookup. A session this

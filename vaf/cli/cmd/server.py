@@ -113,8 +113,10 @@ def _print_certificate_line() -> None:
         validity = "issued at the next start"
     elif facts["days_left"] < 0:
         validity = "[red]EXPIRED[/red]"
+    elif facts["days_left"] == 1:
+        validity = "valid for 1 more day"
     else:
-        validity = f"valid {facts['days_left']} more days"
+        validity = f"valid for {facts['days_left']} more days"
     UI.print(f"  Certificate:     [cyan]{_source_words(state['source'])}[/cyan], {validity} "
              "(`vaf server cert show`)")
     if state.get("problem"):
@@ -662,6 +664,17 @@ def _date(iso: str) -> str:
     return str(iso or "")[:10]
 
 
+def _days(count) -> str:
+    return "1 day" if count == 1 else f"{count} days"
+
+
+def _devices_line(issuer: str) -> None:
+    """What a changed issuer means for the devices, said before anybody wonders."""
+    UI.warning(f"Devices that do not trust {issuer} warn from their next connection on. A "
+               "browser that opened VAF by its name before cannot click past that warning "
+               f"(it remembers that VAF uses HTTPS): install {issuer} on it first.")
+
+
 def _print_report(report) -> None:
     from rich.markup import escape
 
@@ -670,9 +683,10 @@ def _print_report(report) -> None:
     if facts:
         _line(f"  Subject:      {facts.get('subject', '')}")
         _line(f"  Issuer:       {facts.get('issuer', '')}")
-        _line(f"  Names:        {', '.join(facts.get('names') or []) or '-'}")
+        # Each name is escaped too: a SAN like "[link=...]vafhost[/link]" printed as markup.
+        _line(f"  Names:        {', '.join(escape(str(n)) for n in facts.get('names') or []) or '-'}")
         _line(f"  Valid until:  {_date(facts.get('not_after'))} "
-                 f"({facts.get('days_left')} days)")
+              f"({_days(facts.get('days_left'))})")
         _line(f"  Key:          {facts.get('key_type')} {facts.get('key_size') or ''}".rstrip())
         _line(f"  SHA-256:      {colon_fingerprint(facts.get('sha256', ''))}")
         _line(f"  Authority:    {facts.get('authority_subject', '')}")
@@ -753,15 +767,17 @@ def _peer_trust_line(fingerprint: str) -> None:
     from rich.markup import escape
 
     from vaf.network.ssl_utils import colon_fingerprint
+    # The host the invitation names: one the served certificate covers, which the peer
+    # checks (ssl_utils.served_room_host).
     host = "<address>"
     try:
-        from vaf.network.binding import access_addresses
-        reachable = access_addresses()
-        if reachable:
-            host = reachable[0].ip
+        from vaf.network.binding import get_local_network_ip
+        from vaf.network.ssl_utils import served_room_host
+        address = str(get_local_network_ip() or "").strip()
+        host = served_room_host(address) or address or host
     except Exception:
         pass
-    _line("Machines in rooms here trust the new authority again with:")
+    _line("Other machines that joined a room on this VAF trust the new authority again with:")
     _line(f"  vaf a2a trust wss://{escape(host)}{_access_port_suffix()} --ca-fp "
           f"{colon_fingerprint(fingerprint)}")
 
@@ -799,15 +815,15 @@ def cert_show():
     _line(f"  Issuer:       {escape(facts['issuer'])}")
     _line(f"  Names:        {escape(', '.join(facts['names'])) or '-'}")
     left = facts["days_left"]
-    until = f"{_date(facts['not_after'])} ({left} days)" if left >= 0 else (
+    until = f"{_date(facts['not_after'])} ({_days(left)})" if left >= 0 else (
         f"{_date(facts['not_after'])} (EXPIRED)")
     _line(f"  Valid until:  {until}")
     _line(f"  SHA-256:      {colon_fingerprint(facts['sha256'])}")
     _line(f"  Authority:    {escape(facts['authority_subject'])}")
     _line(f"                {colon_fingerprint(facts['authority_sha256'])}")
     if state.get("uncovered"):
-        UI.warning("It does not name " + ", ".join(state["uncovered"]) + ": a device that "
-                   "reaches VAF there gets a certificate warning.")
+        UI.warning("It does not name " + escape(", ".join(state["uncovered"])) + ": a device "
+                   "that reaches VAF there gets a certificate warning.")
     _line()
 
 
@@ -846,6 +862,7 @@ def cert_set(
     _line("\n[bold]Check:[/bold]")
     _print_report(result.report)
     if "authority_changes" in result.report.codes():
+        _devices_line("its issuer")
         _peer_trust_line(result.new_authority or "")
     _finish_with_reload("Your certificate is installed.")
 
@@ -857,6 +874,7 @@ def cert_reset():
     result = reset_certificate(via=_VIA_TERMINAL, reload=False)
     if result.old_authority and result.new_authority and not fingerprints_match(
             result.old_authority, result.new_authority):
+        _devices_line("VAF's authority (`vaf server ca`)")
         _peer_trust_line(result.new_authority)
     _finish_with_reload("VAF's own certificate is back.")
 
@@ -890,16 +908,23 @@ def ca_renew(yes: bool = typer.Option(False, "--yes", help="Do not ask")):
     """Replace the local authority with a new one that only vouches for private names."""
     from vaf.network.ssl_utils import colon_fingerprint, renew_authority, served_certificate
     UI.warning("A new authority replaces the old one. Every device that installed the old one "
-               "must install the new one, machines in rooms here trust its new fingerprint, and "
-               "the old one can then be removed from your devices.")
+               "must install the new one, other machines that joined a room on this VAF trust "
+               "its new fingerprint, and the old one can then be removed from your devices. A "
+               "browser that opened VAF by its name before cannot click past the warning until "
+               "the new authority is installed on it.")
     if not yes and not typer.confirm("Renew the authority now?"):
         UI.info("Nothing was changed.")
         raise typer.Exit(0)
     result = renew_authority(via=_VIA_TERMINAL, reload=False)
     _line(f"  Old SHA-256:  {colon_fingerprint(result.old_authority or '') or '-'}")
     _line(f"  New SHA-256:  {colon_fingerprint(result.new_authority or '')}")
-    if served_certificate().source != "automatic":
+    source = served_certificate().source
+    if source == "own":
         UI.success("The authority is renewed. Your own certificate stays served.")
+        return
+    if source == "none":
+        UI.success("The authority is renewed. TLS is off; VAF serves a certificate from it once "
+                   "TLS is on.")
         return
     _peer_trust_line(result.new_authority or "")
     _finish_with_reload("The authority is renewed.")

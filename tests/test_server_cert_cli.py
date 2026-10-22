@@ -37,6 +37,7 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setattr(binding, "get_all_local_ips", lambda: [("enp3s0", "192.168.1.20")])
     monkeypatch.setattr(binding, "local_interfaces", lambda: [])
     monkeypatch.setattr(binding, "machine_dns_names", lambda: ["vafhost"])
+    monkeypatch.setattr(binding, "get_local_network_ip", lambda: "192.168.1.20")
     monkeypatch.setattr(server_cmd, "_access_port_suffix", lambda: ":8443")
     ssl_dir = isolated_home(tmp_path, monkeypatch, local_network_enabled=False,
                             local_network_tls_enabled=True)
@@ -111,9 +112,12 @@ def test_set_serves_now_when_the_running_vaf_loaded_it(home, running, tmp_path):
     assert _flat("serves it now") in _flat(result.output)
     assert running.calls and running.calls[0].endswith("/api/network/certificate/reload")
     assert ssl_utils.served_certificate().source == "own"
-    # The authority changed from VAF's own to the chain's root: the peers' line is printed.
+    # The authority changed from VAF's own to the chain's root: the peers' line is printed,
+    # with the address the certificate names (the one an invitation hands out), and the
+    # line about browsers that cannot click past the warning.
     colon = ssl_utils.colon_fingerprint(fingerprint(root))
-    assert _flat(f"vaf a2a trust wss://<address>:8443 --ca-fp {colon}") in _flat(result.output)
+    assert _flat(f"vaf a2a trust wss://192.168.1.20:8443 --ca-fp {colon}") in _flat(result.output)
+    assert _flat("cannot click past that warning") in _flat(result.output)
 
 
 def test_set_when_vaf_is_not_running(home, running, tmp_path):
@@ -217,3 +221,43 @@ def test_a_fingerprint_is_printed_as_it_is(home, monkeypatch):
     result = runner.invoke(server_cmd.app, ["ca"])
     assert result.exit_code == 0, result.output
     assert ":".join(["AB", "CD"] * 16) in _flat(result.output)
+
+
+def test_names_print_as_text_not_markup(home, tmp_path):
+    """A SAN can carry console markup ("[link=...]"); printed with markup on it became a
+    hyperlink or bold red text. MUTATION: drop the escape of the names - red."""
+    _files(tmp_path, names=("[bold red]VERIFIED[/bold red]", "192.168.1.20"))
+    result = runner.invoke(server_cmd.app, ["cert", "set", "--check", "--cert",
+                                            str(tmp_path / "cert.pem"), "--key",
+                                            str(tmp_path / "key.pem")])
+    assert "[bold red]VERIFIED[/bold red]" in result.output
+
+
+def test_one_day_is_said_in_the_singular(home, running, tmp_path, monkeypatch):
+    """MUTATION: "1 days" again - red."""
+    from cert_factory import make_ca, make_leaf
+    root, root_key = make_ca()
+    leaf, key = make_leaf(root, root_key, days=2, names=("vafhost", "192.168.1.20"))
+    (tmp_path / "cert.pem").write_bytes(pem(leaf, root))
+    (tmp_path / "key.pem").write_bytes(key_pem(key))
+    runner.invoke(server_cmd.app, ["cert", "set", "--cert", str(tmp_path / "cert.pem"),
+                                   "--key", str(tmp_path / "key.pem")])
+    import vaf.core.inference_profile as profile
+    monkeypatch.setattr(profile, "current", lambda: "local")
+    shown = _flat(runner.invoke(server_cmd.app, ["cert", "show"]).output)
+    status = _flat(runner.invoke(server_cmd.app, ["status"]).output)
+    assert "(1day)" in shown and "1days" not in shown
+    assert "validfor1moreday" in status
+
+
+def test_renewing_with_tls_off_says_so(tmp_path, monkeypatch):
+    """MUTATION: report an own certificate staying served for every source but automatic -
+    red."""
+    import vaf.network.binding as binding
+    monkeypatch.setattr(binding, "get_all_local_ips", lambda: [("enp3s0", "192.168.1.20")])
+    monkeypatch.setattr(binding, "local_interfaces", lambda: [])
+    isolated_home(tmp_path, monkeypatch, local_network_tls_enabled=False)
+    result = runner.invoke(server_cmd.app, ["ca", "renew", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert _flat("TLS is off") in _flat(result.output)
+    assert _flat("Your own certificate stays served") not in _flat(result.output)

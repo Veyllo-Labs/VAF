@@ -392,6 +392,8 @@ def _served(tmp_path, monkeypatch, names, *, own=True):
     (("example.org", "vaf.example.org"), ["vaf", "vaf.example.org"], [], "vaf.example.org"),
     (("example.org", "vaf.example.org"), [], ["vaf.example.org"], "vaf.example.org"),
     (("*.office.example",), [], [], None),
+    # The machine's own name, covered by the wildcard rather than listed.
+    (("*.example.org", "example.org"), ["vaf", "vaf.example.org"], [], "vaf.example.org"),
     # An address written as a DNS name: TLS checks an address against address names only.
     (("192.168.1.20.example", "192.168.1.21"), [], [], "192.168.1.20.example"),
 ])
@@ -399,9 +401,10 @@ def test_the_invitation_names_a_host_the_certificate_covers(tmp_path, monkeypatc
                                                             machine, resolves, expected):
     """The peer checks the certificate against the host the invitation names, so the
     invitation names one the served certificate covers and that is this machine: the LAN
-    address, else a DNS name equal to the machine's name, else one that resolves to the
-    address, else the only name a certificate without a wildcard carries. MUTATION: take the
-    first DNS name again - red (the apex)."""
+    address, else the only name a certificate without a wildcard carries, else the machine's
+    name where the certificate covers it (a wildcard too), else one that resolves to the
+    address. MUTATIONS: take the first DNS name again - red (the apex); match the machine's
+    name only exactly, not through the wildcard - red."""
     import vaf.network.binding as binding
     _served(tmp_path, monkeypatch, names)
     monkeypatch.setattr(binding, "machine_dns_names", lambda: list(machine))
@@ -465,3 +468,51 @@ def test_vafs_own_certificate_without_the_address_names_no_host(tmp_path, monkey
     assert any("vaf server cert reset" in r.getMessage() for r in caplog.records)
     endpoint, gap = invite_mod.lan_lane("room-x")
     assert endpoint == {} and "vaf server cert reset" in gap
+
+
+def test_the_room_host_lookups_share_one_budget_and_run_once_per_name(tmp_path, monkeypatch):
+    """getaddrinfo has no timeout of its own (a .local name nobody answers took 10 s), and an
+    invitation is minted while a person waits. The lookups run together and the choice
+    returns when the budget is spent, not when the slowest one gives up; no name is looked up
+    twice. MUTATIONS: wait for every lookup - red (the time); look a name up twice - red."""
+    import threading
+    import time
+    from collections import Counter
+
+    import vaf.network.binding as binding
+    _served(tmp_path, monkeypatch, ("example.org", "a.example.org", "b.example.org"))
+    release = threading.Event()
+    looked_up, lock = [], threading.Lock()
+
+    def _slow(name, _address):
+        with lock:
+            looked_up.append(name)
+        release.wait(5)
+        return False
+
+    monkeypatch.setattr(ssl_utils, "_resolves_to", _slow)
+    monkeypatch.setattr(binding, "machine_dns_names", lambda: (release.wait(5), [])[1])
+    monkeypatch.setattr(ssl_utils, "_LOOKUP_BUDGET_S", 0.3)
+    try:
+        started = time.monotonic()
+        host, why = ssl_utils.room_host_choice("192.168.1.20")
+        took = time.monotonic() - started
+    finally:
+        release.set()
+    assert host is None and "at most 0.3 s" in why
+    assert took < 2.0, took
+    counts = Counter(looked_up)
+    assert set(counts) <= {"example.org", "a.example.org", "b.example.org"}
+    assert all(n == 1 for n in counts.values()), counts
+
+
+def test_the_only_name_is_chosen_without_a_lookup(tmp_path, monkeypatch):
+    """One DNS name and no wildcard: there is nothing to choose between, so nothing is looked
+    up. MUTATION: drop the shortcut - red (the lookups run)."""
+    import vaf.network.binding as binding
+    _served(tmp_path, monkeypatch, ("vaf.office.example",))
+    asked = []
+    monkeypatch.setattr(ssl_utils, "_resolves_to", lambda name, _a: asked.append(name) or True)
+    monkeypatch.setattr(binding, "machine_dns_names", lambda: asked.append("machine") or [])
+    assert ssl_utils.room_host_choice("192.168.1.20") == ("vaf.office.example", None)
+    assert asked == []

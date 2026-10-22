@@ -382,7 +382,7 @@ def briefing(*, room_id: str, ticket: str, role: str, display: str,
     reason for there ever to be two.
 
     `remote_unavailable` (``lan_lane``'s reason) says, in place of the lane for another
-    machine, that there is none yet and that the host can fix it: an invitation that
+    machine, that there is none yet and why, which decides the host's fix: an invitation that
     silently left the lane out read as a room only this machine could join.
     """
     endpoint = endpoint or {}
@@ -416,11 +416,13 @@ def briefing(*, room_id: str, ticket: str, role: str, display: str,
             )
         where += _guest_block(endpoint, room_id=room_id, ticket=ticket)
     elif remote_unavailable:
+        # The reason as the host would read it: the fix depends on it (a DNS name for a
+        # certificate of the host's own, `vaf server cert reset` for VAF's own only, which
+        # would replace an own certificate and break every room pin).
         where += (
-            "\n\nNOTE: this invitation has no lane for another machine yet. The host's "
-            "certificate names no address or name a peer could check it against. On another "
-            "machine, ask the host to run `vaf server cert reset` (or to serve a certificate "
-            "that names its address) and to invite you again.")
+            "\n\nNOTE: this invitation has no lane for another machine yet. "
+            f"{remote_unavailable} On another machine, ask the host to fix that and to invite "
+            "you again.")
 
     headline = f"You have been invited into an agent room called {room_id}."
     if already_in:
@@ -558,8 +560,8 @@ def invitation_text(room: Room, record: Dict[str, Any]) -> str:
         workspace = room.workspace_dir(create=False)
     except Exception:
         workspace = None
-    endpoint = lan_endpoint(room.room_id)
-    gap = "" if endpoint else lan_lane(room.room_id)[1]
+    # One call: it chooses the host and says why there is none (a lookup each time).
+    endpoint, gap = lan_lane(room.room_id)
     return briefing(
         room_id=room.room_id, ticket=ticket, role=role,
         display=str(record.get("display") or "guest"),
@@ -579,8 +581,8 @@ def invitation(room: Room, identity: Identity, *, display: str = "guest",
     the outside.
     """
     ticket = room.mint_ticket(identity, display=display, ttl_s=float(ttl_s))
-    endpoint = lan_endpoint(room.room_id)
-    gap = "" if endpoint else lan_lane(room.room_id)[1]
+    # One call: it chooses the host and says why there is none (a lookup each time).
+    endpoint, gap = lan_lane(room.room_id)
 
     # The guest's role is decided by the room when the ticket is redeemed. A round
     # makes peers of everyone; in a chain an invited agent arrives as a worker, and

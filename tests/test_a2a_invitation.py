@@ -185,10 +185,10 @@ def test_the_briefing_promises_the_remote_lane_exactly_when_it_exists(circle, mo
     unpinned authority, which reads as a broken invitation), and without an endpoint
     neither may appear.
     """
-    monkeypatch.setattr("vaf.core.a2a.invite.lan_endpoint",
-                        lambda room_id: {"origin": "wss://h:8443",
-                                         "url": f"wss://h:8443/ws/a2a/{room_id}",
-                                         "ca_fingerprint": "cd" * 32})
+    monkeypatch.setattr("vaf.core.a2a.invite.lan_lane",
+                        lambda room_id: ({"origin": "wss://h:8443",
+                                          "url": f"wss://h:8443/ws/a2a/{room_id}",
+                                          "ca_fingerprint": "cd" * 32}, ""))
     room, owner = circle
     row = invitation(room, owner)
 
@@ -202,7 +202,7 @@ def test_the_briefing_promises_the_remote_lane_exactly_when_it_exists(circle, mo
 
 
 def test_without_an_endpoint_the_briefing_stays_on_this_machine(circle, monkeypatch):
-    monkeypatch.setattr("vaf.core.a2a.invite.lan_endpoint", lambda room_id: {})
+    monkeypatch.setattr("vaf.core.a2a.invite.lan_lane", lambda room_id: ({}, ""))
     room, owner = circle
     row = invitation(room, owner)
 
@@ -214,18 +214,23 @@ def test_without_an_endpoint_the_briefing_stays_on_this_machine(circle, monkeypa
 def test_a_missing_lane_for_other_machines_is_said_and_why(circle, monkeypatch):
     """With Local Network and TLS on, a certificate that names no host a peer could dial
     left the lane out silently: the invitation read as a room only this machine could join.
-    The inviter gets the reason, the invited agent a note that the host can fix it.
-    MUTATION: drop the note from the briefing - red."""
+    The inviter gets the reason, the invited agent a note with that reason (the fix depends
+    on it). MUTATIONS: put the fixed text with `vaf server cert reset` back - red; ask
+    lan_lane twice per invitation - red (two lane decisions, each may look names up)."""
     import vaf.core.a2a.invite as invite_mod
     reason = "No machine on another network can join yet: some reason."
-    monkeypatch.setattr(invite_mod, "lan_endpoint", lambda room_id: {})
-    monkeypatch.setattr(invite_mod, "lan_lane", lambda room_id: ({}, reason))
+    calls = []
+    monkeypatch.setattr(invite_mod, "lan_lane",
+                        lambda room_id: calls.append(room_id) or ({}, reason))
     room, owner = circle
     row = invitation(room, owner)
     assert row["remote_unavailable"] == reason
     assert "no lane for another machine yet" in row["briefing"]
-    assert "vaf server cert reset" in row["briefing"]
-    assert "no lane for another machine yet" in invite_mod.invitation_text(
+    assert reason in row["briefing"], "the note carries the reason the host has to fix"
+    assert "vaf server cert reset" not in row["briefing"], (
+        "the reset is no general advice: it replaces a certificate of the host's own")
+    assert calls == ["room-inv"], "one lane decision per invitation (each one may look up)"
+    assert reason in invite_mod.invitation_text(
         room, {"kind": "agent", "status": "pending", "id": row["ticket"]})
 
     monkeypatch.setattr(invite_mod, "lan_lane", lambda room_id: ({}, ""))

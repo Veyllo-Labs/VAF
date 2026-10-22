@@ -43,10 +43,10 @@ def test_the_guest_section_rides_the_wire_endpoint(circle, monkeypatch):
     hands it code over a channel it cannot verify. The two belong together or
     not at all.
     """
-    monkeypatch.setattr("vaf.core.a2a.invite.lan_endpoint",
-                        lambda room_id: {"origin": "wss://h:8443",
-                                         "url": f"wss://h:8443/ws/a2a/{room_id}",
-                                         "ca_fingerprint": "cd" * 32})
+    monkeypatch.setattr("vaf.core.a2a.invite.lan_lane",
+                        lambda room_id: ({"origin": "wss://h:8443",
+                                          "url": f"wss://h:8443/ws/a2a/{room_id}",
+                                          "ca_fingerprint": "cd" * 32}, ""))
     room, owner = circle
     row = invitation(room, owner)
 
@@ -63,7 +63,7 @@ def test_without_an_endpoint_there_is_no_guest_section(circle, monkeypatch):
     """Without wss there is no lane a VAF-less guest could use - the local lane
     IS the vaf command - so naming the client would promise a door that is not
     there."""
-    monkeypatch.setattr("vaf.core.a2a.invite.lan_endpoint", lambda room_id: {})
+    monkeypatch.setattr("vaf.core.a2a.invite.lan_lane", lambda room_id: ({}, ""))
     room, owner = circle
     row = invitation(room, owner)
 
@@ -150,10 +150,10 @@ def test_the_briefing_offers_the_mcp_door_beside_the_shell(circle, monkeypatch):
     it just fetched is also an MCP server - a second document to find would be
     a door most guests never open.
     """
-    monkeypatch.setattr("vaf.core.a2a.invite.lan_endpoint",
-                        lambda room_id: {"origin": "wss://h:8443",
-                                         "url": f"wss://h:8443/ws/a2a/{room_id}",
-                                         "ca_fingerprint": "cd" * 32})
+    monkeypatch.setattr("vaf.core.a2a.invite.lan_lane",
+                        lambda room_id: ({"origin": "wss://h:8443",
+                                          "url": f"wss://h:8443/ws/a2a/{room_id}",
+                                          "ca_fingerprint": "cd" * 32}, ""))
     room, owner = circle
     row = invitation(room, owner)
 
@@ -163,7 +163,7 @@ def test_the_briefing_offers_the_mcp_door_beside_the_shell(circle, monkeypatch):
 
 
 def test_without_an_endpoint_the_mcp_offer_stays_away_too(circle, monkeypatch):
-    monkeypatch.setattr("vaf.core.a2a.invite.lan_endpoint", lambda room_id: {})
+    monkeypatch.setattr("vaf.core.a2a.invite.lan_lane", lambda room_id: ({}, ""))
     room, owner = circle
     row = invitation(room, owner)
 

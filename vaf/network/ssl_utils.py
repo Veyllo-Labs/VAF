@@ -1032,12 +1032,58 @@ def served_authority(cfg: Optional[dict] = None) -> Optional[Tuple[bytes, str]]:
     return pem, top.fingerprint(hashes.SHA256()).hex()
 
 
+# The overall time the lookups of one room-host choice may take. getaddrinfo has no timeout
+# of its own: a .local name nobody answers took 10 s (measured), DNS that is down longer.
+_LOOKUP_BUDGET_S = 2.0
+# At most this many lookups at once: a public certificate may carry a hundred names.
+_LOOKUP_WORKERS = 8
+
+
 def _resolves_to(name: str, address: str) -> bool:
-    """Whether ``name`` resolves to ``address`` here (a DNS lookup)."""
+    """Whether ``name`` resolves to ``address`` here (a DNS lookup, unbounded: callers run it
+    through ``_bounded``)."""
     try:
         return any(info[4][0] == address for info in socket.getaddrinfo(name, None))
     except Exception:
         return False
+
+
+def _bounded(calls: Dict[str, Any], budget: float) -> Dict[str, Any]:
+    """Run the calls on up to ``_LOOKUP_WORKERS`` daemon threads, each call once and in order,
+    and return the results that arrived within ``budget`` seconds in all. The rest are not
+    waited for: a lookup cannot be cancelled, and a daemon thread does not hold up the
+    process's exit (``bounded_run.run_bounded`` bounds one call and answers a tool's timeout
+    text; this needs the answers that did arrive)."""
+    results: Dict[str, Any] = {}
+    lock = threading.Lock()
+    finished = threading.Event()
+    gone = threading.Event()  # the caller left: start no further lookup
+    pending = list(calls.items())
+    left = [len(pending)]
+
+    def _work() -> None:
+        while True:
+            with lock:
+                if not pending or gone.is_set():
+                    return
+                key, fn = pending.pop(0)
+            try:
+                value = fn()
+            except Exception:
+                value = None
+            with lock:
+                results[key] = value
+                left[0] -= 1
+                if left[0] == 0:
+                    finished.set()
+
+    for _ in range(min(_LOOKUP_WORKERS, len(pending))):
+        threading.Thread(target=_work, daemon=True, name="vaf-room-host-lookup").start()
+    if calls:
+        finished.wait(budget)
+    with lock:
+        gone.set()
+        return dict(results)
 
 
 def room_host_choice(address: str, cfg: Optional[dict] = None) -> Tuple[Optional[str], Optional[str]]:
@@ -1046,11 +1092,13 @@ def room_host_choice(address: str, cfg: Optional[dict] = None) -> Tuple[Optional
     A peer checks the served certificate against the host it dials, so the invitation names
     one the certificate covers: ``address`` (this machine's LAN address) when the served leaf
     names it. Otherwise, for a certificate of the person's own (its chain does not end in the
-    local CA), one of its DNS names that is this machine: a name equal to the host name or
-    FQDN, else one that resolves to ``address`` here, else the only name it carries when it
-    has no wildcard. Not the apex beside a wildcard (``example.org`` next to
-    ``*.example.org`` is usually the public website), not a wildcard, ``localhost`` or an
-    address written as a DNS name (TLS checks an address against the address names only).
+    local CA), a name of it that is this machine: the only DNS name of a certificate without a
+    wildcard; else this machine's host name, FQDN or ``<host>.local`` where the certificate
+    covers it (a wildcard included); else one of its names that resolves to ``address`` here.
+    Never the apex beside a wildcard (``example.org`` next to ``*.example.org`` is usually the
+    public website), a wildcard, ``localhost`` or an address written as a DNS name (TLS checks
+    an address against the address names only). The lookups run together under one budget
+    (``_LOOKUP_BUDGET_S``), at most one per name, and none when the only name decides.
     VAF's own certificate names every address this machine had when it was issued; an
     address that came later enters it at the next start or with ``vaf server cert reset``."""
     chain = served_chain(cfg)
@@ -1085,25 +1133,34 @@ def room_host_choice(address: str, cfg: Optional[dict] = None) -> Tuple[Optional
             pass
         if value not in candidates:
             candidates.append(value)
-    if not candidates:
+    if not candidates and not wildcard:
         return None, (f"your certificate names neither {address} nor a DNS name a peer could "
                       "dial: serve one that names this address")
-    try:
-        from vaf.network.binding import machine_dns_names
-        mine = {n.lower().rstrip(".") for n in machine_dns_names()}
-    except Exception:
-        mine = set()
-    for candidate in candidates:
-        if candidate in mine:
-            return candidate, None
-    for candidate in candidates:
-        if _resolves_to(candidate, address):
-            return candidate, None
     if len(candidates) == 1 and not wildcard:
         return candidates[0], None
-    return None, (f"your certificate names {', '.join(candidates)}, but none is this "
-                  f"machine's name or resolves to {address} here: make one of them this "
-                  "machine's host name, or point it at that address in your DNS")
+
+    def _machine_names() -> List[str]:
+        from vaf.network.binding import machine_dns_names
+        found = machine_dns_names()
+        return [*found, _mdns_name(found) or ""]
+
+    calls: Dict[str, Any] = {"": _machine_names}
+    for candidate in candidates:
+        calls[candidate] = (lambda n=candidate: _resolves_to(n, address))
+    answers = _bounded(calls, _LOOKUP_BUDGET_S)
+    for mine in answers.get("") or []:
+        mine = str(mine or "").strip().rstrip(".").lower()
+        if mine and mine != "localhost" and _covers(names, mine):
+            return mine, None
+    for candidate in candidates:
+        if answers.get(candidate) is True:
+            return candidate, None
+    listed = ", ".join(candidates) or ", ".join(
+        str(n.value) for n in names if isinstance(n, x509.DNSName))
+    return None, (f"your certificate names {listed}, but none is this machine's name or "
+                  f"resolves to {address} here (looked up for at most "
+                  f"{_LOOKUP_BUDGET_S:g} s): make one of them this machine's host name, or "
+                  "point it at that address in your DNS")
 
 
 def served_room_host(address: str, cfg: Optional[dict] = None) -> Optional[str]:

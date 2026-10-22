@@ -816,17 +816,21 @@ credential somebody else can harvest, so "encrypted" without verification means
 "encrypted to whoever answered the address".
 
 The host an invitation names is one the served certificate covers
-(`ssl_utils.served_room_host`): the machine's LAN address, which VAF's own certificate names
+(`ssl_utils.room_host_choice`): the machine's LAN address, which VAF's own certificate names
 (it carries every address the machine had when it was issued; an address that came later
 enters it at the next start or with `vaf server cert reset`), or, for a certificate of the
-host's own that does not name that address, a DNS name of it that is this machine: one equal
-to its host name or FQDN, else one that resolves to the address on the host, else the only
-name of a certificate without a wildcard. Never the apex beside a wildcard (usually the
-public website), a wildcard, `localhost` or an address written as a DNS name. The joining
-machine's network must resolve the name to the host. When the certificate names none, the
-invitation carries no lane for other machines: its briefing says so and that the host can
-fix it, `vaf a2a invite` returns the reason as `remote_unavailable`, and the host's log says
-it too.
+host's own that does not name that address, a DNS name of it that is this machine: the only
+DNS name of a certificate without a wildcard, else the host name, FQDN or `<host>.local`
+where the certificate covers it (a wildcard counts), else one of its names that resolves to
+the address on the host. Never the apex beside a wildcard (usually the public website), a
+wildcard, `localhost` or an address written as a DNS name. The lookups (the machine's names
+and each of the certificate's names, once) run together and get 2 s in all
+(`_LOOKUP_BUDGET_S`); an answer that comes later is not waited for, because `getaddrinfo` has
+no timeout of its own (an unanswered `.local` name took 10 s). The web UI builds an
+invitation on an executor, off the server's event loop. The joining machine's network must
+resolve the name to the host. When the certificate names none, the invitation carries no lane
+for other machines: its briefing says so and why, `vaf a2a invite` returns the reason as
+`remote_unavailable`, and the host's log says it too.
 
 A room is joined from this machine, the local network or an admitted VPN, never from the
 internet: the HTTPS door and the backend refuse every other address at the handshake of

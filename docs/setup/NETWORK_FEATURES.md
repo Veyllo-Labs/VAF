@@ -654,12 +654,13 @@ previous one (restart it).
   company authority, whoever it issues that private address to, and private addresses repeat
   across sites and VPNs, so give such a certificate a DNS name and reach VAF by it. The
   invitation names an address your certificate covers; when it covers none, a DNS name of it
-  that is this machine (one equal to its host name or FQDN, else one that resolves to its
-  address here, else the only name of a certificate without a wildcard; never the apex beside
-  a wildcard, which is usually the public website), which the other machine's network must
+  that is this machine (the only name of a certificate without a wildcard, else this machine's
+  host name, FQDN or `<host>.local` where the certificate covers it, a wildcard included, else
+  one that resolves to its address here, looked up for 2 s at most; never the apex beside a
+  wildcard, which is usually the public website), which the other machine's network must
   resolve to this one. A certificate that names neither gets no lane for other machines, and
-  the invitation says so. Switching to an own certificate, back, or renewing the CA changes
-  the authority; those machines run `vaf a2a trust` again with the new fingerprint.
+  the invitation says so and why. Switching to an own certificate, back, or renewing the CA
+  changes the authority; those machines run `vaf a2a trust` again with the new fingerprint.
 
 **Renewing automatically.** VAF runs no ACME client. A DNS-01 client (certbot with a DNS
 plugin, acme.sh, lego) can renew a certificate for a name inside your network and run

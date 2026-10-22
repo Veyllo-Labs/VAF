@@ -834,18 +834,29 @@ of eight daemon threads for the whole process (`bounded_run.DaemonPool`, through
 `run_bounded_all`), and a choice waits 2 s for them in all (`_LOOKUP_BUDGET_S`): `getaddrinfo`
 has no timeout of its own (an unanswered `.local` name took 10 s). Lookups that hang occupy
 those eight threads and no more. A lookup that is still running or queued is shared: a later
-choice does not start it again and waits for it only until the 2 s of the choice that started
-it are up, so while DNS hangs only that choice pays the time, and the others return at once
-with no lane and a reason that says the names gave no answer. An answer is reused for 60 s, so
-repeated invitations do not ask the resolver again, and a DNS change shows in an invitation
-made at most a minute later; a resolver that failed for now (`EAI_AGAIN`, a timeout among
-them) is no answer and is asked again, only a name that does not exist is remembered as one.
-The web UI builds an invitation on a small pool of its own (four threads), off the server's
-event loop and off the default executor the A2A wire and the voice feed use. NAMED BOUNDARY:
-those four threads are shared by every account, with no count per account, so while DNS hangs
-one member's invitations can delay another's: by at most 2.06 s at 20 connections and 3.25 s
-at 60 (measured with lookups that hang 20 s; before the lookups were shared it was 10 s and
-30 s). The joining machine's network must resolve the
+choice does not start it again and waits for it at most 0.1 s (`_LOOKUP_JOIN_WAIT_S`, enough
+for a working resolver), so a lookup that hangs or fails late costs only the choice that
+started it, and the others return at once with no lane and a reason that says the names gave
+no answer in time. An answer is reused for 60 s, so repeated invitations do not ask the
+resolver again, and a DNS change shows in an invitation made at most a minute later; only a
+name that does not exist is remembered as an answer. A resolver failure (`EAI_AGAIN`, which a
+timeout or SERVFAIL gives) is no answer: it is held for 5 s, doubling with each failure of the
+name in a row up to 60 s, and an answer ends the series (RFC 9520 asks resolvers to hold a
+failure and back off). The web UI builds an invitation on a small pool of its own (four
+threads), off the server's event loop and off the default executor the A2A wire and the voice
+feed use. NAMED BOUNDARY: those four threads are shared by every account, with no count per
+account, so while DNS fails one member's invitations delay another's. Measured with a
+certificate of 20 names, one member inviting in a loop over 20 or 60 connections, and another
+account inviting every 2 s (largest wait seen, median; 60 s each):
+
+| Resolver | 20 connections | 60 connections | Queries to the resolver |
+|---|---|---|---|
+| never answers (lookups end after 20 s) | 1.55 s, 0.07 s | 2.02 s, 0.22 s | about 3.5/s |
+| SERVFAIL after 1.5 s | 1.31 s, 0.08 s | 2.55 s, 0.22 s | about 2.7/s |
+| SERVFAIL after 0.05 s | 0.22 s, 0.07 s | 0.36 s, 0.22 s | about 2.8/s |
+
+Before the lookups were shared and the failures held, the same loads cost 12 s and 32 s
+(SERVFAIL after 1.5 s), and a resolver that failed in 0.05 s got about 230 queries/s. The joining machine's network must resolve the
 name to the host. When the certificate names none, the invitation carries no lane for other
 machines: its briefing says so and why, `vaf a2a invite` returns the reason as
 `remote_unavailable`, and the host's log says it too. A member's `vaf a2a howto` is the

@@ -1037,13 +1037,25 @@ def served_authority(cfg: Optional[dict] = None) -> Optional[Tuple[bytes, str]]:
 # of its own: a .local name nobody answers took 10 s (measured), DNS that is down longer.
 _LOOKUP_BUDGET_S = 2.0
 # The lookups of every room-host choice in the process share this many threads: lookups
-# that hang occupy these and no more, and the ones queued behind them are cancelled when a
-# choice's budget is spent (measured before: 800 threads at 20 connections inviting).
+# that hang occupy these and no more, and the ones queued behind them stay queued, one per
+# name, for the next choice (``_LOOKUP_IN_FLIGHT``) instead of each choice starting them again
+# (measured before: 800 threads at 20 connections inviting).
 _LOOKUP_WORKERS = 8
 # An answer is reused this long, so repeated invitations do not ask the resolver again. A
 # DNS change shows in an invitation made at most this long after it.
 _LOOKUP_MEMO_S = 60.0
-_LOOKUP_MEMO: Dict[str, Tuple[float, Any]] = {}
+# A resolver failure (EAI_AGAIN, SERVFAIL among them) is held as "no answer", apart from the
+# 60 s answers: the reason still says the resolver may be down, and the next try comes
+# soon. The hold starts at this and doubles with each failure of the name in a row, up to
+# the 60 s of an answer, and an answer ends the series (RFC 9520 asks resolvers to hold a
+# failure at least 1 s, and to back off). Not holding it at all let every choice start every
+# name again: with a resolver that answers SERVFAIL after 1.5 s, another account's
+# invitation waited 10 s at 20 connections, and one member drove about 230 queries/s at a
+# resolver that fails in 0.05 s (measured).
+_LOOKUP_FAILURE_HOLD_S = 5.0
+_NO_ANSWER = object()
+_LOOKUP_MEMO: Dict[str, Tuple[float, Any, float]] = {}
+_LOOKUP_FAILURES: Dict[str, int] = {}  # failures in a row, by memo key
 _LOOKUP_LOCK = threading.Lock()
 _LOOKUP_POOL = None
 # The lookups still running, shared by every choice: a name whose lookup an earlier choice
@@ -1051,10 +1063,19 @@ _LOOKUP_POOL = None
 # budget ran out. While DNS hangs, only the choice that starts a lookup pays the 2 s; every
 # choice used to pay it again and start the same lookups once more (measured).
 _LOOKUP_IN_FLIGHT = None
+# How long a choice waits for a lookup another choice started: a working resolver answers
+# within it, and a lookup that fails late, or never ends, then costs only the choice that
+# started it (InFlight.join_wait). With a resolver that answers SERVFAIL after 1.5 s, the
+# joining choices held the four invitation threads: another account waited up to 3.22 s at
+# 20 connections without this cap, 2.87 s with 0.5 s and 1.43 s with 0.1 s (measured). A
+# choice that joins a slower lookup gets no answer for that name (no lane), and the next
+# one reads it from the memo.
+_LOOKUP_JOIN_WAIT_S = 0.1
 # The failures of getaddrinfo that are an answer: the name does not exist, or has no
 # address. Anything else (EAI_AGAIN, a resolver that timed out or failed for now, among
-# them) is no answer: it is not remembered, and the choice says the name gave none instead
-# of advising a DNS fix for a name that may resolve fine a moment later.
+# them) is no answer: it is held only for ``_LOOKUP_FAILURE_HOLD_S``, and the choice says the
+# name gave none instead of advising a DNS fix for a name that may resolve fine a moment
+# later.
 _DEFINITE_MISSES = frozenset(code for code in (getattr(socket, "EAI_NONAME", None),
                                                getattr(socket, "EAI_NODATA", None))
                              if code is not None)
@@ -1068,20 +1089,30 @@ def _lookups():
         if _LOOKUP_POOL is None:
             _LOOKUP_POOL = DaemonPool(_LOOKUP_WORKERS, "vaf-host-lookup")
         if _LOOKUP_IN_FLIGHT is None:
-            _LOOKUP_IN_FLIGHT = InFlight()
+            _LOOKUP_IN_FLIGHT = InFlight(join_wait=_LOOKUP_JOIN_WAIT_S)
         return _LOOKUP_POOL, _LOOKUP_IN_FLIGHT
 
 
 def _remember(key: str, value: Any) -> Any:
+    """Remember an answer for ``_LOOKUP_MEMO_S``, or ``_NO_ANSWER`` for the failure hold."""
     with _LOOKUP_LOCK:
-        _LOOKUP_MEMO[key] = (time.monotonic(), value)
+        if value is _NO_ANSWER:
+            failures = _LOOKUP_FAILURES.get(key, 0) + 1
+            _LOOKUP_FAILURES[key] = failures
+            hold = min(_LOOKUP_FAILURE_HOLD_S * 2 ** min(failures - 1, 16), _LOOKUP_MEMO_S)
+        else:
+            _LOOKUP_FAILURES.pop(key, None)
+            hold = _LOOKUP_MEMO_S
+        _LOOKUP_MEMO[key] = (time.monotonic(), value, hold)
     return value
 
 
 def _remembered(key: str) -> Tuple[bool, Any]:
+    """(whether ``key`` is remembered, its value); the value is ``_NO_ANSWER`` while a
+    resolver failure is held."""
     with _LOOKUP_LOCK:
         entry = _LOOKUP_MEMO.get(key)
-    if entry is not None and time.monotonic() - entry[0] < _LOOKUP_MEMO_S:
+    if entry is not None and time.monotonic() - entry[0] < entry[2]:
         return True, entry[1]
     return False, None
 
@@ -1090,12 +1121,13 @@ def _addresses_of(name: str) -> frozenset:
     """The addresses ``name`` resolves to here, none when it does not exist (a DNS lookup,
     unbounded: it runs on the lookup pool). The answer is remembered, also when it arrives
     after the choice that asked for it stopped waiting. A resolver that failed for now
-    raises: no answer, and nothing remembered (``_DEFINITE_MISSES``)."""
+    raises: no answer, held briefly (``_LOOKUP_FAILURE_HOLD_S``, ``_DEFINITE_MISSES``)."""
     try:
         found = frozenset(str(info[4][0]).split("%")[0]
                           for info in socket.getaddrinfo(name, None))
     except socket.gaierror as exc:
         if exc.errno not in _DEFINITE_MISSES:
+            _remember("dns:" + name, _NO_ANSWER)
             raise
         found = frozenset()
     except Exception:
@@ -1191,10 +1223,10 @@ def room_host_choice(address: str, cfg: Optional[dict] = None) -> Tuple[Optional
     for key, call in [("machine", _machine_names),
                       *(("dns:" + c, (lambda n=c: _addresses_of(n))) for c in candidates)]:
         hit, value = _remembered(key)
-        if hit:
-            answers[key] = value
-        else:
+        if not hit:
             calls[key] = call
+        elif value is not _NO_ANSWER:
+            answers[key] = value
     if calls:
         pool, in_flight = _lookups()
         answers.update(run_bounded_all(calls, timeout=_LOOKUP_BUDGET_S, pool=pool,
@@ -1210,10 +1242,11 @@ def room_host_choice(address: str, cfg: Optional[dict] = None) -> Tuple[Optional
     silent = [c for c in candidates if "dns:" + c not in answers]
     if "machine" not in answers:
         silent.append("the host's own names")
-    # No answer covers both a lookup that took longer than the budget and a resolver that
-    # failed at once (EAI_AGAIN), so the text names both rather than "within 2 s".
-    late = (f". No answer came for {', '.join(silent)} (the lookup took longer than "
-            f"{_LOOKUP_BUDGET_S:g} s, or the resolver failed)" if silent else "")
+    # No answer covers a lookup still running when the choice stopped waiting (its budget,
+    # or the join cap for one another choice started) and a resolver that failed at once
+    # (EAI_AGAIN), so the text names both rather than "within 2 s".
+    late = (f". No answer came in time for {', '.join(silent)} (the lookup was still "
+            "running, or the resolver failed)" if silent else "")
     if not candidates:
         example = "vaf" + wildcards[0][1:]
         return None, (f"the served certificate names only {', '.join(wildcards)}, and none of "
@@ -1222,9 +1255,9 @@ def room_host_choice(address: str, cfg: Optional[dict] = None) -> Tuple[Optional
     listed = ", ".join([*candidates, *wildcards])
     if all(c in silent for c in candidates):
         return None, (f"the served certificate names {listed}, and the lookups on the host "
-                      f"gave no answer (they took longer than {_LOOKUP_BUDGET_S:g} s, or the "
-                      "resolver failed; it may be down for now): an invitation made once it "
-                      "answers has the lane")
+                      "gave no answer in time (they were still running, or the resolver "
+                      "failed; it may be down for now): an invitation made once it answers "
+                      "has the lane")
     one = len(candidates) == 1 and not wildcards
     head = (f"the served certificate names {listed}, but it is not the host's name and does "
             f"not resolve to its address {address} on the host" if one else

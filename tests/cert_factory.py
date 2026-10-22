@@ -160,6 +160,7 @@ def isolated_home(tmp_path: Path, monkeypatch, **values) -> Path:
     monkeypatch.setattr(ssl_utils, "_LISTENERS", {})
     # Remembered and running lookups belong to the test that made them.
     monkeypatch.setattr(ssl_utils, "_LOOKUP_MEMO", {})
+    monkeypatch.setattr(ssl_utils, "_LOOKUP_FAILURES", {})
     monkeypatch.setattr(ssl_utils, "_LOOKUP_IN_FLIGHT", None)
     return ssl_dir
 

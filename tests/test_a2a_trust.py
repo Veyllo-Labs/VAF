@@ -514,7 +514,7 @@ def test_the_room_host_lookups_share_one_budget_and_run_once_per_name(tmp_path, 
         took = time.monotonic() - started
     finally:
         release.set()
-    assert host is None and "gave no answer (they took longer than 0.3 s" in why
+    assert host is None and "gave no answer in time (they were still running" in why
     assert took < 2.0, took
     counts = Counter(looked_up)
     assert set(counts) <= {"example.org", "a.example.org", "b.example.org"}
@@ -672,23 +672,54 @@ def _gaierror(code):
     return _raise
 
 
-def test_a_resolver_that_failed_for_now_is_asked_again(tmp_path, monkeypatch):
-    """EAI_AGAIN (a timeout among them) is no answer: remembering it as "no address" gave
-    every invitation for a minute no lane and advice to fix a DNS entry that may be fine.
-    MUTATION: remember every failure as an empty answer - red."""
+def test_a_resolver_failure_is_held_briefly_then_asked_again(tmp_path, monkeypatch):
+    """EAI_AGAIN (SERVFAIL, a timeout) is no answer. Remembered for a minute as "no address",
+    it gave every invitation no lane and advice to fix a DNS entry that may be fine; not held
+    at all, every choice started every name again and waited its full budget (another
+    account's invitation waited 10 s at 20 connections). It is held for a few seconds, as no
+    answer. MUTATIONS: hold nothing - red (asked again at once); hold it like an answer -
+    red (not asked again after the hold)."""
     import socket
+    import time
 
     import vaf.network.binding as binding
     _served(tmp_path, monkeypatch, ("a.example.org", "b.example.org"))
     monkeypatch.setattr(binding, "machine_dns_names", lambda: ["vaf"])
+    monkeypatch.setattr(ssl_utils, "_LOOKUP_FAILURE_HOLD_S", 0.5)
     asked = []
     failing = _gaierror(socket.EAI_AGAIN)
     monkeypatch.setattr(ssl_utils.socket, "getaddrinfo",
                         lambda name, *a, **k: asked.append(name) or failing())
-    for _ in range(2):
+    for _ in range(3):
         host, why = ssl_utils.room_host_choice("192.168.1.20")
         assert host is None and "gave no answer" in why and "hosts file" not in why
-    assert sorted(asked) == ["a.example.org", "a.example.org", "b.example.org", "b.example.org"]
+    assert sorted(asked) == ["a.example.org", "b.example.org"], "asked again within the hold"
+    time.sleep(0.8)
+    ssl_utils.room_host_choice("192.168.1.20")
+    assert sorted(asked) == ["a.example.org", "a.example.org", "b.example.org",
+                             "b.example.org"], "not asked again after the hold"
+
+
+def test_the_failure_hold_backs_off_and_an_answer_ends_the_series(monkeypatch):
+    """Each failure of a name in a row doubles its hold, up to the minute an answer is kept;
+    an answer starts the series over. With a 5 s hold that never grew, a resolver that
+    fails after 1.5 s still made another account wait 7.5 s at 20 connections; backing off
+    brought that to 3.2 s (measured). MUTATION: hold every failure 5 s - red."""
+    monkeypatch.setattr(ssl_utils, "_LOOKUP_MEMO", {})
+    monkeypatch.setattr(ssl_utils, "_LOOKUP_FAILURES", {})
+
+    def _hold():
+        return ssl_utils._LOOKUP_MEMO["dns:x"][2]
+
+    holds = []
+    for _ in range(6):
+        ssl_utils._remember("dns:x", ssl_utils._NO_ANSWER)
+        holds.append(_hold())
+    assert holds == [5.0, 10.0, 20.0, 40.0, 60.0, 60.0]
+    ssl_utils._remember("dns:x", frozenset({"192.168.1.20"}))
+    assert _hold() == 60.0
+    ssl_utils._remember("dns:x", ssl_utils._NO_ANSWER)
+    assert _hold() == 5.0, "an answer starts the series over"
 
 
 def test_a_name_that_does_not_exist_is_remembered(tmp_path, monkeypatch):
@@ -734,5 +765,5 @@ def test_a_name_without_an_answer_gets_a_sentence_of_its_own(tmp_path, monkeypat
     finally:
         release.set()
     assert host is None
-    assert (". No answer came for b.example.org (the lookup took longer than 0.2 s, or the "
-            "resolver failed)") in why
+    assert (". No answer came in time for b.example.org (the lookup was still running, or "
+            "the resolver failed)") in why

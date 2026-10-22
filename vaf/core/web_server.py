@@ -4161,10 +4161,12 @@ def _ws_client_ip(websocket) -> str:
 # look names up for up to 2 s, and on the loop's default executor a member who opened many
 # connections kept the A2A wire, the voice feed and uploads waiting behind those lookups
 # (measured: 5.8 s at 60 connections). Four at a time. NAMED BOUNDARY: the four are shared
-# by every account, with no count per account, so while DNS hangs one member's
-# invitations delay another's: by at most 2.06 s at 20 connections and 3.25 s at 60
-# (measured, lookups hanging 20 s; a running lookup is shared, so only the invitation that
-# starts one waits its 2 s).
+# by every account, with no count per account, so while DNS fails one member's invitations
+# delay another's. Largest wait seen for another account, one member inviting over 20 / 60
+# connections, a certificate of 20 names: 1.55 / 2.02 s with a resolver that never answers,
+# 1.31 / 2.55 s with SERVFAIL after 1.5 s, 0.22 / 0.36 s with SERVFAIL after 0.05 s
+# (medians 0.07 to 0.22 s). Lookups are shared and failures held in ssl_utils, so only the
+# invitation that starts a lookup waits for it (A2A_PROTOCOL.md has the table).
 _ROOM_INVITE_POOL = None
 
 

@@ -3,7 +3,7 @@
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 'use client';
 
-import { useCallback, useEffect, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useState, type ChangeEvent, type ReactNode } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { Copy, Download, ShieldAlert, ShieldCheck, Upload } from 'lucide-react';
 import { copyText } from '@/lib/clipboard';
@@ -91,6 +91,35 @@ function Fingerprint({ hex }: { hex: string }) {
     );
 }
 
+/** A fingerprint inside a sentence: the same break points, the sentence's own style. */
+function inlineFingerprint(chunks: ReactNode) {
+    const text = ([] as ReactNode[]).concat(chunks).join('');
+    const pairs = text.split(':');
+    return (
+        <span className="font-mono break-words">
+            {pairs.map((pair, i) => (
+                <span key={i}>{pair}{i < pairs.length - 1 && <>:<wbr /></>}</span>
+            ))}
+        </span>
+    );
+}
+
+/** A command inside a sentence. It wraps only between its words: a break at the hyphen of
+ *  "-out" (the browser's default) gave a line a copy turns into a wrong command. */
+function inlineCommand(chunks: ReactNode) {
+    const words = ([] as ReactNode[]).concat(chunks).join('').split(' ');
+    return (
+        <code className="font-mono text-[0.95em] px-1 rounded bg-gray-100 text-gray-800">
+            {words.map((word, i) => (
+                <span key={i} className="whitespace-nowrap">{word}{i < words.length - 1 ? ' ' : ''}</span>
+            ))}
+        </code>
+    );
+}
+
+// The tags the catalogue marks commands and fingerprints with (t.rich).
+const RICH = { code: inlineCommand, fp: inlineFingerprint };
+
 /** The common name of a distinguished name ("O=VAF,CN=VAF Local Network CA"), else all of it. */
 function commonName(dn: string): string {
     const match = /(?:^|,)CN=((?:\\,|[^,])+)/.exec(dn || '');
@@ -115,7 +144,7 @@ export default function CertificateSection({ sectionId }: { sectionId?: string }
     const [report, setReport] = useState<Report | null>(null);
     const [code, setCode] = useState('');
     const [busy, setBusy] = useState(false);
-    const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+    const [note, setNote] = useState<{ ok: boolean; text: ReactNode } | null>(null);
     const [confirming, setConfirming] = useState<'restrict' | 'reset' | null>(null);
 
     const load = useCallback(async () => {
@@ -136,14 +165,17 @@ export default function CertificateSection({ sectionId }: { sectionId?: string }
     const date = (iso: string | undefined) => {
         if (!iso) return '';
         const d = new Date(iso);
-        return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString(locale);
+        if (Number.isNaN(d.getTime())) return iso;
+        // A date without a time (a report's "expired on") is a calendar day: read in UTC, it is
+        // not shown a day early west of UTC.
+        return d.toLocaleDateString(locale, /^\d{4}-\d{2}-\d{2}$/.test(iso) ? { timeZone: 'UTC' } : undefined);
     };
 
-    const reason = (item: { code: string; text: string; params?: Record<string, string | number> }) => {
+    const reason = (item: { code: string; text: string; params?: Record<string, string | number> }): ReactNode => {
         if (!REASON_CODES.includes(item.code)) return item.text;
-        const params = { ...(item.params || {}) };
+        const params: Record<string, string | number> = { ...(item.params || {}) };
         if (typeof params.date === 'string') params.date = date(params.date);
-        return t(`reasons.${item.code}`, params);
+        return t.rich(`reasons.${item.code}`, { ...params, ...RICH });
     };
 
     const copy = async (text: string) => {
@@ -177,14 +209,14 @@ export default function CertificateSection({ sectionId }: { sectionId?: string }
     };
 
     // The answer to a change: the second factor's refusals worded, everything else generic.
-    const refusal = async (res: Response) => {
+    const refusal = async (res: Response): Promise<ReactNode> => {
         const answer = await res.json().catch(() => ({}));
         if (res.status === 422 && answer?.detail?.code === 'refused') {
             setReport(answer.detail.report as Report);
             return t('refused');
         }
         if (res.status === 429) return t('codeThrottled');
-        if (res.status === 400) return t('codeUnavailable');
+        if (res.status === 400) return t.rich('codeUnavailable', RICH);
         if (res.status === 403 && data?.step_up_required) return t('codeWrong');
         return t('failed');
     };
@@ -277,9 +309,8 @@ export default function CertificateSection({ sectionId }: { sectionId?: string }
             {data.problem && (
                 <div className="mb-4 p-3 rounded-lg border border-red-200 bg-red-50" role="alert">
                     <p className="text-sm font-semibold text-red-700 mb-1">{t('problemTitle')}</p>
-                    <p className="text-xs text-red-700 break-words">
-                        {t('problemText', { reason: reason(data.problem), path: data.own_path ?? '' })}
-                    </p>
+                    <p className="text-xs text-red-700 break-words">{reason(data.problem)}</p>
+                    <p className="text-xs text-red-700 break-words">{t('problemText', { path: data.own_path ?? '' })}</p>
                 </div>
             )}
 
@@ -349,7 +380,7 @@ export default function CertificateSection({ sectionId }: { sectionId?: string }
                                 <Copy className="w-4 h-4" />
                             </button>
                         </div>
-                        <p className="text-xs text-gray-500">{t('compare')}</p>
+                        <p className="text-xs text-gray-500">{t.rich('compare', RICH)}</p>
                         <div className={`flex items-center gap-1.5 text-xs ${ca.restricted ? 'text-green-700' : 'text-amber-700'}`}>
                             {ca.restricted ? <ShieldCheck className="w-4 h-4 shrink-0" /> : <ShieldAlert className="w-4 h-4 shrink-0" />}
                             <span>{ca.restricted ? t('restricted') : t('unrestricted')}</span>
@@ -382,7 +413,7 @@ export default function CertificateSection({ sectionId }: { sectionId?: string }
                                 </button>
                                 <button type="button" disabled={busy || !codeReady}
                                     onClick={() => void change('POST', '/api/network/certificate/authority', { confirm: true })}
-                                    className="px-3 py-1.5 text-sm font-medium rounded-lg bg-amber-600 hover:bg-amber-700 text-white disabled:opacity-50">
+                                    className="px-3 py-1.5 text-sm font-medium rounded-lg bg-amber-600 hover:bg-amber-700 text-white disabled:bg-gray-200 disabled:text-gray-500 disabled:hover:bg-gray-200">
                                     {t('restrictConfirm')}
                                 </button>
                             </div>
@@ -394,11 +425,14 @@ export default function CertificateSection({ sectionId }: { sectionId?: string }
             {/* A certificate of the person's own */}
             <p className="text-xs font-semibold text-gray-700 mt-4 mb-1">{t('ownTitle')}</p>
             <p className="text-xs text-gray-600 mb-1">{t('ownIntro')}</p>
-            <p className="text-xs text-amber-700 mb-3">{t('keyHint')}</p>
+            <p className="text-xs text-amber-700 mb-3">{t.rich('keyHint', RICH)}</p>
             <div className="flex flex-col gap-2">
                 {PARTS.map(part => (
                     <div key={part} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 rounded-lg border border-gray-200 bg-white">
-                        <span className="text-sm text-gray-700 flex-1 min-w-0 max-md:basis-full">{t(`parts.${part}`)}</span>
+                        <span className="flex flex-col flex-1 min-w-0 max-md:basis-full">
+                            <span className="text-sm text-gray-700">{t(`parts.${part}`)}</span>
+                            {part === 'chain' && <span className="text-xs text-gray-500">{t('parts.chainHint')}</span>}
+                        </span>
                         <span className={`text-xs text-gray-500 min-w-0 break-all ${picked[part] ? 'font-mono' : ''}`}>{picked[part]?.name ?? t('noFile')}</span>
                         <label className={`${BTN_SECONDARY} inline-flex items-center gap-1.5 cursor-pointer shrink-0`}>
                             <Upload className="w-4 h-4" />{t('choose')}
@@ -467,7 +501,7 @@ export default function CertificateSection({ sectionId }: { sectionId?: string }
                                 </button>
                                 <button type="button" disabled={busy || !codeReady}
                                     onClick={() => void change('DELETE', '/api/network/certificate', {})}
-                                    className="px-3 py-1.5 text-sm font-medium rounded-lg bg-amber-600 hover:bg-amber-700 text-white disabled:opacity-50">
+                                    className="px-3 py-1.5 text-sm font-medium rounded-lg bg-amber-600 hover:bg-amber-700 text-white disabled:bg-gray-200 disabled:text-gray-500 disabled:hover:bg-gray-200">
                                     {t('resetConfirm')}
                                 </button>
                             </div>

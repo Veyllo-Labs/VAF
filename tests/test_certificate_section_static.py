@@ -70,3 +70,21 @@ def test_the_section_follows_remote_access_in_the_local_network_tab():
     users = modal.index("<Section title={tLocalNet('userManagement')}>")
     assert remote < cert < users
     assert "tLocalNet('certificate.title')" in modal[:remote], "the settings search lists it"
+
+
+def test_the_dialogs_say_a_browser_cannot_click_past():
+    """A browser that reached VAF by name has seen its HSTS header and does not let a
+    certificate warning be clicked past: the three changes that switch what devices see say
+    so before they are made. MUTATION: drop the sentence from applyWarning - red."""
+    for locale, words in (("en", "click past"), ("de", "nicht vorbei")):
+        catalog = json.loads((ROOT / "web" / "messages" / f"{locale}.json").read_text(encoding="utf-8"))
+        texts = catalog["settings"]["localNetwork"]["certificate"]
+        for key in ("applyWarning", "resetText", "restrictText"):
+            assert words in texts[key], f"{locale}.{key}"
+
+
+def test_a_calendar_day_is_shown_in_utc():
+    """The report's dates ("expired on 2026-10-17") are calendar days; parsed as UTC
+    midnight and shown in local time they were a day early west of UTC."""
+    source = _source()
+    assert "{ timeZone: 'UTC' }" in source and "/^\\d{4}-\\d{2}-\\d{2}$/.test(iso)" in source

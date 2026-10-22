@@ -33,7 +33,7 @@ import queue
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, Executor, Future, wait
-from typing import Any, Callable, Dict, Hashable, List, Mapping, Optional
+from typing import Any, Callable, Dict, Hashable, List, Mapping, Optional, Tuple
 
 _log = logging.getLogger(__name__)
 
@@ -279,6 +279,13 @@ class InFlight:
         self.join_wait = None if join_wait is None else max(0.0, float(join_wait))
 
 
+def _timed(fn: Callable[[], Any]) -> Tuple[Any, float]:
+    """``fn()`` and the moment it returned, taken where the call ends: every caller that
+    shares the future reads the same time, and none has to register anything on it."""
+    value = fn()
+    return value, time.monotonic()
+
+
 def run_bounded_all(calls: Mapping[Hashable, Callable[[], Any]], *, timeout: float,
                     pool: Executor, in_flight: Optional[InFlight] = None) -> Dict[Hashable, Any]:
     """Run every call on ``pool`` and return, keyed like ``calls``, the answers that arrived
@@ -306,7 +313,9 @@ def run_bounded_all(calls: Mapping[Hashable, Callable[[], Any]], *, timeout: flo
     once every key is answered or dropped. One stop time for all keys let an answer count
     after its own limit (a joined call answered after its starter's deadline was kept when
     another key's limit was later), and a caller that joined a hung call and started one
-    that answered at once waited its full time instead of ``join_wait``.
+    that answered at once waited its full time instead of ``join_wait``. The time a call
+    finished is taken where it ends (``_timed``), not when this caller next looks: a call
+    that finished after its limit, just before the loop looked again, used to count.
     """
     now = time.monotonic()
     deadline = now + max(0.0, float(timeout))
@@ -315,7 +324,7 @@ def run_bounded_all(calls: Mapping[Hashable, Callable[[], Any]], *, timeout: flo
     started = set()
     if in_flight is None:
         for key, fn in calls.items():
-            futures[key], until[key] = pool.submit(fn), deadline
+            futures[key], until[key] = pool.submit(_timed, fn), deadline
             started.add(key)
     else:
         with in_flight._lock:
@@ -326,7 +335,7 @@ def run_bounded_all(calls: Mapping[Hashable, Callable[[], Any]], *, timeout: flo
                     if in_flight.join_wait is not None:
                         until[key] = min(until[key], now + in_flight.join_wait)
                     continue
-                futures[key], until[key] = pool.submit(fn), deadline
+                futures[key], until[key] = pool.submit(_timed, fn), deadline
                 in_flight._calls[key] = (futures[key], deadline)
                 started.add(key)
     for key in until:
@@ -337,7 +346,9 @@ def run_bounded_all(calls: Mapping[Hashable, Callable[[], Any]], *, timeout: flo
         for key in [k for k, future in pending.items() if future.done()]:
             future = pending.pop(key)
             if not future.cancelled() and future.exception() is None:
-                answers[key] = future.result()
+                value, finished = future.result()
+                if finished <= until[key]:
+                    answers[key] = value
         moment = time.monotonic()
         for key in [k for k in pending if until[k] <= moment]:
             pending.pop(key)  # its limit passed before its call finished

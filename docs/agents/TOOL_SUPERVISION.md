@@ -50,9 +50,10 @@ started again; the caller joins it, and a queued call stays queued for the next 
 instead of being cancelled, at most one per key. A key counts only if its call finished by
 the key's own limit: for a call the caller started, its own deadline; for a call it joined,
 the earliest of its own deadline, the starter's deadline and, with `InFlight(join_wait=...)`,
-the time it joined plus `join_wait`. The caller returns once every key is answered or past its
-limit, so while calls hang, with `join_wait` set, a call costs its full time only to the
-caller that started it.
+the time it joined plus `join_wait`. The moment a call finished is taken where it ends, so an
+answer that came after its limit does not count even when the caller looks only later. The
+caller returns once every key is answered or past its limit, so while calls hang, with
+`join_wait` set, a call costs its full time only to the caller that started it.
 
 The per-call budget is DECLARED by the tool: `BaseTool.timeout_seconds`, or `budget_seconds(args)`
 when it follows the call's own arguments (`vaf.core.bounded_run.tool_budget_seconds` resolves it;

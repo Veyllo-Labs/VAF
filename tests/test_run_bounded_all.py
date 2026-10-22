@@ -247,3 +247,31 @@ def test_a_caller_that_also_starts_a_key_waits_join_wait_for_the_joined_one():
     assert answers == {"b": "own"}, answers
     # join_wait plus timer slack on a loaded runner, far below the own 2 s.
     assert took < 1.0, took
+
+
+def test_an_answer_that_finished_after_its_limit_does_not_count(monkeypatch):
+    """The loop looked at which calls were done and kept them, then compared the clock with
+    the limits: a call that finished after its limit, in the moment before the loop looked
+    again, counted. The time a call finished is what counts. Deterministic: the wait is
+    wrapped so that, once it timed out at the key's limit, the call finishes before the loop
+    looks. MUTATION: keep every finished call again - red."""
+    import time
+
+    import vaf.core.bounded_run as bounded_run
+
+    release = threading.Event()
+    real_wait = bounded_run.wait
+
+    def _wait_then_finish(fs, timeout=None, return_when=None):
+        done = real_wait(fs, timeout=timeout, return_when=return_when)
+        if not done.done:  # timed out at the limit: the call ends now, past it
+            time.sleep(0.05)
+            release.set()
+            real_wait(fs, timeout=5)
+        return done
+
+    monkeypatch.setattr(bounded_run, "wait", _wait_then_finish)
+    pool = DaemonPool(1, "test-bounded-late")
+    answers = run_bounded_all({"k": lambda: (release.wait(5), "late")[1]}, timeout=0.2, pool=pool)
+    assert release.is_set(), "the call did not finish inside the window"
+    assert answers == {}, answers

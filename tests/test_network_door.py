@@ -749,19 +749,24 @@ def test_an_idle_tls_connection_frees_its_place_at_the_head_timer(cert, monkeypa
 
 class _Large:
     """Answers 200 with a body of `size` bytes, in one part, as Starlette's Response does, and
-    sets `written` once the whole answer is handed to the transport. With `yield_first` it
-    yields once before it answers, as an app that awaits anything does."""
+    sets `written` once the whole answer is handed to the transport. With a `gate` (a
+    threading.Event the test opens) it sets `entered` when it is called and answers only once
+    the gate is open, at most 5 s on."""
 
-    def __init__(self, size: int, yield_first: bool = False):
+    def __init__(self, size: int, gate: "threading.Event | None" = None):
         self.size = size
-        self.yield_first = yield_first
+        self.gate = gate
+        self.entered = threading.Event()
         self.written = threading.Event()
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http":
             return
-        if self.yield_first:
-            await asyncio.sleep(0)
+        if self.gate is not None:
+            self.entered.set()
+            deadline = time.monotonic() + 5
+            while not self.gate.is_set() and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
         await send({"type": "http.response.start", "status": 200,
                     "headers": [(b"content-length", b"%d" % self.size)]})
         await send({"type": "http.response.body", "body": b"x" * self.size})
@@ -933,31 +938,55 @@ def test_a_half_closing_reader_gets_the_whole_answer(cert, monkeypatch, kind, wh
     assert got == size, f"{100 * got // size} % of the answer arrived"
 
 
+def _taken_by_the_server(server, seconds: float = 3.0) -> bool:
+    """Whether the server has taken the client's end of its only connection, which must be
+    registered already: the transport is closing, or the connection is gone."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        protocols = list(server.server_state.connections)
+        if not protocols or protocols[0]._door_transport.is_closing():
+            return True
+        time.sleep(0.01)
+    return False
+
+
 @pytest.mark.parametrize("kind", ["tls", "plain"])
 def test_an_immediate_half_close_ends_the_connection(cert, monkeypatch, kind):
-    """A client that ends its own side right after its request, before the answer is written,
-    may get the answer cut (an end that arrives first wins: measured 296 and 300 of 300 cut,
-    plain and TLS, when the app yields once before it answers), but its connection ends at
-    once and nothing hangs. Keep-alive is set long, so only the client's end can end it in
-    time. MUTATION: keep a plain connection half open at the client's end - red (plain)."""
+    """A client that ends its own side right after its request, before anything is written:
+    the app answers only once the server has taken that end (a gate the test opens then), so
+    the case is certain, not a race (an end that arrives first wins otherwise: measured 296
+    and 300 of 300 cut, plain and TLS, when the app yields once before it answers). Nothing
+    written after the end reaches the client, and its connection ends on both sides at once.
+    Keep-alive and the close limits are set long, so only the client's end can end it in
+    time. The plain row pins the door's handling of that end, the TLS row asyncio's (the TLS
+    layer closes by itself). MUTATION: keep a plain connection half open at the client's end
+    - red (plain: the server never takes the end); answer without the gate - red (both rows:
+    the whole answer arrives, written before the end was taken)."""
     monkeypatch.setattr(door, "KEEP_ALIVE_S", 30.0)
     monkeypatch.setattr(door, "SEND_TIMEOUT_S", 30.0)
     monkeypatch.setattr(door, "CLOSE_TIMEOUT_S", 30.0)
-    size = 1000 * 1000
-    with serving(_door_config(_Large(size, yield_first=True), cert if kind == "tls" else None),
+    gate = threading.Event()
+    app = _Large(1000 * 1000, gate=gate)
+    with serving(_door_config(app, cert if kind == "tls" else None),
                  door.door_event_loop) as (port, server):
         s = tls_connect(port) if kind == "tls" else socket.create_connection(("127.0.0.1", port),
                                                                             timeout=5)
         with s:
             s.sendall(b"GET / HTTP/1.1\r\nHost: door\r\n\r\n")
             socket.socket.shutdown(s, socket.SHUT_WR)
-            got = len(_read_until_closed(s, 3.0))
+            # The app is running, so the connection is registered; only then does an absent
+            # connection mean that the server has taken the end and let it go.
+            assert app.entered.wait(5), "the request never reached the app"
+            assert _taken_by_the_server(server), "the server never took the client's end"
+            gate.set()
+            data = _read_until_closed(s, 3.0)
             assert closed_within(s, 0.5), "the client's end left the connection open"
         started = time.monotonic()
         while server.server_state.connections and time.monotonic() - started < 3.0:
             time.sleep(0.05)
         assert not server.server_state.connections, "the server held the connection"
-    assert got <= size + 1024
+    assert app.written.wait(5), "the app never answered"
+    assert data == b"", f"{len(data)} bytes written after the client's end reached it"
 
 
 async def _streaming_socket(scope, receive, send):

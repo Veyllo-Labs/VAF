@@ -93,12 +93,12 @@ Named boundaries:
   watch ends it. A body sent a little at a time, each part inside ``BODY_STALL_S``, does the
   same while it lasts. The cap bounds how many.
 - A client that ends its own side early (a half-close) gets what is already written when its
-  end arrives, as long as it keeps reading. Nothing written after that reaches it (measured,
-  plain and TLS, with or without the door's close hook: none of a 1 MB answer written 0.5 s
-  later; of a streamed answer only the part written before its end, the first 64 KiB piece
-  of 1 MB on a door listener and nothing through the proxy): asyncio ends a connection at the
-  client's end of file, and its TLS transport cannot stay half open. Browsers do not
-  half-close.
+  end arrives, as long as it keeps reading. Nothing written after that reaches it, because
+  asyncio ends a connection at the client's end of file and its TLS transport cannot stay
+  half open. Measured, plain and TLS, with or without the door's close handling: none of a
+  1 MB answer written 0.5 s later reached such a client, and of a streamed answer only the
+  part written before its end did, the first 64 KiB piece of 1 MB on a door listener and
+  nothing through the proxy. Browsers do not half-close.
 - ``vaf run --web`` serves the backend itself: there the head, handshake and connection
   limits apply to every client, the owner's own web UI included, which reaches it through
   Next.js; a flood that fills the cap turns that UI away too. A body is held only by the

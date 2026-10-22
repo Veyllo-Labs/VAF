@@ -42,7 +42,8 @@ connection, admitted or not, before the admission check reads a single header:
   ``SEND_TIMEOUT_S`` (modelled on nginx's send_timeout, no limit on the whole answer); once
   all is out, it waits ``CLOSE_TIMEOUT_S`` for the client to end it. The client's own end (a
   FIN or a TLS close_notify) goes through the same hook (``eof_received``), and so does the
-  close asyncio's TLS layer makes on the TCP transport under it, a WebSocket's included.
+  close asyncio's TLS layer makes on the TCP transport under it, including on a WebSocket
+  connection.
 - ``door_options()``: those plus at most ``connection_cap()`` connections (503 above it,
   for a WebSocket upgrade as for a request), an explicit keep-alive, no ``Server`` header,
   and no forwarded-header trust of uvicorn's: ``binding.connection_client_ip`` is the only
@@ -92,9 +93,10 @@ Named boundaries:
   watch ends it. A body sent a little at a time, each part inside ``BODY_STALL_S``, does the
   same while it lasts. The cap bounds how many.
 - A client that ends its own side early (a half-close) gets what is already written when its
-  end arrives, as long as it keeps reading. An answer still being produced then is cut there
-  (measured: none of a 1 MB answer written 0.5 s later, or streamed, reached such a client,
-  plain and TLS, with or without the door's close hook): asyncio ends a connection at the
+  end arrives, as long as it keeps reading. Nothing written after that reaches it (measured,
+  plain and TLS, with or without the door's close hook: none of a 1 MB answer written 0.5 s
+  later; of a streamed answer only the part written before its end, the first 64 KiB piece
+  of 1 MB on a door listener and nothing through the proxy): asyncio ends a connection at the
   client's end of file, and its TLS transport cannot stay half open. Browsers do not
   half-close.
 - ``vaf run --web`` serves the backend itself: there the head, handshake and connection

@@ -419,11 +419,14 @@ async def list_account_sessions(db, user_id, *, current_token: Optional[str] = N
             continue
         info = _info(row.device_info)
         limited = _idle_limited(info)
+        browser, system = device_parts(str(info.get("user_agent") or ""))
         out.append({
             "id": str(row.id),
             "kind": session_kind(info),
             "name": str(info.get("name") or ""),
             "device": device_label(str(info.get("user_agent") or "")),
+            "browser": browser,
+            "os": system,
             "ip": info.get("ip") or "",
             "created_at": _iso(row.created_at),
             "last_used_at": _iso(row.last_activity),
@@ -517,18 +520,27 @@ _SYSTEMS = (
 )
 
 
+def device_parts(user_agent: str) -> Tuple[str, str]:
+    """(browser, system) a user agent names, each "" when unknown; a client that is not a
+    browser is named by its product ("curl"). The pages word the pair in the reader's
+    language. Pure."""
+    ua = str(user_agent or "").strip()
+    if not ua:
+        return "", ""
+    browser = next((label for label, marks in _BROWSERS if any(m in ua for m in marks)), "")
+    system = next((label for label, marks in _SYSTEMS if any(m in ua for m in marks)), "")
+    if not browser:
+        if not ua.startswith("Mozilla/"):
+            return ua.split("/", 1)[0].split(" ", 1)[0][:40], ""
+        browser = "Browser"
+    return browser, system
+
+
 def device_label(user_agent: str) -> str:
     """"Firefox on Linux", "Safari on iOS": what a person recognises their device by. A client
     that is not a browser shows its product name ("curl"); no agent at all is "Unknown
     device". Pure."""
-    ua = str(user_agent or "").strip()
-    if not ua:
+    browser, system = device_parts(user_agent)
+    if not browser:
         return "Unknown device"
-    browser = next((label for label, marks in _BROWSERS if any(m in ua for m in marks)), None)
-    system = next((label for label, marks in _SYSTEMS if any(m in ua for m in marks)), None)
-    if browser is None:
-        if not ua.startswith("Mozilla/"):
-            product = ua.split("/", 1)[0].split(" ", 1)[0][:40]
-            return product or "Unknown device"
-        browser = "Browser"
     return f"{browser} on {system}" if system else browser

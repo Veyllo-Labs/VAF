@@ -170,3 +170,36 @@ def test_an_account_without_a_second_factor_gets_none(h):
     h.sign_in(lan, "bob", "bob-password-12", None)
     r = lan.post("/api/auth/tokens", json={"name": "x", "days": 30, "code": "123456"})
     assert r.status_code == 400 and r.json()["code"] == "twofa_not_set_up"
+
+
+def test_the_account_tab_words_every_refusal():
+    """Every code POST /api/auth/tokens answers is said in the reader's language by the
+    Account tab, every key it uses exists, and the tab is rendered under the password change.
+    MUTATION: drop a code from the map in SessionsSection.tsx - red."""
+    import ast
+    import inspect
+    import json
+    import re
+    from pathlib import Path
+
+    import vaf.api.auth_routes as auth_routes
+    from vaf.auth import sessions
+    root = Path(__file__).resolve().parents[1]
+    route = inspect.getsource(auth_routes.create_program_token)
+    codes = set(re.findall(r'"code": "(\w+)"', route))
+    codes |= {node.args[0].value for node in ast.walk(ast.parse(inspect.getsource(sessions)))
+              if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "ProgramTokenRefused"
+              and node.args and isinstance(node.args[0], ast.Constant)}
+    assert {"wrong_code", "twofa_not_set_up", "invalid", "record_changed"} <= codes
+    page = (root / "web" / "components" / "settings" / "SessionsSection.tsx").read_text(encoding="utf-8")
+    known = page.split("const known", 1)[1].split("};", 1)[0]
+    mapped = dict(re.findall(r"(\w+): t\('(\w+)'", known))
+    assert codes <= set(mapped), sorted(codes - set(mapped))
+    catalogue = json.loads((root / "web" / "messages" / "en.json").read_text(encoding="utf-8"))["account"]
+    used = set(re.findall(r"\bt\('(\w+)'", page))
+    assert used <= set(catalogue), sorted(used - set(catalogue))
+    for path in ("/api/auth/sessions", "/api/auth/sessions/end-others", "/api/auth/tokens"):
+        assert path in page, path
+    modal = (root / "web" / "components" / "SettingsModal.tsx").read_text(encoding="utf-8")
+    assert "{activeTab === 'account' && <><AccountSection /><SessionsSection /></>}" in modal
+    assert "fetch(`/api/users/${target}/sign-out`" in modal

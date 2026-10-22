@@ -485,8 +485,8 @@ def test_the_list_is_live_own_and_hashless(h):
 
     listed = h.run_db(_list)
     assert len(listed) == 1 and listed[0]["current"] is True and listed[0]["ip"] == "192.168.11.1"
-    assert set(listed[0]) == {"id", "kind", "name", "device", "ip", "created_at", "last_used_at",
-                              "expires_at", "idle_until", "current"}
+    assert set(listed[0]) == {"id", "kind", "name", "device", "browser", "os", "ip", "created_at",
+                              "last_used_at", "expires_at", "idle_until", "current"}
     assert listed[0]["kind"] == "browser" and listed[0]["idle_until"]
 
 

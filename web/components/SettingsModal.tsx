@@ -36,6 +36,7 @@ import SecretsSection from './settings/SecretsSection';
 import SshSection from './settings/SshSection';
 import FtpSection from './settings/FtpSection';
 import AccountSection from './settings/AccountSection';
+import SessionsSection from './settings/SessionsSection';
 import SandboxSection from './settings/SandboxSection';
 import RemoteAccessSection from './settings/RemoteAccessSection';
 import CertificateSection from './settings/CertificateSection';
@@ -1998,6 +1999,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // hooks have to run on every render or React throws "rendered more hooks than previous render").
     const [pwResetTemp, setPwResetTemp] = useState<string | null>(null);
     const [twoFaResetDone, setTwoFaResetDone] = useState(false);
+    // How many sessions "Sign out everywhere" ended for the user on screen (null: not done).
+    const [signedOutCount, setSignedOutCount] = useState<number | null>(null);
     // ONE way to open the user editor. Two entry points (table row, detail modal) each carried
     // their own reset list and the detail modal's was empty, so a preset picked for the PREVIOUS
     // user stayed selected and the effect below rewrote the newly opened user's tools to that
@@ -2009,6 +2012,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         setEditAccessPreset('custom');
         setPwResetTemp(null);
         setTwoFaResetDone(false);
+        setSignedOutCount(null);
     }, []);
     useEffect(() => {
         if (!editingUser || editAccessPreset === 'custom') return;
@@ -2705,6 +2709,25 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             }
         } catch {
             alert(tModals('editUser.resetTwoFaFailed'));
+        }
+    };
+
+    // Admin-only: every session of the account ends (devices, this computer, tokens for programs)
+    // and its open chats disconnect (POST /api/users/<id>/sign-out).
+    const handleSignOutEverywhere = async () => {
+        if (!editingUser) return;
+        if (!confirm(tModals('editUser.confirmSignOutEverywhere'))) return;
+        const target = editingUser.id;
+        try {
+            const res = await fetch(`/api/users/${target}/sign-out`, { method: 'POST', credentials: 'include' });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok) {
+                setSignedOutCount(Number(data.ended) || 0);
+            } else {
+                alert(`${tModals('editUser.signOutFailed')}${tCommon('labelSeparator')}${data.detail || ''}`);
+            }
+        } catch {
+            alert(tModals('editUser.signOutFailed'));
         }
     };
 
@@ -5507,7 +5530,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             </div>
                         )}
 
-                        {activeTab === 'account' && <AccountSection />}
+                        {activeTab === 'account' && <><AccountSection /><SessionsSection /></>}
                         {activeTab === 'about' && (
                             <div className="space-y-6 pb-8">
                                 <div className="text-center py-6">
@@ -7851,6 +7874,20 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             <span className="text-xs text-green-600">{tModals('editUser.twoFaResetDone')}</span>
                                         ) : (
                                             <button onClick={handleReset2fa} className="text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline">{tModals('editUser.resetTwoFa')}</button>
+                                        )}
+                                    </div>
+
+                                    <div className="flex items-center justify-between p-3 border border-gray-200 rounded-lg hover:border-gray-300 transition-colors">
+                                        <div className="flex items-center gap-3">
+                                            <div className="p-2 bg-gray-100 text-gray-600 rounded-lg">
+                                                <LogOut size={16} />
+                                            </div>
+                                            <span className="text-sm font-medium text-gray-700">{tModals('editUser.sessions')}</span>
+                                        </div>
+                                        {signedOutCount !== null ? (
+                                            <span className="text-xs text-green-600">{tModals('editUser.signedOutEverywhere', { count: signedOutCount })}</span>
+                                        ) : (
+                                            <button onClick={handleSignOutEverywhere} className="text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline">{tModals('editUser.signOutEverywhere')}</button>
                                         )}
                                     </div>
 

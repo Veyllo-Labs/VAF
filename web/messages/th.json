@@ -552,6 +552,7 @@
     "ovEvLogin": "ลงชื่อเข้าใช้ล้มเหลว",
     "ovEv2fa": "การตรวจสอบสองชั้นล้มเหลว",
     "ovEvLoginThrottled": "พยายามลงชื่อเข้าใช้มากเกินไป",
+    "ovEvLoginNewAddress": "ลงชื่อเข้าใช้จากที่อยู่ใหม่",
     "ovEvAccountSeal": "บันทึกบัญชีถูกแก้ไขภายนอก VAF",
     "ovEvPasswordChanged": "ตั้งรหัสผ่านใหม่แล้ว",
     "ovEvProgramToken": "สร้างโทเค็นสำหรับโปรแกรมแล้ว",

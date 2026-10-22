@@ -552,6 +552,7 @@
     "ovEvLogin": "로그인 실패",
     "ovEv2fa": "2단계 인증 실패",
     "ovEvLoginThrottled": "로그인 시도 횟수 초과",
+    "ovEvLoginNewAddress": "새 주소에서 로그인",
     "ovEvAccountSeal": "VAF 밖에서 계정 기록이 변경됨",
     "ovEvPasswordChanged": "비밀번호가 새로 설정됨",
     "ovEvProgramToken": "프로그램용 토큰이 생성됨",

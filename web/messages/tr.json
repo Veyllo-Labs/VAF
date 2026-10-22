@@ -552,6 +552,7 @@
     "ovEvLogin": "Giriş başarısız",
     "ovEv2fa": "2FA başarısız",
     "ovEvLoginThrottled": "Çok fazla giriş denemesi",
+    "ovEvLoginNewAddress": "Yeni bir adresten giriş",
     "ovEvAccountSeal": "Hesap kaydı VAF dışında değiştirildi",
     "ovEvPasswordChanged": "Parola yeniden belirlendi",
     "ovEvProgramToken": "Programlar için belirteç oluşturuldu",

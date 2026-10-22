@@ -240,7 +240,8 @@ def security_alert_count(_: Dict[str, Any] = Depends(require_admin)) -> Dict[str
     """Cheap poll for the sidebar Logs notification dot: how many security
     events were recorded today and the timestamp of the newest one. Every entry
     in the security log is a rejected/blocked/failed attempt or a door opened on
-    purpose (a pairing, a token for programs), so all count.
+    purpose (a pairing, a token for programs, a sign-in from a new address), so all
+    count.
     The frontend compares latest_ts against a per-user 'last seen' marker to
     show an UNREAD dot that clears when the Logs window is opened."""
     today = datetime.now().strftime("%Y-%m-%d")

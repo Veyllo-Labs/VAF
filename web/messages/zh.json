@@ -552,6 +552,7 @@
     "ovEvLogin": "登录失败",
     "ovEv2fa": "两步验证失败",
     "ovEvLoginThrottled": "登录尝试次数过多",
+    "ovEvLoginNewAddress": "来自新地址的登录",
     "ovEvAccountSeal": "账户记录在 VAF 之外被修改",
     "ovEvPasswordChanged": "密码已重新设置",
     "ovEvProgramToken": "已创建程序令牌",

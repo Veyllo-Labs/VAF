@@ -552,6 +552,7 @@
     "ovEvLogin": "Login failed",
     "ovEv2fa": "2FA failed",
     "ovEvLoginThrottled": "Too many login attempts",
+    "ovEvLoginNewAddress": "Sign-in from a new address",
     "ovEvAccountSeal": "Account record changed outside VAF",
     "ovEvPasswordChanged": "Password set anew",
     "ovEvProgramToken": "Token for programs created",

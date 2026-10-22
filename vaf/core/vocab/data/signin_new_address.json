@@ -1,0 +1,23 @@
+{
+  "de": [
+    "Neue Anmeldung bei {username}. {device} von {address}, einer Adresse, die dieses Konto bisher nicht genutzt hat. Wenn du das nicht warst, melde das Gerät unter Einstellungen, Konto ab und ändere das Passwort."
+  ],
+  "en": [
+    "New sign-in to {username}. {device} from {address}, an address this account has not used before. If this was not you, sign that device out in Settings, Account and change the password."
+  ],
+  "ja": [
+    "{username}に新しいログインがありました。{address}からの{device}で、このアカウントがこれまで使ったことのないアドレスです。心当たりがない場合は、設定のアカウントでそのデバイスをログアウトさせ、パスワードを変更してください。"
+  ],
+  "ko": [
+    "{username} 계정에 새 로그인이 있었습니다. {address}에서 {device} 기기로 로그인했으며, 이 계정이 지금까지 쓴 적 없는 주소입니다. 본인이 아니라면 설정의 계정에서 그 기기를 로그아웃시키고 비밀번호를 바꾸세요."
+  ],
+  "th": [
+    "มีการลงชื่อเข้าใช้ {username} ใหม่ {device} จาก {address} ซึ่งเป็นที่อยู่ที่บัญชีนี้ไม่เคยใช้มาก่อน หากไม่ใช่คุณ ให้ออกจากระบบอุปกรณ์นั้นในการตั้งค่า บัญชี และเปลี่ยนรหัสผ่าน"
+  ],
+  "tr": [
+    "{username} hesabına yeni giriş. {address} adresinden {device}; bu hesabın daha önce kullanmadığı bir adres. Bu sen değilsen o cihazın oturumunu Ayarlar, Hesap altında kapat ve parolayı değiştir."
+  ],
+  "zh": [
+    "{username} 有新的登录。{device}，来自 {address}，这是该账号之前从未使用过的地址。如果不是你本人，请在“设置”中的“账号”里让该设备退出登录，并修改密码。"
+  ]
+}

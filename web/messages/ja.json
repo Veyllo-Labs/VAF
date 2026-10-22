@@ -552,6 +552,7 @@
     "ovEvLogin": "ログイン失敗",
     "ovEv2fa": "2段階認証に失敗",
     "ovEvLoginThrottled": "ログイン試行が多すぎます",
+    "ovEvLoginNewAddress": "新しいアドレスからのログイン",
     "ovEvAccountSeal": "VAF外でアカウント記録が変更されました",
     "ovEvPasswordChanged": "パスワードが再設定されました",
     "ovEvProgramToken": "プログラム用トークンが作成されました",

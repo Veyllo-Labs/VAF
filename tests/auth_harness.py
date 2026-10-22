@@ -119,6 +119,11 @@ class Harness:
                     monkeypatch.setattr(tracker, name, {})
         from vaf.auth import second_factor
         monkeypatch.setattr(second_factor, "_last_step", {})
+        # Sign-in alerts run in threads of their own; here they are recorded, and a test that
+        # wants them delivered runs `alert_jobs` (tests/test_sign_in_alerts.py).
+        from vaf.auth import sign_in_alerts
+        self.alert_jobs: List[Any] = []
+        monkeypatch.setattr(sign_in_alerts, "_spawn", self.alert_jobs.append)
         permissions.invalidate_permissions_cache()
         from vaf.auth import sessions
         sessions.forget_cached_sessions()

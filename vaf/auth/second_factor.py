@@ -21,6 +21,9 @@ WHAT IT DOES. `check_second_factor(user, code)` answers None (accepted) or the r
   confirmation within the same 30 seconds. Refused, but not counted: it is a right code, and
   counting it closed a window on its owner. Still the security event `twofa_failed`.
 
+The wrong code that closes the window is said to the account and the local admin at once
+(vaf/auth/sign_in_alerts.py): the password was right, so someone else may have it.
+
 NAMED BOUNDARY: the last accepted step lives in this process; after a restart a code seen
 before it can be used once more within its 90 seconds.
 """
@@ -84,8 +87,14 @@ def check_second_factor(user, code: str, *, ip: str = "", where: str = "") -> Op
                 _last_step[account] = step
                 return None
             spent = True
-    if not spent:
-        rate_limit.record_second_factor_failure(key)
+    if not spent and rate_limit.record_second_factor_failure(key):
+        # This wrong code closed the window: the right password, then five wrong codes.
+        # The account and the admin hear it once per closure.
+        try:
+            from vaf.auth import sign_in_alerts
+            sign_in_alerts.second_factor_guessing(user, max(1, -(-int(held_for(user)) // 60)))
+        except Exception:
+            pass
     what = "code already used" if spent else "wrong code"
     try:
         from vaf.core.security_events import log_security_event

@@ -69,6 +69,11 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
     "login_throttled": "Sign-ins were held after repeated failures (429): `detail` names the "
                        "window that closed (address, account or second factor), `ip` the "
                        "client refused first, `username` the account. Once per closure",
+    "login_new_address": "A sign-in completed from an address that completed none for this "
+                         "account within 30 days (another device; the machine itself is not "
+                         "counted). `ip` the address, `username` the account, `detail` the "
+                         "device. The account is told on its main messenger and in its "
+                         "notifications (vaf/auth/sign_in_alerts.py)",
     "password_changed": "An account's password was set anew: by the account itself or by an "
                         "admin in Settings, or in a terminal on this machine (`vaf users "
                         "reset-password`, with the proof it took in `detail`)",

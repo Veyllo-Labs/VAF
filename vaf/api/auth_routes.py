@@ -641,10 +641,15 @@ async def _complete_sign_in(db, request: Request, response: Response, user) -> s
     """The one place a sign-in after the second factor ends: `/verify-2fa` and `/login` for an
     account without one both come here (they each minted, opened the session and set the
     cookie by hand, and the 30 days for the machine itself sat only in the branch no account
-    VAF creates reaches). Mints the token, opens the session, ends the session of the cookie
-    this browser carried (every sign-in left the previous one of the same browser live for its
-    whole life), and sets the cookie. Returns the token."""
+    VAF creates reaches). Mints the token, asks whether this address completed a sign-in for
+    the account within 30 days BEFORE the new row makes it known, opens the session, ends the
+    session of the cookie this browser carried (every sign-in left the previous one of the same
+    browser live for its whole life), sets the cookie, and for a new address on another device
+    records `login_new_address` and tells the account (vaf/auth/sign_in_alerts.py). Returns the
+    token."""
+    from vaf.network.binding import is_localhost
     ip = _client_ip(request)
+    user_agent = request.headers.get("user-agent", "")
     access = create_access_token(
         str(user.id),
         user.username,
@@ -653,7 +658,13 @@ async def _complete_sign_in(db, request: Request, response: Response, user) -> s
         expires_hours=_sign_in_hours(request),
         is_2fa_verified=True,
     )
-    await open_session(db, user, access, ip=ip, user_agent=request.headers.get("user-agent", ""))
+    known = True
+    if not is_localhost(ip):
+        try:
+            known = await signed_in_from(db, user.username, ip, days=_KNOWN_ADDRESS_DAYS)
+        except Exception as e:
+            logger.warning("Whether the address is known could not be asked; no alert: %s", e)
+    await open_session(db, user, access, ip=ip, user_agent=user_agent)
     previous = (request.cookies.get(COOKIE_NAME) or "").strip()
     if previous and previous != access:
         try:
@@ -662,6 +673,17 @@ async def _complete_sign_in(db, request: Request, response: Response, user) -> s
         except Exception as e:
             logger.warning("The session this browser signed in over was not ended: %s", e)
     _set_auth_cookie(request, response, access)
+    if not known:
+        from vaf.auth import sign_in_alerts
+        from vaf.auth.sessions import device_label
+        device = device_label(user_agent)
+        try:
+            from vaf.core.security_events import log_security_event
+            log_security_event("login_new_address", ip=ip, username=str(user.username or ""),
+                               detail=device)
+        except Exception:
+            pass
+        sign_in_alerts.new_address(user, ip, user_agent)
     return access
 
 
@@ -685,6 +707,10 @@ async def _account_window_refusal(request: Request, username: str):
         logger.warning("Known-address lookup failed, the account window holds: %s", e)
     if account_refusal_is_new(username):
         announce_throttled(ip, username, "account", "/api/auth/login")
+        # Once per closure: the account and the admin hear that the password is being guessed.
+        from vaf.auth import sign_in_alerts
+        from vaf.auth.rate_limit import window_minutes
+        sign_in_alerts.password_guessing(username, window_minutes())
     return too_many_attempts()
 
 

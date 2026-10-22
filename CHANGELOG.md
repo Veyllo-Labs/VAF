@@ -238,6 +238,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `local_network_jwt_expiry_hours` to 24. Signing in again in the same browser now ends the
   session it replaces, which used to stay valid for its whole life.
 
+- **You hear about new sign-ins and guessing.** A sign-in from an address your account has
+  not used in 30 days, repeated wrong passwords, and wrong 2FA codes after a correct
+  password each send a message to your main messenger and the notifications, in your
+  language. The last two also go to the admin. A sign-in from a new address is also the
+  security event "Sign-in from a new address".
+
 - **2FA is required for every account, with no switch.** The `local_network_require_2fa`
   setting no longer changed anything (every account already had to set up its second factor
   at its first sign-in) and is gone, together with its `vaf doctor` warning. A value left in

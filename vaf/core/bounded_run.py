@@ -19,15 +19,21 @@ Python caveat: a thread cannot be force-killed. On timeout/stop we *abandon* the
 worker thread (it keeps running in the background until it finishes on its own),
 but the caller — and therefore the whole backend — stays responsive. Genuinely
 unkillable work belongs in a child process (run it out of process so it can be killed).
+
+`run_bounded_all()` bounds several independent calls at once and keeps the answers that
+arrived in time; `DaemonPool` is the executor for calls that may hang, with a thread cap
+that holds across all its callers.
 """
 from __future__ import annotations
 
 import contextvars
 import logging
 import math
+import queue
 import threading
 import time
-from typing import Callable, Optional
+from concurrent.futures import Executor, Future, wait
+from typing import Any, Callable, Dict, Hashable, List, Mapping, Optional
 
 _log = logging.getLogger(__name__)
 
@@ -196,3 +202,72 @@ def run_bounded(
                 f"{TIMEOUT_PREFIX} '{label}' did not finish within {int(timeout)}s and "
                 f"was abandoned to keep the system responsive. Try a smaller/simpler task."
             )
+
+
+class DaemonPool(Executor):
+    """At most ``workers`` daemon threads behind the ``Executor`` interface, started as work
+    arrives.
+
+    For calls that may never return, such as a DNS lookup nobody answers: the workers of a
+    ``ThreadPoolExecutor`` are joined when the interpreter exits, so one such call holds up
+    the exit of the process it ran in, a CLI command that has already printed its answer
+    too (measured: a process with a 3 s call left on one ended after 3.04 s, with the call
+    left here after 0.24 s); a daemon thread does not. The cap holds across every caller of one pool, so calls that
+    hang occupy at most ``workers`` threads however often they are made, and later calls
+    wait in the queue. A future that has not started can be cancelled and is then never
+    run. Each call runs in a copy of the submitter's context, as ``run_bounded``'s does.
+    """
+
+    def __init__(self, workers: int, name: str) -> None:
+        self._workers = max(1, int(workers))
+        self._name = name
+        self._queue: "queue.SimpleQueue" = queue.SimpleQueue()
+        self._threads: List[threading.Thread] = []
+        self._lock = threading.Lock()
+
+    def submit(self, fn: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Future:
+        future: Future = Future()
+        self._queue.put((future, contextvars.copy_context(), fn, args, kwargs))
+        with self._lock:
+            if len(self._threads) < self._workers:
+                worker = threading.Thread(target=self._work, daemon=True,
+                                          name=f"{self._name}-{len(self._threads)}")
+                self._threads.append(worker)
+                worker.start()
+        return future
+
+    def _work(self) -> None:
+        while True:
+            future, ctx, fn, args, kwargs = self._queue.get()
+            if not future.set_running_or_notify_cancel():
+                continue  # cancelled while it waited: never run
+            try:
+                result = ctx.run(fn, *args, **kwargs)
+            except BaseException as exc:  # noqa: BLE001 - handed to the future's owner
+                future.set_exception(exc)
+            else:
+                future.set_result(result)
+
+
+def run_bounded_all(calls: Mapping[Hashable, Callable[[], Any]], *, timeout: float,
+                    pool: Executor) -> Dict[Hashable, Any]:
+    """Run every call on ``pool`` and return, keyed like ``calls``, the answers that arrived
+    within ``timeout`` seconds in all.
+
+    ``run_bounded`` bounds ONE call and answers a tool's timeout text; this is for several
+    independent calls whose answers count each on its own, so the ones that arrived in time
+    are kept. A call that raised is left out, and so is one that was still queued (it is
+    cancelled, so it never starts) or still running when the time was up (it is abandoned
+    like ``run_bounded``'s worker and finishes on its own). Give it a ``DaemonPool`` of its
+    own when the calls can hang, so their threads stay capped and never hold up the exit.
+    """
+    futures = {key: pool.submit(fn) for key, fn in calls.items()}
+    if futures:
+        wait(list(futures.values()), timeout=max(0.0, float(timeout)))
+    answers: Dict[Hashable, Any] = {}
+    for key, future in futures.items():
+        if future.done() and not future.cancelled() and future.exception() is None:
+            answers[key] = future.result()
+        else:
+            future.cancel()
+    return answers

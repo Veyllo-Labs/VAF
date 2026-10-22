@@ -337,6 +337,20 @@ def test_every_membership_check_in_the_web_server_skips_the_door():
     assert "room.join(" not in invites, "looking at invitations must never join anybody"
 
 
+def test_the_browser_mints_invitations_off_the_event_loop():
+    """Choosing the host may look names up for up to the budget, and every browser connection
+    shares the server's event loop: both commands that build an invitation run it on an
+    executor, like the account lookup beside them. MUTATION: call invitation() directly
+    again - red."""
+    import re
+    source = (ROOT / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    branches = source.split('elif type == "room_invite_agent":')[1].split(
+        "# The panel repaints from the store")[0]
+    assert re.search(r"run_in_executor\(\s*None, lambda: invitation\(room", branches)
+    assert re.search(r"run_in_executor\(\s*None, invitation_text, room, record\)", branches)
+    assert not re.search(r"=\s*invitation(_text)?\(", branches)
+
+
 def test_the_browser_forwards_the_door_and_draws_it():
     """Rule 2: a field the handler does not name is silently dropped."""
     page = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")

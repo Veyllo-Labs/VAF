@@ -5036,8 +5036,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             except (TypeError, ValueError):
                                 ttl = 3600
                             ttl = max(300, min(ttl, 7 * 86400))
-                            minted = invitation(room, identity, display=display[:60],
-                                                ttl_s=float(ttl))
+                            # Off the loop, like the account lookup above: choosing the
+                            # host may look names up (ssl_utils.room_host_choice, bounded
+                            # but not instant), and every connection shares this loop.
+                            minted = await asyncio.get_running_loop().run_in_executor(
+                                None, lambda: invitation(room, identity, display=display[:60],
+                                                         ttl_s=float(ttl)))
                             await websocket.send_json({
                                 "type": "room_invitation",
                                 "roomId": room.room_id,
@@ -5059,7 +5063,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                     "message": "That invitation is not open any more"})
                                 continue
                             try:
-                                text = invitation_text(room, record)
+                                # Off the loop for the same reason as the minting above.
+                                text = await asyncio.get_running_loop().run_in_executor(
+                                    None, invitation_text, room, record)
                             except ValueError as _text_err:
                                 await websocket.send_json({"type": "error",
                                                            "message": str(_text_err)})

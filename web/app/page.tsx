@@ -2673,6 +2673,10 @@ function VAFDashboardContent() {
                     const userData = await res.json();
                     setCurrentUser(userData);
                     setIsAuthenticated(true);
+                } else if (res.status !== 401 && res.status !== 403) {
+                    // The server did not answer the question (a 5xx while the backend restarts):
+                    // that says nothing about the session, so the retry screen, not the login.
+                    setAuthError('error');
                 } else {
                     if (typeof window !== 'undefined') {
                         // The page gate (web/proxy.ts) renders this page only for an unexpired

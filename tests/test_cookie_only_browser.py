@@ -206,3 +206,14 @@ def test_the_web_ui_keeps_no_readable_token():
     page = sources["web/app/page.tsx"]
     assert page.count("new WebSocket(") == 1 and "new WebSocket(wsUrl)" in page
     assert "const wsUrl = (base ? base + '/ws' : '/ws');" in page
+
+
+def test_only_a_refusal_means_the_session_ended():
+    """A 5xx from /api/auth/me (the backend restarting) says nothing about the session: the page
+    shows its retry screen instead of "your session ended". MUTATION: redirect on any non-OK - red."""
+    page = (ROOT / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    check = page[page.index("The HttpOnly cookie is the only credential this page has"):]
+    check = check[:check.index(".catch(")]
+    branch = check.index("} else if (res.status !== 401 && res.status !== 403) {")
+    assert "setAuthError('error');" in check[branch:check.index("} else {", branch + 10)]
+    assert check.index("/login?reason=ended") > branch

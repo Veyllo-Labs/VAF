@@ -422,7 +422,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   errors noted there. They went to the model with every message and were saved as the new
   chat's own. A new chat now starts with none of it, and a chat with saved state gets back
   only its own. `clear` in the terminal app now forgets that summary too, for a chat started
-  in the terminal. Restart VAF after updating so the fix takes effect.
+  in the terminal. At the first start after the update, VAF removes such saved copies once:
+  every chat whose saved summary and decisions are exactly the same as another chat's loses
+  them, the original included, because the two cannot be told apart. The messages of every
+  chat stay as they are. Restart VAF after updating so the fix takes effect.
 
 ### Fixed
 

@@ -490,6 +490,18 @@ file keeps the store tolerant rather than locking a record out. It also
 REPORTS, without touching, files that hold readable copies and that no VAF code
 created: a database dump under `~/.vaf/vm-backups/`, and old config backups.
 
+Once per installation the same sweep also repairs the chats themselves. Earlier
+versions could carry one chat's saved context state (the compressed summary, decisions,
+goal, and the files and errors noted) into another chat when the agent moved between
+them, and save it there; every chat, archived ones included, whose saved context state
+is identical to another chat's loses that one entry, and nothing else in the file
+changes (not the transcript, not `updated_at`, not the file time the chat list sorts
+by). It reads and writes each chat through the same seam as everything above, so
+ciphertext stays ciphertext under the machine key, and a chat it cannot open is never
+written. `context_copy_sweep_done` records that the pass ran; it stays `false` while a
+chat could not be rewritten, and the chats of that state already rewritten are put back,
+so the next start finds the whole group again.
+
 **Downgrade:** `~/.vaf/config.json.pre-keyring.bak` is written once, before the
 first key is removed from config.json. Restoring it puts the keys back where an
 older release looks for them.

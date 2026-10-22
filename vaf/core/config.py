@@ -604,6 +604,7 @@ class Config:
         "cli_password_gate": True,                                 # Interactive terminal (vaf run / TUI) asks for the admin password. Scripts, -p, tray and automations never do
         "secure_store_kek_backend": "auto",                        # Where the master key lives: "auto" (keyring on Windows where chmod protects nothing, file elsewhere), "file" (0600), or "keyring" (OS keyring)
         "allow_plaintext_at_rest": True,                           # Accept files WITHOUT the encryption header on read. Needed while migrating; the sweep turns it off after a clean pass
+        "context_copy_sweep_done": False,                          # Set by the start-up sweep after its one pass that drops a chat's saved context state shared with another chat (vaf/core/at_rest_migration.py)
         "file_encryption_enabled": True,
         "backup_dir": "",                                          # Where `vaf backup` writes its encrypted backups ("" = <data dir>/backups). Held owner-only
         "backup_schedule": "",                                     # Backups by themselves: "daily", "weekly" (Sunday), "off"; "" = never chosen (off; `vaf server provision` makes it daily). vaf/core/backup_schedule.py
@@ -1209,6 +1210,9 @@ class Config:
         # history on disk longer. None of them is a personal preference.
         "file_encryption_enabled",
         "allow_plaintext_at_rest",
+        # The one-time repair's done-marker: set back to false, the next start rewrites
+        # every chat that shares a saved context state with another one, everyone's.
+        "context_copy_sweep_done",
         "cli_password_gate",
         "prompt_log_full_enabled",
         "secure_store_kek_backend",

@@ -844,14 +844,14 @@ SERVFAIL gives) is no answer: it is held for 5 s, doubling with each failure of 
 row up to 60 s, and an answer ends the series (RFC 9520 asks resolvers to hold a failure and
 back off). So after a long outage the lane can return up to a minute after the resolver answers
 again, and the reason says to try again then, and to check that one of the names resolves to
-the host's address if the lane is still missing. A choice that also started a lookup of its own
-waits for the ones it joined until its own 2 s are up, as it does for its own. The web UI
-builds an invitation on a small pool of its own (four threads), off the server's event loop and
-off the default executor the A2A wire and the voice feed use. NAMED BOUNDARY: those four
-threads are shared by every account, with no count per account, so while DNS fails one member's
-invitations delay another's. Measured with a certificate of 20 names, one member inviting in a
-loop over 20 or 60 connections, and another account inviting every 2 s (largest wait seen,
-median; 60 s each):
+the host's address if the lane is still missing. Each name counts only if its lookup answered
+by its own limit: 2 s for a lookup the choice started, 0.1 s (or the starter's 2 s, if sooner)
+for one it joined. The web UI builds an invitation on a small pool of its own (four threads),
+off the server's event loop and off the default executor the A2A wire and the voice feed use.
+NAMED BOUNDARY: those four threads are shared by every account, with no count per account, so
+while DNS fails one member's invitations delay another's. Measured with a certificate of 20
+names, one member inviting in a loop over 20 or 60 connections, and another account inviting
+every 2 s (largest wait seen, median; 60 s each):
 
 | Resolver | 20 connections | 60 connections | Queries to the resolver |
 |---|---|---|---|

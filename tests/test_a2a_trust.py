@@ -771,4 +771,21 @@ def test_a_name_without_an_answer_gets_a_sentence_of_its_own(tmp_path, monkeypat
         release.set()
     assert host is None
     assert (". No answer came in time for b.example.org (the lookup was still running, or "
-            "the resolver failed); an invitation made about a minute later can use the answer") in why
+            "the resolver failed); try again in about a minute") in why
+
+
+def test_the_retry_check_names_only_names_that_are_looked_up(tmp_path, monkeypatch):
+    """A wildcard is never looked up, so the hint to check that a name resolves names the
+    others only. MUTATION: build the hint from every listed name again - red."""
+    import socket
+
+    import vaf.network.binding as binding
+    _served(tmp_path, monkeypatch, ("*.example.org", "a.example.org", "b.example.org"))
+    monkeypatch.setattr(binding, "machine_dns_names", lambda: ["vaf"])
+    failing = _gaierror(socket.EAI_AGAIN)
+    monkeypatch.setattr(ssl_utils.socket, "getaddrinfo", lambda *a, **k: failing())
+    host, why = ssl_utils.room_host_choice("192.168.1.20")
+    hint = why.split("check that ", 1)[1]
+    assert host is None
+    assert hint.startswith("one of a.example.org, b.example.org resolves"), hint
+    assert "*" not in hint

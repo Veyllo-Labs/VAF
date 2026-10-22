@@ -663,14 +663,14 @@ previous one (restart it).
   minute, so after an outage the lane can return up to a minute after the resolver answers
   again; and an invitation made while another one's slow lookup still runs waits for it only
   0.1 s and gets no lane. In both cases the invitation says the names gave no answer: try
-  again in about a minute, and if the lane is still missing then, check that a name resolves
-  to this machine. The only name of a certificate is checked like any other: a certificate
-  made for a website would send a peer, and its ticket, to that website. Where this machine
-  uses another DNS than your devices, add the name to its hosts file; the devices must still
-  resolve it to this machine. A certificate that names neither gets no lane for other
-  machines, and the invitation says so and why. Switching to an own certificate, back, or
-  renewing the CA changes the authority; those machines run `vaf a2a trust` again with the
-  new fingerprint.
+  again in about a minute, and if the lane is still missing then, check that one of the names
+  resolves to this machine. The only name of a certificate is checked like any other: a
+  certificate made for a website would send a peer, and its ticket, to that website. Where
+  this machine uses another DNS than your devices, add the name to its hosts file; the
+  devices must still resolve it to this machine. A certificate that names neither gets no
+  lane for other machines, and the invitation says so and why. Switching to an own
+  certificate, back, or renewing the CA changes the authority; those machines run
+  `vaf a2a trust` again with the new fingerprint.
 
 **Renewing automatically.** VAF runs no ACME client. A DNS-01 client (certbot with a DNS
 plugin, acme.sh, lego) can renew a certificate for a name inside your network and run

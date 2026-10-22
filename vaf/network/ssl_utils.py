@@ -1250,8 +1250,7 @@ def room_host_choice(address: str, cfg: Optional[dict] = None) -> Tuple[Optional
     # (EAI_AGAIN), so the text names both rather than "within 2 s".
     # The retry hint says a minute: a failure is held up to that long after an outage.
     late = (f". No answer came in time for {', '.join(silent)} (the lookup was still "
-            "running, or the resolver failed); an invitation made about a minute later "
-            "can use the answer" if silent else "")
+            "running, or the resolver failed); try again in about a minute" if silent else "")
     if not candidates:
         example = "vaf" + wildcards[0][1:]
         return None, (f"the served certificate names only {', '.join(wildcards)}, and none of "
@@ -1259,11 +1258,15 @@ def room_host_choice(address: str, cfg: Optional[dict] = None) -> Tuple[Optional
                       f"that{late}")
     listed = ", ".join([*candidates, *wildcards])
     if all(c in silent for c in candidates):
+        # Only the names that are looked up: a wildcard never is.
+        looked_up = (candidates[0] if len(candidates) == 1 else
+                     "one of these names" if not wildcards else
+                     "one of " + ", ".join(candidates))
         return None, (f"the served certificate names {listed}, and the lookups on the host "
                       "gave no answer in time (they were still running, or the resolver "
                       "failed; it may be down for now): try again in about a minute, and if "
-                      "the lane is still missing then, check that one of these names "
-                      "resolves to the host's address")
+                      f"the lane is still missing then, check that {looked_up} resolves to "
+                      "the host's address")
     one = len(candidates) == 1 and not wildcards
     head = (f"the served certificate names {listed}, but it is not the host's name and does "
             f"not resolve to its address {address} on the host" if one else

@@ -17,9 +17,11 @@ moments are now said at once, on the account's main messenger and in its notific
   The name is looked up in the background job, so the request does the same work for an
   existing name and an unknown one (an answer's timing must not say which names exist);
   for an unknown name nothing is sent.
-- `second_factor_guessing`: the second-factor window closed, so the right password was
-  given and then five wrong codes: someone else has the password. To the account and to
-  the local admin.
+- `second_factor_guessing`: the second-factor window closed. After a correct password (the
+  sign-in, the password change) that means someone else has the password; at a door a
+  signed-in session uses (a token for programs, an admin's step-up) it means a session of the
+  account is guessing the code, and it says that instead. To the account and to the local
+  admin.
 
 Each fires once per closure or per new address by construction (the closure's first refusal,
 the window's closing failure, the first sign-in from an address). The texts come from the
@@ -44,10 +46,19 @@ from typing import Callable, Iterable, Optional, Tuple
 logger = logging.getLogger(__name__)
 
 NEW_ADDRESS = "signin_new_address"
+SESSION_CODE_GUESSING = "signin_session_code_guessing"
+# The notification titles, short enough for a phone's bell: an ordered list per language,
+# one per alert, in this order.
+HEADLINES = "signin_headlines"
 # The device in the reader's words: [0] "{browser} on {os}", [1] "an unknown device".
 DEVICE = "signin_device"
 PASSWORD_GUESSING = "signin_password_guessing"
 SECOND_FACTOR_GUESSING = "signin_second_factor_guessing"
+_HEADLINE_OF = {NEW_ADDRESS: 0, PASSWORD_GUESSING: 1, SECOND_FACTOR_GUESSING: 2,
+                SESSION_CODE_GUESSING: 3}
+# The doors that ask for the code right after a correct password (`check_second_factor`'s
+# `where`): the sign-in passes none, the password change "change-password".
+_AFTER_PASSWORD = frozenset({"", "change-password"})
 
 
 def _spawn(fn: Callable[[], None]) -> None:
@@ -55,10 +66,17 @@ def _spawn(fn: Callable[[], None]) -> None:
     threading.Thread(target=fn, name="vaf-sign-in-alert", daemon=True).start()
 
 
-def _title(text: str) -> str:
-    """The notification's title: the message's first sentence (the full text is its summary)."""
-    cut = min((i for i in (text.find(". "), text.find("。")) if i > 0), default=len(text))
-    return text[:cut]
+def _headline(key: str, lang: str, text: str, **fmt) -> str:
+    """The notification's title, from the headline file; the text's start when there is none."""
+    from vaf.core.vocab import phrasings
+    forms = phrasings(HEADLINES, lang)
+    index = _HEADLINE_OF.get(key)
+    if index is not None and index < len(forms):
+        try:
+            return forms[index].format(**fmt)
+        except (KeyError, IndexError, ValueError):
+            pass
+    return text[:60]
 
 
 def _device_words(lang: str, browser: str, system: str) -> str:
@@ -90,7 +108,7 @@ def _deliver(to_scope: str, to_username: str, key: str, status: str, *,
         return
     try:
         from vaf.core.user_notifications import append_notification
-        append_notification(user_scope_id=scope, kind="system", title=_title(text),
+        append_notification(user_scope_id=scope, kind="system", title=_headline(key, lang, text, **fmt),
                             status=status, summary=text)
     except Exception as e:
         logger.warning("Sign-in alert %s was not added to the notifications: %s", key, e)
@@ -158,14 +176,17 @@ def password_guessing(username: str, minutes: int) -> None:
     _spawn(_job)
 
 
-def second_factor_guessing(user, minutes: int) -> None:
-    """The second-factor window closed: the right password, then five wrong codes."""
+def second_factor_guessing(user, minutes: int, where: str = "") -> None:
+    """The second-factor window closed. `where` is the door (`check_second_factor`): after a
+    correct password someone has it; at a door a signed-in session uses, a session of the
+    account is guessing the code."""
     scope, username = str(getattr(user, "user_scope_id", "") or ""), str(getattr(user, "username", "") or "")
     if not scope:
         return
 
     def _job():
+        key = SECOND_FACTOR_GUESSING if where in _AFTER_PASSWORD else SESSION_CODE_GUESSING
         for to_scope, name in _with_admin(scope, username):
-            _deliver(to_scope, name, SECOND_FACTOR_GUESSING, "error", username=username, minutes=minutes)
+            _deliver(to_scope, name, key, "error", username=username, minutes=minutes)
 
     _spawn(_job)

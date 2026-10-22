@@ -209,3 +209,49 @@ def test_no_delivery_runs_on_the_calling_thread(monkeypatch):
     monkeypatch.setattr(sign_in_alerts, "_deliver", _deliver)
     sign_in_alerts.new_address(SimpleNamespace(user_scope_id="s1", username="alice"), "10.0.0.1", "curl")
     assert done.wait(5) and ran == [False]
+
+
+def test_wrong_codes_from_a_signed_in_session_do_not_claim_the_password(h, sent, monkeypatch):
+    """At /api/auth/tokens the code comes from a session that is already signed in; nobody
+    typed the password there. Five wrong codes say that, not "someone has the password".
+    MUTATION: send the password text for every door - red."""
+    _id, secret = h.add_user("alice", "alice-password-1", totp=True)
+    _admin(monkeypatch, h)
+    app = h.app()
+    lan = h.client("192.168.95.1", app=app)
+    token = h.sign_in(lan, "alice", "alice-password-1", secret)
+    from vaf.auth import second_factor
+    second_factor.forget_spent_codes()
+    _run(h)
+    sent["messenger"].clear()
+    sent["notification"].clear()
+    for n in range(5):
+        h.client(f"192.168.95.{n + 2}", app=app).post(
+            "/api/auth/tokens", headers={"Authorization": f"Bearer {token}"},
+            json={"name": "x", "days": 7, "code": wrong_code(secret)})
+    assert _run(h) == 1
+    assert all(t.startswith("Wrong 2FA codes for alice.") for _s, t in sent["messenger"])
+    assert not any("password of alice" in t for _s, t in sent["messenger"])
+    assert {n[2] for n in sent["notification"]} == {"Wrong 2FA codes: alice"}
+
+
+def test_titles_are_headlines_in_every_language(h, sent, monkeypatch):
+    """The bell's title is a short headline, not the message cut at its first full stop (Thai
+    has none, so the whole message became the title). MUTATION: title from the text - red."""
+    import json
+    from pathlib import Path
+
+    from vaf.auth import sign_in_alerts
+    from vaf.core import vocab
+    data = Path(__file__).resolve().parents[1] / "vaf" / "core" / "vocab" / "data"
+    heads = json.loads((data / "signin_headlines.json").read_text(encoding="utf-8"))
+    assert {"en", "de", "ja", "ko", "th", "tr", "zh"} <= set(heads)
+    for lang, forms in heads.items():
+        assert len(forms) == 4, lang
+        for form in forms:
+            assert len(form.format(username="alice")) <= 32, (lang, form)
+    monkeypatch.setattr(vocab, "resolve_user_language", lambda scope=None, username=None: "th")
+    sign_in_alerts._deliver("s1", "alice", sign_in_alerts.NEW_ADDRESS, "info",
+                            device=("Chrome", "Android"), username="alice", address="10.0.0.5")
+    title, text = sent["notification"][0][2], sent["notification"][0][1]
+    assert title == heads["th"][0].format(username="alice") and title != text

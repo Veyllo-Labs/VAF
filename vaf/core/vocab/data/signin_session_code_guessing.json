@@ -1,0 +1,23 @@
+{
+  "de": [
+    "Falsche 2FA-Codes für {username}. Eine angemeldete Sitzung dieses Kontos hat fünfmal einen falschen 2FA-Code eingegeben, deshalb wird der Code {minutes} Minuten lang zurückgehalten. Wenn das nicht die Person war, der das Konto gehört, sollten die anderen Geräte abgemeldet und das Passwort geändert werden."
+  ],
+  "en": [
+    "Wrong 2FA codes for {username}. A signed-in session of this account entered a wrong 2FA code five times, so the code is held for {minutes} minutes. If that was not the account's own person, its other devices should be signed out and the password changed."
+  ],
+  "ja": [
+    "{username}の2FAコードが間違えられました。このアカウントのログイン中のセッションで2FAコードが5回間違えられたため、コードは{minutes}分間保留されます。アカウントの持ち主でない場合は、ほかのデバイスをログアウトさせ、パスワードを変更してください。"
+  ],
+  "ko": [
+    "{username} 계정의 2FA 코드가 틀렸습니다. 이 계정에 로그인된 세션에서 2FA 코드를 다섯 번 틀려서, 코드는 {minutes}분 동안 보류됩니다. 계정 주인이 아니었다면 다른 기기를 로그아웃시키고 비밀번호를 바꾸세요."
+  ],
+  "th": [
+    "รหัส 2FA ของ {username} ผิด เซสชันที่ลงชื่อเข้าใช้บัญชีนี้อยู่ใส่รหัส 2FA ผิดห้าครั้ง รหัสจึงถูกระงับไว้ {minutes} นาที หากไม่ใช่เจ้าของบัญชี ให้ออกจากระบบอุปกรณ์อื่นและเปลี่ยนรหัสผ่าน"
+  ],
+  "tr": [
+    "{username} için yanlış 2FA kodları. Bu hesabın oturum açık bir oturumu beş kez yanlış 2FA kodu girdi; kod {minutes} dakika bekletiliyor. Bunu hesabın sahibi yapmadıysa diğer cihazların oturumu kapatılmalı ve parola değiştirilmeli."
+  ],
+  "zh": [
+    "{username} 的 2FA 验证码错误。该账号一个已登录的会话 5 次输入了错误的 2FA 验证码，验证码将暂停 {minutes} 分钟。如果不是账号本人，请让其他设备退出登录并修改密码。"
+  ]
+}

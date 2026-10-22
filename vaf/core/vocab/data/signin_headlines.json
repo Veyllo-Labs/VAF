@@ -1,0 +1,44 @@
+{
+  "de": [
+    "Neue Anmeldung bei {username}",
+    "Falsche Passwörter: {username}",
+    "Passwort bekannt: {username}",
+    "Falsche 2FA-Codes: {username}"
+  ],
+  "en": [
+    "New sign-in to {username}",
+    "Password guessing: {username}",
+    "Password known: {username}",
+    "Wrong 2FA codes: {username}"
+  ],
+  "ja": [
+    "{username}に新しいログイン",
+    "{username}のパスワード推測",
+    "{username}のパスワード漏えい",
+    "{username}の2FAコード誤り"
+  ],
+  "ko": [
+    "{username} 새 로그인",
+    "{username} 비밀번호 추측",
+    "{username} 비밀번호 노출",
+    "{username} 2FA 코드 오류"
+  ],
+  "th": [
+    "ลงชื่อเข้าใช้ใหม่: {username}",
+    "มีการเดารหัสผ่าน: {username}",
+    "รหัสผ่านรั่วไหล: {username}",
+    "รหัส 2FA ผิด: {username}"
+  ],
+  "tr": [
+    "{username} için yeni giriş",
+    "Parola tahmini: {username}",
+    "Parola biliniyor: {username}",
+    "Yanlış 2FA kodları: {username}"
+  ],
+  "zh": [
+    "{username} 有新的登录",
+    "有人在猜 {username} 的密码",
+    "{username} 的密码已泄露",
+    "{username} 的 2FA 验证码错误"
+  ]
+}

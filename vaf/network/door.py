@@ -41,7 +41,8 @@ connection, admitted or not, before the admission check reads a single header:
   bytes remain, the connection is dropped only when they have not shrunk for
   ``SEND_TIMEOUT_S`` (modelled on nginx's send_timeout, no limit on the whole answer); once
   all is out, it waits ``CLOSE_TIMEOUT_S`` for the client to end it. The client's own end (a
-  FIN or a TLS close_notify) goes through the same hook (``eof_received``).
+  FIN or a TLS close_notify) goes through the same hook (``eof_received``), and so does the
+  close asyncio's TLS layer makes on the TCP transport under it, a WebSocket's included.
 - ``door_options()``: those plus at most ``connection_cap()`` connections (503 above it,
   for a WebSocket upgrade as for a request), an explicit keep-alive, no ``Server`` header,
   and no forwarded-header trust of uvicorn's: ``binding.connection_client_ip`` is the only
@@ -90,6 +91,12 @@ Named boundaries:
   streamed answer still held both at 70 s). Once the door closes the connection, the close
   watch ends it. A body sent a little at a time, each part inside ``BODY_STALL_S``, does the
   same while it lasts. The cap bounds how many.
+- A client that ends its own side early (a half-close) gets what is already written when its
+  end arrives, as long as it keeps reading. An answer still being produced then is cut there
+  (measured: none of a 1 MB answer written 0.5 s later, or streamed, reached such a client,
+  plain and TLS, with or without the door's close hook): asyncio ends a connection at the
+  client's end of file, and its TLS transport cannot stay half open. Browsers do not
+  half-close.
 - ``vaf run --web`` serves the backend itself: there the head, handshake and connection
   limits apply to every client, the owner's own web UI included, which reaches it through
   Next.js; a flood that fills the cap turns that UI away too. A body is held only by the
@@ -104,9 +111,9 @@ Named boundaries:
   ``response_complete``, ``disconnected`` and ``message_event``. All of them are the same from
   uvicorn 0.27 to 0.54, and httptools 0.8 and 0.9 call the chunk callbacks the trailer count
   needs; ``tests/test_network_door.py`` pins them, and CI runs against the newest uvicorn
-  ``requirements.txt`` resolves. The close watch reads the TCP transport under a TLS one
-  (``_ssl_protocol._transport``, Python 3.11+), which asyncio does not expose; the slow
-  reader tests fail if it moves.
+  ``requirements.txt`` resolves. The door reaches the TCP transport under a TLS one through
+  asyncio's private ``_ssl_protocol._transport``, to read its progress (Python 3.11+) and to
+  hook its close (every version); the pin test and the TLS WebSocket test fail if it moves.
 
 The limits are constants, not settings: they are the floor of the door, not a preference,
 and a config key's name is a security decision of its own.
@@ -253,6 +260,14 @@ class BoundedHttpToolsProtocol(HttpToolsProtocol):
 
     def connection_made(self, transport) -> None:  # type: ignore[override]
         _install_close_hook(transport, self)
+        # Over TLS, asyncio's TLS layer closes the TCP transport under it by itself (after the
+        # client's close_notify, or once its own shutdown is done), and that close waited for
+        # a client that reads nothing without any limit: a WebSocket whose client stopped
+        # reading and sent close_notify was held past 150 s on Python 3.13 and 3.10.15. The
+        # same hook on the TCP transport bounds it; lingering is decided above it.
+        inner = getattr(getattr(transport, "_ssl_protocol", None), "_transport", None)
+        if inner is not None:
+            _install_close_hook(inner, None)
         super().connection_made(transport)
         self._door_transport = transport
         self._begin_head()
@@ -272,8 +287,11 @@ class BoundedHttpToolsProtocol(HttpToolsProtocol):
         # Over TLS on Python 3.11+, asyncio ends the TLS layer by itself after a FIN or a
         # close_notify, uvicorn then sees the transport closing and never closes it, and the
         # TCP transport waits for a client that reads nothing without any limit (measured:
-        # still held after 130 s, both ways). A client that half-closes and keeps reading
-        # still gets its whole answer: the watch drops only a close that stops moving.
+        # still held after 130 s, both ways). What is already written when the client's end
+        # arrives still reaches a client that keeps reading: the watch drops only a close that
+        # stops moving. An answer still being produced then is cut there, as before: asyncio
+        # ends a connection at the client's end of file, and its TLS transport cannot be kept
+        # half open.
         transport = self._door_transport
         if transport is not None and not transport.is_closing():
             transport.close()
@@ -514,18 +532,21 @@ def _install_close_hook(transport, protocol) -> None:
     """Hook ``close()`` on the transport itself, so that every close goes through the door:
     uvicorn's (an answer with ``Connection: close``, the keep-alive expiry, a 400), the door's
     (a 431, a 503 for an upgrade at the cap), websockets' after an upgrade, and asyncio's own
-    when a plain connection reaches its end. The transport keeps its identity and type, so
-    nothing that reads it changes.
+    when a plain connection reaches its end. Over TLS the TCP transport under the TLS one gets
+    the hook as well (``protocol`` None: it never lingers), for the closes asyncio's TLS layer
+    makes there by itself. The transport keeps its identity and type, so nothing that reads it
+    changes.
 
     A close first asks the protocol whether to linger (an answered request whose body still
     arrives, ``BoundedHttpToolsProtocol._linger``); then it closes and starts the close watch
-    (``_watch_close``). Only the first ``close()`` is passed on: on Python 3.11+ a second one
-    drops the TLS transport's protocol, and ``abort()`` then does nothing (measured: closed
-    twice, aborted after 1 s, still open after 20 s). A transport that takes no attributes
-    (uvloop's, which the door's own loop never uses) keeps its loop's limits.
+    (``_watch_close``). Only the first ``close()`` is passed on, and none to a transport
+    something already closed: on Python 3.11+ a second one drops the TLS transport's protocol,
+    and ``abort()`` then does nothing (measured: closed twice, aborted after 1 s, still open
+    after 20 s). A transport that takes no attributes (uvloop's, which the door's own loop
+    never uses) keeps its loop's limits.
     """
     ref = weakref.ref(transport)
-    owner = weakref.ref(protocol)
+    owner = weakref.ref(protocol) if protocol is not None else (lambda: None)
     close = type(transport).close
     loop = asyncio.get_running_loop()
     closing = False
@@ -534,7 +555,13 @@ def _install_close_hook(transport, protocol) -> None:
         target = ref()
         if target is None:
             return
-        close(target)
+        # A transport something already closed is not closed again: asyncio's TLS layer closes
+        # it by itself after the client's close_notify, and on Python 3.11+ a second close
+        # drops the TLS transport's protocol, after which the watch and abort() do nothing
+        # (measured: a WebSocket closed again by websockets after a close_notify, held past
+        # 150 s). The watch still starts.
+        if not target.is_closing():
+            close(target)
         # A close from a finalizer can come after the loop stopped; nothing is left to hold.
         if not loop.is_closed():
             _watch_close(loop, ref)

@@ -883,11 +883,13 @@ def test_a_tls_client_that_ends_its_side_is_still_watched(cert, monkeypatch, how
             s.close()
 
 
+@pytest.mark.parametrize("when", ["midway", "right after the request"])
 @pytest.mark.parametrize("kind", ["tls", "plain"])
-def test_a_half_closing_reader_gets_the_whole_answer(cert, monkeypatch, kind):
-    """A client that ends its own side and keeps reading (shutdown(SHUT_WR)) gets its whole
-    answer: its end starts the close watch, which drops only a close that stops moving.
-    MUTATION: drop the connection at the client's end - red."""
+def test_a_half_closing_reader_gets_the_whole_answer(cert, monkeypatch, kind, when):
+    """A client that ends its own side and keeps reading (shutdown(SHUT_WR)) gets what is
+    already written when its end arrives, here a whole one-piece answer: its end starts the
+    close watch, which drops only a close that stops moving. MUTATION: drop the connection at
+    the client's end - red."""
     monkeypatch.setattr(door, "SEND_TIMEOUT_S", 8.0)
     monkeypatch.setattr(door, "CLOSE_TIMEOUT_S", 0.25)
     size = 4 * 1000 * 1000
@@ -897,8 +899,11 @@ def test_a_half_closing_reader_gets_the_whole_answer(cert, monkeypatch, kind):
                                                                             timeout=5)
         with s:
             s.sendall(b"GET / HTTP/1.1\r\nHost: door\r\n\r\n")
+            ended = when == "right after the request"
+            if ended:
+                socket.socket.shutdown(s, socket.SHUT_WR)
             s.settimeout(10)
-            got, head, ended = 0, b"", False
+            got, head = 0, b""
             while got < size:
                 try:
                     part = s.recv(50000)
@@ -914,6 +919,85 @@ def test_a_half_closing_reader_gets_the_whole_answer(cert, monkeypatch, kind):
                     ended = True
                 time.sleep(0.02)
     assert got == size, f"{100 * got // size} % of the answer arrived"
+
+
+async def _streaming_socket(scope, receive, send):
+    """A WebSocket that sends 64 KiB frames for as long as it can."""
+    if scope["type"] != "websocket":
+        return
+    await receive()
+    await send({"type": "websocket.accept"})
+    try:
+        while True:
+            await send({"type": "websocket.send", "bytes": b"x" * 65536})
+    except Exception:
+        return
+
+
+@pytest.mark.parametrize("path", ["app transport", "tcp transport"])
+def test_a_tls_websocket_that_ends_its_side_is_still_watched(cert, monkeypatch, path):
+    """A TLS WebSocket whose client stops reading and then sends close_notify was held without
+    any limit (measured: past 150 s on Python 3.13 and 3.10.15). asyncio's TLS layer closes
+    the connection by itself there: on 3.11+ websockets then closed the TLS transport a second
+    time, which dropped its protocol and disarmed the watch; on 3.10 the TCP transport under
+    it was closed and nothing told the WebSocket. Two ways out: no second close of a closed
+    transport, so websockets' own abort after its close timeout (10 s) works again, and the
+    app transport's watch, which reads the TCP transport under it, ends a close that stops
+    moving (3.11+); and the close hook on the TCP transport itself, the only way on 3.10,
+    where nothing closes the app transport. MUTATION: close a closed transport again - red
+    (app transport). Without the hook on the TCP transport this row stays green on 3.11+
+    (the app transport's watch ends it) and fails on 3.10; the hook itself is pinned on every
+    version by test_the_tcp_transport_under_tls_gets_the_close_hook."""
+    import base64
+    if path == "app transport":
+        if sys.version_info < (3, 11):
+            pytest.skip("3.10 does not tell the WebSocket protocol about a close_notify")
+        monkeypatch.setattr(door, "SEND_TIMEOUT_S", 30.0)
+        monkeypatch.setattr(door, "CLOSE_TIMEOUT_S", 30.0)
+        window = 15.0
+    else:
+        monkeypatch.setattr(door, "SEND_TIMEOUT_S", 1.0)
+        monkeypatch.setattr(door, "CLOSE_TIMEOUT_S", 30.0)
+        window = 8.0
+    with serving(_door_config(_streaming_socket, cert), door.door_event_loop) as (port, server):
+        raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        raw.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        raw.settimeout(5)
+        raw.connect(("127.0.0.1", port))
+        s = tls_client().wrap_socket(raw)
+        try:
+            s.sendall(b"GET /ws HTTP/1.1\r\nHost: door\r\nConnection: Upgrade\r\n"
+                      b"Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n"
+                      b"Sec-WebSocket-Key: " + base64.b64encode(b"0123456789abcdef") + b"\r\n\r\n")
+            assert s.recv(200).startswith(b"HTTP/1.1 101")
+            time.sleep(1.0)          # the server streams until its buffers are full
+            s.setblocking(False)
+            try:
+                s.unwrap()           # sends close_notify; nothing more is read
+            except (ssl.SSLError, OSError):
+                pass
+            started = time.monotonic()
+            while server.server_state.connections and time.monotonic() - started < window:
+                time.sleep(0.1)
+            assert not server.server_state.connections, "the WebSocket was held"
+        finally:
+            s.close()
+
+
+def test_the_tcp_transport_under_tls_gets_the_close_hook(cert):
+    """The TCP transport under a door's TLS connection carries the close hook, so a close
+    asyncio's TLS layer makes there by itself is watched too (on Python 3.10 the only close a
+    WebSocket that ends with close_notify gets). MUTATION: no hook on the TCP transport -
+    red."""
+    with serving(_door_config(_App(), cert), door.door_event_loop) as (port, server):
+        with tls_connect(port) as s:
+            assert http_exchange(s, GET).startswith(b"HTTP/1.1 200")
+            protocols = list(server.server_state.connections)
+            assert protocols, "the connection is not registered"
+            transport = protocols[0]._door_transport
+            inner = getattr(getattr(transport, "_ssl_protocol", None), "_transport", None)
+            assert inner is not None, "asyncio no longer keeps the TCP transport there"
+            assert "close" in vars(transport) and "close" in vars(inner)
 
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="3.10's TLS transport counts the TCP buffer itself")

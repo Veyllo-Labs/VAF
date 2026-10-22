@@ -315,11 +315,19 @@ def list_sessions(username: str = typer.Argument(..., help="The account whose se
         print(f"{_ascii(username)} has no live session.")
         return
     for s in rows:
-        what = s["name"] if s["kind"] == "program" else s["device"]
-        until = (f"ends {_day(s['idle_until'])} unless used, at the latest {_day(s['expires_at'])}"
-                 if s["idle_until"] else f"valid until {_day(s['expires_at'])}")
-        print(_ascii(f"{_KIND_WORDS.get(s['kind'], s['kind'])}: {what}, {s['ip'] or 'no address'}, "
-                     f"last used {_day(s['last_used_at'])}, {until}  [{s['id']}]"))
+        print(_ascii("\n".join(_session_lines(s))))
+
+
+def _session_lines(s: dict) -> list:
+    """One session as a heading and its facts on indented lines, the id last: on one line the
+    row ran past 120 columns and wrapped mid-date in an 80-column terminal."""
+    what = s["name"] if s["kind"] == "program" else s["device"]
+    until = (f"ends {_day(s['idle_until'])} unless used, at the latest {_day(s['expires_at'])}"
+             if s["idle_until"] else f"valid until {_day(s['expires_at'])}")
+    return [f"{_KIND_WORDS.get(s['kind'], s['kind'])}: {what}",
+            f"    {s['ip'] or 'no address'}, last used {_day(s['last_used_at'])}",
+            f"    {until}",
+            f"    id {s['id']}"]
 
 
 @app.command("sign-out")
@@ -357,18 +365,46 @@ def sign_out(username: str = typer.Argument(..., help="The account to sign out e
                    "A device with a chat still open keeps it until VAF restarts: restart VAF now.")
 
 
-def _access_hint() -> str:
-    """The address another machine reaches VAF by, for the example call; a placeholder when
-    none is known."""
+def _access_hint() -> tuple:
+    """The address another machine reaches VAF by, for the example call (a placeholder when
+    none is known), and which certificate it is served with there: ``automatic`` (VAF's own),
+    ``own`` or ``none`` (TLS off, plain HTTP), as ``served_certificate`` says."""
+    source = "automatic"
+    try:
+        from vaf.network.ssl_utils import served_certificate
+        source = served_certificate().source
+    except Exception:
+        pass
+    scheme, default_port = ("http", 80) if source == "none" else ("https", 443)
     try:
         from vaf.network.binding import access_addresses, resolve_lan_access_ports
         port, _ = resolve_lan_access_ports(wait_for_proxy=False)
         addresses = access_addresses()
         if addresses:
-            return f"https://{addresses[0].ip}" + ("" if port == 443 else f":{port}")
+            return (f"{scheme}://{addresses[0].ip}" + ("" if port == default_port else f":{port}"),
+                    source)
     except Exception:
         pass
-    return "https://<VAF's address>"
+    return f"{scheme}://<VAF's address>", source
+
+
+def _token_use_lines(url: str, source: str) -> list:
+    """How a program on another machine sends the token. Under VAF's own certificate curl must
+    be given VAF's authority: without it curl refuses the self-signed chain, and the shortcut
+    -k would send the token to whoever answers at that address."""
+    call = f'-H "Authorization: Bearer <token>" {url}/api/auth/me'
+    if source != "automatic":
+        return [f"Use it as: curl {call}"]
+    try:
+        from vaf.network.ssl_utils import ca_certificate_path
+        here = ca_certificate_path()
+    except Exception:
+        here = None
+    return [f"Use it as: curl --cacert vaf-authority.pem {call}",
+            "vaf-authority.pem is VAF's certificate authority: Settings, Local Network, "
+            "Certificate, Download" + (f" (on this machine: {here})" if here else "") + ".",
+            "Compare its fingerprint with the one `vaf server ca` prints. Not -k instead: "
+            "it sends the token to whoever answers."]
 
 
 @app.command("token")
@@ -419,6 +455,7 @@ def make_token(
     print()
     print(token)
     print()
-    print(f'Use it as: curl -H "Authorization: Bearer <token>" {_access_hint()}/api/auth/me')
+    for line in _token_use_lines(*_access_hint()):
+        print(_ascii(line))
     print(f"The token acts as {_ascii(username)}. Revoke it in Settings, Account, or with "
           f"`vaf users sign-out {_ascii(username)}`.")

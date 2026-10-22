@@ -351,7 +351,9 @@ Rejections from the layers above are recorded in an always-on security event log
   shell with a host grant among them, is the local admin, which can create an account in the
   user management and sign in with it (see Localhost Bypass in Layer 3 and the per-start IPC
   token named there)), or in a terminal with `vaf users token NAME --label TEXT [--days N]`
-  (a person at the terminal and the admin password or the recovery key, like a reset). It is
+  (a person at the terminal and the admin password or the recovery key, like a reset; it
+  prints a `curl` call for the token, which under VAF's own certificate gives curl the
+  authority with `--cacert` instead of `-k`, since `-k` sends the token to whoever answers). It is
   shown once, sent as `Authorization: Bearer <token>` (or `?token=` on a socket, and as the
   credential of an agent room), acts as the account with its full rights, does not end from
   disuse, and is listed with the sessions and revoked there. A wrong code is a 401 counted by

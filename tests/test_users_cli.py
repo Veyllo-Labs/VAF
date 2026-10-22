@@ -417,6 +417,13 @@ def test_sessions_sign_out_and_token(monkeypatch):
     assert r.exit_code == 0, r.output
     assert "192.168.81.1" in r.output and "192.168.81.2" in r.output and "browser" in r.output
     assert r.output.isascii()
+    # An 80-column terminal reads every line whole: the facts go on indented lines, the id last.
+    lines = r.output.splitlines()
+    assert all(len(line) <= 80 for line in lines), max(lines, key=len)
+    heads = [i for i, line in enumerate(lines) if line.startswith("browser: ")]
+    assert len(heads) == 2
+    for i in heads:
+        assert lines[i + 1].startswith("    192.168.81.") and lines[i + 3].startswith("    id ")
     assert _run(["sessions", "nobody"]).exit_code == 1
 
     def _probe(token):
@@ -451,3 +458,34 @@ def test_sessions_sign_out_and_token(monkeypatch):
     assert len(created) == 1 and "admin password" in created[0]["detail"]
     assert "90 days" in created[0]["detail"] and tokens[0] not in str(created)
     assert _run(["token", "alice", "--label", "x", "--days", "14"]).exit_code == 1
+
+
+def test_the_token_hint_gives_curl_the_authority(monkeypatch):
+    """Under VAF's own certificate the example call names the authority (`--cacert`) and never
+    `-k`, which would send the token to whoever answers; with TLS off it is plain HTTP on the
+    plain port. MUTATION: the old one-line hint (https, no authority) - red."""
+    import vaf.network.binding as binding
+    import vaf.network.ssl_utils as ssl_utils
+
+    monkeypatch.setattr(binding, "access_addresses", lambda: [SimpleNamespace(ip="192.168.81.5")])
+    served = {"source": "automatic"}
+    monkeypatch.setattr(ssl_utils, "served_certificate",
+                        lambda cfg=None: SimpleNamespace(source=served["source"]))
+    monkeypatch.setattr(ssl_utils, "ca_certificate_path", lambda: None)
+
+    monkeypatch.setattr(binding, "resolve_lan_access_ports", lambda wait_for_proxy=False: (8443, 8001))
+    url, source = users_cmd._access_hint()
+    assert (url, source) == ("https://192.168.81.5:8443", "automatic")
+    hint = "\n".join(users_cmd._token_use_lines(url, source))
+    assert "curl --cacert vaf-authority.pem -H" in hint and "vaf server ca" in hint
+    assert " -k " not in hint.replace("Not -k instead", "")
+
+    served["source"] = "own"
+    assert "--cacert" not in "\n".join(users_cmd._token_use_lines(*users_cmd._access_hint()))
+
+    served["source"] = "none"
+    monkeypatch.setattr(binding, "resolve_lan_access_ports", lambda wait_for_proxy=False: (8001, 3000))
+    url, source = users_cmd._access_hint()
+    assert url == "http://192.168.81.5:8001"
+    assert users_cmd._token_use_lines(url, source) == [
+        'Use it as: curl -H "Authorization: Bearer <token>" http://192.168.81.5:8001/api/auth/me']

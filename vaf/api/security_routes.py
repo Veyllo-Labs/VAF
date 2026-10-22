@@ -1153,8 +1153,11 @@ async def security_overview(admin: Dict[str, Any] = Depends(require_admin)) -> D
 # What a page's report-only script policy would have blocked (web/lib/csp.ts), written to the
 # webui log so the policy can be enforced once the list is clean. Bounded, because any page a
 # signed-in account opens can send reports: a body over CSP_REPORT_MAX_BYTES is refused unread
-# past that, each distinct (directive, blocked, page) is written once per day and process, and
-# at most CSP_REPORT_DAILY_LINES lines a day, then one line that says the rest is dropped.
+# past that, each distinct (directive, blocked, page, reporter) is written once per day and
+# process, and at most CSP_REPORT_DAILY_LINES lines a day, then one line that says the rest is
+# dropped. Every line names who reported it (the account, or "this machine" for the tokenless
+# window): any signed-in account can write lines, so an origin is reproduced before the
+# enforcing policy allows it, never taken from a line alone.
 CSP_REPORT_MAX_BYTES = 16 * 1024
 CSP_REPORT_DAILY_LINES = 200
 _csp_lock = threading.Lock()
@@ -1162,14 +1165,21 @@ _csp_day = {"day": "", "seen": set(), "dropped_said": False}
 
 
 def _origin_and_path(value: Any) -> str:
-    """A URL as origin and path, with no query or fragment (they can carry tokens and
-    personal data); a keyword such as `inline` or `eval` as it is. Control characters become
-    spaces, so one report is one log line."""
+    """A URL as origin and path, with no credentials, query or fragment (they can carry
+    passwords, tokens and personal data); a keyword such as `inline` or `eval` as it is.
+    Control characters become spaces, so one report is one log line."""
     from urllib.parse import urlsplit
     text = str(value or "").strip()[:500]
     if "://" in text:
         parts = urlsplit(text)
-        text = f"{parts.scheme}://{parts.netloc}{parts.path}"
+        host = parts.hostname or ""
+        if ":" in host:
+            host = f"[{host}]"
+        try:
+            port = f":{parts.port}" if parts.port else ""
+        except ValueError:
+            port = ""
+        text = f"{parts.scheme}://{host}{port}{parts.path}"
     elif text.startswith("/"):
         text = urlsplit(text).path
     return "".join(ch if ch.isprintable() else " " for ch in text)[:300] or "-"
@@ -1190,13 +1200,14 @@ def _csp_fields(report: Any) -> Optional[tuple]:
     return None
 
 
-def _record_csp(fields: tuple) -> None:
+def _record_csp(fields: tuple, reporter: str) -> None:
     from vaf.core.log_helper import append_domain_log
     today = datetime.now().strftime("%Y-%m-%d")
     with _csp_lock:
         if _csp_day["day"] != today:
             _csp_day.update(day=today, seen=set(), dropped_said=False)
-        if fields in _csp_day["seen"]:
+        key = fields + (reporter,)
+        if key in _csp_day["seen"]:
             return
         if len(_csp_day["seen"]) >= CSP_REPORT_DAILY_LINES:
             if _csp_day["dropped_said"]:
@@ -1205,9 +1216,9 @@ def _record_csp(fields: tuple) -> None:
             line = (f"[CSP] {CSP_REPORT_DAILY_LINES} reports today; further CSP reports today "
                     "are dropped")
         else:
-            _csp_day["seen"].add(fields)
+            _csp_day["seen"].add(key)
             directive, blocked, page = fields
-            line = f"[CSP] {directive} blocked {blocked} on {page}"
+            line = f"[CSP] {directive} blocked {blocked} on {page} (reported by {reporter})"
     append_domain_log("webui", line)
 
 
@@ -1231,8 +1242,10 @@ async def csp_report(request: Request):
         payload = json.loads(raw.decode("utf-8") or "null")
     except Exception:
         return Response(status_code=204)
+    caller = getattr(request.state, "user", None) or {}
+    reporter = _origin_and_path(caller.get("username") or "") if caller.get("username") else "this machine"
     for report in (payload if isinstance(payload, list) else [payload])[:20]:
         fields = _csp_fields(report)
         if fields:
-            _record_csp(fields)
+            _record_csp(fields, reporter)
     return Response(status_code=204)

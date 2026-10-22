@@ -44,9 +44,8 @@ def _policy_from_node():
 
 
 def test_pages_get_a_report_only_policy():
-    """Report-only, a fresh nonce per page, the directives of the policy and its report path;
-    no enforcing header from the page proxy, and only pages get it. MUTATION: name the header
-    Content-Security-Policy; make the nonce once at module load - red."""
+    """The real builder, run in node: a fresh nonce per call, the directives and the report path.
+    MUTATION: make the nonce once at module load in csp.ts - red."""
     got = _policy_from_node()
     assert got["a"] != got["b"] and len(got["a"]) >= 32
     policy = got["prod"]
@@ -58,6 +57,16 @@ def test_pages_get_a_report_only_policy():
     assert directives["report-uri"] == "/api/security/csp-report"
     assert "ws://127.0.0.1:*" in directives["connect-src"] and "wss://localhost:*" in directives["connect-src"]
 
+
+def test_the_page_policy_is_wired_report_only():
+    """Read from the sources, so it runs where web/node_modules is not installed: the header is
+    report-only, the proxy makes a nonce per page and sets no enforcing policy, only pages get
+    it, the layout renders per request with the nonce, and a ran-out cookie says why.
+    MUTATION: name the header Content-Security-Policy; make the nonce once at module load in
+    the proxy; drop the reason from the redirect - red."""
+    csp = (WEB / "lib" / "csp.ts").read_text(encoding="utf-8")
+    assert "'nonce-${nonce}'" in csp and "report-uri ${CSP_REPORT_PATH}" in csp
+    assert "export function newNonce(): string {\n    return btoa(crypto.randomUUID());" in csp.replace("\r\n", "\n")
     proxy = (WEB / "proxy.ts").read_text(encoding="utf-8")
     assert "'Content-Security-Policy-Report-Only'" in proxy
     assert not re.search(r"['\"]Content-Security-Policy['\"]", proxy), "an enforcing policy from the page proxy"
@@ -67,6 +76,8 @@ def test_pages_get_a_report_only_policy():
     guards = proxy[proxy.index("function applyAuthGuards"):proxy.index("function pageWithPolicy")]
     assert guards.index("if (isPublicAsset)") < guards.index("pageWithPolicy(request)"), \
         "/api, /_next and the static files return before a policy is set"
+    redirect = guards[guards.index("if (!isLoginRoute && !isAuthenticated)"):]
+    assert "if (hasStaleToken) url.searchParams.set('reason', 'ended');" in redirect.split("return res;", 1)[0]
     layout = (WEB / "app" / "layout.tsx").read_text(encoding="utf-8")
     assert "export default async function RootLayout" in layout
     assert '(await headers()).get("x-nonce")' in layout and "nonce={nonce}" in layout
@@ -104,16 +115,19 @@ def test_the_report_sink_dedupes_caps_and_strips(sink):
     h, app, browser, lines = sink
     for _ in range(3):
         assert _post(browser, _report()).status_code == 204
-    assert lines == [("webui", "[CSP] script-src-elem blocked https://cdn.example/x.js on https://10.0.0.2:8443/")]
+    assert lines == [("webui", "[CSP] script-src-elem blocked https://cdn.example/x.js on "
+                               "https://10.0.0.2:8443/ (reported by alice)")]
     _post(browser, _report(blocked="https://other.example/y.js?token=secret#frag",
                            page="https://10.0.0.2:8443/chat?id=1"))
-    assert lines[-1] == ("webui", "[CSP] script-src-elem blocked https://other.example/y.js on https://10.0.0.2:8443/chat")
+    assert lines[-1] == ("webui", "[CSP] script-src-elem blocked https://other.example/y.js on "
+                                  "https://10.0.0.2:8443/chat (reported by alice)")
     assert "secret" not in str(lines)
     # The Reporting API's shape is read too.
     _post(browser, [{"type": "csp-violation", "body": {"effectiveDirective": "img-src",
                                                          "blockedURL": "https://img.example/a.png",
                                                          "documentURL": "https://10.0.0.2:8443/"}}])
-    assert lines[-1][1] == "[CSP] img-src blocked https://img.example/a.png on https://10.0.0.2:8443/"
+    assert lines[-1][1] == ("[CSP] img-src blocked https://img.example/a.png on https://10.0.0.2:8443/ "
+                            "(reported by alice)")
     # A body over 16 KiB, declared or sent in pieces, is refused and not written.
     before = len(lines)
     big = _report(blocked="https://cdn.example/" + "x" * 17 * 1024)
@@ -144,3 +158,16 @@ def test_a_report_is_one_log_line(sink):
     _h, _app, browser, lines = sink
     _post(browser, _report(blocked="https://cdn.example/a.js\n2026-01-01 [CSP] forged", directive="script-src\nx"))
     assert len(lines) == 1 and "\n" not in lines[0][1]
+
+
+def test_a_report_keeps_no_credentials_and_names_who_sent_it(sink):
+    """A URL in a report can carry `user:password@`; the line keeps origin and path only. Any
+    signed-in account can write lines, so each names its reporter, and the machine itself is
+    "this machine". MUTATION: rebuild the origin from netloc; drop the reporter - red."""
+    h, app, browser, lines = sink
+    _post(browser, _report(blocked="https://user:s3cret@evil.example:8080/p?q=1#f"))
+    assert lines[-1][1] == ("[CSP] script-src-elem blocked https://evil.example:8080/p on "
+                            "https://10.0.0.2:8443/ (reported by alice)")
+    assert "s3cret" not in str(lines)
+    _post(h.client(None, app=app), _report())
+    assert lines[-1][1].endswith("(reported by this machine)")

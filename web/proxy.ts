@@ -89,12 +89,16 @@ function applyAuthGuards(request: NextRequest): NextResponse {
     } else {
       url.search = '';
     }
+    // A cookie that ran out (the 30 days of a session): the sign-in page says the session ended,
+    // as it does when the app finds a session ended by a sign-out or by inactivity.
+    if (hasStaleToken) url.searchParams.set('reason', 'ended');
     const res = NextResponse.redirect(url, 307);
     if (hasStaleToken) res.cookies.set('vaf_token', '', { path: '/', maxAge: 0 });
     return res;
   }
 
-  // Login route while unauthenticated: render the login page, dropping any stale cookie.
+  // Every page rendered from here on: the login page while signed out (dropping any stale
+  // cookie) and every other page while signed in. Each gets the script policy.
   const res = pageWithPolicy(request);
   if (hasStaleToken) res.cookies.set('vaf_token', '', { path: '/', maxAge: 0 });
   return res;

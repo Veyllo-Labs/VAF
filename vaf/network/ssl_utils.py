@@ -72,6 +72,7 @@ import socket
 import ssl
 import tempfile
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1035,55 +1036,75 @@ def served_authority(cfg: Optional[dict] = None) -> Optional[Tuple[bytes, str]]:
 # The overall time the lookups of one room-host choice may take. getaddrinfo has no timeout
 # of its own: a .local name nobody answers took 10 s (measured), DNS that is down longer.
 _LOOKUP_BUDGET_S = 2.0
-# At most this many lookups at once: a public certificate may carry a hundred names.
+# The lookups of every room-host choice in the process share this many threads: lookups
+# that hang occupy these and no more, and the ones queued behind them are cancelled when a
+# choice's budget is spent (measured before: 800 threads at 20 connections inviting).
 _LOOKUP_WORKERS = 8
+# An answer is reused this long, so repeated invitations do not ask the resolver again. A
+# DNS change shows in an invitation made at most this long after it.
+_LOOKUP_MEMO_S = 60.0
+_LOOKUP_MEMO: Dict[str, Tuple[float, Any]] = {}
+_LOOKUP_LOCK = threading.Lock()
+_LOOKUP_POOL = None
 
 
-def _resolves_to(name: str, address: str) -> bool:
-    """Whether ``name`` resolves to ``address`` here (a DNS lookup, unbounded: callers run it
-    through ``_bounded``)."""
+def _lookup_pool():
+    global _LOOKUP_POOL
+    with _LOOKUP_LOCK:
+        if _LOOKUP_POOL is None:
+            from vaf.core.bounded_run import DaemonPool
+            _LOOKUP_POOL = DaemonPool(_LOOKUP_WORKERS, "vaf-host-lookup")
+        return _LOOKUP_POOL
+
+
+def _remember(key: str, value: Any) -> Any:
+    with _LOOKUP_LOCK:
+        _LOOKUP_MEMO[key] = (time.monotonic(), value)
+    return value
+
+
+def _remembered(key: str) -> Tuple[bool, Any]:
+    with _LOOKUP_LOCK:
+        entry = _LOOKUP_MEMO.get(key)
+    if entry is not None and time.monotonic() - entry[0] < _LOOKUP_MEMO_S:
+        return True, entry[1]
+    return False, None
+
+
+def _addresses_of(name: str) -> frozenset:
+    """The addresses ``name`` resolves to here, none when it does not (a DNS lookup, unbounded:
+    it runs on the lookup pool). The answer is remembered, an empty one too, also when it
+    arrives after the choice that asked for it stopped waiting."""
     try:
-        return any(info[4][0] == address for info in socket.getaddrinfo(name, None))
+        found = frozenset(str(info[4][0]).split("%")[0]
+                          for info in socket.getaddrinfo(name, None))
     except Exception:
-        return False
+        found = frozenset()
+    return _remember("dns:" + name, found)
 
 
-def _bounded(calls: Dict[str, Any], budget: float) -> Dict[str, Any]:
-    """Run the calls on up to ``_LOOKUP_WORKERS`` daemon threads, each call once and in order,
-    and return the results that arrived within ``budget`` seconds in all. The rest are not
-    waited for: a lookup cannot be cancelled, and a daemon thread does not hold up the
-    process's exit (``bounded_run.run_bounded`` bounds one call and answers a tool's timeout
-    text; this needs the answers that did arrive)."""
-    results: Dict[str, Any] = {}
-    lock = threading.Lock()
-    finished = threading.Event()
-    gone = threading.Event()  # the caller left: start no further lookup
-    pending = list(calls.items())
-    left = [len(pending)]
+def _machine_names() -> List[str]:
+    """This machine's host name, FQDN (a lookup) and ``<host>.local``, remembered like an
+    address lookup."""
+    from vaf.network.binding import machine_dns_names
+    found = list(machine_dns_names())
+    return _remember("machine", [*found, _mdns_name(found) or ""])
 
-    def _work() -> None:
-        while True:
-            with lock:
-                if not pending or gone.is_set():
-                    return
-                key, fn = pending.pop(0)
-            try:
-                value = fn()
-            except Exception:
-                value = None
-            with lock:
-                results[key] = value
-                left[0] -= 1
-                if left[0] == 0:
-                    finished.set()
 
-    for _ in range(min(_LOOKUP_WORKERS, len(pending))):
-        threading.Thread(target=_work, daemon=True, name="vaf-room-host-lookup").start()
-    if calls:
-        finished.wait(budget)
-    with lock:
-        gone.set()
-        return dict(results)
+def _own_addresses(address: str, cfg: Optional[dict]) -> set:
+    """The addresses a name of this machine may resolve to: ``address`` and every admitted
+    one (a VPN's too, where a peer dials it: a certificate made for the VPN name resolves
+    there, not to the LAN address)."""
+    mine = {address} if address else set()
+    try:
+        from vaf.network.binding import access_addresses
+        mine.update(str(iface.ip) for iface in access_addresses(cfg))
+    except Exception:
+        pass
+    return mine
+
+
+_CERT_SHOW = "`vaf server cert show` on the host says why"
 
 
 def room_host_choice(address: str, cfg: Optional[dict] = None) -> Tuple[Optional[str], Optional[str]]:
@@ -1092,31 +1113,37 @@ def room_host_choice(address: str, cfg: Optional[dict] = None) -> Tuple[Optional
     A peer checks the served certificate against the host it dials, so the invitation names
     one the certificate covers: ``address`` (this machine's LAN address) when the served leaf
     names it. Otherwise, for a certificate of the person's own (its chain does not end in the
-    local CA), a name of it that is this machine: the only DNS name of a certificate without a
-    wildcard; else this machine's host name, FQDN or ``<host>.local`` where the certificate
-    covers it (a wildcard included); else one of its names that resolves to ``address`` here.
-    Never the apex beside a wildcard (``example.org`` next to ``*.example.org`` is usually the
-    public website), a wildcard, ``localhost`` or an address written as a DNS name (TLS checks
-    an address against the address names only). The lookups run together under one budget
-    (``_LOOKUP_BUDGET_S``), at most one per name, and none when the only name decides.
+    local CA), a name of it that is this machine: this machine's host name, FQDN or
+    ``<host>.local`` where the certificate covers it (a wildcard included), else one of its
+    names that resolves here to ``address`` or another admitted address of this machine. The
+    only name of a certificate is checked like any other: a certificate made for a website
+    names the website, and a peer sent there would hand its ticket to that server. Never the
+    apex beside a wildcard (``example.org`` next to ``*.example.org`` is usually the public
+    website), a wildcard, ``localhost`` or an address written as a DNS name (TLS checks an
+    address against the address names only). The lookups of every choice share one pool of
+    ``_LOOKUP_WORKERS`` threads, a choice waits ``_LOOKUP_BUDGET_S`` for them in all, and an
+    answer is reused for ``_LOOKUP_MEMO_S``. Where this machine uses another DNS than the
+    devices (split DNS), a name the devices resolve may not resolve here: a line in this
+    machine's hosts file, or the name as its host name, makes it count.
     VAF's own certificate names every address this machine had when it was issued; an
-    address that came later enters it at the next start or with ``vaf server cert reset``."""
+    address that came later enters it at the next start or with ``vaf server cert reset``.
+    The reasons are worded for whoever reads them, the host or an invited agent."""
     chain = served_chain(cfg)
     if not chain:
-        return None, "TLS serves no certificate"
+        return None, f"TLS serves no certificate ({_CERT_SHOW})"
     try:
         names = _san_names(chain[0])
     except Exception:
-        return None, "the served certificate's names cannot be read"
+        return None, f"the names of the served certificate cannot be read ({_CERT_SHOW})"
     if address and _covers(names, address):
         return address, None
     local_ca = ca_fingerprint()
     if local_ca and fingerprints_match(chain[-1].fingerprint(hashes.SHA256()).hex(), local_ca):
-        return None, (f"VAF's own certificate does not name {address}, which came after it "
-                      "was issued: `vaf server cert reset` issues one that names it, without "
-                      "a restart")
+        return None, (f"VAF's own certificate does not name the host's address {address}, "
+                      "which came after it was issued: `vaf server cert reset` on the host "
+                      "issues one that names it, without a restart")
     candidates: List[str] = []
-    wildcard = False
+    wildcards: List[str] = []
     for name in names:
         if not isinstance(name, x509.DNSName):
             continue
@@ -1124,7 +1151,7 @@ def room_host_choice(address: str, cfg: Optional[dict] = None) -> Tuple[Optional
         if not value or value == "localhost":
             continue
         if value.startswith("*"):
-            wildcard = True
+            wildcards.append(value)
             continue
         try:
             ipaddress.ip_address(value)
@@ -1133,34 +1160,43 @@ def room_host_choice(address: str, cfg: Optional[dict] = None) -> Tuple[Optional
             pass
         if value not in candidates:
             candidates.append(value)
-    if not candidates and not wildcard:
-        return None, (f"your certificate names neither {address} nor a DNS name a peer could "
-                      "dial: serve one that names this address")
-    if len(candidates) == 1 and not wildcard:
-        return candidates[0], None
+    if not candidates and not wildcards:
+        return None, (f"the served certificate names neither the host's address {address} "
+                      "nor a DNS name a peer could dial: it needs one that names that address")
 
-    def _machine_names() -> List[str]:
-        from vaf.network.binding import machine_dns_names
-        found = machine_dns_names()
-        return [*found, _mdns_name(found) or ""]
-
-    calls: Dict[str, Any] = {"": _machine_names}
-    for candidate in candidates:
-        calls[candidate] = (lambda n=candidate: _resolves_to(n, address))
-    answers = _bounded(calls, _LOOKUP_BUDGET_S)
+    from vaf.core.bounded_run import run_bounded_all
+    answers: Dict[str, Any] = {}
+    calls: Dict[str, Any] = {}
+    for key, call in [("", _machine_names),
+                      *((c, (lambda n=c: _addresses_of(n))) for c in candidates)]:
+        hit, value = _remembered("machine" if not key else "dns:" + key)
+        if hit:
+            answers[key] = value
+        else:
+            calls[key] = call
+    if calls:
+        answers.update(run_bounded_all(calls, timeout=_LOOKUP_BUDGET_S, pool=_lookup_pool()))
     for mine in answers.get("") or []:
         mine = str(mine or "").strip().rstrip(".").lower()
         if mine and mine != "localhost" and _covers(names, mine):
             return mine, None
+    own = _own_addresses(address, cfg)
     for candidate in candidates:
-        if answers.get(candidate) is True:
+        if own & set(answers.get(candidate) or ()):
             return candidate, None
-    listed = ", ".join(candidates) or ", ".join(
-        str(n.value) for n in names if isinstance(n, x509.DNSName))
-    return None, (f"your certificate names {listed}, but none is this machine's name or "
-                  f"resolves to {address} here (looked up for at most "
-                  f"{_LOOKUP_BUDGET_S:g} s): make one of them this machine's host name, or "
-                  "point it at that address in your DNS")
+    unanswered = [k or "this machine's names" for k in calls if k not in answers]
+    late = (f"; {', '.join(unanswered)} did not answer within {_LOOKUP_BUDGET_S:g} s"
+            if unanswered else "")
+    if not candidates:
+        example = "vaf" + wildcards[0][1:]
+        return None, (f"the served certificate names only {', '.join(wildcards)}, and none of "
+                      f"the host's names is under it: a host name such as {example} fixes "
+                      f"that{late}")
+    listed = ", ".join([*candidates, *wildcards])
+    return None, (f"the served certificate names {listed}, but none of them is the host's "
+                  f"name or resolves to its address {address} on the host: making one of "
+                  "them the host's name, or pointing one at that address in the DNS the host "
+                  f"uses (a line in its hosts file does), fixes that{late}")
 
 
 def served_room_host(address: str, cfg: Optional[dict] = None) -> Optional[str]:

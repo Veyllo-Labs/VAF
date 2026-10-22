@@ -215,18 +215,19 @@ def test_a_missing_lane_for_other_machines_is_said_and_why(circle, monkeypatch):
     """With Local Network and TLS on, a certificate that names no host a peer could dial
     left the lane out silently: the invitation read as a room only this machine could join.
     The inviter gets the reason, the invited agent a note with that reason (the fix depends
-    on it). MUTATIONS: put the fixed text with `vaf server cert reset` back - red; ask
-    lan_lane twice per invitation - red (two lane decisions, each may look names up)."""
+    on it), said once. MUTATIONS: put the fixed text with `vaf server cert reset` back - red;
+    ask lan_lane twice per invitation - red (two lane decisions, each may look names up)."""
     import vaf.core.a2a.invite as invite_mod
-    reason = "No machine on another network can join yet: some reason."
+    reason = "the served certificate names x.example, but none of them is the host's name"
     calls = []
     monkeypatch.setattr(invite_mod, "lan_lane",
                         lambda room_id: calls.append(room_id) or ({}, reason))
     room, owner = circle
     row = invitation(room, owner)
-    assert row["remote_unavailable"] == reason
+    assert row["remote_unavailable"] == f"No machine on another network can join yet: {reason}."
     assert "no lane for another machine yet" in row["briefing"]
     assert reason in row["briefing"], "the note carries the reason the host has to fix"
+    assert "can join yet" not in row["briefing"], "the note says it once, for the invitee"
     assert "vaf server cert reset" not in row["briefing"], (
         "the reset is no general advice: it replaces a certificate of the host's own")
     assert calls == ["room-inv"], "one lane decision per invitation (each one may look up)"

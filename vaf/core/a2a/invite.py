@@ -105,7 +105,9 @@ def lan_lane(room_id: str) -> "tuple[Dict[str, str], str]":
 
     The reason is only given for the case a person can fix and would not guess: the
     certificate names no host a peer could dial. Local Network or TLS off and an address
-    that is not admitted are choices, and say nothing here."""
+    that is not admitted are choices, and say nothing here. It is ``room_host_choice``'s
+    reason as it stands, without a lead-in: the inviter's row and the invited agent's note
+    each put their own in front of it."""
     try:
         from vaf.core.config import Config
         from vaf.network.binding import get_local_network_ip, is_allowed_ip
@@ -124,7 +126,7 @@ def lan_lane(room_id: str) -> "tuple[Dict[str, str], str]":
             import logging
             logging.getLogger(__name__).warning(
                 "No room invitation for other machines: %s.", why)
-            return {}, f"No machine on another network can join yet: {why}."
+            return {}, str(why or "")
         port, confirmed = _effective_port()
         return {
             "origin": f"wss://{host}:{port}",
@@ -420,9 +422,9 @@ def briefing(*, room_id: str, ticket: str, role: str, display: str,
         # certificate of the host's own, `vaf server cert reset` for VAF's own only, which
         # would replace an own certificate and break every room pin).
         where += (
-            "\n\nNOTE: this invitation has no lane for another machine yet. "
-            f"{remote_unavailable} On another machine, ask the host to fix that and to invite "
-            "you again.")
+            "\n\nNOTE: this invitation has no lane for another machine yet, because "
+            f"{remote_unavailable}. If you are on another machine, ask the host to fix that and "
+            "to invite you again.")
 
     headline = f"You have been invited into an agent room called {room_id}."
     if already_in:
@@ -617,7 +619,7 @@ def invitation(room: Room, identity: Identity, *, display: str = "guest",
             row["client_sha256"] = checksum
     elif gap:
         # For the inviter (`vaf a2a invite` prints the row): why no other machine can join.
-        row["remote_unavailable"] = gap
+        row["remote_unavailable"] = f"No machine on another network can join yet: {gap}."
     # Created at invite time, because an invitation is the moment file sharing
     # becomes likely - and a briefing must never name a directory that is not there.
     try:

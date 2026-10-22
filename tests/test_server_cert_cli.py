@@ -283,7 +283,7 @@ def test_no_trust_command_for_a_host_the_certificate_does_not_name(home, running
     says why instead of printing that command. MUTATION: print the address anyway - red."""
     import vaf.network.binding as binding
     monkeypatch.setattr(binding, "get_local_network_ip", lambda: "192.168.9.9")
-    monkeypatch.setattr(ssl_utils, "_resolves_to", lambda *_a: False)
+    monkeypatch.setattr(ssl_utils, "_addresses_of", lambda _name: frozenset())
     _files(tmp_path, names=("example.org", "www.example.org"))
     result = runner.invoke(server_cmd.app, ["cert", "set", "--cert", str(tmp_path / "cert.pem"),
                                             "--key", str(tmp_path / "key.pem")])
@@ -301,6 +301,18 @@ def test_the_reason_for_no_trust_command_prints_as_text(home, monkeypatch, capsy
                         lambda _address: (None, f"your certificate names {marked}"))
     server_cmd._peer_trust_line("ab" * 32)
     assert _flat(marked) in _flat(capsys.readouterr().out)
+
+
+def test_without_a_lan_address_the_line_keeps_the_placeholder(home, monkeypatch, capsys):
+    """The reasons quote the address; without one they read "does not name , which...".
+    MUTATION: choose a host for the empty address again - red."""
+    asked = []
+    monkeypatch.setattr(binding, "get_local_network_ip", lambda: "")
+    monkeypatch.setattr(ssl_utils, "room_host_choice",
+                        lambda address: asked.append(address) or (None, "reason"))
+    server_cmd._peer_trust_line("ab" * 32)
+    assert asked == []
+    assert "wss://<address>:8443" in _flat(capsys.readouterr().out)
 
 
 def test_renewing_lists_the_names_left_out(home, monkeypatch):

@@ -782,8 +782,11 @@ def _peer_trust_line(fingerprint: str) -> None:
         from vaf.network.binding import get_local_network_ip
         from vaf.network.ssl_utils import room_host_choice
         address = str(get_local_network_ip() or "").strip()
-        chosen, why = room_host_choice(address)
-        host = chosen or host
+        # Without a LAN address there is nothing to choose for (the reasons quote it): the
+        # line keeps the placeholder, as when the address cannot be read at all.
+        if address:
+            chosen, why = room_host_choice(address)
+            host = chosen or host
     except Exception:
         pass
     if why:

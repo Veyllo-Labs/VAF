@@ -46,14 +46,13 @@ they are made, and none of them holds up the exit of the process (the workers of
 cap once it started, so a thread that could not start does not hold its place.
 
 With an `InFlight` shared by the callers, a key whose call is still running or queued is not
-started again. A caller that only joins calls waits for them until the time of the caller
-that started them is up, or its own, whichever comes first, and with `InFlight(join_wait=...)`
-set at most that long. A caller that joins calls and also starts one of its own waits for all
-of them until its own deadline (2 s in the host choice), so it may return a joined call's
-answer that arrived after the starter's deadline. A queued call stays queued for the next
-caller instead of being cancelled, at most one per key. So while calls hang, with `join_wait`
-set, the callers that start calls pay the time, and the ones that only join return within
-`join_wait`.
+started again; the caller joins it, and a queued call stays queued for the next caller
+instead of being cancelled, at most one per key. A key counts only if its call finished by
+the key's own limit: for a call the caller started, its own deadline; for a call it joined,
+the earliest of its own deadline, the starter's deadline and, with `InFlight(join_wait=...)`,
+the time it joined plus `join_wait`. The caller returns once every key is answered or past its
+limit, so while calls hang, with `join_wait` set, a call costs its full time only to the
+caller that started it.
 
 The per-call budget is DECLARED by the tool: `BaseTool.timeout_seconds`, or `budget_seconds(args)`
 when it follows the call's own arguments (`vaf.core.bounded_run.tool_budget_seconds` resolves it;

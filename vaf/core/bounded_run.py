@@ -32,7 +32,7 @@ import math
 import queue
 import threading
 import time
-from concurrent.futures import Executor, Future, wait
+from concurrent.futures import FIRST_COMPLETED, Executor, Future, wait
 from typing import Any, Callable, Dict, Hashable, List, Mapping, Optional
 
 _log = logging.getLogger(__name__)
@@ -267,18 +267,11 @@ class InFlight:
     caller that started it. Shared by the callers whose calls mean the same thing for the
     same key (a lookup of one name), so a key runs once at a time.
 
-    ``join_wait`` caps how long a caller that only joins calls waits for them (None: until the
-    deadline of the caller that started them, or its own, whichever comes first). A quick
-    answer still reaches it, while a call that ends late, or fails late, costs only the
-    caller that started it: with lookups that failed after 1.5 s, every invitation that
-    joined one waited those 1.5 s, and the invitations of other accounts queued behind them
-    (measured).
-
-    A caller that joins calls and also starts one of its own is not capped: it waits for all
-    of them until its own deadline, so it may return a joined call's answer that arrived
-    after the deadline of the caller that started it. It waits up to its own deadline (2 s
-    in the host choice) for its own call in any case, and when calls fail or hang its own
-    does as well, so a cap per key would not shorten its wait."""
+    ``join_wait`` caps how long a caller waits for a call it joined (None: no cap of its own;
+    the limits ``run_bounded_all`` names still hold). A quick answer still reaches it, while
+    a call that ends late, or fails late, costs only the caller that started it: with lookups
+    that failed after 1.5 s, every invitation that joined one waited those 1.5 s, and the
+    invitations of other accounts queued behind them (measured)."""
 
     def __init__(self, join_wait: Optional[float] = None) -> None:
         self._lock = threading.Lock()
@@ -300,14 +293,20 @@ def run_bounded_all(calls: Mapping[Hashable, Callable[[], Any]], *, timeout: flo
     their threads stay capped and never hold up the exit.
 
     With ``in_flight``, a key whose call another caller started and has not finished, running
-    or queued, is not started again: this caller waits for that call, but only until the
-    deadline of the one who started it or its own, whichever comes first (its own ``timeout``
-    caps its wait either way). A call still queued when the time is up stays queued
-    for whoever asks next, instead of being cancelled, so at most one call per key waits. So
-    while calls hang, only the caller that starts one pays the time, and the others return
-    at once without it. Measured before: every later caller waited the full time again,
-    because it started the calls cancelled from the queue once more (another account's
-    invitation waited 32 s at 60 connections).
+    or queued, is not started again; this caller joins it instead. A call still queued when
+    the time is up stays queued for whoever asks next, instead of being cancelled, so at
+    most one call per key waits. Measured before: every later caller waited the full time
+    again, because it started the calls cancelled from the queue once more (another
+    account's invitation waited 32 s at 60 connections).
+
+    A key counts only if its call finished by the key's own limit: for a call this caller
+    started, its own deadline; for a call it joined, the earliest of its own deadline, the
+    deadline of the caller that started it and, with ``InFlight(join_wait=...)``, the time it
+    joined plus ``join_wait``. A key whose limit passed is dropped, and the caller returns
+    once every key is answered or dropped. One stop time for all keys let an answer count
+    after its own limit (a joined call answered after its starter's deadline was kept when
+    another key's limit was later), and a caller that joined a hung call and started one
+    that answered at once waited its full time instead of ``join_wait``.
     """
     now = time.monotonic()
     deadline = now + max(0.0, float(timeout))
@@ -330,14 +329,24 @@ def run_bounded_all(calls: Mapping[Hashable, Callable[[], Any]], *, timeout: flo
                 futures[key], until[key] = pool.submit(fn), deadline
                 in_flight._calls[key] = (futures[key], deadline)
                 started.add(key)
-    if futures:
-        # The latest deadline among the keys, but never past this caller's own.
-        stop = min(deadline, max(until.values()))
-        wait(list(futures.values()), timeout=max(0.0, stop - time.monotonic()))
+    for key in until:
+        until[key] = min(until[key], deadline)
     answers: Dict[Hashable, Any] = {}
-    for key, future in futures.items():
-        if future.done() and not future.cancelled() and future.exception() is None:
-            answers[key] = future.result()
-        elif key in started and in_flight is None:
-            future.cancel()
+    pending = dict(futures)
+    while pending:
+        for key in [k for k, future in pending.items() if future.done()]:
+            future = pending.pop(key)
+            if not future.cancelled() and future.exception() is None:
+                answers[key] = future.result()
+        moment = time.monotonic()
+        for key in [k for k in pending if until[k] <= moment]:
+            pending.pop(key)  # its limit passed before its call finished
+        if pending:
+            nearest = min(until[k] for k in pending)
+            wait(list(pending.values()), timeout=max(0.0, nearest - moment),
+                 return_when=FIRST_COMPLETED)
+    if in_flight is None:
+        for key in started:
+            if key not in answers:
+                futures[key].cancel()
     return answers

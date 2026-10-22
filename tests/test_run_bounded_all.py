@@ -190,3 +190,60 @@ def test_join_wait_caps_the_wait_for_a_call_another_caller_started():
         release.set()
         starter.join(5)
     assert later < 1.2, later
+
+
+def _start(pool, in_flight, key, call, timeout):
+    """A caller in a thread of its own that starts ``key``; returns once its call runs."""
+    running = threading.Event()
+
+    def _call():
+        running.set()
+        return call()
+
+    caller = threading.Thread(target=run_bounded_all, args=({key: _call},),
+                              kwargs={"timeout": timeout, "pool": pool, "in_flight": in_flight},
+                              daemon=True)
+    caller.start()
+    assert running.wait(10), f"the call for {key} never ran"
+    return caller
+
+
+def test_a_joined_key_counts_only_by_its_own_limit():
+    """One stop time for all keys let a joined answer count after its own starter's deadline
+    whenever another key's limit was later. MUTATION: one stop time again - red (A counts)."""
+    import time
+
+    release_b = threading.Event()
+    pool, in_flight = DaemonPool(4, "test-bounded-limits"), InFlight()
+    # A: its starter gives it 0.3 s, and it answers after 1.0 s, past that limit.
+    _start(pool, in_flight, "a", lambda: (time.sleep(1.0), "A")[1], 0.3)
+    _start(pool, in_flight, "b", lambda: release_b.wait(10), 2.0)
+    restarted = []
+    try:
+        answers = run_bounded_all({"a": lambda: restarted.append("a"),
+                                   "b": lambda: restarted.append("b")},
+                                  timeout=5.0, pool=pool, in_flight=in_flight)
+    finally:
+        release_b.set()
+    assert restarted == [], "joined too late: a key was started again"
+    assert answers == {}, answers
+
+
+def test_a_caller_that_also_starts_a_key_waits_join_wait_for_the_joined_one():
+    """Joining a hung key A and starting B that answers at once took the full own time
+    (measured: 2.00 s instead of 0.10 s). MUTATION: one stop time again - red."""
+    import time
+
+    release = threading.Event()
+    pool, in_flight = DaemonPool(4, "test-bounded-mixed"), InFlight(join_wait=0.1)
+    _start(pool, in_flight, "a", lambda: release.wait(10), 3.0)
+    try:
+        took = time.monotonic()
+        answers = run_bounded_all({"a": lambda: "restarted", "b": lambda: "own"},
+                                  timeout=2.0, pool=pool, in_flight=in_flight)
+        took = time.monotonic() - took
+    finally:
+        release.set()
+    assert answers == {"b": "own"}, answers
+    # join_wait plus timer slack on a loaded runner, far below the own 2 s.
+    assert took < 1.0, took

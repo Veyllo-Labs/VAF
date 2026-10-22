@@ -176,16 +176,21 @@ def password_guessing(username: str, minutes: int) -> None:
     _spawn(_job)
 
 
-def second_factor_guessing(user, minutes: int, where: str = "") -> None:
-    """The second-factor window closed. `where` is the door (`check_second_factor`): after a
-    correct password someone has it; at a door a signed-in session uses, a session of the
+def second_factor_guessing(user, minutes: int, doors: Iterable[str] = ("",)) -> None:
+    """The second-factor window closed. `doors` are where its wrong codes were entered
+    (`check_second_factor`'s `where`). A wrong code right after a correct password means
+    someone has the password, and that is said whenever one of the codes came from such a
+    door: the window counts every door of the account, so a closure can mix them, and that
+    warning must not be lost to the door of the last code. Only codes all entered at doors a
+    signed-in session uses (a token for programs, an admin's step-up) say a session of the
     account is guessing the code."""
     scope, username = str(getattr(user, "user_scope_id", "") or ""), str(getattr(user, "username", "") or "")
     if not scope:
         return
+    after_password = any(door in _AFTER_PASSWORD for door in doors)
 
     def _job():
-        key = SECOND_FACTOR_GUESSING if where in _AFTER_PASSWORD else SESSION_CODE_GUESSING
+        key = SECOND_FACTOR_GUESSING if after_password else SESSION_CODE_GUESSING
         for to_scope, name in _with_admin(scope, username):
             _deliver(to_scope, name, key, "error", username=username, minutes=minutes)
 

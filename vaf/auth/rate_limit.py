@@ -22,7 +22,9 @@ Throttling for the sign-in doors: windows of failed attempts, each only emptied 
   doors with three accountings before: one counted per address by hand, two not at all). Five
   wrong codes hold the account's code for the window, every further closure within a day
   twice as long, at most a day. No exemption for the machine: it cannot be reached without
-  the password. A completed sign-in clears it; a new password opens a fresh one.
+  the password. A completed sign-in clears it; a new password opens a fresh one. Each wrong
+  code keeps its door, and the code that closes the window answers the doors of all of them:
+  what the closure proves (vaf/auth/sign_in_alerts.py) depends on every door, not the last.
 
 The address and account windows count an attempt BEFORE it runs (`_AttemptTracker.reserve`:
 check and count are one step under the lock) and take it back once it did not fail. Checked
@@ -202,24 +204,31 @@ class _SecondFactorTracker(_AttemptTracker):
         super().__init__()
         self._closed_until: dict[str, float] = {}
         self._closures: dict[str, list[float]] = {}
+        # (time, door) of each wrong code in the window: the window counts every door of the
+        # account, so what a closure proves depends on all of them, not on the last one.
+        self._doors: dict[str, list[tuple[float, str]]] = {}
 
-    def record_wrong_code(self, key: str, threshold: int) -> bool:
-        """Count one wrong code; True when it closed the window."""
+    def record_wrong_code(self, key: str, threshold: int, door: str = "") -> Optional[frozenset]:
+        """Count one wrong code at `door`; when it closed the window, the doors of the codes
+        that closed it, else None."""
         window = _window_seconds()
         with self._lock:
             now = _now()
             live = [t for t in self._attempts.get(key, ()) if t > now - window] + [now]
+            doors = [(t, d) for t, d in self._doors.get(key, ()) if t > now - window] + [(now, door)]
             self._horizon[key] = window
             if len(live) < threshold:
                 self._attempts[key] = live
+                self._doors[key] = doors
                 if len(self._attempts) > self.MAX_KEYS:
                     self._sweep(now)
-                return False
+                return None
             closures = [c for c in self._closures.get(key, ()) if c > now - self.DAY] + [now]
             self._closures[key] = closures
             self._closed_until[key] = now + min(window * 2 ** (len(closures) - 1), self.DAY)
             self._attempts.pop(key, None)
-            return True
+            self._doors.pop(key, None)
+            return frozenset(d for _t, d in doors)
 
     def closed_for(self, key: str) -> float:
         """Seconds this key stays closed, 0 when open."""
@@ -238,6 +247,7 @@ class _SecondFactorTracker(_AttemptTracker):
     def clear(self, key: str) -> None:
         with self._lock:
             self._attempts.pop(key, None)
+            self._doors.pop(key, None)
             self._closed_until.pop(key, None)
 
     def _sweep(self, now: float) -> None:
@@ -248,8 +258,10 @@ class _SecondFactorTracker(_AttemptTracker):
             if live or recent or self._closed_until.get(key, 0.0) > now:
                 if live:
                     self._attempts[key] = live
+                    self._doors[key] = [(t, d) for t, d in self._doors.get(key, ()) if t > now - window]
                 else:
                     self._attempts.pop(key, None)
+                    self._doors.pop(key, None)
                 if recent:
                     self._closures[key] = recent
                 continue
@@ -259,6 +271,7 @@ class _SecondFactorTracker(_AttemptTracker):
         super()._forget(key)
         self._closed_until.pop(key, None)
         self._closures.pop(key, None)
+        self._doors.pop(key, None)
 
 
 _tracker = _AttemptTracker()           # per real client address
@@ -378,9 +391,10 @@ def second_factor_closed(key: str) -> float:
     return _second_factor_tracker.closed_for(key)
 
 
-def record_second_factor_failure(key: str) -> bool:
-    """One wrong code; True when it closed the window."""
-    return _second_factor_tracker.record_wrong_code(key, SECOND_FACTOR_ATTEMPTS)
+def record_second_factor_failure(key: str, door: str = "") -> Optional[frozenset]:
+    """One wrong code at `door` (`check_second_factor`'s `where`); when it closed the window,
+    the doors of the codes that closed it, else None."""
+    return _second_factor_tracker.record_wrong_code(key, SECOND_FACTOR_ATTEMPTS, door)
 
 
 def second_factor_refusal_is_new(key: str) -> bool:

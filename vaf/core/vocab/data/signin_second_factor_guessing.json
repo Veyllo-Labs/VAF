@@ -1,23 +1,23 @@
 {
   "de": [
-    "Jemand kennt das Passwort von {username}. Es wurde richtig eingegeben und danach fünfmal ein falscher 2FA-Code; der Code wird {minutes} Minuten lang zurückgehalten. Das Passwort sollte geändert werden."
+    "Jemand kennt das Passwort von {username}. Es wurde richtig eingegeben und danach ein falscher 2FA-Code; nach insgesamt fünf falschen Codes wird der Code {minutes} Minuten lang zurückgehalten. Das Passwort sollte geändert werden."
   ],
   "en": [
-    "Someone has the password of {username}. They entered it correctly and then a wrong 2FA code five times; the code is held for {minutes} minutes. The password should be changed."
+    "Someone has the password of {username}. They entered it correctly and then a wrong 2FA code; after five wrong codes in all, the code is held for {minutes} minutes. The password should be changed."
   ],
   "ja": [
-    "{username}のパスワードを知っている人がいます。正しいパスワードの後に2FAコードが5回間違えられたため、コードは{minutes}分間保留されます。パスワードを変更してください。"
+    "{username}のパスワードを知っている人がいます。正しいパスワードの後に間違った2FAコードが入力され、間違いが合わせて5回になったため、コードは{minutes}分間保留されます。パスワードを変更してください。"
   ],
   "ko": [
-    "누군가 {username} 계정의 비밀번호를 알고 있습니다. 올바른 비밀번호를 입력한 뒤 2FA 코드를 다섯 번 틀려서, 코드는 {minutes}분 동안 보류됩니다. 비밀번호를 바꿔야 합니다."
+    "누군가 {username} 계정의 비밀번호를 알고 있습니다. 올바른 비밀번호를 입력한 뒤 틀린 2FA 코드를 입력했고, 틀린 코드가 모두 다섯 번이 되어 코드는 {minutes}분 동안 보류됩니다. 비밀번호를 바꿔야 합니다."
   ],
   "th": [
-    "มีคนรู้รหัสผ่านของ {username} มีการใส่รหัสผ่านถูกต้องแล้วใส่รหัส 2FA ผิดห้าครั้ง รหัสจึงถูกระงับไว้ {minutes} นาที ควรเปลี่ยนรหัสผ่าน"
+    "มีคนรู้รหัสผ่านของ {username} มีการใส่รหัสผ่านถูกต้องแล้วตามด้วยรหัส 2FA ที่ผิด เมื่อรหัสผิดครบห้าครั้ง รหัสจึงถูกระงับไว้ {minutes} นาที ควรเปลี่ยนรหัสผ่าน"
   ],
   "tr": [
-    "Biri {username} hesabının parolasını biliyor. Parola doğru girildi, ardından beş kez yanlış 2FA kodu girildi; kod {minutes} dakika bekletiliyor. Parola değiştirilmeli."
+    "Biri {username} hesabının parolasını biliyor. Parola doğru girildi, ardından yanlış bir 2FA kodu girildi; toplam beş yanlış koddan sonra kod {minutes} dakika bekletiliyor. Parola değiştirilmeli."
   ],
   "zh": [
-    "有人知道 {username} 的密码。对方输入了正确的密码，随后 5 次输入了错误的 2FA 验证码；验证码将暂停 {minutes} 分钟。应当修改密码。"
+    "有人知道 {username} 的密码。对方输入了正确的密码，随后输入了错误的 2FA 验证码；错误验证码累计 5 次后，验证码将暂停 {minutes} 分钟。应当修改密码。"
   ]
 }

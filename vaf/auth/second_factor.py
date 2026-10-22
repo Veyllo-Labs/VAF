@@ -87,13 +87,14 @@ def check_second_factor(user, code: str, *, ip: str = "", where: str = "") -> Op
                 _last_step[account] = step
                 return None
             spent = True
-    if not spent and rate_limit.record_second_factor_failure(key):
-        # This wrong code closed the window: the right password, then five wrong codes.
+    closed_by = None if spent else rate_limit.record_second_factor_failure(key, where)
+    if closed_by is not None:
+        # This wrong code closed the window: five wrong codes, at the doors in `closed_by`.
         # The account and the admin hear it once per closure.
         try:
             from vaf.auth import sign_in_alerts
             sign_in_alerts.second_factor_guessing(user, max(1, -(-int(held_for(user)) // 60)),
-                                                  where=where)
+                                                  doors=closed_by)
         except Exception:
             pass
     what = "code already used" if spent else "wrong code"

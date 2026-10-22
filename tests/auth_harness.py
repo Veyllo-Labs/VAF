@@ -114,7 +114,7 @@ class Harness:
                             lambda kind, **f: self.events.append((kind, f)))
         for tracker in self._trackers(rate_limit):
             monkeypatch.setattr(tracker, "_attempts", {})
-            for name in ("_horizon", "_announced", "_closed_until", "_closures"):
+            for name in ("_horizon", "_announced", "_closed_until", "_closures", "_doors"):
                 if hasattr(tracker, name):
                     monkeypatch.setattr(tracker, name, {})
         from vaf.auth import second_factor

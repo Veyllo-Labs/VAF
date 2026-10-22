@@ -255,3 +255,32 @@ def test_titles_are_headlines_in_every_language(h, sent, monkeypatch):
                             device=("Chrome", "Android"), username="alice", address="10.0.0.5")
     title, text = sent["notification"][0][2], sent["notification"][0][1]
     assert title == heads["th"][0].format(username="alice") and title != text
+
+
+def test_a_mixed_closure_still_says_the_password_is_known(h, sent, monkeypatch):
+    """The window counts every door of the account. Four wrong codes right after a correct
+    password and a fifth from a signed-in session still mean someone has the password, and
+    that is what is said, not the door of the closing code. MUTATION: choose the alert by the
+    closing code's door alone - red."""
+    _id, secret = h.add_user("alice", "alice-password-1", totp=True)
+    _admin(monkeypatch, h)
+    app = h.app()
+    session = h.sign_in(h.client("192.168.96.1", app=app), "alice", "alice-password-1", secret)
+    from vaf.auth import second_factor
+    second_factor.forget_spent_codes()
+    _run(h)
+    sent["messenger"].clear()
+    sent["notification"].clear()
+    lan = h.client("192.168.96.2", app=app)
+    temp = h.login(lan, "alice", "alice-password-1").json()["temp_token"]
+    for _ in range(4):
+        assert h.verify(lan, temp, wrong_code(secret)).status_code == 401
+    assert _run(h) == 0
+    r = h.client("192.168.96.3", app=app).post(
+        "/api/auth/tokens", headers={"Authorization": f"Bearer {session}"},
+        json={"name": "x", "days": 7, "code": wrong_code(secret)})
+    assert r.status_code == 401, r.text
+    assert _run(h) == 1
+    assert sent["messenger"] and all(t.startswith("Someone has the password of alice.")
+                                     for _s, t in sent["messenger"])
+    assert {n[2] for n in sent["notification"]} == {"Password known: alice"}

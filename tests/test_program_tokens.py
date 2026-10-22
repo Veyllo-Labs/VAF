@@ -203,3 +203,38 @@ def test_the_account_tab_words_every_refusal():
     modal = (root / "web" / "components" / "SettingsModal.tsx").read_text(encoding="utf-8")
     assert "{activeTab === 'account' && <><AccountSection /><SessionsSection /></>}" in modal
     assert "fetch(`/api/users/${target}/sign-out`" in modal
+
+
+def test_the_account_tab_reads_on_a_phone_and_in_dark():
+    """Below md a row's action takes its own line under the facts, a date never breaks between
+    its time and AM/PM, the "shown only now" warning stands out (amber has a dark pair in
+    globals.css), and the disabled Create button keeps a readable label in dark mode, where
+    half opacity on the light button left grey on grey. MUTATION: the row action back to the
+    plain link class - red."""
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    page = (root / "web" / "components" / "settings" / "SessionsSection.tsx").read_text(encoding="utf-8")
+    row = re.search(r"const rowClass = '([^']*)'", page).group(1)
+    assert "max-md:flex-wrap" in row
+    action = re.search(r"const rowAction = `([^`]*)`", page).group(1)
+    assert "max-md:basis-full" in action and "max-md:pl-7" in action
+    assert page.count("className={rowAction}") == 2       # the device rows and the token rows
+    assert ".format(new Date(iso)).replace(/\\s/g, '\\u00a0')" in page
+    assert "text-amber-700 mb-2\">{t('tokenShownOnce')}" in page
+    create = page[:page.index("{t('tokenCreate')}")].rsplit("<button", 1)[1]
+    assert "dark:disabled:opacity-100" in create and "dark:disabled:text-" in create
+    css = (root / "web" / "app" / "globals.css").read_text(encoding="utf-8")
+    assert css.count("--acc-amber-700t:") == 2
+
+
+def test_the_devices_intro_does_not_promise_this_computer_stays_signed_in():
+    """The machine's own row has a Sign out button, so the intro says only that this computer
+    is not signed out for being unused. MUTATION: the old "stays signed in" wording - red."""
+    import json
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    en = json.loads((root / "web" / "messages" / "en.json").read_bytes())["account"]["devicesIntro"]
+    de = json.loads((root / "web" / "messages" / "de.json").read_bytes())["account"]["devicesIntro"]
+    assert "not signed out for being unused" in en and "stays signed in" not in en
+    assert "wegen Nichtnutzung nicht abgemeldet" in de and "bleibt angemeldet" not in de

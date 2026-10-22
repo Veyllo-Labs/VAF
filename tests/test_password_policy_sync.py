@@ -65,3 +65,12 @@ def test_the_admin_door_words_the_rule():
     for locale in sorted(p.stem for p in (ROOT / "web" / "messages").glob("*.json")):
         rule = json.loads((ROOT / "web" / "messages" / f"{locale}.json").read_bytes())["modals"]["addUser"]["passwordRule"]
         assert "{n}" in rule and not re.search(r"\d", rule), (locale, rule)
+
+
+def test_the_wizard_names_both_halves_of_the_rule():
+    """The setup wizard's password step says the length and that a common password is refused,
+    before the person reaches the step where bootstrap would refuse it. MUTATION: drop the
+    second half in en - red."""
+    en = json.loads((ROOT / "web" / "messages" / "en.json").read_bytes())["onboarding"]["passwordSubtitle"]
+    de = json.loads((ROOT / "web" / "messages" / "de.json").read_bytes())["onboarding"]["passwordSubtitle"]
+    assert "not a common one" in en and "keines der häufigsten" in de

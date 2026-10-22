@@ -76,11 +76,12 @@ export default function SessionsSection() {
     useEffect(() => { void load(); }, [load]);
 
     // The last use with its time (it is what tells a device apart), every other moment as a day.
+    // The spaces inside a date do not break, so a narrow row never splits "4:00" from "PM".
     const format = (iso: string | null, withTime: boolean) => {
         if (!iso) return '-';
         try {
             return new Intl.DateTimeFormat(locale, withTime ? { dateStyle: 'medium', timeStyle: 'short' }
-                : { dateStyle: 'medium' }).format(new Date(iso));
+                : { dateStyle: 'medium' }).format(new Date(iso)).replace(/\s/g, '\u00a0');
         } catch {
             return iso;
         }
@@ -167,9 +168,11 @@ export default function SessionsSection() {
 
     const card = 'bg-gray-50/50 p-6 rounded-xl border border-gray-100 mt-6 max-md:p-4';
     const title = 'text-sm font-bold text-gray-900 uppercase tracking-wide';
-    const rowClass = 'flex items-start gap-3 px-3 py-2.5 rounded-lg border border-gray-200 bg-white';
+    // Below md the action takes a row of its own under the meta, aligned with the text.
+    const rowClass = 'flex items-start gap-3 px-3 py-2.5 rounded-lg border border-gray-200 bg-white max-md:flex-wrap';
     const meta = 'text-xs text-gray-500 mt-0.5 break-words';
     const linkButton = 'text-xs font-medium text-red-600 hover:text-red-700 hover:underline disabled:opacity-50 shrink-0';
+    const rowAction = `${linkButton} max-md:basis-full max-md:text-left max-md:pl-7`;
     const badge = 'text-[11px] font-semibold px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 border border-gray-200';
     const field = 'w-full px-3 py-2 border border-gray-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-gray-400';
     const label = 'block text-xs font-semibold text-gray-700 mb-1';
@@ -231,7 +234,7 @@ export default function SessionsSection() {
                                 </p>
                             </div>
                             {!row.current && (
-                                <button type="button" onClick={() => void endOne(row)} disabled={busy !== null} className={linkButton}>
+                                <button type="button" onClick={() => void endOne(row)} disabled={busy !== null} className={rowAction}>
                                     {t('signOut')}
                                 </button>
                             )}
@@ -258,7 +261,7 @@ export default function SessionsSection() {
                                         {[t('tokenCreated', { when: day(row.created_at) }), t('validUntil', { when: day(row.expires_at) })].join(' · ')}
                                     </p>
                                 </div>
-                                <button type="button" onClick={() => void endOne(row)} disabled={busy !== null} className={linkButton}>
+                                <button type="button" onClick={() => void endOne(row)} disabled={busy !== null} className={rowAction}>
                                     {t('revoke')}
                                 </button>
                             </li>
@@ -268,7 +271,7 @@ export default function SessionsSection() {
 
                 {created ? (
                     <div className="rounded-lg border border-gray-200 bg-white p-3">
-                        <p className="text-xs text-gray-700 mb-2">{t('tokenShownOnce')}</p>
+                        <p className="text-xs font-semibold text-amber-700 mb-2">{t('tokenShownOnce')}</p>
                         <div className="flex items-start gap-2 max-md:flex-col">
                             <code className="flex-1 min-w-0 font-mono text-xs text-gray-900 bg-gray-100 rounded px-2 py-1.5 break-all select-all">{created}</code>
                             <button type="button" onClick={() => void copyCreated()}
@@ -303,7 +306,7 @@ export default function SessionsSection() {
                                 autoComplete="one-time-code" placeholder="123456" className={`${field} font-mono w-32 max-md:w-full`} />
                         </div>
                         <button type="submit" disabled={busy !== null || !name.trim() || !code.trim()}
-                            className="px-4 py-2 text-sm font-medium rounded-lg bg-gray-900 hover:bg-black text-white dark:bg-[#e6e6e6] dark:hover:bg-[#f5f5f5] dark:text-[#181818] transition-colors disabled:opacity-50">
+                            className="px-4 py-2 text-sm font-medium rounded-lg bg-gray-900 hover:bg-black text-white dark:bg-[#e6e6e6] dark:hover:bg-[#f5f5f5] dark:text-[#181818] transition-colors disabled:opacity-50 dark:disabled:opacity-100 dark:disabled:bg-[#3a3a3a] dark:disabled:text-[#a3a3a3]">
                             {t('tokenCreate')}
                         </button>
                     </form>

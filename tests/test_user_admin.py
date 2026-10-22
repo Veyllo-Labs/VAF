@@ -106,10 +106,10 @@ def _lookup(db, username):
 def test_duplicate_usernames_are_refused_regardless_of_case():
     db = FakeDb()
     asyncio.run(user_admin.create_local_user(
-        _lookup(db, "Alice"), username="Alice", password="longenough1"))
+        _lookup(db, "Alice"), username="Alice", password="longenough12"))
     with pytest.raises(UserAdminError) as e:
         asyncio.run(user_admin.create_local_user(
-            _lookup(db, "alice"), username="alice", password="longenough1"))
+            _lookup(db, "alice"), username="alice", password="longenough12"))
     assert e.value.code == "username_taken"
     assert e.value.http_status == 409
 
@@ -125,14 +125,14 @@ def test_the_password_rule_also_applies_to_ordinary_users():
 def test_a_username_must_be_long_enough():
     with pytest.raises(UserAdminError) as e:
         asyncio.run(user_admin.create_local_user(
-            _lookup(FakeDb(), "a"), username=" a ", password="longenough1"))
+            _lookup(FakeDb(), "a"), username=" a ", password="longenough12"))
     assert e.value.code == "username_invalid"
 
 
 def test_the_first_admin_requires_2fa_setup():
     """This flag is what walks the owner into 2FA enrollment on first web login."""
     user = asyncio.run(user_admin.create_first_admin(
-        _lookup(FakeDb(), "mert"), username="mert", password="longenough1"))
+        _lookup(FakeDb(), "dora"), username="dora", password="longenough12"))
     assert user.role == "admin"
     assert user.requires_2fa_setup is True
 
@@ -140,18 +140,18 @@ def test_the_first_admin_requires_2fa_setup():
 def test_a_second_first_admin_is_refused(_isolated):
     db = FakeDb()
     asyncio.run(user_admin.create_first_admin(
-        _lookup(db, "mert"), username="mert", password="longenough1"))
+        _lookup(db, "dora"), username="dora", password="longenough12"))
     with pytest.raises(UserAdminError) as e:
         asyncio.run(user_admin.create_first_admin(
-            _lookup(db, "eve"), username="eve", password="longenough1"))
+            _lookup(db, "eve"), username="eve", password="longenough12"))
     assert e.value.code == "admin_exists"
     assert e.value.http_status == 403
 
 
 def test_the_admin_identity_is_written_to_the_config(_isolated):
     user = asyncio.run(user_admin.create_first_admin(
-        _lookup(FakeDb(), "mert"), username="mert", password="longenough1"))
-    assert _isolated["local_admin_username"] == "mert"
+        _lookup(FakeDb(), "dora"), username="dora", password="longenough12"))
+    assert _isolated["local_admin_username"] == "dora"
     assert _isolated["local_admin_scope_id"] == str(user.user_scope_id)
 
 
@@ -164,7 +164,7 @@ def test_an_unwritable_config_takes_the_account_back(monkeypatch, _isolated):
     db = FakeDb()
     with pytest.raises(UserAdminError) as e:
         asyncio.run(user_admin.create_first_admin(
-            _lookup(db, "mert"), username="mert", password="longenough1"))
+            _lookup(db, "dora"), username="dora", password="longenough12"))
     assert e.value.code == "identity_not_written"
     assert db.deleted, "the account row must be removed again"
     assert asyncio.run(user_admin.active_admin(db)) is None
@@ -176,8 +176,8 @@ def test_a_failing_keyring_mirror_does_not_cost_the_account(monkeypatch):
     monkeypatch.setattr(gate, "mirror_admin_password_hash",
                         lambda h: (_ for _ in ()).throw(RuntimeError("no ring")))
     user = asyncio.run(user_admin.create_local_user(
-        _lookup(FakeDb(), "mert"), username="mert", password="longenough1"))
-    assert user.username == "mert"
+        _lookup(FakeDb(), "dora"), username="dora", password="longenough12"))
+    assert user.username == "dora"
 
 
 def test_the_mirror_runs_after_the_row_exists(monkeypatch, _isolated):
@@ -196,15 +196,15 @@ def test_the_mirror_runs_after_the_row_exists(monkeypatch, _isolated):
     db.commit = spy_commit
 
     asyncio.run(user_admin.create_local_user(
-        _lookup(db, "mert"), username="mert", password="longenough1"))
+        _lookup(db, "dora"), username="dora", password="longenough12"))
     assert [s[0] for s in seen] == ["commit", "mirror"]
 
 
 def test_the_agent_gets_the_name_it_was_given(_isolated, tmp_path):
     asyncio.run(user_admin.create_first_admin(
-        _lookup(FakeDb(), "mert"), username="mert", password="longenough1",
+        _lookup(FakeDb(), "dora"), username="dora", password="longenough12",
         agent_name="Jarvis"))
-    identity = json.loads((tmp_path / "users" / "mert" / "identity.json").read_text())
+    identity = json.loads((tmp_path / "users" / "dora" / "identity.json").read_text())
     assert identity["name"] == "Jarvis"
 
 
@@ -212,8 +212,8 @@ def test_without_a_name_the_workspace_still_exists(_isolated, tmp_path):
     """Bootstrap never created this directory at all - it made a different one
     under the platform data dir that nothing reads."""
     asyncio.run(user_admin.create_first_admin(
-        _lookup(FakeDb(), "mert"), username="mert", password="longenough1"))
-    identity_file = tmp_path / "users" / "mert" / "identity.json"
+        _lookup(FakeDb(), "dora"), username="dora", password="longenough12"))
+    identity_file = tmp_path / "users" / "dora" / "identity.json"
     assert identity_file.exists(), "the agent workspace must be prepared"
     assert json.loads(identity_file.read_text())["name"].startswith("Nobel")
 
@@ -262,5 +262,5 @@ def test_the_first_admin_always_reaches_the_terminal_door(monkeypatch, _isolated
     monkeypatch.setattr(gate, "mirror_admin_password_hash", lambda h: mirrored.append(h))
 
     asyncio.run(user_admin.create_first_admin(
-        _lookup(FakeDb(), "mert"), username="mert", password="longenough1"))
-    assert mirrored == ["hash:longenough1"]
+        _lookup(FakeDb(), "dora"), username="dora", password="longenough12"))
+    assert mirrored == ["hash:longenough12"]

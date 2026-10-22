@@ -34,6 +34,9 @@ RUNTIME_ASSETS = (
     ("skills/builtin", "vaf/skills/builtin/**/*", 1),
     # The sandbox environments' Dockerfile, piped to `docker build -`.
     ("assets/sandbox", "vaf/assets/sandbox/*", 1),
+    # The common passwords a new password may not be (vaf/auth/user_admin.py): without it
+    # every new password would be checked for its length only.
+    ("auth/data", "vaf/auth/data/*.txt", 1),
 )
 
 _ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -99,6 +102,7 @@ def test_the_built_wheel_carries_every_runtime_asset(tmp_path):
     assert any("vocab/data/capability_denial.json" in n for n in names)
     # The llama.cpp pin: without it an installed VAF may download nothing (backend.py).
     assert any(n.endswith("vaf/core/llama_server_pin.json") for n in names)
+    assert any(n.endswith("vaf/auth/data/common_passwords.txt") for n in names)
     # And the shipped A2A skill: an installed VAF that lost it would route "work
     # with another agent" straight past the feature that exists for it.
     assert any("skills/builtin/a2a_rooms/SKILL.md" in n for n in names)

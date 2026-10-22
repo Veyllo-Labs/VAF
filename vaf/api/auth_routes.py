@@ -307,12 +307,12 @@ async def bootstrap(body: BootstrapRequest, request: Request, response: Response
                     require_setup_code=_setup_code_required(request),
                 )
             except UserAdminError as e:
-                if e.code == "setup_code":
-                    # A 401 the address window counts; the code lets the wizard go back to
-                    # the step that asks for it.
-                    return JSONResponse(status_code=e.http_status,
-                                        content={"detail": e.message, "code": e.code})
-                raise HTTPException(status_code=e.http_status, detail=e.message)
+                # The code travels with the sentence: a wrong setup code (a 401 the address
+                # window counts) sends the wizard back to the step that asks for it, and a
+                # refused password (`password_too_short`, `password_common`) is said in the
+                # reader's language.
+                return JSONResponse(status_code=e.http_status,
+                                    content={"detail": e.message, "code": e.code})
 
             access = create_access_token(
                 str(new_user.id),

@@ -51,11 +51,11 @@ def test_the_password_comes_from_stdin_and_no_prompt_is_reached(monkeypatch, no_
     monkeypatch.setattr(setup_cmd, "run_first_account_setup", fake_engine)
     monkeypatch.setattr(setup_cmd.getpass, "getpass", _explode)
 
-    result = runner.invoke(setup_cmd.app, ["-u", "mert", "--password-stdin"],
+    result = runner.invoke(setup_cmd.app, ["-u", "dora", "--password-stdin"],
                            input="hunter2secret\n")
     assert result.exit_code == 0
     assert seen["password"] == "hunter2secret", "the trailing newline belongs to the shell"
-    assert seen["username"] == "mert"
+    assert seen["username"] == "dora"
     assert seen["interactive"] is False
 
 
@@ -69,7 +69,7 @@ def test_password_stdin_without_a_username_is_refused(monkeypatch, no_db):
 def test_every_outcome_has_its_own_exit_code(monkeypatch, no_db, outcome):
     """A script must be able to branch without parsing text."""
     monkeypatch.setattr(setup_cmd, "run_first_account_setup", lambda **_k: outcome)
-    result = runner.invoke(setup_cmd.app, ["-u", "mert", "--password-stdin"], input="secret12\n")
+    result = runner.invoke(setup_cmd.app, ["-u", "dora", "--password-stdin"], input="secret12\n")
     assert result.exit_code == EXIT_CODES[outcome]
     assert len(set(EXIT_CODES.values())) == len(EXIT_CODES), "codes must stay distinct"
 
@@ -78,7 +78,7 @@ def test_an_existing_admin_stops_the_setup(monkeypatch, no_db):
     import vaf.auth.user_admin as user_admin
 
     class _Admin:
-        username = "mert"
+        username = "dora"
 
     async def _found(_db):
         return _Admin()
@@ -88,7 +88,7 @@ def test_an_existing_admin_stops_the_setup(monkeypatch, no_db):
     _fake_auth_db(monkeypatch)
 
     assert setup_cmd.run_first_account_setup(
-        username="eve", password="secret12", interactive=False,
+        username="eve", password="secret12secret", interactive=False,
     ) == SetupOutcome.ALREADY_EXISTS
 
 
@@ -98,7 +98,7 @@ def test_a_short_password_is_refused_before_the_database_is_touched(monkeypatch,
     _fake_auth_db(monkeypatch)
 
     assert setup_cmd.run_first_account_setup(
-        username="mert", password="short", interactive=False,
+        username="dora", password="short", interactive=False,
     ) == SetupOutcome.ABORTED
 
 
@@ -109,7 +109,7 @@ def test_an_unreachable_database_says_so(monkeypatch):
     monkeypatch.setattr(setup_cmd, "_start_service_stack", lambda: None)
     monkeypatch.setattr(setup_cmd, "_wait_for_auth_db", _never)
     assert setup_cmd.run_first_account_setup(
-        username="mert", password="secret12", interactive=False,
+        username="dora", password="secret12secret", interactive=False,
     ) == SetupOutcome.DB_UNAVAILABLE
 
 
@@ -136,7 +136,7 @@ def test_a_created_account_unlocks_this_process(monkeypatch, no_db):
 
     async def _made(_db, **_k):
         class _U:
-            username = "mert"
+            username = "dora"
         return _U()
 
     monkeypatch.setattr(user_admin, "active_admin", _none)
@@ -145,7 +145,7 @@ def test_a_created_account_unlocks_this_process(monkeypatch, no_db):
     monkeypatch.setattr(gate, "_unlocked", False)
 
     assert setup_cmd.run_first_account_setup(
-        username="mert", password="secret12", agent_name="Jarvis", interactive=False,
+        username="dora", password="secret12secret", agent_name="Jarvis", interactive=False,
     ) == SetupOutcome.CREATED
     assert gate._unlocked is True
 
@@ -237,9 +237,9 @@ def test_the_agent_name_follows_the_configured_owner(monkeypatch, tmp_path):
     anything else never saw the name they chose."""
     from vaf.core import config as config_module
     monkeypatch.setattr(config_module.Config, "APP_DIR", tmp_path)
-    monkeypatch.setattr(config_module, "get_local_admin_username", lambda: "mert")
+    monkeypatch.setattr(config_module, "get_local_admin_username", lambda: "dora")
 
-    home = tmp_path / "users" / "mert"
+    home = tmp_path / "users" / "dora"
     home.mkdir(parents=True)
     (home / "identity.json").write_text(json.dumps({"name": "Jarvis", "emoji": "*"}))
 

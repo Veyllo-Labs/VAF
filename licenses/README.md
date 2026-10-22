@@ -21,6 +21,7 @@ being stale claims a diligence that is not there.
 
 | File | Covers | Obligation |
 |---|---|---|
+| `SecLists-MIT.txt` | `vaf/auth/data/common_passwords.txt`, the 10,000 most common passwords of at least 12 characters from SecLists (the password rule in `vaf/auth/user_admin.py` refuses them) | MIT: the copyright notice and the permission notice in all copies or substantial portions. The data file's header names the origin; this is the notice. |
 | `pdfjs-dist-Apache-2.0.txt` | `web/public/pdf.worker.min.mjs`, a verbatim copy of Mozilla's pdf.js worker (`react-pdf` requires the worker to be served as a static asset, so it is checked in rather than resolved at run time) | Apache-2.0 section 4(a): recipients must be given **a copy of the License**, not a link to it. The file's own header carries the copyright notice and the pointer; this is the copy. |
 
 ## What is NOT in here

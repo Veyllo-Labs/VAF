@@ -6,9 +6,7 @@
 import { useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { retryAfterSeconds, retryWhen } from '@/lib/retryAfter';
-
-/** Mirrors MIN_PASSWORD_LEN in vaf/auth/user_admin.py; the server checks it again. */
-const MIN_PASSWORD_LEN = 8;
+import { MIN_PASSWORD_LEN } from '@/lib/passwordPolicy';
 
 /**
  * The caller changes their OWN password (POST /api/auth/change-password, vaf/auth/user_admin.py
@@ -58,6 +56,7 @@ export default function AccountSection() {
                     throttled: t('errThrottled', { when }),
                     code_spent: t('errCodeSpent'),
                     password_too_short: t('tooShort', { n: MIN_PASSWORD_LEN }),
+                    password_common: t('errCommonPassword'),
                 };
                 const held = res.status === 429 && !data.code ? tCommon('tooManyAttempts', { when }) : '';
                 setNote({ ok: false, text: known[String(data.code || '')] || held || String(data.detail || t('failed')) });

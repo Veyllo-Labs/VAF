@@ -278,6 +278,7 @@ arrives without either.
 |---|---|---|---|
 | `vaf/vendor/langid/langid.py` | https://github.com/saffsd/langid.py | BSD-2-Clause, Copyright 2011 Marco Lui | full text verbatim in the file header |
 | `web/public/pdf.worker.min.mjs` | https://github.com/mozilla/pdf.js (`pdfjs-dist`) | Apache-2.0, Copyright 2024 Mozilla Foundation | header notice plus `licenses/pdfjs-dist-Apache-2.0.txt`, because section 4(a) asks for a copy of the license and not a link |
+| `vaf/auth/data/common_passwords.txt` | https://github.com/danielmiessler/SecLists (`Passwords/Common-Credentials/xato-net-10-million-passwords-1000000.txt`, commit `c205c36a`): the first 10,000 distinct entries of at least 12 characters, lowercased; `scripts/build_common_passwords.py` rebuilds it byte for byte | MIT, Copyright 2018 Daniel Miessler | origin and license in the file's header plus `licenses/SecLists-MIT.txt`, because MIT asks for the notice in substantial portions. Data, not code: the list is what a new password may not be, and contains vulgar words as such lists do |
 
 Dependencies are deliberately NOT in that folder. Their notice requirements attach to
 distributing a copy, and VAF distributes none: pip and npm fetch them onto the user's

@@ -24,6 +24,18 @@ exception, because it is an account rule: a reset password or second factor ends
 every session of the account, whichever door made the reset. It goes through
 vaf/auth/sessions.py, the one owner of the session rows.
 
+THE PASSWORD RULE. A new password needs MIN_PASSWORD_LEN (12) characters and may not
+be one of the 10,000 most common passwords of that length (data/common_passwords.txt,
+SecLists, MIT; scripts/build_common_passwords.py rebuilds it), compared lowercased. One
+rule for every door that sets a password: the first admin (browser and `vaf setup`), an
+admin's new account, the account's own change, the terminal reset. Existing passwords keep
+working: only an Argon2 hash is stored, so a stored password's length cannot be known, and
+the rule applies to every new one. Not built: a check against the account name (ASVS
+6.2.11), a breached-password service (an outbound call with a password's hash prefix), a
+forced change of an older password. A missing list file logs ERROR once and skips the list
+check, the length still applies: a packaging error must not block every password change,
+and tests/test_wheel_ships_runtime_assets.py catches the error before a release.
+
 THE FIRST-RUN SETUP CODE. While no admin exists, a browser that is not on this
 machine must bring the code `vaf setup code` shows in a terminal on it
 (`first_run_setup_code`, `setup_code_matches`, checked by `create_first_admin`).
@@ -38,7 +50,9 @@ comes first.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+import threading
+from pathlib import Path
+from typing import Any, Dict, FrozenSet, Optional
 
 from sqlalchemy import func, select
 
@@ -48,7 +62,11 @@ from vaf.auth.models import LocalUser
 logger = logging.getLogger(__name__)
 
 MIN_USERNAME_LEN = 2
-MIN_PASSWORD_LEN = 8
+MIN_PASSWORD_LEN = 12
+
+_COMMON_PASSWORDS_FILE = Path(__file__).resolve().parent / "data" / "common_passwords.txt"
+_common: Optional[FrozenSet[str]] = None
+_common_lock = threading.Lock()
 
 
 class UserAdminError(Exception):
@@ -78,11 +96,34 @@ def validate_username(username: str) -> str:
     return cleaned
 
 
+def _common_passwords() -> FrozenSet[str]:
+    """The shipped list, loaded once. Empty (and logged once) when the file is missing."""
+    global _common
+    with _common_lock:
+        if _common is None:
+            try:
+                text = _COMMON_PASSWORDS_FILE.read_bytes().decode("utf-8")
+                _common = frozenset(line.strip() for line in text.splitlines()
+                                    if line.strip() and not line.startswith("#"))
+            except OSError as e:
+                logger.error("The common-password list is missing (%s); new passwords are "
+                             "checked for their length only", e)
+                _common = frozenset()
+        return _common
+
+
 def validate_password(password: str) -> None:
+    """The rule for every new password: MIN_PASSWORD_LEN characters, and not a common one."""
     if not password or len(password) < MIN_PASSWORD_LEN:
         raise UserAdminError(
             "password_too_short",
             f"Password must be at least {MIN_PASSWORD_LEN} characters",
+            400,
+        )
+    if password.lower() in _common_passwords():
+        raise UserAdminError(
+            "password_common",
+            "This password is one of the most common ones; choose another",
             400,
         )
 

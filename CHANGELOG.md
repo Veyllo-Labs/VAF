@@ -212,6 +212,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   at its first sign-in) and is gone, together with its `vaf doctor` warning. A value left in
   an older `config.json` is ignored.
 
+- **Passwords need 12 characters and may not be a common one.** Every new password, from
+  the setup wizard, `vaf setup`, an admin's new account, your own change in Settings or
+  `vaf users reset-password`, is checked against the 10,000 most common passwords of that
+  length. Existing passwords keep working; change a shorter one in Settings, Account. For
+  your own programs: a refusal carries `"code": "password_too_short"` or
+  `"password_common"`, and `POST /api/auth/bootstrap` now answers every refusal with
+  `{"detail", "code"}`.
+
 - **The API documentation needs a sign-in.** `/docs` and `/openapi.json` were open to every
   device on the network when VAF ran with `vaf run --web`. The machine itself still opens
   them without one.

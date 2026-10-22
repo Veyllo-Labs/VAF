@@ -125,11 +125,14 @@ def _log_failed_proof(what: str) -> None:
 
 
 def _new_password() -> str:
-    from vaf.auth.user_admin import MIN_PASSWORD_LEN
+    """Asked twice; judged by the one rule every door uses (length, and not a common one)."""
+    from vaf.auth.user_admin import MIN_PASSWORD_LEN, UserAdminError, validate_password
     for _ in range(_MAX_ATTEMPTS):
         first = getpass.getpass(f"New password (at least {MIN_PASSWORD_LEN} characters): ")
-        if len(first) < MIN_PASSWORD_LEN:
-            UI.error(f"At least {MIN_PASSWORD_LEN} characters.")
+        try:
+            validate_password(first)
+        except UserAdminError as e:
+            UI.error(e.message)
             continue
         if getpass.getpass("Again: ") != first:
             UI.error("The two did not match.")

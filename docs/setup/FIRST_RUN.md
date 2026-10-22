@@ -71,7 +71,11 @@ language step.
 
 ### 1. Create admin account
 Choose an admin **username** and a **password** (confirmed). This is the owner account -
-it has full access and isolates your data under its own scope.
+it has full access and isolates your data under its own scope. The password needs at least
+12 characters and may not be one of the 10,000 most common passwords of that length (the
+same rule as `vaf setup`, an admin's new account and every later change; see
+[NETWORK_FEATURES.md](NETWORK_FEATURES.md#authentication-details)). A common one is refused
+when the account is created, at the 2FA step, and the wizard goes back to this step.
 
 **From another device: the setup code.** When the browser is not on the machine VAF runs
 on (a laptop opening a server's address, a phone on the LAN or the VPN), this step first

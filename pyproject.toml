@@ -206,6 +206,9 @@ vaf = [
     # The sandbox environments' image, built from stdin (environment_image.py):
     # an installed VAF has no docker/ directory.
     "assets/sandbox/Dockerfile",
+    # The common passwords a new password may not be (vaf/auth/user_admin.py reads
+    # data/common_passwords.txt; scripts/build_common_passwords.py rebuilds it).
+    "auth/data/*.txt",
 ]
 
 [tool.setuptools.dynamic]

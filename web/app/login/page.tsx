@@ -17,6 +17,7 @@ import SoulWizard from '@/components/SoulWizard';
 import { cn } from '@/lib/utils';
 import { getApiBase } from '@/lib/utils';
 import { retryAfterSeconds, retryWhen } from '@/lib/retryAfter';
+import { MIN_PASSWORD_LEN } from '@/lib/passwordPolicy';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { useLocaleStore } from '@/lib/localeStore';
 import { veylloDashboardUrl } from '@/lib/veyllo';
@@ -338,8 +339,8 @@ export default function LoginPage() {
             setBootstrapError(password !== confirmPassword ? t('errPwMismatch') : t('errPwEnter'));
             return;
         }
-        if (password.length < 8) {
-            setBootstrapError(t('errPwShort'));
+        if (password.length < MIN_PASSWORD_LEN) {
+            setBootstrapError(t('errPwShort', { n: MIN_PASSWORD_LEN }));
             return;
         }
         // No API call yet — collect credentials locally and continue: first the
@@ -445,6 +446,18 @@ export default function LoginPage() {
                 // Back to the step that asks for the code; everything typed after it stays.
                 setSetupCodeError(t('errSetupCode'));
                 setCreateAdminSubStep('setup_code');
+                setStep('create_admin');
+                setIsLoading(false);
+                return;
+            }
+            const passwordRefusal: Record<string, string> = {
+                password_too_short: t('errPwShort', { n: MIN_PASSWORD_LEN }),
+                password_common: t('errCommonPassword'),
+            };
+            if (passwordRefusal[String(bootstrapData?.code || '')]) {
+                // Back to the step that asks for the password; everything typed after it stays.
+                setBootstrapError(passwordRefusal[String(bootstrapData.code)]);
+                setCreateAdminSubStep('password');
                 setStep('create_admin');
                 setIsLoading(false);
                 return;
@@ -1061,7 +1074,7 @@ export default function LoginPage() {
                                 {createAdminSubStep === 'password' && (
                                     <>
                                         <h2 className="text-lg font-semibold text-gray-900 mb-1">{t('passwordTitle')}</h2>
-                                        <p className="text-sm text-gray-500 mb-6">{t('passwordSubtitle', { username: username || 'admin' })}</p>
+                                        <p className="text-sm text-gray-500 mb-6">{t('passwordSubtitle', { username: username || 'admin', n: MIN_PASSWORD_LEN })}</p>
                                         <form onSubmit={handleBootstrapPasswordStep} className="space-y-5">
                                             <div className="space-y-1.5">
                                                 <label className="text-sm font-medium text-gray-700 ml-1">{t('passwordLabel')}</label>
@@ -1073,7 +1086,7 @@ export default function LoginPage() {
                                                         onChange={(e) => setPassword(e.target.value)}
                                                         className="w-full pl-11 pr-11 py-3 bg-white border border-gray-200 rounded-xl text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all"
                                                         placeholder="••••••••"
-                                                        minLength={8}
+                                                        minLength={MIN_PASSWORD_LEN}
                                                     />
                                                     <button type="button" aria-label={showPassword ? tAuth('hidePassword') : tAuth('showPassword')} onClick={() => setShowPassword(!showPassword)} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400">
                                                         {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
@@ -1106,7 +1119,7 @@ export default function LoginPage() {
                                                 </button>
                                                 <button
                                                     type="submit"
-                                                    disabled={!password || password !== confirmPassword || password.length < 8 || isLoading}
+                                                    disabled={!password || password !== confirmPassword || password.length < MIN_PASSWORD_LEN || isLoading}
                                                     className="flex-1 bg-gray-900 hover:bg-gray-800 text-white font-medium py-3 rounded-xl shadow-sm transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-[#e6e6e6] dark:text-[#181818] dark:hover:bg-[#f5f5f5] dark:shadow-none"
                                                 >
                                                     {isLoading ? (

@@ -992,16 +992,18 @@ def test_an_immediate_half_close_ends_the_connection(cert, monkeypatch, kind):
 
 
 async def _streaming_socket(scope, receive, send):
-    """A WebSocket that sends 64 KiB frames, 16 MiB at most, far more than a client that
-    reads nothing takes, then waits for its end. A bound and not an endless loop: uvicorn's
-    sans-I/O protocol before 0.53 never makes a sender wait, and an endless loop there never
-    yields and grows until the process is killed (measured: the out-of-memory killer)."""
+    """A WebSocket that sends 64 KiB frames, 64 MiB at most, then waits for its end. Far more
+    than a client that reads nothing takes (about 1.8 MB on Linux) or than Windows took in
+    one send (4 MB), so bytes are still unsent when the client ends its side. A bound and not
+    an endless loop: uvicorn's sans-I/O protocol before 0.53 never makes a sender wait, and an
+    endless loop there never yields and grows until the process is killed (measured: the
+    out-of-memory killer)."""
     if scope["type"] != "websocket":
         return
     await receive()
     await send({"type": "websocket.accept"})
     try:
-        for _ in range(256):
+        for _ in range(1024):
             await send({"type": "websocket.send", "bytes": b"x" * 65536})
         while (await receive())["type"] != "websocket.disconnect":
             pass
@@ -1090,7 +1092,11 @@ def test_a_tls_transport_shows_the_tcp_transport_under_it(cert):
     """The close watch reads a TLS close's progress on the TCP transport under the TLS one,
     through asyncio's private _ssl_protocol._transport: on Python 3.11+ the TLS transport
     counts only its own encryption backlog (measured: 0 against 1.6 MB right after a 4 MB
-    write). Pinned directly, so a change in asyncio fails here and not as a slow reader."""
+    write). Pinned directly, so a change in asyncio fails here and not as a slow reader.
+
+    On Windows only the TCP transport under the TLS one is pinned: the Proactor transport
+    hands a write to the kernel whole, and the kernel took the 4 MB at once (measured on the
+    Windows runner, Python 3.12: both counts 0), so nothing waits there to be counted."""
     import ssl as ssl_module
     seen = {}
 
@@ -1121,6 +1127,9 @@ def test_a_tls_transport_shows_the_tcp_transport_under_it(cert):
     asyncio.run(_run())
     inner = seen["inner"]
     assert inner is not None and callable(getattr(inner, "get_write_buffer_size", None))
+    if sys.platform == "win32":
+        pytest.skip("the Proactor transport hands the write to the kernel whole: nothing "
+                    "is left under the TLS transport to count")
     assert seen["unsent"] > seen["tls"], "the TCP transport's bytes were not counted"
 
 
@@ -1331,13 +1340,14 @@ def test_the_door_picks_the_websocket_by_what_it_does(monkeypatch, own_pause, ex
 
 
 def test_a_door_websocket_makes_its_sender_wait():
-    """A WebSocket on a door makes its app wait while the client reads nothing: of 32 MiB
+    """A WebSocket on a door makes its app wait while the client reads nothing: of 64 MiB
     sent to a client that never reads, a small part is taken and the sender waits for the
-    rest (measured: 28 of 512 frames of 64 KiB on uvicorn 0.49, 29 on 0.54). uvicorn's
-    sans-I/O protocol before 0.53, uvicorn's own default from 0.50 to 0.52, never makes it
-    wait: all 512 frames went into the process at once (0.49), and a sender in an endless
-    loop grew it until the out-of-memory killer ended it. MUTATION: the door picks the
-    sans-I/O protocol on every uvicorn - red on one before 0.53 (the locked one)."""
+    rest (measured: 28 of 1024 frames of 64 KiB on uvicorn 0.49, 29 on 0.54; the limit of
+    half leaves room for a kernel that takes more, as Windows took 4 MB in one send).
+    uvicorn's sans-I/O protocol before 0.53, uvicorn's own default from 0.50 to 0.52, never
+    makes it wait: all 1024 frames went into the process at once (0.49), and a sender in an
+    endless loop grew it until the out-of-memory killer ended it. MUTATION: the door picks
+    the sans-I/O protocol on every uvicorn - red on one before 0.53 (the locked one)."""
     sent = []
 
     async def flood(scope, receive, send):
@@ -1346,7 +1356,7 @@ def test_a_door_websocket_makes_its_sender_wait():
         await receive()
         await send({"type": "websocket.accept"})
         try:
-            for _ in range(512):
+            for _ in range(1024):
                 await send({"type": "websocket.send", "bytes": b"x" * 65536})
                 sent.append(1)
         except Exception:
@@ -1363,7 +1373,7 @@ def test_a_door_websocket_makes_its_sender_wait():
             taken = len(sent)
         finally:
             raw.close()
-    assert taken < 256, f"{taken} of 512 frames of 64 KiB taken by a client that reads nothing"
+    assert taken < 512, f"{taken} of 1024 frames of 64 KiB taken by a client that reads nothing"
 
 
 # --------------------------------------------------------------------------- open files

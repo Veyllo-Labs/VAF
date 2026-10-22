@@ -24,6 +24,7 @@ def _utc_now_naive():
 from typing import Any, Dict, Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -309,7 +310,10 @@ async def create_user(data: UserCreate, _: Dict[str, Any] = Depends(require_admi
                     },
                 )
             except UserAdminError as e:
-                raise HTTPException(status_code=e.http_status, detail=e.message)
+                # The code travels with the sentence, so the user editor can say a refused
+                # password (`password_too_short`, `password_common`) in the admin's language.
+                return JSONResponse(status_code=e.http_status,
+                                    content={"detail": e.message, "code": e.code})
 
             return {
                 "id": str(user.id),

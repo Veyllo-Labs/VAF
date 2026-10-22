@@ -19,7 +19,8 @@ from vaf.auth.user_admin import MIN_PASSWORD_LEN
 ROOT = Path(__file__).resolve().parents[1]
 POLICY = ROOT / "web" / "lib" / "passwordPolicy.ts"
 PAGES = (ROOT / "web" / "app" / "login" / "page.tsx",
-         ROOT / "web" / "components" / "settings" / "AccountSection.tsx")
+         ROOT / "web" / "components" / "settings" / "AccountSection.tsx",
+         ROOT / "web" / "components" / "SettingsModal.tsx")
 
 
 def test_the_page_constant_is_the_rule():
@@ -48,3 +49,19 @@ def test_the_sentences_take_the_number(locale):
         assert "{n}" in value and not re.search(r"\d", value), (key, value)
     assert "{n}" in catalogue["account"]["tooShort"]
     assert catalogue["onboarding"]["errCommonPassword"] and catalogue["account"]["errCommonPassword"]
+
+
+def test_the_admin_door_words_the_rule():
+    """The user editor's new account and password reset say a refused password in the admin's
+    language, and the form names the rule under its password field. MUTATION: show the server's
+    sentence for the create refusal again - red."""
+    src = (ROOT / "web" / "components" / "SettingsModal.tsx").read_text(encoding="utf-8")
+    refusal = src[src.index("const passwordRefusal"):].split("};", 1)[0]
+    assert "'password_too_short') return t('account.tooShort', { n: MIN_PASSWORD_LEN })" in refusal
+    assert "'password_common') return t('account.errCommonPassword')" in refusal
+    assert "alert(passwordRefusal(err) || `Failed to create user:" in src
+    assert "alert(passwordRefusal(err)\n                    || `${tModals('editUser.resetPasswordFailed')}" in src
+    assert "{tModals('addUser.passwordRule', { n: MIN_PASSWORD_LEN })}" in src
+    for locale in sorted(p.stem for p in (ROOT / "web" / "messages").glob("*.json")):
+        rule = json.loads((ROOT / "web" / "messages" / f"{locale}.json").read_bytes())["modals"]["addUser"]["passwordRule"]
+        assert "{n}" in rule and not re.search(r"\d", rule), (locale, rule)

@@ -45,16 +45,12 @@ def _bootstrap(h, monkeypatch, password):
 
 
 def _admin_create(h, monkeypatch, password):
+    """The admin's new account answers a refusal with its code, which the user editor words."""
     r = h.client(None).post("/api/users", json={"username": "carol", "password": password})
     if r.status_code == 201:
         return None
-    from vaf.auth import user_admin
-    messages = {}
-    for candidate, code in ((ELEVEN, "password_too_short"), (COMMON, "password_common")):
-        with pytest.raises(user_admin.UserAdminError) as e:
-            user_admin.validate_password(candidate)
-        messages[e.value.message] = code
-    return messages.get(r.json().get("detail"), r.json().get("detail"))
+    assert r.json().get("detail")
+    return r.json().get("code")
 
 
 def _own_change(h, monkeypatch, password):

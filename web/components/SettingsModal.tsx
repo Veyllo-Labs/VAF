@@ -37,6 +37,7 @@ import SshSection from './settings/SshSection';
 import FtpSection from './settings/FtpSection';
 import AccountSection from './settings/AccountSection';
 import SessionsSection from './settings/SessionsSection';
+import { MIN_PASSWORD_LEN } from '@/lib/passwordPolicy';
 import SandboxSection from './settings/SandboxSection';
 import RemoteAccessSection from './settings/RemoteAccessSection';
 import CertificateSection from './settings/CertificateSection';
@@ -2640,8 +2641,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 setAccessPreset('standard');
                 setShowNewUserPassword(false);
             } else {
-                const err = await res.json();
-                alert(`Failed to create user: ${err.detail || 'Unknown error'}`);
+                const err = await res.json().catch(() => ({}));
+                alert(passwordRefusal(err) || `Failed to create user: ${err.detail || 'Unknown error'}`);
             }
         } catch (error) {
             console.error('Error creating user:', error);
@@ -2679,6 +2680,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         }
     };
 
+    // A password the rule refused, in the admin's language (vaf/auth/user_admin.py
+    // validate_password); '' for any other refusal, which keeps the server's own sentence.
+    const passwordRefusal = (err: { code?: string }): string => {
+        if (err?.code === 'password_too_short') return t('account.tooShort', { n: MIN_PASSWORD_LEN });
+        if (err?.code === 'password_common') return t('account.errCommonPassword');
+        return '';
+    };
+
     // Admin-only: reset a user's password to a fresh temporary one (shown once) or clear their 2FA.
     const handleResetPassword = async () => {
         if (!editingUser) return;
@@ -2689,8 +2698,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 const data = await res.json();
                 setPwResetTemp(data.temporary_password || null);
             } else {
-                const err = await res.json();
-                alert(`${tModals('editUser.resetPasswordFailed')}${tCommon('labelSeparator')}${err.detail || ''}`);
+                const err = await res.json().catch(() => ({}));
+                alert(passwordRefusal(err)
+                    || `${tModals('editUser.resetPasswordFailed')}${tCommon('labelSeparator')}${err.detail || ''}`);
             }
         } catch {
             alert(tModals('editUser.resetPasswordFailed'));
@@ -7707,6 +7717,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             {showNewUserPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                                         </button>
                                     </div>
+                                    <p className="text-xs text-gray-400 ml-1">{tModals('addUser.passwordRule', { n: MIN_PASSWORD_LEN })}</p>
                                 </div>
                             </div>
 

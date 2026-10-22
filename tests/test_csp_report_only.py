@@ -115,19 +115,19 @@ def test_the_report_sink_dedupes_caps_and_strips(sink):
     h, app, browser, lines = sink
     for _ in range(3):
         assert _post(browser, _report()).status_code == 204
-    assert lines == [("webui", "[CSP] script-src-elem blocked https://cdn.example/x.js on "
-                               "https://10.0.0.2:8443/ (reported by alice)")]
+    assert lines == [("webui", '[CSP] reported by "alice": script-src-elem blocked '
+                               "https://cdn.example/x.js on https://10.0.0.2:8443/")]
     _post(browser, _report(blocked="https://other.example/y.js?token=secret#frag",
                            page="https://10.0.0.2:8443/chat?id=1"))
-    assert lines[-1] == ("webui", "[CSP] script-src-elem blocked https://other.example/y.js on "
-                                  "https://10.0.0.2:8443/chat (reported by alice)")
+    assert lines[-1] == ("webui", '[CSP] reported by "alice": script-src-elem blocked '
+                                  "https://other.example/y.js on https://10.0.0.2:8443/chat")
     assert "secret" not in str(lines)
     # The Reporting API's shape is read too.
     _post(browser, [{"type": "csp-violation", "body": {"effectiveDirective": "img-src",
                                                          "blockedURL": "https://img.example/a.png",
                                                          "documentURL": "https://10.0.0.2:8443/"}}])
-    assert lines[-1][1] == ("[CSP] img-src blocked https://img.example/a.png on https://10.0.0.2:8443/ "
-                            "(reported by alice)")
+    assert lines[-1][1] == ('[CSP] reported by "alice": img-src blocked https://img.example/a.png '
+                            "on https://10.0.0.2:8443/")
     # A body over 16 KiB, declared or sent in pieces, is refused and not written.
     before = len(lines)
     big = _report(blocked="https://cdn.example/" + "x" * 17 * 1024)
@@ -166,8 +166,21 @@ def test_a_report_keeps_no_credentials_and_names_who_sent_it(sink):
     "this machine". MUTATION: rebuild the origin from netloc; drop the reporter - red."""
     h, app, browser, lines = sink
     _post(browser, _report(blocked="https://user:s3cret@evil.example:8080/p?q=1#f"))
-    assert lines[-1][1] == ("[CSP] script-src-elem blocked https://evil.example:8080/p on "
-                            "https://10.0.0.2:8443/ (reported by alice)")
+    assert lines[-1][1] == ('[CSP] reported by "alice": script-src-elem blocked '
+                            "https://evil.example:8080/p on https://10.0.0.2:8443/")
     assert "s3cret" not in str(lines)
     _post(h.client(None, app=app), _report())
-    assert lines[-1][1].endswith("(reported by this machine)")
+    assert lines[-1][1].startswith("[CSP] reported by this machine: script-src-elem blocked")
+
+
+def test_a_report_cannot_pose_as_another_reporter(sink):
+    """The reporter comes first and the sender's fields hold no space, so text in a reported
+    URL cannot read as the reporter. MUTATION: the reporter at the end again; keep spaces in
+    a field - red."""
+    _h, _app, browser, lines = sink
+    _post(browser, _report(blocked="https://x.example/ (reported by this machine)",
+                           directive="script-src-elem  'unsafe-inline'"))
+    assert lines[-1][1] == ('[CSP] reported by "alice": script-src-elem blocked '
+                            "https://x.example/%20(reported%20by%20this%20machine) on "
+                            "https://10.0.0.2:8443/")
+    assert lines[-1][1].count(" ") == 8

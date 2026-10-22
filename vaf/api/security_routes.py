@@ -1155,9 +1155,10 @@ async def security_overview(admin: Dict[str, Any] = Depends(require_admin)) -> D
 # signed-in account opens can send reports: a body over CSP_REPORT_MAX_BYTES is refused unread
 # past that, each distinct (directive, blocked, page, reporter) is written once per day and
 # process, and at most CSP_REPORT_DAILY_LINES lines a day, then one line that says the rest is
-# dropped. Every line names who reported it (the account, or "this machine" for the tokenless
-# window): any signed-in account can write lines, so an origin is reproduced before the
-# enforcing policy allows it, never taken from a line alone.
+# dropped. Every line names who reported it first (the account, quoted, or "this machine" for
+# the tokenless window), and the sender's fields after it hold no space (written %20), so a
+# field cannot pose as the reporter: any signed-in account can write lines, so an origin is
+# reproduced before the enforcing policy allows it, never taken from a line alone.
 CSP_REPORT_MAX_BYTES = 16 * 1024
 CSP_REPORT_DAILY_LINES = 200
 _csp_lock = threading.Lock()
@@ -1167,7 +1168,9 @@ _csp_day = {"day": "", "seen": set(), "dropped_said": False}
 def _origin_and_path(value: Any) -> str:
     """A URL as origin and path, with no credentials, query or fragment (they can carry
     passwords, tokens and personal data); a keyword such as `inline` or `eval` as it is.
-    Control characters become spaces, so one report is one log line."""
+    Control characters and spaces become %20 (a browser never reports a raw space in a URL):
+    one report is one log line, and no field holds a space that would read as the line's own
+    words."""
     from urllib.parse import urlsplit
     text = str(value or "").strip()[:500]
     if "://" in text:
@@ -1182,7 +1185,23 @@ def _origin_and_path(value: Any) -> str:
         text = f"{parts.scheme}://{host}{port}{parts.path}"
     elif text.startswith("/"):
         text = urlsplit(text).path
-    return "".join(ch if ch.isprintable() else " " for ch in text)[:300] or "-"
+    return "".join(ch if ch.isprintable() and not ch.isspace() else "%20" for ch in text)[:300] or "-"
+
+
+def _first_word(value: Any) -> str:
+    """A directive as its first word (a violated directive carries its sources after it)."""
+    words = str(value or "").split()
+    return _origin_and_path(words[0] if words else "")
+
+
+def _reporter(username: str) -> str:
+    """Who sent a report, for the line: the account's name quoted, so it cannot read as the
+    machine or close early; the tokenless window is this machine."""
+    if not username:
+        return "this machine"
+    import json
+    return json.dumps("".join(ch if ch.isprintable() else " " for ch in username)[:64],
+                      ensure_ascii=False)
 
 
 def _csp_fields(report: Any) -> Optional[tuple]:
@@ -1191,11 +1210,11 @@ def _csp_fields(report: Any) -> Optional[tuple]:
     if isinstance(report, dict) and isinstance(report.get("csp-report"), dict):
         body = report["csp-report"]
         directive = body.get("effective-directive") or body.get("violated-directive")
-        return (_origin_and_path(directive).split(" ")[0], _origin_and_path(body.get("blocked-uri")),
+        return (_first_word(directive), _origin_and_path(body.get("blocked-uri")),
                 _origin_and_path(body.get("document-uri")))
     if isinstance(report, dict) and report.get("type") == "csp-violation" and isinstance(report.get("body"), dict):
         body = report["body"]
-        return (_origin_and_path(body.get("effectiveDirective")).split(" ")[0],
+        return (_first_word(body.get("effectiveDirective")),
                 _origin_and_path(body.get("blockedURL")), _origin_and_path(body.get("documentURL")))
     return None
 
@@ -1218,7 +1237,7 @@ def _record_csp(fields: tuple, reporter: str) -> None:
         else:
             _csp_day["seen"].add(key)
             directive, blocked, page = fields
-            line = f"[CSP] {directive} blocked {blocked} on {page} (reported by {reporter})"
+            line = f"[CSP] reported by {reporter}: {directive} blocked {blocked} on {page}"
     append_domain_log("webui", line)
 
 
@@ -1243,7 +1262,7 @@ async def csp_report(request: Request):
     except Exception:
         return Response(status_code=204)
     caller = getattr(request.state, "user", None) or {}
-    reporter = _origin_and_path(caller.get("username") or "") if caller.get("username") else "this machine"
+    reporter = _reporter(str(caller.get("username") or ""))
     for report in (payload if isinstance(payload, list) else [payload])[:20]:
         fields = _csp_fields(report)
         if fields:

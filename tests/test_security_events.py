@@ -7,9 +7,13 @@ Pins: dual sink (structured JSONL + human-readable security_<date>.log whose
 line format the Logs window parser understands), flood throttle per (kind, ip),
 no-secrets field surface, and the firewall-module derivations built on top.
 """
+import asyncio
 import json
+import pathlib
 import re
 from datetime import datetime
+
+import pytest
 
 from vaf.api import security_routes
 from vaf.api.security_routes import (derive_firewall_status, events_for_module,
@@ -154,11 +158,43 @@ def test_events_route_filters_by_module_before_the_limit(monkeypatch):
     assert exc.value.status_code == 400
 
 
-def test_one_event_is_one_line(tmp_path, monkeypatch):
+def _windows_line_ends(monkeypatch):
+    """Write text files as Windows does: a line feed becomes carriage return plus line feed
+    wherever the caller passes no newline, the default of a text-mode file there. Reads keep
+    their own translation."""
+    real = pathlib.Path.open
+
+    def _open(self, mode="r", buffering=-1, encoding=None, errors=None, newline=None):
+        if newline is None and "b" not in mode and any(c in mode for c in "wax+"):
+            newline = "\r\n"
+        return real(self, mode, buffering, encoding, errors, newline)
+    monkeypatch.setattr(pathlib.Path, "open", _open)
+
+
+def _shown_lines(filename):
+    """The readable log's lines as the Logs window shows them: logs_routes.read_log reads in
+    text mode, where a line ends at a line feed, a carriage return plus line feed or a lone
+    carriage return, on every platform."""
+    from vaf.api import logs_routes
+    shown = asyncio.run(logs_routes.read_log(filename, tail=500, _={}))
+    return [ln for ln in shown["lines"] if ln]
+
+
+@pytest.mark.parametrize("line_end", ["posix", "windows"])
+def test_one_event_is_one_line(tmp_path, monkeypatch, line_end):
     """A login name with a newline wrote a forged second line into the readable log (measured:
     "... [password_changed] user=admin ..."). Every value from outside is one line there; the
-    JSONL keeps it as it was. MUTATION: drop the sanitizing - red."""
+    JSONL keeps it as it was. MUTATION: drop the sanitizing - red.
+
+    The log is read as the Logs window reads it, so a lone carriage return from a value is a
+    line break and the platform's own line end is not. The writer opens the file in text
+    mode, so on Windows every line ends in a carriage return plus line feed; the raw bytes
+    split at each line feed kept that carriage return, and the Windows runner failed here
+    while the log was right. The windows row writes those line ends on any host. MUTATION:
+    split the raw bytes at each line feed again - red (windows)."""
     _fresh(tmp_path, monkeypatch)
+    if line_end == "windows":
+        _windows_line_ends(monkeypatch)
     forged = "mallory\n2026-10-20T03:00:00 [password_changed] user=admin"
     for breaker in ("\n", "\r", "\u2028", "\u2029", "\x0b", "\x85"):
         se._last_emit.clear()
@@ -166,8 +202,9 @@ def test_one_event_is_one_line(tmp_path, monkeypatch):
                               path=f"/api{breaker}y", detail=f"wrong{breaker}password",
                               channel=f"web{breaker}z")
     day = datetime.now().strftime("%Y-%m-%d")
-    lines = (tmp_path / f"security_{day}.log").read_bytes().decode("utf-8").split("\n")
-    lines = [ln for ln in lines if ln]
+    if line_end == "windows":
+        assert b"\r\n" in (tmp_path / f"security_{day}.log").read_bytes(), "not simulated"
+    lines = _shown_lines(f"security_{day}.log")
     assert len(lines) == 6, lines
     assert all(re.match(r"^\d{4}-\d{2}-\d{2}T[\d:.]+\s+\[login_failed\]", ln) for ln in lines)
     assert not any(ch in "".join(lines) for ch in ("\r", "\u2028", "\u2029", "\x0b", "\x85"))

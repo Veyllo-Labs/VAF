@@ -58,18 +58,21 @@ It never dials loopback, where a tokenless request is the owner.
 - **door.py**: what a listener other devices reach holds to, before any HTTP is judged:
   `door_options()` for `uvicorn.Config` (a request head within 15 s and 16 KiB, trailers
   included, 431 above it; a connection cap, 503 above it, WebSocket upgrades included; at
-  most 16 requests sent ahead of their answers; every close ended within 5 s; no `Server`
-  header; uvicorn's forwarded-header trust off, so `connection_client_ip` is the only reader
-  of `X-Forwarded-For` there), `door_event_loop()` (a 15 s TLS handshake),
-  `raise_open_file_limit()`, and the body limits the proxy holds a request to. The HTTPS
-  proxy and `vaf run --web` are built on it. Not imported by the package: it needs uvicorn.
+  most 16 requests sent ahead of their answers; every close bounded by its progress (60 s
+  without any) and 10 s for the goodbye after it, with lingering for the rest of an answered
+  request's body; no `Server` header; uvicorn's forwarded-header trust off, so
+  `connection_client_ip` is the only reader of `X-Forwarded-For` there), `door_event_loop()`
+  (a 15 s TLS handshake), `raise_open_file_limit()`, and the body limits the proxy holds a
+  request to. The HTTPS proxy and `vaf run --web` are built on it. Not imported by the
+  package: it needs uvicorn.
 - **admission.py**: `AdmissionGuard(app)`, the admission check as a pure ASGI door: it
-  refuses a client `is_allowed_ip` does not admit, HTTP with 403 (the connection closed when
-  the request sends no body; a browser loading a page gets a short page saying what to do,
-  everything else JSON) and a WebSocket with 4003 before accept, and records `ip_blocked`
-  with the path in `detail`. `ByLocalNetwork` picks a door per request by the Local Network
-  setting and `this_machine_only` is the door while it is off; both of VAF's doors are built
-  on them. Not imported by the package: it needs starlette, which a slim install lacks.
+  refuses a client `is_allowed_ip` does not admit, HTTP with 403 and the connection closed
+  (a door lingers for a body still arriving first; a browser loading a page gets a short
+  page saying what to do, everything else JSON) and a WebSocket with 4003 before accept, and
+  records `ip_blocked` with the path in `detail`. `ByLocalNetwork` picks a door per request
+  by the Local Network setting and `this_machine_only` is the door while it is off; both of
+  VAF's doors are built on them. Not imported by the package: it needs starlette, which a
+  slim install lacks.
 - **binding.py**: interfaces, the inbound policy, the real client, the foreign-origin
   decision, port resolution, the outbound address classifier.
 - **firewall.py**: the OS firewall for the admitted networks (firewalld, ufw, iptables,

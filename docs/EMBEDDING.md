@@ -705,25 +705,27 @@ What an embedded agent can and cannot do on the host - the short version of
   `local_network_vpn_only`).
   To refuse everybody else, wrap your app the way VAF's two doors (the HTTPS proxy and the
   backend) wrap theirs: `vaf.network.admission.AdmissionGuard(app)` judges HTTP requests
-  and WebSocket handshakes alike (403, which closes the connection when the request sends
-  no body, or close 4003 before accept), shows a browser that loads a page a short page
-  saying what to do, and records the refusal; `admits=` takes another rule, such as
-  `binding.is_localhost` for this machine only, and `reason=` and `next_step=` its words.
-  VAF's two doors follow its Local Network setting per request through
-  `ByLocalNetwork(network=..., this_machine=this_machine_only(app))`; a door of yours that
-  has no such switch needs only the guard. An address check of your own written as a
-  Starlette `BaseHTTPMiddleware` would let every WebSocket through: Starlette hands such a
-  middleware HTTP scopes only. A uvicorn door of your own takes VAF's door settings:
+  and WebSocket handshakes alike (403 with the connection closed, or close 4003 before
+  accept), shows a browser that loads a page a short page saying what to do, and records
+  the refusal; `admits=` takes another rule, such as `binding.is_localhost` for this
+  machine only, and `reason=` and `next_step=` its words. VAF's two doors follow its Local
+  Network setting per request through `ByLocalNetwork(network=...,
+  this_machine=this_machine_only(app))`; a door of yours that has no such switch needs
+  only the guard. An address check of your own written as a Starlette `BaseHTTPMiddleware`
+  would let every WebSocket through: Starlette hands such a middleware HTTP scopes only. A
+  uvicorn door of your own takes VAF's door settings:
   `**vaf.network.ssl_utils.server_tls_options(cert, key)` for the TLS policy (TLS 1.2 with
   forward-secret AEAD suites only, and TLS 1.3), and `**vaf.network.door.door_options()`
   on a loop from `vaf.network.door.door_event_loop()` for a 15 s TLS handshake, every
-  close ended within 5 s, a request head of at most 16 KiB within 15 s (431 above it), a
-  connection cap (503 above it, for a WebSocket upgrade too), at most 16 requests sent
-  ahead of their answers, a raised open-file limit, and no forwarded-header trust of
-  uvicorn's own (it trusts `FORWARDED_ALLOW_IPS`, and with `*` a device that writes
-  `X-Forwarded-For: 127.0.0.1` is this machine). Without them uvicorn holds a slow client
-  open as long as it likes and accepts any head size and the static-RSA and CBC suites of
-  OpenSSL's default (measured on VAF's own door,
+  close bounded by its progress (60 s without any, then 10 s for the goodbye), lingering
+  for the rest of a body whose request is answered (so a 403 or 413 stays readable), a
+  request head of at most 16 KiB within 15 s (431 above it), a connection cap (503 above
+  it, for a WebSocket upgrade too), at most 16 requests sent ahead of their answers, a
+  raised open-file limit, and no forwarded-header trust of uvicorn's own (it trusts
+  `FORWARDED_ALLOW_IPS`, and with `*` a device that writes `X-Forwarded-For: 127.0.0.1` is
+  this machine). Without them uvicorn holds a slow client open as long as it likes and
+  accepts any head size and the static-RSA and CBC suites of OpenSSL's default (measured
+  on VAF's own door,
   [NETWORK_FEATURES.md](setup/NETWORK_FEATURES.md#the-https-door-holds)).
   `inbound_policy()` returns that policy whole, `firewall_sources()` the networks
   an OS firewall should open, `local_interfaces()` this machine's LAN and VPN

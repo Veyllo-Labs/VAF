@@ -15,10 +15,13 @@ this is the quick look between edits.
 
 Placement and reuse: harness internals beside browser_interactive, whose
 helpers carry everything browser-shaped here - endpoint resolution honours
-the per-user pool, the busy answer comes from the same managers that arbitrate
-the lease, and file targets ride the EXISTING workspace mirror
-(/home/browser/Workspace) instead of a serving route of their own. The probe
-never evicts anyone: a browser somebody is using answers busy instead.
+the per-user pool, the busy answer and the jar handover come from the same
+managers that arbitrate the lease (hold_for_probe: on the shared browser a
+probe for another scope, or the first one after a restart, runs the verified
+profile wipe first, exactly as an agent run does), and file targets ride the
+EXISTING workspace mirror (/home/browser/Workspace) instead of a serving route
+of their own. The probe never evicts anyone: a browser somebody is using
+answers busy instead.
 
 localhost: the container's localhost is the container. Targets addressing
 localhost/127.0.0.1/0.0.0.0 are rewritten to host.docker.internal (mapped by
@@ -73,14 +76,15 @@ def _rewrite_local(target: str):
     return target, False
 
 
-def _file_target_to_container_url(target: str, scope: str, manager) -> Optional[str]:
-    """A host file under the caller's own project root, as a mirror file:// URL.
+def _file_target_relpath(target: str, scope: str) -> Optional[str]:
+    """A host file under the caller's own project root, as its path inside the mirror.
 
     The jail is the point: only files under get_user_projects_root(scope) may
-    be rendered - the same boundary every file tool enforces - and the mirror
-    is synced first so the file the coder wrote two seconds ago is the file
-    the browser opens. Returns None when the path is outside the jail or the
-    root is unknown."""
+    be rendered - the same boundary every file tool enforces. Returns None when
+    the path is outside the jail, is not a file, or the root is unknown. No
+    browser work here: the target is refused before the browser is held or
+    wiped, and render_page syncs the mirror only after the jar handover, which
+    purges the Workspace on a change of hands."""
     from vaf.core.session import get_user_projects_root
     root = get_user_projects_root(scope)
     if root is None:
@@ -92,9 +96,7 @@ def _file_target_to_container_url(target: str, scope: str, manager) -> Optional[
             return None
         if not os.path.isfile(real_target):
             return None
-        manager.sync_workspace(scope)
-        rel = os.path.relpath(real_target, real_root).replace(os.sep, "/")
-        return f"file:///home/browser/Workspace/{rel}"
+        return os.path.relpath(real_target, real_root).replace(os.sep, "/")
     except Exception:
         return None
 
@@ -106,7 +108,7 @@ def render_page(target: str, user_scope_id: Optional[str] = None,
     Never raises. BLOCKING (CDP, load wait): call from a worker thread.
     Answer keys: ok, busy, error, requested, url, rewritten, title, text,
     console, page_errors, failed_requests, screenshot_b64."""
-    from vaf.core.browser_interactive import resolve_browser_scope
+    from vaf.core.browser_interactive import BrowserHandoverError, resolve_browser_scope
 
     out = {"ok": False, "busy": False, "error": "", "requested": target,
            "url": "", "rewritten": False, "title": "", "text": "",
@@ -116,25 +118,43 @@ def render_page(target: str, user_scope_id: Optional[str] = None,
         scope = resolve_browser_scope(user_scope_id)
         cdp_base, manager = _endpoint_for(scope)
 
-        # A browser somebody is using is theirs: the probe waits for no one
-        # and evicts no one - busy is an answer, not an error to retry blindly.
-        if manager.has_activity():
-            out["busy"] = True
-            out["error"] = ("The browser is in use (an interactive session or an "
-                            "agent run). Try again when it is free.")
-            return out
-
         t = target.strip()
+        rel = None
         if t.lower().startswith(("http://", "https://")):
             url, out["rewritten"] = _rewrite_local(t)
         else:
-            url = _file_target_to_container_url(t, scope, manager)
-            if url is None:
+            rel = _file_target_relpath(t, scope)
+            if rel is None:
                 out["error"] = (
                     "Not renderable: the target must be an http(s) URL or an "
                     "existing file inside your own project workspace.")
                 return out
-        result = _render_via_cdp(cdp_base, url, wait_ms=wait_ms, max_text=max_text)
+
+        # A browser somebody is using is theirs: the probe waits for no one
+        # and evicts no one - busy is an answer, not an error to retry blindly.
+        # Held from the jar handover to the parking, so no other holder's jar
+        # can be restored under the page this reads.
+        try:
+            with manager.hold_for_probe(scope) as free:
+                if not free:
+                    out["busy"] = True
+                    out["error"] = ("The browser is in use (an interactive session, an "
+                                    "agent run or another page check). Try again when "
+                                    "it is free.")
+                    return out
+                if rel is not None:
+                    # After the handover: the mirror is synced into a Workspace
+                    # that holds this scope's files only, and the file the coder
+                    # wrote two seconds ago is the file the browser opens.
+                    manager.sync_workspace(scope)
+                    url = f"file:///home/browser/Workspace/{rel}"
+                result = _render_via_cdp(cdp_base, url, wait_ms=wait_ms, max_text=max_text)
+        except BrowserHandoverError:
+            out["error"] = ("The browser could not be handed over safely: the previous "
+                            "user's browser data could not be wiped, so nothing was "
+                            "rendered. Try again in a moment.")
+            append_domain_log("webui", "[browser_render] handover refused; nothing rendered")
+            return out
         out.update(result)
         return out
     except Exception as e:

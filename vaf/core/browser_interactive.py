@@ -37,6 +37,7 @@ evict the interactive lease when a run starts.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -960,7 +961,10 @@ class InteractiveBrowserManager:
         # shared jar and the install-time busy answer cannot undo that: the
         # winner would browse over the loser's restored cookies. One mutex
         # makes the busy check, the wipe and the cookie restore one atomic
-        # story; worst-case wait is one profile wipe (~5s), fallback path only.
+        # story; worst-case wait is one profile wipe (~5s), fallback path only,
+        # or one render probe, which holds it from its handover to its parking
+        # (hold_for_probe; a few seconds for a page that loads, bounded by the
+        # probe's own CDP timeouts for one that does not).
         self._handover_mutex = threading.Lock()
         self._lease: Optional[InteractiveLease] = None
         self._agent_active = False
@@ -1162,64 +1166,111 @@ class InteractiveBrowserManager:
         promise, not isolation) and are only logged."""
         scope = resolve_browser_scope(user_scope_id)
         with self._handover_mutex:
-            with self._lock:
-                jar_scope = self._last_cookie_scope
-                dedicated = self._dedicated_scope
-            if dedicated is not None:
-                # A per-user instance: the profile IS this user's, and nobody
-                # else's state can be in it. Only the clean-start promise of a
-                # non-persistent run still applies, and never a profile wipe.
-                if not persistent:
-                    try:
-                        _cookie_op(self.cdp_base(), "scrub")
-                    except Exception as e:
-                        append_domain_log("webui", f"[browser_interactive] clean-start scrub failed: {e}")
-            elif jar_scope != scope:
+            self._hand_jar_locked(scope, persistent=persistent, continuing=continuing)
+
+    @contextlib.contextmanager
+    def hold_for_probe(self, user_scope_id: Optional[str] = None):
+        """Hold this browser for one render probe: yields True to render, False for busy.
+
+        The probe (vaf.core.browser_render) navigates the browser's first page and
+        reads its text, so it is a holder of the jar like an agent run, and it gets
+        the same handover: hand_jar_to_run's rules with persistent=True. On the
+        SHARED browser a scope change or an unknown owner (the first use after a
+        server restart) is the purge plus the verified profile wipe, fail-closed:
+        BrowserHandoverError, raised before anything is navigated. Afterwards the
+        jar is the probe's scope, so the files its file target mirrors into the
+        Workspace are purged by the next holder's handover instead of showing up
+        in that person's file picker. A dedicated instance gets no wipe (only its
+        own user is routed to it) and no scrub (persistent).
+
+        The handover mutex is held for the WHOLE probe, not just the handover: a
+        lease or a run that started between the wipe and the navigation would get
+        its own jar restored under the probe, and the probe would read that
+        holder's page. Taken without waiting, with the busy check repeated inside
+        it - the probe waits for no one and evicts no one, so a held mutex or any
+        activity answers busy. On the shared browser that check includes an agent
+        run spawned into another process (is_agent_active's queue scan), which
+        this process's mutex cannot stop; on a dedicated instance it would also
+        count other users' runs on their own instances, so there it stays local."""
+        scope = resolve_browser_scope(user_scope_id)
+        if not self._handover_mutex.acquire(blocking=False):
+            yield False
+            return
+        try:
+            if self.has_activity() or (self._dedicated_scope is None
+                                       and self.is_agent_active()):
+                yield False
+                return
+            self._hand_jar_locked(scope, persistent=True, continuing=False, lane="render")
+            yield True
+        finally:
+            self._handover_mutex.release()
+
+    def _hand_jar_locked(self, scope: str, *, persistent: bool, continuing: bool,
+                         lane: str = "agent") -> None:
+        """hand_jar_to_run's body, for a caller that already holds _handover_mutex
+        (hand_jar_to_run itself, and hold_for_probe, which keeps the mutex for the
+        whole probe). One implementation, so the probe's handover cannot drift from
+        the agent run's. Raises BrowserHandoverError like hand_jar_to_run; `lane`
+        only labels the refusal in the log."""
+        with self._lock:
+            jar_scope = self._last_cookie_scope
+            dedicated = self._dedicated_scope
+        if dedicated is not None:
+            # A per-user instance: the profile IS this user's, and nobody
+            # else's state can be in it. Only the clean-start promise of a
+            # non-persistent run still applies, and never a profile wipe.
+            if not persistent:
                 try:
-                    # Same rule as the interactive handover: a previous
-                    # holder's transfer folders never ride into another
-                    # scope's session.
-                    _purge_container_downloads(self._container_name)
-                    if not verified_profile_wipe(self._container_name, self.cdp_base()):
-                        raise BrowserHandoverError("profile wipe not confirmed")
-                    _cookie_op(self.cdp_base(), "clear_cookies")
-                    with self._lock:
-                        self._ws_sig = None
-                        self._last_cookie_scope = scope
-                except Exception as e:
-                    append_domain_log(
-                        "webui", f"[browser_interactive] agent cross-scope handover refused: {e}")
-                    try:
-                        from vaf.core.security_events import log_security_event
-                        log_security_event("browser_handover_failed",
-                                           username=str(scope or "")[:32],
-                                           detail=str(e)[:200], channel="browser")
-                    except Exception:
-                        pass
-                    if isinstance(e, BrowserHandoverError):
-                        raise
-                    raise BrowserHandoverError(str(e)) from e
-            elif not persistent and not continuing:
-                # Same scope, but the run promised a clean start: quick scrub -
-                # the person's own logins are already exported and come back on
-                # their next interactive lease or persistent run. In full mode
-                # the clean start deepens to a profile wipe (the mode's one
-                # remaining meaning; a scope change wipes regardless).
-                # `continuing` overrides the promise: a run that takes over the
-                # person's LIVE session exists to carry it on, and scrubbing
-                # would log out the very session it was handed.
-                try:
-                    if scrub_mode() == "full":
-                        request_profile_wipe(self._container_name)
                     _cookie_op(self.cdp_base(), "scrub")
                 except Exception as e:
                     append_domain_log("webui", f"[browser_interactive] clean-start scrub failed: {e}")
+        elif jar_scope != scope:
             try:
-                _set_download_behavior(self.cdp_base(), allow=downloads_mode() != "off")
+                # Same rule as the interactive handover: a previous
+                # holder's transfer folders never ride into another
+                # scope's session.
+                _purge_container_downloads(self._container_name)
+                if not verified_profile_wipe(self._container_name, self.cdp_base()):
+                    raise BrowserHandoverError("profile wipe not confirmed")
+                _cookie_op(self.cdp_base(), "clear_cookies")
+                with self._lock:
+                    self._ws_sig = None
+                    self._last_cookie_scope = scope
             except Exception as e:
-                append_domain_log("webui", f"[browser_interactive] download policy not applied: {e}")
-            with self._lock:
-                self._last_cookie_scope = scope
+                append_domain_log(
+                    "webui", f"[browser_interactive] {lane} cross-scope handover refused: {e}")
+                try:
+                    from vaf.core.security_events import log_security_event
+                    log_security_event("browser_handover_failed",
+                                       username=str(scope or "")[:32],
+                                       detail=str(e)[:200], channel="browser")
+                except Exception:
+                    pass
+                if isinstance(e, BrowserHandoverError):
+                    raise
+                raise BrowserHandoverError(str(e)) from e
+        elif not persistent and not continuing:
+            # Same scope, but the run promised a clean start: quick scrub -
+            # the person's own logins are already exported and come back on
+            # their next interactive lease or persistent run. In full mode
+            # the clean start deepens to a profile wipe (the mode's one
+            # remaining meaning; a scope change wipes regardless).
+            # `continuing` overrides the promise: a run that takes over the
+            # person's LIVE session exists to carry it on, and scrubbing
+            # would log out the very session it was handed.
+            try:
+                if scrub_mode() == "full":
+                    request_profile_wipe(self._container_name)
+                _cookie_op(self.cdp_base(), "scrub")
+            except Exception as e:
+                append_domain_log("webui", f"[browser_interactive] clean-start scrub failed: {e}")
+        try:
+            _set_download_behavior(self.cdp_base(), allow=downloads_mode() != "off")
+        except Exception as e:
+            append_domain_log("webui", f"[browser_interactive] download policy not applied: {e}")
+        with self._lock:
+            self._last_cookie_scope = scope
 
     def sweep_downloads(self, user_scope_id: Optional[str]) -> List[str]:
         """Drain finished downloads to their owner's workspace. Mode-gated,

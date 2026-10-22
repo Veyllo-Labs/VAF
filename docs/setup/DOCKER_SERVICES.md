@@ -365,11 +365,20 @@ When a runtime is present (or has just been set up), the installer manages the s
      build, so a full cache hit still got a new image ID: compose recreated `vaf-browser`
      and `vaf-tts` at every start although nothing in them had changed, and the browser
      pool, which compares image IDs, recreated every per-user browser the first time it
-     was opened afterwards. A value of `BUILDX_NO_DEFAULT_ATTESTATIONS` already in VAF's
-     environment is kept, and on such an engine it brings that per-start recreation back.
+     was opened afterwards. `docker info --format '{{range .DriverStatus}}{{.}} {{end}}'`
+     prints `driver-type io.containerd.snapshotter.v1` on such an engine; on the classic
+     image store builds carry no such index, and nothing changes. The first start after
+     the update that brought this switch still recreates the two containers and each
+     per-user browser one last time (the images built before it carry the attestation);
+     from the next start on they are left alone until their content changes. A value of
+     `BUILDX_NO_DEFAULT_ATTESTATIONS` already in VAF's environment is kept, so a value that
+     turns the attestations back on (such as `0`) brings the per-start recreation back.
      The installers' first build and a hand-run `--build` from these docs attach the
-     attestation, which costs one recreation at the next VAF start. On the classic image
-     store builds carry no such index, and nothing changes.
+     attestation, which costs one recreation at the next VAF start. The sandbox
+     environments' image is built separately (`docker build` in
+     `vaf/core/environment_image.py`, with the attestation) and has no such churn: it is
+     built only when it is missing or older than its age budget, so its ID changes only
+     with a real rebuild.
    - The cache hit has a second face for the browser: its apt layer installs an UNPINNED
      Debian Chromium, and a cached `--build` never re-runs that layer, so the browser engine
      would age forever while `--build` reports success. The age gate closes that class: once

@@ -699,20 +699,28 @@ partition:
   own browser instead of `busy`.
 - **Handover wipe, verified and fail-closed:** when the browser changes hands to a
   DIFFERENT scope - an interactive lease, an agent run (`stop_for_agent_run` carries
-  the run's scope), or an unknown jar after a server restart - the whole Chromium
-  profile is wiped before the new scope's stored logins are optionally loaded:
+  the run's scope), a `render_check` probe (`hold_for_probe`, the agent run's
+  handover with its jar kept), or an unknown jar after a server restart - the whole
+  Chromium profile is wiped before the new scope's stored logins are optionally loaded:
   cookies, every site's stored state, history, Chromium-saved passwords, autofill,
   bookmarks, downloads, the HTTP disk cache and the NSS certificate/key database
   (client certificates AND their private keys) die together. The wipe is VERIFIED (the
   supervisor's consumption of the wipe marker is confirmed), and a handover whose
   wipe cannot be confirmed is REFUSED - no lease, no run, a
   `browser_handover_failed` security event - instead of proceeding over the previous
-  holder's state. This is not configurable. A non-persistent agent run of the SAME
+  holder's state (a refused probe opens nothing and answers an error). The shared
+  container survives restarts of VAF, so its profile is still there at the next start;
+  every lane meets the unknown-owner rule, the probe included, which used to render in
+  whatever logins the container held. This is not configurable. A non-persistent agent run of the SAME
   scope still gets a quick scrub (its documented promise is a clean start;
   `VAF_BROWSER_SCRUB=full` deepens that to a best-effort profile wipe). Saved logins
   live in the same per-scope storage-state files as the agent's persistent sessions,
   above. Concurrent handovers are serialized by a dedicated mutex, so two starts can
-  never interleave their wipe-and-restore sequences on the shared jar.
+  never interleave their wipe-and-restore sequences on the shared jar. A probe holds
+  that mutex until it has rendered and parked the page, and takes it without waiting
+  (a held mutex, a lease, a run or, on the shared container, a spawned agent run in
+  another process answers busy): a lease or a run that started between its wipe and
+  its navigation would otherwise get its jar restored under the page the probe reads.
 - **Stream access is a per-lease ticket in the URL path** (`/api/browser-vnc/t/<ticket>/`),
   validated on every asset request and on the stream websocket, and dead the moment the
   lease ends. The path is auth-middleware-exempt for the same reason the A2A room seat
@@ -720,7 +728,8 @@ partition:
 - **The old profile residual is closed; what remains is named.** History, Chromium-saved
   passwords, autofill, bookmarks and the HTTP disk cache used to survive a quick-mode
   handover on the shared container; the mandatory verified wipe above deletes them with
-  the profile on every change of hands, so the next holder inherits nothing. The
+  the profile on every change of hands, on every lane that drives that browser (lease,
+  agent run, `render_check` probe), so the next holder inherits nothing. The
   password manager itself is pinned ON by managed policy - deliberate: agent runs and
   interactive re-login depend on it, and cross-user isolation is carried by the
   mandatory scope-change wipe (shared container) and per-user profile volumes (pool),
@@ -741,14 +750,21 @@ partition:
   workspace MIRROR (`/home/browser/Workspace`, the upload lane) is treated the same
   way: it is the holder's own files by construction, it is purged unread on a scope
   change so the next person can neither read nor upload it, and the profile wipe wipes
-  it with the profile.
+  it with the profile. A `render_check` of a project file mirrors into it too; the
+  probe takes the jar first and mirrors after its handover, so its files are the
+  probe's scope's and leave with the next change of hands. Before, the probe left the
+  jar on the previous owner, whose next lease saw no change of hands and purged
+  nothing, so the probe's files sat in that person's file picker.
 - **The genuine partition is the per-user pool** (`browser_pool_max`, default 2,
   admin-only, overridable by `VAF_BROWSER_POOL_MAX`; see the pool
   section in [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md)): each user scope gets a
   browser container with its own profile volume AND its own docker network, so nothing
   is shared with anyone and users browse in PARALLEL; hand-over scrubbing then only
   guards the shared fallback container, and a dedicated
-  instance is never scrubbed or profile-wiped. Raising `browser_pool_max` raises the
+  instance is never scrubbed or profile-wiped. An instance keeps the settings of its
+  `docker run` for life, so on adoption its proxy, timezone and Safe Browsing key are
+  compared with the current ones and a drifted instance is recreated on its own volume
+  (a per-user browser created before a proxy was set kept browsing direct). Raising `browser_pool_max` raises the
   number of people who are partitioned rather than scrubbed, which is why the residual
   above is a property of the fallback and not of the product. With the pool active,
   every fallback onto the shared container is recorded as a `browser_pool_fallback`

@@ -10,8 +10,11 @@ mirror sync, and the report both agents read. The three wiring guarantees
 (coder registration, advertised schema, host-gateway on both container lanes)
 are pinned statically so they cannot drift apart one file at a time.
 """
+import contextlib
 import os
 import re
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -22,6 +25,9 @@ _REPO = Path(__file__).resolve().parents[1]
 
 
 class _Manager:
+    """Stands in for the manager's probe hold; the real one (handover, mutex,
+    busy check) is pinned by the shared-browser tests below."""
+
     def __init__(self, busy=False):
         self.busy = busy
         self.synced = []
@@ -31,6 +37,10 @@ class _Manager:
 
     def has_activity(self):
         return self.busy
+
+    @contextlib.contextmanager
+    def hold_for_probe(self, scope):
+        yield not self.busy
 
     def sync_workspace(self, scope):
         self.synced.append(scope)
@@ -135,6 +145,219 @@ def test_render_page_never_raises(monkeypatch):
                         lambda: (_ for _ in ()).throw(RuntimeError("no docker")))
     out = br.render_page("https://example.com/")
     assert out["ok"] is False and "render failed" in out["error"]
+
+
+# ── the shared browser: the probe is a holder like any other ──────────────────
+
+@pytest.fixture
+def shared(monkeypatch, tmp_path):
+    """A REAL shared manager (no dedicated scope, empty jar tracker: the state of
+    every fresh VAF process), with docker and CDP replaced by recorders. The
+    container's Workspace is a set the purge empties and the mirror adds to,
+    the way `rm -rf Workspace/*` and `tar -xf` treat the real folder."""
+    import vaf.core.browser_interactive as bi
+    import vaf.core.browser_pool as bp
+    import vaf.core.containers as containers
+    import vaf.core.session as sess
+    import vaf.core.subagent_ipc as ipc_mod
+
+    monkeypatch.delenv("VAF_BROWSER_WORKSPACE_SYNC", raising=False)
+    events = []
+    workspace = set()
+    state = {"wipe_ok": True}
+
+    def _purge(name):
+        events.append("purge")
+        workspace.clear()
+
+    def _wipe(name, cdp_base=""):
+        events.append("wipe")
+        return state["wipe_ok"]
+
+    def _tar(name, tar_path):
+        import tarfile
+        with tarfile.open(tar_path) as tf:
+            workspace.update(tf.getnames())
+        events.append("mirror")
+        return 0
+
+    monkeypatch.setattr(bi, "_purge_container_downloads", _purge)
+    monkeypatch.setattr(bi, "verified_profile_wipe", _wipe)
+    monkeypatch.setattr(bi, "_tar_stream_to_container", _tar)
+    monkeypatch.setattr(bi, "_cookie_op",
+                        lambda base, op, cookies=None: events.append(f"cookie:{op}") or [])
+    monkeypatch.setattr(bi, "resolve_cdp_ws_url", lambda base: "ws://stub/devtools/browser/x")
+    monkeypatch.setattr(bi, "_set_download_behavior", lambda base, allow: None)
+    monkeypatch.setattr(bi, "_sweep_container_downloads", lambda name, scope: [])
+    monkeypatch.setattr(bi, "park_browser_idle", lambda base: None)
+    monkeypatch.setattr(bi, "_current_page", lambda base: None)
+    monkeypatch.setattr(containers, "docker",
+                        lambda args, timeout=60: type("R", (), {"returncode": 0, "stdout": "",
+                                                                "stderr": ""})())
+
+    class _IPC:
+        tasks = []
+
+        def get_active_tasks(self, session_id=None):
+            return list(self.tasks)
+
+        def get_pending_tasks(self, session_id=None):
+            return []
+
+    ipc = _IPC()
+    monkeypatch.setattr(ipc_mod, "get_ipc", lambda: ipc)
+
+    class _NoPool:
+        def resolve(self, scope):
+            return None
+
+    monkeypatch.setattr(bp, "get_browser_pool", lambda: _NoPool())
+    roots = {}
+    for scope, files in (("scope-a", {"a.txt": b"a"}),
+                         ("scope-b", {"index.html": b"<p>b</p>",
+                                      "b-private-notes.txt": b"notes of b"})):
+        root = tmp_path / scope
+        root.mkdir()
+        for fn, data in files.items():
+            (root / fn).write_bytes(data)
+        roots[scope] = root
+    monkeypatch.setattr(sess, "get_user_projects_root", lambda scope: roots.get(scope))
+
+    m = bi.InteractiveBrowserManager()
+    m._emit = lambda payload, session_id: None
+    m._ensure_janitor = lambda: None
+    monkeypatch.setattr(bi, "get_interactive_manager", lambda: m)
+
+    def _cdp(cdp_base, url, *, wait_ms, max_text):
+        events.append("render")
+        m._test_seen = {"workspace": set(workspace), "mutex_held": m._handover_mutex.locked()}
+        return {"ok": True, "url": url, "title": "", "text": "x", "console": [],
+                "page_errors": [], "failed_requests": [], "screenshot_b64": "", "error": ""}
+
+    monkeypatch.setattr(br, "_render_via_cdp", _cdp)
+    m._test_events = events
+    m._test_workspace = workspace
+    m._test_state = state
+    m._test_roots = roots
+    m._test_ipc = ipc
+    return m
+
+
+def test_a_render_on_the_shared_browser_hands_the_jar_over_first(shared):
+    """The probe navigates the shared browser's first page and returns its text
+    and a screenshot. A fresh process does not know whose state the container
+    holds (the container outlives a restart), so the first render is a change of
+    hands like an interactive start or an agent run: purge, VERIFIED wipe, jar
+    cleared - all before the page is opened - and the jar is the probe's then.
+    Before, it rendered in whatever logins the container held.
+
+    MUTATION: render without the handover (drop `_hand_jar_locked` from
+    hold_for_probe) - red."""
+    out = br.render_page("https://mail.example.com/", user_scope_id="scope-b")
+    assert out["ok"] is True
+    ev = shared._test_events
+    assert ev[:3] == ["purge", "wipe", "cookie:clear_cookies"], ev
+    assert ev.index("render") > ev.index("cookie:clear_cookies")
+    assert shared._last_cookie_scope == "scope-b"
+
+    # The same scope again: its own jar, no second wipe.
+    ev.clear()
+    assert br.render_page("https://mail.example.com/", user_scope_id="scope-b")["ok"] is True
+    assert "wipe" not in ev and ev[-1] == "render"
+
+
+def test_an_unconfirmed_wipe_never_renders(shared):
+    """Fail-closed like the other lanes: a wipe that cannot be confirmed means the
+    previous holder's state may still be in the profile, so nothing is opened,
+    the answer is an error, and the jar does not change owner.
+
+    MUTATION: swallow BrowserHandoverError in hold_for_probe and render anyway -
+    red."""
+    shared._test_state["wipe_ok"] = False
+    out = br.render_page("https://mail.example.com/", user_scope_id="scope-b")
+    assert out["ok"] is False and out["busy"] is False
+    assert "handed over" in out["error"]
+    assert "render" not in shared._test_events
+    assert shared._last_cookie_scope is None
+
+
+def test_a_file_render_leaves_nothing_for_the_next_holder(shared):
+    """The reverse direction: a file render mirrors the caller's project tree into
+    the container's Workspace, and the mirror only adds. When the render left the
+    jar on the previous owner, that owner's next lease saw no change of hands,
+    purged nothing, and the other scope's files sat in their file picker. Now the
+    render takes the jar, and the next lease's handover purges the mirror.
+
+    MUTATIONS: render without the handover (red: b's files during a's lease);
+    sync the mirror before the handover (red: the file is not there to render)."""
+    shared.start("scope-a", "sess-a", save=False)
+    shared.stop("user", requester_scope="scope-a")
+    page = shared._test_roots["scope-b"] / "index.html"
+    out = br.render_page(str(page), user_scope_id="scope-b")
+    assert out["ok"] is True
+    assert "index.html" in shared._test_seen["workspace"], "the rendered file was not mirrored"
+    assert "a.txt" not in shared._test_seen["workspace"], "a's files were in b's render"
+
+    r = shared.start("scope-a", "sess-a2", save=False)
+    assert r["status"] == "active"
+    assert not {"index.html", "b-private-notes.txt"} & shared._test_workspace, (
+        f"b's files reached a's lease: {sorted(shared._test_workspace)}")
+
+
+def test_the_probe_holds_the_browser_until_it_has_rendered(shared):
+    """Held from the handover to the parking: a lease or a run that started
+    between the wipe and the navigation would have its own jar restored under the
+    probe, which would then read that holder's page.
+
+    MUTATION: release the mutex right after the handover - red."""
+    assert br.render_page("https://example.com/", user_scope_id="scope-b")["ok"] is True
+    assert shared._test_seen["mutex_held"] is True
+    assert not shared._handover_mutex.locked(), "the probe did not let go of the browser"
+
+
+def test_a_handover_in_progress_answers_busy_at_once(shared):
+    """The probe waits for no one: while another handover holds the browser it
+    answers busy instead of queueing behind it (and then rendering into the jar
+    that handover installed).
+
+    MUTATION: wait for the mutex instead of trying it - red (renders late)."""
+    shared._handover_mutex.acquire()
+    threading.Timer(1.0, shared._handover_mutex.release).start()
+    t0 = time.monotonic()
+    out = br.render_page("https://example.com/", user_scope_id="scope-b")
+    assert out["busy"] is True and "render" not in shared._test_events
+    assert time.monotonic() - t0 < 0.9
+    time.sleep(1.1)
+
+
+def test_an_agent_run_in_another_process_makes_the_shared_browser_busy(shared):
+    """A spawned browser_agent child drives the shared container from its own
+    process, where this process's lease state and mutex do not reach. The queue
+    scan is how the interactive start sees it, and the probe asks the same.
+
+    MUTATION: check only this process's activity - red."""
+    shared._test_ipc.tasks = [type("T", (), {"agent_type": "browser_agent"})()]
+    out = br.render_page("https://example.com/", user_scope_id="scope-b")
+    assert out["busy"] is True
+    assert "render" not in shared._test_events and "wipe" not in shared._test_events
+
+
+def test_a_dedicated_instance_renders_without_a_wipe(shared, monkeypatch):
+    """Only its own user is routed to a per-user instance, so its profile is theirs
+    to keep: no wipe, no scrub - and another user's agent run on THEIR instance
+    (the queue scan cannot tell instances apart) does not make it busy.
+
+    MUTATIONS: apply the queue scan on dedicated instances too (red: busy);
+    hand over non-persistently (red: scrubbed)."""
+    import vaf.core.browser_interactive as bi
+    mine = bi.InteractiveBrowserManager(cdp_base_url="http://127.0.0.1:49222",
+                                        container_name="vaf-browser-u-0123456789ab",
+                                        dedicated_scope="scope-b")
+    monkeypatch.setattr(br, "_endpoint_for", lambda scope: (mine.cdp_base(), mine))
+    shared._test_ipc.tasks = [type("T", (), {"agent_type": "browser_agent"})()]
+    out = br.render_page("https://example.com/", user_scope_id="scope-b")
+    assert out["ok"] is True
+    assert shared._test_events == ["render"], shared._test_events
 
 
 # ── the tool face ─────────────────────────────────────────────────────────────

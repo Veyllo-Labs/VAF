@@ -430,6 +430,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   goes on from the recent messages and writes a new summary the next time the conversation
   grows long. Restart VAF after updating so the fix takes effect.
 
+- **A page check on the shared browser no longer sees another user's logins.** When
+  `render_check` (the agent's and the coder's quick look at a page) ran on the shared browser,
+  it opened the page in whatever the browser held: another user's logins, or after a restart
+  anyone's. It now gets the same handover as the interactive browser and the browser agent:
+  when someone else used the browser last, or VAF has just started, the browser's data is
+  wiped and the wipe confirmed before the page is opened, and if it cannot be confirmed
+  nothing is opened and the check reports an error. The project files it copies into
+  the browser for a file check are removed when the next person takes the browser over; before,
+  they could appear in that person's file picker. A per-user browser was never affected.
+
+- **Your own browser follows a proxy or timezone change.** A per-user browser kept the proxy,
+  timezone and Safe Browsing key it was created with, so one created before you set a proxy
+  kept browsing without it, from your real address. It is now recreated with the current
+  settings the next time it is opened after such a change; logins, history and bookmarks stay.
+
 ### Fixed
 
 - **The server service no longer calls sudo at every start.** The installed service cannot
@@ -484,13 +499,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   by-hand command with `--env-file` and the profile's service list. The installers made the
   same call on every upgrade, until VAF's next start put the password back; they now pass
   the file too.
-- **Your own browser is no longer rebuilt after every start.** On Docker installations that
-  use the containerd image store, every VAF start gave the browser and text-to-speech images
-  a new identity although nothing in them had changed. Both containers were recreated at
-  each start, and each person's own browser was thrown away and recreated the first time it
-  was opened afterwards: logins survived, but opening it took longer. The images now keep
-  their identity until their content really changes, for example when the browser receives
-  its periodic security update.
+- **Your own browser is no longer recreated after every start.** On Docker installations
+  that use the containerd image store, every VAF start gave the browser and text-to-speech
+  images a new identity although nothing in them had changed. The browser and text-to-speech
+  containers were recreated at each start, and each person's own browser was thrown away and
+  recreated the first time it was opened afterwards: logins survived, but opening it took
+  longer. The images now keep their identity until their content really changes, for example
+  when the browser receives its periodic security update. The first start after this update
+  still recreates them one last time; from the next start on they are left alone.
 
 ## [0.1.0a33] - 2026-10-11
 

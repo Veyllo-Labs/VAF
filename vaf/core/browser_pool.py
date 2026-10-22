@@ -30,19 +30,21 @@ via docker inspect at first use), published loopback-only on ephemeral host
 ports exactly like the shared one, and named by a scope HASH - a container
 listing must not leak who uses the machine. Stopped instances keep their
 container and profile volume; the reaper only ever `docker stop`s an idle
-instance, it never removes data. A container is removed in one case only: its
+instance, it never removes data. A container is removed in two cases only: its
 image ID differs from the one that image name points to now (a rebuild moved
-the tag). It is then recreated on the current image before it is handed out,
-on the same profile volume.
+the tag), or it was created with other values of the settings it takes from
+VAF's environment (proxy, timezone, Safe Browsing key). It is then recreated
+before it is handed out, on the same profile volume.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import threading
 import time
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional
 
 from vaf.core import containers
 from vaf.core.log_helper import append_domain_log
@@ -190,6 +192,46 @@ def _short_image_id(image_id: str) -> str:
     return image_id.split(":", 1)[-1][:12]
 
 
+# The settings an instance takes from VAF's environment at `docker run`, which
+# a container keeps for life. The stream credential is not among them: it is
+# stable by design (read from the keyring), and an instance whose credential
+# no longer matches fails its health probe and is never handed out, visibly.
+_FOLLOWED_SETTINGS = ("TZ", "VAF_BROWSER_PROXY", "VAF_BROWSER_GOOGLE_API_KEY")
+
+
+def _instance_settings() -> Dict[str, str]:
+    """The followed settings as `_create` passes them now; an unset one is absent."""
+    out = {"TZ": os.environ.get("VAF_BROWSER_TZ", "Europe/Berlin")}
+    proxy = os.environ.get("VAF_BROWSER_PROXY", "").strip()
+    if proxy:
+        out["VAF_BROWSER_PROXY"] = proxy
+    gkey = os.environ.get("VAF_BROWSER_GOOGLE_API_KEY", "").strip()
+    if gkey:
+        out["VAF_BROWSER_GOOGLE_API_KEY"] = gkey
+    return out
+
+
+def _drifted_settings(env_json: str) -> List[str]:
+    """Names of the followed settings whose value in a container (its
+    `{{json .Config.Env}}`) differs from what `_create` would pass now. Names
+    only, never values: a proxy URL can carry a password, and the Safe Browsing
+    key is a credential. An unreadable env answers none, so it never triggers
+    a recreate on its own; empty and absent count as the same."""
+    try:
+        entries = json.loads(env_json or "null")
+    except Exception:
+        return []
+    if not isinstance(entries, list):
+        return []
+    have: Dict[str, str] = {}
+    for entry in entries:
+        if isinstance(entry, str):
+            key, _, value = entry.partition("=")
+            have[key] = value
+    want = _instance_settings()
+    return [k for k in _FOLLOWED_SETTINGS if have.get(k, "") != want.get(k, "")]
+
+
 class BrowserPool:
     """Singleton allocator of per-user browser containers."""
 
@@ -271,9 +313,17 @@ class BrowserPool:
             raise PoolExhausted(reason)
         return None
 
-    def _outdated_image(self, name: str) -> Optional[Tuple[str, str]]:
-        """(have, want) image IDs when this container runs an image other than the
-        current one; None when it is current or either side cannot be read.
+    def _recreate_reasons(self, name: str) -> List[str]:
+        """Why this container must be recreated before it is handed out; empty
+        when it may be adopted. Two reasons, read with one inspect of the
+        template and one of the container:
+
+        - it runs an image other than the current one (both short IDs named);
+        - it was created with other values of the followed settings (the
+          proxy, the timezone, the Safe Browsing key; names only). A container
+          keeps the env of its `docker run` for life, so a per-user browser
+          created before the operator set a proxy kept browsing direct, around
+          the proxy the shared browser uses.
 
         A container is pinned to the image ID it was created from, for life.
         The stack start rebuilds the browser image (its --build, and the age
@@ -290,21 +340,30 @@ class BrowserPool:
         moved the tag without recreating it (an optional `up --build` that failed
         or was cancelled by a quit) would recreate the instance at every use.
 
-        A failed lookup answers None on purpose: the instance is adopted, never
-        thrown away on a docker hiccup."""
+        A failed lookup on either side answers no reason on purpose: the
+        instance is adopted, never thrown away on a docker hiccup."""
         try:
             template = self._resolve_template()
             if template is None:
-                return None
+                return []
             r = containers.docker(["inspect", template[0], "--format", "{{.Id}}"], timeout=20)
             want = (r.stdout or "").strip() if r.returncode == 0 else ""
-            r = containers.docker(["inspect", name, "--format", "{{.Image}}"], timeout=20)
-            have = (r.stdout or "").strip() if r.returncode == 0 else ""
-            if want and have and want != have:
-                return have, want
-            return None
+            r = containers.docker(["inspect", name, "--format",
+                                   "{{.Image}}\t{{json .Config.Env}}"], timeout=20)
+            have, _, env_json = ((r.stdout or "").strip() if r.returncode == 0 else "").partition("\t")
+            have = have.strip()
+            if not (want and have):
+                return []
+            reasons = []
+            if want != have:
+                reasons.append(f"runs an outdated image (have {_short_image_id(have)}, "
+                               f"current {_short_image_id(want)})")
+            drifted = _drifted_settings(env_json)
+            if drifted:
+                reasons.append(f"was created with other settings ({', '.join(drifted)})")
+            return reasons
         except Exception:
-            return None
+            return []
 
     def _take_ownership(self, scope: str, name: str) -> bool:
         """Record a container this pool just started or adopted. False when the pool is
@@ -328,18 +387,16 @@ class BrowserPool:
         name = _NAME_PREFIX + containers.scope_hash(scope)
 
         state = containers.container_state(name)
-        outdated = self._outdated_image(name) if state in ("running", "exited") else None
-        if outdated is not None:
+        reasons = self._recreate_reasons(name) if state in ("running", "exited") else []
+        if reasons:
             # Recreate rather than adopt. The PROFILE VOLUME is untouched by
             # this (it is named and mounted afresh), so the person's logins,
             # history and bookmarks come back with the new container; only the
-            # stale binary is thrown away. Both IDs go into the line: a recreate
-            # at every start, with no change to the image, shows up as a new
-            # "current" ID each time.
-            have, want = outdated
+            # stale binary or the stale settings are thrown away. Both image IDs
+            # go into the line: a recreate at every start, with no change to the
+            # image, shows up as a new "current" ID each time.
             append_domain_log("webui", f"[browser_pool] instance for scope hash {containers.scope_hash(scope)} "
-                                       f"runs an outdated image (have {_short_image_id(have)}, "
-                                       f"current {_short_image_id(want)}); recreating on the current one")
+                                       f"{' and '.join(reasons)}; recreating it")
             containers.docker(["rm", "-f", name], timeout=60)
             with self._lock:
                 self._instances.pop(scope, None)
@@ -415,6 +472,9 @@ class BrowserPool:
             return None
         image, _shared_network = template
         volume = _VOLUME_PREFIX + containers.scope_hash(scope)
+        # What this container keeps for life; adoption compares it again
+        # (`_recreate_reasons`), so a later change of these is not missed.
+        settings = _instance_settings()
         # ONE NETWORK PER INSTANCE, never the shared browser's. Inside the
         # container Chromium's CDP proxy listens on 0.0.0.0:9222 with NO
         # authentication - safe only because the host publishes it on loopback
@@ -445,7 +505,7 @@ class BrowserPool:
             # browser only.
             "--add-host", "host.docker.internal:host-gateway",
             "-p", "127.0.0.1::9222", "-p", "127.0.0.1::6901",
-            "-e", f"TZ={os.environ.get('VAF_BROWSER_TZ', 'Europe/Berlin')}",
+            "-e", f"TZ={settings['TZ']}",
             "-v", f"{volume}:/home/browser",
             # Same hardening the compose browser gets. SYS_CHROOT because
             # Chromium's zygote chroots its sandboxed children (measured to
@@ -464,14 +524,12 @@ class BrowserPool:
             # to --no-sandbox loudly, so the browser still works.
             append_domain_log("webui", "[browser_pool] seccomp profile not found; "
                                        "instance runs without Chromium's own sandbox")
-        proxy = os.environ.get("VAF_BROWSER_PROXY", "").strip()
-        if proxy:
-            args += ["-e", f"VAF_BROWSER_PROXY={proxy}"]
+        if "VAF_BROWSER_PROXY" in settings:
+            args += ["-e", f"VAF_BROWSER_PROXY={settings['VAF_BROWSER_PROXY']}"]
         # Same Safe Browsing key the compose service gets: a pooled instance
         # must not be the lane with weaker phishing protection.
-        gkey = os.environ.get("VAF_BROWSER_GOOGLE_API_KEY", "").strip()
-        if gkey:
-            args += ["-e", f"VAF_BROWSER_GOOGLE_API_KEY={gkey}"]
+        if "VAF_BROWSER_GOOGLE_API_KEY" in settings:
+            args += ["-e", f"VAF_BROWSER_GOOGLE_API_KEY={settings['VAF_BROWSER_GOOGLE_API_KEY']}"]
         # The stream port's credential, the same one the compose service gets
         # through compose.env. Without it the container mints its own, nobody
         # can watch the stream, the health probe fails and this instance is

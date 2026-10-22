@@ -51,7 +51,9 @@ created without it has no working interactive stream. See
 
 On first run, Docker builds the `vaf-browser` image from `docker/browser/Dockerfile` (~30 seconds). Later starts pass `--build` too: an unchanged build context is a cache hit and costs seconds, while a changed one is rebuilt rather than silently reused. Without that, a checkout that moves ahead of its images keeps running the old ones with nothing to show for it.
 
-A cache hit also keeps the image's ID, because VAF's start builds with buildx's default attestations off (`BUILDX_NO_DEFAULT_ATTESTATIONS=1`). With them, on an engine that uses the containerd image store, every build got a new image ID even when nothing in the image had changed: the browser and TTS containers were recreated at every start, and every per-user browser looked outdated (see "A personal browser follows the image" below). A value of the variable already in VAF's environment is kept. A hand-run `--build` such as the one above gives the image a new ID once on such an engine, which costs one recreation at the next VAF start; see [DOCKER_SERVICES.md](../setup/DOCKER_SERVICES.md#start-the-services).
+A cache hit also keeps the image's ID. VAF's start builds with buildx's default attestations off (`BUILDX_NO_DEFAULT_ATTESTATIONS=1`); with them, every build got a new image ID even when nothing in the image had changed. That happens only on an engine that uses the containerd image store: `docker info --format '{{range .DriverStatus}}{{.}} {{end}}'` prints `driver-type io.containerd.snapshotter.v1` on such an engine. There the browser and TTS containers were recreated at every start, and every per-user browser looked outdated (see "A personal browser follows the image" below).
+
+A value of the variable already in VAF's environment is kept. A hand-run `--build` such as the one above gives the image a new ID once on such an engine, which costs one recreation at the next VAF start, and so does the first start after the update that brought this switch; see [DOCKER_SERVICES.md](../setup/DOCKER_SERVICES.md#start-the-services).
 
 ### Verify it's running
 
@@ -839,7 +841,19 @@ profile volume is named and remounted, so history, logins and bookmarks come bac
 it - only the stale binary is thrown away. The recreate line in the `webui` log names
 both short image IDs (`have ..., current ...`). Because a cache hit keeps the image's ID
 (see [Start the browser container](#start-the-browser-container)), this happens once per
-real image change (a Dockerfile change, the age gate), not at every start.
+real image change (a Dockerfile change, the age gate), not at every start. A `current`
+ID that is different after every start, with no Dockerfile change and no age gate in
+between, means builds get a new ID again: check whether VAF's environment sets
+`BUILDX_NO_DEFAULT_ATTESTATIONS` to a value that turns the attestations back on, such
+as `0` or `false`.
+
+**A personal browser follows the settings too.** An instance takes `VAF_BROWSER_PROXY`,
+`VAF_BROWSER_TZ` and `VAF_BROWSER_GOOGLE_API_KEY` from VAF's environment when it is
+created, and a container keeps them for life. Before an instance is adopted, those
+values are compared with the current ones (in the same inspect that reads its image
+ID); on a difference it is recreated on the same profile volume, and the `webui` log
+line names the settings that changed, never their values. Without this, a per-user
+browser created before a proxy was set kept browsing direct.
 
 **Fallbacks are visible, and strict mode refuses them.** With the pool active, every
 resolution that ends on the shared container (capacity, memory floor, docker trouble)
@@ -1102,6 +1116,8 @@ In a systemd unit they are `Environment=` lines, like the port above.
 
 When `VAF_BROWSER_PROXY` is set, the entrypoint adds `--proxy-server` and WebRTC leak protection (`--force-webrtc-ip-handling-policy=disable_non_proxied_udp`) so the real IP does not leak around the proxy. Set `VAF_BROWSER_TZ` to a timezone consistent with the proxy's exit region (a timezone that contradicts the IP is a tell).
 
+Both take effect at the next start of VAF. The shared browser is recreated by compose when they change; a per-user browser is recreated at its next use (see "A personal browser follows the settings too" under [Per-user browser pool](#per-user-browser-pool-parallel-use)).
+
 ---
 
 ## Docker Container Details
@@ -1298,6 +1314,18 @@ rendering it parks the page on `about:blank` (an animating page with nobody
 watching burns CPU permanently). Everything runs through the same per-user
 resolution as the rest of the browser stack, so a pooled user probes their own
 instance.
+
+On the SHARED browser the probe is a holder of the jar like any other lane, and
+it gets the agent run's handover (`hold_for_probe`, keeping the jar like a
+persistent run): a probe for another scope, or the first one after a server
+restart, purges the transfer folders and runs the verified profile wipe before
+anything is opened, and a wipe that cannot be confirmed means nothing is
+rendered and the answer is an error. A file target is mirrored only after that
+handover, so the next holder's handover removes it again. The probe holds the
+handover mutex until it has parked the page, and takes it without waiting: a
+handover in progress, a lease, a run, or a browser agent run spawned into
+another process answers busy. A dedicated pool instance gets no wipe and no
+scrub, since only its own user is routed to it.
 
 ## Known Limitations (v1)
 

@@ -13,6 +13,7 @@ scope HASH rather than the scope, and the manager registry hands out one
 manager per instance with tickets routing to the right one.
 """
 
+import json
 import types
 
 import pytest
@@ -79,6 +80,10 @@ def _done(code, out="", err=""):
 @pytest.fixture
 def pool(monkeypatch):
     monkeypatch.delenv("VAF_BROWSER_POOL_MAX", raising=False)
+    # The settings an instance is created with: the machine's own values must
+    # not decide what the adoption tests compare.
+    for var in ("VAF_BROWSER_TZ", "VAF_BROWSER_PROXY", "VAF_BROWSER_GOOGLE_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
     # Neither the machine's own config file nor the environment may decide what
     # these tests measure: with the config seam answering None every knob falls
     # to the module default, which is the state a test then varies on purpose.
@@ -623,6 +628,33 @@ def test_every_resolve_caller_names_the_strict_refusal():
 
 _OLD_ID = "sha256:0123456789ab" + "c" * 52
 _NEW_ID = "sha256:fedcba987654" + "3" * 52
+_CONTAINER_FMT = "{{.Image}}\t{{json .Config.Env}}"
+
+
+def _created_env(pool):
+    """The settings the fake `docker run` gave the last instance, as docker lists them."""
+    run = [c for c in pool._test_docker.calls if c[0] == "run"][-1]
+    return [run[i + 1] for i, a in enumerate(run) if a == "-e"]
+
+
+def _inspecting(pool, *, current, have, env, fail=None, seen=None):
+    """The fake docker with the two adoption inspects answered: the template's
+    `{{.Id}}` (the image its name points to now) and the container's image ID
+    plus the env it was created with. `fail` makes one of them fail."""
+    real = pool._test_docker.__call__
+
+    def fake(args, timeout=60):
+        if args[0] == "inspect" and args[-1] in ("{{.Id}}", _CONTAINER_FMT):
+            if seen is not None:
+                seen.append(list(args))
+            if args[-1] == fail:
+                return _done(1, "", "no such object")
+            if args[-1] == "{{.Id}}":
+                return _done(0, current + "\n")
+            return _done(0, f"{have}\t{json.dumps(env)}\n")
+        return real(args, timeout=timeout)
+
+    return fake
 
 
 def test_a_pooled_instance_on_an_outdated_image_is_recreated(pool, monkeypatch):
@@ -635,9 +667,9 @@ def test_a_pooled_instance_on_an_outdated_image_is_recreated(pool, monkeypatch):
 
     The recreate line names both IDs, because a recreate at every start with no
     change to the image (a build that hands an unchanged image a new ID) is only
-    visible as a new "current" ID each time. And the check stays one `{{.Id}}`
-    and one `{{.Image}}` inspect per resolve: it sits on the blocking path of
-    opening a browser.
+    visible as a new "current" ID each time. And the check stays one inspect of
+    the template and one of the container per resolve: it sits on the blocking
+    path of opening a browser.
 
     MUTATIONS: drop the IDs from the log line (red on content); read the IDs a
     second time, by a second helper or a second call of the check (red on the
@@ -648,21 +680,10 @@ def test_a_pooled_instance_on_an_outdated_image_is_recreated(pool, monkeypatch):
     name = first.container_name
 
     # The shared browser has been rebuilt: same tag, new image ID.
-    real = pool._test_docker.__call__
     inspects = []
-
-    def aged(args, timeout=60):
-        if args[0] == "inspect" and args[-1] == "{{.Image}}":
-            inspects.append(list(args))
-            return types.SimpleNamespace(returncode=0, stdout=_OLD_ID + "\n", stderr="")
-        if args[0] == "inspect" and args[-1] == "{{.Id}}":
-            inspects.append(list(args))
-            return types.SimpleNamespace(returncode=0, stdout=_NEW_ID + "\n", stderr="")
-        return real(args, timeout=timeout)
-
+    aged = _inspecting(pool, current=_NEW_ID, have=_OLD_ID, env=_created_env(pool), seen=inspects)
     logs = []
     monkeypatch.setattr(bp, "append_domain_log", lambda domain, msg: logs.append((domain, msg)))
-    monkeypatch.setattr(pool._test_docker, "__call__", aged, raising=False)
     monkeypatch.setattr("vaf.core.containers.docker", aged)
     again = pool.resolve("scope-a")
     assert again is not None
@@ -676,11 +697,12 @@ def test_a_pooled_instance_on_an_outdated_image_is_recreated(pool, monkeypatch):
         f"the recreate line does not name both short image IDs: {line}")
     assert "sha256:" not in line and "0123456789abc" not in line, (
         f"the IDs are not shortened to docker's 12 hex digits: {line}")
-    assert [a for a in inspects if a[-1] == "{{.Id}}"] == [["inspect", "vaf-vaf-browser", "--format", "{{.Id}}"]]
-    assert [a for a in inspects if a[-1] == "{{.Image}}"] == [["inspect", name, "--format", "{{.Image}}"]]
+    assert "settings" not in line, f"unchanged settings were reported as drifted: {line}"
+    assert inspects == [["inspect", "vaf-vaf-browser", "--format", "{{.Id}}"],
+                        ["inspect", name, "--format", _CONTAINER_FMT]]
 
 
-@pytest.mark.parametrize("failing", ["{{.Id}}", "{{.Image}}"])
+@pytest.mark.parametrize("failing", ["{{.Id}}", _CONTAINER_FMT])
 def test_an_instance_whose_image_cannot_be_read_is_adopted(pool, monkeypatch, failing):
     """A failed lookup is not evidence of an outdated image. Throwing the person's
     container away on a docker hiccup would cost them a recreate for nothing, so
@@ -690,16 +712,8 @@ def test_an_instance_whose_image_cannot_be_read_is_adopted(pool, monkeypatch, fa
     guard of that side)."""
     monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "2")
     assert pool.resolve("scope-a") is not None
-    real = pool._test_docker.__call__
-    answers = {"{{.Id}}": _NEW_ID, "{{.Image}}": _OLD_ID}
-
-    def broken(args, timeout=60):
-        if args[0] == "inspect" and args[-1] in answers:
-            if args[-1] == failing:
-                return types.SimpleNamespace(returncode=1, stdout="", stderr="no such object")
-            return types.SimpleNamespace(returncode=0, stdout=answers[args[-1]] + "\n", stderr="")
-        return real(args, timeout=timeout)
-
+    broken = _inspecting(pool, current=_NEW_ID, have=_OLD_ID, env=_created_env(pool),
+                         fail=failing)
     monkeypatch.setattr("vaf.core.containers.docker", broken)
     assert pool.resolve("scope-a") is not None
     assert not [c for c in pool._test_docker.calls if c[0] == "rm"], (
@@ -707,20 +721,86 @@ def test_an_instance_whose_image_cannot_be_read_is_adopted(pool, monkeypatch, fa
 
 
 def test_a_pooled_instance_on_the_current_image_is_adopted(pool, monkeypatch):
-    """The counter-proof: matching image IDs must NOT trigger a recreate, or
-    every resolve would throw the user's browser away."""
+    """The counter-proof: matching image IDs and unchanged settings must NOT
+    trigger a recreate, or every resolve would throw the user's browser away."""
     monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "2")
     assert pool.resolve("scope-a") is not None
-    real = pool._test_docker.__call__
-
-    def same(args, timeout=60):
-        if args[0] == "inspect" and args[-1] in ("{{.Image}}", "{{.Id}}"):
-            return types.SimpleNamespace(returncode=0, stdout="sha256:SAME\n", stderr="")
-        return real(args, timeout=timeout)
-
+    same = _inspecting(pool, current="sha256:SAME", have="sha256:SAME", env=_created_env(pool))
     monkeypatch.setattr("vaf.core.containers.docker", same)
     assert pool.resolve("scope-a") is not None
     assert not [c for c in pool._test_docker.calls if c[0] == "rm"]
+
+
+_SECRETISH = "http://user:pw-not-for-logs@proxy.example:8080"
+
+
+@pytest.mark.parametrize("env_var,setting,value", [
+    ("VAF_BROWSER_PROXY", "VAF_BROWSER_PROXY", _SECRETISH),
+    ("VAF_BROWSER_TZ", "TZ", "America/New_York"),
+    ("VAF_BROWSER_GOOGLE_API_KEY", "VAF_BROWSER_GOOGLE_API_KEY", "key-not-for-logs"),
+])
+def test_an_instance_created_with_other_settings_is_recreated(pool, monkeypatch,
+                                                              env_var, setting, value):
+    """A container keeps the env of its `docker run` for life. A per-user browser
+    created before the operator set a proxy kept browsing direct, its real IP
+    exposed, while the shared browser went through the proxy; the same for the
+    timezone (a tell against the proxy's region) and the Safe Browsing key. On
+    adoption the settings are compared and a drifted instance is recreated with
+    the current ones, still within the two inspects. The log names the setting,
+    never its value: a proxy URL can carry a password.
+
+    MUTATIONS: skip the settings comparison (red: adopted); log the value
+    instead of the name (red on content)."""
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "2")
+    first = pool.resolve("scope-a")
+    assert first is not None
+    created = _created_env(pool)
+    assert not any(e.startswith(f"{setting}={value}") for e in created)
+
+    monkeypatch.setenv(env_var, value)
+    inspects = []
+    drifted = _inspecting(pool, current=_NEW_ID, have=_NEW_ID, env=created, seen=inspects)
+    logs = []
+    monkeypatch.setattr(bp, "append_domain_log", lambda domain, msg: logs.append((domain, msg)))
+    monkeypatch.setattr("vaf.core.containers.docker", drifted)
+    assert pool.resolve("scope-a") is not None
+    assert [c for c in pool._test_docker.calls if c[0] == "rm" and first.container_name in c], (
+        f"an instance created without the current {setting} was adopted")
+    assert f"{setting}={value}" in _created_env(pool), "the recreated instance lacks the setting"
+    lines = [msg for domain, msg in logs if domain == "webui" and "recreating" in msg]
+    assert len(lines) == 1 and setting in lines[0], f"the drifted setting is not named: {logs}"
+    assert value not in lines[0] and "pw-not-for-logs" not in lines[0], (
+        f"a setting's value reached the log: {lines[0]}")
+    assert "outdated image" not in lines[0]
+    assert len(inspects) == 2
+
+
+def test_a_proxy_removed_since_creation_is_followed_too(pool, monkeypatch):
+    """Compared both ways: an instance created WITH a proxy is recreated once the
+    operator removes it. And empty counts as absent: a container whose env lists
+    the variable empty (an image that declares it with an empty default, the way
+    the compose service passes it) is not recreated for that.
+
+    MUTATION: compare without treating empty and absent alike - red."""
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "2")
+    monkeypatch.setenv("VAF_BROWSER_PROXY", _SECRETISH)
+    first = pool.resolve("scope-a")
+    created = _created_env(pool)
+    assert f"VAF_BROWSER_PROXY={_SECRETISH}" in created
+
+    monkeypatch.setenv("VAF_BROWSER_PROXY", "")
+    monkeypatch.setattr("vaf.core.containers.docker",
+                        _inspecting(pool, current=_NEW_ID, have=_NEW_ID, env=created))
+    assert pool.resolve("scope-a") is not None
+    assert [c for c in pool._test_docker.calls if c[0] == "rm" and first.container_name in c]
+
+    # Recreated without it; a listed-but-empty value matches the absent one.
+    rms = len([c for c in pool._test_docker.calls if c[0] == "rm"])
+    monkeypatch.setattr("vaf.core.containers.docker",
+                        _inspecting(pool, current=_NEW_ID, have=_NEW_ID,
+                                    env=_created_env(pool) + ["VAF_BROWSER_PROXY="]))
+    assert pool.resolve("scope-a") is not None
+    assert len([c for c in pool._test_docker.calls if c[0] == "rm"]) == rms
 
 
 def test_the_health_probe_authenticates_or_the_pool_dies_silently(live_health_pool, monkeypatch):

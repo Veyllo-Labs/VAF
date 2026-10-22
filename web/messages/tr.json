@@ -554,6 +554,7 @@
     "ovEvLoginThrottled": "Çok fazla giriş denemesi",
     "ovEvAccountSeal": "Hesap kaydı VAF dışında değiştirildi",
     "ovEvPasswordChanged": "Parola yeniden belirlendi",
+    "ovEvProgramToken": "Programlar için belirteç oluşturuldu",
     "ovEvBackupRestored": "Yedek geri yüklendi",
     "ovEvBackupRestoreFailed": "Yedekten geri yükleme tamamlanmadı",
     "ovEvTlsCertificateChanged": "Sertifika değiştirildi",

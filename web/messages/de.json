@@ -554,6 +554,7 @@
     "ovEvLoginThrottled": "Zu viele Login-Versuche",
     "ovEvAccountSeal": "Kontodaten außerhalb von VAF verändert",
     "ovEvPasswordChanged": "Passwort neu gesetzt",
+    "ovEvProgramToken": "Token für Programme erstellt",
     "ovEvBackupRestored": "Backup wiederhergestellt",
     "ovEvBackupRestoreFailed": "Wiederherstellung aus Backup nicht abgeschlossen",
     "ovEvTlsCertificateChanged": "Zertifikat gewechselt",

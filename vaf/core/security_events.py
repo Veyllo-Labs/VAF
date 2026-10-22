@@ -72,6 +72,12 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
     "password_changed": "An account's password was set anew: by the account itself or by an "
                         "admin in Settings, or in a terminal on this machine (`vaf users "
                         "reset-password`, with the proof it took in `detail`)",
+    "program_token_created": "A token for programs was made for an account: in Settings, "
+                             "Account with the account's 2FA code, or in a terminal on this "
+                             "machine (`vaf users token`) with its proof. `username` the "
+                             "account, `detail` the token's name, its days and where it was "
+                             "made; never the token. It acts as the account until it ends or "
+                             "is revoked",
     "backup_restored": "Everything VAF keeps on this machine was replaced by a backup's "
                        "(`vaf backup restore`). `path` the backup file, `detail` the proof the "
                        "person gave in the terminal, the safety backup of the state before and "

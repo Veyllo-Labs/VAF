@@ -554,6 +554,7 @@
     "ovEvLoginThrottled": "登录尝试次数过多",
     "ovEvAccountSeal": "账户记录在 VAF 之外被修改",
     "ovEvPasswordChanged": "密码已重新设置",
+    "ovEvProgramToken": "已创建程序令牌",
     "ovEvBackupRestored": "已从备份恢复",
     "ovEvBackupRestoreFailed": "从备份恢复未完成",
     "ovEvTlsCertificateChanged": "证书已更换",

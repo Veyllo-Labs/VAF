@@ -554,6 +554,7 @@
     "ovEvLoginThrottled": "พยายามลงชื่อเข้าใช้มากเกินไป",
     "ovEvAccountSeal": "บันทึกบัญชีถูกแก้ไขภายนอก VAF",
     "ovEvPasswordChanged": "ตั้งรหัสผ่านใหม่แล้ว",
+    "ovEvProgramToken": "สร้างโทเค็นสำหรับโปรแกรมแล้ว",
     "ovEvBackupRestored": "กู้คืนจากข้อมูลสำรองแล้ว",
     "ovEvBackupRestoreFailed": "การกู้คืนจากข้อมูลสำรองไม่เสร็จสมบูรณ์",
     "ovEvTlsCertificateChanged": "เปลี่ยนใบรับรองแล้ว",

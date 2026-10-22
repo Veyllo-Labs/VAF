@@ -554,6 +554,7 @@
     "ovEvLoginThrottled": "로그인 시도 횟수 초과",
     "ovEvAccountSeal": "VAF 밖에서 계정 기록이 변경됨",
     "ovEvPasswordChanged": "비밀번호가 새로 설정됨",
+    "ovEvProgramToken": "프로그램용 토큰이 생성됨",
     "ovEvBackupRestored": "백업에서 복원됨",
     "ovEvBackupRestoreFailed": "백업 복원이 완료되지 않음",
     "ovEvTlsCertificateChanged": "인증서가 변경됨",

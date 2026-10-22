@@ -32,8 +32,14 @@ interface State {
     problem: { code: string; text: string } | null;
     certificate: Facts | null;
     authority: { subject: string; fingerprint: string } | null;
-    local_ca: { path: string; fingerprint: string; not_after: string; restricted: boolean } | null;
+    local_ca: {
+        path: string; fingerprint: string; not_after: string; restricted: boolean;
+        // This machine's names a new authority leaves out of VAF's certificate.
+        left_out_on_renewal?: string[];
+    } | null;
     uncovered: string[];
+    // <host>.local, which a new authority keeps (mDNS).
+    mdns_name?: string | null;
     step_up_required: boolean;
 }
 
@@ -406,6 +412,13 @@ export default function CertificateSection({ sectionId }: { sectionId?: string }
                         <div className="mt-3 p-4 rounded-lg border border-amber-200 bg-amber-50" role="alertdialog" aria-label={t('restrictTitle')}>
                             <p className="text-sm font-semibold text-amber-800 mb-1">{t('restrictTitle')}</p>
                             <p className="text-xs text-amber-800 mb-3">{t('restrictText')}</p>
+                            {(ca.left_out_on_renewal ?? []).length > 0 && (
+                                <p className="text-xs text-amber-800 mb-3 break-words">
+                                    {data.mdns_name && !(ca.left_out_on_renewal ?? []).includes(data.mdns_name)
+                                        ? t('restrictLeavesOutMdns', { names: (ca.left_out_on_renewal ?? []).join(', '), mdns: data.mdns_name })
+                                        : t('restrictLeavesOut', { names: (ca.left_out_on_renewal ?? []).join(', ') })}
+                                </p>
+                            )}
                             {codeField && <div className="mb-3">{codeField}</div>}
                             <div className="flex flex-wrap items-center justify-end gap-2">
                                 <button type="button" onClick={() => setConfirming(null)} className={BTN_SECONDARY}>

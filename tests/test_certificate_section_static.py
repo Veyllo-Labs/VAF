@@ -88,3 +88,19 @@ def test_a_calendar_day_is_shown_in_utc():
     midnight and shown in local time they were a day early west of UTC."""
     source = _source()
     assert "{ timeZone: 'UTC' }" in source and "/^\\d{4}-\\d{2}-\\d{2}$/.test(iso)" in source
+
+
+def test_a_left_out_name_comes_with_what_to_open_instead():
+    """A name the certificate does not carry is said together with the way in that works,
+    and the restrict dialog lists the names a new authority leaves out. MUTATION: drop the
+    left-out list from the dialog - red."""
+    catalog = json.loads((ROOT / "web" / "messages" / "en.json").read_text(encoding="utf-8"))
+    texts = catalog["settings"]["localNetwork"]["certificate"]
+    assert "Open VAF by" in texts["uncovered"]
+    assert "{names}" in texts["restrictLeavesOut"] and "{mdns}" in texts["restrictLeavesOutMdns"]
+    assert texts["resetConfirm"] != "Go back", "the confirm button names what it does"
+    source = _source()
+    dialog = source[source.index("confirming === 'restrict'"):]
+    dialog = dialog[:dialog.index("</div>\n                    )}")]
+    assert "(ca.left_out_on_renewal ?? []).length > 0 && (" in dialog
+    assert "restrictLeavesOut" in dialog

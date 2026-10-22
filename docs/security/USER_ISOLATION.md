@@ -490,7 +490,8 @@ there too - cleared before the commit, a lookup in between re-cached the old ans
   allowlists), and that the token's own session has not ended (`vaf/auth/sessions.py`; a
   sign-in from another device also ends after `local_network_session_idle_days` without
   use, the window on this machine and tokens for programs do not; a session of the window on
-  this machine stands only for this machine and is refused when another device presents it). A
+  this machine stands only for this machine and is refused when another device presents it,
+  also while the auth store cannot be asked: the token carries that it is the machine's). A
   network client then gets 401 (a socket: close code 4001, and a `ws_rejected` event); the
   real localhost client falls back to the tokenless lane as before. An unreachable auth
   store keeps the token: the same desktop default as the allowlist lookup. A session this

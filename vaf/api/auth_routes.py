@@ -361,6 +361,7 @@ async def bootstrap(body: BootstrapRequest, request: Request, response: Response
             # The wizard's own session, for its remaining steps (the soul, the settings). It is
             # past the second factor before one exists, so it lives an hour, not the 30 days a
             # sign-in gets; the wizard's 2FA step ends it (_complete_sign_in).
+            from vaf.network.binding import is_localhost
             access = create_access_token(
                 str(new_user.id),
                 new_user.username,
@@ -368,6 +369,7 @@ async def bootstrap(body: BootstrapRequest, request: Request, response: Response
                 str(new_user.user_scope_id),
                 expires_hours=BOOTSTRAP_SESSION_HOURS,
                 is_2fa_verified=True,
+                this_machine=is_localhost(_client_ip(request)),
             )
             await open_session(db, new_user, access, ip=_client_ip(request),
                                user_agent=request.headers.get("user-agent", ""))
@@ -657,6 +659,7 @@ async def _complete_sign_in(db, request: Request, response: Response, user) -> s
         str(user.user_scope_id),
         expires_hours=_sign_in_hours(request),
         is_2fa_verified=True,
+        this_machine=is_localhost(ip),
     )
     known = True
     if not is_localhost(ip):

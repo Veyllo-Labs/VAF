@@ -240,7 +240,8 @@ async def token_account_stands(payload: dict, token: str, *, client_ip: Optional
     if client_ip is not None:
         from vaf.network.binding import is_localhost
         from_this_machine = is_localhost(client_ip)
-    return await session_standing_async(token, from_this_machine=from_this_machine) != ENDED
+    return await session_standing_async(token, from_this_machine=from_this_machine,
+                                        claims=payload) != ENDED
 
 
 class AuthMiddleware(BaseHTTPMiddleware):

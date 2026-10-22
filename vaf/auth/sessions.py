@@ -31,7 +31,10 @@ LIFETIMES. A row is one of three kinds (`device_info.device_type` and its addres
   person is at their own desk. That reason holds only where the token is USED, so such a
   session opens nothing for a client that is not this machine (`session_standing_async`
   with `from_this_machine=False` answers `ended`): a copied desktop cookie does not carry
-  the exemption to another device, fresh or idle.
+  the exemption to another device, fresh or idle. The token itself says it is such a
+  session (`crypto.THIS_MACHINE_CLAIM`, set when the sign-in completes on this machine), so
+  the refusal needs no store and holds while the store cannot be asked too. A token minted
+  before the claim existed is judged by its row only.
 - a token for programs (`program`): 7, 30, 90 or 365 days, chosen when it is made, and no
   inactivity limit: a backup script that runs monthly must not die of disuse.
 This departs from NIST 800-63B-4 at AAL2 (24 hours overall and one hour of inactivity, both
@@ -56,7 +59,9 @@ ending in this process, so an ending here takes effect on the next request.
 NAMED BOUNDARIES:
 - A store that cannot be asked keeps the token (`unknown`), the same desktop default as the
   account standing (vaf/auth/permissions.py): a stopped database stack means nobody can sign
-  in either. Failing closed instead would sign every device out on each database restart,
+  in either. A session of this machine presented by another client is refused all the same
+  (its claim); one minted before the claim existed is kept then, like any other token, until
+  it expires. Failing closed instead would sign every device out on each database restart,
   and the refused cookie is deleted (vaf/auth/middleware.py), so that sign-out would stick.
   What this process ended stays ended regardless: the hashes of the sessions it ended are
   remembered (`_ended`, bounded) and answered `ended` without asking the store, so a token
@@ -226,13 +231,18 @@ def _for_client(answer: str, machine_bound: bool, from_this_machine: Optional[bo
     return answer
 
 
-async def session_standing_async(token: str, *, from_this_machine: Optional[bool] = None) -> str:
+async def session_standing_async(token: str, *, from_this_machine: Optional[bool] = None,
+                                 claims: Optional[dict] = None) -> str:
     """`live`, `ended` (no row, ended, expired, idle too long, or a session of this machine
     presented by another client: `from_this_machine=False`) or `unknown` (the store cannot be
     asked). `from_this_machine=None` (the caller does not know the client) skips the address
-    rule. Never raises."""
-    from vaf.auth.crypto import token_hash_for_db
+    rule. `claims` is the token's verified payload: one that says it is a session of this
+    machine is refused for another client before the store is asked. Never raises."""
+    from vaf.auth.crypto import THIS_MACHINE_CLAIM, token_hash_for_db
 
+    if (from_this_machine is False and isinstance(claims, dict)
+            and claims.get(THIS_MACHINE_CLAIM) is True):
+        return _for_client(LIVE, True, False)
     key = token_hash_for_db(str(token or ""))
     now = time.monotonic()
     with _cache_lock:

@@ -320,7 +320,11 @@ Rejections from the layers above are recorded in an always-on security event log
     presented by another device is refused (401, a socket 4001, a room door refusal), fresh or
     idle, so a copied desktop cookie does not carry the exemption elsewhere. Every reader of a
     token passes the real client to the standing check (`token_account_stands(...,
-    client_ip=...)`; the room door's verifier receives it through `admit`).
+    client_ip=...)`; the room door's verifier receives it through `admit`). The token itself
+    says it is the machine's (the `this_machine` claim, set when the sign-in completes here),
+    so the refusal needs no database and holds while the auth store cannot be asked too; a
+    token minted before that claim existed is judged by its row alone, and kept like any
+    other while the store cannot be asked, until it expires.
   - a token for programs: the 7, 30, 90 or 365 days it was made with, no inactivity limit.
 - **Sessions end** (`vaf/auth/sessions.py`, the one owner of `user_sessions`): a logout ends
   the presented token's session, the account's own password change every other one (the

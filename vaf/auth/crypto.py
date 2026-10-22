@@ -125,6 +125,12 @@ def password_fingerprint(password_hash: Optional[str]) -> str:
     return hashlib.sha256(str(password_hash or "").encode("utf-8")).hexdigest()[:16]
 
 
+# The claim of a session of the window on this machine (vaf/auth/sessions.py): such a session
+# stands only for this machine, and the token saying so lets a reader refuse it elsewhere
+# without asking the auth store.
+THIS_MACHINE_CLAIM = "this_machine"
+
+
 def create_access_token(
     user_id: str,
     username: str,
@@ -133,9 +139,11 @@ def create_access_token(
     expires_hours: Optional[float] = None,
     is_2fa_verified: bool = False,
     password_version: Optional[str] = None,
+    this_machine: bool = False,
 ) -> str:
     """Create JWT access token. `password_version` (`password_fingerprint`) is set on a token
-    from before the second factor, binding it to the password it was minted with."""
+    from before the second factor, binding it to the password it was minted with.
+    `this_machine` marks a sign-in completed on this machine (`THIS_MACHINE_CLAIM`)."""
     if expires_hours is None:
         expires_hours = float(Config.get("local_network_jwt_expiry_hours", 720))
     now = datetime.now(timezone.utc)
@@ -156,6 +164,8 @@ def create_access_token(
     }
     if password_version:
         payload["pwv"] = password_version
+    if this_machine:
+        payload[THIS_MACHINE_CLAIM] = True
     return jwt.encode(
         payload,
         _get_jwt_secret(),

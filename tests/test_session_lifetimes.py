@@ -222,3 +222,34 @@ def test_a_session_of_this_machine_opens_nothing_elsewhere(monkeypatch):
     _clock(monkeypatch, timedelta(0))
     assert _a2a_credential_verifier(here, client_ip="192.168.50.9") is None
     assert _a2a_credential_verifier(here, client_ip="127.0.0.1")["username"] == "alice"
+
+
+def test_a_session_of_this_machine_is_refused_elsewhere_without_the_store(monkeypatch):
+    """The token says it belongs to the window on this machine, so another device is refused
+    even while the auth store cannot be asked; a session from another device is kept then, as
+    every token is, and the machine itself keeps its own. MUTATION: mint the sign-in without
+    the claim; drop the claim check from the standing - red."""
+    import contextlib
+
+    import vaf.auth.database as database
+    from vaf.auth import permissions, sessions
+    from vaf.auth.crypto import THIS_MACHINE_CLAIM, decode_token
+    h, app, t = _world(monkeypatch)
+    assert decode_token(t["here"]).get(THIS_MACHINE_CLAIM) is True
+    assert THIS_MACHINE_CLAIM not in decode_token(t["lan"])
+
+    @contextlib.asynccontextmanager
+    async def _down():
+        raise RuntimeError("the auth store cannot be asked")
+        yield
+
+    monkeypatch.setattr(database, "get_auth_db", _down)
+    sessions.forget_cached_sessions()
+    permissions.invalidate_permissions_cache()
+    lan = h.client("192.168.50.9", app=app)
+    assert lan.get("/api/probe", headers={"Authorization": f"Bearer {t['here']}"}).status_code == 401
+    assert lan.get("/api/probe", headers={"Authorization": f"Bearer {t['lan']}"}).status_code == 200
+    from vaf.main import _a2a_credential_verifier
+    assert _a2a_credential_verifier(t["here"], client_ip="192.168.50.9") is None
+    assert asyncio.run(sessions.session_standing_async(
+        t["here"], from_this_machine=True, claims=decode_token(t["here"]))) == sessions.UNKNOWN

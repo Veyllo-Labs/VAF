@@ -212,6 +212,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   at its first sign-in) and is gone, together with its `vaf doctor` warning. A value left in
   an older `config.json` is ignored.
 
+- **The API documentation needs a sign-in.** `/docs` and `/openapi.json` were open to every
+  device on the network when VAF ran with `vaf run --web`. The machine itself still opens
+  them without one.
+
 - **The first visitor can no longer make themselves the admin.** While no admin existed,
   any device VAF admits could open the setup page and create the admin account, on a rented
   server the provider's own network included. A browser on another device now needs a setup

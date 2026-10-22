@@ -144,6 +144,28 @@ def test_the_2fa_switch_is_gone():
     assert hits == [], hits
 
 
+def test_api_docs_need_a_sign_in(monkeypatch):
+    """`vaf run --web` serves the backend itself on 0.0.0.0 in network mode, and the API
+    documentation was exempt: every device on the network read the whole route table without
+    an account. Now a tokenless network client gets 401, a signed-in one and the machine
+    itself 200. MUTATION: put /openapi.json back into the exempt set - red."""
+    from auth_harness import Harness
+
+    from vaf.auth.middleware import AUTH_EXEMPT_PATHS
+    assert "/docs" not in AUTH_EXEMPT_PATHS and "/openapi.json" not in AUTH_EXEMPT_PATHS
+    h = Harness(monkeypatch)
+    h.add_user("alice", "alice-password-123", no_second_factor=True)
+    app = h.app()
+    stranger = h.client("192.168.21.5", app=app)
+    for path in ("/docs", "/openapi.json"):
+        assert stranger.get(path).status_code == 401, path
+    token = h.sign_in(h.client("192.168.21.6", app=app), "alice", "alice-password-123", None)
+    device = h.client("192.168.21.7", app=app)
+    for path in ("/docs", "/openapi.json"):
+        assert device.get(path, headers={"Authorization": f"Bearer {token}"}).status_code == 200, path
+        assert h.client(None, app=app).get(path).status_code == 200, path
+
+
 def test_every_token_reader_asks_the_same_question():
     """The WebSocket's network lane and the A2A room door read tokens without this middleware.
     The localhost-only socket lane (local network off) is deliberately not asked: there a

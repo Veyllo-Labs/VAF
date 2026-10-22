@@ -69,8 +69,12 @@ AUTH_EXEMPT_PATHS: set[str] = {
     # them over an unverified channel safe for the guest.
     "/api/a2a/client.py",
     "/api/a2a/ca.pem",
-    "/docs",
-    "/openapi.json",
+    # NOT here: the API documentation (/docs, /openapi.json). It was, and `vaf run --web`
+    # serves the backend itself on 0.0.0.0 in network mode, so every device on the network
+    # read the whole route table without an account (measured: 200 for a tokenless LAN
+    # client). The machine itself still opens it on the tokenless path. Named boundary:
+    # every signed-in account can read it; it holds no data, and the source of the same
+    # routes is public.
 }
 
 AUTH_EXEMPT_PREFIXES: tuple[str, ...] = (

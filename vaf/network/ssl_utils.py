@@ -1046,15 +1046,30 @@ _LOOKUP_MEMO_S = 60.0
 _LOOKUP_MEMO: Dict[str, Tuple[float, Any]] = {}
 _LOOKUP_LOCK = threading.Lock()
 _LOOKUP_POOL = None
+# The lookups still running, shared by every choice: a name whose lookup an earlier choice
+# started is not asked again, and a later choice waits for it only until that choice's
+# budget ran out. While DNS hangs, only the choice that starts a lookup pays the 2 s; every
+# choice used to pay it again and start the same lookups once more (measured).
+_LOOKUP_IN_FLIGHT = None
+# The failures of getaddrinfo that are an answer: the name does not exist, or has no
+# address. Anything else (EAI_AGAIN, a resolver that timed out or failed for now, among
+# them) is no answer: it is not remembered, and the choice says the name gave none instead
+# of advising a DNS fix for a name that may resolve fine a moment later.
+_DEFINITE_MISSES = frozenset(code for code in (getattr(socket, "EAI_NONAME", None),
+                                               getattr(socket, "EAI_NODATA", None))
+                             if code is not None)
 
 
-def _lookup_pool():
-    global _LOOKUP_POOL
+def _lookups():
+    """(the lookup pool, its running lookups), made on first use."""
+    global _LOOKUP_POOL, _LOOKUP_IN_FLIGHT
+    from vaf.core.bounded_run import DaemonPool, InFlight
     with _LOOKUP_LOCK:
         if _LOOKUP_POOL is None:
-            from vaf.core.bounded_run import DaemonPool
             _LOOKUP_POOL = DaemonPool(_LOOKUP_WORKERS, "vaf-host-lookup")
-        return _LOOKUP_POOL
+        if _LOOKUP_IN_FLIGHT is None:
+            _LOOKUP_IN_FLIGHT = InFlight()
+        return _LOOKUP_POOL, _LOOKUP_IN_FLIGHT
 
 
 def _remember(key: str, value: Any) -> Any:
@@ -1072,14 +1087,19 @@ def _remembered(key: str) -> Tuple[bool, Any]:
 
 
 def _addresses_of(name: str) -> frozenset:
-    """The addresses ``name`` resolves to here, none when it does not (a DNS lookup, unbounded:
-    it runs on the lookup pool). The answer is remembered, an empty one too, also when it
-    arrives after the choice that asked for it stopped waiting."""
+    """The addresses ``name`` resolves to here, none when it does not exist (a DNS lookup,
+    unbounded: it runs on the lookup pool). The answer is remembered, also when it arrives
+    after the choice that asked for it stopped waiting. A resolver that failed for now
+    raises: no answer, and nothing remembered (``_DEFINITE_MISSES``)."""
     try:
         found = frozenset(str(info[4][0]).split("%")[0]
                           for info in socket.getaddrinfo(name, None))
-    except Exception:
+    except socket.gaierror as exc:
+        if exc.errno not in _DEFINITE_MISSES:
+            raise
         found = frozenset()
+    except Exception:
+        found = frozenset()  # a name the resolver cannot even take, such as an overlong label
     return _remember("dns:" + name, found)
 
 
@@ -1162,41 +1182,56 @@ def room_host_choice(address: str, cfg: Optional[dict] = None) -> Tuple[Optional
             candidates.append(value)
     if not candidates and not wildcards:
         return None, (f"the served certificate names neither the host's address {address} "
-                      "nor a DNS name a peer could dial: it needs one that names that address")
+                      "nor a DNS name a peer could dial: installing a certificate that names "
+                      "that address, or a DNS name of the host, fixes that")
 
     from vaf.core.bounded_run import run_bounded_all
     answers: Dict[str, Any] = {}
     calls: Dict[str, Any] = {}
-    for key, call in [("", _machine_names),
-                      *((c, (lambda n=c: _addresses_of(n))) for c in candidates)]:
-        hit, value = _remembered("machine" if not key else "dns:" + key)
+    for key, call in [("machine", _machine_names),
+                      *(("dns:" + c, (lambda n=c: _addresses_of(n))) for c in candidates)]:
+        hit, value = _remembered(key)
         if hit:
             answers[key] = value
         else:
             calls[key] = call
     if calls:
-        answers.update(run_bounded_all(calls, timeout=_LOOKUP_BUDGET_S, pool=_lookup_pool()))
-    for mine in answers.get("") or []:
+        pool, in_flight = _lookups()
+        answers.update(run_bounded_all(calls, timeout=_LOOKUP_BUDGET_S, pool=pool,
+                                       in_flight=in_flight))
+    for mine in answers.get("machine") or []:
         mine = str(mine or "").strip().rstrip(".").lower()
         if mine and mine != "localhost" and _covers(names, mine):
             return mine, None
     own = _own_addresses(address, cfg)
     for candidate in candidates:
-        if own & set(answers.get(candidate) or ()):
+        if own & set(answers.get("dns:" + candidate) or ()):
             return candidate, None
-    unanswered = [k or "this machine's names" for k in calls if k not in answers]
-    late = (f"; {', '.join(unanswered)} did not answer within {_LOOKUP_BUDGET_S:g} s"
-            if unanswered else "")
+    silent = [c for c in candidates if "dns:" + c not in answers]
+    if "machine" not in answers:
+        silent.append("the host's own names")
+    late = (f"; {', '.join(silent)} gave no answer within {_LOOKUP_BUDGET_S:g} s"
+            if silent else "")
     if not candidates:
         example = "vaf" + wildcards[0][1:]
         return None, (f"the served certificate names only {', '.join(wildcards)}, and none of "
                       f"the host's names is under it: a host name such as {example} fixes "
                       f"that{late}")
     listed = ", ".join([*candidates, *wildcards])
-    return None, (f"the served certificate names {listed}, but none of them is the host's "
-                  f"name or resolves to its address {address} on the host: making one of "
-                  "them the host's name, or pointing one at that address in the DNS the host "
-                  f"uses (a line in its hosts file does), fixes that{late}")
+    if all(c in silent for c in candidates):
+        return None, (f"the served certificate names {listed}, and the lookups on the host "
+                      f"gave no answer within {_LOOKUP_BUDGET_S:g} s (its resolver may be "
+                      "down for now): an invitation made once it answers has the lane")
+    one = len(candidates) == 1 and not wildcards
+    head = (f"the served certificate names {listed}, but it is not the host's name and does "
+            f"not resolve to its address {address} on the host" if one else
+            f"the served certificate names {listed}, but none of them is the host's name or "
+            f"resolves to its address {address} on the host")
+    return None, (f"{head}: making {'it' if one else 'one of them'} the host's name, or "
+                  f"pointing {'it' if one else 'one'} at that address in DNS, fixes that. The "
+                  "other machines must resolve it to that address too; where the host uses "
+                  "another DNS than they do, a line in its hosts file covers the host"
+                  f"{late}")
 
 
 def served_room_host(address: str, cfg: Optional[dict] = None) -> Optional[str]:

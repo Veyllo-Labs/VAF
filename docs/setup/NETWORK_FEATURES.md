@@ -657,14 +657,15 @@ previous one (restart it).
   invitation names an address your certificate covers; when it covers none, a DNS name of it
   that is this machine (its host name, FQDN or `<host>.local` where the certificate covers
   it, a wildcard included, else one that resolves here to its LAN address or another admitted
-  address, looked up for 2 s at most and remembered for a minute; never the apex beside a
-  wildcard, which is usually the public website), which the other machine's network must
-  resolve to this one. The only name of a certificate is checked like any other: a
-  certificate made for a website would send a peer, and its ticket, to that website. Where
-  this machine uses another DNS than your devices, add the name to its hosts file. A
-  certificate that names neither gets no lane for other machines, and the invitation says so
-  and why. Switching to an own certificate, back, or renewing the CA
-  changes the authority; those machines run `vaf a2a trust` again with the new fingerprint.
+  address, looked up for 2 s at most and remembered for a minute, a resolver failure not;
+  never the apex beside a wildcard, which is usually the public website), which the other
+  machine's network must resolve to this one. The only name of a certificate is checked like
+  any other: a certificate made for a website would send a peer, and its ticket, to that
+  website. Where this machine uses another DNS than your devices, add the name to its hosts
+  file; the devices must still resolve it to this machine. A certificate that names neither
+  gets no lane for other machines, and the invitation says so and why. Switching to an own
+  certificate, back, or renewing the CA changes the authority; those machines run
+  `vaf a2a trust` again with the new fingerprint.
 
 **Renewing automatically.** VAF runs no ACME client. A DNS-01 client (certbot with a DNS
 plugin, acme.sh, lego) can renew a certificate for a name inside your network and run

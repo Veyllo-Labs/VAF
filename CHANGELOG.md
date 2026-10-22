@@ -100,7 +100,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   settings show the fingerprint of VAF's certificate authority, so you can compare it with what
   a device shows before you trust it. Room invitations to other machines now name the authority
   of the certificate you serve, and a joining machine also checks that the certificate names
-  the host it dials. The invitation names such a host only when it is this machine (its own
+  the host it dials. The invitation names a host only when it is this machine (its own
   name, or a name that resolves to it here) and otherwise says why there is no lane for
   other machines. Installing this update takes one restart of VAF (and the web rebuild
   `vaf update` does) for the section to appear; after that a certificate change needs none,

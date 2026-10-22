@@ -4160,7 +4160,11 @@ def _ws_client_ip(websocket) -> str:
 # Room invitations are built on threads of their own: choosing the host a peer dials may
 # look names up for up to 2 s, and on the loop's default executor a member who opened many
 # connections kept the A2A wire, the voice feed and uploads waiting behind those lookups
-# (measured: 5.8 s at 60 connections). Four at a time; more wait for each other only.
+# (measured: 5.8 s at 60 connections). Four at a time. NAMED BOUNDARY: the four are shared
+# by every account, with no count per account, so while DNS hangs one member's
+# invitations delay another's: by at most 2.06 s at 20 connections and 3.25 s at 60
+# (measured, lookups hanging 20 s; a running lookup is shared, so only the invitation that
+# starts one waits its 2 s).
 _ROOM_INVITE_POOL = None
 
 

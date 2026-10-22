@@ -458,6 +458,7 @@ def test_a_dns_name_that_is_an_address_is_not_a_room_host(tmp_path, monkeypatch)
         Config.save(cfg)
     host, why = ssl_utils.room_host_choice("192.168.1.20")
     assert host is None and "neither" in why
+    assert "installing a certificate that names that address" in why, "the step to take"
 
 
 def test_vafs_own_certificate_without_the_address_names_no_host(tmp_path, monkeypatch, caplog):
@@ -494,6 +495,7 @@ def test_the_room_host_lookups_share_one_budget_and_run_once_per_name(tmp_path, 
     import vaf.network.binding as binding
     _served(tmp_path, monkeypatch, ("example.org", "a.example.org", "b.example.org"))
     monkeypatch.setattr(ssl_utils, "_LOOKUP_POOL", None)
+    monkeypatch.setattr(ssl_utils, "_LOOKUP_IN_FLIGHT", None)
     release = threading.Event()
     looked_up, lock = [], threading.Lock()
 
@@ -512,7 +514,7 @@ def test_the_room_host_lookups_share_one_budget_and_run_once_per_name(tmp_path, 
         took = time.monotonic() - started
     finally:
         release.set()
-    assert host is None and "did not answer within 0.3 s" in why
+    assert host is None and "gave no answer within 0.3 s" in why
     assert took < 2.0, took
     counts = Counter(looked_up)
     assert set(counts) <= {"example.org", "a.example.org", "b.example.org"}
@@ -531,6 +533,11 @@ def test_the_only_name_is_checked_like_any_other(tmp_path, monkeypatch):
     host, why = ssl_utils.room_host_choice("192.168.1.20")
     assert host is None
     assert "example.org" in why and "hosts file" in why, "the split-DNS fix is named"
+    # One name is "it"; and a hosts line on the host alone would pass this check while the
+    # devices still reach the website, so the reason says they must resolve it too
+    # (MUTATION: the plural wording for one name - red).
+    assert "but it is not the host's name" in why
+    assert "other machines must resolve it to that address too" in why
 
 
 def test_a_name_that_resolves_to_an_admitted_vpn_address_is_this_machine(tmp_path, monkeypatch):
@@ -552,7 +559,7 @@ def test_a_name_that_resolves_to_an_admitted_vpn_address_is_this_machine(tmp_pat
 def test_the_lookups_of_every_invitation_share_eight_threads(tmp_path, monkeypatch):
     """Lookups that hang outlive the choice that asked; one pool for all choices keeps them
     to eight threads however many invitations are made (measured before: 800 at twenty
-    connections), and the ones queued behind them never start. MUTATION: a pool per choice
+    connections), and the ones queued behind them wait, one per name. MUTATION: a pool per choice
     - red."""
     import threading
 
@@ -560,6 +567,7 @@ def test_the_lookups_of_every_invitation_share_eight_threads(tmp_path, monkeypat
     names = tuple(f"n{i}.example.org" for i in range(20))
     _served(tmp_path, monkeypatch, names)
     monkeypatch.setattr(ssl_utils, "_LOOKUP_POOL", None)
+    monkeypatch.setattr(ssl_utils, "_LOOKUP_IN_FLIGHT", None)
     monkeypatch.setattr(ssl_utils, "_LOOKUP_BUDGET_S", 0.05)
     release = threading.Event()
     started, lock = [], threading.Lock()
@@ -584,7 +592,7 @@ def test_the_lookups_of_every_invitation_share_eight_threads(tmp_path, monkeypat
     finally:
         release.set()
     assert len(grown) <= ssl_utils._LOOKUP_WORKERS, len(grown)
-    assert ran <= ssl_utils._LOOKUP_WORKERS, "a queued lookup started after its choice left"
+    assert ran <= ssl_utils._LOOKUP_WORKERS, "more lookups ran than the pool has threads"
 
 
 def test_an_answer_is_reused_for_a_minute(tmp_path, monkeypatch):
@@ -616,3 +624,86 @@ def test_every_reason_says_what_fixes_it(tmp_path, monkeypatch):
     monkeypatch.setattr(ssl_utils, "served_chain", lambda cfg=None: [])
     host, why = ssl_utils.room_host_choice("192.168.1.20")
     assert host is None and "vaf server cert show" in why
+
+
+def test_a_lookup_still_running_is_not_waited_for_again(tmp_path, monkeypatch):
+    """While DNS hangs, every choice used to wait its full budget again and start the same
+    lookups once more, so one account opening many connections made everybody's invitations
+    queue. Only the choice that starts a lookup pays the time now. MUTATION: no shared
+    running lookups - red."""
+    import threading
+    import time
+
+    import vaf.network.binding as binding
+    _served(tmp_path, monkeypatch, ("a.example.org", "b.example.org"))
+    monkeypatch.setattr(ssl_utils, "_LOOKUP_POOL", None)
+    monkeypatch.setattr(ssl_utils, "_LOOKUP_IN_FLIGHT", None)
+    monkeypatch.setattr(ssl_utils, "_LOOKUP_BUDGET_S", 0.5)
+    release = threading.Event()
+    started = []
+
+    def _hang(name):
+        started.append(name)
+        release.wait(10)
+        return frozenset()
+
+    monkeypatch.setattr(ssl_utils, "_addresses_of", _hang)
+    monkeypatch.setattr(binding, "machine_dns_names", lambda: ["vaf"])
+    try:
+        first = time.monotonic()
+        assert ssl_utils.room_host_choice("192.168.1.20")[0] is None
+        first = time.monotonic() - first
+        second = time.monotonic()
+        host, why = ssl_utils.room_host_choice("192.168.1.20")
+        second = time.monotonic() - second
+        ran = sorted(started)
+    finally:
+        release.set()
+    assert first >= 0.4 and second < 0.2, (first, second)
+    assert host is None and "gave no answer" in why
+    assert ran == ["a.example.org", "b.example.org"], "a running lookup was started again"
+
+
+def _gaierror(code):
+    import socket
+
+    def _raise(*_a, **_k):
+        raise socket.gaierror(code, "resolver")
+    return _raise
+
+
+def test_a_resolver_that_failed_for_now_is_asked_again(tmp_path, monkeypatch):
+    """EAI_AGAIN (a timeout among them) is no answer: remembering it as "no address" gave
+    every invitation for a minute no lane and advice to fix a DNS entry that may be fine.
+    MUTATION: remember every failure as an empty answer - red."""
+    import socket
+
+    import vaf.network.binding as binding
+    _served(tmp_path, monkeypatch, ("a.example.org", "b.example.org"))
+    monkeypatch.setattr(binding, "machine_dns_names", lambda: ["vaf"])
+    asked = []
+    failing = _gaierror(socket.EAI_AGAIN)
+    monkeypatch.setattr(ssl_utils.socket, "getaddrinfo",
+                        lambda name, *a, **k: asked.append(name) or failing())
+    for _ in range(2):
+        host, why = ssl_utils.room_host_choice("192.168.1.20")
+        assert host is None and "gave no answer" in why and "hosts file" not in why
+    assert sorted(asked) == ["a.example.org", "a.example.org", "b.example.org", "b.example.org"]
+
+
+def test_a_name_that_does_not_exist_is_remembered(tmp_path, monkeypatch):
+    """EAI_NONAME is an answer, and it is remembered like any other. MUTATION: remember no
+    failure at all - red."""
+    import socket
+
+    import vaf.network.binding as binding
+    _served(tmp_path, monkeypatch, ("a.example.org", "b.example.org"))
+    monkeypatch.setattr(binding, "machine_dns_names", lambda: ["vaf"])
+    asked = []
+    missing = _gaierror(socket.EAI_NONAME)
+    monkeypatch.setattr(ssl_utils.socket, "getaddrinfo",
+                        lambda name, *a, **k: asked.append(name) or missing())
+    for _ in range(2):
+        host, why = ssl_utils.room_host_choice("192.168.1.20")
+        assert host is None and "hosts file" in why
+    assert sorted(asked) == ["a.example.org", "b.example.org"]

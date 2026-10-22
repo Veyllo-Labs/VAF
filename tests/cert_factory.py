@@ -158,8 +158,9 @@ def isolated_home(tmp_path: Path, monkeypatch, **values) -> Path:
     ssl_dir = root / "ssl"
     monkeypatch.setattr(ssl_utils, "_ssl_dir_path", lambda: ssl_dir)
     monkeypatch.setattr(ssl_utils, "_LISTENERS", {})
-    # Remembered lookups belong to the test that made them.
+    # Remembered and running lookups belong to the test that made them.
     monkeypatch.setattr(ssl_utils, "_LOOKUP_MEMO", {})
+    monkeypatch.setattr(ssl_utils, "_LOOKUP_IN_FLIGHT", None)
     return ssl_dir
 
 

@@ -833,12 +833,19 @@ The lookups (the machine's names and each of the certificate's names, once) run 
 of eight daemon threads for the whole process (`bounded_run.DaemonPool`, through
 `run_bounded_all`), and a choice waits 2 s for them in all (`_LOOKUP_BUDGET_S`): `getaddrinfo`
 has no timeout of its own (an unanswered `.local` name took 10 s). Lookups that hang occupy
-those eight threads and no more, and the ones queued behind them are cancelled when the time
-is up, so the invitation then has no lane and says that the names did not answer. An answer
-is reused for 60 s, so repeated invitations do not ask the resolver again, and a DNS change
-shows in an invitation made at most a minute later. The web UI builds an invitation on a
-small pool of its own (four threads), off the server's event loop and off the default
-executor the A2A wire and the voice feed use. The joining machine's network must resolve the
+those eight threads and no more. A lookup that is still running or queued is shared: a later
+choice does not start it again and waits for it only until the 2 s of the choice that started
+it are up, so while DNS hangs only that choice pays the time, and the others return at once
+with no lane and a reason that says the names gave no answer. An answer is reused for 60 s, so
+repeated invitations do not ask the resolver again, and a DNS change shows in an invitation
+made at most a minute later; a resolver that failed for now (`EAI_AGAIN`, a timeout among
+them) is no answer and is asked again, only a name that does not exist is remembered as one.
+The web UI builds an invitation on a small pool of its own (four threads), off the server's
+event loop and off the default executor the A2A wire and the voice feed use. NAMED BOUNDARY:
+those four threads are shared by every account, with no count per account, so while DNS hangs
+one member's invitations can delay another's: by at most 2.06 s at 20 connections and 3.25 s
+at 60 (measured with lookups that hang 20 s; before the lookups were shared it was 10 s and
+30 s). The joining machine's network must resolve the
 name to the host. When the certificate names none, the invitation carries no lane for other
 machines: its briefing says so and why, `vaf a2a invite` returns the reason as
 `remote_unavailable`, and the host's log says it too. A member's `vaf a2a howto` is the

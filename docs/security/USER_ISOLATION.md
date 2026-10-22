@@ -491,7 +491,9 @@ there too - cleared before the commit, a lookup in between re-cached the old ans
   sign-in from another device also ends after `local_network_session_idle_days` without
   use, the window on this machine and tokens for programs do not; a session of the window on
   this machine stands only for this machine and is refused when another device presents it,
-  also while the auth store cannot be asked: the token carries that it is the machine's). A
+  also while the auth store cannot be asked: the token carries that it is the machine's. A
+  token minted before that claim existed is judged by its row alone, so while the store
+  cannot be asked it is kept like any other until it expires, 30 days at most). A
   network client then gets 401 (a socket: close code 4001, and a `ws_rejected` event); the
   real localhost client falls back to the tokenless lane as before. An unreachable auth
   store keeps the token: the same desktop default as the allowlist lookup. A session this

@@ -97,3 +97,52 @@ def test_ws_localhost_exception_falls_through(monkeypatch):
     except Exception:
         pass  # the spy aborts after connect; we only care that connect was reached
     assert calls, "localhost must still reach manager.connect despite the auth error"
+
+
+def _signed_in_socket_world(monkeypatch):
+    """The real /ws handler over the sign-in store of tests/auth_harness.py, one account
+    signed in from the LAN. Returns (harness, token, recorded identities)."""
+    from auth_harness import JWT_SECRET, Harness
+
+    import vaf.auth.crypto as crypto
+    h = Harness(monkeypatch)
+    monkeypatch.setattr(crypto, "get_jwt_secret", lambda: JWT_SECRET)
+    h.add_user("alice", "alice-password-1", no_second_factor=True)
+    token = h.sign_in(h.client("192.168.61.1"), "alice", "alice-password-1", None)
+    _enable_network(monkeypatch)
+    seen = []
+
+    async def fake_connect(ws):
+        await ws.accept()
+
+    def fake_set_user(ws, scope, username=None, role=None):
+        seen.append((str(scope), username))
+        raise RuntimeError("stop-after-identity")
+
+    monkeypatch.setattr(manager, "connect", fake_connect)
+    monkeypatch.setattr(manager, "set_connection_user", fake_set_user)
+    return h, token, seen
+
+
+def test_the_cookie_alone_opens_the_socket(monkeypatch):
+    """The web UI dials /ws with no ?token=: the HttpOnly cookie is its credential, and the
+    socket is the account's. An ended session's cookie is refused with 4001.
+    MUTATION: ignore websocket.cookies - red."""
+    h, token, seen = _signed_in_socket_world(monkeypatch)
+    c = TestClient(app, client=LAN)
+    c.cookies.set("vaf_token", token)
+    try:
+        with c.websocket_connect("/ws"):
+            pass
+    except Exception:
+        pass
+    assert seen == [(str(h.user("alice").user_scope_id), "alice")]
+
+    h.client("192.168.61.1").post("/api/auth/logout", headers={"Authorization": f"Bearer {token}"})
+    ended = TestClient(app, client=LAN)
+    ended.cookies.set("vaf_token", token)
+    with pytest.raises(WebSocketDisconnect) as ei:
+        with ended.websocket_connect("/ws"):
+            pass
+    assert ei.value.code == 4001
+    assert len(seen) == 1

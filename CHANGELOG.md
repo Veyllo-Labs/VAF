@@ -207,6 +207,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   VAF, it says so: restart VAF then). A window whose session ended shows the sign-in page
   and says why. Signing in twice in the same second no longer fails.
 
+- **The browser keeps no token a script can read.** The web UI used to copy its access token
+  into the page's local storage and into the chat connection's address, where any script
+  running in the page could read it and use it from anywhere until it expired. It now uses
+  only the HttpOnly cookie, and the copy an older version left behind is removed at the next
+  page load. For your own programs: sign-in, the 2FA step and the first-run setup no longer
+  return an access token (`POST /api/auth/verify-2fa` answers `{"ok": true}`,
+  `POST /api/auth/login` without a second factor `{"user": ...}`, `POST /api/auth/bootstrap`
+  `{"temp_token", "user"}`). The machine itself still needs no token.
+
 - **A sign-in on another device ends after a week without use, and lasts a month at most.**
   It used to last a day whether used or not. It now ends after 7 days without use
   (`local_network_session_idle_days`) and after 30 days at the latest

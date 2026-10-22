@@ -214,13 +214,11 @@ export default function LoginPage() {
                     retry();
                 });
         };
-        // COOKIE-ONLY check, deliberately WITHOUT the Bearer/localStorage fallback: the
-        // server-side gate (web/proxy.ts) routes pages purely on the vaf_token COOKIE.
-        // If this bounce decision used a different authority (a still-valid localStorage
-        // token while the cookie JWT is expired - they can diverge, e.g. 24h JWT expiry
-        // vs 30-day cookie max_age), /login and / disagree forever: / 307s here, this
-        // check bounces back, and the window navigation-loops until Chromium throttles
-        // it (live incident 2026-07-22). One authority for routing: the cookie.
+        // The HttpOnly cookie is the browser's only credential, the same authority the
+        // server-side gate (web/proxy.ts) routes pages on. When this bounce decision used a
+        // different one (a token copy in the page's storage while the cookie had expired),
+        // /login and / disagreed forever and the window navigation-looped until Chromium
+        // throttled it (live incident 2026-07-22).
         fetch(`${apiPrefix}/api/auth/me`, {
             credentials: 'include',
             cache: 'no-store',
@@ -274,13 +272,12 @@ export default function LoginPage() {
                         if (now - bounce.t > 15000) bounce = { n: 0, t: now };
                         if (bounce.n >= 2) {
                             sessionStorage.removeItem('vaf_login_bounce');
-                            localStorage.removeItem('vaf_token');
                             setCheckingSetup(false);
                             return;
                         }
                         sessionStorage.setItem('vaf_login_bounce', JSON.stringify({ n: bounce.n + 1, t: bounce.t || now }));
                     }
-                    // Full navigation so dashboard mounts with the same cookie/Bearer semantics as a refresh (avoids client-only transition loops).
+                    // Full navigation so the dashboard mounts with the cookie exactly as on a refresh (avoids client-only transition loops).
                     if (typeof window !== 'undefined') {
                         window.location.replace(`${window.location.origin}/`);
                     } else {
@@ -289,11 +286,7 @@ export default function LoginPage() {
                     return; // Stop further checks
                 }
 
-                // Not authenticated by the cookie: also drop a possibly stale localStorage
-                // token (split-brain cleanup, mirrors app/page.tsx), then check setup status.
-                if (typeof window !== 'undefined') {
-                    localStorage.removeItem('vaf_token');
-                }
+                // Not signed in: is this a first run?
                 checkSetup(0);
             })
             .catch(() => {
@@ -468,37 +461,41 @@ export default function LoginPage() {
                 setIsLoading(false);
                 return;
             }
-            const accessToken: string = bootstrapData.access_token || '';
-            setTempToken(accessToken);
+            // The step token for the second factor, held in memory for this step only. The
+            // wizard's own session for the next two saves is the HttpOnly cookie the answer set.
+            const stepToken: string = bootstrapData.temp_token || '';
+            setTempToken(stepToken);
 
-            // 2. Save pending soul content with Bearer token (no cookie needed).
-            if (pendingSoul && accessToken) {
+            // 2. Save the pending soul through the cookie.
+            if (pendingSoul) {
                 await fetch(`${getApiBase()}/api/user/soul`, {
                     method: 'PUT',
-                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
                     body: JSON.stringify({ content: pendingSoul }),
                 }).catch(() => {});
             }
 
-            // 3. Save pending connection configs with Bearer token. Merge any config passed in
+            // 3. Save pending connection configs through the cookie. Merge any config passed in
             //    explicitly (e.g. the Veyllo key from the previous step): React state
             //    (onboardingConfig) is not yet updated when this runs in the same tick, so relying
             //    on it alone would silently drop the just-entered key + provider.
             const cfgToSave = { ...onboardingConfig, ...(extraConfig || {}) };
-            if (Object.keys(cfgToSave).length > 0 && accessToken) {
+            if (Object.keys(cfgToSave).length > 0) {
                 await fetch(`${getApiBase()}/api/config`, {
                     method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
                     body: JSON.stringify(cfgToSave),
                 }).catch(() => {});
             }
 
-            // 4. Fetch the 2FA QR code.
-            if (accessToken) {
+            // 4. Fetch the 2FA QR code with the step token, as the sign-in does.
+            if (stepToken) {
                 try {
                     const setupRes = await fetch(`${getApiBase()}/api/auth/setup-2fa`, {
                         method: 'POST',
-                        headers: { Authorization: `Bearer ${accessToken}` },
+                        headers: { Authorization: `Bearer ${stepToken}` },
                         credentials: 'include',
                     });
                     if (setupRes.ok) {
@@ -536,7 +533,6 @@ export default function LoginPage() {
                 sessionStorage.removeItem('vaf_onboarding');
                 sessionStorage.removeItem('vaf_onboarding_step');
                 sessionStorage.removeItem('vaf_onboarding_profile');
-                if (data.access_token) localStorage.setItem('vaf_token', data.access_token);
             }
             window.location.replace(`${window.location.origin}/`);
             return;
@@ -590,9 +586,7 @@ export default function LoginPage() {
                     setQrCodeBase64(null);
                 }
             } else {
-                if (typeof window !== 'undefined' && data.access_token) {
-                    localStorage.setItem('vaf_token', data.access_token);
-                }
+                // Signed in: the cookie is set, nothing to keep here.
                 router.push('/');
                 return;
             }
@@ -623,9 +617,6 @@ export default function LoginPage() {
                 setTwoFAError(codeErrorText(res, data));
                 setIsLoading(false);
                 return;
-            }
-            if (typeof window !== 'undefined' && data.access_token) {
-                localStorage.setItem('vaf_token', data.access_token);
             }
             router.push('/');
         } catch {

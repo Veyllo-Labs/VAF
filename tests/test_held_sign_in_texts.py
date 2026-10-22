@@ -38,8 +38,9 @@ def test_a_code_answer_is_named_for_what_it_is():
 
 
 def test_a_session_that_ended_elsewhere_is_named_on_the_login_page():
-    """MUTATION: redirect without the reason, or drop the notice - red."""
-    assert APP.count("? '?reason=ended' : ''}`);") == 2
+    """The page gate renders the app only for an unexpired cookie, so a refusal there always
+    means the session ended. MUTATION: redirect without the reason, or drop the notice - red."""
+    assert APP.count("/login?reason=ended`);") == 2
     assert "get('reason') === 'ended'" in LOGIN
     assert "{tAuth('sessionEnded')}" in LOGIN
 

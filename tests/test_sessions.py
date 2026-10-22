@@ -61,7 +61,7 @@ def test_two_sign_ins_in_one_second_both_succeed(h, frozen_second):
     first = h.login(c, "alice", "alice-password-1")
     second = h.login(c, "alice", "alice-password-1")
     assert first.status_code == 200 and second.status_code == 200, second.text
-    assert first.json()["access_token"] != second.json()["access_token"]
+    assert first.cookies.get("vaf_token") != second.cookies.get("vaf_token")
     assert len(h.sessions()) == 2
 
 
@@ -236,8 +236,13 @@ def test_a_temp_token_from_before_a_reset_is_refused(h):
     assert _setup_2fa(h, fresh["temp_token"]).status_code == 200
 
 
-def test_the_wizard_still_enrolls_with_the_bootstrap_token(h, monkeypatch):
-    """The first-run wizard enrolls with the bootstrap's own token (it has a live session)."""
+def test_the_wizard_enrolls_with_the_temp_token_and_the_cookie(h, monkeypatch):
+    """The first-run wizard on another device with no full token in JSON: the bootstrap answers
+    a step token for the second factor and sets the wizard's own session as the cookie; the
+    soul and the settings are saved through that cookie, the second factor is set up and
+    verified with the step token, and the sign-in then ends the wizard's session and leaves a
+    cookie that opens /me. MUTATION: bootstrap answers access_token again; skip ending the
+    replaced session - red."""
     import auth_harness
     from vaf.auth import account_seal, user_admin
     from vaf.core.config import Config
@@ -247,13 +252,36 @@ def test_the_wizard_still_enrolls_with_the_bootstrap_token(h, monkeypatch):
     monkeypatch.setattr(Config, "load", staticmethod(lambda *a, **k: dict(saved)))
     monkeypatch.setattr(Config, "save", staticmethod(lambda c, *a, **k: saved.update(c)))
     monkeypatch.setattr(user_admin, "_prepare_user_home", lambda *a, **k: None)
-    local = h.client(None)
-    token = local.post("/api/auth/bootstrap",
-                       json={"username": "owner", "password": "owner-password-1"}).json()["access_token"]
-    r = local.post("/api/auth/setup-2fa", headers={"Authorization": f"Bearer {token}"})
+    monkeypatch.setattr(user_admin, "setup_code_matches", lambda code: code == "CODE-CODE")
+
+    from fastapi import Request
+
+    async def _whoami(request: Request):
+        return {"user": getattr(request.state, "user", None)}
+
+    app = h.app(extra_routes=[("/api/user/soul", _whoami, ["PUT"]), ("/api/config", _whoami, ["PATCH"])])
+    browser = h.client("192.168.16.1", app=app)
+    r = browser.post("/api/auth/bootstrap", json={"username": "owner", "password": "owner-password-1",
+                                                  "setup_code": "CODE-CODE"})
+    assert r.status_code == 200, r.text
+    answer = r.json()
+    assert "access_token" not in answer and answer["temp_token"]
+    wizard_session = r.cookies.get("vaf_token")
+    assert wizard_session
+    for method, path in (("PUT", "/api/user/soul"), ("PATCH", "/api/config")):
+        saved_with = browser.request(method, path, json={})
+        assert saved_with.status_code == 200 and saved_with.json()["user"]["username"] == "owner"
+    r = browser.post("/api/auth/setup-2fa", headers={"Authorization": f"Bearer {answer['temp_token']}"})
     assert r.status_code == 200, r.text
     code = auth_harness.pyotp.TOTP(r.json()["secret"]).now()
-    assert h.verify(local, token, code).status_code == 200
+    r = h.verify(browser, answer["temp_token"], code)
+    assert r.status_code == 200 and r.json() == {"ok": True}, r.text
+    signed_in = r.cookies.get("vaf_token")
+    assert signed_in and signed_in != wizard_session
+    assert _probe(h, wizard_session) == 401
+    me = h.client("192.168.16.1", app=app)
+    me.cookies.set("vaf_token", signed_in)
+    assert me.get("/api/auth/me").status_code == 200
 
 
 # ── open sockets end with their sessions ─────────────────────────────────────────

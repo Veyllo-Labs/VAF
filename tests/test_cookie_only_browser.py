@@ -155,3 +155,54 @@ def test_a_refused_cookie_is_deleted_for_every_reason(h, monkeypatch):
         here = h.client(None, app=app)
         here.cookies.set("vaf_token", token)
         assert here.get("/api/probe").status_code == 200, token
+
+
+def test_no_answer_hands_out_a_token(h, monkeypatch):
+    """Bootstrap, /login (with and without a second factor) and /verify-2fa: the session's
+    token is in the HttpOnly cookie only, never in JSON a page script could read and keep.
+    MUTATION: /verify-2fa answers access_token again - red."""
+    _first_run(monkeypatch)
+    app = h.app()
+    here = h.client(None, app=app)
+    r = here.post("/api/auth/bootstrap", json={"username": "owner", "password": "owner-password-1"})
+    assert r.status_code == 200 and set(r.json()) == {"temp_token", "user"}, r.text
+    _id, secret = h.add_user("alice", "alice-password-1", totp=True)
+    h.add_user("bob", "bob-password-12", no_second_factor=True)
+    lan = h.client("192.168.54.1", app=app)
+    r = h.login(lan, "alice", "alice-password-1")
+    assert set(r.json()) == {"requires_2fa", "needs_2fa_setup", "temp_token"}
+    assert _cookie(r) is None
+    r = h.verify(lan, r.json()["temp_token"], pyotp.TOTP(secret).now())
+    assert r.status_code == 200 and r.json() == {"ok": True} and _cookie(r)
+    r = h.login(h.client("192.168.54.2", app=app), "bob", "bob-password-12")
+    assert r.status_code == 200 and set(r.json()) == {"user"} and _cookie(r)
+    for token_like in ("access_token", "refresh_token"):
+        assert token_like not in r.text
+
+
+def test_the_web_ui_keeps_no_readable_token():
+    """No access token in the page's storage, in a header built from storage, or in the
+    socket's address: the HttpOnly cookie is the browser's only credential, and exactly one
+    call removes the copy an older VAF left behind, in a module every page loads.
+    MUTATION: keep a localStorage.setItem('vaf_token' in the login page; put token= back
+    into the socket address - red."""
+    import re
+    web = ROOT / "web"
+    sources = {}
+    for top in ("app", "components", "lib"):
+        for path in (web / top).rglob("*"):
+            if path.suffix in (".ts", ".tsx") and path.is_file():
+                sources[path.relative_to(ROOT).as_posix()] = path.read_text(encoding="utf-8")
+    storage = {rel: re.findall(r"(?:localStorage|sessionStorage)\.\w+\(\s*['\"]vaf_token['\"]", src)
+               for rel, src in sources.items()}
+    storage = {rel: calls for rel, calls in storage.items() if calls}
+    assert storage == {"web/components/HostnameNormalizer.tsx": ["localStorage.removeItem('vaf_token'"]}
+    layout = (web / "app" / "layout.tsx").read_text(encoding="utf-8")
+    assert "<HostnameNormalizer />" in layout
+    assert not [rel for rel, src in sources.items() if "access_token" in src]
+    assert not re.search(r"['\"`?&]token=", sources["web/app/page.tsx"]), "a token in the socket address"
+    assert not [rel for rel, src in sources.items()
+                if re.search(r"Authorization:\s*`Bearer \$\{(?:t|token|accessToken)\}`", src)]
+    page = sources["web/app/page.tsx"]
+    assert page.count("new WebSocket(") == 1 and "new WebSocket(wsUrl)" in page
+    assert "const wsUrl = (base ? base + '/ws' : '/ws');" in page

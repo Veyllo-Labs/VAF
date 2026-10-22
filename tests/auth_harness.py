@@ -217,15 +217,18 @@ class Harness:
         return c.post("/api/auth/verify-2fa", json={"temp_token": temp_token, "code": code})
 
     def sign_in(self, c, username: str, password: str, secret: Optional[str]) -> str:
-        """A completed sign-in; returns the access token."""
+        """A completed sign-in; returns the access token, read from the HttpOnly cookie the
+        answer sets: no sign-in answer carries it in JSON."""
         r = self.login(c, username, password)
         assert r.status_code == 200, r.text
         data = r.json()
-        if not data.get("requires_2fa"):
-            return data["access_token"]
-        r = self.verify(c, data["temp_token"], pyotp.TOTP(secret).now())
-        assert r.status_code == 200, r.text
-        return r.json()["access_token"]
+        if data.get("requires_2fa"):
+            r = self.verify(c, data["temp_token"], pyotp.TOTP(secret).now())
+            assert r.status_code == 200, r.text
+        assert "access_token" not in r.json(), r.text
+        token = r.cookies.get("vaf_token")
+        assert token, r.headers
+        return token
 
     def kinds(self, kind: str) -> List[Dict[str, Any]]:
         return [f for k, f in self.events if k == kind]

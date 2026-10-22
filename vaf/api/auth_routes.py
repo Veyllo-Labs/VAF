@@ -239,6 +239,27 @@ def _is_db_not_ready_error(exc: Exception) -> bool:
     ))
 
 
+def _temp_token(user) -> str:
+    """The token of the step between the password and the second factor: it opens only
+    /setup-2fa and /verify-2fa, for a quarter of an hour, and only while the account still has
+    the password it was minted with (`pwv`). No browser keeps it: the page holds it in memory
+    for the step."""
+    return create_access_token(
+        str(user.id),
+        user.username,
+        user.role,
+        str(user.user_scope_id),
+        expires_hours=TEMP_TOKEN_HOURS,
+        is_2fa_verified=False,
+        password_version=password_fingerprint(user.password_hash),
+    )
+
+
+def _user_answer(user) -> dict:
+    return {"id": str(user.id), "username": user.username, "role": user.role,
+            "user_scope_id": str(user.user_scope_id)}
+
+
 def _setup_code_required(request: Request) -> bool:
     """A browser that is not on this machine needs the first-run setup code, in every mode:
     the IP check admits the LAN, the VPN and on a VPS the provider's private network, and
@@ -297,8 +318,12 @@ async def needs_setup(request: Request):
 @router.post("/bootstrap")
 async def bootstrap(body: BootstrapRequest, request: Request, response: Response):
     """
-    Create the first admin account. Only allowed when no admin exists.
-    No auth required. On success returns tokens and sets cookie (auto-login).
+    Create the first admin account. Only allowed when no admin exists. No auth required.
+
+    On success the cookie carries the wizard's own session for its remaining steps (the soul,
+    the settings), and the answer carries the step token for the second factor
+    (`temp_token`, what /login answers a correct password with). No access token goes into
+    JSON: the browser keeps only the HttpOnly cookie, which no page script can read.
     """
     try:
         async with get_auth_db() as db:
@@ -338,14 +363,8 @@ async def bootstrap(body: BootstrapRequest, request: Request, response: Response
 
         _set_auth_cookie(request, response, access)
         return {
-            "access_token": access,
-            "user": {
-                "id": str(new_user.id),
-                "username": new_user.username,
-                "role": new_user.role,
-                "user_scope_id": str(new_user.user_scope_id),
-                "requires_2fa_setup": new_user.requires_2fa_setup,
-            },
+            "temp_token": _temp_token(new_user),
+            "user": {**_user_answer(new_user), "requires_2fa_setup": new_user.requires_2fa_setup},
         }
     except HTTPException:
         raise
@@ -524,7 +543,8 @@ async def setup_2fa(request: Request):
 @router.post("/verify-2fa")
 async def verify_2fa(body: Verify2FARequest, request: Request, response: Response):
     """
-    Verify TOTP code and complete 2FA. On success sets cookie, creates session for new token, returns tokens.
+    Verify the code and complete the sign-in (_complete_sign_in). The session's token goes into
+    the HttpOnly cookie only, never into JSON: a page script must not be able to read it.
     """
     payload = await _second_factor_step_token(body.temp_token)
     if payload is None:
@@ -588,9 +608,9 @@ async def verify_2fa(body: Verify2FARequest, request: Request, response: Respons
         user.last_login = datetime.utcnow()
         await db.commit()
 
-        access = await _complete_sign_in(db, request, response, user)
+        await _complete_sign_in(db, request, response, user)
 
-    return {"access_token": access}
+    return {"ok": True}
 
 
 # How long an address that completed a sign-in for an account stays exempt from that
@@ -761,18 +781,8 @@ async def _sign_in(body: LoginRequest, request: Request, response: Response,
         is_2fa_verified = not (needs_2fa_setup or has_2fa_configured)
 
         if not is_2fa_verified:
-            # The temp token only reaches /setup-2fa and /verify-2fa: a quarter of an hour
-            # for the code, not the day it used to live.
-            temp = create_access_token(
-                str(user.id),
-                user.username,
-                user.role,
-                str(user.user_scope_id),
-                expires_hours=TEMP_TOKEN_HOURS,
-                is_2fa_verified=False,
-                # A token from before the second factor is bound to this password.
-                password_version=password_fingerprint(user.password_hash),
-            )
+            # The step token: a quarter of an hour for the code, not the day it used to live.
+            temp = _temp_token(user)
 
     if not is_2fa_verified:
         return {
@@ -781,19 +791,11 @@ async def _sign_in(body: LoginRequest, request: Request, response: Response,
             "temp_token": temp,
         }
 
-    # An account without a second factor: the sign-in completes here, as after the code.
-    # remember_me changes nothing: the lifetime is the token's (vaf/auth/sessions.py).
+    # An account without a second factor: the sign-in completes here, as after the code. The
+    # token is in the cookie only. remember_me changes nothing: the lifetime is the token's.
     async with get_auth_db() as db:
-        access = await _complete_sign_in(db, request, response, user)
-    return {
-        "access_token": access,
-        "user": {
-            "id": str(user.id),
-            "username": user.username,
-            "role": user.role,
-            "user_scope_id": str(user.user_scope_id),
-        },
-    }
+        await _complete_sign_in(db, request, response, user)
+    return {"user": _user_answer(user)}
 
 
 def _authorization_bearer(request: Request) -> str:
@@ -805,11 +807,8 @@ def _authorization_bearer(request: Request) -> str:
 
 
 def _access_token_candidates(request: Request) -> list[str]:
-    """Ordered JWT candidates for /me.
-
-    Bearer (e.g. sessionStorage) is tried before the httpOnly cookie so a stale
-    cookie cannot shadow a valid Authorization token — a common SPA redirect loop.
-    """
+    """Ordered JWT candidates for /me: a program's Bearer token before the browser's HttpOnly
+    cookie, so a stale cookie in the same client cannot shadow a valid Authorization token."""
     bearer = _authorization_bearer(request)
     cookie_tok = (request.cookies.get(COOKIE_NAME) or "").strip()
     out: list[str] = []

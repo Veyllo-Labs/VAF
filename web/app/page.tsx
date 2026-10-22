@@ -2661,18 +2661,12 @@ function VAFDashboardContent() {
         setAuthError(null);
         const ac = new AbortController();
         const timeoutId = setTimeout(() => ac.abort(), 8000);
-        const authHeaders: Record<string, string> = {
-            'Cache-Control': 'no-cache',
-        };
-        if (typeof window !== 'undefined') {
-            const token = localStorage.getItem('vaf_token');
-            if (token) authHeaders.Authorization = `Bearer ${token}`;
-        }
+        // The HttpOnly cookie is the only credential this page has; it is sent, never read.
         fetch(`${getApiBase()}/api/auth/me`, {
             credentials: 'include',
             signal: ac.signal,
             cache: 'no-store',
-            headers: authHeaders,
+            headers: { 'Cache-Control': 'no-cache' },
         })
             .then(async (res) => {
                 if (res.ok) {
@@ -2681,15 +2675,13 @@ function VAFDashboardContent() {
                     setIsAuthenticated(true);
                 } else {
                     if (typeof window !== 'undefined') {
-                        // A token that no longer works means the session ended (signed out on
-                        // another device, a password change, a reset) or ran out: the login
-                        // page says so (?reason=ended) instead of appearing without a word.
-                        const hadToken = !!localStorage.getItem('vaf_token');
-                        // Avoid split-brain auth state (stale token in storage, invalid on backend)
-                        localStorage.removeItem('vaf_token');
+                        // The page gate (web/proxy.ts) renders this page only for an unexpired
+                        // cookie, so a refusal here means its session ended (signed out on
+                        // another device, a password change, a reset, too long unused): the
+                        // login page says so (?reason=ended) instead of appearing without a word.
                         // Hard navigation: router.replace('/login') can fail to leave the dashboard
                         // shell when using the integrated HTTPS proxy (e.g. https://localhost:8443).
-                        window.location.replace(`${window.location.origin}/login${hadToken ? '?reason=ended' : ''}`);
+                        window.location.replace(`${window.location.origin}/login?reason=ended`);
                     } else {
                         router.replace('/login');
                     }
@@ -5002,11 +4994,9 @@ function VAFDashboardContent() {
             // desktop must use the plain internal channel (its self-signed cert is
             // rejected by the desktop's web engine).
             wsBaseResolvedRef.current = base;
-            let wsUrl = (base ? base + '/ws' : '/ws');
-            const token = localStorage.getItem('vaf_token');
-            if (token) {
-                wsUrl += (wsUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(token);
-            }
+            // No token in the address: the handshake carries the HttpOnly cookie, the same one
+            // every request of this page sends (a program's own token may still go in the address).
+            const wsUrl = (base ? base + '/ws' : '/ws');
             const socket = new WebSocket(wsUrl);
             wsSocketRef.current = socket;
             let opened = false;
@@ -7318,20 +7308,17 @@ function VAFDashboardContent() {
             // or the server briefly down). Re-check auth before reconnecting so an expired session
             // routes cleanly to /login instead of hammering /ws.
             if (!opened) {
-                const t = localStorage.getItem('vaf_token');
                 fetch(`${getApiBase() || ''}/api/auth/me`, {
                     credentials: 'include',
                     cache: 'no-store',
-                    headers: t ? { Authorization: `Bearer ${t}` } : {},
                 })
                     .then((res) => {
                         if (cancelled) return;
                         if (res.status === 401 || res.status === 403) {
-                            localStorage.removeItem('vaf_token');
                             setIsAuthenticated(false);
-                            // The socket was refused and the token no longer works: the
+                            // The socket was refused and the cookie no longer works: the
                             // session ended, and the login page says so.
-                            window.location.replace(`${window.location.origin}/login${t ? '?reason=ended' : ''}`);
+                            window.location.replace(`${window.location.origin}/login?reason=ended`);
                             return;
                         }
                         scheduleReconnect();

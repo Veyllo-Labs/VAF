@@ -81,7 +81,7 @@ def test_argon2_never_runs_on_the_loop(h, argon2_threads, monkeypatch):
     argon2_threads["hash"].clear()
     r = local.post("/api/auth/bootstrap", json={"username": "owner", "password": "owner-password-1"})
     assert r.status_code == 200, r.text
-    token = r.json()["access_token"]
+    token = r.cookies.get("vaf_token")
     assert h.login(local, "owner", "owner-password-1").status_code == 200
     r = local.post("/api/auth/change-password", headers={"Authorization": f"Bearer {token}"},
                    json={"current_password": "owner-password-1", "new_password": "owner-password-2"})

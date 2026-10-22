@@ -91,7 +91,9 @@ stream checked none.
 
 The `/ws` endpoint (`websocket_endpoint` in `vaf/core/web_server.py`) then authenticates **inside
 the handler**, not via the HTTP `AuthMiddleware`, for the same reason. The token is read from the
-`?token=<jwt>` query param or the `vaf_token` cookie.
+`?token=<jwt>` query param (a program's own token) or the HttpOnly `vaf_token` cookie, which is
+all the web UI sends: it dials `/ws` with no token in the address, and keeps no copy of the
+token a script could read.
 
 **Trust model.** Localhost (loopback: `127.0.0.1`, `::1`, `binding.is_localhost`, the same rule
 the HTTP localhost bypass uses) is trusted. In **network mode** (`local_network_enabled=true`) a

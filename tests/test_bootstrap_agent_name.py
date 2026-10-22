@@ -88,6 +88,7 @@ def _recorder(monkeypatch):
             id = uuid.uuid4()
             user_scope_id = uuid.uuid4()
             requires_2fa_setup = True
+            password_hash = "argon2-hash-of-the-password"
         _User.username = username
         _User.role = "admin"
         return _User()

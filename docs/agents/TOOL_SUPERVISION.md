@@ -34,14 +34,19 @@ responsive regardless. Long pure-Python tools should therefore check the stop fl
 and return early - see "Cooperative cancel" below.
 
 Several independent calls that may hang, such as the DNS lookups behind the host a room
-invitation names, go through `run_bounded_all(calls, *, timeout, pool)` instead: it returns the
-answers that arrived within the time in all, leaves out a call that raised or was too slow,
-and cancels the ones still queued, so they never start. Its `pool` is a `DaemonPool(workers,
-name)`: at most `workers` daemon threads, started as work arrives and shared by every caller of
-that pool, so calls that hang occupy that many threads however often they are made, and none
-of them holds up the exit of the process (the workers of a `ThreadPoolExecutor` are joined at
-exit: a process with a 3-second call left on one ended after 3.04 s, with the call left on a
-`DaemonPool` after 0.24 s, measured).
+invitation names, go through `run_bounded_all(calls, *, timeout, pool, in_flight=None)` instead:
+it returns the answers that arrived within the time in all, leaves out a call that raised or
+was too slow, and cancels the ones still queued, so they never start. Its `pool` is a
+`DaemonPool(workers, name)`: at most `workers` daemon threads, started as work arrives and
+shared by every caller of that pool, so calls that hang occupy that many threads however often
+they are made, and none of them holds up the exit of the process (the workers of a
+`ThreadPoolExecutor` are joined at exit: a process with a 3-second call left on one ended after
+3.04 s, with the call left on a `DaemonPool` after 0.24 s, measured). A worker counts toward the
+cap once it started, so a thread that could not start does not hold its place. With an
+`InFlight` shared by the callers, a key whose call is still running or queued is not started
+again: a later caller waits for it only until the time of the caller that started it is up,
+and a queued call stays queued for the next one instead of being cancelled (at most one per
+key), so while calls hang only the caller that starts one pays the time.
 
 The per-call budget is DECLARED by the tool: `BaseTool.timeout_seconds`, or `budget_seconds(args)`
 when it follows the call's own arguments (`vaf.core.bounded_run.tool_budget_seconds` resolves it;

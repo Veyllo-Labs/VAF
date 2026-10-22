@@ -211,11 +211,16 @@ class DaemonPool(Executor):
     For calls that may never return, such as a DNS lookup nobody answers: the workers of a
     ``ThreadPoolExecutor`` are joined when the interpreter exits, so one such call holds up
     the exit of the process it ran in, a CLI command that has already printed its answer
-    too (measured: a process with a 3 s call left on one ended after 3.04 s, with the call
-    left here after 0.24 s); a daemon thread does not. The cap holds across every caller of one pool, so calls that
-    hang occupy at most ``workers`` threads however often they are made, and later calls
-    wait in the queue. A future that has not started can be cancelled and is then never
-    run. Each call runs in a copy of the submitter's context, as ``run_bounded``'s does.
+    too (measured: 3.04 s for a 3 s call, 0.24 s here). The cap holds across every caller
+    of one pool, so calls that hang occupy at most ``workers`` threads however often they
+    are made, and later calls wait in the queue. A future that has not started can be
+    cancelled and is then never run. Each call runs in a copy of the submitter's context,
+    as ``run_bounded``'s does.
+
+    A worker is counted once it started: one that could not start would otherwise hold its
+    place under the cap for good, and a pool whose every start failed would never run
+    anything again (measured). When no worker runs, the failure reaches the caller and its
+    call is cancelled; when one does, the call waits for it.
     """
 
     def __init__(self, workers: int, name: str) -> None:
@@ -232,8 +237,16 @@ class DaemonPool(Executor):
             if len(self._threads) < self._workers:
                 worker = threading.Thread(target=self._work, daemon=True,
                                           name=f"{self._name}-{len(self._threads)}")
-                self._threads.append(worker)
-                worker.start()
+                try:
+                    worker.start()
+                except BaseException:
+                    if not self._threads:
+                        future.cancel()
+                        raise
+                    _log.warning("[DaemonPool] '%s' could not start another worker; %d run",
+                                 self._name, len(self._threads))
+                else:
+                    self._threads.append(worker)
         return future
 
     def _work(self) -> None:
@@ -249,8 +262,18 @@ class DaemonPool(Executor):
                 future.set_result(result)
 
 
+class InFlight:
+    """The calls of ``run_bounded_all`` still running, by key, each with the deadline of the
+    caller that started it. Shared by the callers whose calls mean the same thing for the
+    same key (a lookup of one name), so a key runs once at a time."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._calls: Dict[Hashable, Any] = {}
+
+
 def run_bounded_all(calls: Mapping[Hashable, Callable[[], Any]], *, timeout: float,
-                    pool: Executor) -> Dict[Hashable, Any]:
+                    pool: Executor, in_flight: Optional[InFlight] = None) -> Dict[Hashable, Any]:
     """Run every call on ``pool`` and return, keyed like ``calls``, the answers that arrived
     within ``timeout`` seconds in all.
 
@@ -260,14 +283,40 @@ def run_bounded_all(calls: Mapping[Hashable, Callable[[], Any]], *, timeout: flo
     cancelled, so it never starts) or still running when the time was up (it is abandoned
     like ``run_bounded``'s worker and finishes on its own). Give it a ``DaemonPool`` of its
     own when the calls can hang, so their threads stay capped and never hold up the exit.
+
+    With ``in_flight``, a key whose call another caller started and has not finished, running
+    or queued, is not started again: this caller waits for that call, but only until the
+    deadline of the one who started it. A call still queued when the time is up stays queued
+    for whoever asks next, instead of being cancelled, so at most one call per key waits. So
+    while calls hang, only the caller that starts one pays the time, and the others return
+    at once without it. Measured before: every later caller waited the full time again,
+    because it started the calls cancelled from the queue once more (another account's
+    invitation waited 32 s at 60 connections).
     """
-    futures = {key: pool.submit(fn) for key, fn in calls.items()}
+    deadline = time.monotonic() + max(0.0, float(timeout))
+    futures: Dict[Hashable, Future] = {}
+    until: Dict[Hashable, float] = {}
+    started = set()
+    if in_flight is None:
+        for key, fn in calls.items():
+            futures[key], until[key] = pool.submit(fn), deadline
+            started.add(key)
+    else:
+        with in_flight._lock:
+            for key, fn in calls.items():
+                running = in_flight._calls.get(key)
+                if running is not None and not running[0].done():
+                    futures[key], until[key] = running
+                    continue
+                futures[key], until[key] = pool.submit(fn), deadline
+                in_flight._calls[key] = (futures[key], deadline)
+                started.add(key)
     if futures:
-        wait(list(futures.values()), timeout=max(0.0, float(timeout)))
+        wait(list(futures.values()), timeout=max(0.0, max(until.values()) - time.monotonic()))
     answers: Dict[Hashable, Any] = {}
     for key, future in futures.items():
         if future.done() and not future.cancelled() and future.exception() is None:
             answers[key] = future.result()
-        else:
+        elif key in started and in_flight is None:
             future.cancel()
     return answers

@@ -10,7 +10,7 @@ holds up the exit of the process.
 """
 import threading
 
-from vaf.core.bounded_run import DaemonPool, run_bounded_all
+from vaf.core.bounded_run import DaemonPool, InFlight, run_bounded_all
 
 
 def _threads(prefix):
@@ -61,3 +61,73 @@ def test_calls_that_hang_occupy_the_cap_and_daemon_threads_only():
         release.set()
     assert len(threads) == 3
     assert all(t.daemon for t in threads), "a hung call must not hold up the exit"
+
+
+def test_a_worker_that_could_not_start_does_not_hold_its_place():
+    """A pool whose every start failed never ran anything again: the dead threads filled the
+    cap. MUTATION: count the worker before it started - red."""
+    real = threading.Thread.start
+    fails = [1]
+
+    def _flaky(self):
+        if self.name.startswith("test-bounded-start") and fails[0]:
+            fails[0] -= 1
+            raise RuntimeError("can't start new thread")
+        return real(self)
+
+    pool = DaemonPool(1, "test-bounded-start")
+    threading.Thread.start = _flaky
+    try:
+        try:
+            pool.submit(lambda: "lost")
+        except RuntimeError:
+            pass
+    finally:
+        threading.Thread.start = real
+    assert pool.submit(lambda: "served").result(timeout=5) == "served"
+
+
+def test_a_key_already_running_is_not_started_again():
+    """With ``in_flight``, a later caller shares a running call and waits for it only until
+    the deadline of the caller that started it. MUTATION: start every key again - red."""
+    import time
+
+    release = threading.Event()
+    started = []
+
+    def _hang():
+        started.append(1)
+        release.wait(5)
+
+    pool, in_flight = DaemonPool(2, "test-bounded-shared"), InFlight()
+    try:
+        assert run_bounded_all({"k": _hang}, timeout=0.2, pool=pool, in_flight=in_flight) == {}
+        later = time.monotonic()
+        assert run_bounded_all({"k": _hang}, timeout=0.2, pool=pool, in_flight=in_flight) == {}
+        later = time.monotonic() - later
+    finally:
+        release.set()
+    assert started == [1] and later < 0.1, (started, later)
+
+
+def test_a_queued_key_stays_queued_for_the_next_caller():
+    """Cancelled from the queue at the first caller's deadline, a key was started again by
+    every later caller, who then waited its full time for it (another account's invitation
+    waited 32 s at 60 connections). With ``in_flight`` it stays queued, once. MUTATION:
+    cancel it anyway - red."""
+    import time
+
+    release = threading.Event()
+    ran = []
+    pool, in_flight = DaemonPool(1, "test-bounded-queued-shared"), InFlight()
+    try:
+        run_bounded_all({"a": lambda: release.wait(5), "b": lambda: ran.append("b")},
+                        timeout=0.1, pool=pool, in_flight=in_flight)
+        later = time.monotonic()
+        run_bounded_all({"b": lambda: ran.append("b again")}, timeout=0.3, pool=pool,
+                        in_flight=in_flight)
+        later = time.monotonic() - later
+    finally:
+        release.set()
+    assert pool.submit(lambda: "after").result(timeout=5) == "after"
+    assert later < 0.05 and ran == ["b"], (later, ran)

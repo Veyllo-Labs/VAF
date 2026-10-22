@@ -261,3 +261,42 @@ def test_renewing_with_tls_off_says_so(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert _flat("TLS is off") in _flat(result.output)
     assert _flat("Your own certificate stays served") not in _flat(result.output)
+
+
+def test_an_unconfirmed_load_says_it_may_already_be_served(home, running, tmp_path):
+    """The load started and had not finished when the wait ended: it may have applied, so
+    "still serves the previous certificate" would be false. MUTATION: drop the unconfirmed
+    branch - red."""
+    running.answer = _Answer(200, {"ok": False, "listeners": {"proxy": "unconfirmed"},
+                                   "refused": None, "source": "own"})
+    _files(tmp_path)
+    result = runner.invoke(server_cmd.app, ["cert", "set", "--cert", str(tmp_path / "cert.pem"),
+                                            "--key", str(tmp_path / "key.pem")])
+    assert result.exit_code == 3
+    assert _flat("may already serve it") in _flat(result.output)
+    assert _flat("still serves the previous certificate") not in _flat(result.output)
+
+
+def test_no_trust_command_for_a_host_the_certificate_does_not_name(home, running, tmp_path,
+                                                                    monkeypatch):
+    """A peer's name check refuses an address the certificate does not name, so the line
+    says why instead of printing that command. MUTATION: print the address anyway - red."""
+    import vaf.network.binding as binding
+    monkeypatch.setattr(binding, "get_local_network_ip", lambda: "192.168.9.9")
+    monkeypatch.setattr(ssl_utils, "_resolves_to", lambda *_a: False)
+    _files(tmp_path, names=("example.org", "www.example.org"))
+    result = runner.invoke(server_cmd.app, ["cert", "set", "--cert", str(tmp_path / "cert.pem"),
+                                            "--key", str(tmp_path / "key.pem")])
+    flat = _flat(result.output)
+    assert "vafa2atrustwss://" not in flat
+    assert _flat("cannot reach it now") in flat
+
+
+def test_renewing_lists_the_names_left_out(home, monkeypatch):
+    """MUTATION: drop the list from ca renew - red."""
+    import vaf.network.binding as binding
+    monkeypatch.setattr(binding, "machine_dns_names", lambda: ["mypc", "mypc.fritz.box"])
+    result = runner.invoke(server_cmd.app, ["ca", "renew"], input="n\n")
+    flat = _flat(result.output)
+    assert _flat("leaves mypc, mypc.fritz.box out of VAF's certificate") in flat
+    assert _flat("its address or mypc.local") in flat or _flat("its address") in flat

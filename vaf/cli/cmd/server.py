@@ -748,6 +748,13 @@ def _finish_with_reload(what: str) -> None:
         listeners = answer.get("listeners") or {}
         detail = ", ".join(f"{name} {status}" for name, status in listeners.items())
         refused = answer.get("refused")
+        if "unconfirmed" in listeners.values():
+            # The load started and had not finished when the wait ended: it may have applied.
+            UI.warning(f"{what} The running VAF did not confirm the new certificate in time "
+                       f"({detail}); it may already serve it (check with `vaf server cert "
+                       "show` on the machine, or in a browser), else restart it "
+                       "(`systemctl --user restart vaf`, or quit and start the tray).")
+            raise typer.Exit(EXIT_RESTART_NEEDED)
         UI.warning(f"{what} The running VAF still serves the previous certificate"
                    + (f" ({detail})" if detail else "")
                    + (f" ({refused})" if refused else "")
@@ -768,15 +775,20 @@ def _peer_trust_line(fingerprint: str) -> None:
 
     from vaf.network.ssl_utils import colon_fingerprint
     # The host the invitation names: one the served certificate covers, which the peer
-    # checks (ssl_utils.served_room_host).
-    host = "<address>"
+    # checks (ssl_utils.room_host_choice). With none, the command would be one a peer's name
+    # check refuses, so the reason is printed instead.
+    host, why = "<address>", None
     try:
         from vaf.network.binding import get_local_network_ip
-        from vaf.network.ssl_utils import served_room_host
+        from vaf.network.ssl_utils import room_host_choice
         address = str(get_local_network_ip() or "").strip()
-        host = served_room_host(address) or address or host
+        chosen, why = room_host_choice(address)
+        host = chosen or host
     except Exception:
         pass
+    if why:
+        UI.warning(f"Other machines that joined a room on this VAF cannot reach it now: {why}.")
+        return
     _line("Other machines that joined a room on this VAF trust the new authority again with:")
     _line(f"  vaf a2a trust wss://{escape(host)}{_access_port_suffix()} --ca-fp "
           f"{colon_fingerprint(fingerprint)}")
@@ -823,7 +835,8 @@ def cert_show():
     _line(f"                {colon_fingerprint(facts['authority_sha256'])}")
     if state.get("uncovered"):
         UI.warning("It does not name " + escape(", ".join(state["uncovered"])) + ": a device "
-                   "that reaches VAF there gets a certificate warning.")
+                   "that reaches VAF there gets a certificate warning. Open VAF by an address "
+                   "or name it carries instead.")
     _line()
 
 
@@ -900,7 +913,22 @@ def ca_show(ctx: typer.Context):
     if not authority["restricted"]:
         UI.info("`vaf server ca renew` restricts it to private addresses; every device then "
                 "installs it again.")
+        _left_out_line(authority.get("left_out_on_renewal") or [])
     _line()
+
+
+def _left_out_line(left: list) -> None:
+    """The machine's names a new authority leaves out of VAF's certificate, and what to use."""
+    if not left:
+        return
+    from rich.markup import escape
+
+    from vaf.network.ssl_utils import mdns_name
+    mdns = mdns_name()
+    instead = "its address" + (f" or {mdns}" if mdns and mdns not in left else "")
+    UI.warning("A new authority leaves " + escape(", ".join(left)) + " out of VAF's "
+               f"certificate: devices that open VAF by one of them get a warning; open it by "
+               f"{escape(instead)} instead.")
 
 
 @ca_app.command("renew")
@@ -912,6 +940,8 @@ def ca_renew(yes: bool = typer.Option(False, "--yes", help="Do not ask")):
                "its new fingerprint, and the old one can then be removed from your devices. A "
                "browser that opened VAF by its name before cannot click past the warning until "
                "the new authority is installed on it.")
+    from vaf.network.ssl_utils import names_a_new_authority_leaves_out
+    _left_out_line(names_a_new_authority_leaves_out())
     if not yes and not typer.confirm("Renew the authority now?"):
         UI.info("Nothing was changed.")
         raise typer.Exit(0)

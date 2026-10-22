@@ -460,32 +460,46 @@ def test_sessions_sign_out_and_token(monkeypatch):
     assert _run(["token", "alice", "--label", "x", "--days", "14"]).exit_code == 1
 
 
-def test_the_token_hint_gives_curl_the_authority(monkeypatch):
-    """Under VAF's own certificate the example call names the authority (`--cacert`) and never
-    `-k`, which would send the token to whoever answers; with TLS off it is plain HTTP on the
-    plain port. MUTATION: the old one-line hint (https, no authority) - red."""
+def test_the_token_call_works_as_printed_and_never_over_plain_http(monkeypatch):
+    """With TLS off no other machine reaches VAF, so no call to a network address is printed,
+    only the one on this machine. With TLS on the call names a host the served certificate
+    covers (the room invitation's choice), not an address a certificate of your own may not
+    name; under VAF's own certificate curl gets the authority, never -k. MUTATION: the LAN
+    address over http when TLS is off; the first address whatever the certificate names;
+    no authority under VAF's own certificate - red."""
     import vaf.network.binding as binding
     import vaf.network.ssl_utils as ssl_utils
 
     monkeypatch.setattr(binding, "access_addresses", lambda: [SimpleNamespace(ip="192.168.81.5")])
-    served = {"source": "automatic"}
+    served = {"source": "none"}
     monkeypatch.setattr(ssl_utils, "served_certificate",
                         lambda cfg=None: SimpleNamespace(source=served["source"]))
     monkeypatch.setattr(ssl_utils, "ca_certificate_path", lambda: None)
+    choice = {"host": None, "why": None}
+    monkeypatch.setattr(ssl_utils, "room_host_choice",
+                        lambda address, cfg=None: (choice["host"], choice["why"]))
+
+    monkeypatch.setattr(binding, "resolve_lan_access_ports", lambda wait_for_proxy=False: (8001, 3000))
+    lines = users_cmd._token_use_lines()
+    assert not any("192.168.81.5" in line for line in lines), lines
+    assert lines[-1] == ('On this machine: curl -H "Authorization: Bearer <token>" '
+                         "http://127.0.0.1:8001/api/auth/me")
+    assert "vaf server on" in lines[0]
 
     monkeypatch.setattr(binding, "resolve_lan_access_ports", lambda wait_for_proxy=False: (8443, 8001))
-    url, source = users_cmd._access_hint()
-    assert (url, source) == ("https://192.168.81.5:8443", "automatic")
-    hint = "\n".join(users_cmd._token_use_lines(url, source))
-    assert "curl --cacert vaf-authority.pem -H" in hint and "vaf server ca" in hint
-    assert " -k " not in hint.replace("Not -k instead", "")
-
     served["source"] = "own"
-    assert "--cacert" not in "\n".join(users_cmd._token_use_lines(*users_cmd._access_hint()))
+    choice.update(host="vaf.example.lan", why=None)
+    assert users_cmd._token_use_lines() == [
+        'Use it as: curl -H "Authorization: Bearer <token>" https://vaf.example.lan:8443/api/auth/me']
+    choice.update(host=None, why="the served certificate names www.example.org, but it is not "
+                                 "the host's name")
+    lines = users_cmd._token_use_lines()
+    assert lines[0].startswith("Not to 192.168.81.5: the served certificate names www.example.org")
+    assert lines[-1].endswith("https://<a name the certificate covers>:8443/api/auth/me")
 
-    served["source"] = "none"
-    monkeypatch.setattr(binding, "resolve_lan_access_ports", lambda wait_for_proxy=False: (8001, 3000))
-    url, source = users_cmd._access_hint()
-    assert url == "http://192.168.81.5:8001"
-    assert users_cmd._token_use_lines(url, source) == [
-        'Use it as: curl -H "Authorization: Bearer <token>" http://192.168.81.5:8001/api/auth/me']
+    served["source"] = "automatic"
+    choice.update(host="192.168.81.5", why=None)
+    hint = "\n".join(users_cmd._token_use_lines())
+    assert ("curl --cacert vaf-authority.pem -H \"Authorization: Bearer <token>\" "
+            "https://192.168.81.5:8443/api/auth/me") in hint and "vaf server ca" in hint
+    assert " -k " not in hint.replace("Not -k instead", "")

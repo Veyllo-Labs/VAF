@@ -365,46 +365,62 @@ def sign_out(username: str = typer.Argument(..., help="The account to sign out e
                    "A device with a chat still open keeps it until VAF restarts: restart VAF now.")
 
 
-def _access_hint() -> tuple:
-    """The address another machine reaches VAF by, for the example call (a placeholder when
-    none is known), and which certificate it is served with there: ``automatic`` (VAF's own),
-    ``own`` or ``none`` (TLS off, plain HTTP), as ``served_certificate`` says."""
-    source = "automatic"
+def _token_use_lines() -> list:
+    """How a program sends the token: a call that works as printed, or none that would leak it.
+
+    TLS off means Local Network is off (network mode always serves HTTPS), so no other machine
+    reaches VAF, and a token never crosses the network over plain HTTP: only the call on this
+    machine is shown. With TLS on the call goes to a host the served certificate names
+    (`room_host_choice`, the choice a room invitation makes for a peer on another machine):
+    curl checks the certificate against it, and an address a certificate of your own does not
+    name fails there. Under VAF's own certificate curl is given VAF's authority; the shortcut
+    -k would send the token to whoever answers at that address."""
+    header = '-H "Authorization: Bearer <token>"'
+    source, port, address = "automatic", None, None
     try:
         from vaf.network.ssl_utils import served_certificate
         source = served_certificate().source
     except Exception:
         pass
-    scheme, default_port = ("http", 80) if source == "none" else ("https", 443)
     try:
         from vaf.network.binding import access_addresses, resolve_lan_access_ports
         port, _ = resolve_lan_access_ports(wait_for_proxy=False)
-        addresses = access_addresses()
-        if addresses:
-            return (f"{scheme}://{addresses[0].ip}" + ("" if port == default_port else f":{port}"),
-                    source)
+        found = access_addresses()
+        address = str(found[0].ip) if found else None
     except Exception:
         pass
-    return f"{scheme}://<VAF's address>", source
-
-
-def _token_use_lines(url: str, source: str) -> list:
-    """How a program on another machine sends the token. Under VAF's own certificate curl must
-    be given VAF's authority: without it curl refuses the self-signed chain, and the shortcut
-    -k would send the token to whoever answers at that address."""
-    call = f'-H "Authorization: Bearer <token>" {url}/api/auth/me'
+    if source == "none":
+        return ["Other machines reach VAF only with Local Network on (`vaf server on`), which "
+                "serves HTTPS; a token is never sent over plain HTTP across the network.",
+                f"On this machine: curl {header} http://127.0.0.1:{port or 8001}/api/auth/me"]
+    lines, host, why = [], None, None
+    if address:
+        try:
+            from vaf.network.ssl_utils import room_host_choice
+            host, why = room_host_choice(address)
+        except Exception as e:
+            why = f"the served certificate could not be read ({e})"
+    if host:
+        target = f"[{host}]" if ":" in host else host
+    elif address:
+        target = "<a name the certificate covers>"
+        lines.append(f"Not to {address}: {str(why or '').rstrip('.')}.")
+    else:
+        target = "<VAF's address>"
+    url = f"https://{target}" + ("" if port in (None, 443) else f":{port}") + "/api/auth/me"
     if source != "automatic":
-        return [f"Use it as: curl {call}"]
+        return lines + [f"Use it as: curl {header} {url}"]
     try:
         from vaf.network.ssl_utils import ca_certificate_path
         here = ca_certificate_path()
     except Exception:
         here = None
-    return [f"Use it as: curl --cacert vaf-authority.pem {call}",
-            "vaf-authority.pem is VAF's certificate authority: Settings, Local Network, "
-            "Certificate, Download" + (f" (on this machine: {here})" if here else "") + ".",
-            "Compare its fingerprint with the one `vaf server ca` prints. Not -k instead: "
-            "it sends the token to whoever answers."]
+    return lines + [
+        f"Use it as: curl --cacert vaf-authority.pem {header} {url}",
+        "vaf-authority.pem is VAF's certificate authority: Settings, Local Network, "
+        "Certificate, Download" + (f" (on this machine: {here})" if here else "") + ".",
+        "Compare its fingerprint with the one `vaf server ca` prints. Not -k instead: "
+        "it sends the token to whoever answers."]
 
 
 @app.command("token")
@@ -455,7 +471,7 @@ def make_token(
     print()
     print(token)
     print()
-    for line in _token_use_lines(*_access_hint()):
+    for line in _token_use_lines():
         print(_ascii(line))
     print(f"The token acts as {_ascii(username)}. Revoke it in Settings, Account, or with "
           f"`vaf users sign-out {_ascii(username)}`.")

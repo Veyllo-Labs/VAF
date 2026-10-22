@@ -345,9 +345,12 @@ Rejections from the layers above are recorded in an always-on security event log
 - **Tokens for programs**: the browser keeps no readable token, so a script or a program on
   another machine gets one of its own: in Settings, Account (`POST /api/auth/tokens` with a
   name, a lifetime of 7, 30, 90 or 365 days and the account's 2FA code; the tokenless desktop
-  gives the code too, because a process on this machine, the agent's shell with a host grant
-  among them, reaches the backend tokenless and must not turn that into a credential that
-  works from the network), or in a terminal with `vaf users token NAME --label TEXT [--days N]`
+  gives the code too, so this route does not turn the tokenless trust of this machine into a
+  token for programs. NAMED BOUNDARY: that is all the code here guarantees. It is not the
+  boundary of the tokenless trust itself: a tokenless request from this machine, the agent's
+  shell with a host grant among them, is the local admin, which can create an account in the
+  user management and sign in with it (see Localhost Bypass in Layer 3 and the per-start IPC
+  token named there)), or in a terminal with `vaf users token NAME --label TEXT [--days N]`
   (a person at the terminal and the admin password or the recovery key, like a reset). It is
   shown once, sent as `Authorization: Bearer <token>` (or `?token=` on a socket, and as the
   credential of an agent room), acts as the account with its full rights, does not end from

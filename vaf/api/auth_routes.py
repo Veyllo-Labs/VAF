@@ -1079,10 +1079,13 @@ async def end_other_sessions(request: Request):
 async def create_program_token(body: ProgramTokenRequest, request: Request):
     """A token for a program of the caller's own (Settings, Account): a name, a lifetime of
     7, 30, 90 or 365 days and the account's 2FA code. Shown once; it acts as the account and
-    is listed and revoked with the sessions. The tokenless desktop gives the code too: a process
-    on this machine (the agent's shell with a host grant) reaches the backend tokenless and must
-    not turn that into a credential that works from the network. A wrong code is a 401, counted
-    by the address window (`_RATE_LIMITED_PATHS`) and the account's second-factor window."""
+    is listed and revoked with the sessions. The tokenless desktop gives the code too, so this
+    route does not turn the tokenless trust of this machine into a token for programs. Named
+    boundary: that is all it guarantees. A tokenless request from this machine (the agent's
+    shell with a host grant among them) is the local admin and can create an account and sign
+    in with it; closing that is the per-start IPC token docs/setup/NETWORK_FEATURES.md names. A
+    wrong code is a 401, counted by the address window (`_RATE_LIMITED_PATHS`) and the
+    account's second-factor window."""
     from vaf.auth import second_factor, sessions
     async with get_auth_db() as db:
         user = await _caller_account(db, request)

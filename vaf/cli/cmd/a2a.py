@@ -1239,7 +1239,7 @@ def howto(room_id: str = typer.Argument(...),
     builds, with the join step replaced by this peer's handle - a second, differently
     worded reference would leave a reader deciding which of the two is current.
     """
-    from vaf.core.a2a.invite import briefing, lan_endpoint
+    from vaf.core.a2a.invite import briefing
     room = _open_local(room_id)
     if room is None:
         # A remote peer needs this text MORE than a local one, not less: it is
@@ -1260,12 +1260,13 @@ def howto(room_id: str = typer.Argument(...),
         return
     identity = _me(room, as_peer=as_peer)
     # Plain text, like `log`: this command exists to be READ, and a briefing
-    # escaped inside a JSON string is a briefing nobody follows.
+    # escaped inside a JSON string is a briefing nobody follows. No lane for other
+    # machines: a member's briefing (`already_in`) is the command reference and shows
+    # neither the lane nor why there is none, so choosing it was a lookup for nothing.
     typer.echo(briefing(
         room_id=room_id, ticket="", role=identity.role, display=identity.display,
         room_kind=room.kind, topic=str(room.manifest.get("topic") or ""),
-        endpoint=lan_endpoint(room_id), workspace=room.workspace_dir(create=False),
-        already_in=identity.peer_id,
+        workspace=room.workspace_dir(create=False), already_in=identity.peer_id,
     ))
 
 

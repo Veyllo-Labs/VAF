@@ -504,6 +504,20 @@ def test_howto_reprints_the_briefing_for_a_room_you_are_already_in(rooms):
     assert "--progress" in text, "the reminder must teach progress too"
 
 
+def test_howto_chooses_no_lane_it_does_not_show(rooms, monkeypatch):
+    """A member's reference shows neither the lane for other machines nor why there is none,
+    and choosing one may look names up for seconds. MUTATION: pass lan_endpoint(room_id)
+    again - red."""
+    import vaf.core.a2a.invite as invite_mod
+    asked = []
+    monkeypatch.setattr(invite_mod, "lan_endpoint", lambda room_id: asked.append(room_id) or {})
+    monkeypatch.setattr(invite_mod, "lan_lane", lambda room_id: asked.append(room_id) or ({}, ""))
+    created = runner.invoke(a2a_cmd.app, ["create", "--kind", "round"])
+    room_id = json.loads(created.stdout.strip().splitlines()[-1])["room"]
+    assert runner.invoke(a2a_cmd.app, ["howto", room_id]).exit_code == 0
+    assert asked == []
+
+
 def test_joining_answers_with_the_welcome_and_asks_on_stderr(rooms):
     """MUTATION: answer a join with the handle again, or put the nudge on stdout.
 

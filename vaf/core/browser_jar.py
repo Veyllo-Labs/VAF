@@ -43,9 +43,9 @@ tag or with another one) is never read as "no holders" and never overwritten: th
 holder half answers JarRecordUnavailable, so a probe is busy and a handover is
 refused, and the log names the file, until it is removed with VAF stopped.
 
-Why on the host and not as a marker inside the container: the holders are host
+Why on the host and not as a flag file inside the container: the holders are host
 processes, whose liveness only the host can check (measured: `docker inspect` 7 ms,
-the locked read and write 0.2 ms, a process start mark 0.04 ms), and a marker inside
+the locked read and write 0.2 ms, a process start mark 0.04 ms), and a flag file inside
 the container is written by the browser user - the account a compromised page runs
 as. A record the browser itself can forge must never decide whether the next
 person's profile is wiped.

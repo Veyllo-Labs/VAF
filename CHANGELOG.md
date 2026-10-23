@@ -544,6 +544,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **"Connect OneDrive" reaches Microsoft's sign-in page.** The OneDrive connection under
+  Settings -> Connections -> Cloud Storage sent the browser to an authorize address Microsoft
+  does not serve (`/oauth2/v2/authorize` instead of `/oauth2/v2.0/authorize`), so the sign-in
+  could not start. A test now checks every Microsoft sign-in address VAF uses.
+
 - **A server install leaves out what only a desktop uses.** `./install.sh --server` no longer
   installs the tray icon's GTK, AppIndicator and WebKitGTK libraries, the PortAudio headers,
   the desktop window and tray packages (PySide6, pywebview, pystray, qtpy) or SpeechRecognition

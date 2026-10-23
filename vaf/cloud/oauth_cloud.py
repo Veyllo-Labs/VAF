@@ -46,7 +46,7 @@ CLOUD_PROVIDERS: Dict[str, Dict[str, Any]] = {
         "client_secret_key": "cloud_oauth_google_client_secret",
     },
     "onedrive": {
-        "auth_url": "https://login.microsoftonline.com/common/oauth2/v2/authorize",
+        "auth_url": "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
         "token_url": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
         "scopes": [
             "https://graph.microsoft.com/Files.ReadWrite",

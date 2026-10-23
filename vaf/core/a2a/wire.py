@@ -63,34 +63,26 @@ def set_credential_verifier(verify) -> None:
     None for anything else. Deciding what "allowed to open a session" means - the token
     type, an expiry, a revoked session - belongs to whoever owns the accounts.
 
-    A verifier whose signature names a ``client_ip`` parameter (or takes ``**kwargs``), as
-    ``_client_slot`` reads it, is also told the real client's address (the door's own
-    resolver, ``binding.connection_client_ip``), because whether a credential may open a
-    session can depend on where it is used: VAF's own sessions of the window on the machine
-    itself stand only for that machine. Such a verifier gets the parameter on every call,
-    with an address or without, however it declares it (by position right after the
-    credential when it is positional-only), and None there means the door did not know the
-    client: the verifier decides what that means (VAF's own then skips its address rule),
-    so a door must pass the address it has. A plain verifier that takes ``**kwargs`` gets
-    it too. So two shapes are refused here with a TypeError, because the door could not
-    hand them the parameter: a verifier whose signature cannot be read (compiled code, a
-    ``__signature__`` that raises or that ``inspect`` cannot read), which may take
-    ``client_ip`` unseen, and one whose positional-only ``client_ip`` is not right after
-    the credential. Wrap such a verifier in a Python function that names ``client_ip``. A
-    verifier whose signature names neither is called with the credential alone and keeps
-    working.
+    A verifier that wants the client's address names ``client_ip`` in its own signature: a
+    plain Python function, or a callable object whose ``__call__`` names it. It then gets
+    the parameter on every call, by position when ``client_ip`` is positional-only right
+    after the credential, otherwise by keyword; a plain verifier that takes ``**kwargs``
+    gets it too, and one that names neither is called with the credential alone. Whether
+    a credential may open a session can depend on where it is used: VAF's own sessions of
+    the window on the machine itself stand only for that machine. The address is the one
+    the door resolved (``binding.connection_client_ip``); None means the client is not
+    known, the verifier decides what that means (VAF's own then skips its address rule),
+    and a door must pass the address it has.
 
-    NAMED BOUNDARY, wrapped verifiers. The outermost layer's own signature decides when it
-    names ``client_ip``; otherwise the signature at the end of its ``__wrapped__`` chain
-    decides (the innermost function, or the first layer on the way that declares a
-    ``__signature__``), and the layers in between are not read. So a decorator that adds
-    the address must be the outermost layer, or name ``client_ip`` itself: below another
-    layer that exposes ``__wrapped__`` (as ``functools.wraps`` sets it: a logging wrapper,
-    ``lru_cache``) or a ``staticmethod`` it is read past, and the verifier is called with
-    the credential alone. A wrapper that exposes ``__wrapped__`` and takes the address only
-    through ``**kwargs`` is read past even as the outermost layer, since it cannot be told
-    apart from a plain logging decorator. A declared ``__signature__``
-    (a Signature or a signature string) that leaves ``client_ip`` out is taken at its word.
+    Refused here with a TypeError, because the door could not hand them the parameter: a
+    verifier whose signature ``inspect`` cannot read, and one whose positional-only
+    ``client_ip`` is not right after the credential.
+
+    NAMED BOUNDARY: any other shape (a decorator, a ``__wrapped__`` chain, a declared
+    ``__signature__``, a compiled callable) is read as Python's ``inspect.signature``
+    reports it (``_client_slot``), and that can differ between Python versions. If such a
+    verifier needs the address, wrap it in a plain Python function that names
+    ``client_ip`` and calls it.
     """
     global _verifier
     if verify is not None:
@@ -129,17 +121,11 @@ def _client_slot(verify) -> Optional[str]:
     ``client_ip`` right after the credential), ``"keyword"`` (any other ``client_ip``, or
     ``**kwargs``) or None (it names neither and gets the credential alone).
 
-    The outermost layer's own signature (``follow_wrapped=False``: a callable object's
-    ``__call__``, for a ``partial`` the function it binds) decides when it names
-    ``client_ip``: a decorator that adds the address check and exposes ``__wrapped__`` (as
-    ``functools.wraps`` sets it) reports the wrapped signature, and read through it would be
-    called without the address. Otherwise
-    the signature ``inspect`` finds at the end of the ``__wrapped__`` chain decides: the
-    innermost function, or the first layer that declares a ``__signature__``, which is taken
-    at its word. The layers in between are not read, so a decorator that adds the address
-    below another wrapper is read past (the named boundary in ``set_credential_verifier``),
-    while a plain ``(*args, **kwargs)`` wrapper that exposes ``__wrapped__`` is called as its
-    wrapped function asks.
+    It reads the signature as Python's ``inspect.signature`` reports it: the verifier's own
+    first, and when that does not name ``client_ip``, the one ``inspect`` reports by default.
+    For a plain function, or a callable object whose ``__call__`` names ``client_ip``, that
+    is its declared signature; for any other shape it is what ``inspect`` reports on the
+    running Python (the named boundary in ``set_credential_verifier``).
 
     Raises TypeError when the address could not be handed over: a signature that cannot be
     read may hide a ``client_ip``, and a positional-only ``client_ip`` anywhere else has no

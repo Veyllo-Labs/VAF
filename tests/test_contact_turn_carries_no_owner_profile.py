@@ -111,3 +111,47 @@ def test_the_workspace_block_is_the_owners_only(prompt, tmp_path):
     assert "<workspace>" in owner and "WS7QMARK" in owner
     contact = manager.build_prompt(username="alice", user_scope_id=SCOPE, front_office=True)
     assert "<workspace>" not in contact and "WS7QMARK" not in contact
+
+
+def test_a_running_sub_agent_is_not_shown_to_somebody_else(prompt, monkeypatch, tmp_path):
+    """The `<subagent_active>` block names the task and the chat workspace's path.
+    MUTATION: gate it on front_office only - the allowed-set case goes red."""
+    from vaf.core.system_prompt import SystemPromptManager
+    agent = SimpleNamespace(
+        provider="deepseek", api_backend=object(), _background_run=False,
+        get_live_session_subagents=lambda: [{"agent_type": "coding_agent", "running_seconds": 120,
+                                             "task_description": "TASK7QMARK build the page"}])
+    manager = SystemPromptManager(tools=[], agent_instance=agent)
+    owner = manager.build_prompt(username="alice", user_scope_id=SCOPE)
+    assert "<subagent_active>" in owner and "TASK7QMARK" in owner
+    for kw in ({"answers_somebody_else": True}, {"front_office": True}):
+        other = manager.build_prompt(username="alice", user_scope_id=SCOPE, **kw)
+        assert "<subagent_active>" not in other and "TASK7QMARK" not in other, kw
+
+
+def test_a_project_file_under_a_set_keeps_its_place_on_the_machine_to_itself(monkeypatch, tmp_path):
+    """MUTATION: print `Loaded from:` under a set - red."""
+    from vaf.core.agent import Agent
+    (tmp_path / "VAF.md").write_bytes(b"PROJ7QMARK house rules")
+    monkeypatch.chdir(tmp_path)
+    stub = Agent.__new__(Agent)
+    stub.config = {"n_ctx": 8192}
+    stub._current_chat_source = None
+    stub._allowed_tools = None
+    owner = stub._project_context_block()
+    assert "PROJ7QMARK" in owner and f"Loaded from: {tmp_path}" in owner
+    stub._allowed_tools = frozenset({"web_search"})
+    other = stub._project_context_block()
+    assert "PROJ7QMARK" in other and "Loaded from:" not in other and str(tmp_path) not in other
+
+
+def test_a_contacts_turn_gets_no_project_folder_and_no_workspace_note():
+    """A photo a contact sent creates the chat's folder under the owner's VAF_Projects; from it
+    the turn's note and the engine's VAF.md lookup would print the owner's paths.
+    MUTATION: bind the folder for a contact, or build the note under Front Office - red."""
+    src = (ROOT / "vaf" / "core" / "headless_runner.py").read_bytes().decode("utf-8")
+    assert ('project_dir="" if from_contact else '
+            '_chat_project_paths(session_mgr, task.session_id).edit_path') in src
+    note = src[src.index("_proj = _chat_project_paths(session_mgr, task.session_id)"):]
+    note = note[:note.index("[SESSION WORKSPACE]")]
+    assert 'if getattr(agent, "_front_office_mode", False):' in note

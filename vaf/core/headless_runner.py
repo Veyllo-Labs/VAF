@@ -1186,7 +1186,10 @@ def _task_turn_binding(task, session_mgr) -> TurnBinding:
         # (Agent._turn_reports).
         wake=(_wake, str(task.input_text or "")) if _wake else None,
         excluded_tools=_editor_tool_exclusions(session_mgr, task.session_id),
-        project_dir=_chat_project_paths(session_mgr, task.session_id).edit_path,
+        # A contact's turn gets no project folder: a photo it sent creates the chat's folder
+        # under the owner's VAF_Projects, and from it the engine would read the owner's own
+        # VAF.md and print its path into the contact's prompt.
+        project_dir="" if from_contact else _chat_project_paths(session_mgr, task.session_id).edit_path,
     )
 
 
@@ -2590,7 +2593,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # The same folders the turn was bound with (_chat_project_paths): its VAF.md
                     # is read from the edit folder (Agent._project_context_block).
                     _proj = _chat_project_paths(session_mgr, task.session_id)
-                    if _proj.workspace:
+                    if getattr(agent, "_front_office_mode", False):
+                        # Somebody else is answered: the owner's folders are not theirs to see.
+                        pass
+                    elif _proj.workspace:
                         _workspace, _edit_path = _proj.workspace, _proj.edit_path
                         proj_note = (
                             f"[SESSION WORKSPACE] All files for this chat are stored in: {_workspace}\n"

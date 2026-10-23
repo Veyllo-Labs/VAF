@@ -1137,8 +1137,8 @@ Then use the results to answer. Do NOT guess from your training data!
         #  - not _background_run: an automation's thread has no session ContextVar and would
         #    inherit the user's last chat session via the process-global fallback - it must
         #    never be told to "keep replies light".
-        #  - not front_office: a third-party contact must not learn what the owner's
-        #    sub-agent is working on.
+        #  - not third_party: a contact or an embedder's set must not learn what the
+        #    owner's sub-agent is working on, nor the chat workspace's path.
         #
         # Data comes ONLY from agent.get_live_session_subagents() (session-filtered IPC +
         # heartbeat freshness) - NEVER from agent._async_subagent_tasks (unkeyed on the
@@ -1151,7 +1151,7 @@ Then use the results to answer. Do NOT guess from your training data!
                 and str(getattr(_cc_agent, "provider", "local") or "local").strip().lower() != "local"
                 and getattr(_cc_agent, "api_backend", None) is not None
                 and not getattr(_cc_agent, "_background_run", False)
-                and not front_office
+                and not third_party
             ):
                 _cc_types = ("librarian_agent", "coding_agent", "research_agent", "document_agent")
                 _cc_live = [

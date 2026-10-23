@@ -2428,7 +2428,8 @@ class Agent:
         question held every other account's drain turns. The key is canonical
         (`thinking_mode.scope_storage_key`): no scope and the local admin's scope are one
         account, as in the owner's other per-account stores. Per account, not per chat: an
-        account's message in any of its chats answers its question. A contact's turn runs on
+        account's message in any of its chats answers its question. NAMED BOUNDARY: per agent,
+        so several runner workers keep separate latches, and only worker 1 drains. A contact's turn runs on
         the owner's account and neither sets nor clears it (`_turn_is_from_the_user`, the
         allowed-set check at the setter)."""
         latches = self.__dict__.get("_ask_first_latches")
@@ -5631,6 +5632,9 @@ class Agent:
             return ""
         if not ctx:
             return ""
+        if getattr(self, "_allowed_tools", None) is not None:
+            # Somebody else is answered: the file's place on this machine stays out.
+            return f"## PROJECT CONTEXT (VAF.md)\n{ctx.content}\n"
         return f"## PROJECT CONTEXT (VAF.md)\nLoaded from: {ctx.path}\n{ctx.content}\n"
 
     def _bind_session_persistence(self, session_id: Optional[str], *,

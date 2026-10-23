@@ -1617,8 +1617,11 @@ class InteractiveBrowserManager:
         pin both directions of it. Same scope + same chat session -> refresh,
         the ticket and stream survive. Same scope, different chat session ->
         the newer window wins with a fresh ticket. Foreign scope -> busy,
-        unless the caller is an admin, who may evict.
+        unless the caller is an admin, who may evict. A revoked account gets
+        nothing (`_scope_revoked`; checked again where the lease is installed).
         """
+        if _scope_revoked(user_scope_id):
+            return dict(_REVOKED_REFUSAL)
         if self.is_agent_active():
             # The run's own window may WATCH: hand it the view-only stream
             # grant when one exists for exactly this session. Any other
@@ -1738,8 +1741,15 @@ class InteractiveBrowserManager:
             # Measured: the person kept a live ticket on the run's browser. Checked
             # here, the run's count and this install cannot interleave.
             refused_for_run = self._agent_runs > 0
+            # A revoked account gets no lease either. The revocation listener stopped
+            # the leases that stood when the account was revoked; one installed after
+            # that is never stopped (measured: a revocation during this start's wipe
+            # left the account a live ticket). The mark is set before any listener
+            # runs, and the listener reads the lease under this same lock, so either
+            # it sees this install or this install sees the mark.
+            refused_revoked = not refused_for_run and _scope_revoked(user_scope_id)
             stale_token = None
-            if refused_for_run:
+            if refused_for_run or refused_revoked:
                 if self._lease is None:
                     # No lease of this process is installed, so the record entry
                     # is this start's own claim and goes back with it. Decided
@@ -1791,10 +1801,12 @@ class InteractiveBrowserManager:
                 lease.pixels_seen = 0
                 self._ensure_janitor()
                 payload = self._payload("active", lease=lease)
-        if refused_for_run:
+        if refused_for_run or refused_revoked:
             # The record entry this start claimed goes back with it; the run's
             # own handover finds this start's scope as the owner and wipes.
             self._release_shared(stale_token)
+            if refused_revoked:
+                return dict(_REVOKED_REFUSAL)
             return self._payload("agent_active", reason="agent_run")
         self._emit(payload, session_id)
         return payload
@@ -2186,6 +2198,22 @@ def _all_managers() -> List[InteractiveBrowserManager]:
     return managers
 
 
+_REVOKED_REFUSAL = {"status": "stopped", "reason": "account_revoked",
+                    "saving": False, "streamPath": ""}
+
+
+def _scope_revoked(user_scope_id) -> bool:
+    """Whether the account was deactivated or deleted (`vaf.core.revocation`). Takes
+    only the revocation module's own lock, which is never held while a manager's lock
+    is taken, so it may be asked under a manager's lock."""
+    try:
+        from vaf.core.revocation import is_revoked
+        key = str(user_scope_id or "").strip()
+        return bool(key) and is_revoked(key)
+    except Exception:
+        return False
+
+
 def _on_account_revoked(user_scope_id: str) -> None:
     """Revocation listener (vaf.core.revocation): a revoked account loses the browser.
 
@@ -2193,8 +2221,9 @@ def _on_account_revoked(user_scope_id: str) -> None:
     lease: its cookies are exported, its downloads drained, its holder entry released,
     and the sockets opened on it close (`grant_current`). Leases of other scopes are
     untouched: the stop names the scope as its requester, so a lease that changed
-    hands between the look and the stop is refused, not ended. The account's watch
-    grant ends with its run, which the same revocation stops.
+    hands between the look and the stop is refused, not ended. A start that was under
+    way refuses at its install (`_scope_revoked`). The account's watch grant ends with
+    its run, which the same revocation stops (cooperatively, within seconds).
 
     Only a REVOCATION (deactivation, deletion). The listeners also hear a demotion and
     a narrowed allowlist (`stop_account_work`), and those leave the browser alone: a

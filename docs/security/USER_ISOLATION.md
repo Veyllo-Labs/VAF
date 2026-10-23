@@ -770,7 +770,9 @@ partition:
   validated on every asset request, at the stream websocket's connect, and on every message
   the stream relays in either direction. When the lease or the run's watch grant ends (a
   stop, a takeover, a newer window, an admin, the run's end, the account's revocation), its
-  open sockets are closed with 4403 at once, and a quiet one within half a second
+  open sockets are closed with 4403 at once, and a quiet one within half a second; a revoked
+  account's watch grant ends with its run, which the revocation stops within seconds, and the
+  account gets no new lease, not even from a start that was already under way
   (`STREAM_RECHECK_S`); no frame or keystroke crosses after the end. Measured before the
   check: an open socket kept streaming after every one of those ends, each frame showed the
   next holder's browser, and its input reached that browser. The grant is this process's,

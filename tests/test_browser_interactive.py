@@ -1800,6 +1800,43 @@ def test_a_demotion_or_narrowing_leaves_the_browser_alone(relay):
         revocation.restore_account("scope-a")
 
 
+def test_an_account_revoked_during_its_start_gets_no_lease(mgr, monkeypatch):
+    """A revocation that lands while the account's start is in its wipe: the listener
+    found no lease to stop, so the install refuses and the start's claim goes back to
+    the record. MUTATION: drop the revocation check at the install (red)."""
+    from vaf.core import revocation
+    released = []
+    real_release = mgr._release_shared
+    monkeypatch.setattr(mgr, "_release_shared",
+                        lambda token: (released.append(token), real_release(token))[1])
+
+    def wipe_then_revoke(name, cdp_base=""):
+        revocation.revoke_account("scope-a")
+        return True
+
+    monkeypatch.setattr(bi, "verified_profile_wipe", wipe_then_revoke)
+    try:
+        out = mgr.start("scope-a", "sess-a")
+        assert (out["status"], out["reason"]) == ("stopped", "account_revoked")
+        assert mgr._lease is None, "a revoked account got a live ticket"
+        assert released and released[-1] is not None, "the start's claim stayed in the record"
+    finally:
+        revocation.restore_account("scope-a")
+
+
+def test_a_revoked_account_cannot_start_the_browser_and_others_can(mgr):
+    """MUTATION: drop both revocation checks in start (red)."""
+    from vaf.core import revocation
+    revocation.revoke_account("scope-a")
+    try:
+        out = mgr.start("scope-a", "sess-a")
+        assert (out["status"], out["reason"]) == ("stopped", "account_revoked")
+        assert mgr._lease is None
+        assert mgr.start("scope-b", "sess-b")["status"] == "active"
+    finally:
+        revocation.restore_account("scope-a")
+
+
 # ── the run's watch grant exists only once the run holds the browser ──────
 
 @pytest.fixture

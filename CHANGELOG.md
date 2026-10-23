@@ -483,7 +483,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   agent run. Such a connection is now closed the moment its access ends. An agent run's live
   view now starts only once the browser has been cleaned for that run, so it no longer shows
   what was on the screen before, and deactivating an account now also ends its browser
-  session.
+  session and refuses it a new one (the live view of an agent run it started closes when the
+  run stops, within seconds).
 
 - **Your own browser follows a proxy or timezone change.** A per-user browser kept the proxy,
   timezone and Safe Browsing key it was created with, so one created before you set a proxy

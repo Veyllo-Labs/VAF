@@ -507,6 +507,27 @@ def _browser_pool_off():
         os.environ["VAF_BROWSER_POOL_MAX"] = previous
 
 
+@pytest.fixture(autouse=True)
+def _isolated_browser_jar(tmp_path, monkeypatch):
+    """The shared browser's cross-process record, per TEST.
+
+    `vaf.core.browser_jar` keeps whose state the shared container's profile holds
+    and who holds it right now, in a file under the VAF data directory, and reads
+    the container's identity from docker whenever it decides on an owner. Left
+    alone, the suite would read the developer's live container (`docker inspect vaf-browser`)
+    and share one record across tests, so a lease in one test would decide whether
+    the next test's first start wipes. Each test gets an empty record in its own
+    tmp_path and a fixed container identity; the tests about the record itself
+    override either.
+    """
+    import vaf.core.browser_jar as bj
+
+    root = tmp_path / "browser_jar"
+    monkeypatch.setattr(bj, "_state_dir", lambda: root)
+    monkeypatch.setattr(bj, "container_instance", lambda container: "test-container@test-start")
+    yield root
+
+
 @pytest.fixture(autouse=True, scope="session")
 def _not_inside_an_agent_command():
     """The suite may be started by the agent's own shell (a coder running VAF's tests). The

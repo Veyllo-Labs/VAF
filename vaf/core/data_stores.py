@@ -189,6 +189,8 @@ STORES: Tuple[Store, ...] = (
     _s("vaf", "server.pid", RUNTIME, "vaf/core/backend.py"),
     _s("vaf", "web_port", RUNTIME, "vaf/core/frontend_manager.py"),
     _s("vaf", "sandbox_env_image.lock", RUNTIME, "vaf/core/environment_image.py"),
+    _s("vaf", "browser_jar", RUNTIME, "vaf/core/browser_jar.py",
+       "whose state the shared browser holds and who holds it, bound to the container's start"),
     # ── data: Platform.data_dir() ────────────────────────────────────────────────
     _s("data", "data_keys.enc", KEY, "vaf/core/data_keyring.py"),
     _s("data", "data_keys.key.json", KEY, "vaf/core/data_keyring.py"),

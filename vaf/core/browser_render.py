@@ -152,7 +152,8 @@ def render_page(target: str, user_scope_id: Optional[str] = None,
         except BrowserHandoverError:
             out["error"] = ("The browser could not be handed over safely: the previous "
                             "user's browser data could not be wiped, so nothing was "
-                            "rendered. Try again in a moment.")
+                            "rendered. Try again in a moment; if it keeps failing, "
+                            "tell the admin.")
             append_domain_log("webui", "[browser_render] handover refused; nothing rendered")
             return out
         out.update(result)

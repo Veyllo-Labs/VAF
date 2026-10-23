@@ -534,7 +534,8 @@ lane (`persistent=false` runs). On a handover to a DIFFERENT user scope the shar
 gets a VERIFIED whole-profile wipe first - cookies, every site's stored state, history,
 Chromium-saved passwords, autofill and downloads all die with the profile, and the wipe
 is confirmed (marker consumed by the container's supervisor) before anyone gets the
-browser. The same rule fires when the jar owner is unknown (fresh server process). The
+browser. The same rule fires when no record vouches for the jar's owner (see "Whose
+state the shared browser holds" under [Handover scrub depth](#handover-scrub-depth)). The
 handover is fail-closed: a wipe that cannot be confirmed refuses the lease (or the run)
 with a `browser_handover_failed` security event instead of proceeding over a stranger's
 state (see [USER_ISOLATION.md](../security/USER_ISOLATION.md)).
@@ -852,7 +853,8 @@ as `0` or `false`.
 created, and a container keeps them for life. Before an instance is adopted, those
 values are compared with the current ones (in the same inspect that reads its image
 ID); on a difference it is recreated on the same profile volume, and the `webui` log
-line names the settings that changed, never their values. Without this, a per-user
+line names the settings that changed, never their values. The line names them as the
+container sees them, so a changed `VAF_BROWSER_TZ` appears as `TZ`. Without this, a per-user
 browser created before a proxy was set kept browsing direct.
 
 **Fallbacks are visible, and strict mode refuses them.** With the pool active, every
@@ -1022,8 +1024,8 @@ too. Pinned by `tests/test_browser_interactive.py` and the entrypoint guard.
 ### Handover scrub depth
 
 **A change of hands is not configurable.** When the shared browser passes to a DIFFERENT
-user scope (a foreign interactive lease or agent run, or an unknown jar after a server
-restart), the whole Chromium profile is wiped - history, Chromium-saved passwords,
+user scope (a foreign interactive lease, agent run or `render_check` probe, or an owner
+no record vouches for), the whole Chromium profile is wiped - history, Chromium-saved passwords,
 autofill, bookmarks, downloads, the HTTP disk cache, the NSS certificate and key
 database, and every site's stored state - via a marker
 the container's supervisor consumes between Chromium launches, and VAF VERIFIES that
@@ -1031,6 +1033,23 @@ consumption before granting the browser (cost: one Chromium relaunch, ~3-5 s). T
 handover is fail-closed: a wipe that cannot be confirmed refuses the lease or the run,
 logs a `browser_handover_failed` security event, and leaves the previous state guarded.
 A switch that could turn this off would not be a setting but a defect, so there is none.
+
+**Whose state the shared browser holds** is one record for every VAF process
+(`vaf/core/browser_jar.py`, one file per container under the VAF data directory). The
+shared container is driven from the web server, from a coder child (its
+`render_check`), from a spawned browser agent child and from the terminal app, and each
+has its own manager; a manager's memory of the owner alone let a coder child's render
+wipe the browser under a person's live lease, and left the web process trusting an
+owner a child had replaced. Every handover reads the record's owner, a scope hash
+bound to the container and its last start, and wipes for anything it cannot vouch for:
+no record, one without its format tag, one for another container or an earlier start
+of this one, or a handover cut short (the owner is cleared before the wipe and named
+after it). The record also lists who holds the browser now - one entry per lease, run
+or probe, with its process's pid and start time. A live holder of another process
+makes a probe busy, and a lease or a run waits up to 60 seconds for a probe there and
+refuses anything else ("Another user is driving the browser right now" in the window,
+"Browser agent is busy" for a run). An entry whose process is gone is dropped, so a
+crash never locks the browser.
 
 What remains configurable is the SAME-SCOPE clean start (a non-persistent
 `browser_agent` run of the same user - a clean start is that lane's documented promise):
@@ -1054,7 +1073,8 @@ runs after the run has passed the concurrency gate and after its stop watchdog i
 (`hand_jar_to_run`, in the executor). Before the gate it would scrub a browser another
 run is still driving, logging that run out of every site mid-task; before the watchdog
 it would swallow a Stop for as long as an unresponsive browser makes it wait. A spawned
-child does its own handover behind its own gate rather than having the parent do it.
+child does its own handover behind its own gate rather than having the parent do it,
+and the record above is how the parent and every later holder learn what it did.
 Both orderings are pinned by `tests/test_browser_pool.py`. A per-user instance is exempt
 from the scope-change half entirely - its profile belongs to one person.
 
@@ -1317,15 +1337,19 @@ instance.
 
 On the SHARED browser the probe is a holder of the jar like any other lane, and
 it gets the agent run's handover (`hold_for_probe`, keeping the jar like a
-persistent run): a probe for another scope, or the first one after a server
-restart, purges the transfer folders and runs the verified profile wipe before
-anything is opened, and a wipe that cannot be confirmed means nothing is
+persistent run). The coder's probe runs in the coder's own process, so what
+decides is the cross-process record (see "Whose state the shared browser holds"
+above), not that process's memory: a probe whose scope the record does not name
+as the owner purges the transfer folders and runs the verified profile wipe
+before anything is opened, and a wipe that cannot be confirmed means nothing is
 rendered and the answer is an error. A file target is mirrored only after that
-handover, so the next holder's handover removes it again. The probe holds the
-handover mutex until it has parked the page, and takes it without waiting: a
-handover in progress, a lease, a run, or a browser agent run spawned into
-another process answers busy. A dedicated pool instance gets no wipe and no
-scrub, since only its own user is routed to it.
+handover, so the next holder's handover removes it again, in whichever process
+it happens. The probe holds the handover mutex and its record entry until it has
+parked the page, and takes both without waiting: a handover in progress, a lease,
+a run, a browser agent run spawned into another process, or any holder the
+record lists for another process answers busy - a person's live lease in the web
+process included. A dedicated pool instance gets no wipe and no scrub, since only
+its own user is routed to it.
 
 ## Known Limitations (v1)
 
@@ -1346,6 +1370,7 @@ scrub, since only its own user is routed to it.
 |---|---|
 | [vaf/tools/browser_agent.py](../../vaf/tools/browser_agent.py) | Tool implementation, `VAFLLMBridge`, `BrowserAgentTool`, screenshot loop |
 | [vaf/core/browser_render.py](../../vaf/core/browser_render.py) | `render_page()` - the single-look probe behind `render_check` (navigate, observe, screenshot, park) |
+| [vaf/core/browser_jar.py](../../vaf/core/browser_jar.py) | The shared browser's cross-process record: whose state its profile holds, and who holds it now (see [Handover scrub depth](#handover-scrub-depth)) |
 | [vaf/tools/render_check.py](../../vaf/tools/render_check.py) | `render_check` tool face for the main agent and the coder (see [render_check](#render_check-the-single-look-probe)) |
 | [vaf/core/web_interface.py](../../vaf/core/web_interface.py) | `emit_browser_frame()`/`emit_browser_step()` - WebSocket broadcast in-process; **HTTP-bridged to the main process when running in a sub-agent subprocess** |
 | [web/components/SubAgentWindow.tsx](../../web/components/SubAgentWindow.tsx) | Live viewport panel (URL bar + screenshot) - standalone runs |

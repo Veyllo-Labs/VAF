@@ -51,7 +51,8 @@ def mgr(monkeypatch, tmp_path):
 
     monkeypatch.setattr(bi, "_cookie_op", fake_cookie_op)
     # The cross-scope handover is a VERIFIED profile wipe now, and every first
-    # start() of a fresh manager IS a scope change (the tracker starts None).
+    # start() in a test IS a scope change (each test starts with an empty
+    # cross-process owner record, see conftest `_isolated_browser_jar`).
     # Without this stub the whole lease matrix would shell out to docker.
     wipes = []
     monkeypatch.setattr(bi, "verified_profile_wipe",
@@ -222,9 +223,9 @@ def test_foreign_handover_wipes_the_profile_before_loading(mgr, monkeypatch):
 
 
 def test_first_start_after_process_boot_wipes_the_unknown_jar(mgr, monkeypatch):
-    """A fresh manager knows nothing about the jar while the container may
-    still hold anyone's state; trusting that gap is how residue crosses
-    users. The same scope refreshing afterwards keeps its state."""
+    """With no record vouching for the owner the container may still hold
+    anyone's state; trusting that gap is how residue crosses users. The same
+    scope refreshing afterwards keeps its state."""
     _no_ipc_tasks(monkeypatch)
     mgr.start("scope-a", "sess-1")
     assert len(mgr._test_wipes) == 1
@@ -1209,8 +1210,8 @@ def test_a_failed_wipe_refuses_the_lease_and_emits_a_security_event(mgr, monkeyp
     assert res["status"] == "error" and res["reason"] == "handover_failed"
     assert mgr._lease is None
     assert [k for k, _ in events] == ["browser_handover_failed"]
-    # The tracker still names the previous (unknown) holder, so the next
-    # attempt re-enters the wipe branch instead of trusting the jar.
+    # Neither the tracker nor the cross-process record names a new owner, so
+    # the next attempt re-enters the wipe branch instead of trusting the jar.
     assert mgr._last_cookie_scope is None
 
 

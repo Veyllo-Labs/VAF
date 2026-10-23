@@ -1217,7 +1217,13 @@ class BrowserAgentTool(BaseTool):
             # pressed during browser start would escape the tool as a crash.
             return "Browser task stopped by user."
         except Exception as e:
-            from vaf.core.browser_interactive import BrowserHandoverError
+            from vaf.core.browser_interactive import BrowserHandoverError, BrowserHeldElsewhere
+            if isinstance(e, BrowserHeldElsewhere):
+                # Another part of VAF (a person's interactive session, a run, a
+                # page check) holds the shared browser from another process.
+                return ("Browser agent is busy - the shared browser is in use elsewhere "
+                        "in VAF (an interactive session, another run or a page check). "
+                        "Please try again in a moment.")
             if isinstance(e, BrowserHandoverError):
                 # The cross-user handover could not be made safe, so the run
                 # was refused before it could browse over a stranger's logins.

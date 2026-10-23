@@ -700,7 +700,7 @@ partition:
 - **Handover wipe, verified and fail-closed:** when the browser changes hands to a
   DIFFERENT scope - an interactive lease, an agent run (`stop_for_agent_run` carries
   the run's scope), a `render_check` probe (`hold_for_probe`, the agent run's
-  handover with its jar kept), or an unknown jar after a server restart - the whole
+  handover with its jar kept), or an owner nobody can vouch for - the whole
   Chromium profile is wiped before the new scope's stored logins are optionally loaded:
   cookies, every site's stored state, history, Chromium-saved passwords, autofill,
   bookmarks, downloads, the HTTP disk cache and the NSS certificate/key database
@@ -708,19 +708,45 @@ partition:
   supervisor's consumption of the wipe marker is confirmed), and a handover whose
   wipe cannot be confirmed is REFUSED - no lease, no run, a
   `browser_handover_failed` security event - instead of proceeding over the previous
-  holder's state (a refused probe opens nothing and answers an error). The shared
-  container survives restarts of VAF, so its profile is still there at the next start;
-  every lane meets the unknown-owner rule, the probe included, which used to render in
-  whatever logins the container held. This is not configurable. A non-persistent agent run of the SAME
+  holder's state (a refused probe opens nothing and answers an error). This is not
+  configurable.
+- **Whose state the profile holds is one record for every VAF process**
+  (`vaf/core/browser_jar.py`). The shared container is driven from several processes:
+  the web server (leases, chat runs, the main agent's `render_check`), a coder child
+  (its `render_check`, a piped child process in the web UI), a spawned browser agent
+  child (workflows) and the terminal app. Each has its own manager, and a manager's
+  memory of the owner used to be all a lane checked: measured with two processes, a
+  coder child's render wiped the profile under a person's live lease and pointed their
+  tab at another user's page, the web process skipped the wipe after a child's render
+  so the child's mirrored files sat in the next person's file picker, and a spawned
+  run left its logins to the next lease of another scope. Every handover now reads the
+  record's owner, a scope HASH bound to the container instance and its last start, and
+  wipes for anything the record cannot vouch for: no record, one without its format
+  tag, one for another container or an earlier start of this one (a restarted stack
+  starts unknown), or a handover cut short - the owner is cleared before the wipe and
+  named only after it is confirmed. The container survives restarts of VAF, and the
+  record is how a restarted process knows whose state is in it. The record also lists
+  who holds the browser now, one entry per lease, run or probe with its process's pid
+  and start time: a live holder of another process makes a probe answer busy, a lease
+  or a run wait out a probe there (up to 60 seconds) and refuse anything else, and an
+  entry whose process is gone, or whose pid now belongs to another process, is
+  dropped, so a crash never locks the browser. It lives on the host and not in the
+  container, because only the host can tell whether a process is alive, and because a
+  marker inside the container would be written by the browser user, the account a
+  compromised page runs as. Hashes, pids and timestamps only, owner-only, written
+  under the same cross-process lock secure_store uses.
+- **The same scope, and serialised handovers.** A non-persistent agent run of the SAME
   scope still gets a quick scrub (its documented promise is a clean start;
   `VAF_BROWSER_SCRUB=full` deepens that to a best-effort profile wipe). Saved logins
   live in the same per-scope storage-state files as the agent's persistent sessions,
-  above. Concurrent handovers are serialized by a dedicated mutex, so two starts can
-  never interleave their wipe-and-restore sequences on the shared jar. A probe holds
-  that mutex until it has rendered and parked the page, and takes it without waiting
-  (a held mutex, a lease, a run or, on the shared container, a spawned agent run in
-  another process answers busy): a lease or a run that started between its wipe and
-  its navigation would otherwise get its jar restored under the page the probe reads.
+  above. Within a process, concurrent handovers are serialized by a dedicated mutex,
+  so two starts can never interleave their wipe-and-restore sequences on the shared
+  jar; across processes the holder record above does the same. A probe holds the
+  mutex and its record entry until it has rendered and parked the page, and takes
+  both without waiting (a held mutex, a lease, a run, a spawned agent run, or any
+  holder in another process answers busy): a lease or a run that started between its
+  wipe and its navigation would otherwise get its jar restored under the page the
+  probe reads.
 - **Stream access is a per-lease ticket in the URL path** (`/api/browser-vnc/t/<ticket>/`),
   validated on every asset request and on the stream websocket, and dead the moment the
   lease ends. The path is auth-middleware-exempt for the same reason the A2A room seat
@@ -740,9 +766,10 @@ partition:
   store, so saved passwords belong on a dedicated per-user instance, never on the
   shared fallback. Its saved passwords therefore live only until the next
   cross-user handover on the shared container, and indefinitely on a dedicated pool
-  instance. What remains on the shared container is the cross-process boundary named
-  in `hand_jar_to_run`: the concurrency gate is per-process, so two VAF processes can
-  still reach the same shared container at once - the pool is the answer to that.
+  instance. What remains on the shared container is named in `hand_jar_to_run`:
+  within one process `VAF_BROWSER_MAX_PARALLEL` above 1 lets that many runs share one
+  jar, and a second VAF installation under another OS account that drives the same
+  container keeps a record of its own - the pool is the answer to both.
   Downloads are not a residual: finished ones are swept to their owner's
   `VAF_Projects/<uid8>/Downloads`
   through the threat funnel (origin `browser_download`), and a scope change purges the
@@ -752,9 +779,11 @@ partition:
   change so the next person can neither read nor upload it, and the profile wipe wipes
   it with the profile. A `render_check` of a project file mirrors into it too; the
   probe takes the jar first and mirrors after its handover, so its files are the
-  probe's scope's and leave with the next change of hands. Before, the probe left the
-  jar on the previous owner, whose next lease saw no change of hands and purged
-  nothing, so the probe's files sat in that person's file picker.
+  probe's scope's in the record every process reads, and leave with the next change
+  of hands, in whichever process that happens. Before, the probe left the jar on the
+  previous owner (in its own process, and in every other process always), whose next
+  lease saw no change of hands and purged nothing, so the probe's files sat in that
+  person's file picker.
 - **The genuine partition is the per-user pool** (`browser_pool_max`, default 2,
   admin-only, overridable by `VAF_BROWSER_POOL_MAX`; see the pool
   section in [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md)): each user scope gets a

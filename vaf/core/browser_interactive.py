@@ -13,7 +13,11 @@ the two things the stream cannot decide for itself:
   BROWSER: the shared container's (the default and fallback), plus one for
   each per-user instance the pool hands out (vaf/core/browser_pool.py) - the
   registry at the bottom routes by scope, by stream ticket, by session, and
-  by the container a run pinned at its start;
+  by the container a run pinned at its start. The shared container is also
+  driven from other processes (a coder child's render_check, a spawned run,
+  the terminal app), so its jar owner and its current holders are kept in a
+  record every process reads (vaf/core/browser_jar.py), never in one
+  manager's memory alone;
 - the LOGINS: cookies are loaded and exported per user scope through the same
   storage-state files the browser agent's persistent sessions use, so a login
   performed by hand is a login the agent has on its next run, and vice versa.
@@ -766,6 +770,13 @@ class BrowserHandoverError(RuntimeError):
     BaseException would ride past the run's error handling)."""
 
 
+class BrowserHeldElsewhere(BrowserHandoverError):
+    """The shared browser is held by another VAF process (a lease, a run, or a
+    probe that outlasted the wait), so this run was refused before it took the
+    jar. A BrowserHandoverError, so every lane that refuses on a failed handover
+    refuses here too."""
+
+
 def scrub_mode() -> str:
     """The quick-scrub depth for SAME-SCOPE clean starts: "quick" (CDP sweep,
     default) or "full" (adds a profile wipe with a Chromium relaunch). An env
@@ -1001,6 +1012,10 @@ class InteractiveBrowserManager:
         # mirror of THEIR files rather than a stale signature match.
         self._ws_sig = None
         self._janitor_alive = False
+        # This process's entries in the shared browser's cross-process holder
+        # record (vaf.core.browser_jar): the lease's and the in-process run's.
+        self._lease_token: Optional[str] = None
+        self._run_token: Optional[str] = None
 
     # -- environment -------------------------------------------------------
     def cdp_base(self) -> str:
@@ -1099,6 +1114,18 @@ class InteractiveBrowserManager:
         with self._lock:
             if self._lease is not None or self._agent_active:
                 return False
+        # A handover or a probe of this process holds the mutex, and a holder of
+        # another process is in the record: parking would blank the page either
+        # of them is about to read.
+        if self._handover_mutex.locked():
+            return False
+        if self._dedicated_scope is None:
+            try:
+                from vaf.core import browser_jar
+                if browser_jar.record_for(self._container_name).foreign_holders():
+                    return False
+            except Exception:
+                return False
         try:
             park_browser_idle(self.cdp_base())
         except Exception:
@@ -1153,11 +1180,15 @@ class InteractiveBrowserManager:
         even for the same scope: "starts with a clean browser" is the tool's
         documented promise.
 
-        Named boundary: the gate is a per-process semaphore, so two VAF
-        processes (a chat run and a workflow child) can still reach the same
-        SHARED container at once. That race predates this lane - it is what
-        VAF_BROWSER_MAX_PARALLEL has always been - and the pool is the answer
-        to it: a per-user instance is only ever driven by that user's runs.
+        Across processes the gate does not reach, so the SHARED container's run
+        is claimed in the holder record every VAF process keeps
+        (vaf.core.browser_jar): a probe of another process is waited out, a
+        lease or a run there refuses this one with BrowserHeldElsewhere, and the
+        owner the handover compares with is the record's, never this process's
+        memory alone. Named boundary: within one process the gate admits
+        VAF_BROWSER_MAX_PARALLEL runs at once, and above 1 they share one jar,
+        as they always have; the pool is the answer to that, since a per-user
+        instance is only ever driven by that user's runs.
 
         A SCOPE CHANGE is fail-closed: the verified profile wipe either
         confirms, or this raises BrowserHandoverError and the run must not
@@ -1166,6 +1197,23 @@ class InteractiveBrowserManager:
         promise, not isolation) and are only logged."""
         scope = resolve_browser_scope(user_scope_id)
         with self._handover_mutex:
+            with self._lock:
+                claimed = self._run_token is not None
+            if self._dedicated_scope is None and not claimed:
+                # The run is claimed in the cross-process record before it takes
+                # the jar: a probe of another process is waited out, a lease or a
+                # run there refuses this one (BrowserHeldElsewhere). Released by
+                # agent_run_ended, like the in-process flag.
+                from vaf.core.browser_jar import KIND_RUN
+                token, other = self._claim_shared(KIND_RUN, scope, wait_s=self.PROBE_WAIT_S)
+                if token is None:
+                    append_domain_log("webui", "[browser_interactive] shared browser held by "
+                                               f"another VAF process ({(other or {}).get('kind')}); "
+                                               "run refused")
+                    raise BrowserHeldElsewhere(
+                        f"shared browser in use by another VAF process ({(other or {}).get('kind')})")
+                with self._lock:
+                    self._run_token = token
             self._hand_jar_locked(scope, persistent=persistent, continuing=continuing)
 
     @contextlib.contextmanager
@@ -1175,10 +1223,10 @@ class InteractiveBrowserManager:
         The probe (vaf.core.browser_render) navigates the browser's first page and
         reads its text, so it is a holder of the jar like an agent run, and it gets
         the same handover: hand_jar_to_run's rules with persistent=True. On the
-        SHARED browser a scope change or an unknown owner (the first use after a
-        server restart) is the purge plus the verified profile wipe, fail-closed:
-        BrowserHandoverError, raised before anything is navigated. Afterwards the
-        jar is the probe's scope, so the files its file target mirrors into the
+        SHARED browser an owner the cross-process record does not vouch for is
+        the purge plus the verified profile wipe, fail-closed: BrowserHandoverError,
+        raised before anything is navigated. Afterwards the jar is the probe's
+        scope, for every process, so the files its file target mirrors into the
         Workspace are purged by the next holder's handover instead of showing up
         in that person's file picker. A dedicated instance gets no wipe (only its
         own user is routed to it) and no scrub (persistent).
@@ -1188,10 +1236,14 @@ class InteractiveBrowserManager:
         its own jar restored under the probe, and the probe would read that
         holder's page. Taken without waiting, with the busy check repeated inside
         it - the probe waits for no one and evicts no one, so a held mutex or any
-        activity answers busy. On the shared browser that check includes an agent
-        run spawned into another process (is_agent_active's queue scan), which
-        this process's mutex cannot stop; on a dedicated instance it would also
-        count other users' runs on their own instances, so there it stays local."""
+        activity answers busy. The probe is most often a coder child's, in a
+        process of its own, where this manager's lease and memory are empty: on
+        the shared browser the probe is therefore also claimed in the holder
+        record (any live holder of another process is busy, and a lease or a run
+        there waits for the probe), and the queue scan counts a browser agent run
+        spawned but not yet holding the browser. On a dedicated instance both
+        would count other users' runs on their own instances, so there it stays
+        local."""
         scope = resolve_browser_scope(user_scope_id)
         if not self._handover_mutex.acquire(blocking=False):
             yield False
@@ -1201,8 +1253,21 @@ class InteractiveBrowserManager:
                                        and self.is_agent_active()):
                 yield False
                 return
-            self._hand_jar_locked(scope, persistent=True, continuing=False, lane="render")
-            yield True
+            token = None
+            if self._dedicated_scope is None:
+                # Any live holder of another process (a person's lease in the web
+                # process while this probe runs in a coder child, a spawned run,
+                # another probe) is busy too: this process's state cannot see it.
+                from vaf.core.browser_jar import KIND_PROBE
+                token, _other = self._claim_shared(KIND_PROBE, scope, wait_s=0.0)
+                if token is None:
+                    yield False
+                    return
+            try:
+                self._hand_jar_locked(scope, persistent=True, continuing=False, lane="render")
+                yield True
+            finally:
+                self._release_shared(token)
         finally:
             self._handover_mutex.release()
 
@@ -1214,7 +1279,6 @@ class InteractiveBrowserManager:
         the agent run's. Raises BrowserHandoverError like hand_jar_to_run; `lane`
         only labels the refusal in the log."""
         with self._lock:
-            jar_scope = self._last_cookie_scope
             dedicated = self._dedicated_scope
         if dedicated is not None:
             # A per-user instance: the profile IS this user's, and nobody
@@ -1225,52 +1289,115 @@ class InteractiveBrowserManager:
                     _cookie_op(self.cdp_base(), "scrub")
                 except Exception as e:
                     append_domain_log("webui", f"[browser_interactive] clean-start scrub failed: {e}")
-        elif jar_scope != scope:
-            try:
-                # Same rule as the interactive handover: a previous
-                # holder's transfer folders never ride into another
-                # scope's session.
-                _purge_container_downloads(self._container_name)
-                if not verified_profile_wipe(self._container_name, self.cdp_base()):
-                    raise BrowserHandoverError("profile wipe not confirmed")
-                _cookie_op(self.cdp_base(), "clear_cookies")
-                with self._lock:
-                    self._ws_sig = None
-                    self._last_cookie_scope = scope
-            except Exception as e:
-                append_domain_log(
-                    "webui", f"[browser_interactive] {lane} cross-scope handover refused: {e}")
+        else:
+            holds, instance = self._jar_holds(scope)
+            if not holds:
+                self._take_jar(scope, lane, instance)
+            elif not persistent and not continuing:
+                # Same scope, but the run promised a clean start: quick scrub -
+                # the person's own logins are already exported and come back on
+                # their next interactive lease or persistent run. In full mode
+                # the clean start deepens to a profile wipe (the mode's one
+                # remaining meaning; a scope change wipes regardless).
+                # `continuing` overrides the promise: a run that takes over the
+                # person's LIVE session exists to carry it on, and scrubbing
+                # would log out the very session it was handed.
                 try:
-                    from vaf.core.security_events import log_security_event
-                    log_security_event("browser_handover_failed",
-                                       username=str(scope or "")[:32],
-                                       detail=str(e)[:200], channel="browser")
-                except Exception:
-                    pass
-                if isinstance(e, BrowserHandoverError):
-                    raise
-                raise BrowserHandoverError(str(e)) from e
-        elif not persistent and not continuing:
-            # Same scope, but the run promised a clean start: quick scrub -
-            # the person's own logins are already exported and come back on
-            # their next interactive lease or persistent run. In full mode
-            # the clean start deepens to a profile wipe (the mode's one
-            # remaining meaning; a scope change wipes regardless).
-            # `continuing` overrides the promise: a run that takes over the
-            # person's LIVE session exists to carry it on, and scrubbing
-            # would log out the very session it was handed.
-            try:
-                if scrub_mode() == "full":
-                    request_profile_wipe(self._container_name)
-                _cookie_op(self.cdp_base(), "scrub")
-            except Exception as e:
-                append_domain_log("webui", f"[browser_interactive] clean-start scrub failed: {e}")
+                    if scrub_mode() == "full":
+                        request_profile_wipe(self._container_name)
+                    _cookie_op(self.cdp_base(), "scrub")
+                except Exception as e:
+                    append_domain_log("webui", f"[browser_interactive] clean-start scrub failed: {e}")
         try:
             _set_download_behavior(self.cdp_base(), allow=downloads_mode() != "off")
         except Exception as e:
             append_domain_log("webui", f"[browser_interactive] download policy not applied: {e}")
         with self._lock:
             self._last_cookie_scope = scope
+
+    # -- the shared browser across processes ----------------------------------
+    # Everything below is the SHARED container's: a dedicated instance has one
+    # user, so its owner is known from the start and nobody else holds it.
+    # vaf.core.browser_jar holds the record and says why it exists.
+
+    def _jar_holds(self, scope: str) -> tuple:
+        """(does the shared profile hold this scope's state, the container instance
+        that answer is about). Asked of the record every VAF process keeps, never of
+        this process's memory: a coder child or a spawned run in another process
+        changes hands without this manager seeing it. Anything the record cannot
+        vouch for, a record that cannot be read included, is an unknown owner: the
+        caller wipes."""
+        from vaf.core import browser_jar
+        instance = browser_jar.container_instance(self._container_name)
+        try:
+            return browser_jar.record_for(self._container_name).owner_is(scope, instance), instance
+        except Exception:
+            return False, instance
+
+    def _take_jar(self, scope: str, lane: str, instance: str) -> None:
+        """The cross-scope handover of the shared browser: the record's owner is
+        cleared first, then the transfer folders are purged (a previous holder's
+        downloads and mirrored Workspace files never ride into another scope's
+        session), the profile wipe is VERIFIED, the cookies are cleared, and only
+        then is the new owner recorded - a crash in between leaves "unknown",
+        never a wrong name. Fail-closed: anything short of that raises
+        BrowserHandoverError, a record that cannot be written included, because
+        the other processes would keep trusting the old owner."""
+        from vaf.core import browser_jar
+        jar = browser_jar.record_for(self._container_name)
+        try:
+            jar.set_owner(None, instance)
+            _purge_container_downloads(self._container_name)
+            if not verified_profile_wipe(self._container_name, self.cdp_base()):
+                raise BrowserHandoverError("profile wipe not confirmed")
+            _cookie_op(self.cdp_base(), "clear_cookies")
+            jar.set_owner(scope, instance)
+            with self._lock:
+                self._ws_sig = None
+                self._last_cookie_scope = scope
+        except Exception as e:
+            append_domain_log(
+                "webui", f"[browser_interactive] {lane} cross-scope handover refused: {e}")
+            try:
+                from vaf.core.security_events import log_security_event
+                log_security_event("browser_handover_failed",
+                                   username=str(scope or "")[:32],
+                                   detail=str(e)[:200], channel="browser")
+            except Exception:
+                pass
+            if isinstance(e, BrowserHandoverError):
+                raise
+            raise BrowserHandoverError(str(e)) from e
+
+    # A probe of another process is short and bounded, so a lease or a run waits
+    # it out like it waits for a probe of its own process (the handover mutex);
+    # past this budget it answers busy rather than hang the window or the run.
+    PROBE_WAIT_S = 60.0
+
+    def _claim_shared(self, kind: str, scope: str, *, wait_s: float) -> tuple:
+        """Record this process as a holder of the shared browser: (token, None),
+        or (None, the live holder of another process that is in the way). A probe
+        of another process is waited out for up to wait_s; any other holder, or a
+        record that cannot be read ({"kind": "unknown"}), is the answer at once."""
+        from vaf.core import browser_jar
+        jar = browser_jar.record_for(self._container_name)
+        deadline = time.time() + max(0.0, wait_s)
+        while True:
+            try:
+                token, other = jar.claim(kind, scope)
+            except browser_jar.JarRecordUnavailable as e:
+                append_domain_log("webui", f"[browser_interactive] holder record unavailable: {e}")
+                return None, {"kind": "unknown"}
+            if token is not None:
+                return token, None
+            if (other or {}).get("kind") != browser_jar.KIND_PROBE or time.time() >= deadline:
+                return None, other or {"kind": "unknown"}
+            time.sleep(0.25)
+
+    def _release_shared(self, token: Optional[str]) -> None:
+        if token:
+            from vaf.core import browser_jar
+            browser_jar.record_for(self._container_name).release(token)
 
     def sweep_downloads(self, user_scope_id: Optional[str]) -> List[str]:
         """Drain finished downloads to their owner's workspace. Mode-gated,
@@ -1316,6 +1443,11 @@ class InteractiveBrowserManager:
     def agent_run_ended(self, notify: bool = True) -> None:
         with self._lock:
             self._agent_active = False
+            # The spawn lane (notify=False) never claimed: its child does, in its
+            # own process, and releases there.
+            run_token = None
+            if notify:
+                run_token, self._run_token = self._run_token, None
             # The watch-only ticket dies with the run; a stream that outlives
             # it would keep showing the browser to a window with no run behind.
             self._agent_stream = None
@@ -1327,6 +1459,7 @@ class InteractiveBrowserManager:
         # A run downloads too (the agent saves a PDF for the person): drain to
         # the run's OWN scope - the jar owner at this moment is that run's.
         self.sweep_downloads(run_scope)
+        self._release_shared(run_token)
         # Tell the window that owned the interactive view the browser is free
         # again. When an interactive lease was evicted FOR this run, the stop
         # event says resumable: the holder's window re-enters the interactive
@@ -1407,42 +1540,48 @@ class InteractiveBrowserManager:
         except Exception:
             return self._payload("error", reason="browser_unavailable")
 
-        # Jar handover, before the person starts browsing. A scope CHANGE is a
-        # VERIFIED profile wipe, fail-closed: the previous holder's cookies,
-        # localStorage/IndexedDB, history, saved passwords and autofill all
-        # die with the profile, or nobody gets the browser. On the SHARED
-        # browser an unknown owner counts as a change - after a server restart
-        # the tracker is empty while the container may still hold anyone's
-        # state, and trusting that gap is how residue crosses users. A
-        # DEDICATED instance is exempt: only its own user is ever routed to
-        # it, so its profile is theirs to keep.
         with self._lock:
-            jar_scope = self._last_cookie_scope
             dedicated = self._dedicated_scope
-        if dedicated is None and jar_scope != user_scope_id:
-            try:
-                # Residue in the transfer folders belongs to the PREVIOUS
-                # holder; delivering it onward (or letting the next person
-                # upload it) would be a cross-user hand-off. It dies here,
-                # and the mirror starts over for the new holder.
-                _purge_container_downloads(self._container_name)
-                if not verified_profile_wipe(self._container_name, self.cdp_base()):
-                    raise BrowserHandoverError("profile wipe not confirmed")
-                _cookie_op(self.cdp_base(), "clear_cookies")
-                with self._lock:
-                    self._ws_sig = None
-                    self._last_cookie_scope = user_scope_id
-            except Exception as e:
-                append_domain_log(
-                    "webui", f"[browser_interactive] cross-scope handover refused: {e}")
+            had_lease = self._lease is not None
+        if dedicated is None:
+            # The SHARED browser is used from other processes too (a coder
+            # child's render_check, a spawned run, the terminal app), where this
+            # manager's lease and memory do not reach. The lease is claimed in
+            # the record they all keep: a probe there is waited out, as one of
+            # this process is (the handover mutex); a run or a lease there
+            # refuses, as one here does.
+            from vaf.core.browser_jar import KIND_LEASE, KIND_RUN
+            token, other = self._claim_shared(KIND_LEASE, user_scope_id, wait_s=self.PROBE_WAIT_S)
+            if token is None:
+                kind = (other or {}).get("kind")
+                if kind == KIND_RUN:
+                    return self._payload("agent_active", reason="agent_run")
+                if kind == "unknown":
+                    return self._payload("error", reason="handover_failed")
+                return {"status": "busy", "reason": "in_use",
+                        "saving": False, "streamPath": ""}
+            with self._lock:
+                self._lease_token = token
+
+            # Jar handover, before the person starts browsing. A scope CHANGE is
+            # a VERIFIED profile wipe, fail-closed: the previous holder's
+            # cookies, localStorage/IndexedDB, history, saved passwords and
+            # autofill all die with the profile, or nobody gets the browser. The
+            # owner is the record's, not this process's memory: whatever the
+            # record cannot vouch for (no record, another container or an
+            # earlier start of this one, a handover cut short) counts as a
+            # change. A DEDICATED instance is exempt: only its own user is ever
+            # routed to it, so its profile is theirs to keep.
+            holds, instance = self._jar_holds(user_scope_id)
+            if not holds:
                 try:
-                    from vaf.core.security_events import log_security_event
-                    log_security_event("browser_handover_failed",
-                                       username=str(user_scope_id or "")[:32],
-                                       detail=str(e)[:200], channel="browser")
-                except Exception:
-                    pass
-                return self._payload("error", reason="handover_failed")
+                    self._take_jar(user_scope_id, "interactive", instance)
+                except BrowserHandoverError:
+                    if not had_lease:
+                        with self._lock:
+                            self._lease_token = None
+                        self._release_shared(token)
+                    return self._payload("error", reason="handover_failed")
 
         # The lenient half: the jar is verifiably the new holder's now, so a
         # failure here (their own cookie restore, the mirror) costs comfort,
@@ -1519,6 +1658,7 @@ class InteractiveBrowserManager:
                         "saving": False, "streamPath": ""}
             self._lease = None
             sid = lease.session_id
+            lease_token, self._lease_token = self._lease_token, None
 
         if lease.save_enabled:
             try:
@@ -1538,6 +1678,8 @@ class InteractiveBrowserManager:
         # leaves WITH them - on takeover too, so the run that follows never
         # finds another scope's files in the hand-off folder.
         self.sweep_downloads(lease.user_scope_id)
+        # Released last: the export above still reads the person's own jar.
+        self._release_shared(lease_token)
 
         payload = {"status": "stopped", "reason": reason,
                    "saving": lease.save_enabled, "streamPath": ""}

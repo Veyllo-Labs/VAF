@@ -124,6 +124,8 @@ def test_format_identities_are_pinned_literals():
     assert BACKUP_FORMAT == "vafbackup-1-5e2c90"
     from vaf.core.at_rest_migration import CONTEXT_REPAIR_FORMAT
     assert CONTEXT_REPAIR_FORMAT == "ctxrepair-1-141182"
+    from vaf.core.browser_jar import JAR_FORMAT
+    assert JAR_FORMAT == "browserjar-1-6e0d93"
 
 
 def test_chain_with_versioned_seed_verifies():

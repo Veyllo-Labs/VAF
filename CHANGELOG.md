@@ -434,11 +434,23 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `render_check` (the agent's and the coder's quick look at a page) ran on the shared browser,
   it opened the page in whatever the browser held: another user's logins, or after a restart
   anyone's. It now gets the same handover as the interactive browser and the browser agent:
-  when someone else used the browser last, or VAF has just started, the browser's data is
+  when someone else used the browser last, or nobody can say who did, the browser's data is
   wiped and the wipe confirmed before the page is opened, and if it cannot be confirmed
-  nothing is opened and the check reports an error. The project files it copies into
-  the browser for a file check are removed when the next person takes the browser over; before,
-  they could appear in that person's file picker. A per-user browser was never affected.
+  nothing is opened and the check reports an error. While someone else is using the browser,
+  the check answers that it is busy. The project files it copies into the browser for a file
+  check are removed when the next person takes the browser over; before, they could appear in
+  that person's file picker. A per-user browser was never affected.
+
+- **Every part of VAF now agrees on who used the shared browser last.** The coder's page
+  checks, browser runs started by workflows and the terminal app each drive the shared browser
+  from a process of their own, and each kept its own idea of whose data the browser held.
+  Measured: a coder's page check for one person wiped the browser while another person was
+  using it and pointed their window at a different page; after such a check, that person's
+  next session skipped the wipe and their file picker listed the other person's project
+  files; and after a workflow's browser run, the next person's session browsed with the
+  run's logins. VAF now keeps one record of who holds the browser and whose data is in it,
+  which every part reads before it hands the browser over. A part of VAF that crashes while
+  holding the browser does not block it. A per-user browser was never affected.
 
 - **Your own browser follows a proxy or timezone change.** A per-user browser kept the proxy,
   timezone and Safe Browsing key it was created with, so one created before you set a proxy

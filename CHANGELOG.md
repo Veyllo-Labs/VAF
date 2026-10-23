@@ -452,6 +452,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   which every part reads before it hands the browser over. A part of VAF that crashes while
   holding the browser does not block it. A per-user browser was never affected.
 
+- **A browser run that waited for its turn keeps the shared browser to itself.** When two
+  browser runs queued for the shared browser, the second one drove it after the first ended
+  while VAF already treated the browser as free: another person's browser window (for example
+  the one the first run had taken over, reopening on its own) got the browser in the middle of
+  that run, with that person's logins and files, and a page check could open a page in it. A
+  run now holds the browser from the moment it queues until it ends, and one that gives up
+  waiting hands its place back.
+
 - **Your own browser follows a proxy or timezone change.** A per-user browser kept the proxy,
   timezone and Safe Browsing key it was created with, so one created before you set a proxy
   kept browsing without it, from your real address. It is now recreated with the current

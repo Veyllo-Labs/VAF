@@ -490,8 +490,13 @@ reason.
 **The agent always wins - but only borrows.** `BrowserAgentTool.run()` evicts any
 interactive lease at its very start (for both the in-process and the spawned-child lane,
 since the hook runs before the spawn branch), and an interactive start is refused with
-`agent_active` while a run is underway - the in-process flag covers the first, an IPC
-scan for a live `browser_agent` task covers the second.
+`agent_active` while a run is underway - the in-process count covers the first, an IPC
+scan for a live `browser_agent` task covers the second. The count holds every run of
+that browser that has evicted and not yet ended, a run queued at the concurrency gate
+included: with one flag, the end of the first of two queued runs cleared it while the
+second was about to drive, and another person's start (the evicted window resuming on
+its own) then got the browser under that run. A run whose gate times out gives its
+place back.
 
 **A takeover of a live session is a HANDOVER, not a fresh start.** When the eviction
 found a person driving, the page they were on is captured (`_current_page`, HTTP target
@@ -1082,7 +1087,8 @@ and the record above is how the parent and every later holder learn what it did.
 run also reads its generation there, after the gate: a run stopped while its handover
 still waits releases the claim when it lands, and a run that waited at the gate is
 never refused because the run ahead of it ended - a run ends before it lets the next
-one past the gate.
+one past the gate, and the queued run already counts as one of the browser's runs, so
+nobody else gets the browser in between.
 Both orderings are pinned by `tests/test_browser_pool.py`. A per-user instance is exempt
 from the scope-change half entirely - its profile belongs to one person.
 

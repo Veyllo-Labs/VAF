@@ -1105,6 +1105,14 @@ class BrowserAgentTool(BaseTool):
                      else _os.environ.get("VAF_BROWSER_CDP_URL", "http://localhost:9222"))
         _container = _endpoint.container_name if _endpoint else "vaf-browser"
 
+        # Parsed BEFORE the eviction: the eviction counts this run as one of the
+        # browser's runs until it ends, and an argument that does not parse must
+        # not leave that count behind.
+        max_steps = max(1, min(int(kwargs.get("max_steps") or 25), 100))
+        allowed_domains: Optional[list] = kwargs.get("allowed_domains") or None
+        persistent: bool = bool(kwargs.get("persistent") or False)
+        session: str = str(kwargs.get("session") or "default").strip() or "default"
+
         # The agent's run always wins its browser: evict a person's
         # interactive lease BEFORE the spawn branch, so the eviction happens in
         # the web-server parent process for both lanes (in the spawned child
@@ -1155,11 +1163,6 @@ class BrowserAgentTool(BaseTool):
             except Exception:
                 pass   # any spawn error → fall through to in-process below
 
-        max_steps = max(1, min(int(kwargs.get("max_steps") or 25), 100))
-        allowed_domains: Optional[list] = kwargs.get("allowed_domains") or None
-        persistent: bool = bool(kwargs.get("persistent") or False)
-        session: str = str(kwargs.get("session") or "default").strip() or "default"
-
         # ── Concurrency gate ──────────────────────────────────────────────────
         # Serialises access to ONE Chromium container - the gate is per
         # browser, so runs on different pooled instances proceed in parallel.
@@ -1167,29 +1170,37 @@ class BrowserAgentTool(BaseTool):
         # seconds before giving up.
         acquired = _browser_semaphore(_container).acquire(timeout=_BROWSER_QUEUE_TIMEOUT)
         if not acquired:
+            # The run leaves without driving: its place in the browser's run count
+            # goes back, and only that - the run ahead is still driving, and the
+            # generation and the holder entry are its own. Without this the browser
+            # counted as driven for the life of the process.
+            from vaf.core.browser_interactive import agent_run_abandoned
+            agent_run_abandoned(container_name=_container)
             return (
                 f"Browser agent is busy — all {_BROWSER_MAX_PARALLEL} slot(s) are in use. "
                 f"Please try again in a moment."
             )
-        # Session id crosses the thread boundary AS AN ARGUMENT: the run below
-        # executes on a fresh thread with a fresh contextvar context, where
-        # get_current_session_id() answers None - which silently disarmed the
-        # stop monitor for every chat browser run (measured live: ten Stop
-        # presses, none seen) and broadcast the live frames unscoped.
+        # The try opens right after the gate: whatever follows, the finally ends
+        # the run (and its count) exactly once.
         try:
-            from vaf.core.subagent_ipc import get_current_session_id
-            _session_id = get_current_session_id()
-        except Exception:
-            _session_id = None
-        # Grant the run's own chat window a watch-only live stream of this run
-        # (the window then shows the real streamed Chromium instead of the
-        # 1.5s screenshot view; the screenshots below keep streaming as the
-        # fallback and as vision input). In-process lane only - the helper
-        # itself stands down inside a spawned child, where the ticket would
-        # validate against the wrong process. Never raises.
-        from vaf.core.browser_interactive import agent_stream_started
-        agent_stream_started(_session_id, container_name=_container)
-        try:
+            # Session id crosses the thread boundary AS AN ARGUMENT: the run below
+            # executes on a fresh thread with a fresh contextvar context, where
+            # get_current_session_id() answers None - which silently disarmed the
+            # stop monitor for every chat browser run (measured live: ten Stop
+            # presses, none seen) and broadcast the live frames unscoped.
+            try:
+                from vaf.core.subagent_ipc import get_current_session_id
+                _session_id = get_current_session_id()
+            except Exception:
+                _session_id = None
+            # Grant the run's own chat window a watch-only live stream of this run
+            # (the window then shows the real streamed Chromium instead of the
+            # 1.5s screenshot view; the screenshots below keep streaming as the
+            # fallback and as vision input). In-process lane only - the helper
+            # itself stands down inside a spawned child, where the ticket would
+            # validate against the wrong process. Never raises.
+            from vaf.core.browser_interactive import agent_stream_started
+            agent_stream_started(_session_id, container_name=_container)
             return _run_async_in_new_loop(
                 self._run_browser(
                     task=task,
@@ -1234,10 +1245,12 @@ class BrowserAgentTool(BaseTool):
             return f"Error (browser_agent): {type(e).__name__}: {e}"
         finally:
             # The run's end BEFORE the gate opens: agent_run_ended moves the run
-            # generation on and releases this run's holder entry, and a run queued
-            # at the gate that got past it first would be retired by this end
-            # (its entry released, its handover refused) although it is the
-            # current run by then.
+            # generation on, releases this run's holder entry and gives back its
+            # place in the run count, and a run queued at the gate that got past
+            # it first would have its entry released and its handover refused by
+            # this end although it is the current run by then. A run still queued
+            # keeps its own place in the count, so the browser stays marked as
+            # driven across the hand from one run to the next.
             try:
                 agent_run_ended(container_name=_container)
             finally:

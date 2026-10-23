@@ -751,10 +751,14 @@ partition:
   so two starts can never interleave their wipe-and-restore sequences on the shared
   jar; across processes the holder record above does the same. A probe holds the
   mutex and its record entry until it has rendered and parked the page, and takes
-  both without waiting (a held mutex, a lease, a run, a spawned agent run, or any
-  holder in another process answers busy): a lease or a run that started between its
-  wipe and its navigation would otherwise get its jar restored under the page the
-  probe reads.
+  both without waiting (a held mutex, a lease, a run - queued at the browser's
+  concurrency gate or driving, each one counted until it ends - a spawned agent run,
+  or any holder in another process answers busy): a lease or a run that started
+  between its wipe and its navigation would otherwise get its jar restored under the
+  page the probe reads. The same count refuses an interactive start while any run of
+  that browser is queued or driving; it used to be one flag, and the end of the first
+  of two queued runs cleared it, so the second drove while another person's start
+  and a probe were let in.
 - **Stream access is a per-lease ticket in the URL path** (`/api/browser-vnc/t/<ticket>/`),
   validated on every asset request and on the stream websocket, and dead the moment the
   lease ends. The path is auth-middleware-exempt for the same reason the A2A room seat

@@ -978,7 +978,14 @@ class InteractiveBrowserManager:
         # probe's own CDP timeouts for one that does not).
         self._handover_mutex = threading.Lock()
         self._lease: Optional[InteractiveLease] = None
-        self._agent_active = False
+        # Runs of THIS browser that are queued at its concurrency gate or driving
+        # it: stop_for_agent_run adds one, agent_run_ended (or agent_run_abandoned,
+        # for a run that leaves before it drives) takes it back. A count, not a
+        # flag: with one slot a second run evicts and waits at the gate, and the
+        # first run's end cleared a single flag although the second was about to
+        # drive - measured, another user's interactive start then got the browser
+        # under that run, and a probe of this process rendered under it.
+        self._agent_runs = 0
         self._agent_stream: Optional[AgentStream] = None
         # The lease an agent takeover evicted: (user_scope_id, session_id).
         # This is the fact "the person was driving BEFORE the agent took the
@@ -1034,6 +1041,11 @@ class InteractiveBrowserManager:
     def container_name(self) -> str:
         return self._container_name
 
+    @property
+    def _agent_active(self) -> bool:
+        """A run of this browser is queued or driving (see `_agent_runs`)."""
+        return self._agent_runs > 0
+
     def has_activity(self) -> bool:
         """Anything alive on this browser: a lease, a run, or a watch grant.
         The pool's reaper asks this before stopping an idle instance."""
@@ -1078,7 +1090,7 @@ class InteractiveBrowserManager:
         kill its Chromium outright. hand_jar_to_run() does that half, after
         the gate."""
         with self._lock:
-            self._agent_active = True
+            self._agent_runs += 1
             lease = self._lease
             self._pre_agent_holder = ((lease.user_scope_id, lease.session_id)
                                       if lease else None)
@@ -1197,8 +1209,9 @@ class InteractiveBrowserManager:
     def run_generation(self) -> int:
         """Which run of this browser is current: agent_run_ended moves it on. A run
         reads it once it has passed its concurrency gate, right before it hands it
-        to hand_jar_to_run - not earlier: a run still queued at the gate would be
-        retired by the end of the run ahead of it."""
+        to hand_jar_to_run - not earlier: the end of the run ahead of a run still
+        queued at the gate moves it on, and the queued run's handover would then
+        be refused as if it had been stopped."""
         with self._lock:
             return self._run_generation
 
@@ -1237,8 +1250,10 @@ class InteractiveBrowserManager:
 
         `run_generation` is what run_generation() answered after the run passed
         its concurrency gate (BrowserAgentTool._run_browser reads it there, and
-        run() ends a run before it opens the gate for the next one, so a queued
-        run is never retired by the end of the one ahead of it). The wait for a
+        run() ends a run before it opens the gate for the next one, so the end of
+        the run ahead of a queued run neither refuses its handover nor releases
+        its holder entry; and the queued run's own place in `_agent_runs`, taken
+        at its eviction, keeps the browser marked as driven in between). The wait for a
         probe of another process runs in the run's executor thread, and
         a Stop cancels the run without waiting for that thread: agent_run_ended
         had already run when the late claim landed, so the run's entry stayed in
@@ -1510,9 +1525,19 @@ class InteractiveBrowserManager:
             payload = self._agent_payload(stream)
         self._emit(payload, str(session_id))
 
+    def agent_run_abandoned(self) -> None:
+        """A run that evicted (stop_for_agent_run) and then left before it drove -
+        the concurrency gate timed out on it: it gives its place in `_agent_runs`
+        back, and nothing else. The run ahead of it is still driving, so the run
+        generation, the holder entry and the give-back are that run's to settle."""
+        with self._lock:
+            self._agent_runs = max(0, self._agent_runs - 1)
+
     def agent_run_ended(self, notify: bool = True) -> None:
         with self._lock:
-            self._agent_active = False
+            # This run's place in the count, in both modes; a run queued behind it
+            # keeps the browser marked as driven.
+            self._agent_runs = max(0, self._agent_runs - 1)
             # The spawn lane (notify=False) never claimed: its child does, in its
             # own process, and releases there.
             run_token = None
@@ -2265,6 +2290,16 @@ def agent_stream_started(session_id: Optional[str],
     window a watch-only live stream of the run's own browser. Never raises."""
     try:
         _manager_for_run(container_name).agent_stream_started(session_id)
+    except Exception:
+        pass
+
+
+def agent_run_abandoned(container_name: Optional[str] = None) -> None:
+    """Hook for BrowserAgentTool.run(): the run evicted and then left before it
+    drove (its concurrency gate timed out). Gives back its count only. Never
+    raises."""
+    try:
+        _manager_for_run(container_name).agent_run_abandoned()
     except Exception:
         pass
 

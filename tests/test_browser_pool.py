@@ -493,7 +493,7 @@ def test_reaper_asks_the_registry_about_activity(registry):
     mgr = _quiet(bi._manager_for_instance(registry.instances["scope-a"]))
     assert bi.peek_manager_for_container("vaf-browser-u-aaa") is mgr
     assert mgr.has_activity() is False
-    mgr._agent_active = True
+    mgr._agent_runs = 1
     assert mgr.has_activity() is True
     assert bi.peek_manager_for_container("vaf-browser") is bi.get_interactive_manager()
 

@@ -739,3 +739,107 @@ def test_a_read_error_is_not_taken_for_a_gone_holder(monkeypatch):
                         lambda p: False if str(p).startswith("/proc") else real_isdir(p))
     assert bj._alive(me), "a missing /proc made a live holder look gone"
     assert not bj._alive({"pid": 4194304 + 7, "started": 5.0}), "a pid that cannot exist lived"
+
+
+@pytest.mark.parametrize("moment", ["after its handover", "before its handover"])
+def test_a_queued_run_keeps_the_browser_marked_as_driven(box, monkeypatch, moment):
+    """Y holds a lease; run A evicts it and drives; run B evicts too and waits at
+    the gate. A's end used to clear the single in-process flag although B was about
+    to drive, and nothing set it again: Y's window, resuming on the give-back,
+    got `active` and B ran on Y's restored logins (or B wiped under Y's live
+    lease), and an in-process probe rendered under B. The flag is a count of the
+    browser's runs, so it holds from B's eviction to B's end.
+
+    MUTATION: let agent_run_ended clear the count instead of taking one back - red."""
+    pytest.importorskip("browser_use", exc_type=ImportError)
+    import vaf.tools.browser_agent as ba
+
+    monkeypatch.setitem(ba._BROWSER_SEMAPHORES, "vaf-browser", threading.Semaphore(1))
+    web = box["web"]
+    assert web.start("scope-y", "sess-y", save=False)["status"] == "active"
+    release_a, b_here, release_b = threading.Event(), threading.Event(), threading.Event()
+    real_take = bi.take_agent_handover
+
+    def take(user_scope_id=None, container_name=None):
+        if user_scope_id == "scope-b" and moment == "before its handover":
+            b_here.set()
+            release_b.wait(10)
+        return real_take(user_scope_id=user_scope_id, container_name=container_name)
+
+    def mirror(user_scope_id=None, container_name=None):
+        if user_scope_id == "scope-a":
+            release_a.wait(10)
+        elif moment == "after its handover":
+            b_here.set()
+            release_b.wait(10)
+        raise _Reached(user_scope_id)
+
+    monkeypatch.setattr(bi, "take_agent_handover", take)
+    monkeypatch.setattr(bi, "sync_workspace_for_run", mirror)
+    runs = [threading.Thread(target=lambda s=s: ba.BrowserAgentTool().run(task="look it up",
+                                                                         user_scope_id=s))
+            for s in ("scope-a", "scope-b")]
+    runs[0].start()
+    for _ in range(100):
+        if web._run_token is not None:
+            break
+        time.sleep(0.05)
+    runs[1].start()
+    time.sleep(0.4)                              # B waits at the gate
+    release_a.set()
+    assert b_here.wait(10), "B never got past the gate"
+
+    res = web.start("scope-y", "sess-y", save=False)
+    probe = br.render_page("https://example.com/", user_scope_id="scope-z")
+    release_b.set()
+    for t in runs:
+        t.join(15)
+    assert res["status"] == "agent_active", f"another user got the browser under run B: {res}"
+    assert probe["busy"] is True, "a probe rendered under run B"
+    assert web._agent_runs == 0 and not web.has_activity()
+    assert web.start("scope-y", "sess-y", save=False)["status"] == "active"
+
+
+def test_a_run_whose_gate_times_out_gives_its_count_back(box, monkeypatch):
+    """A run that evicted and then gave up at the gate never drives: it gives back
+    its place in the count, and nothing else - the run ahead still drives, so its
+    generation and its holder entry stay. Without the give-back the browser
+    counted as driven for the life of the process and refused every start.
+
+    MUTATIONS: no give-back on the timeout (red: the count stays up); end the run
+    instead (red: the run ahead's generation and entry are gone)."""
+    import vaf.tools.browser_agent as ba
+
+    gate = threading.Semaphore(1)
+    monkeypatch.setitem(ba._BROWSER_SEMAPHORES, "vaf-browser", gate)
+    monkeypatch.setattr(ba, "_BROWSER_QUEUE_TIMEOUT", 0.2)
+    web = box["web"]
+    gate.acquire()                               # the run ahead holds the gate...
+    bi.stop_for_agent_run(container_name="vaf-browser")
+    bi.hand_jar_to_run(user_scope_id="scope-a", persistent=True, container_name="vaf-browser",
+                       run_generation=bi.run_generation(container_name="vaf-browser"))
+    token, generation = web._run_token, web.run_generation()
+    assert web._agent_runs == 1
+
+    out = ba.BrowserAgentTool().run(task="look it up", user_scope_id="scope-b")
+    assert out.startswith("Browser agent is busy"), out
+    assert web._agent_runs == 1, "the timed-out run kept its place in the count"
+    assert web._run_token == token and web.run_generation() == generation
+    data = json.loads((bj._state_dir() / "vaf-browser.json").read_bytes())
+    assert [h["kind"] for h in data["holders"]] == [bj.KIND_RUN]
+
+    bi.agent_run_ended(container_name="vaf-browser")   # ...and ends
+    gate.release()
+    assert web._agent_runs == 0 and not web.has_activity()
+
+
+def test_an_argument_that_does_not_parse_leaves_no_run_counted(box):
+    """The arguments are parsed before the eviction: one that raises leaves no run
+    counted behind (the eviction would otherwise never be ended).
+
+    MUTATION: parse after stop_for_agent_run again - red."""
+    from vaf.tools.browser_agent import BrowserAgentTool
+
+    with pytest.raises(ValueError):
+        BrowserAgentTool().run(task="look it up", user_scope_id="scope-a", max_steps="many")
+    assert box["web"]._agent_runs == 0

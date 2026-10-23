@@ -142,3 +142,48 @@ def test_telemetry_section_admits_the_version_check():
     assert "GitHub" in section
     # It must also be honest that configured providers receive prompts.
     assert "provider" in section.lower()
+
+
+_REPO_LINK = re.compile(r"https://github\.com/Veyllo-Labs/VAF/(?:blob|tree)/main/([^)\s#]+)(?:#([^)\s]+))?")
+_BARE_ANCHOR = re.compile(r"https://github\.com/Veyllo-Labs/VAF#([^)\s]+)")
+_IN_PAGE = re.compile(r"\]\(#([^)\s]+)\)")
+
+
+def _heading_slugs(text: str) -> set:
+    """GitHub's heading anchors, approximately: lowercase, drop all but word characters,
+    hyphens and spaces, spaces become hyphens; headings inside fenced code are not headings."""
+    slugs, fenced = set(), False
+    for line in text.splitlines():
+        if line.lstrip().startswith(("```", "~~~")):
+            fenced = not fenced
+            continue
+        m = None if fenced else re.match(r"#{1,6}\s+(.*)", line)
+        if m:
+            slugs.add(re.sub(r"[^\w\- ]", "", m.group(1).strip().lower()).replace(" ", "-"))
+    return slugs
+
+
+def test_readme_links_into_the_repository_resolve():
+    """Links are claims too. The doc-link checker skips absolute links, and PyPI forces the
+    README to use them, so a renamed doc or heading would leave a dead link on the project's
+    front page. MUTATION: change the VPS anchor, rename its heading, point a link at a file
+    that does not exist, or make the pattern match nothing (floor) - red."""
+    text = _readme()
+    tracked = subprocess.run(["git", "ls-files"], capture_output=True, text=True,
+                             cwd=ROOT, check=True).stdout.split("\n")
+    tracked_set = set(tracked)
+    links = anchors = 0
+    for path, anchor in _REPO_LINK.findall(text):
+        links += 1
+        path = path.rstrip("/")
+        assert path in tracked_set or any(t.startswith(path + "/") for t in tracked), (
+            f"README links to {path}, which is not in the repository")
+        if anchor:
+            anchors += 1
+            target = (ROOT / path).read_bytes().decode("utf-8")
+            assert anchor in _heading_slugs(target), f"{path} has no heading for #{anchor}"
+    own = _heading_slugs(text)
+    for anchor in _BARE_ANCHOR.findall(text) + _IN_PAGE.findall(text):
+        anchors += 1
+        assert anchor in own, f"the README has no heading for #{anchor}"
+    assert links >= 50 and anchors >= 1, f"the scan checked too little: {links} links, {anchors} anchors"

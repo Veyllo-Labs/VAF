@@ -319,3 +319,34 @@ def test_a_server_installs_the_headless_python_set():
     assert 'REQUIREMENTS_FILE="$(python_requirements_file "$INSTALL_MODE")"' in SH
     assert 'python3 -m pip install -r "$REQUIREMENTS_FILE" --quiet' in SH
     assert "pip install -r requirements.txt" not in SH
+
+
+def _installer_flag_labels() -> set:
+    """The case labels of install.sh's argument loop, e.g. --profile from `--profile|--profile=*)`."""
+    block = SH.split("# ARGUMENT PARSING", 1)[1].split("# BANNER", 1)[0]
+    labels = set()
+    for line in block.splitlines():
+        m = re.match(r"\s+(-[^)\s]+)\)\s*$", line)
+        if m:
+            for label in m.group(1).split("|"):
+                label = re.sub(r"=\*$", "", label)
+                if label != "*":
+                    labels.add(label)
+    return labels
+
+
+def test_every_documented_install_sh_flag_is_one_the_installer_accepts():
+    """A flag the docs name and the parser does not know fails on a stranger's server, not
+    here. MUTATION: rename the --profile label in install.sh, or write --profiles in the README
+    block, or delete the README's server command (floor) - red."""
+    labels = _installer_flag_labels()
+    docs = [ROOT / "README.md"] + sorted((ROOT / "docs").rglob("*.md"))
+    found = set()
+    for path in docs:
+        text = path.read_bytes().decode("utf-8")
+        for m in re.finditer(r"install\.sh((?:\s+-{1,2}[A-Za-z][\w-]*(?:[ =](?!-)[\w.-]+)?)+)", text):
+            for flag in re.findall(r"(-{1,2}[A-Za-z][\w-]*)", m.group(1)):
+                found.add(flag)
+                assert flag in labels, f"{path.relative_to(ROOT)} names install.sh {flag}, the installer knows {sorted(labels)}"
+    assert {"--profile", "--server"} <= found, f"the scan found too little: {sorted(found)}"
+    assert "./install.sh --server --profile api" in (ROOT / "README.md").read_bytes().decode("utf-8")

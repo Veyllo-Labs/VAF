@@ -96,6 +96,14 @@ On **Linux**, the installer asks once which **installation mode** to use (macOS 
 ```
 Choose **[2] Server** for home servers, NAS devices, or any headless machine that should be reachable from other devices. See [docs/setup/SERVER_MODE.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/SERVER_MODE.md) for details.
 
+`install.sh` (Linux and macOS) also asks for the **profile**: **Full (local)**, the default, runs the models on this machine; **Lean (API)** downloads no chat, speech-to-text or text-to-speech model and uses what you set in Settings after the first login. See [docs/setup/INSTALL_PROFILES.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/INSTALL_PROFILES.md).
+
+**On a rented Linux server (VPS) without a GPU**, answer both questions on the command line:
+```bash
+./install.sh --server --profile api
+```
+After the first login, set the chat provider under Settings -> AI & Model. [On a rented server (VPS)](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/SERVER_MODE.md#on-a-rented-server-vps) covers the rest: a VPN instead of an open port, backups off the machine, and a health monitor.
+
 ---
 
 ## Keep VAF off the public internet
@@ -227,7 +235,7 @@ vaf run --web
 
 ## Models
 
-VAF works with **local GGUF models** and **cloud APIs**. On first start it downloads the default model and the llama-server backend automatically.
+VAF works with **local GGUF models** and **cloud APIs**. On first start it downloads the default model and the llama-server backend automatically, unless it was installed with the Lean profile (`--profile api`), which downloads neither and needs a cloud API.
 
 **Local (privacy-first):**
 - Any GGUF model (Llama 3, Mistral, Qwen, DeepSeek, etc.)
@@ -302,6 +310,7 @@ vaf prompt "..."     # One-shot prompt
 vaf tray             # Desktop app; in a terminal it shows the dashboard
 vaf server on|off|status
 vaf server provision # Re-run server-mode setup (certs, firewall, checks)
+vaf profile [local|api] # Local models or API providers only; no argument shows the current one
 
 vaf update           # Update to the latest release
 vaf update check     # Check if a newer release is available

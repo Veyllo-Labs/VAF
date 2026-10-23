@@ -70,7 +70,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   or the switch at the top of Settings > AI & Model changes an existing installation (it
   stops the local model server and the speech containers; `--prune` also removes the speech
   images), and both show what is left out and which setting still points at a local model.
-  The browser stays in both profiles.
+  The browser stays in both profiles. The README's installation steps now name the command
+  for a rented server without a GPU, and its command list names `vaf profile`.
 - **Backups.** `vaf backup create` writes everything VAF keeps into one encrypted file: the
   chats, memories and accounts (a dump of the database), the keys, the mail, message,
   calendar and contact databases, the people's working folders, the sandbox environment

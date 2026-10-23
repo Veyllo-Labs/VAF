@@ -1139,7 +1139,17 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
         _lifecycle(f"FATAL setup crash after Agent init: {_setup_err}")
         append_domain_log_always("headless", f"[FATAL] {traceback.format_exc()}")
         raise
-    
+
+    # No task before the one-time repair of the chats is over. It rewrites chat files, and a
+    # turn saved between its read and its write would be lost; this thread starts beside the
+    # web server, whose startup runs the same pass, so whichever comes first does it and the
+    # other waits (vaf/core/at_rest_migration.py, repair_context_copies_once).
+    try:
+        from vaf.core.at_rest_migration import repair_context_copies_once
+        repair_context_copies_once()
+    except Exception as _repair_err:
+        _lifecycle(f"Context state repair skipped: {_repair_err}")
+
     # Main Loop
     last_subagent_check = 0.0
     # Rooms are polled rather than pushed: a peer may be a foreign process that has

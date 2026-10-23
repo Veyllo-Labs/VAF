@@ -493,14 +493,26 @@ created: a database dump under `~/.vaf/vm-backups/`, and old config backups.
 Once per installation the same sweep also repairs the chats themselves. Earlier
 versions could carry one chat's saved context state (the compressed summary, decisions,
 goal, and the files and errors noted) into another chat when the agent moved between
-them, and save it there; every chat, archived ones included, whose saved context state
-is identical to another chat's loses that one entry, and nothing else in the file
-changes (not the transcript, not `updated_at`, not the file time the chat list sorts
-by). It reads and writes each chat through the same seam as everything above, so
-ciphertext stays ciphertext under the machine key, and a chat it cannot open is never
-written. `context_copy_sweep_done` records that the pass ran; it stays `false` while a
-chat could not be rewritten, and the chats of that state already rewritten are put back,
-so the next start finds the whole group again.
+them, and save it there. The repair finds every chat, archived ones included, whose saved
+context state is identical to another chat's, and removes that one entry from each of
+them. Nothing else in the file changes: not the transcript, not `updated_at`, and not the
+file time the chat list sorts by.
+
+- **All or nothing per group of identical chats.** Before the first chat of a group is
+  rewritten, the group goes into a journal (`maintenance/context_repair.json` beside the
+  config, encrypted like the stores). A start that finds a journal, after a crash or a
+  write that failed, first finishes that group. Without it, the chats already rewritten
+  would leave the rest looking unique for good.
+- **Ciphertext stays ciphertext.** Each chat is read and written through the same seam as
+  everything above, and a chat that was encrypted is written back encrypted even when
+  `file_encryption_enabled` is off. A chat it cannot open is never written.
+- **No turn runs during it.** The headless runner waits for the repair before its first
+  task, and the web server before it answers or starts a scheduler, because a turn saved
+  between the repair's read and its write would be lost.
+- **Done only when nothing is left open.** `context_copy_sweep_done` records that the
+  repair ran. It stays `false` while a chat could not be rewritten or could not be read
+  (for example because the key was not available at that start), and the next start runs
+  the repair again.
 
 **Downgrade:** `~/.vaf/config.json.pre-keyring.bak` is written once, before the
 first key is removed from config.json. Restoring it puts the keys back where an

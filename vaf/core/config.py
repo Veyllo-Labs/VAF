@@ -1210,7 +1210,7 @@ class Config:
         # history on disk longer. None of them is a personal preference.
         "file_encryption_enabled",
         "allow_plaintext_at_rest",
-        # The one-time repair's done-marker: set back to false, the next start rewrites
+        # The one-time repair's done flag: set back to false, the next start rewrites
         # every chat that shares a saved context state with another one, everyone's.
         "context_copy_sweep_done",
         "cli_password_gate",

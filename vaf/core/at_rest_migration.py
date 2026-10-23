@@ -23,10 +23,12 @@ backup still carrying a superseded memory key. Deleting a user's own files is
 not this function's call; telling them is.
 
 And it runs ONE one-time repair of the chats themselves
-(`_drop_shared_context_state`): the saved context state that one chat carried
+(`repair_context_copies_once`): the saved context state that one chat carried
 into another before the session loader cleared it on a switch. Once per
 installation, recorded by `context_copy_sweep_done` in the config, the same place
-this sweep records its other lasting decision (`allow_plaintext_at_rest`).
+this sweep records its other lasting decision (`allow_plaintext_at_rest`). The
+headless runner calls it too, before its first task, so no turn saves a chat
+while the repair rewrites it.
 
 Wired into the web/tray startup AND the CLI start path on purpose. Wiring a
 repair into one lane only is a mistake this repo has made before: a cleanup
@@ -35,22 +37,31 @@ records it was supposed to remove were permanent.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import threading
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional
 
 logger = logging.getLogger("vaf.core.at_rest_migration")
 
 _done = False
 
-# The one-time repair's done-marker. A config key beside `allow_plaintext_at_rest`
+# The one-time repair's done flag. A config key beside `allow_plaintext_at_rest`
 # rather than a step in vaf/core/migrations.py: those run inside Config.load(), in
 # every process and long before the keyring can open a chat, and must stay pure
 # transforms of the config dict.
 CONTEXT_COPY_SWEEP_DONE = "context_copy_sweep_done"
+
+# On-disk format tag of the repair's journal (`_journal_path`). The reader also takes
+# a journal without one. Pinned as a literal in tests/test_persisted_format_tags.py.
+CONTEXT_REPAIR_FORMAT = "ctxrepair-1-141182"
+
+_repair_lock = threading.Lock()
+_repair_ran = False
 
 
 def _migrate_file(path: Path) -> str:
@@ -151,19 +162,9 @@ def run_once(*, force: bool = False) -> Dict[str, object]:
             report["enforced"] = True
             logger.info("Every store is ciphertext; plaintext reads are now refused.")
 
-    # Once per installation, and marked done only when no rewrite failed, so a chat that
-    # could not be written gets the pass again at the next start.
-    try:
-        if not Config.get_bool(CONTEXT_COPY_SWEEP_DONE, False):
-            counts = _drop_shared_context_state(sealed.get("sessions"))
-            report["context_copies"] = counts
-            if counts["dropped"]:
-                logger.info("Dropped the saved context state of %d chat(s) that held the same "
-                            "state as another chat: %s", counts["dropped"], counts)
-            if not counts["failed"]:
-                Config.set(CONTEXT_COPY_SWEEP_DONE, True)
-    except Exception as e:
-        logger.warning("Context state repair skipped: %s", e)
+    counts = repair_context_copies_once()
+    if counts is not None:
+        report["context_copies"] = counts
 
     report["archives_pruned"] = _prune_context_archives(vaf_dir)
     report["payloads_pruned"] = _prune_orphan_payloads(vaf_dir)
@@ -237,8 +238,67 @@ def _context_state_key(data) -> Optional[str]:
     return json.dumps(content, sort_keys=True, ensure_ascii=False, default=str)
 
 
+def _state_digest(data) -> Optional[str]:
+    """`_context_state_key` as a short digest: what groups chats, and what the journal
+    records instead of the summaries themselves."""
+    key = _context_state_key(data)
+    return hashlib.sha256(key.encode("utf-8")).hexdigest() if key is not None else None
+
+
+def repair_context_copies_once() -> Optional[Dict[str, int]]:
+    """Run the one-time repair of the chats (`_drop_shared_context_state`) when it is due.
+
+    Once per process, and serialized. The web startup (in every lifespan, so the second
+    server of the TLS mode waits as well), the headless runner before its first task and
+    every CLI start path call it; whichever comes first runs the pass and the others wait
+    for it. That is what keeps a turn's save off a chat between the pass's read and its
+    write: `SessionManager.save` takes no lock the pass could hold, so the pass has to be
+    over before anything that saves chats starts. Returns the counts, or None when
+    nothing ran.
+
+    `context_copy_sweep_done` is set only after a pass that left nothing open: no
+    failed rewrite (a group left unfinished in the journal is one) and no chat it could
+    not read (a key that is not in the ring at this start would otherwise end the repair
+    with every copy still in place). Otherwise the next start runs it again.
+
+    NAMED BOUNDARY: a second VAF process that saves a chat while this one's pass runs
+    (a terminal app started in the seconds after the server, on an installation that has
+    not finished the pass) is not held off; nothing serializes saves across processes.
+    """
+    global _repair_ran
+    with _repair_lock:
+        if _repair_ran:
+            return None
+        _repair_ran = True
+        try:
+            from vaf.core import data_stores
+            from vaf.core.config import Config
+
+            if Config.get_bool(CONTEXT_COPY_SWEEP_DONE, False):
+                return None
+            counts = _drop_shared_context_state(data_stores.sealed_trees().get("sessions"))
+        except Exception as e:
+            logger.warning("Context state repair skipped: %s", e)
+            return None
+        if counts["dropped"]:
+            logger.info("Context state repair: dropped the saved context state of %d chat(s) "
+                        "that shared it with another chat.", counts["dropped"])
+        if counts["failed"]:
+            logger.warning("Context state repair incomplete, %d chat(s) could not be rewritten; "
+                           "it will run again at the next start.", counts["failed"])
+        if counts["unreadable"]:
+            logger.warning("Context state repair incomplete, %d chat(s) could not be read; "
+                           "it will run again at the next start.", counts["unreadable"])
+        if not (counts["failed"] or counts["unreadable"]):
+            try:
+                Config.set(CONTEXT_COPY_SWEEP_DONE, True)
+            except Exception as e:
+                logger.warning("Could not record the context state repair as done: %s", e)
+        return counts
+
+
 def _drop_shared_context_state(tree) -> Dict[str, int]:
-    """Drop the saved context state that one chat carried into another. Runs once.
+    """Drop the saved context state that one chat carried into another.
 
     Until the session loader cleared the agent's context manager on a switch, a chat with
     nothing saved (a contact's first message, a new web chat, another account's new chat
@@ -250,121 +310,127 @@ def _drop_shared_context_state(tree) -> Dict[str, int]:
     whose saved context state is identical to another chat's (`_context_state_key`)
     loses its `context` entry, the origin included. The origin loses only its LLM
     summary: its full transcript is replayed and compressed structurally on its next
-    load. Nothing else in the file changes: not the transcript, not the other
-    `runtime_state` keys (sidebar documents, editor selections, the other providers),
-    not `updated_at`, and not the file's modification time, which orders the chat list.
+    load, and the next compression in a turn writes a new summary. Nothing else in the
+    file changes: not the transcript, not the other `runtime_state` keys (sidebar
+    documents, editor selections, the other providers), not `updated_at`, and not the
+    file's modification time, which orders the chat list.
 
-    Chats are encrypted at rest, and stay so: each file is read through the session read
-    seam and written back through `data_files.write_bytes_atomic`, as a save would. A
-    file that cannot be read (a key the ring does not hold, a plaintext file in an
-    enforced store) is counted and never written. The rewrite reads the file again under
-    the session's append lock and drops the entry only while the file still holds the
-    shared state, so a turn saved since the scan is not replaced by an older copy. And
-    it is all or nothing per shared state: when one chat cannot be written, the chats
-    of the same state already rewritten are put back byte for byte, and the pass is not
-    marked done, so the next start finds the whole group again.
+    All or nothing per group of identical chats, a crash included. Before the first
+    write of a group its chats go into a journal (`_journal_path`, encrypted like the
+    stores); the journal is removed when the group is done. A start that finds one,
+    after a crash or a write that failed, finishes that group before anything else: it
+    drops the entry from every listed chat that still holds the same state. Without
+    that, the chats already rewritten would leave the rest looking unique for good.
+
+    Chats are encrypted at rest and stay so: each file is read through the session read
+    seam's decrypt and written back through `data_files.write_bytes_atomic`, as
+    ciphertext when it was ciphertext, whatever `file_encryption_enabled` says for new
+    writes. A file that cannot be read (a key the ring does not hold, a plaintext file in
+    an enforced store) is counted and never written. The rewrite reads the file again
+    under the session's append lock, which holds off the background appends, and drops
+    the entry only while the file still holds the shared state.
 
     NAMED BOUNDARY: legacy `.json.gz` chats are not read; the sealed globs leave them
-    out, and the loader prefers the `.json` a later save writes beside one. A turn that
-    loaded a copy-carrying chat before this pass and saves it afterwards writes the copy
-    back; the window is the first seconds after a start. And a copy is found only while
-    it is identical: an origin that later saved a different state leaves its copy alone.
+    out, and the loader prefers the `.json` a later save writes beside one. A copy is
+    found only while it is identical: an origin that later saved a different state
+    leaves its copy alone.
     """
-    counts = {"dropped": 0, "changed": 0, "unreadable": 0, "failed": 0, "put_back": 0}
+    counts = {"dropped": 0, "changed": 0, "gone": 0, "unreadable": 0, "failed": 0}
     if not tree:
         return counts
-    root, patterns = tree
-    sessions_dir = Path(root) / "sessions"
-    if not sessions_dir.is_dir():
+    root, patterns = Path(tree[0]), tree[1]
+    if not (root / "sessions").is_dir():
         return counts
+
+    # A group a start before this one left unfinished goes first.
+    try:
+        journal = _read_journal()
+    except Exception as e:
+        logger.warning("The context state repair journal could not be read: %s", e)
+        counts["unreadable"] += 1
+        return counts
+    if journal is not None:
+        state, chats = journal
+        if not _rewrite_group(root, chats, state, counts):
+            return counts
+        _clear_journal()
 
     from vaf.core.session import SessionManager
 
-    reader = SessionManager(storage_dir=str(sessions_dir))
+    reader = SessionManager(storage_dir=str(root / "sessions"))
     groups: Dict[str, List[Path]] = {}
     for pattern in patterns:
-        for path in sorted(Path(root).glob(pattern)):
+        for path in sorted(root.glob(pattern)):
             if not path.is_file() or path.suffix == ".gz":
                 continue
             try:
-                key = _context_state_key(reader._read_session_file(path))
+                state = _state_digest(reader._read_session_file(path))
             except Exception:
                 counts["unreadable"] += 1
                 continue
-            if key is not None:
-                groups.setdefault(key, []).append(path)
+            if state is not None:
+                groups.setdefault(state, []).append(path)
 
-    for key, paths in groups.items():
+    for state, paths in groups.items():
         if len(paths) < 2:
             continue
-        # All or nothing per shared state: once one chat has lost the entry, a chat that
-        # kept it because its write failed would look unique at the next start and never
-        # be found again. So a failure puts the files already rewritten back as they were.
-        rewritten = []
-        failed = False
-        for path in paths:
-            result, before = _drop_context_entry(path, key)
-            if result == "dropped":
-                rewritten.append((path, before))
-            elif result == "failed":
-                counts["failed"] += 1
-                failed = True
-                break
-            else:
-                counts[result] += 1
-        if failed:
-            for path, before in rewritten:
-                _put_back(path, before)
-            counts["put_back"] += len(rewritten)
-        else:
-            counts["dropped"] += len(rewritten)
+        chats = [path.relative_to(root).as_posix() for path in paths]
+        if not _write_journal(state, chats):
+            counts["failed"] += len(chats)
+            break
+        if not _rewrite_group(root, chats, state, counts):
+            break  # the journal stays: the next start finishes this group first
+        _clear_journal()
     return counts
 
 
-def _drop_context_entry(path: Path, key: str):
-    """Remove the `context` provider entry from one chat file that still holds `key`.
+def _rewrite_group(root: Path, chats: List[str], state: str, counts: Dict[str, int]) -> bool:
+    """Drop the entry from every chat of one group; True when none is left open."""
+    done = True
+    for rel in chats:
+        result = _drop_context_entry(root / rel, state)
+        counts[result] += 1
+        if result in ("failed", "unreadable"):
+            done = False
+    return done
 
-    Returns `(result, before)`: result is 'dropped', 'changed' (the file no longer holds
-    that state), 'unreadable' or 'failed' (the write did not happen; the file is as it
-    was), and `before` the file's bytes and stat as they were read, for `_put_back`."""
+
+def _drop_context_entry(path: Path, state: str) -> str:
+    """Remove the `context` provider entry from one chat file that still holds `state`.
+
+    Returns 'dropped', 'changed' (the file no longer holds that state), 'gone' (the chat
+    was deleted), 'unreadable' or 'failed' (the write did not happen; the file is as it
+    was)."""
     from vaf.core import data_files
     from vaf.core.session import _append_lock
 
     with _append_lock(path.name[: -len(".json")]):
         try:
-            before = (path.read_bytes(), path.stat())
-            # The session read seam's own decrypt (SessionManager._read_session_file), on
-            # the very bytes that `_put_back` would restore.
-            data = json.loads(data_files.decrypt_bytes(before[0]).decode("utf-8"))
+            raw = path.read_bytes()
+            stat = path.stat()
+        except FileNotFoundError:
+            return "gone"
+        except OSError:
+            return "unreadable"
+        try:
+            data = json.loads(data_files.decrypt_bytes(raw).decode("utf-8"))
         except Exception:
-            return "unreadable", None
-        if _context_state_key(data) != key:
-            return "changed", None
+            return "unreadable"
+        if _state_digest(data) != state:
+            return "changed"
         data["runtime_state"]["providers"].pop("context", None)
         # The serialization SessionManager.save writes, lone surrogates replaced alike.
         payload = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8", errors="replace")
         try:
-            data_files.write_bytes_atomic(path, payload)
+            # Ciphertext stays ciphertext: with file_encryption_enabled off, new writes are
+            # plaintext, but a repair must not turn a chat nobody touched into one.
+            data_files.write_bytes_atomic(
+                path, payload, encrypt=True if data_files.is_encrypted(raw) else None)
         except Exception as e:
             logger.warning("Could not drop the copied context state from %s: %s", path.name, e)
-            return "failed", None
-        _keep_mtime(path, before[1])
-    return "dropped", before
-
-
-def _put_back(path: Path, before) -> None:
-    """Write a chat file's earlier bytes back unchanged (already ciphertext, if they were)."""
-    from vaf.core import data_files
-    from vaf.core.session import _append_lock
-
-    raw, stat = before
-    with _append_lock(path.name[: -len(".json")]):
-        try:
-            data_files.write_bytes_atomic(path, raw, encrypt=False)
-        except Exception as e:
-            logger.warning("Could not put %s back after a failed repair: %s", path.name, e)
-            return
+            return "failed"
         _keep_mtime(path, stat)
+    return "dropped"
 
 
 def _keep_mtime(path: Path, stat) -> None:
@@ -372,6 +438,53 @@ def _keep_mtime(path: Path, stat) -> None:
     try:
         os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
     except OSError:
+        pass
+
+
+def _journal_path() -> Path:
+    """Where an unfinished group is recorded: a runtime file of the maintenance folder,
+    never backed up (vaf/core/data_stores.py)."""
+    from vaf.core.config import Config
+    return Path(Config.APP_DIR) / "maintenance" / "context_repair.json"
+
+
+def _write_journal(state: str, chats: List[str]) -> bool:
+    from vaf.core import data_files
+    try:
+        data_files.write_json_atomic(
+            _journal_path(), {"format": CONTEXT_REPAIR_FORMAT, "state": state, "chats": chats})
+        return True
+    except Exception as e:
+        logger.warning("Could not write the context state repair journal: %s", e)
+        return False
+
+
+def _read_journal():
+    """`(state, chats)` of an unfinished group, or None when there is none. Raises when a
+    journal is there and cannot be used: a group must never be guessed at."""
+    from vaf.core import data_files
+
+    path = _journal_path()
+    if not path.exists():
+        return None
+    data = json.loads(data_files.read_bytes(path).decode("utf-8"))
+    if not isinstance(data, dict) or data.get("format", CONTEXT_REPAIR_FORMAT) != CONTEXT_REPAIR_FORMAT:
+        raise ValueError("not a journal this version writes")
+    state, chats = data.get("state"), data.get("chats")
+    if not isinstance(state, str) or not isinstance(chats, list):
+        raise ValueError("the journal is incomplete")
+    for rel in chats:
+        # Only chat files of the sessions store, never a path out of it.
+        parts = PurePosixPath(str(rel)).parts
+        if not parts or parts[0] != "sessions" or ".." in parts or not str(rel).endswith(".json"):
+            raise ValueError(f"the journal names a file outside the chats: {rel!r}")
+    return state, [str(rel) for rel in chats]
+
+
+def _clear_journal() -> None:
+    try:
+        _journal_path().unlink()
+    except FileNotFoundError:
         pass
 
 

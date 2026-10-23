@@ -1743,6 +1743,16 @@ async def startup_event():
         except Exception as e:
             log("WebServer", f"Maintenance broadcast not started: {e}")
 
+    # Every lifespan waits for the one-time repair of the chats before it serves anything or
+    # starts a scheduler. In TLS mode two servers share this app and only one of them runs
+    # run_once above; the other would otherwise answer the web UI while that pass rewrites
+    # the chats (vaf/core/at_rest_migration.py, repair_context_copies_once).
+    try:
+        from vaf.core.at_rest_migration import repair_context_copies_once
+        await asyncio.to_thread(repair_context_copies_once)
+    except Exception as e:
+        log("WebServer", f"Context state repair skipped: {e}")
+
     # Whare Wananga EAGER: opt-in background scanner that proactively trains safe, configured,
     # not-yet-learned tools (off by default; tolerates a not-yet-built agent). Guarded.
     try:

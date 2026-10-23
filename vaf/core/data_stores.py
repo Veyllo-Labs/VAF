@@ -117,7 +117,9 @@ STORES: Tuple[Store, ...] = (
     _s("app", "user_profile_cache", DERIVED, "vaf/memory/rag.py", harden=True),
     _s("app", "tag_links.json", DATA, "vaf/memory/tag_links.py"),
     _s("app", "compaction_state.json", DERIVED, "vaf/memory/rag.py"),
-    _s("app", "maintenance", RUNTIME, "vaf/memory/reembed.py"),
+    _s("app", "maintenance", RUNTIME, "vaf/memory/reembed.py",
+       "the re-embed status and lock; the journal of an unfinished context state repair "
+       "(vaf/core/at_rest_migration.py)"),
     _s("app", "firewalld_lan.json", DERIVED, "vaf/network/firewall.py"),
     _s("app", "ufw_sources.json", DERIVED, "vaf/network/firewall.py"),
     _s("app", "ssl", RECREATABLE, "vaf/network/ssl_utils.py", "browsers trust this authority"),

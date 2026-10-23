@@ -122,6 +122,8 @@ def test_format_identities_are_pinned_literals():
     assert RECOVERY_FORMAT == "recovery-2-3d8a51"
     from vaf.core.backup import BACKUP_FORMAT
     assert BACKUP_FORMAT == "vafbackup-1-5e2c90"
+    from vaf.core.at_rest_migration import CONTEXT_REPAIR_FORMAT
+    assert CONTEXT_REPAIR_FORMAT == "ctxrepair-1-141182"
 
 
 def test_chain_with_versioned_seed_verifies():

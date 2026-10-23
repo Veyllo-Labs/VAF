@@ -736,7 +736,8 @@ registered verifier the real client's address when the verifier's signature name
 and `_client_slot` in `vaf/core/a2a/wire.py`): by position when that parameter is
 positional-only right after the credential, by keyword otherwise, on every call, with an
 address or without. A plain verifier that takes `**kwargs` gets the address too; only a
-`functools.wraps` wrapper is read through to what it wraps (the boundary below).
+wrapper that exposes `__wrapped__` (as `functools.wraps` sets it) is read through to what it
+wraps (the boundary below).
 `client_ip=None` means the client is not known; the verifier receives that None and decides
 (VAF's own then skips its address rule), so a door must pass the address it has. Only a
 verifier whose signature names neither is called with the credential alone. The door could
@@ -749,10 +750,11 @@ the outermost layer's own signature decides when it names `client_ip`; otherwise
 signature at the end of the `__wrapped__` chain does (the innermost function, or the first
 layer on the way that declares a `__signature__`), and the layers in between are not read.
 So a decorator that adds the address must be the outermost layer, or name `client_ip`
-itself: below another `functools.wraps` layer (a logging wrapper, `lru_cache`) or a
-`staticmethod` it is read past, and the verifier is called with the credential alone. A
-wrapper that takes the address only through `**kwargs` is read past even as the outermost
-layer, since it cannot be told apart from a plain logging decorator. A declared
+itself: below another layer that exposes `__wrapped__` (as `functools.wraps` sets it: a
+logging wrapper, `lru_cache`) or a `staticmethod` it is read past, and the verifier is called
+with the credential alone. A wrapper that exposes `__wrapped__` and takes the address only
+through `**kwargs` is read past even as the outermost layer, since it cannot be told apart
+from a plain logging decorator. A declared
 `__signature__` (a Signature or a signature string) that leaves `client_ip` out is taken at
 its word. VAF's
 verifier refuses a session of the window on the host machine presented from another address. **There is no fallback**: no credential

@@ -85,10 +85,11 @@ def set_credential_verifier(verify) -> None:
     decides (the innermost function, or the first layer on the way that declares a
     ``__signature__``), and the layers in between are not read. So a decorator that adds
     the address must be the outermost layer, or name ``client_ip`` itself: below another
-    ``functools.wraps`` layer (a logging wrapper, ``lru_cache``) or a ``staticmethod`` it is
-    read past, and the verifier is called with the credential alone. A wrapper that takes
-    the address only through ``**kwargs`` is read past even as the outermost layer, since
-    it cannot be told apart from a plain logging decorator. A declared ``__signature__``
+    layer that exposes ``__wrapped__`` (as ``functools.wraps`` sets it: a logging wrapper,
+    ``lru_cache``) or a ``staticmethod`` it is read past, and the verifier is called with
+    the credential alone. A wrapper that exposes ``__wrapped__`` and takes the address only
+    through ``**kwargs`` is read past even as the outermost layer, since it cannot be told
+    apart from a plain logging decorator. A declared ``__signature__``
     (a Signature or a signature string) that leaves ``client_ip`` out is taken at its word.
     """
     global _verifier
@@ -130,13 +131,15 @@ def _client_slot(verify) -> Optional[str]:
 
     The outermost layer's own signature (``follow_wrapped=False``: a callable object's
     ``__call__``, for a ``partial`` the function it binds) decides when it names
-    ``client_ip``: a ``functools.wraps`` decorator that adds the address check reports the
-    wrapped signature, and read through it would be called without the address. Otherwise
+    ``client_ip``: a decorator that adds the address check and exposes ``__wrapped__`` (as
+    ``functools.wraps`` sets it) reports the wrapped signature, and read through it would be
+    called without the address. Otherwise
     the signature ``inspect`` finds at the end of the ``__wrapped__`` chain decides: the
     innermost function, or the first layer that declares a ``__signature__``, which is taken
     at its word. The layers in between are not read, so a decorator that adds the address
     below another wrapper is read past (the named boundary in ``set_credential_verifier``),
-    while a plain ``(*args, **kwargs)`` wrapper is called as its wrapped function asks.
+    while a plain ``(*args, **kwargs)`` wrapper that exposes ``__wrapped__`` is called as its
+    wrapped function asks.
 
     Raises TypeError when the address could not be handed over: a signature that cannot be
     read may hide a ``client_ip``, and a positional-only ``client_ip`` anywhere else has no

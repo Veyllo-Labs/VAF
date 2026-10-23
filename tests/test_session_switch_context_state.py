@@ -25,8 +25,12 @@ MUTATIONS, each turns the named tests red:
 - M3 drop the reset from `init_chat` -> the init_chat and clear tests;
 - M4 plain `init_chat()` in the loader's try branch -> the account test's second half and the
   keep-site guard;
-- M9 the loader without its fail-closed branch -> the failed-switch test;
+- M9 the loader without its fail-closed branch, or a half of it (the context variable, the
+  working memory, the caller's identity) -> the failed-switch test;
 - M10 reset on a rebuild of the same chat too -> the same-chat test;
+- M11 restore the saved snapshot on a rebuild of the same chat -> the newer-live-state test;
+- M12 the runner runs the turn after a failed load, or does not answer it -> the two
+  failed-load tests;
 - M5 reset after `SessionManager.load` -> the account test's second half;
 - M6 declare the session after `init_chat` again -> the system message test;
 - M7 reset by building a new `ContextManager` -> the init_chat test;
@@ -54,6 +58,7 @@ DOC_ONLY_SESSION = "web-doc-only"
 
 OWNER_SCOPE = "6f9619ff-8b86-d011-b42d-00c04fc964ff"
 OTHER_SCOPE = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"
+CALLER_SCOPE = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
 
 OWNER_TAG = "OWNER7Q"
 OTHER_TAG = "OTHER7Q"
@@ -302,6 +307,9 @@ def test_a_switch_that_fails_holds_no_chat(make_agent, monkeypatch):
     the prompt build fails in both branches) must not leave the agent claiming the new
     chat while it holds the previous chat's history: every later load of that chat would
     return early on the claim, and a turn would run on another account's messages."""
+    from vaf.core.identity_binding import Identity, bind_identity
+    from vaf.core.subagent_ipc import get_current_session_id
+
     _seed(OTHER_NEW_SESSION, scope=OTHER_SCOPE)
     agent = make_agent()
     agent.load_session_context(OWNER_SESSION)
@@ -311,12 +319,20 @@ def test_a_switch_that_fails_holds_no_chat(make_agent, monkeypatch):
     def broken(**kw):
         raise RuntimeError("the prompt could not be built")
 
+    # The caller binds the turn's identity before the load, as the runner does from the task.
+    caller = Identity(scope=CALLER_SCOPE, username="carol", role="user")
+    bind_identity(agent, caller)
     monkeypatch.setattr(agent, "init_chat", broken)
     with pytest.raises(RuntimeError):
         agent.load_session_context(OTHER_NEW_SESSION)
 
     assert agent.history == [], "the failed switch kept the previous chat's history"
     assert agent.current_session_id is None, "the failed switch still claims the new chat"
+    assert get_current_session_id() is None and agent._dispatch_session_id() is None, \
+        "a tool dispatched now would run under the chat that failed to load"
+    assert agent.main_persistence is None, "the failed chat's working memory is still bound"
+    assert (agent._current_user_scope_id, agent._current_username) == (CALLER_SCOPE, "carol"), \
+        "the identity is not the one the caller bound"
 
     monkeypatch.setattr(agent, "init_chat", real_init_chat)
     agent.load_session_context(OTHER_NEW_SESSION)
@@ -347,6 +363,69 @@ def test_a_rebuild_of_the_same_chat_keeps_its_state(make_agent):
     assert any("Termin um neun" in str(m.get("content")) for m in agent.history), \
         "the appended message was not read in"
     assert agent.context_manager.state.narrative_summary == f"{OWNER_TAG}SUMMARY"
+
+
+def test_a_rebuild_keeps_a_newer_live_state_over_the_chats_saved_one(make_agent):
+    """The chat's file holds a snapshot older than what the agent noted since. A forced
+    rebuild of the same chat must not put the older one back; a switch away and back does
+    restore the saved one. The context broadcast that ends every load restores the saved
+    snapshot on its own and is held off, so this pins the loader."""
+    agent = make_agent()
+    agent._broadcast_context_status = lambda: None
+    agent.load_session_context(OWNER_SESSION)
+    agent.context_manager.state.narrative_summary = "LIVE7QSUMMARY newer than the file"
+    agent.context_manager.state.key_decisions.append("LIVE7QDECISION")
+
+    agent.load_session_context(OWNER_SESSION, force=True)
+
+    assert agent.context_manager.state.narrative_summary == "LIVE7QSUMMARY newer than the file"
+    assert "LIVE7QDECISION" in agent.context_manager.state.key_decisions
+
+    _seed(OTHER_NEW_SESSION, scope=OTHER_SCOPE)
+    agent.load_session_context(OTHER_NEW_SESSION)
+    agent.load_session_context(OWNER_SESSION)
+    assert agent.context_manager.state.narrative_summary == f"{OWNER_TAG}SUMMARY"
+
+
+def test_a_chat_that_did_not_load_is_answered_as_failed(monkeypatch):
+    """The runner does not run a turn on a chat that did not load: the agent holds no chat
+    then, and storing the exchange could replace a chat file that did not load because it
+    could not be read. It answers like a turn that raised: the error in the web UI's
+    timeline, the turn closed, and the usual failure reply on a messenger."""
+    import vaf.core.headless_runner as hr
+
+    seen = []
+
+    class _Web:
+        def log(self, text, **kw):
+            seen.append(("log", kw.get("level"), kw.get("session_id")))
+
+        def emit_message_complete(self, content="", session_id=None):
+            seen.append(("complete", content, session_id))
+
+    monkeypatch.setattr(hr, "get_web_interface", lambda: _Web())
+    monkeypatch.setattr(hr, "_send_turn_error_reply",
+                        lambda task, error, contact=None: seen.append(("reply", task.session_id)))
+    task = SimpleNamespace(session_id=CONTACT_SESSION, source="whatsapp", input_text="Hallo",
+                           metadata={"from_contact": True})
+
+    hr.answer_failed_load(task, RuntimeError("the chat could not be read"))
+
+    assert seen == [("log", "error", CONTACT_SESSION), ("complete", "", CONTACT_SESSION),
+                    ("reply", CONTACT_SESSION)]
+
+
+def test_the_runner_runs_no_turn_on_a_chat_that_did_not_load():
+    """MUTATION: drop the `continue`, or the answer, from the load's except branch - red."""
+    import inspect
+
+    import vaf.core.headless_runner as hr
+
+    loop = inspect.getsource(hr.run_headless_agent).replace("\r\n", "\n")
+    failed = loop.split('print(f"[Headless] Failed to load session context: {e}")', 1)[1]
+    branch = failed.split("# Process Input", 1)[0]
+    assert "answer_failed_load(task, e)" in branch
+    assert "continue" in branch.split("answer_failed_load(task, e)", 1)[1]
 
 
 def test_init_chat_starts_a_fresh_conversation_unless_told_to_keep_it(make_agent):

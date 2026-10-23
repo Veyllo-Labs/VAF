@@ -373,6 +373,28 @@ def _send_turn_error_reply(task, error, contact=None) -> None:
         pass
 
 
+def answer_failed_load(task, error) -> None:
+    """Close a chat turn whose chat could not be loaded, the way a turn that raised is closed.
+
+    The turn does not run. The agent holds no chat after a failed load
+    (`Agent.load_session_context` fails closed): no history to answer from, and no chat
+    to store the exchange in. Storing it anyway could replace a chat file that did not
+    load because it could not be read, which is still recoverable. The web UI gets the
+    error in the chat's timeline and its turn closed; a messenger gets the usual failure
+    reply (`_send_turn_error_reply`, the fixed sentence for a contact). Never raises."""
+    try:
+        get_web_interface().log(
+            f"The chat could not be loaded for session {task.session_id}: {error}",
+            level="error", source="System", session_id=task.session_id)
+    except Exception:
+        pass
+    try:
+        get_web_interface().emit_message_complete(content="", session_id=task.session_id)
+    except Exception:
+        pass
+    _send_turn_error_reply(task, error)
+
+
 def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=None,
                            turn: TurnStatus = TurnStatus()) -> None:
     """Send a finished turn's answer back where the task came from: Telegram, Discord,
@@ -1487,9 +1509,16 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     _apply_channel_history_window(agent, getattr(task, "source", None))
                 except Exception as e:
                     print(f"[Headless] Failed to load session context: {e}")
-                    # Create fallback session?
-                    # valid session is needed for chat_step to work properly with history
-                    pass
+                    if not str(task.input_text).startswith("__CMD__"):
+                        # A chat turn on a chat that did not load is answered as failed and
+                        # does not run (answer_failed_load). A command still runs: it is no
+                        # turn on that chat, and LOAD_SESSION loads the chat it names itself.
+                        answer_failed_load(task, e)
+                        try:
+                            tq.task_done(task=task)
+                        except Exception:
+                            tq.task_done()
+                        continue
 
                 # Process Input
                 input_text = task.input_text

@@ -5631,6 +5631,11 @@ class Agent:
         # A rebuild of the chat this agent is already on (force, a background append) is
         # the same conversation, and keeps its context state like the model swap does.
         same_chat = getattr(self, "current_session_id", None) == session_id
+        # The identity the caller bound before the load (the runner from the task, the
+        # facade and the thinking lane from their own caller). The load replaces it with
+        # the target session's owner; a failed load gives it back (below).
+        caller_identity = (getattr(self, "_current_user_scope_id", None),
+                           getattr(self, "_current_username", None))
 
         # Declare the target BEFORE anything is built for it. init_chat below builds the
         # system message from current_session_id (the workspace line) and its prompt
@@ -5647,10 +5652,18 @@ class Agent:
             # Fail closed. The target is already declared, so a load that dies here would
             # leave the agent claiming the new chat while it holds the previous chat's
             # history (another account's, on a runner worker), and every later load of
-            # that chat would return early on the claim. Holding nothing and claiming
-            # nothing, the next load rebuilds.
+            # that chat would return early on the claim. So it holds no history, claims no
+            # session (neither the attribute nor the context variable, which the tool
+            # dispatch reads first) and has no working memory bound; the identity is the
+            # one the caller bound, not the owner the target's file named. The next load
+            # rebuilds; the runner answers the turn as failed and does not run it.
             self.history = []
             self.current_session_id = None
+            set_current_session_id(None)
+            self.main_persistence = None
+            if getattr(self, "prompt_manager", None) is not None:
+                self.prompt_manager.mpm = None
+            self._current_user_scope_id, self._current_username = caller_identity
             raise
 
     def _enter_session(self, session_id: str, *, same_chat: bool) -> None:
@@ -5664,8 +5677,14 @@ class Agent:
         # The restore only touches the providers a snapshot carries, and a chat without
         # one (no file yet, a file the web wrote without runtime_state, a runtime_state
         # holding only sidebar documents) used to keep whatever the previous chat left.
-        # The same chat keeps its state: a terminal chat stores no snapshot, so a reset
-        # here would lose its summary to every background append.
+        # The same chat keeps its state, the live one: a terminal chat stores no snapshot,
+        # so a reset would lose its summary to every background append, and the load below
+        # does not restore a chat's saved state over its newer live one either.
+        #
+        # NAMED BOUNDARY: `_broadcast_context_status`, which ends every load and every
+        # turn, reloads the session with the state registry and so still restores its
+        # saved snapshot; a chat WITH one gets the saved state back after this rebuild
+        # until that broadcast reads the file without restoring.
         if not same_chat:
             self._reset_chat_state()
 
@@ -5674,7 +5693,7 @@ class Agent:
         # CRITICAL: Pass state_registry so runtime state (ContextManager, etc.) is restored
         sm = SessionManager(state_registry=self.state_registry)
         try:
-            session = sm.load(session_id)
+            session = sm.load(session_id, restore_state=not same_chat)
             # Set current user from session metadata so build_prompt() shows the right User identity.
             # Assign UNCONDITIONALLY (including None): switching to a session that has no owner must
             # RESET the in-memory identity, otherwise the previous session's user_scope_id/username

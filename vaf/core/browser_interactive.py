@@ -31,7 +31,14 @@ on those by itself, but it builds its SOCKET url from settings
 `/websockify` that does not exist here. The settings are overridable per URL, so
 `_payload` hands the ticketed socket path over in `?path=` - see the comment
 there. The ticket is the credential (the same pattern as the A2A room seat lane),
-which is why the path is auth-middleware-exempt.
+which is why the path is auth-middleware-exempt. A socket outlives its request,
+so validating the ticket at connect is not enough: the relay keeps the grant
+object the ticket resolved to and asks `grant_current` on every message it
+passes, in both directions, with a watchdog for a socket that carries none. When
+the lease or the run's watch grant ends (a stop, a takeover, a newer window, an
+admin, the run's end, a revoked account), its sockets close with 4403 and no
+frame or keystroke crosses after the end - otherwise an open socket went on
+showing, and driving, the browser of whoever held it next.
 
 Placement: vaf/core beside web_interface/web_server (harness internals per
 docs/ARCHITECTURE.md). vaf/tools/browser_agent.py imports THIS module (tools ->
@@ -921,9 +928,11 @@ class AgentStream:
     would drive, instead of a rebuilt chrome bar over 1.5s screenshots - but
     the person must not be able to type into a browser the agent is driving,
     so the stream URL carries the viewer's view_only setting and the grant is
-    emitted only to the chat session that owns the run. The ticket dies with
-    the run. Screenshots keep streaming regardless: they are the fallback for
-    the lanes without a grant (workflow tile, spawned child)."""
+    emitted only to the chat session that owns the run. Minted only once the run
+    holds the browser (after its handover), and the ticket dies with the run or
+    with the next grant, closing every socket opened on it. Screenshots keep
+    streaming regardless: they are the fallback for the lanes without a grant
+    (workflow tile, spawned child)."""
 
     session_id: str
     ticket: str
@@ -940,6 +949,12 @@ class InteractiveBrowserManager:
     # generous: reading without touching anything is normal browsing, so
     # "activity" is an open stream connection, not input.
     GRACE_S = 120.0
+    # How often an open stream socket that carries no traffic asks whether its
+    # grant still stands. Only the close of a QUIET socket waits for this: the
+    # relay checks the grant on every message it passes, so no byte crosses after
+    # the grant's end whatever the interval is. Measured: the check over 100
+    # sockets costs 0.29 % of one core at 0.25 s and 0.05 % at 1 s.
+    STREAM_RECHECK_S = 0.5
     # What separates the protocol handshake from the first real picture. Measured
     # against this container: the ENTIRE handshake is 45 bytes (greeting 12,
     # security types 2, result 4, ServerInit 27) and the first framebuffer update is
@@ -1028,6 +1043,10 @@ class InteractiveBrowserManager:
         # that run's give-back. Kept apart from _pre_agent_holder, which belongs
         # to a run of this browser.
         self._elsewhere_holder: Optional[tuple] = None
+        # A browser that can hold a lease is one a revoked account must lose. Here,
+        # where every manager comes into being (the shared one and each pooled
+        # one), so no creation path can leave a lease without the listener.
+        _ensure_revocation_listener()
 
     # -- environment -------------------------------------------------------
     def cdp_base(self) -> str:
@@ -1508,11 +1527,17 @@ class InteractiveBrowserManager:
     def agent_stream_started(self, session_id: Optional[str]) -> None:
         """Grant the run's own chat window a watch-only live stream of the run.
 
+        Called once the run HOLDS the browser, right after its handover
+        (BrowserAgentTool._run_browser): before it, the browser still shows the
+        previous holder's state, or a probe of another process the handover waits
+        out. A refused handover raises first and grants nothing.
+
         In-process lane only: in a spawned child this manager is not the one
         the web server's proxy validates tickets against, so a grant made
         there would be a link to a 403 - the child lane keeps the screenshot
         view. Emitted only to the session that owns the run; the ticket IS the
-        capability, so nobody else may receive it."""
+        capability, so nobody else may receive it. A grant replaced here ends,
+        and so do the sockets opened on it (`grant_current`)."""
         if not session_id:
             return
         if os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip().lower() in ("1", "true", "yes"):
@@ -1899,9 +1924,29 @@ class InteractiveBrowserManager:
         return None
 
     def validate_ticket(self, ticket: str):
-        """The proxy's auth gate: a lease's ticket or a run's watch-only ticket."""
+        """The proxy's auth gate: a lease's ticket or a run's watch-only ticket.
+        Returns the grant itself, which the stream relay keeps for `grant_current`."""
         with self._lock:
             return self._match_ticket(ticket)
+
+    def grant_current(self, grant) -> bool:
+        """Is this grant (what validate_ticket returned) still this browser's lease
+        or its run's watch grant? The stream relay asks on every message it passes
+        and a watchdog asks for a quiet socket; False ends the socket.
+
+        Derived from the two fields every grant change writes, so no end of a grant
+        can be missed by it, present or future: a stop, a takeover, a newer window,
+        an admin, the run's end, a new watch grant all replace or clear one of them.
+        IDENTITY, not ticket equality: the same window's refresh keeps its lease
+        object and so keeps its socket, and a grant of another kind can never stand
+        in for the one a socket was opened on (a lease socket is never turned into a
+        watch socket).
+
+        Deliberately without the lock. It runs per message on the server's event
+        loop, which must never wait for a worker thread inside a handover, and the
+        writes it reads are single reference assignments under the lock: a reader
+        sees the old or the new object, never a torn one."""
+        return grant is not None and (grant is self._lease or grant is self._agent_stream)
 
     def stream_connected(self, ticket: str) -> bool:
         with self._lock:
@@ -2141,6 +2186,52 @@ def _all_managers() -> List[InteractiveBrowserManager]:
     return managers
 
 
+def _on_account_revoked(user_scope_id: str) -> None:
+    """Revocation listener (vaf.core.revocation): a revoked account loses the browser.
+
+    Every lease of that scope, on every browser, is stopped like any other end of a
+    lease: its cookies are exported, its downloads drained, its holder entry released,
+    and the sockets opened on it close (`grant_current`). Leases of other scopes are
+    untouched: the stop names the scope as its requester, so a lease that changed
+    hands between the look and the stop is refused, not ended. The account's watch
+    grant ends with its run, which the same revocation stops.
+
+    Only a REVOCATION (deactivation, deletion). The listeners also hear a demotion and
+    a narrowed allowlist (`stop_account_work`), and those leave the browser alone: a
+    lease carries neither the role nor the allowlist - start() reads neither, beyond
+    an admin's eviction at the moment of the start - so ending it would take the
+    browser from a person who may open it again at once.
+
+    Runs on the revoking thread, where the blocking stop is allowed. Never raises."""
+    try:
+        from vaf.core.revocation import is_revoked
+        key = str(user_scope_id or "").strip()
+        if not key or not is_revoked(key):
+            return
+        for mgr in _all_managers():
+            with mgr._lock:
+                lease = mgr._lease
+                scope = lease.user_scope_id if lease is not None else None
+            if scope is None or str(scope).strip() != key:
+                continue
+            try:
+                mgr.stop("account_revoked", requester_scope=scope)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _ensure_revocation_listener() -> None:
+    """Register `_on_account_revoked` once; `add_revocation_listener` ignores a
+    listener it already holds. Called by every manager's constructor."""
+    try:
+        from vaf.core.revocation import add_revocation_listener
+        add_revocation_listener(_on_account_revoked)
+    except Exception:
+        pass
+
+
 def peek_manager_for_container(container_name: str) -> Optional[InteractiveBrowserManager]:
     """Registry lookup without side effects - the pool's reaper asks here."""
     if container_name == "vaf-browser":
@@ -2339,8 +2430,9 @@ def give_back_pending(container_name: Optional[str] = None) -> bool:
 
 def agent_stream_started(session_id: Optional[str],
                          container_name: Optional[str] = None) -> None:
-    """Hook for BrowserAgentTool.run()'s in-process lane: grant the run's own
-    window a watch-only live stream of the run's own browser. Never raises."""
+    """Hook for BrowserAgentTool._run_browser, right after the run's handover (the
+    in-process lane): grant the run's own window a watch-only live stream of the
+    run's own browser. Never raises."""
     try:
         _manager_for_run(container_name).agent_stream_started(session_id)
     except Exception:

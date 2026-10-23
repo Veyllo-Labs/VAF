@@ -10,7 +10,11 @@ that the storage-state file format round-trips unchanged between the export
 and the load side (the agent's persistent sessions read the same files).
 """
 
+import asyncio
 import json
+import threading
+import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -1391,3 +1395,468 @@ def test_the_suite_cannot_run_a_command_in_a_real_container():
         r = containers.docker(["exec", "vaf-test-no-such-container", "true"], timeout=10)
     assert r.returncode == 1 and "refused under test" in (r.stderr or "")
     assert any("refused under test" in str(w.message) for w in caught)
+
+
+# ── an open stream socket lives exactly as long as its grant ──────────────
+#
+# The real relay route runs over this file's manager (installed as the shared
+# browser's), with a fake KasmVNC socket in place of the container's. Every wait
+# is bounded - the viewer is read on a thread of its own and joined with a
+# timeout - so a mutation fails instead of hanging.
+
+class _FakeVncUpstream:
+    """The container's stream socket. TALKING yields a frame every 10 ms, each
+    labelled with whether the socket's grant still stood when it was made; QUIET
+    never yields. Both record what the relay forwarded to the browser."""
+
+    def __init__(self, talking, label):
+        self.talking = talking
+        self.label = label
+        self.sent = []
+        self.n = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def send(self, data):
+        self.sent.append(data)
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self.talking:
+            await asyncio.Event().wait()        # until the relay cancels it
+        await asyncio.sleep(0.01)
+        self.n += 1
+        return f"{self.label()} frame {self.n}".encode()
+
+
+def _wait_until(predicate, timeout=3.0):
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return predicate()
+
+
+def _ticket_of(payload):
+    return payload["streamPath"].split("/t/")[1].split("/")[0]
+
+
+@pytest.fixture
+def relay(mgr, monkeypatch):
+    """The stream route over `mgr`, dialling a fake upstream instead of a container."""
+    _no_ipc_tasks(monkeypatch)
+    monkeypatch.setattr(bi, "_manager", mgr)
+    monkeypatch.setattr(bi, "_pool_managers", {})
+    monkeypatch.setattr(bi, "_VNC_SECRET_CACHE", "", raising=False)
+    monkeypatch.setattr(bi, "browser_vnc_secret", lambda: "test-stream-secret")
+    state = SimpleNamespace(mgr=mgr, talking=True, grant=None, upstreams=[])
+
+    def label():
+        # Read straight from the manager's two fields, not through grant_current:
+        # the label must stay true while grant_current is the thing under test.
+        g = state.grant
+        return "live" if g is not None and (mgr._lease is g or mgr._agent_stream is g) else "ENDED"
+
+    def connect(uri, **kw):
+        up = _FakeVncUpstream(state.talking, label)
+        state.upstreams.append(up)
+        return up
+
+    import websockets.asyncio.client as wsc
+    monkeypatch.setattr(wsc, "connect", connect)
+    from fastapi.testclient import TestClient
+    from vaf.core.web_server import app
+    # Without `with`: that would run the server's startup and its background loops.
+    # On this machine's address, as the stream-credential tests do.
+    state.client = TestClient(app, client=("127.0.0.1", 50000))
+    return state
+
+
+class _Viewer:
+    """One viewer socket on the relay, read on a thread of its own: `frames` as
+    they arrive, then `code` and `closed` when the server closes it."""
+
+    def __init__(self, relay, ticket):
+        self.frames = []
+        self.code = None
+        self.closed = threading.Event()
+        relay.grant = relay.mgr.validate_ticket(ticket)
+        self._cm = relay.client.websocket_connect(f"/api/browser-vnc/t/{ticket}/websockify")
+
+    def __enter__(self):
+        self.ws = self._cm.__enter__()
+        threading.Thread(target=self._read, daemon=True).start()
+        return self
+
+    def __exit__(self, *a):
+        return self._cm.__exit__(*a)
+
+    def _read(self):
+        from starlette.websockets import WebSocketDisconnect
+        try:
+            while True:
+                self.frames.append(self.ws.receive_bytes().decode())
+        except WebSocketDisconnect as e:
+            self.code = e.code
+        except Exception as e:
+            self.code = repr(e)
+        finally:
+            self.closed.set()
+
+
+def _end_by_user(m):
+    m.stop("user", requester_scope="scope-a")
+
+
+def _end_by_a_run(m):
+    m.stop_for_agent_run()
+
+
+def _end_by_a_run_elsewhere(m):
+    m.evict_for_run_elsewhere()
+
+
+def _end_by_an_admin(m):
+    assert m.start("scope-b", "sess-b", is_admin=True)["status"] == "active"
+
+
+def _end_by_a_newer_window(m):
+    assert m.start("scope-a", "sess-2")["status"] == "active"
+
+
+def _end_by_the_janitor(m):
+    m.stop("viewer_gone", force=True)
+
+
+def _end_by_a_restarted_browser(m):
+    m.stop("browser_restarted", force=True)
+
+
+def _end_by_revocation(m):
+    from vaf.core.revocation import revoke_account
+    revoke_account("scope-a")
+
+
+@pytest.mark.parametrize("end", [
+    _end_by_user, _end_by_a_run, _end_by_a_run_elsewhere, _end_by_an_admin,
+    _end_by_a_newer_window, _end_by_the_janitor, _end_by_a_restarted_browser,
+    _end_by_revocation,
+], ids=lambda f: f.__name__[len("_end_by_"):])
+def test_a_lease_socket_is_closed_with_4403_when_the_lease_ends(relay, end):
+    """Measured before the fix, for every one of these ends: the open socket kept
+    streaming (every frame after the end showed the next holder's browser) and its
+    input reached that browser. MUTATION: `grant_current` answers True always (red
+    for every end)."""
+    from vaf.core.revocation import restore_account
+    ticket = _ticket_of(relay.mgr.start("scope-a", "sess-1"))
+    try:
+        with _Viewer(relay, ticket) as v:
+            assert _wait_until(lambda: len(v.frames) >= 3), "the relay never streamed"
+            end(relay.mgr)
+            assert v.closed.wait(3.0), "the socket outlived its lease"
+            assert v.code == 4403
+    finally:
+        restore_account("scope-a")
+
+
+@pytest.mark.parametrize("end", ["run_end", "next_grant"])
+def test_a_watch_socket_is_closed_with_4403_when_its_grant_ends(relay, end):
+    """A run's watch socket ends with the run, and with a newer watch grant that
+    replaces it - measured before the fix, a finished run's watch socket showed the
+    next person's browser. MUTATION: `grant_current` answers True always (red)."""
+    m = relay.mgr
+    m.stop_for_agent_run()
+    m.agent_stream_started("sess-run")
+    with _Viewer(relay, m._agent_stream.ticket) as v:
+        assert _wait_until(lambda: len(v.frames) >= 3), "the relay never streamed"
+        if end == "run_end":
+            m.agent_run_ended()
+        else:
+            m.agent_stream_started("sess-other")
+        assert v.closed.wait(3.0), "the watch socket outlived its grant"
+        assert v.code == 4403
+    m.agent_run_ended()
+
+
+def test_no_frame_made_after_the_end_reaches_the_viewer(relay, monkeypatch):
+    """Per frame, not per interval: with the watchdog parked at 30 s, a frame the
+    container produced after the lease's end (it shows the next holder) must still
+    never be sent. MUTATION: drop the grant check in `_to_client` (red: the labelled
+    frames arrive and the socket stays open)."""
+    monkeypatch.setattr(bi.InteractiveBrowserManager, "STREAM_RECHECK_S", 30.0)
+    ticket = _ticket_of(relay.mgr.start("scope-a", "sess-1"))
+    with _Viewer(relay, ticket) as v:
+        assert _wait_until(lambda: len(v.frames) >= 3), "the relay never streamed"
+        relay.mgr.stop("user", requester_scope="scope-a")
+        v.closed.wait(2.0)
+        after = [f for f in v.frames if f.startswith("ENDED")]
+        assert after == [], f"{len(after)} frames made after the end reached the viewer"
+        assert v.code == 4403
+
+
+def test_no_input_sent_after_the_end_reaches_the_browser(relay, monkeypatch):
+    """Per message, not per interval: with a quiet container and the watchdog parked
+    at 30 s, input the viewer sends after the lease's end must never be forwarded -
+    it would type into the next holder's browser. MUTATION: drop the grant check in
+    `_to_upstream` (red: the key is forwarded and the socket stays open)."""
+    monkeypatch.setattr(bi.InteractiveBrowserManager, "STREAM_RECHECK_S", 30.0)
+    relay.talking = False
+    ticket = _ticket_of(relay.mgr.start("scope-a", "sess-1"))
+    with _Viewer(relay, ticket) as v:
+        up = relay.upstreams[-1]
+        v.ws.send_bytes(b"key while the lease stands")
+        assert _wait_until(lambda: up.sent == [b"key while the lease stands"])
+        relay.mgr.stop("user", requester_scope="scope-a")
+        v.ws.send_bytes(b"key after the end")
+        v.closed.wait(2.0)
+        assert up.sent == [b"key while the lease stands"], "input after the end was forwarded"
+        assert v.code == 4403
+
+
+def test_a_quiet_socket_is_closed_within_two_seconds(relay):
+    """No frame and no input either way (a still page, a viewer that sends
+    nothing): the watchdog closes the socket, at the default interval. MUTATION:
+    drop the `_grant_watch` task (red: the socket stays open)."""
+    relay.talking = False
+    ticket = _ticket_of(relay.mgr.start("scope-a", "sess-1"))
+    with _Viewer(relay, ticket) as v:
+        t0 = time.monotonic()
+        relay.mgr.stop("user", requester_scope="scope-a")
+        assert v.closed.wait(2.0), "a quiet socket outlived its lease"
+        assert time.monotonic() - t0 < 2.0
+        assert v.code == 4403
+
+
+def test_the_same_windows_refresh_keeps_its_socket(relay):
+    """A repeat start from the same window refreshes the lease in place - same
+    object, same ticket - so its open socket must keep streaming and keep its
+    input. MUTATION: `_start_locked` installs a fresh lease object for the same
+    window (red: the socket is closed)."""
+    r1 = relay.mgr.start("scope-a", "sess-1")
+    ticket = _ticket_of(r1)
+    with _Viewer(relay, ticket) as v:
+        assert _wait_until(lambda: len(v.frames) >= 3), "the relay never streamed"
+        assert _ticket_of(relay.mgr.start("scope-a", "sess-1")) == ticket
+        n = len(v.frames)
+        time.sleep(3 * bi.InteractiveBrowserManager.STREAM_RECHECK_S)
+        assert not v.closed.is_set(), f"the refresh closed the socket ({v.code})"
+        assert len(v.frames) > n
+        v.ws.send_bytes(b"key after the refresh")
+        assert _wait_until(lambda: b"key after the refresh" in relay.upstreams[-1].sent)
+
+
+def test_a_lease_socket_is_not_kept_when_a_watch_grant_replaces_the_lease(relay, monkeypatch):
+    """A takeover and the run's watch grant for the very same window: the window's
+    lease socket is closed, never carried over - it is not watch-only, so its input
+    would drive the browser the run is driving. Quiet container and parked watchdog,
+    so only the check on the viewer's own message can close it. MUTATION:
+    `grant_current` answers "is there any grant" (red: the key is forwarded)."""
+    monkeypatch.setattr(bi.InteractiveBrowserManager, "STREAM_RECHECK_S", 30.0)
+    relay.talking = False
+    m = relay.mgr
+    ticket = _ticket_of(m.start("scope-a", "sess-1"))
+    with _Viewer(relay, ticket) as v:
+        up = relay.upstreams[-1]
+        m.stop_for_agent_run()
+        m.agent_stream_started("sess-1")
+        v.ws.send_bytes(b"key into the run's browser")
+        v.closed.wait(2.0)
+        assert up.sent == [], "the old lease socket drove the run's browser"
+        assert v.code == 4403
+    m.agent_run_ended()
+
+
+def test_a_watch_socket_forwards_nothing_while_its_grant_stands(relay):
+    """The behavioural half of the static watch-only guard in test_browser_pool.py:
+    the picture flows, the viewer's input does not, and the socket stays open."""
+    m = relay.mgr
+    m.stop_for_agent_run()
+    m.agent_stream_started("sess-run")
+    with _Viewer(relay, m._agent_stream.ticket) as v:
+        assert _wait_until(lambda: len(v.frames) >= 3), "the relay never streamed"
+        v.ws.send_bytes(b"key on a watch grant")
+        time.sleep(0.3)
+        assert relay.upstreams[-1].sent == []
+        assert not v.closed.is_set()
+    m.agent_run_ended()
+
+
+def test_a_ticket_that_died_since_the_lookup_is_refused_before_dialling(relay, monkeypatch):
+    """The grant is taken again after the manager lookup; one that ended in between
+    gets 4403 and nothing is dialled. MUTATION: refuse only when no manager was
+    found (red: the container is dialled)."""
+    from starlette.websockets import WebSocketDisconnect
+
+    class _DeadTicket:
+        STREAM_RECHECK_S = 0.5
+
+        def vnc_base(self):
+            return "http://127.0.0.1:16901"
+
+        def validate_ticket(self, ticket):
+            return None
+
+        def grant_current(self, grant):
+            return False
+
+        def stream_connected(self, ticket):
+            return False
+
+        def stream_disconnected(self, ticket):
+            return None
+
+    monkeypatch.setattr(bi, "get_manager_by_ticket", lambda ticket: _DeadTicket())
+    with relay.client.websocket_connect("/api/browser-vnc/t/tkt/websockify") as ws:
+        with pytest.raises(WebSocketDisconnect) as refused:
+            ws.receive_bytes()
+    assert refused.value.code == 4403
+    assert relay.upstreams == [], "the container was dialled for a dead ticket"
+
+
+def test_a_grant_ends_before_its_holder_entry_is_released(mgr, monkeypatch):
+    """Why the close can hang on this process's grant alone: another process can
+    claim the shared browser only once the holder entry is released, and by then the
+    grant must already be gone - else that process's page streams to the old socket
+    until its next check. MUTATION: in `stop()` (or `agent_run_ended`) drop the grant
+    below `_release_shared` (red)."""
+    _no_ipc_tasks(monkeypatch)
+    seen = []
+    held = {}
+    real_release = mgr._release_shared
+
+    def release(token):
+        if token:
+            seen.append(mgr.grant_current(held["grant"]))
+        return real_release(token)
+
+    monkeypatch.setattr(mgr, "_release_shared", release)
+    mgr.start("scope-a", "sess-1")
+    held["grant"] = mgr._lease
+    mgr.stop("user", requester_scope="scope-a")
+    assert seen == [False], "the lease's holder entry was released while its grant stood"
+    seen.clear()
+    mgr.stop_for_agent_run()
+    mgr.hand_jar_to_run(user_scope_id="scope-b", run_generation=mgr.run_generation())
+    mgr.agent_stream_started("sess-run")
+    held["grant"] = mgr._agent_stream
+    mgr.agent_run_ended()
+    assert seen == [False], "the run's holder entry was released while its watch grant stood"
+
+
+def test_revoking_an_account_stops_its_leases_on_every_browser_and_no_other(mgr, monkeypatch):
+    """The revocation listener reaches the shared browser and every pooled one, and
+    only the revoked scope's lease; it is registered by the managers themselves,
+    once however many exist. MUTATION: drop the registration in the manager's
+    constructor (red)."""
+    from vaf.core import revocation
+    _no_ipc_tasks(monkeypatch)
+    revocation.remove_revocation_listener(bi._on_account_revoked)
+    monkeypatch.setattr(bi, "_manager", None)
+    monkeypatch.setattr(bi, "_pool_managers", {})
+    shared = bi.get_interactive_manager()
+    inst = SimpleNamespace(user_scope_id="scope-a", container_name="vaf-browser-u-aaa",
+                           cdp_base="http://127.0.0.1:41111", vnc_base="http://127.0.0.1:42222")
+    pooled = bi._manager_for_instance(inst)
+    assert bi._manager_for_instance(inst) is pooled
+    for m in (shared, pooled):
+        m._emit = lambda payload, session_id: None
+        m._ensure_janitor = lambda: None
+    assert [fn for fn in revocation._listeners if fn is bi._on_account_revoked] == [
+        bi._on_account_revoked]
+    assert pooled.start("scope-a", "sess-a")["status"] == "active"
+    assert shared.start("scope-b", "sess-b")["status"] == "active"
+    try:
+        revocation.revoke_account("scope-a")
+        assert pooled._lease is None, "the revoked account kept its browser"
+        assert shared._lease is not None and shared._lease.user_scope_id == "scope-b"
+        revocation.revoke_account("scope-b")
+        assert shared._lease is None, "the shared browser was not reached"
+    finally:
+        revocation.restore_account("scope-a")
+        revocation.restore_account("scope-b")
+
+
+def test_a_demotion_or_narrowing_leaves_the_browser_alone(relay):
+    """`stop_account_work` without a revocation (a demotion, a narrowed allowlist)
+    reaches the same listener, and the lease stays: it carries neither the role nor
+    the allowlist. The revocation that follows does end it, so the first half is not
+    vacuous. MUTATION: drop the `is_revoked` gate in the listener (red)."""
+    from vaf.core import revocation
+    m = relay.mgr
+    m.start("scope-a", "sess-1")
+    try:
+        revocation.stop_account_work("scope-a")
+        assert m._lease is not None, "a narrowing took the person's browser"
+        revocation.revoke_account("scope-a")
+        assert m._lease is None
+    finally:
+        revocation.restore_account("scope-a")
+
+
+# ── the run's watch grant exists only once the run holds the browser ──────
+
+@pytest.fixture
+def real_run(mgr, monkeypatch):
+    """BrowserAgentTool.run for real, on `mgr` as the shared browser, with scope-y's
+    lease standing so the run's handover is a change of hands. Stopped at the
+    browse phase by `sync_workspace_for_run`, which a test replaces."""
+    pytest.importorskip("browser_use", exc_type=ImportError)
+    _no_ipc_tasks(monkeypatch)
+    monkeypatch.delenv("VAF_SPAWN_BROWSER_SUBAGENT", raising=False)
+    monkeypatch.setattr(bi, "_manager", mgr)
+    monkeypatch.setattr(bi, "_pool_managers", {})
+    import vaf.core.subagent_ipc as ipc_mod
+    monkeypatch.setattr(ipc_mod, "get_current_session_id", lambda: "sess-b")
+    assert mgr.start("scope-y", "sess-y")["status"] == "active"
+    from vaf.tools.browser_agent import BrowserAgentTool
+    return BrowserAgentTool()
+
+
+class _BrowsePhaseReached(RuntimeError):
+    pass
+
+
+def test_the_runs_watch_grant_is_minted_after_its_handover(real_run, mgr, monkeypatch):
+    """Measured before the fix: the grant was minted right after the concurrency
+    gate, so the run's own watch socket streamed the evicted person's page (and,
+    across processes, another user's page check) for as long as the handover took.
+    MUTATION: call `agent_stream_started` in `run()` before the run's loop (red)."""
+    seen = {}
+    real_hand = bi.hand_jar_to_run
+
+    def hand(*a, **kw):
+        seen["at_handover"] = mgr._agent_stream
+        return real_hand(*a, **kw)
+
+    def browse_phase(user_scope_id=None, container_name=None):
+        stream = mgr._agent_stream
+        seen["at_browse"] = stream.session_id if stream is not None else None
+        raise _BrowsePhaseReached("the test stops the run here")
+
+    monkeypatch.setattr(bi, "hand_jar_to_run", hand)
+    monkeypatch.setattr(bi, "sync_workspace_for_run", browse_phase)
+    out = real_run.run(task="read the page", user_scope_id="scope-b")
+    assert "_BrowsePhaseReached" in out, out
+    assert seen["at_handover"] is None, \
+        "the run's watch grant existed while the browser still held the previous holder"
+    assert seen["at_browse"] == "sess-b"
+    assert mgr._agent_stream is None            # and it died with the run
+
+
+def test_a_refused_handover_mints_no_watch_grant(real_run, mgr, monkeypatch):
+    """The cross-user handover cannot be made safe, so the run is refused - and no
+    window may watch a browser that still holds the previous user's state.
+    MUTATION: as above (red)."""
+    grants = []
+    monkeypatch.setattr(bi, "verified_profile_wipe", lambda name, cdp_base="": False)
+    monkeypatch.setattr(bi, "agent_stream_started", lambda *a, **kw: grants.append(a))
+    out = real_run.run(task="read the page", user_scope_id="scope-b")
+    assert "could not be cleaned" in out, out
+    assert grants == []

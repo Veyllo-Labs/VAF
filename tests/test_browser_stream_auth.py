@@ -29,11 +29,16 @@ EXPECTED = "Basic " + base64.b64encode(f"vaf:{SECRET}".encode()).decode()
 
 
 class _FakeManager:
+    STREAM_RECHECK_S = 0.5
+
     def vnc_base(self):
         return "http://127.0.0.1:16901"
 
     def validate_ticket(self, ticket):
         return object()          # not an AgentStream: not watch-only
+
+    def grant_current(self, grant):
+        return True              # the grant stands for the whole test
 
     def stream_connected(self, ticket):
         return True

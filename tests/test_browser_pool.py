@@ -469,6 +469,28 @@ def test_the_jar_handover_sits_after_the_gate_and_after_the_watchdog():
     assert "run_in_executor" in handover
 
 
+def test_the_watch_grant_is_minted_after_the_handover():
+    """The run's watch-only stream is granted once the run holds the browser: before
+    its handover the browser still shows the previous holder's state, or a page
+    check of another process the handover waits out (measured: the run's watch
+    socket streamed that page check's page of another user). The static half of the
+    behavioural test in test_browser_interactive.py, which needs browser_use and is
+    skipped without it. MUTATION: call `agent_stream_started` in `run()` again (red)."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent
+           / "vaf" / "tools" / "browser_agent.py").read_text(encoding="utf-8")
+    run_body = src.split("    def run(self, **kwargs) -> str:", 1)[1]
+    run_body = run_body.split("    async def _run_browser", 1)[0]
+    assert "agent_stream_started" not in run_body, \
+        "the watch grant is minted before the run's handover"
+    inner = src.split("    async def _run_browser", 1)[1]
+    grant = inner.index("agent_stream_started(")
+    assert inner.index("run_generation=_run_gen") < grant, \
+        "the watch grant must follow the handover"
+    assert grant < inner.index("sync_workspace_for_run("), \
+        "the watch grant must exist by the browse phase"
+
+
 def test_watch_only_is_enforced_by_the_relay_not_by_the_viewer():
     """A run's grant carries view_only in the client's URL and the window puts
     pointer-events off on top of it, but both live in the PAGE: anything that

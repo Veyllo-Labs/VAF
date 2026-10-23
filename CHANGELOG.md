@@ -475,6 +475,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   waits for it and cleans the browser before it starts. An interactive browser that was
   still starting when a run began is now refused instead of opening under that run.
 
+- **A browser stream ends when access to the browser ends.** When the interactive browser
+  changed hands (an agent run took it over, an admin took it, the person stopped it, or a
+  newer window replaced it), a viewer that kept its connection open, for example the stream
+  opened in a tab of its own, went on showing the browser and could still type into it,
+  including into the next person's session. The same was true of the live view of a finished
+  agent run. Such a connection is now closed the moment its access ends. An agent run's live
+  view now starts only once the browser has been cleaned for that run, so it no longer shows
+  what was on the screen before, and deactivating an account now also ends its browser
+  session.
+
 - **Your own browser follows a proxy or timezone change.** A per-user browser kept the proxy,
   timezone and Safe Browsing key it was created with, so one created before you set a proxy
   kept browsing without it, from your real address. It is now recreated with the current

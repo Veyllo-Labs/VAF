@@ -266,7 +266,11 @@ Key rules:
   reply's `streamPath` names a ticketed proxy path (`/api/browser-vnc/t/<ticket>/...`)
   which the window's iframe loads SAME-ORIGIN (the ticket is the credential there:
   auth-middleware-exempt path, validated per request against the lease, the room-seat
-  pattern). The frontend appends `host` and `port` for the stream socket from
+  pattern). An open stream socket is closed with 4403 when its lease or watch grant ends,
+  the same code a dead ticket gets at connect, and the relay passes nothing after that end
+  in either direction. The close can arrive a moment before the `stopped` state; the
+  window's rule that its cover is up whenever the viewer reports no picture applies to that
+  gap as to any reconnect. The frontend appends `host` and `port` for the stream socket from
   `getWsBase`, because the dev server cannot proxy websockets; the LAN lane needs both a
   `WebSocketRoute` and an `_WS_ALLOWED` entry in `vaf/network/https_proxy.py`, and that
   relay carries binary frames. Both handlers run the manager's blocking work (container
@@ -386,7 +390,8 @@ Key rules:
   the interactive-browser lease verdict and lifecycle. `status` is one of `active`
   (streamPath set, the window's iframe loads it), `stopped` (with `reason`: `user`,
   `superseded` by the same user's newer window, `agent_takeover`, `agent_done`,
-  `viewer_gone` after the 120s grace, `browser_restarted`), `busy` (a different user
+  `viewer_gone` after the 120s grace, `browser_restarted`, `account_revoked` when the
+  holder's account was deactivated or deleted), `busy` (a different user
   holds the lease; deliberately without saying who), `agent_active`, or `error`
   (`browser_unavailable`). An `agent_active` sent to the session that OWNS the run
   carries a streamPath of its own: the run's watch-only live view (the URL carries

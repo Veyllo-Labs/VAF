@@ -1199,14 +1199,8 @@ class BrowserAgentTool(BaseTool):
                 _session_id = get_current_session_id()
             except Exception:
                 _session_id = None
-            # Grant the run's own chat window a watch-only live stream of this run
-            # (the window then shows the real streamed Chromium instead of the
-            # 1.5s screenshot view; the screenshots below keep streaming as the
-            # fallback and as vision input). In-process lane only - the helper
-            # itself stands down inside a spawned child, where the ticket would
-            # validate against the wrong process. Never raises.
-            from vaf.core.browser_interactive import agent_stream_started
-            agent_stream_started(_session_id, container_name=_container)
+            # The run's watch-only live stream is granted in _run_browser, once
+            # the run holds the browser (after its handover), not here.
             return _run_async_in_new_loop(
                 self._run_browser(
                     task=task,
@@ -1352,6 +1346,19 @@ class BrowserAgentTool(BaseTool):
                                     continuing=_handover is not None,
                                     run_generation=_run_gen),
         )
+        # Grant the run's own chat window a watch-only live stream of this run
+        # (the window then shows the real streamed Chromium instead of the 1.5s
+        # screenshot view; the screenshots keep streaming as the fallback and as
+        # vision input). Only HERE, once the handover returned: before it the
+        # browser still shows the previous holder's state, or a page check of
+        # another process the handover waits out for up to a minute - measured,
+        # a watch socket granted before the handover received that page check's
+        # frames of another user's page. A refused handover raised above and
+        # grants nothing. In-process lane only - the helper stands down inside a
+        # spawned child, where the ticket would validate against the wrong
+        # process. Never raises.
+        from vaf.core.browser_interactive import agent_stream_started
+        agent_stream_started(_session_id, container_name=container_name)
         # The owner's files, mirrored into this browser: the container paths
         # double as browser-use's upload whitelist, so "fill the form and
         # attach my report.pdf" actually can - the file picker and the

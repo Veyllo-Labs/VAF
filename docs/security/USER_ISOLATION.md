@@ -533,7 +533,10 @@ there too - cleared before the commit, a lookup in between re-cached the old ans
   sub-agents), end its background host commands - which the Stop button spares - stop its
   sandbox environments and the processes in them (a revocation listener in
   `vaf/core/environments.py`; stopped, not deleted), and close its sockets, which carry the
-  old role.
+  old role. Deactivation and deletion also end the account's interactive browser lease on
+  every browser, which closes its stream sockets (a revocation listener in
+  `vaf/core/browser_interactive.py`); a demotion or a narrowed allowlist leaves the browser
+  alone, because a lease carries neither the role nor the allowlist.
 - **Nothing more runs.** While the mark stands, the tool funnel refuses the account's calls
   BEFORE the admin exemption (a turn queued before a demotion still carries the old role),
   a tool call already running ends through the funnel's own stop check, and the runner drops
@@ -764,8 +767,19 @@ partition:
   before its first hook, so it is counted on the browser it drives, never on the
   shared one.
 - **Stream access is a per-lease ticket in the URL path** (`/api/browser-vnc/t/<ticket>/`),
-  validated on every asset request and on the stream websocket, and dead the moment the
-  lease ends. The path is auth-middleware-exempt for the same reason the A2A room seat
+  validated on every asset request, at the stream websocket's connect, and on every message
+  the stream relays in either direction. When the lease or the run's watch grant ends (a
+  stop, a takeover, a newer window, an admin, the run's end, the account's revocation), its
+  open sockets are closed with 4403 at once, and a quiet one within half a second
+  (`STREAM_RECHECK_S`); no frame or keystroke crosses after the end. Measured before the
+  check: an open socket kept streaming after every one of those ends, each frame showed the
+  next holder's browser, and its input reached that browser. The grant is this process's,
+  and it is dropped before its holder entry in the cross-process record is released, so
+  another process can only become the next holder, never take the browser under a grant
+  still live here. The run's watch grant is minted only after the run's handover: before
+  it, the browser still shows the previous holder, or a page check of another process the
+  handover waits out, and a watch socket granted that early received that page check's
+  frames. The path is auth-middleware-exempt for the same reason the A2A room seat
   lane is: the credential is in the request itself.
 - **The old profile residual is closed; what remains is named.** History, Chromium-saved
   passwords, autofill, bookmarks and the HTTP disk cache used to survive a quick-mode

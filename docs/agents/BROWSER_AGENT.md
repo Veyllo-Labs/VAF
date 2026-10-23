@@ -362,7 +362,7 @@ browser-use requires the LLM to produce structured JSON on every reasoning step.
 
 When `browser_agent` is running, the **SubAgent Window** in the WebUI opens automatically and shows a live browser view: the streamed Chromium itself on top (the same KasmVNC stream the interactive lane uses, watch-only), and the run's dock below (task, action plan, visited URLs, activity).
 
-**The viewport is the real browser.** At run start the in-process lane grants the run's own chat session a WATCH-ONLY stream ticket (`agent_stream_started` in `vaf/core/browser_interactive.py`): the window's iframe loads the same viewer document as the interactive lane, with the viewer's `view_only` setting in the URL and pointer events off on top of it, so the person sees Chromium's own tab strip and omnibox exactly as the agent drives them - but cannot type into a browser the agent is using. Watch-only is enforced at the RELAY, not in the page: both of those live in the browser, so the stream proxy drops everything travelling from client to container on an agent grant (the RFB protocol needs no client frames to deliver a picture). Pinned by `tests/test_browser_pool.py`. The grant is emitted only to the session that owns the run (the ticket is the capability; a foreign user must not watch someone else's agent browse), and the ticket dies with the run.
+**The viewport is the real browser.** Once the run holds the browser, right after its handover, the in-process lane grants the run's own chat session a WATCH-ONLY stream ticket (`agent_stream_started` in `vaf/core/browser_interactive.py`, called from `_run_browser`). Not earlier: before the handover the browser still shows the previous holder's state, or a page check of another process that the handover waits out for up to a minute, and a watch socket granted at the concurrency gate received that page check's frames of another user's page (measured). On a change of hands the live view therefore starts after the verified wipe, and a refused handover grants nothing. The window's iframe loads the same viewer document as the interactive lane, with the viewer's `view_only` setting in the URL and pointer events off on top of it, so the person sees Chromium's own tab strip and omnibox exactly as the agent drives them - but cannot type into a browser the agent is using. Watch-only is enforced at the RELAY, not in the page: both of those live in the browser, so the stream proxy drops everything travelling from client to container on an agent grant (the RFB protocol needs no client frames to deliver a picture). Pinned by `tests/test_browser_pool.py`. The grant is emitted only to the session that owns the run (the ticket is the capability; a foreign user must not watch someone else's agent browse), and the ticket dies with the run, which closes every socket opened on it.
 
 **Screenshots stay.** The ~1.5s JPEG screenshot loop keeps running regardless - it feeds the workflow tile and the fallback view for the lanes without a stream grant (a spawned child validates tickets against the wrong process, so the child lane deliberately makes no grant and keeps the rebuilt chrome bar over screenshots). While the stream draws its first picture, the latest screenshot doubles as the connecting cover.
 
@@ -401,7 +401,15 @@ flag. Nothing is lost: only the TCP stream port is published, and VAF's proxy sp
 WebSocket, so the UDP lane was unreachable anyway. `-udpPort 0` does not skip the query.
 Pinned by `tests/test_browser_entrypoint_supervise.py`.
 The ticket in the path is the credential, validated against the current lease on every
-request; a stopped or superseded lease kills its ticket immediately. The two halves of
+request; a stopped or superseded lease kills its ticket immediately, and closes every
+stream socket opened on it with 4403. A socket outlives the request that opened it, so
+the relay keeps the grant its ticket resolved to and asks the manager on every message it
+passes, in both directions, whether that grant is still the browser's lease or its run's
+watch grant (`grant_current`); a watchdog asks the same of a socket with no traffic every
+`STREAM_RECHECK_S` (0.5 s). No frame and no input crosses after the end, whichever way the
+grant ended: a stop, a takeover, a newer window, an admin, the janitor, the run's end, a
+newer watch grant or a revoked account. The same window's refresh keeps its lease object
+and therefore its socket. The two halves of
 the stream carry that ticket differently, and it is worth knowing which is which: ASSETS
 resolve relative to the client's own directory and take the ticket along by themselves,
 but the SOCKET url is built from the client's settings (`ws://<host>:<port>/` + the

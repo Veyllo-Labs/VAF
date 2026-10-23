@@ -2427,7 +2427,13 @@ async def receive_subagent_stream(update: SubAgentStreamUpdate, _caller: dict = 
 # pattern): the KasmVNC client builds every asset and websocket URL relative to
 # its own directory, so the ticket rides along on all of them by construction.
 # Validated per request against the CURRENT lease - a superseded or stopped
-# lease invalidates its ticket immediately.
+# lease invalidates its ticket immediately. The stream socket outlives its
+# request, so it is checked for its whole life, not only at connect: the relay
+# keeps the grant its ticket resolved to and asks the manager on every message,
+# in both directions, whether that grant still stands, and a watchdog asks for a
+# quiet socket. A grant that ended (stopped, taken over, superseded, the run's
+# end, a revoked account) closes the socket with 4403, the same code a dead
+# ticket gets at connect, and no frame or input crosses after the end.
 
 @app.get("/api/browser-vnc/t/{ticket}/{path:path}")
 async def browser_vnc_asset(ticket: str, path: str):
@@ -2480,11 +2486,21 @@ async def browser_vnc_stream(websocket: WebSocket, ticket: str):
 
     Every open pipe counts as viewer presence for the lease janitor; the last
     disconnect starts the grace timer that eventually releases the lease.
+
+    The pipe lives exactly as long as the grant it was opened on: a lease or a
+    run's watch grant that ends closes it with 4403, before another byte crosses
+    in either direction. Without that an open socket went on showing, and
+    driving, the browser of whoever held it next (measured: every frame after a
+    takeover showed the next holder, and the old socket's input reached it).
     """
     from vaf.core.browser_interactive import (AgentStream, get_manager_by_ticket,
                                               vnc_auth_headers as _vnc_auth_headers)
     mgr = get_manager_by_ticket(ticket)
-    if mgr is None:
+    # The grant this socket is opened on, kept for the socket's whole life and
+    # asked about on every message (mgr.grant_current). Taken again here because
+    # it can have ended since the lookup, and then nothing is dialled.
+    grant = mgr.validate_ticket(ticket) if mgr is not None else None
+    if grant is None:
         # Accept-then-close: a close before accept surfaces as a handshake
         # error in the browser console instead of a readable code.
         await websocket.accept()
@@ -2497,8 +2513,11 @@ async def browser_vnc_stream(websocket: WebSocket, ticket: str):
     # browser the agent is working in. The relay therefore drops everything
     # travelling client-to-container on an agent grant - the protocol needs no
     # client frames to deliver a picture (the server pushes framebuffer updates
-    # on its own), so a silent drop costs the viewer nothing.
-    watch_only = isinstance(mgr.validate_ticket(ticket), AgentStream)
+    # on its own), so a silent drop costs the viewer nothing. Derived once and
+    # never stale: a socket's grant cannot change kind while it stands, because
+    # any change of grant ends the socket, and the next one derives it afresh.
+    watch_only = isinstance(grant, AgentStream)
+    grant_ended = False
 
     # Mirror the client's offered subprotocol (the KasmVNC client offers
     # "binary"); inventing or dropping it makes some browsers abort the socket.
@@ -2534,9 +2553,15 @@ async def browser_vnc_stream(websocket: WebSocket, ticket: str):
             counted = True
 
             async def _to_upstream():
+                nonlocal grant_ended
                 while True:
                     msg = await websocket.receive()
                     if msg.get("type") == "websocket.disconnect":
+                        return
+                    # Before anything is forwarded: input that arrives after the
+                    # grant's end would land in the next holder's browser.
+                    if not mgr.grant_current(grant):
+                        grant_ended = True
                         return
                     if watch_only:
                         # Keep reading (the socket must stay drained and the
@@ -2554,8 +2579,13 @@ async def browser_vnc_stream(websocket: WebSocket, ticket: str):
             _pixels_up = False
 
             async def _to_client():
-                nonlocal _pixels_up
+                nonlocal _pixels_up, grant_ended
                 async for frame in upstream:
+                    # Per frame, before it is counted or sent: a frame produced
+                    # after the grant's end shows the next holder's browser.
+                    if not mgr.grant_current(grant):
+                        grant_ended = True
+                        return
                     if isinstance(frame, (bytes, bytearray)):
                         raw = bytes(frame)
                         if not _pixels_up:
@@ -2564,7 +2594,17 @@ async def browser_vnc_stream(websocket: WebSocket, ticket: str):
                     else:
                         await websocket.send_text(frame)
 
-            tasks = [asyncio.create_task(_to_upstream()), asyncio.create_task(_to_client())]
+            # The two pumps see a grant's end only when a message passes. A socket
+            # with no traffic either way (a still page, a viewer that sends nothing)
+            # is closed by this one instead, within one interval of the end.
+            async def _grant_watch():
+                nonlocal grant_ended
+                while mgr.grant_current(grant):
+                    await asyncio.sleep(mgr.STREAM_RECHECK_S)
+                grant_ended = True
+
+            tasks = [asyncio.create_task(_to_upstream()), asyncio.create_task(_to_client()),
+                     asyncio.create_task(_grant_watch())]
             try:
                 done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                 for t in pending:
@@ -2584,8 +2624,12 @@ async def browser_vnc_stream(websocket: WebSocket, ticket: str):
     finally:
         if counted:
             mgr.stream_disconnected(ticket)
+        if grant_ended:
+            append_domain_log("webui", "[browser-vnc] stream closed: its grant ended")
         try:
-            await websocket.close()
+            # 4403 when the grant ended, as at connect: a viewer that reconnects
+            # with the dead ticket reads the same answer either way.
+            await websocket.close(code=4403 if grant_ended else 1000)
         except Exception:
             pass
 

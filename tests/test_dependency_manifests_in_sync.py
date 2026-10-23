@@ -26,6 +26,13 @@ THIRD_PARTY row states the range. A cap in one and not the other hands one of th
 three a major release nobody tested: CI installed mcp 2.x from an uncapped
 requirements.txt while the lock held 1.x, and the remote MCP tests failed on a
 renamed class.
+
+A fourth is a FLOOR, for the packages whose floor a VAF behaviour needs. An update
+(``pip install -r requirements.txt``) keeps an installed version that satisfies the
+floor, so a floor below the version a behaviour needs leaves old installs without it:
+uvicorn's sans-I/O WebSocket protocol, the one the door names, makes a sender wait
+from 0.52.1, and ``websockets.connect`` is the asyncio client the proxy's relay calls
+from websockets 14.0. Only these floors are compared.
 """
 import ast
 import json
@@ -215,3 +222,52 @@ def test_an_upper_bound_is_the_same_in_every_manifest_that_names_the_package():
         "An upper bound differs between the manifests that name the package "
         f"(requirements.txt is what CI and releases install, pyproject.toml what pip resolves): {drift}"
     )
+
+
+def _floors(package: str) -> dict:
+    """Manifest -> the ``>=`` floor it writes for one package, extras and markers dropped."""
+    floors = {}
+    for src, ranges in _ranges().items():
+        if package not in ranges:
+            continue
+        rng = re.sub(r"^\[.*?\]", "", ranges[package].split(";", 1)[0].strip())
+        found = [c.strip()[2:].strip() for c in rng.split(",") if c.strip().startswith(">=")]
+        floors[src] = found[0] if found else None
+    return floors
+
+
+def _assert_floor(package: str, minimum: str, why: str) -> None:
+    from packaging.version import Version
+
+    floors = _floors(package)
+    assert set(floors) == {"requirements.txt", "pyproject.toml", "THIRD_PARTY.md"}, (
+        f"{package} is missing from a manifest: {floors}")
+    assert len(set(floors.values())) == 1, (
+        f"{package}'s floor differs between the manifests (requirements.txt is what CI and "
+        f"releases install, pyproject.toml what pip resolves): {floors}")
+    floor = floors["requirements.txt"]
+    assert floor is not None and Version(floor) >= Version(minimum), (
+        f"{package}'s floor {floor} is below {minimum}: {why}")
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="tomllib requires Python 3.11+")
+def test_the_uvicorn_floor_is_where_a_websocket_makes_its_sender_wait():
+    """The door serves uvicorn's sans-I/O WebSocket protocol (vaf/network/door.py
+    WS_PROTOCOL), which defines its own pause_writing, and so makes a sender wait while its
+    client reads nothing, from uvicorn 0.52.1. CI and releases install requirements.txt and a
+    pip install resolves pyproject.toml, so each of them must hold uvicorn at or above it.
+    MUTATION: the pyproject.toml floor back to >=0.27.0, or requirements.txt to >=0.52.0 -
+    red."""
+    _assert_floor("uvicorn", "0.52.1",
+                  "the door's WebSocket would never make a sender wait (vaf/network/door.py)")
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason="tomllib requires Python 3.11+")
+def test_the_websockets_floor_has_the_client_the_relay_calls():
+    """The proxy's WebSocket relay calls websockets.connect(..., additional_headers=...)
+    (vaf/network/https_proxy.py). Up to websockets 13.1 that name is the legacy client, which
+    takes extra_headers and hands an unknown keyword on to loop.create_connection, so every
+    relayed socket would fail; from 14.0 it is the asyncio client. uvicorn[standard] lets
+    13.x in. MUTATION: the THIRD_PARTY.md floor back to >=12.0 - red."""
+    _assert_floor("websockets", "14.0",
+                  "websockets.connect would be the legacy client (vaf/network/https_proxy.py)")

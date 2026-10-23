@@ -15,8 +15,8 @@ PyGithub>=2.1.1
 beautifulsoup4>=4.12.0
 markdownify>=1.0.0      # HTML->Markdown (MIT); replaces GPL-3.0 html2text - see docs/legal/THIRD_PARTY.md
 fastapi>=0.109.0
-uvicorn[standard]>=0.27.0
-websockets>=12.0
+uvicorn[standard]>=0.53.0  # the door's WebSocket implementation (vaf/network/door.py WS_PROTOCOL) makes a sender wait from 0.52.1; below it a socket to a client that reads nothing grows without a limit
+websockets>=14.0  # from 14.0 websockets.connect is the asyncio client, whose additional_headers the proxy's WebSocket relay passes (vaf/network/https_proxy.py)
 pydantic>=2.0.0
 jsonschema>=4.18.0  # schema validation for tool-input repair (vaf/core/tool_input_repair.py); was only present transitively (mcp via browser-use, py>=3.11), so it was missing on 3.10
 mcp>=1.26.0,<2  # the official Model Context Protocol SDK: remote MCP servers (Streamable HTTP, SSE) in vaf/core/mcp_remote.py; was only present transitively (browser-use, py>=3.11). Capped below 2: 2.x renamed FastMCP (the tests' in-process servers) and the remote lane is tested on 1.x only

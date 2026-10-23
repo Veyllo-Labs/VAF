@@ -473,7 +473,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it queues until it ends, and one that gives up waiting hands its place back. A page check
   from another part of VAF can still slip in between two runs for a moment; the next run then
   waits for it and cleans the browser before it starts. An interactive browser that was
-  still starting when a run began is now refused instead of opening under that run.
+  still starting when a run began is now refused instead of opening under that run. The
+  person whose browser window the first run took over gets it back when the last of the
+  queued runs ends; before, the second run made VAF forget them and their window closed.
 
 - **A browser stream ends when access to the browser ends.** When the interactive browser
   changed hands (an agent run took it over, an admin took it, the person stopped it, or a

@@ -28,12 +28,17 @@ requirements.txt while the lock held 1.x, and the remote MCP tests failed on a
 renamed class.
 
 A fourth is a FLOOR, for the packages whose floor a VAF behaviour needs. An update
-(``pip install -r requirements.txt``) keeps an installed version that satisfies the
-floor, so a floor below the version a behaviour needs leaves old installs without it:
-uvicorn's sans-I/O WebSocket protocol, the one the door names, makes a sender wait
-from 0.52.1 (the manifests floor uvicorn at 0.53, the first release the door's tests
-ran on), and ``websockets.connect`` is the asyncio client the proxy's relay calls from
-websockets 14.0. Only these floors are compared.
+(``pip install -r`` of the installation's requirements file) keeps an installed version
+that satisfies the floor, so a floor below the version a behaviour needs leaves old
+installs without it: uvicorn's sans-I/O WebSocket protocol, the one the door names, makes
+a sender wait from 0.52.1 (the manifests floor uvicorn at 0.53, the first release the
+door's tests ran on), and ``websockets.connect`` is the asyncio client the proxy's relay
+calls from websockets 14.0. Only these floors are compared.
+
+requirements.txt is two files since a server install leaves out what only a desktop
+session uses: it includes requirements-headless.txt (`-r`), the set a server installs,
+and adds the desktop-only packages. Every reader here follows the include the way pip
+does, so the rules above hold for the whole installed set.
 """
 import ast
 import json
@@ -46,6 +51,15 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 _NAME_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)")
+_INCLUDE_RE = re.compile(r"^(?:-r|--requirement)(?:\s+|=)(\S+)$")
+
+HEADLESS_REQUIREMENTS = "requirements-headless.txt"
+
+# requirements.txt's own requirements: what only a desktop session uses (the tray icon,
+# the desktop window, the terminal microphone). Normalised names.
+DESKTOP_ONLY = (
+    "pystray", "pyobjc-framework-cocoa", "pywebview", "pyside6", "qtpy", "speechrecognition",
+)
 
 
 def _norm(name: str) -> str:
@@ -56,16 +70,40 @@ def _norm(name: str) -> str:
     return name.strip().lower().replace("_", "-")
 
 
-def _requirements_txt_names() -> set:
-    names = set()
-    for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines():
+def _requirement_lines(rel: str = "requirements.txt"):
+    """(file, name, range as written) for every requirement `rel` installs.
+
+    A `-r` include is followed relative to the including file, as pip resolves it.
+    """
+    for line in (ROOT / rel).read_text(encoding="utf-8").splitlines():
         line = line.split("#", 1)[0].strip()
         if not line:
             continue
+        inc = _INCLUDE_RE.match(line)
+        if inc:
+            yield from _requirement_lines((Path(rel).parent / inc.group(1)).as_posix())
+            continue
         m = _NAME_RE.match(line)
         if m:
-            names.add(_norm(m.group(1)))
-    return names
+            yield rel, _norm(m.group(1)), line[m.end():]
+
+
+def _includes(rel: str) -> list:
+    """The `-r` targets written in `rel` itself."""
+    out = []
+    for line in (ROOT / rel).read_text(encoding="utf-8").splitlines():
+        inc = _INCLUDE_RE.match(line.split("#", 1)[0].strip())
+        if inc:
+            out.append(inc.group(1))
+    return out
+
+
+def _requirements_txt_names() -> set:
+    return {name for _, name, _ in _requirement_lines()}
+
+
+def _headless_names() -> set:
+    return {name for _, name, _ in _requirement_lines(HEADLESS_REQUIREMENTS)}
 
 
 def _pyproject_names() -> set:
@@ -132,12 +170,85 @@ def _rows_for(prefix: str) -> set:
 
 
 def test_bootstrap_dependency_map_names_only_requirements_entries():
-    missing = [k for k in _bootstrap_dependency_map_keys() if _norm(k) not in _requirements_txt_names()]
+    """Every probed package is one the SMALLER set installs: a server installs only
+    requirements-headless.txt, so a desktop-only package in the map prompts on every
+    command there. MUTATION: put `"pystray": "pystray"` back into the map - red."""
+    missing = [k for k in _bootstrap_dependency_map_keys() if _norm(k) not in _headless_names()]
     assert not missing, (
-        "vaf/main.py bootstrap() DEPENDENCIES names packages that requirements.txt "
-        f"does not install: {missing}. Every fresh install would prompt for them "
+        "vaf/main.py bootstrap() DEPENDENCIES names packages that requirements-headless.txt "
+        f"does not install: {missing}. Every server install would prompt for them "
         "on every start (pip installs the file, the probe still misses)."
     )
+
+
+def test_requirements_txt_is_the_headless_set_plus_the_desktop_only_packages():
+    """requirements.txt includes the headless set once and adds exactly the desktop-only
+    packages; nothing is named in both. MUTATION: add pystray to requirements-headless.txt,
+    or move fastapi into requirements.txt's own lines - red."""
+    assert _includes("requirements.txt") == [HEADLESS_REQUIREMENTS]
+    assert _includes(HEADLESS_REQUIREMENTS) == []
+    own = [name for src, name, _ in _requirement_lines() if src == "requirements.txt"]
+    assert sorted(own) == sorted(DESKTOP_ONLY)
+    headless = _headless_names()
+    assert not headless & set(own), f"named in both files: {sorted(headless & set(own))}"
+    # Images are not a desktop matter: vision input, PDF OCR, QR codes for 2FA.
+    assert "pillow" in headless
+    # The reader really followed the include: the full set is both files together.
+    assert _requirements_txt_names() == headless | set(own)
+
+
+@pytest.mark.parametrize("server_mode, expected", [
+    (True, HEADLESS_REQUIREMENTS),
+    (False, "requirements.txt"),
+])
+def test_the_bootstrap_installs_the_requirements_file_of_this_installation(
+        monkeypatch, server_mode, expected):
+    """A server's dependency prompt installs the headless set, not the full list that
+    would bring the desktop packages back. MUTATION: hardcode requirements.txt in the
+    auto-install - the server case goes red."""
+    import builtins
+    import importlib.util
+
+    import vaf.main as vaf_main
+    from vaf.core.config import Config
+
+    monkeypatch.delenv("VAF_SKIP_DEP_CHECK", raising=False)
+    real_find_spec = importlib.util.find_spec
+    monkeypatch.setattr(
+        importlib.util, "find_spec",
+        lambda name, *a, **k: None if name == "fastapi" else real_find_spec(name, *a, **k),
+    )
+    # speech_language set: the speech onboarding after the install stays quiet.
+    settings = {"server_mode": server_mode, "speech_language": "en-US"}
+    monkeypatch.setattr(Config, "get", lambda key, default=None: settings.get(key, default))
+
+    class _Terminal:
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr(vaf_main.sys, "stdin", _Terminal())
+    monkeypatch.setattr(builtins, "input", lambda prompt="": "y")
+    calls = []
+    monkeypatch.setattr(vaf_main.subprocess, "check_call", lambda cmd, **kw: calls.append(cmd))
+
+    vaf_main.bootstrap()
+
+    assert len(calls) == 1, calls
+    cmd = calls[0]
+    assert Path(cmd[cmd.index("-r") + 1]) == ROOT / expected, cmd
+
+
+def test_the_lock_check_regenerates_from_both_requirement_files():
+    """pip-compile reads the include, so the local lock check must copy it and count a
+    change to it. MUTATION: drop requirements-headless.txt from REQ_FILES, or copy only
+    requirements.txt again - red."""
+    sh = (ROOT / "scripts" / "ci_check.sh").read_text(encoding="utf-8")
+    stage = sh[sh.index("=== 5/9"):sh.index("=== 6/9")]
+    assert f'REQ_FILES="requirements.txt {HEADLESS_REQUIREMENTS}"' in stage
+    assert "git diff --name-only origin/main...HEAD -- $REQ_FILES" in stage
+    assert "git diff --name-only -- $REQ_FILES)" in stage
+    assert 'cp $REQ_FILES requirements.lock "$LOCK_TMP/"' in stage
+    assert "cp requirements.txt requirements.lock" not in stage
 
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="tomllib requires Python 3.11+")
@@ -189,10 +300,8 @@ def _ranges() -> dict:
         return (_norm(m.group(1)), spec.strip()[m.end():]) if m else (None, "")
 
     out = {"requirements.txt": {}, "pyproject.toml": {}, "THIRD_PARTY.md": {}}
-    for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines():
-        name, rng = split(line.split("#", 1)[0])
-        if name:
-            out["requirements.txt"][name] = rng
+    for _, name, rng in _requirement_lines():
+        out["requirements.txt"][name] = rng
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     specs = list(data["project"]["dependencies"])
     for extra_specs in data["project"]["optional-dependencies"].values():
@@ -210,7 +319,8 @@ def _ranges() -> dict:
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="tomllib requires Python 3.11+")
 def test_an_upper_bound_is_the_same_in_every_manifest_that_names_the_package():
-    """MUTATION: drop `,<2` from the mcp line of pyproject.toml and this goes red."""
+    """MUTATION: drop `,<2` from the mcp line of pyproject.toml and this goes red; drop it
+    from requirements-headless.txt and it goes red too (the include is followed)."""
     ranges = _ranges()
     capped = {n for r in ranges.values() for n, rng in r.items() if _upper_bounds(rng)}
     assert capped, "no capped package found: the parser no longer reads the manifests"

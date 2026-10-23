@@ -461,6 +461,25 @@ def is_source_tree(root: Path) -> bool:
     return (root / "vaf" / "version.py").exists() and (root / "requirements.txt").exists()
 
 
+# The Python set a server installs: requirements.txt without what only a desktop
+# session uses (tray icon, desktop window, terminal microphone). install.sh names
+# the same file for `--server` (python_requirements_file).
+HEADLESS_REQUIREMENTS = "requirements-headless.txt"
+
+
+def requirements_file(root: Path) -> Path:
+    """The requirements file this installation installs from `root`.
+
+    A server takes the headless set, everything else the full requirements.txt.
+    The existence check covers a checkout from before the split (a rollback or
+    a downgrade target), which only has requirements.txt.
+    """
+    headless = root / HEADLESS_REQUIREMENTS
+    if _server_mode() and headless.exists():
+        return headless
+    return root / "requirements.txt"
+
+
 def describe_update_ability(root: Optional[Path] = None) -> Tuple[bool, str]:
     """Can an update be applied WITHOUT a terminal, and if not, why not?
 

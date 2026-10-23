@@ -15,7 +15,9 @@ could not be confirmed are marked `unverified`.
 Scope of this file:
 - Python runtime deps from `pyproject.toml` `[project.dependencies]` and the named
   `[project.optional-dependencies]` extras.
-- Python deps from `requirements.txt` (the canonical full installer list).
+- Python deps from `requirements.txt` (the canonical full installer list). It includes
+  `requirements-headless.txt`, the set a server install takes; the rows below are the
+  union of both files.
 - Web UI deps from `web/package.json`.
 - WhatsApp bridge deps from `vaf/whatsapp_node/package.json`.
 - Runtime vs build/dev tooling are listed separately.

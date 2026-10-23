@@ -53,6 +53,21 @@ FORBIDDEN_MODULES = (
     "docx", "openpyxl", "pptx",
 )
 
+# What only a desktop session imports, by the pip name that installs it. A server install
+# leaves all of it out (requirements-headless.txt, no PyGObject), so the service path must
+# import none of it. pystray brings python-xlib on Linux, PyGObject brings pycairo.
+DESKTOP_MODULES = {
+    "pystray": ("pystray", "Xlib"),
+    "pyobjc-framework-cocoa": ("AppKit", "Foundation", "objc"),
+    "pywebview": ("webview",),
+    "pyside6": ("PySide6", "shiboken6"),
+    "qtpy": ("qtpy",),
+    "speechrecognition": ("speech_recognition",),
+    # built into the venv by install.sh on a Linux desktop only, for the tray icon
+    "pygobject": ("gi", "cairo"),
+}
+DESKTOP_FORBIDDEN = tuple(m for mods in DESKTOP_MODULES.values() for m in mods)
+
 _BLOCKER_TEMPLATE = """\
 import sys
 
@@ -82,9 +97,10 @@ if _preloaded:
 """
 
 
-def _run_with_blocker(code: str, extra_env: dict | None = None) -> subprocess.CompletedProcess:
-    """Run `code` in a subprocess with the extras blocker installed first."""
-    script = _BLOCKER_TEMPLATE.format(forbidden=tuple(FORBIDDEN_MODULES)) + "\n" + code
+def _run_with_blocker(code: str, extra_env: dict | None = None,
+                      forbidden=FORBIDDEN_MODULES) -> subprocess.CompletedProcess:
+    """Run `code` in a subprocess with a blocker for `forbidden` installed first."""
+    script = _BLOCKER_TEMPLATE.format(forbidden=tuple(forbidden)) + "\n" + code
     env = dict(os.environ)
     if extra_env:
         env.update(extra_env)
@@ -217,3 +233,63 @@ def test_bootstrap_gate_skips_pip_install_layout(monkeypatch):
         "bootstrap() must not probe dependencies when requirements.txt is absent "
         "next to the package (pip-install layout)"
     )
+
+
+def test_the_blocked_desktop_set_is_what_a_server_leaves_out():
+    """The desktop blocker hides exactly requirements.txt's own packages plus PyGObject,
+    so the next desktop package added there is hidden here too. MUTATION: move qtpy into
+    requirements-headless.txt - red."""
+    from test_dependency_manifests_in_sync import _requirement_lines
+
+    own = {name for src, name, _ in _requirement_lines() if src == "requirements.txt"}
+    assert set(DESKTOP_MODULES) == own | {"pygobject"}
+
+
+def test_the_headless_service_path_imports_without_the_desktop_packages():
+    """What the server's unit runs (`vaf.main tray` under VAF_NATIVE_WRAPPER=1) and the
+    lanes behind the web UI import with every desktop package hidden. MUTATION: a
+    module-level `import webview` in vaf/core/web_server.py, or `import
+    speech_recognition` at the top of vaf/core/speech.py - red."""
+    result = _run_with_blocker(
+        "import vaf.main\n"
+        "import vaf.tray\n"
+        "assert vaf.tray.pystray is None, 'the headless tray must not load pystray'\n"
+        "import vaf.core.web_server\n"
+        "import vaf.core.headless_runner\n"
+        "import vaf.core.speech as speech\n"
+        "assert speech._lazy_load_sr() is None, 'the terminal microphone must report absent'\n"
+        "import vaf.core.voice_vad\n"
+        "import vaf.core.speaker_id\n"
+        "import vaf.core.speech_client\n"
+        "import vaf.core.voice_agent\n"
+        "print('HEADLESS_OK')\n",
+        extra_env={"VAF_NATIVE_WRAPPER": "1", "VAF_SKIP_DEP_CHECK": "1"},
+        forbidden=DESKTOP_FORBIDDEN,
+    )
+    assert result.returncode == 0 and "HEADLESS_OK" in result.stdout, (
+        "The server's service path imports a desktop-only package.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+def test_a_server_without_the_desktop_packages_gets_no_dependency_prompt():
+    """bootstrap() probes only packages a server installs, so with the desktop packages
+    absent `vaf --version` says nothing about dependencies (in an SSH terminal it would
+    otherwise ask, and a no ends the command). The dependency check really runs here: no
+    VAF_SKIP_DEP_CHECK. MUTATION: put `"pystray": "pystray"` back into DEPENDENCIES - red."""
+    env = {k: v for k, v in os.environ.items() if k != "VAF_SKIP_DEP_CHECK"}
+    script = _BLOCKER_TEMPLATE.format(forbidden=DESKTOP_FORBIDDEN) + (
+        "\nimport sys\n"
+        "sys.argv = ['vaf', '--version']\n"
+        "import vaf.main\n"
+        "try:\n"
+        "    vaf.main.main()\n"
+        "except SystemExit as e:\n"
+        "    sys.exit(e.code or 0)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, timeout=300,
+        cwd=str(ROOT), env=env,
+    )
+    assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    assert "Dependency Check" not in result.stdout, result.stdout

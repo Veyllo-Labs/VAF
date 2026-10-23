@@ -279,3 +279,30 @@ def test_server_mode_without_systemd_run_says_so_before_the_button_is_pressed(tm
     ok, reason = uc.describe_update_ability(tmp_path)
     assert ok is False
     assert "terminal" in reason
+
+
+# ── which requirements file this installation installs ───────────────────────
+
+def test_a_server_installs_the_headless_requirements(tmp_path, monkeypatch):
+    """A server leaves out what only a desktop session uses. MUTATION: ignore
+    _server_mode() - red."""
+    _source_tree(tmp_path)
+    (tmp_path / uc.HEADLESS_REQUIREMENTS).write_text("")
+    monkeypatch.setattr(uc, "_server_mode", lambda: True)
+    assert uc.requirements_file(tmp_path) == tmp_path / "requirements-headless.txt"
+
+
+def test_a_desktop_installs_the_full_list(tmp_path, monkeypatch):
+    _source_tree(tmp_path)
+    (tmp_path / uc.HEADLESS_REQUIREMENTS).write_text("")
+    monkeypatch.setattr(uc, "_server_mode", lambda: False)
+    assert uc.requirements_file(tmp_path) == tmp_path / "requirements.txt"
+
+
+def test_a_server_on_a_checkout_from_before_the_split_installs_the_full_list(tmp_path, monkeypatch):
+    """A rollback or a downgrade lands on a tree that has only requirements.txt;
+    naming a file that is not there would fail the install. MUTATION: drop the
+    exists() check - red."""
+    _source_tree(tmp_path)
+    monkeypatch.setattr(uc, "_server_mode", lambda: True)
+    assert uc.requirements_file(tmp_path) == tmp_path / "requirements.txt"

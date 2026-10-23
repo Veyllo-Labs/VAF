@@ -113,7 +113,11 @@ def _install_python_deps(root: Path) -> None:
     # post-install hook that read this. Updates can cross that boundary (downgrade, or
     # the checkout mid-update), so keep setting it - platform setup must never re-run here.
     env = {**os.environ, "VAF_SKIP_POSTINSTALL": "1"}
-    for args in (["-e", "."], ["-r", "requirements.txt"]):
+    # A server keeps the headless set; installing the full file would put the
+    # desktop packages back on every update. A bare name with cwd=root, so the
+    # argument is the same on every platform.
+    requirements = update_check.requirements_file(root).name
+    for args in (["-e", "."], ["-r", requirements]):
         r = subprocess.run([sys.executable, "-m", "pip", "install", *args], cwd=str(root), env=env)
         if r.returncode != 0:
             raise _UpdateError(f"pip install {' '.join(args)} failed")
@@ -450,7 +454,7 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
         for s in [
             "stop the VAF service",
             *checkout_steps,
-            "pip install -e .  +  pip install -r requirements.txt",
+            f"pip install -e .  +  pip install -r {update_check.requirements_file(root).name}",
             "npm install in web/ (only if frontend deps changed)",
             "invalidate web/.next (lazy rebuild on next start)",
             "run config/state migrations",

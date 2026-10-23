@@ -1,0 +1,114 @@
+# VAF - Veyllo Agentic Framework
+# The headless set: everything VAF needs except what only a desktop session
+# uses. A server install (./install.sh --server) and `vaf update` on a server
+# install this file; requirements.txt includes it and adds the desktop packages.
+
+# CLI & UI
+typer>=0.12.0  # from 0.12 typer carries shellingham itself (shell detection for --install-completion)
+rich>=13.0.0
+prompt_toolkit>=3.0.0
+textual>=8.2.8
+psutil>=5.9.0
+
+# API & Networking
+requests>=2.31.0
+httpx>=0.27.0
+PyGithub>=2.1.1
+beautifulsoup4>=4.12.0
+markdownify>=1.0.0      # HTML->Markdown (MIT); replaces GPL-3.0 html2text - see docs/legal/THIRD_PARTY.md
+fastapi>=0.109.0
+uvicorn[standard]>=0.53.0  # the door's WebSocket implementation (vaf/network/door.py WS_PROTOCOL) makes a sender wait from 0.52.1; below it a socket to a client that reads nothing grows without a limit
+websockets>=14.0  # from 14.0 websockets.connect is the asyncio client, whose additional_headers the proxy's WebSocket relay passes (vaf/network/https_proxy.py)
+pydantic>=2.0.0
+jsonschema>=4.18.0  # schema validation for tool-input repair (vaf/core/tool_input_repair.py); was only present transitively (mcp via browser-use, py>=3.11), so it was missing on 3.10
+mcp>=1.26.0,<2  # the official Model Context Protocol SDK: remote MCP servers (Streamable HTTP, SSE) in vaf/core/mcp_remote.py; was only present transitively (browser-use, py>=3.11). Capped below 2: 2.x renamed FastMCP (the tests' in-process servers) and the remote lane is tested on 1.x only
+packaging>=23.0  # PEP 440 version parsing/comparison for the self-updater (vaf/cli/cmd/update.py); imported directly, was only transitive (huggingface_hub)
+discord.py>=2.3.2
+python-telegram-bot>=21.0
+
+# AI/ML
+huggingface_hub[hf_xet]>=1.1.0  # first with tqdm_class on hf_hub_download and its Xet path; every model download passes one (progress + the profile guard)
+tqdm>=4.65.0  # Progress bars for downloads
+openai>=1.12.0
+anthropic>=0.18.0
+google-genai>=1.0.0  # new unified SDK; google-generativeai is EOL
+
+# Browser Automation (optional - run `playwright install --with-deps chromium` after pip install)
+browser-use>=0.13.8; python_version >= "3.11"
+playwright>=1.49.0; python_version >= "3.11"
+
+# Interactive CLI prompts
+inquirer>=3.1.0
+
+# Timezones
+tzdata>=2024.1  # IANA tz database for zoneinfo on Windows (no system tz db); used by vaf/core/user_time.py
+
+# Speech Processing (Optional - Offline STT)
+# pyttsx3 removed - RAM explosion on Windows (SAPI/comtypes); Docker TTS (Piper) is the primary engine
+# pyaudio removed from CORE requirements: it ships no wheels for brand-new Python versions and its
+# source build needs the portaudio C headers, which broke the whole install (seen on Python 3.14).
+# It stays available as the optional `vaf[speech]` extra (setup.py); the runtime import is guarded,
+# so CLI microphone input degrades gracefully without it. Web/desktop mic capture is unaffected.
+# SpeechRecognition (the terminal microphone) is desktop only and lives in requirements.txt.
+transformers>=5.0.0  # 4.x needs huggingface_hub<1.0, which the hub floor above excludes; WhisperFeatureExtractor only: the log-mel front end of the Smart Turn judge (vaf/core/voice_vad.py); needs no torch
+# openai-whisper>=20231117  # Recommended for high-quality offline STT (DE, TR, CN...)
+# openwakeword>=0.6.0  # Wake Word Detection (100% local & free) - DISABLED on Mac due to install issues
+# onnxruntime>=1.16.0  # Required for openWakeWord inference
+
+# Images (icons, vision input, PDF OCR, QR codes for 2FA)
+pillow>=10.0.0
+
+# Code Quality & Linting
+ruff>=0.1.0  # Fast Python linter and formatter
+
+# Document Processing (PDF, Word, etc.)
+# Gotenberg (Docker): optional Office->PDF for Document Viewer; see docs/setup/DOCKER_SERVICES.md
+PyPDF2>=3.0.0  # PDF reading (fallback path for pdf_extract)
+pdfplumber>=0.11.0  # PDF -> markdown (headings + tables); primary path in vaf/core/pdf_extract.py (MIT)
+pycryptodome>=3.15.0  # Required by PyPDF2 for AES-encrypted PDFs (e.g. bank statements)
+pypdfium2>=4.30.0  # PDF page rendering for OCR (scanned PDFs); permissive (BSD/Apache) pip wheel on every platform - replaced GPL poppler/pdf2image
+pytesseract>=0.3.10  # OCR for scanned PDFs; system: Tesseract required (optional lang pack "deu" for German)
+python-docx>=1.1.0  # Word document reading
+openpyxl>=3.1.0  # Excel file reading
+python-pptx>=0.6.21  # PowerPoint reading
+
+# Auth (Local Network: JWT, 2FA, Argon2) + Email credential storage
+argon2-cffi>=25.1.0         # Password hashing
+keyring>=25.7.0             # OS keyring for email OAuth/IMAP credentials (Windows/macOS/Linux)
+filelock>=3.12.0           # Cross-process lock for the encrypted credential fallback (vaf.core.secure_store)
+PyJWT>=2.8.0               # JWT tokens
+pyotp>=2.9.0               # TOTP 2FA
+qrcode[pil]>=7.4.0         # QR code for 2FA setup
+
+# Memory System (RAG + Vector Search)
+sqlalchemy[asyncio]>=2.0.0  # Async ORM for database operations
+asyncpg>=0.29.0  # Async PostgreSQL driver
+pgvector>=0.2.0  # pgvector SQLAlchemy integration
+cryptography>=41.0.0  # AES-256-GCM encryption
+pyrage>=1.4.0,<2  # age file encryption: the recovery key (vaf.core.recovery_kit)
+onnxruntime>=1.16.0  # Lightweight ONNX Runtime for embeddings
+sherpa-onnx>=1.13  # Speaker ID (Silero VAD + ERes2Net embeddings); live incident: missing dep = every fresh install's enrollment said "no speech"
+tokenizers>=0.15.0   # Fast Rust-based tokenizers
+numpy>=1.24.0        # Numerical operations for embeddings
+
+# Caching (Redis)
+redis>=5.0.0  # Redis client for caching embeddings, RAG queries, sessions
+
+# Mail client engine (vaf/mail/, docs/integrations/EMAIL_CLIENT.md)
+IMAPClient>=3.0.0    # IMAP driver (BSD-3): IDLE, XOAUTH2, parsed responses
+nh3>=0.2.17          # HTML e-mail sanitization at the trust boundary (MIT, Rust/ammonia)
+zstandard>=0.22.0    # Compression for raw RFC822 blobs in the mail store (BSD)
+
+# System Requirements (must be installed separately)
+# Git: Required for version control in coding projects
+# - Windows: https://git-scm.com/download/win or `winget install Git.Git`
+# - macOS: `brew install git` or `xcode-select --install`
+# Linux: `sudo apt-get install git` (Debian/Ubuntu) or equivalent for your distribution
+# Tesseract: needed only for ocr_engine=tesseract (the free local OCR lane; the installers set it up).
+# Windows: winget install UB-Mannheim.TesseractOCR; macOS: brew install tesseract tesseract-lang; Linux: apt install tesseract-ocr tesseract-ocr-deu.
+# Without it, ocr_engine=auto falls back to the configured vision model (one model call per page).
+
+
+# Testing
+pytest>=7.0.0
+setuptools>=77  # the wheel guard (tests/test_wheel_ships_runtime_assets.py) builds with --no-build-isolation; a venv on Python 3.12+ ships no setuptools

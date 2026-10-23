@@ -14,8 +14,9 @@ These guards pin three things:
   2. That range equals exactly the CI matrix (ci.yml + ci-nightly.yml) - the tested versions
      ARE the supported versions; whoever bumps the matrix must bump the installers (and vice
      versa) in the same change.
-  3. pyaudio stays OUT of the core requirements.txt (it is the optional vaf[speech] extra);
-     its no-wheel-for-new-Python source build is what broke the install in the first place.
+  3. pyaudio stays OUT of the core requirements.txt and the headless set it includes (it is
+     the optional vaf[speech] extra); its no-wheel-for-new-Python source build is what broke
+     the install in the first place.
 """
 import json
 import re
@@ -92,9 +93,13 @@ def test_installers_fall_through_to_uv_on_unsupported_python():
 
 
 def test_pyaudio_stays_out_of_core_requirements():
-    req = (ROOT / "requirements.txt").read_text(encoding="utf-8")
-    active = [ln for ln in req.splitlines() if ln.strip() and not ln.strip().startswith("#")]
-    assert not any("pyaudio" in ln.lower() for ln in active), (
+    # Through the `-r` include: requirements.txt is the headless set plus the desktop
+    # packages. MUTATION: add pyaudio to requirements-headless.txt - red.
+    from test_dependency_manifests_in_sync import _requirement_lines
+
+    active = [name for _, name, _ in _requirement_lines()]
+    assert "fastapi" in active, "the reader no longer follows the include"
+    assert not any("pyaudio" in name for name in active), (
         "pyaudio must stay OUT of core requirements.txt (no wheels for brand-new Pythons broke "
         "the whole install); it belongs to the optional vaf[speech] extra in pyproject.toml"
     )

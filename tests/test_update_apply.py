@@ -324,3 +324,65 @@ def test_apply_with_nothing_running_starts_headless(patched):
     """No instance to copy: the documented default of `vaf start`."""
     upd._apply(dry_run=False, assume_yes=True, target_tag=None)
     assert patched.events["modes"] == [None]
+
+
+# ── a server keeps the headless set across updates ───────────────────────────
+
+def _checkout_with_both_requirement_files(tmp_path):
+    (tmp_path / "requirements.txt").write_text("-r requirements-headless.txt\n", encoding="utf-8")
+    (tmp_path / uc.HEADLESS_REQUIREMENTS).write_text("typer\n", encoding="utf-8")
+    return tmp_path
+
+
+@pytest.mark.parametrize("server_mode, expected", [
+    (True, "requirements-headless.txt"),
+    (False, "requirements.txt"),
+])
+def test_the_update_installs_the_requirements_file_of_this_installation(
+        monkeypatch, tmp_path, server_mode, expected):
+    """An update on a server installs the headless set again, so the desktop packages
+    never come back with it. MUTATION: put the literal "requirements.txt" back into
+    _install_python_deps - the server case goes red."""
+    root = _checkout_with_both_requirement_files(tmp_path)
+    monkeypatch.setattr(uc, "_server_mode", lambda: server_mode)
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append((cmd, kw.get("cwd")))
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(upd.subprocess, "run", fake_run)
+    upd._install_python_deps(root)
+    assert [c[0][-2:] for c in calls] == [["-e", "."], ["-r", expected]]
+    assert all(cwd == str(root) for _, cwd in calls)
+
+
+def test_the_rollback_installs_the_headless_set_on_a_server(patched, monkeypatch, tmp_path):
+    """The rollback reinstalls through the same function, on the tree it went back to."""
+    root = _checkout_with_both_requirement_files(tmp_path)
+    monkeypatch.setattr(upd, "_repo_root", lambda: root)
+    monkeypatch.setattr(uc, "_server_mode", lambda: True)
+    pip = []
+    real_run = upd.subprocess.run
+
+    def recording_run(cmd, **kw):
+        if "pip" in cmd:
+            pip.append(cmd[-2:])
+        return real_run(cmd, **kw)
+
+    monkeypatch.setattr(upd.subprocess, "run", recording_run)
+    patched.git.fail_checkout_to = "v9.9.9"   # the target checkout fails, the rollback runs
+    with pytest.raises(typer.Exit):
+        upd._apply(dry_run=False, assume_yes=True, target_tag=None)
+    assert ["-r", "requirements-headless.txt"] in pip
+    assert ["-r", "requirements.txt"] not in pip
+
+
+def test_the_dry_run_names_the_requirements_file_it_would_install(patched, monkeypatch, tmp_path):
+    root = _checkout_with_both_requirement_files(tmp_path)
+    monkeypatch.setattr(upd, "_repo_root", lambda: root)
+    monkeypatch.setattr(uc, "_server_mode", lambda: True)
+    msgs = _capture_ui(monkeypatch)
+    with pytest.raises(typer.Exit):
+        upd._apply(dry_run=True, assume_yes=True, target_tag=None)
+    assert "  - pip install -e .  +  pip install -r requirements-headless.txt" in msgs

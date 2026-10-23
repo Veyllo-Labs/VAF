@@ -5,9 +5,10 @@
 # Packaging metadata SSOT (PEP 621). setup.py remains only as a thin legacy
 # shim. Dependency layout: [project.dependencies] is the slim base needed to
 # use VAF as a headless library (`from vaf import Agent`); everything heavy
-# lives in optional extras so the library stays slim. The full desktop/server
-# product installs `pip install -r requirements.txt` (the canonical FLAT full
-# list used by install.sh / install.ps1) - that flow is unaffected by this file.
+# lives in optional extras so the library stays slim. The full desktop product
+# installs `pip install -r requirements.txt` (the canonical full list used by
+# install.sh / install.ps1; it includes requirements-headless.txt, the set a
+# server install takes) - that flow is unaffected by this file.
 
 [build-system]
 # setuptools >= 77 is required for PEP 639 (SPDX license expression +

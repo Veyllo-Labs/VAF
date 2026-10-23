@@ -60,12 +60,15 @@ def bootstrap():
         "tqdm": "tqdm",  # Progress bars for downloads
         # Interactive CLI prompts
         "inquirer": "inquirer",
-        # Speech (TTS/STT/Wake Word)
-        "SpeechRecognition": "speech_recognition",
+        # Only packages of requirements-headless.txt, the set every install lane installs
+        # (tests/test_dependency_manifests_in_sync.py). The desktop-only ones (pystray,
+        # SpeechRecognition, pywebview, PySide6) are not probed: a server leaves them out, so
+        # probing them would prompt on every command there, and a desktop without them runs
+        # without the tray icon or the terminal microphone, never without VAF.
         # pyaudio is NOT required here: it moved to the optional vaf[speech] extra (no wheels
         # for brand-new Pythons; source build needs portaudio headers). Requiring it would
         # recreate the infinite prompt documented in the rumps NOTE below, because the
-        # auto-install runs `pip install -r requirements.txt`, which no longer contains it.
+        # auto-install runs `pip install -r` on a requirements file that does not contain it.
         # "onnxruntime": "onnxruntime",   # Optional/Unstable on Mac
         # Document Processing (PDF, Word, Excel, PowerPoint)
         "PyPDF2": "PyPDF2",
@@ -74,8 +77,7 @@ def bootstrap():
         "python-pptx": "pptx",             # pip name != import name
         # Code Quality & Linting
         "ruff": "ruff",
-        # System Tray
-        "pystray": "pystray",
+        # Images (icons, vision input, PDF OCR, 2FA QR codes)
         "pillow": "PIL",
     }
     
@@ -83,7 +85,7 @@ def bootstrap():
     # pywebview for macOS main-thread ownership); the tray uses pystray on every platform, and
     # pystray + pyobjc-framework-Cocoa are in requirements.txt for darwin. Demanding rumps here
     # caused an infinite "missing rumps" prompt, since `pip install -r requirements.txt` never
-    # installs it. The platform-agnostic check above already covers pystray.
+    # installs it. pystray itself is not probed either (desktop only, see the map above).
     
     missing = []
     for pip_name, import_name in DEPENDENCIES.items():
@@ -107,11 +109,17 @@ def bootstrap():
     if not missing and not optional_extras:
         return  # All good!
     
-    # Find requirements.txt (could be in project root or vaf folder)
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # The file this installation installs: the headless set on a server, the full list
+    # elsewhere. Imported only on this path and guarded: bootstrap runs before anything
+    # else, and a missing dependency of that module falls back to the full list.
     req_file = os.path.join(base_dir, "requirements.txt")
-    if not os.path.exists(req_file):
-        req_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
+    try:
+        from pathlib import Path
+        from vaf.core.update_check import requirements_file
+        req_file = str(requirements_file(Path(base_dir)))
+    except Exception:
+        pass
+    req_name = os.path.basename(req_file)
     
     print(f"\n{'='*60}")
     print("  VAF - Dependency Check")
@@ -141,7 +149,7 @@ def bootstrap():
         _interactive = False
     if not _interactive:
         print("  Non-interactive environment — skipping auto-install.")
-        print("  To install manually: pip install -r requirements.txt")
+        print(f"  To install manually: pip install -r {req_name}")
         return
     try:
         response = input("  Auto-install via pip? [Y/n]: ").strip().lower()
@@ -153,7 +161,7 @@ def bootstrap():
         print("\n  Installing dependencies...")
         try:
             if os.path.exists(req_file):
-                # Install from requirements.txt (includes all packages and extras)
+                # Install the requirements file (includes all packages and extras)
                 subprocess.check_call(
                     [sys.executable, "-m", "pip", "install", "-r", req_file, "-q"],
                     stdout=subprocess.DEVNULL
@@ -179,16 +187,16 @@ def bootstrap():
             if sys.platform == "darwin" and "externally-managed-environment" in str(e): # Popen/run would be needed to capture this
                  pass # We can't see the output with check_call(..., stdout=DEVNULL)
             
-            print(f"  Run manually: pip install -r requirements.txt")
+            print(f"  Run manually: pip install -r {req_name}")
             if sys.platform == "darwin":
-                 print("  Note: On macOS, you may need: pip install --break-system-packages -r requirements.txt")
+                 print(f"  Note: On macOS, you may need: pip install --break-system-packages -r {req_name}")
             sys.exit(1)
         except Exception as e:
             print(f"  ✗ Install failed: {e}")
             sys.exit(1)
     else:
         print("\n  Please install manually:")
-        print(f"    pip install -r requirements.txt")
+        print(f"    pip install -r {req_name}")
         print("  or:")
         print(f"    pip install {' '.join(missing)}")
         sys.exit(1)

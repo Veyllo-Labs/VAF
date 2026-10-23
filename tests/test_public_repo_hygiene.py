@@ -316,7 +316,7 @@ def test_the_attribution_detector_actually_detects():
 # them corrupting a German example sentence the model received verbatim.
 # ---------------------------------------------------------------------------
 
-_DASH_FREE_FILES = ("vaf/core/system_prompt.py",)
+_DASH_FREE_FILES = ("vaf/core/system_prompt.py", "requirements.txt", "requirements-headless.txt")
 _BANNED_TYPOGRAPHY = {"—": "em dash", "–": "en dash",
                       "―": "horizontal bar", "�": "replacement character"}
 

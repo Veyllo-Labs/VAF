@@ -84,8 +84,12 @@ echo "=== 5/9  Lock file freshness ==="
 # The shape check it replaces ("requirements.txt changed, the lock did not")
 # refused a correct change: a cap the pinned version already meets leaves the
 # regenerated lock byte-identical. Without python3.13 the shape check remains.
+# requirements.txt includes requirements-headless.txt (-r), so the included
+# file is an input of the lock like requirements.txt itself.
+REQ_FILES="requirements.txt requirements-headless.txt"
 if git rev-parse --verify -q origin/main >/dev/null; then
-    REQ_CHANGED=$(git diff --name-only origin/main...HEAD -- requirements.txt; git diff --name-only -- requirements.txt)
+    # shellcheck disable=SC2086  # two separate path arguments
+    REQ_CHANGED=$(git diff --name-only origin/main...HEAD -- $REQ_FILES; git diff --name-only -- $REQ_FILES)
     LOCK_CHANGED=$(git diff --name-only origin/main...HEAD -- requirements.lock; git diff --name-only -- requirements.lock)
     if [ -z "$REQ_CHANGED" ] && [ -z "$LOCK_CHANGED" ]; then
         echo "    OK (neither file changed)"
@@ -96,7 +100,8 @@ if git rev-parse --verify -q origin/main >/dev/null; then
             exit 1
         fi
         LOCK_TMP="$(mktemp -d)"
-        cp requirements.txt requirements.lock "$LOCK_TMP/"
+        # shellcheck disable=SC2086  # two separate path arguments
+        cp $REQ_FILES requirements.lock "$LOCK_TMP/"
         echo "    regenerating the lock like the lock-sync job ($LOCK_PINS, Python 3.13)"
         # shellcheck disable=SC2086  # the pins are two separate arguments
         if ! { python3.13 -m venv "$LOCK_TMP/venv" \
@@ -118,7 +123,7 @@ if git rev-parse --verify -q origin/main >/dev/null; then
         rm -rf "$LOCK_TMP"
         echo "    OK (regenerated lock is identical)"
     elif [ -n "$REQ_CHANGED" ] && [ -z "$LOCK_CHANGED" ]; then
-        echo "ERROR: requirements.txt changed but requirements.lock did not, and without" >&2
+        echo "ERROR: a requirements file changed but requirements.lock did not, and without" >&2
         echo "python3.13 the lock cannot be regenerated here to prove it needs no change." >&2
         echo "Regenerate the lock in the SAME commit (recipe in CLAUDE.md Rule 5)." >&2
         exit 1

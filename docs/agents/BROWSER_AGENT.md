@@ -538,7 +538,9 @@ window re-enters the interactive mode by itself, with a short handover veil in e
 direction - the agent must not close a browser window the person opened. A run that
 evicted nobody ends as before: the window auto-closes a few seconds after completion.
 The give-back is consumed on first use, and a lease the person starts by hand clears any
-pending one.
+pending one. With runs queued behind each other it waits for the last of them: a queued run
+finds no lease to evict and leaves the remembered holder alone, and neither the give-back nor
+the "browser is free" stop event goes out while another run is still counted.
 
 **Logins persist, without a switch.** Interactive use is always the PERSISTENT mode - the
 counterpart of the agent's `persistent=true` runs, and deliberately without a toggle of its

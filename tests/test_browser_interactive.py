@@ -390,6 +390,24 @@ def test_takeover_remembers_the_holder_and_run_end_says_resumable(mgr, monkeypat
     assert [1 for p, _ in mgr._test_emitted if p.get("resumable")] == [1]
 
 
+def test_a_queued_run_keeps_the_give_back_for_the_last_runs_end(mgr, monkeypatch):
+    """A second run queues while the first drives (no lease left to evict): the person the
+    first run evicted gets the browser back when the LAST run ends, once, and nobody is told
+    the browser is free while a run is still queued. MUTATION: clear the holder on every
+    eviction call, or give back on every run's end - red."""
+    _no_ipc_tasks(monkeypatch)
+    mgr.start("scope-a", "sess-1")
+    mgr.stop_for_agent_run()             # run A evicts the person
+    mgr.stop_for_agent_run()             # run B queues behind it
+    mgr.agent_run_ended()                # A ends, B drives next
+    assert not [p for p, _ in mgr._test_emitted if p.get("reason") == "agent_done"], (
+        "the browser was announced free while a run was still queued")
+    mgr.agent_run_ended()                # B ends
+    resumable = [sid for p, sid in mgr._test_emitted
+                 if p.get("reason") == "agent_done" and p.get("resumable")]
+    assert resumable == ["sess-1"], "the evicted person did not get the browser back"
+
+
 def test_no_lease_means_no_give_back(mgr, monkeypatch):
     _no_ipc_tasks(monkeypatch)
     mgr.stop_for_agent_run()

@@ -1111,8 +1111,11 @@ class InteractiveBrowserManager:
         with self._lock:
             self._agent_runs += 1
             lease = self._lease
-            self._pre_agent_holder = ((lease.user_scope_id, lease.session_id)
-                                      if lease else None)
+            # Only an eviction names a holder. A run queued behind one that is still
+            # driving finds no lease, and clearing the holder there took the give-back
+            # from the person the first run evicted (their window closed at the end).
+            if lease is not None:
+                self._pre_agent_holder = (lease.user_scope_id, lease.session_id)
         if lease is not None:
             # Capture WHERE the person is before the eviction, so the run can
             # continue there. Best-effort and bounded; a takeover of an idle
@@ -1563,6 +1566,9 @@ class InteractiveBrowserManager:
             # This run's place in the count, in both modes; a run queued behind it
             # keeps the browser marked as driven.
             self._agent_runs = max(0, self._agent_runs - 1)
+            # The browser is handed back, and its window told it is free, only when
+            # the LAST run ends: a run queued behind this one drives next.
+            last_run = self._agent_runs == 0
             # The spawn lane (notify=False) never claimed: its child does, in its
             # own process, and releases there.
             run_token = None
@@ -1575,8 +1581,8 @@ class InteractiveBrowserManager:
             # it would keep showing the browser to a window with no run behind.
             self._agent_stream = None
             sid = self._last_session_id
-            holder = self._pre_agent_holder if notify else None
-            if notify:
+            holder = self._pre_agent_holder if (notify and last_run) else None
+            if notify and last_run:
                 self._pre_agent_holder = None
             run_scope = self._last_cookie_scope
         # A run downloads too (the agent saves a PDF for the person): drain to
@@ -1590,8 +1596,8 @@ class InteractiveBrowserManager:
         # Best-effort. notify=False is the spawn lane, where run() returns its
         # marker while the child is only starting - announcing a free browser
         # there would be a lie (the holder stays remembered for the run that
-        # does end with a notification).
-        if not notify:
+        # does end with a notification). A run still queued keeps both for its own end.
+        if not notify or not last_run:
             return
         if holder is not None:
             self._emit({"status": "stopped", "reason": "agent_done",

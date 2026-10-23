@@ -235,7 +235,8 @@ def test_the_bootstrap_installs_the_requirements_file_of_this_installation(
 
     assert len(calls) == 1, calls
     cmd = calls[0]
-    assert Path(cmd[cmd.index("-r") + 1]) == ROOT / expected, cmd
+    # bootstrap() builds the path with os.path.abspath, ROOT is resolve()d: compare the files.
+    assert Path(cmd[cmd.index("-r") + 1]).resolve() == (ROOT / expected).resolve(), cmd
 
 
 def test_the_lock_check_regenerates_from_both_requirement_files():

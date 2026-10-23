@@ -243,12 +243,7 @@ Standalone Baileys-based bridge invoked over stdin/stdout JSON IPC.
 ### Runtime dependencies
 | Package | Range | License |
 |---|---|---|
-| @whiskeysockets/baileys | ^6.7.21 | MIT (well-known; node_modules not installed) |
-
-### Build / dev tooling (devDependencies)
-| Package | Range | License |
-|---|---|---|
-| patch-package | ^8.0.1 | MIT (well-known; node_modules not installed) |
+| @whiskeysockets/baileys | ^6.7.24 | MIT (well-known; node_modules not installed) |
 
 ---
 

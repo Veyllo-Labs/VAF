@@ -396,8 +396,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   gone, and the schema is still created at startup.
 - **The WhatsApp bridge reads audio length with a patched parser.** Baileys measures a voice
   message's length with `music-metadata` before it sends one, and the version in use could be
-  made to crash the bridge or loop forever by a crafted audio file (three advisories). It now
-  runs 11.16.1.
+  made to crash the bridge or loop forever by a crafted audio file (three advisories). A new
+  install of the bridge runs 11.16.1; an installed bridge gets it when its packages are
+  installed again (`npm ci` in `vaf/whatsapp_node`, with VAF stopped).
+- **The web interface runs on Next.js 16.4.2 and DOMPurify 3.4.17.** Next.js up to 16.4.0
+  carries three advisories published on 22 October (remote code execution through the image
+  optimizer with SVG files and through `use cache` functions, and a denial of service through
+  Server Actions), DOMPurify 3.4.16 three more (its `SAFE_FOR_TEMPLATES`, `IN_PLACE` and XHTML
+  modes). None of them reached VAF: its image optimizer is switched off, it has no Server
+  Action and no `use cache` function, and its sanitizer uses none of those modes. `vaf update`
+  installs the new packages and rebuilds the interface at the next start. A new install of the
+  WhatsApp bridge gets follow-redirects 1.16.1 (two advisories about credential headers on
+  redirects); the bridge's requests carry no credentials, so a bridge that keeps 1.16.0 is not
+  exposed.
 
 - **A certificate you configured is never replaced.** VAF used to drop it when it had fewer
   than 30 days left or lacked two extensions, serve its own instead and overwrite your settings;

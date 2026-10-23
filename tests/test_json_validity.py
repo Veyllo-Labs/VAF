@@ -166,6 +166,31 @@ def test_npm_manifest_agrees_with_its_lockfile(rel: Path) -> None:
     )
 
 
+_NPM_FILES = tuple(
+    path for manifest in _NPM_MANIFESTS
+    for path in (manifest, manifest.parent / "package-lock.json")
+)
+
+
+@pytest.mark.parametrize("rel", _NPM_FILES, ids=str)
+def test_npm_manifests_and_locks_are_committed_with_lf(rel: Path) -> None:
+    """npm writes package-lock.json with the line ending it finds in package.json. A
+    manifest committed with CRLF therefore turns every lock regeneration into a CRLF
+    rewrite of the whole lock, thousands of changed lines that bury the one version that
+    moved and have to be put back by hand each time. The committed blob is read, not the
+    working tree: under Windows' autocrlf the working tree carries CRLF either way."""
+    blob = subprocess.run(
+        ["git", "cat-file", "blob", f":{rel.as_posix()}"],
+        cwd=_REPO,
+        capture_output=True,
+        check=True,
+    ).stdout
+    assert b"\r" not in blob, (
+        f"{rel.as_posix()} carries CR line endings in git; npm copies the manifest's line "
+        "ending into the lock on the next regeneration. Convert it to LF by bytes."
+    )
+
+
 def test_parser_rejects_the_stray_brace_incident() -> None:
     """The exact 2026-07-23 accident: one extra closing brace at the end of the file."""
     text = (_REPO / "web/package.json").read_bytes().decode("utf-8-sig").rstrip()

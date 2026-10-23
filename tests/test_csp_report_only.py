@@ -184,3 +184,16 @@ def test_a_report_cannot_pose_as_another_reporter(sink):
                             "https://x.example/%20(reported%20by%20this%20machine) on "
                             "https://10.0.0.2:8443/")
     assert lines[-1][1].count(" ") == 8
+
+
+def test_a_url_the_parser_refuses_is_written_as_unknown_and_the_batch_goes_on(sink):
+    """urlsplit raises on an unbalanced or non-IP bracketed host; one such field must not turn
+    the route into a 500 and drop the rest of the batch. MUTATION: drop the ValueError guard
+    around the parse - red."""
+    _h, _app, browser, lines = sink
+    r = _post(browser, [_report(blocked="https://[abc/x.js"), _report(page="//[x"),
+                        _report(blocked="https://ok.example/y.js")])
+    assert r.status_code == 204
+    assert lines[0][1] == ('[CSP] reported by "alice": script-src-elem blocked - '
+                           "on https://10.0.0.2:8443/")
+    assert lines[-1][1].endswith("blocked https://ok.example/y.js on https://10.0.0.2:8443/")

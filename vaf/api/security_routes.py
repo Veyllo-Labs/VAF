@@ -1173,18 +1173,23 @@ def _origin_and_path(value: Any) -> str:
     words."""
     from urllib.parse import urlsplit
     text = str(value or "").strip()[:500]
-    if "://" in text:
-        parts = urlsplit(text)
-        host = parts.hostname or ""
-        if ":" in host:
-            host = f"[{host}]"
-        try:
-            port = f":{parts.port}" if parts.port else ""
-        except ValueError:
-            port = ""
-        text = f"{parts.scheme}://{host}{port}{parts.path}"
-    elif text.startswith("/"):
-        text = urlsplit(text).path
+    try:
+        if "://" in text:
+            parts = urlsplit(text)
+            host = parts.hostname or ""
+            if ":" in host:
+                host = f"[{host}]"
+            try:
+                port = f":{parts.port}" if parts.port else ""
+            except ValueError:
+                port = ""
+            text = f"{parts.scheme}://{host}{port}{parts.path}"
+        elif text.startswith("/"):
+            text = urlsplit(text).path
+    except ValueError:
+        # urlsplit refuses some hosts outright (an unbalanced or non-IP bracket): such a
+        # field is written as unknown, and the rest of the batch is still recorded.
+        return "-"
     return "".join(ch if ch.isprintable() and not ch.isspace() else "%20" for ch in text)[:300] or "-"
 
 

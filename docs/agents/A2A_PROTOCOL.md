@@ -1142,7 +1142,8 @@ ONLY the user's frames opens what a chat instruction would open; a wake that mix
 their words with a stranger's stays gated, so a stranger's ask can never ride on the
 user's authority. `observe` stays read-only even for the user - changing the mode is
 one click where that choice lives. An `autonomous` room is additionally exempt from
-the agent's ask-first latch: autonomous IS the user's standing decision for that room,
+the agent's ask-first latch (any other room turn reads the latch of the room's account only):
+autonomous IS the user's standing decision for that room,
 and an open chat question must not freeze work they explicitly ordered to continue
 without them.
 

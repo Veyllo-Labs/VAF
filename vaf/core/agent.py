@@ -2413,6 +2413,35 @@ class Agent:
         except Exception:
             return None
 
+    def _latch_key(self) -> str:
+        from vaf.core.thinking_mode import scope_storage_key
+        return scope_storage_key(getattr(self, "_current_user_scope_id", None))
+
+    @property
+    def _pending_user_question(self):
+        """The ask-first latch of the account this turn runs as: the agent asked that account
+        a blocking question and waits for its answer (`_ask_first_gate_decision`, the drain's
+        retry instruction).
+
+        Kept per account, because one agent serves every account of a runner worker: as one
+        field, another account's message cleared the owner's open question, and one account's
+        question held every other account's drain turns. The key is canonical
+        (`thinking_mode.scope_storage_key`): no scope and the local admin's scope are one
+        account, as in the owner's other per-account stores. Per account, not per chat: an
+        account's message in any of its chats answers its question. A contact's turn runs on
+        the owner's account and neither sets nor clears it (`_turn_is_from_the_user`, the
+        allowed-set check at the setter)."""
+        latches = self.__dict__.get("_ask_first_latches")
+        return latches.get(self._latch_key()) if latches else None
+
+    @_pending_user_question.setter
+    def _pending_user_question(self, value) -> None:
+        latches = self.__dict__.setdefault("_ask_first_latches", {})
+        if value is None:
+            latches.pop(self._latch_key(), None)
+        else:
+            latches[self._latch_key()] = value
+
     def _ask_first_gate_decision(self, name, tool_instance):
         """Gate (c): once the agent's final reply asked the user a blocking question,
         synthetic background turns (runner drain) may deliver results and read, but must
@@ -9677,8 +9706,8 @@ class Agent:
         user's identity: it is a person, but never the user, so neither latch may
         read it as an answer. A contact's turn reaches both: the waiting record is
         keyed on the user's scope, which the turn runs under, and the ask-first
-        latch is a field of this agent, which serves every chat of a runner
-        worker. Measured before this test read the set: a
+        latch is kept per account, and a contact's turn runs on the owner's.
+        Measured before this test read the set: a
         contact's "ja" was filed as the owner's answer to a background question,
         the owner's question, the proposal and the findings behind it reached the
         contact's prompt, and the next background run could close the request on
@@ -13166,10 +13195,11 @@ class Agent:
                 # background turns (runner drain) cannot launch new write actions meanwhile.
                 # Only SET here; cleared exclusively by a real user message at chat_step entry
                 # (a later non-question background reply does not mean the user answered).
-                # Not under an allowed set: the latch is agent-wide and means the agent waits
-                # on its OWN user, while a turn under a set asked somebody else. One agent
-                # serves every chat of a runner worker, so a question to a contact would hold
-                # the user's drain turns and the runner's sub-agent retry until the user spoke.
+                # Not under an allowed set: the latch is kept per account (see
+                # `_pending_user_question`) and means the agent waits on that account's own
+                # user, while a turn under a set asked somebody else. A contact's turn runs on
+                # the owner's account, so a question to a contact would hold the owner's drain
+                # turns and the runner's sub-agent retry until the owner spoke.
                 # `_ac_needs_user` still brakes this turn's auto-continue below.
                 if _ac_needs_user and getattr(self, "_allowed_tools", None) is None:
                     try:

@@ -38,13 +38,11 @@ lifetimes (guarded by tests/test_turn_binding.py, which reads the attributes fro
 - ``chat``: one conversation (the history, the context state, the working memory, the recent
   tools). Swapped by `load_session_context`, or started fresh by `init_chat`
   (`Agent._reset_chat_state`).
-- ``account``: one account's state, which the binding neither swaps nor resets. NAMED
-  BOUNDARY: neither member is keyed per account yet. `_pending_user_question` (the ask-first
-  latch) is one value for the whole agent: the ask-first gate reads it at every write
-  (`Agent._ask_first_gate_decision`), and so does the drain's retry instruction, so one
-  account's open question holds another account's drain turns, and one account's answer
-  clears it for another. `_room_reply_streak` is keyed by room only, and any account's
-  person clears it for every room (`Agent.note_human_turn`).
+- ``account``: one account's state, which the binding neither swaps nor resets: the engine
+  keeps it per account and reads it through the bound identity. `_pending_user_question` (the
+  ask-first latch) is a property keyed by the bound scope (`Agent._pending_user_question`).
+  NAMED BOUNDARY: `_room_reply_streak` is keyed by room only, and any account's person clears
+  it for every room (`Agent.note_human_turn`).
 - ``binding``: one turn, set by the lane. Only `bind_turn` and `end_turn` write them.
 
 Plus four per-context variables in `vaf.core.subagent_ipc`: the session, the turn, the room

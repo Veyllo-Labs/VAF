@@ -525,6 +525,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   typed into a web chat is a chat message too: only the commands VAF queues itself are run as
   commands. Restart VAF after updating.
 
+- **One account's message no longer answers another account's open question.** On a server
+  with several accounts, one agent serves all of them. When it had asked one account
+  something ("Shall I delete the old files?"), a message from any other account counted as
+  the answer, so finished sub-agent work for the first account could start changes again
+  without anyone answering. While a question was open, every other account's background work
+  was held back as well. A question now belongs to the account it was asked of. Restart VAF
+  after updating so the fix takes effect.
+
 ### Fixed
 
 - **A server install leaves out what only a desktop uses.** `./install.sh --server` no longer

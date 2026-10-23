@@ -31,8 +31,9 @@ A fourth is a FLOOR, for the packages whose floor a VAF behaviour needs. An upda
 (``pip install -r requirements.txt``) keeps an installed version that satisfies the
 floor, so a floor below the version a behaviour needs leaves old installs without it:
 uvicorn's sans-I/O WebSocket protocol, the one the door names, makes a sender wait
-from 0.52.1, and ``websockets.connect`` is the asyncio client the proxy's relay calls
-from websockets 14.0. Only these floors are compared.
+from 0.52.1 (the manifests floor uvicorn at 0.53, the first release the door's tests
+ran on), and ``websockets.connect`` is the asyncio client the proxy's relay calls from
+websockets 14.0. Only these floors are compared.
 """
 import ast
 import json
@@ -254,12 +255,14 @@ def _assert_floor(package: str, minimum: str, why: str) -> None:
 def test_the_uvicorn_floor_is_where_a_websocket_makes_its_sender_wait():
     """The door serves uvicorn's sans-I/O WebSocket protocol (vaf/network/door.py
     WS_PROTOCOL), which defines its own pause_writing, and so makes a sender wait while its
-    client reads nothing, from uvicorn 0.52.1. CI and releases install requirements.txt and a
-    pip install resolves pyproject.toml, so each of them must hold uvicorn at or above it.
-    MUTATION: the pyproject.toml floor back to >=0.27.0, or requirements.txt to >=0.52.0 -
-    red."""
-    _assert_floor("uvicorn", "0.52.1",
-                  "the door's WebSocket would never make a sender wait (vaf/network/door.py)")
+    client reads nothing, from uvicorn 0.52.1. The floor is 0.53.0, the first release the
+    door's tests ran on and the one the docs name. CI and releases install requirements.txt
+    and a pip install resolves pyproject.toml, so each of them must hold uvicorn at or above
+    it. MUTATION: the pyproject.toml floor back to >=0.27.0, requirements.txt to >=0.52.0, or
+    all three at >=0.52.1 - red."""
+    _assert_floor("uvicorn", "0.53.0",
+                  "the door's WebSocket makes a sender wait only from 0.52.1, and 0.53.0 is the "
+                  "first release its tests ran on (vaf/network/door.py WS_PROTOCOL)")
 
 
 @pytest.mark.skipif(sys.version_info < (3, 11), reason="tomllib requires Python 3.11+")

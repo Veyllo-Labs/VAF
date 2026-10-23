@@ -193,7 +193,8 @@ KEEP_ALIVE_S = 5
 # 0.52.1 (0.50.0 to 0.52.0 have none). Without that wait, a WebSocket app sending in a loop to a
 # client that read nothing grew the process until the out-of-memory killer ended it (measured
 # with uvicorn 0.49's sans-I/O protocol, Python 3.13). The manifests floor uvicorn at 0.53, and
-# uvicorn deprecates its legacy protocol.
+# uvicorn deprecates its legacy protocol. The tray's loopback listeners pass it too, and
+# tests/test_ws_frame_size_pin.py fails on a uvicorn.Config that names no implementation.
 WS_PROTOCOL = "websockets-sansio"
 # A household behind one VPN with every tab, socket and live stream fits many times over.
 MAX_CONNECTIONS = 512

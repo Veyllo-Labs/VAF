@@ -448,22 +448,25 @@ def start_uvicorn(wait_for_db: bool = True):
         tls_enabled = Config.get("local_network_tls_enabled", False)
         # Mask the /ws?token=<jwt> query param out of uvicorn's access log.
         from vaf.core.log_helper import WS_MAX_SIZE_BYTES, redacted_uvicorn_log_config
+        # The WebSocket implementation the door names, on 8001 and 8005 as well, rather than
+        # uvicorn's own default (ws="auto"): that default moved once already to a protocol
+        # that never made a sender wait (uvicorn 0.50.0 to 0.52.0), and 8005 is the backend
+        # leg of every device WebSocket the HTTPS proxy relays, so a default that moved again
+        # would let a socket to a device that reads nothing grow this process.
+        from vaf.network.door import WS_PROTOCOL
         _log_cfg = redacted_uvicorn_log_config()
         if tls_enabled and ssl_cert and ssl_key:
             print(f"[Tray] Starting Uvicorn with TLS (HTTPS/WSS) on port 8001 ({host})...")
             log("Tray", f"Initializing Uvicorn Config with TLS ({host}:8001)...")
             # The TLS policy every listener shares. The door limits of the HTTPS proxy
             # (vaf/network/door.py) stay off this port and 8005: only this machine
-            # reaches them, and they keep uvicorn's forwarded-header defaults. Their
-            # WebSocket implementation stays uvicorn's own choice, which from the 0.53
-            # floor is the sans-I/O protocol the door names (WS_PROTOCOL), pinned by
-            # test_uvicorns_own_websocket_choice_is_the_doors.
+            # reaches them, and they keep uvicorn's forwarded-header defaults.
             from vaf.network.ssl_utils import register_tls_listener, server_tls_options
             config = uvicorn.Config(
                 app, host=host, port=8001, log_level="info", use_colors=False,
                 log_config=_log_cfg,
                 **server_tls_options(ssl_cert, ssl_key),
-                ws_max_size=WS_MAX_SIZE_BYTES,
+                ws_max_size=WS_MAX_SIZE_BYTES, ws=WS_PROTOCOL,
             )
             server = uvicorn.Server(config)
             # A changed certificate is loaded into this listener without a restart.
@@ -474,7 +477,7 @@ def start_uvicorn(wait_for_db: bool = True):
             print(f"[Tray] Starting Uvicorn thread on port 8001 ({host})...")
             log("Tray", f"Initializing Uvicorn Config ({host}:8001)...")
             config = uvicorn.Config(app, host=host, port=8001, log_level="info", use_colors=False, log_config=_log_cfg,
-                                    ws_max_size=WS_MAX_SIZE_BYTES)
+                                    ws_max_size=WS_MAX_SIZE_BYTES, ws=WS_PROTOCOL)
             server = uvicorn.Server(config)
         uvicorn_server = server
 
@@ -509,7 +512,7 @@ def start_uvicorn(wait_for_db: bool = True):
                     # would re-cap uploads the front door already accepted.
                     internal_cfg = uvicorn.Config(app, host="127.0.0.1", port=8005, log_level="warning", use_colors=False,
                                                   log_config=redacted_uvicorn_log_config(),
-                                                  ws_max_size=WS_MAX_SIZE_BYTES)
+                                                  ws_max_size=WS_MAX_SIZE_BYTES, ws=WS_PROTOCOL)
                     internal_srv = uvicorn.Server(internal_cfg)
                     internal_srv.install_signal_handlers = lambda: None
                     internal_api_server = internal_srv  # track so restart/disable can stop it

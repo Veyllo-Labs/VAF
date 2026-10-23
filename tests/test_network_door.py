@@ -1324,23 +1324,6 @@ def test_door_options_pin_the_websocket_implementation():
         "the floor, install requirements.txt")
 
 
-def test_uvicorns_own_websocket_choice_is_the_doors():
-    """The tray's loopback listeners (8001, and 8005, where the HTTPS proxy relays every
-    device's WebSocket) build their uvicorn.Config without ws and keep uvicorn's own choice.
-    From VAF's uvicorn floor that choice is the class the door names, so the relay chain
-    makes a sender wait end to end. Measured with config.load(): ws="auto" loads the legacy
-    protocol on 0.49 and WebSocketsSansIOProtocol on 0.50.0, 0.52.0, 0.52.1, 0.53 and 0.54,
-    with its own pause_writing from 0.52.1. CI runs the newest uvicorn, so the day that
-    default moves, this goes red there. MUTATION: uvicorn's auto protocol pointed at the
-    legacy one - red."""
-    plain = uvicorn.Config(_App(), log_config=None)
-    plain.load()
-    pinned = uvicorn.Config(_App(), log_config=None, **door.door_options())
-    pinned.load()
-    assert plain.ws_protocol_class is pinned.ws_protocol_class
-    assert plain.ws_protocol_class.__name__ == "WebSocketsSansIOProtocol"
-
-
 def test_a_door_websocket_makes_its_sender_wait():
     """A WebSocket on a door makes its app wait while the client reads nothing: of 64 MiB
     sent to a client that never reads, a small part is taken and the sender waits for the

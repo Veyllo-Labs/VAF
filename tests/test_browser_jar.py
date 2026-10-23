@@ -978,3 +978,46 @@ def test_without_a_cross_process_lock_the_record_is_unavailable(monkeypatch):
     monkeypatch.setattr(ss, "_get_filelock_cls", lambda: None)
     with pytest.raises(bj.JarRecordUnavailable):
         bj.record_for("vaf-browser").claim(bj.KIND_PROBE, "scope-a")
+
+
+@pytest.mark.parametrize("path", ["refused at the install", "handover refused"])
+def test_a_refresh_start_overtaken_by_a_run_leaves_no_entry(box, monkeypatch, path):
+    """Y's window starts again (a refresh, same session) while Y's lease stands, and
+    a run's eviction lands between that start's look at its lease and its claim:
+    the eviction releases the old entry, the claim makes a new one, and the start is
+    then refused - at the install (a run is counted) or at the handover (the wipe
+    fails). Whether the entry goes back is decided at that point, from the lease
+    actually installed; a lease seen before the claim kept the new entry in the
+    record with no lease behind it, and other processes saw the browser held.
+
+    MUTATION: release only when no lease was seen before the claim - red."""
+    import vaf.core.browser_jar as bj_mod
+
+    web = box["web"]
+    assert web.start("scope-y", "sess-y", save=False)["status"] == "active"
+    evicted, holding = threading.Event(), threading.Event()
+    real_claim = web._claim_shared
+
+    def slow_claim(kind, scope, *, wait_s):
+        if kind == bj.KIND_LEASE and not holding.is_set():
+            holding.set()
+            evicted.wait(5)
+        return real_claim(kind, scope, wait_s=wait_s)
+
+    monkeypatch.setattr(web, "_claim_shared", slow_claim)
+    if path == "handover refused":
+        box["wipe_ok"] = False
+        monkeypatch.setattr(bj_mod, "container_instance", lambda c: "test-container@restarted")
+    result = {}
+    t = threading.Thread(target=lambda: result.update(web.start("scope-y", "sess-y", save=False)))
+    t.start()
+    assert holding.wait(5)
+    web.stop_for_agent_run()                      # the run's eviction lands now
+    evicted.set()
+    t.join(5)
+    expected = "agent_active" if path == "refused at the install" else "error"
+    assert result.get("status") == expected, result
+    assert web._lease is None and web._lease_token is None
+    data = json.loads((bj._state_dir() / "vaf-browser.json").read_bytes())
+    assert data["holders"] == [], f"an entry stayed with no lease behind it: {data['holders']}"
+    web.agent_run_ended()

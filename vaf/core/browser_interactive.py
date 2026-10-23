@@ -1640,7 +1640,6 @@ class InteractiveBrowserManager:
 
         with self._lock:
             dedicated = self._dedicated_scope
-            had_lease = self._lease is not None
         if dedicated is None:
             # The SHARED browser is used from other processes too (a coder
             # child's render_check, a spawned run, the terminal app), where this
@@ -1675,9 +1674,15 @@ class InteractiveBrowserManager:
                 try:
                     self._take_jar(user_scope_id, "interactive", instance)
                 except BrowserHandoverError:
-                    if not had_lease:
-                        with self._lock:
+                    # Released unless a lease of this process is still installed,
+                    # decided now under the lock (as at the install below): a lease
+                    # seen before the claim proves nothing, since a run's eviction
+                    # in between leaves a fresh entry with no lease behind it.
+                    with self._lock:
+                        stale = self._lease is None
+                        if stale:
                             self._lease_token = None
+                    if stale:
                         self._release_shared(token)
                     return self._payload("error", reason="handover_failed")
 
@@ -1710,7 +1715,16 @@ class InteractiveBrowserManager:
             refused_for_run = self._agent_runs > 0
             stale_token = None
             if refused_for_run:
-                if not had_lease:
+                if self._lease is None:
+                    # No lease of this process is installed, so the record entry
+                    # is this start's own claim and goes back with it. Decided
+                    # here, not from a lease seen before the claim: a run's
+                    # eviction between that look and the claim released the old
+                    # entry, the claim made a new one, and that one stayed in the
+                    # record with no lease behind it (measured: other processes saw
+                    # the browser held until this process's next lease cycle). A
+                    # lease still installed here is evicted by the run's
+                    # stop_for_agent_run, which releases its entry.
                     stale_token, self._lease_token = self._lease_token, None
             else:
                 prev = self._lease

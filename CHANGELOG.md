@@ -506,6 +506,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **A server install leaves out what only a desktop uses.** `./install.sh --server` no longer
+  installs the tray icon's GTK, AppIndicator and WebKitGTK libraries, the PortAudio headers,
+  the desktop window and tray packages (PySide6, pywebview, pystray, qtpy) or SpeechRecognition
+  with its bundled pocketsphinx model, and on Ubuntu and Debian it installs ffmpeg without
+  apt's recommendations, which brought pocketsphinx and GTK along. On Ubuntu 24.04 that is
+  about 170 fewer system packages and about 1.1 GB less on disk. `vaf update` keeps the
+  smaller set (`requirements-headless.txt`); an existing server keeps what it has, and
+  `docs/setup/SERVER_MODE.md` names how to remove it.
 - **The server service no longer calls sudo at every start.** The installed service cannot
   gain root (its systemd hardening rules that out), yet it tried to open the OS firewall at
   each start and the journal showed sudo refusing ("no new privileges flag is set"). It now

@@ -10,6 +10,7 @@ Server mode is an installation profile for running VAF as a persistent backgroun
 | LAN access | Optional, user-controlled | Always on, locked |
 | TLS (HTTPS) | Optional | Always on |
 | Tray icon | Yes (where available) | No (headless) |
+| Desktop packages | Installed (tray icon, desktop window, terminal microphone) | Left out ([below](#what-a-server-install-leaves-out)) |
 | Settings → Local Network tab | Visible | Visible (LAN toggle replaced by locked notice) |
 | Settings → Start Tray on Login | Visible | Hidden |
 
@@ -54,6 +55,45 @@ The installer then:
 6. Installs a systemd user service at `~/.config/systemd/user/vaf.service`, enables it, enables linger so it starts at boot without an active login session (`loginctl enable-linger`), and starts it immediately. When the same run added you to the `docker` group, it restarts your systemd user manager first (`user@<uid>.service`): the manager keeps the groups it started with, and the service would otherwise reach Docker only after the next reboot. When other user services are running or still starting it does not cut them off: at a terminal it asks first, otherwise VAF reaches Docker after the next reboot (or `sudo systemctl restart user@$(id -u).service`). Timers, sockets, path watchers and finished one-shot services that were active are started again after the restart. An install started from a terminal of a desktop session runs inside that same manager and would end itself, so it leaves the restart to you there; an SSH login is not affected. A server without a system Node.js gets the installer's portable one in `~/.vaf/node`; VAF finds it there itself (`vaf/core/node_runtime.py`), since the unit does not read your shell's startup file.
 
 `vaf server provision` is idempotent and can be re-run at any time (for example after moving the machine to another subnet), and re-running `./install.sh --server` upgrades an existing server install in place. Immutable/transactional distributions (openSUSE MicroOS, Leap Micro) are detected early and refused with a clear message. This is a current limitation of the alpha installer, not a design decision: support via `transactional-update` is planned, and exactly these systems are attractive server targets. Until then, run VAF on a standard distribution or inside a container/VM on the immutable host.
+
+### What a server install leaves out
+
+The service runs headless (`VAF_NATIVE_WRAPPER=1`): no tray icon, no desktop window, no
+terminal microphone. A server install therefore leaves out what only those use:
+
+- **System packages:** the tray icon's GTK, AppIndicator and WebKitGTK libraries, the headers
+  PyGObject is built against, and the PortAudio headers. On Ubuntu and Debian, ffmpeg is
+  installed without apt's recommendations, which brought pocketsphinx's speech model, GTK 3,
+  icon themes and video drivers along. ffmpeg itself stays (voice replies to messengers are
+  converted to OGG/Opus), and so do git, tesseract (OCR) and the compiler with the Python
+  headers (pip builds a package that has no wheel for this machine).
+- **Python packages:** PyGObject, and `requirements-headless.txt` instead of
+  `requirements.txt`: no PySide6, pywebview, pystray or qtpy (the window and the tray), and no
+  SpeechRecognition (the terminal microphone; its wheel bundles a 38 MB pocketsphinx model).
+  Speech in the web UI goes through the speech services and is unaffected.
+
+Measured on Ubuntu 24.04: 174 fewer system packages and 419 MB less on disk against the server
+cloud image (229 and 471 MB against the minimal container image), plus 730 MB of Python
+packages. `vaf update` keeps the smaller set on a server: it installs the requirements file
+`server_mode` selects (`vaf/core/update_check.py`, `requirements_file`).
+
+An existing server keeps what an earlier install put there: neither pip nor the package
+manager removes anything on a re-run. To free the space in VAF's own environment (nothing
+outside it uses these), stop the service and run from the VAF folder:
+
+```bash
+systemctl --user stop vaf
+venv/bin/python -m pip uninstall -y PySide6 PySide6_Addons PySide6_Essentials shiboken6 \
+    pywebview pystray python-xlib bottle proxy_tools qtpy SpeechRecognition \
+    standard-aifc standard-chunk PyGObject pycairo
+systemctl --user start vaf
+```
+
+The system packages are shared with the rest of the machine, so remove them only when nothing
+else on it uses them: on Ubuntu, for example, `sudo apt-get remove portaudio19-dev python3-gi
+gir1.2-ayatanaappindicator3-0.1 gir1.2-webkit2-4.1 libgirepository1.0-dev libcairo2-dev
+pocketsphinx-en-us` and then `sudo apt-get autoremove` for what only those pulled in. Read the
+list apt prints before you confirm.
 
 ## On a rented server (VPS)
 
@@ -337,6 +377,9 @@ sudo loginctl disable-linger $USER
 # Re-enable sleep/suspend (the server install masked these)
 sudo systemctl unmask sleep.target suspend.target hibernate.target hybrid-sleep.target
 ```
+
+A server install left out the tray icon, the desktop window and the terminal microphone
+([above](#what-a-server-install-leaves-out)); run `./install.sh --desktop` to install them.
 
 ## Troubleshooting
 

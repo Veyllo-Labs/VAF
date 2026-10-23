@@ -46,6 +46,69 @@ python_version_supported() {
     return 0
 }
 
+# The system packages of a Linux install, one line per install call: the line is that call's
+# argument list. "$1" is the package manager, "$2" the installation mode. A server leaves out
+# what only a desktop session uses: the PortAudio headers (the terminal microphone), the
+# GTK/AppIndicator libraries of the tray icon and the PyGObject build headers. It keeps git,
+# ffmpeg (messenger voice replies), tesseract (OCR) and the compiler with the Python headers
+# (pip may build a package that has no wheel). On apt, ffmpeg goes in its own call without
+# Recommends: those pull pocketsphinx's model, GTK 3, icon themes and video drivers onto a
+# server. Each list is ONE call because a single unknown package name aborts a whole
+# transaction; the WebKitGTK name differs between releases and is tried separately below.
+linux_install_calls() {
+    case "$1:$2" in
+        apt:server)
+            echo "python3-dev python3-venv build-essential git tesseract-ocr tesseract-ocr-deu"
+            echo "--no-install-recommends ffmpeg"
+            ;;
+        apt:*)
+            echo "portaudio19-dev python3-dev python3-venv build-essential git ffmpeg tesseract-ocr tesseract-ocr-deu python3-gi gir1.2-ayatanaappindicator3-0.1 libgirepository1.0-dev libcairo2-dev"
+            ;;
+        dnf:server|yum:server)
+            echo "python3-devel gcc git ffmpeg tesseract tesseract-langpack-deu"
+            ;;
+        dnf:*|yum:*)
+            echo "portaudio-devel python3-devel gcc git ffmpeg tesseract tesseract-langpack-deu python3-gobject3 libappindicator-gtk3 gobject-introspection-devel cairo-devel"
+            ;;
+        pacman:server)
+            echo "python git ffmpeg tesseract tesseract-data-deu base-devel"
+            ;;
+        pacman:*)
+            echo "portaudio python git ffmpeg tesseract tesseract-data-deu base-devel python-gobject webkit2gtk libappindicator-gtk3 gobject-introspection cairo"
+            ;;
+        zypper:server)
+            echo "python3-devel gcc git ffmpeg tesseract-ocr tesseract-ocr-traineddata-german nodejs-default npm-default docker-compose"
+            ;;
+        zypper:*)
+            echo "portaudio-devel alsa-devel python3-devel gcc git ffmpeg tesseract-ocr tesseract-ocr-traineddata-german nodejs-default npm-default docker-compose typelib-1_0-WebKit2-4_1 libwebkit2gtk-4_1-0 typelib-1_0-AyatanaAppIndicator3-0_1 gobject-introspection-devel cairo-devel"
+            ;;
+    esac
+}
+
+# Runs every install call linux_install_calls prints for this machine. The calls are read
+# into an array first, so no package manager reads its stdin from the list.
+install_linux_packages() {
+    local _call
+    local -a _calls
+    mapfile -t _calls < <(linux_install_calls "$PKG_MANAGER" "$INSTALL_MODE")
+    for _call in "${_calls[@]}"; do
+        print_info "Installing: $_call"
+        # shellcheck disable=SC2086  # the line is the argument list of one call
+        $INSTALL_CMD $_call 2>/dev/null || print_warning "Some packages may have failed"
+    done
+}
+
+# The Python requirements file of an installation mode. A server installs the headless set;
+# it must name the same file as HEADLESS_REQUIREMENTS in vaf/core/update_check.py, which
+# `vaf update` installs on a server (tests/test_installer_server_mode.py pins both).
+python_requirements_file() {
+    if [[ "$1" == "server" ]]; then
+        echo "requirements-headless.txt"
+    else
+        echo "requirements.txt"
+    fi
+}
+
 # Flags
 SKIP_DOCKER=false
 VERBOSE=false
@@ -412,41 +475,37 @@ elif [[ "$OS_TYPE" == "linux" ]]; then
         apt)
             print_info "Updating package lists..."
             sudo apt-get update -qq || print_warning "apt update failed - continuing with cached lists"
-            # Core build deps in ONE call. Keep the WebKitGTK typelib SEPARATE: Ubuntu 24.04 dropped
-            # gir1.2-webkit2-4.0 (only 4.1 exists), and a single unknown package name aborts the whole
-            # apt-get transaction - which would otherwise silently skip build-essential/portaudio/etc.
-            DEPS="portaudio19-dev python3-dev python3-venv build-essential git ffmpeg tesseract-ocr tesseract-ocr-deu python3-gi gir1.2-ayatanaappindicator3-0.1 libgirepository1.0-dev libcairo2-dev"
-            print_info "Installing: $DEPS"
-            $INSTALL_CMD $DEPS 2>/dev/null || print_warning "Some packages may have failed"
+            # The package lists live in linux_install_calls (top of this file).
+            install_linux_packages
             # WebKitGTK typelib (used by the AppIndicator tray icon; the app window uses Qt, so this is
-            # non-fatal): try 4.1 (Ubuntu 24.04+), fall back to 4.0 (22.04), best-effort.
-            $INSTALL_CMD gir1.2-webkit2-4.1 2>/dev/null \
-                || $INSTALL_CMD gir1.2-webkit2-4.0 2>/dev/null \
-                || print_warning "WebKitGTK typelib unavailable (tray icon may not load; app window unaffected)"
+            # non-fatal): try 4.1 (Ubuntu 24.04+), fall back to 4.0 (22.04), best-effort. A server has
+            # no tray icon.
+            if [[ "$INSTALL_MODE" != "server" ]]; then
+                $INSTALL_CMD gir1.2-webkit2-4.1 2>/dev/null \
+                    || $INSTALL_CMD gir1.2-webkit2-4.0 2>/dev/null \
+                    || print_warning "WebKitGTK typelib unavailable (tray icon may not load; app window unaffected)"
+            fi
             ;;
         dnf|yum)
+            install_linux_packages
             # WebKitGTK kept separate (Fedora 39+ ships webkit2gtk4.1, not 4.0) so one bad name can't
-            # abort the whole transaction.
-            DEPS="portaudio-devel python3-devel gcc git ffmpeg tesseract tesseract-langpack-deu python3-gobject3 libappindicator-gtk3 gobject-introspection-devel cairo-devel"
-            print_info "Installing: $DEPS"
-            $INSTALL_CMD $DEPS 2>/dev/null || print_warning "Some packages may have failed"
-            $INSTALL_CMD webkit2gtk4.1 2>/dev/null \
-                || $INSTALL_CMD webkit2gtk4.0 2>/dev/null \
-                || $INSTALL_CMD webkit2gtk3 2>/dev/null \
-                || print_warning "WebKitGTK unavailable (tray icon may not load; app window unaffected)"
+            # abort the whole transaction. A server has no tray icon.
+            if [[ "$INSTALL_MODE" != "server" ]]; then
+                $INSTALL_CMD webkit2gtk4.1 2>/dev/null \
+                    || $INSTALL_CMD webkit2gtk4.0 2>/dev/null \
+                    || $INSTALL_CMD webkit2gtk3 2>/dev/null \
+                    || print_warning "WebKitGTK unavailable (tray icon may not load; app window unaffected)"
+            fi
             ;;
-        pacman)
-            DEPS="portaudio python git ffmpeg tesseract tesseract-data-deu base-devel python-gobject webkit2gtk libappindicator-gtk3 gobject-introspection cairo"
-            print_info "Installing: $DEPS"
-            $INSTALL_CMD $DEPS 2>/dev/null || print_warning "Some packages may have failed"
-            ;;
-        zypper)
-            DEPS="portaudio-devel alsa-devel python3-devel gcc git ffmpeg tesseract-ocr tesseract-ocr-traineddata-german nodejs-default npm-default docker-compose typelib-1_0-WebKit2-4_1 libwebkit2gtk-4_1-0 typelib-1_0-AyatanaAppIndicator3-0_1 gobject-introspection-devel cairo-devel"
-            print_info "Installing: $DEPS"
-            $INSTALL_CMD $DEPS 2>/dev/null || print_warning "Some packages may have failed"
+        pacman|zypper)
+            install_linux_packages
             ;;
         *)
-            print_warning "Please manually install: portaudio, git, ffmpeg, python dev headers"
+            if [[ "$INSTALL_MODE" == "server" ]]; then
+                print_warning "Please manually install: git, ffmpeg, python dev headers"
+            else
+                print_warning "Please manually install: portaudio, git, ffmpeg, python dev headers"
+            fi
             ;;
     esac
 
@@ -750,7 +809,8 @@ print_info "Python: $(python3 --version)"
 # PyGObject into the venv (Linux desktop window / pywebview GTK backend). Needs the
 # gobject-introspection + cairo dev headers from the system-deps step. Done AFTER the venv
 # exists  fixes the old ordering bug where it ran before venv creation and was silently skipped.
-if [[ "$OS_TYPE" == "linux" ]]; then
+# A server has no tray icon and installs neither the headers nor PyGObject.
+if [[ "$OS_TYPE" == "linux" ]] && [[ "$INSTALL_MODE" != "server" ]]; then
     # PyGObject powers the AppIndicator TRAY ICON on Linux; the window itself uses Qt/QtWebEngine, so
     # this is non-fatal. Pin < 3.52 because 3.52+ needs girepository-2.0, which Ubuntu 24.04 and older
     # distros do not ship (they have libgirepository-1.0-dev). Best-effort with a fallback to latest.
@@ -784,9 +844,10 @@ python3 -m pip install --upgrade pip --quiet
 print_info "Installing core dependencies..."
 python3 -m pip install -e . --quiet 2>/dev/null || python3 -m pip install -e .
 
-# Install all requirements
-print_info "Installing all requirements (this may take a few minutes)..."
-python3 -m pip install -r requirements.txt --quiet 2>/dev/null || {
+# Install the requirements: the full list, or the headless set on a server
+REQUIREMENTS_FILE="$(python_requirements_file "$INSTALL_MODE")"
+print_info "Installing the requirements from $REQUIREMENTS_FILE (this may take a few minutes)..."
+python3 -m pip install -r "$REQUIREMENTS_FILE" --quiet 2>/dev/null || {
     print_warning "Some optional dependencies failed - core functionality should work"
 }
 
@@ -1279,7 +1340,10 @@ verify_module "fastapi" "FastAPI" || true
 # pyttsx3 removed  caused 1-4GB RAM explosion on Windows via SAPI/comtypes.
 # TTS is now handled by Docker (Piper). See docs/web-ui/SPEECH_FEATURES.md.
 # verify_module "pyttsx3" "TTS Engine"
-verify_module "speech_recognition" "Speech Recognition" || true
+# The terminal microphone; a server does not install it.
+if [[ "$INSTALL_MODE" != "server" ]]; then
+    verify_module "speech_recognition" "Speech Recognition" || true
+fi
 
 # ============================================================================
 # SUMMARY

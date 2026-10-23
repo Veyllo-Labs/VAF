@@ -28,7 +28,10 @@ duplicate the install steps.
   background thread while pywebview owns the main thread. The tray needs the
   AppIndicator + WebKitGTK typelibs (installed by the installer); if they are
   missing the tray icon may not appear, but the Qt app window is unaffected. See
-  [SYSTEM_TRAY.md](./SYSTEM_TRAY.md).
+  [SYSTEM_TRAY.md](./SYSTEM_TRAY.md). A server install (`./install.sh --server`)
+  installs neither the tray nor the window packages: its service runs headless
+  (`VAF_NATIVE_WRAPPER=1`), see
+  [SERVER_MODE.md](../setup/SERVER_MODE.md#what-a-server-install-leaves-out).
 - **Docker services.** The database (PostgreSQL/pgvector), cache, STT,
   document engine, TTS and browser containers run from `docker-compose.memory.yml`
   (STT and TTS only on the Full installation profile). VAF starts them itself when a lane

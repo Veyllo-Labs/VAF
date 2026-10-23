@@ -7,7 +7,9 @@ Supported distributions: **Ubuntu / Debian / Mint / Pop!_OS**, **Fedora / RHEL /
 ## Installation
 
 The automated installer ([install.sh](../../install.sh)) is the recommended path. It installs the
-build/audio/desktop system packages (step 1), provisions Python via [uv](https://docs.astral.sh/uv/)
+build/audio/desktop system packages (step 1; a server install, `--server`, leaves the audio and
+desktop ones out, see [SERVER_MODE.md](SERVER_MODE.md#what-a-server-install-leaves-out)),
+provisions Python via [uv](https://docs.astral.sh/uv/)
 (no system Python required), provisions **Node** (portable download, falling back to your package
 manager / NodeSource), and **auto-installs and starts Docker** (distro package + `systemctl enable
 --now docker` + adds you to the `docker` group) when it is missing - parity with the macOS and
@@ -16,35 +18,38 @@ things ahead of time.
 
 ### 1. System Packages
 
+The PortAudio packages (`portaudio*`, `alsa-devel`) serve the terminal microphone, and the second
+line of each block the tray icon. A server needs neither: `./install.sh --server` leaves them out.
+
 **OpenSUSE (zypper):**
 ```bash
 sudo zypper install portaudio-devel alsa-devel python3-devel gcc git nodejs-default npm-default docker docker-compose
-# Desktop window (pywebview):
+# Desktop only: tray icon (Gtk/AppIndicator) and pywebview's GTK fallback (WebKitGTK):
 sudo zypper install typelib-1_0-WebKit2-4_1 libwebkit2gtk-4_1-0
 ```
 
 **Fedora (dnf):**
 ```bash
 sudo dnf install portaudio-devel alsa-devel python3-devel gcc git nodejs npm docker docker-compose
-# Desktop window (pywebview):
+# Desktop only: tray icon (Gtk/AppIndicator) and pywebview's GTK fallback (WebKitGTK):
 sudo dnf install python3-gobject3 webkit2gtk4.1
 ```
 
 **Ubuntu / Debian (apt):**
 ```bash
 sudo apt-get install portaudio19-dev python3-dev python3-venv build-essential git nodejs npm ffmpeg
-# Desktop window (pywebview):
+# Desktop only: tray icon (Gtk/AppIndicator) and pywebview's GTK fallback (WebKitGTK):
 sudo apt-get install python3-gi gir1.2-webkit2-4.1   # Ubuntu 22.04: gir1.2-webkit2-4.0
 ```
 
 **Arch:**
 ```bash
 sudo pacman -S portaudio python git nodejs npm docker docker-compose base-devel
-# Desktop window (pywebview):
+# Desktop only: tray icon (Gtk/AppIndicator) and pywebview's GTK fallback (WebKitGTK):
 sudo pacman -S python-gobject webkit2gtk
 ```
 
-> **Note:** The WebKitGTK packages are only needed for the native desktop window. If they are missing, VAF falls back to opening the Web UI in your default browser instead.
+> **Note:** The app window on Linux is Qt (PySide6), not GTK ([LINUX.md](../platform/LINUX.md#runtime-stack-on-linux)), so these GTK packages decide the tray icon, not the window. If they are missing, the tray icon may not appear; the window is unaffected.
 
 ### 2. Container runtime *(handled automatically)*
 

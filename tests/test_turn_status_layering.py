@@ -27,13 +27,28 @@ ENGINE = "vaf/core/agent.py"
 ROOTS = ("vaf", "examples", "scripts", "tests/contract")
 
 
+def _state_census_keys(tree) -> set:
+    """The key nodes of an `AGENT_STATE` dict. The turn binding names every attribute an
+    agent carries there, these two included, to say which turn resets them; naming a field
+    in that census reads nothing."""
+    keys = set()
+    for node in ast.walk(tree):
+        target = getattr(node, "target", None) or next(iter(getattr(node, "targets", [])), None)
+        if (isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(target, ast.Name)
+                and target.id == "AGENT_STATE" and isinstance(node.value, ast.Dict)):
+            keys |= {id(k) for k in node.value.keys if k is not None}
+    return keys
+
+
 def _private_turn_reads(source: bytes):
     found = []
-    for node in ast.walk(ast.parse(source)):
+    tree = ast.parse(source)
+    census = _state_census_keys(tree)
+    for node in ast.walk(tree):
         if isinstance(node, ast.Attribute) and node.attr in PRIVATE_TURN_FIELDS:
             found.append((node.lineno, node.attr))
         elif (isinstance(node, ast.Constant) and isinstance(node.value, str)
-              and node.value in PRIVATE_TURN_FIELDS):
+              and node.value in PRIVATE_TURN_FIELDS and id(node) not in census):
             found.append((node.lineno, node.value))
         elif isinstance(node, ast.keyword) and node.arg in PRIVATE_TURN_FIELDS:
             found.append((node.value.lineno, node.arg))

@@ -612,8 +612,12 @@ def test_an_open_rooms_working_memory_outlives_a_quiet_weekend(world):
                         peer_id=derive_peer_id(participant_key("agent", OWNER_SCOPE),
                                                "room-closing"))
     closing.close(host)
+    # A torn write leaves an empty manifest: the room is still there, only unreadable.
+    torn = Room.create(kind="round", owner_scope=OWNER_SCOPE, base=world.rooms,
+                       room_id="room-torn")
+    torn.store.manifest_path.write_bytes(b"")
     stores = {"open": _store("room-a"), "closed": _store("room-closing"),
-              "gone": _store("room-deleted")}
+              "gone": _store("room-deleted"), "torn": _store("room-torn")}
     stale = _time.time() - 10 * 86400
     for store in stores.values():
         for f in store.context_dir.rglob("*"):
@@ -624,6 +628,7 @@ def test_an_open_rooms_working_memory_outlives_a_quiet_weekend(world):
         datetime.now() - timedelta(hours=48), {"deleted": 0, "freed_bytes": 0, "errors": 0})
 
     assert stores["open"].context_dir.exists(), "an open room lost its working memory"
+    assert stores["torn"].context_dir.exists(), "an unreadable room lost its working memory"
     assert not stores["closed"].context_dir.exists(), "a closed room's store is never collected"
     assert not stores["gone"].context_dir.exists(), "a deleted room's store is never collected"
 

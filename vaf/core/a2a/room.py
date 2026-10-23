@@ -288,16 +288,23 @@ def conversation_room_open(key: str, *, base: Optional[Path] = None) -> bool:
     """Whether the room a conversation key belongs to still exists on this machine and is
     not closed: while it is, its working memory is the room's to keep, however long the room
     has been quiet. A key that names no room (not of `conversation_key`'s shape, a room
-    deleted or never here) answers False. A room that cannot be read answers True: the
-    question decides a deletion, and keeping a store is the recoverable answer."""
+    deleted or never here) answers False. A room that cannot be read answers True, an empty
+    or torn manifest included: the question decides a deletion, and keeping a store is the
+    recoverable answer."""
     text = str(key or "").strip()
     room_id, sep, peer = text.rpartition(".p-")
     if not (room_id and sep and peer):
         return False
     try:
-        room = Room.open(room_id, base=base)
-    except StoreError:              # absent, or an id no room can have (UnsafeName)
+        store = RoomStore(room_id, base=base)
+    except StoreError:              # an id no room can have (UnsafeName)
         return False
+    try:
+        room = Room(store)
+    except StoreError:
+        # Room() reads an empty or non-JSON manifest as "no room"; a manifest file that is
+        # still there is a room that cannot be read, not a deleted one.
+        return store.manifest_path.exists()
     except Exception:
         return True
     try:

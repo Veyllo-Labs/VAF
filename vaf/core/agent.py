@@ -5612,7 +5612,7 @@ class Agent:
         from the version the store no longer holds.
         """
         from vaf.core.subagent_ipc import set_current_session_id
-        from vaf.core.session import model_text, take_transcript_changed
+        from vaf.core.session import take_transcript_changed
 
         # A background lane appended to this session's FILE behind this agent's
         # in-memory history (see session.note_transcript_changed): rebuild from
@@ -5628,6 +5628,10 @@ class Agent:
         # before its turn, and until then no VAF.md is anybody's (_project_context_block).
         self._chat_project_dir = ""
 
+        # A rebuild of the chat this agent is already on (force, a background append) is
+        # the same conversation, and keeps its context state like the model swap does.
+        same_chat = getattr(self, "current_session_id", None) == session_id
+
         # Declare the target BEFORE anything is built for it. init_chat below builds the
         # system message from current_session_id (the workspace line) and its prompt
         # manager binds the working memory of the session the context variable names;
@@ -5637,12 +5641,33 @@ class Agent:
         self.current_session_id = session_id
         set_current_session_id(session_id)
         self._bind_session_persistence(session_id)
+        try:
+            self._enter_session(session_id, same_chat=same_chat)
+        except BaseException:
+            # Fail closed. The target is already declared, so a load that dies here would
+            # leave the agent claiming the new chat while it holds the previous chat's
+            # history (another account's, on a runner worker), and every later load of
+            # that chat would return early on the claim. Holding nothing and claiming
+            # nothing, the next load rebuilds.
+            self.history = []
+            self.current_session_id = None
+            raise
+
+    def _enter_session(self, session_id: str, *, same_chat: bool) -> None:
+        """The body of `load_session_context` once the target session is declared:
+        context state, the load and its restore, the prompt, the replay, the compression
+        on load and the broadcast. Raising leaves the caller to fail closed."""
+        from vaf.core.subagent_ipc import set_current_session_id
+        from vaf.core.session import model_text
 
         # Start from a clean context state, then let the load restore THIS chat's own.
         # The restore only touches the providers a snapshot carries, and a chat without
         # one (no file yet, a file the web wrote without runtime_state, a runtime_state
         # holding only sidebar documents) used to keep whatever the previous chat left.
-        self._reset_chat_state()
+        # The same chat keeps its state: a terminal chat stores no snapshot, so a reset
+        # here would lose its summary to every background append.
+        if not same_chat:
+            self._reset_chat_state()
 
         # Load new session data
         from vaf.core.session import SessionManager

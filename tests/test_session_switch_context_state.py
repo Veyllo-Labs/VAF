@@ -25,6 +25,8 @@ MUTATIONS, each turns the named tests red:
 - M3 drop the reset from `init_chat` -> the init_chat and clear tests;
 - M4 plain `init_chat()` in the loader's try branch -> the account test's second half and the
   keep-site guard;
+- M9 the loader without its fail-closed branch -> the failed-switch test;
+- M10 reset on a rebuild of the same chat too -> the same-chat test;
 - M5 reset after `SessionManager.load` -> the account test's second half;
 - M6 declare the session after `init_chat` again -> the system message test;
 - M7 reset by building a new `ContextManager` -> the init_chat test;
@@ -295,6 +297,58 @@ def test_the_loaders_system_message_is_built_for_the_new_chat(make_agent):
     assert str(other_ws) in system
 
 
+def test_a_switch_that_fails_holds_no_chat(make_agent, monkeypatch):
+    """The loader declares the target before it loads. A load that dies after that (here
+    the prompt build fails in both branches) must not leave the agent claiming the new
+    chat while it holds the previous chat's history: every later load of that chat would
+    return early on the claim, and a turn would run on another account's messages."""
+    _seed(OTHER_NEW_SESSION, scope=OTHER_SCOPE)
+    agent = make_agent()
+    agent.load_session_context(OWNER_SESSION)
+    assert any("Handyvertrag" in str(m.get("content")) for m in agent.history)
+    real_init_chat = agent.init_chat
+
+    def broken(**kw):
+        raise RuntimeError("the prompt could not be built")
+
+    monkeypatch.setattr(agent, "init_chat", broken)
+    with pytest.raises(RuntimeError):
+        agent.load_session_context(OTHER_NEW_SESSION)
+
+    assert agent.history == [], "the failed switch kept the previous chat's history"
+    assert agent.current_session_id is None, "the failed switch still claims the new chat"
+
+    monkeypatch.setattr(agent, "init_chat", real_init_chat)
+    agent.load_session_context(OTHER_NEW_SESSION)
+    assert agent.current_session_id == OTHER_NEW_SESSION
+    assert agent.history[0]["role"] == "system"
+    assert not any("Handyvertrag" in str(m.get("content")) for m in agent.history)
+
+
+def test_a_rebuild_of_the_same_chat_keeps_its_state(make_agent):
+    """`force=True` and a background append rebuild the chat the agent is on from its file.
+    That is the same conversation, and a terminal chat stores no snapshot: a reset there
+    would lose its summary to every thinking-mode question or automation result."""
+    from vaf.core.session import SessionManager
+
+    _seed(DOC_ONLY_SESSION, scope=OWNER_SCOPE,
+          messages=[("user", "Kuendige bitte den Handyvertrag"), ("assistant", "Erledigt.")])
+    agent = make_agent()
+    agent.load_session_context(DOC_ONLY_SESSION)
+    agent.state_registry.get_provider("context").restore_state(
+        _context_runtime_state(OWNER_TAG)["providers"]["context"]["state"])
+
+    agent.load_session_context(DOC_ONLY_SESSION, force=True)
+    assert agent.context_manager.state.narrative_summary == f"{OWNER_TAG}SUMMARY"
+
+    SessionManager().append_background_message(DOC_ONLY_SESSION, "Erinnerung: Termin um neun",
+                                               kind="automation")
+    agent.load_session_context(DOC_ONLY_SESSION)
+    assert any("Termin um neun" in str(m.get("content")) for m in agent.history), \
+        "the appended message was not read in"
+    assert agent.context_manager.state.narrative_summary == f"{OWNER_TAG}SUMMARY"
+
+
 def test_init_chat_starts_a_fresh_conversation_unless_told_to_keep_it(make_agent):
     agent = make_agent()
     agent.load_session_context(OWNER_SESSION)
@@ -343,12 +397,19 @@ def test_clear_forgets_the_cleared_conversations_summary(make_agent):
 
 
 def _keep_sites():
-    """Every call in vaf/ that passes `keep_chat_state=True`, by its innermost function."""
+    """Every call in vaf/ that passes `keep_chat_state` as anything but False, spelled as a
+    keyword or inside a `**{...}` literal, as (file, innermost function)."""
     found = []
 
+    def _keeps(kw):
+        if kw.arg == "keep_chat_state":
+            return not (isinstance(kw.value, ast.Constant) and kw.value.value is False)
+        return kw.arg is None and isinstance(kw.value, ast.Dict) and any(
+            isinstance(k, ast.Constant) and k.value == "keep_chat_state" for k in kw.value.keys)
+
     class _Visitor(ast.NodeVisitor):
-        def __init__(self):
-            self.stack = []
+        def __init__(self, rel):
+            self.rel, self.stack = rel, []
 
         def _func(self, node):
             self.stack.append(node.name)
@@ -358,21 +419,21 @@ def _keep_sites():
         visit_FunctionDef = visit_AsyncFunctionDef = _func
 
         def visit_Call(self, node):
-            if any(kw.arg == "keep_chat_state" and not (
-                    isinstance(kw.value, ast.Constant) and kw.value.value is False)
-                   for kw in node.keywords):
-                found.append(self.stack[-1] if self.stack else "<module>")
+            if any(_keeps(kw) for kw in node.keywords):
+                found.append((self.rel, self.stack[-1] if self.stack else "<module>"))
             self.generic_visit(node)
 
     for path in sorted((_REPO / "vaf").rglob("*.py")):
         source = path.read_bytes().decode("utf-8")
         if "keep_chat_state" in source:
-            _Visitor().visit(ast.parse(source))
+            _Visitor(path.relative_to(_REPO).as_posix()).visit(ast.parse(source))
     return found
 
 
 def test_only_the_same_conversation_keeps_its_state():
-    """Exactly two engine paths rebuild the prompt of the SAME conversation: the loader after
-    it restored the chat's own state, and the model swap. Every other `init_chat()` starts a
-    fresh one, `clear` in both terminal apps included."""
-    assert sorted(_keep_sites()) == ["load_session_context", "reload_local_model"]
+    """Exactly two engine paths rebuild the prompt of the SAME conversation: the session
+    loader (its body, `_enter_session`) after it restored the chat's own state, and the model
+    swap. Every other `init_chat()` starts a fresh one, `clear` in both terminal apps
+    included."""
+    assert sorted(_keep_sites()) == [("vaf/core/agent.py", "_enter_session"),
+                                     ("vaf/core/agent.py", "reload_local_model")]

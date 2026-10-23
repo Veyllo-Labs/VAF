@@ -314,7 +314,11 @@ still runs a hidden tool, but never one outside the allowed set.
   state and restores the session's own saved one when it has one, rebinds identity from
   session metadata, re-inits the prompt, and replays messages preserving tool-call
   linkage. A session without saved context state (no file yet, a new chat) carries
-  nothing of the chat the agent served before. It returns immediately when the
+  nothing of the chat the agent served before; a rebuild of the session the agent is
+  already on keeps its state, since it is the same conversation. If the load raises
+  after the session was declared, the agent holds no history and no current session,
+  so the next call rebuilds rather than returning early on a chat it never loaded.
+  It returns immediately when the
   agent is already on that session; `force=True` rebuilds anyway, which is what a
   rewind or any out-of-band edit of the stored transcript needs, because the
   in-memory history is otherwise authoritative and the agent would keep answering

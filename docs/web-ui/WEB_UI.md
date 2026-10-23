@@ -1219,8 +1219,9 @@ The Web UI runs alongside the CLI interface:
 - **Desktop only** (`max-md:hidden`): a rail on the screen edge sits under the thumb and
   eats the scroll gesture, see [MOBILE_UI.md](MOBILE_UI.md).
 - **It reads `filteredMessages`, not `messages`**: a prompt the chat filters out (a
-  `__CMD__` line, a thinking-mode preamble) has no bubble on screen, so a row for it
-  would be a target that cannot be reached.
+  thinking-mode preamble) has no bubble on screen, so a row for it would be a target that
+  cannot be reached. A user message that happens to begin with `__CMD__:` is shown like any
+  other.
 - **Widening the window is counted in turns.** The chat renders a virtual window of the
   last `MSG_TURNS + msgOffset` user turns, so a prompt older than that has no bubble to
   jump to; the click raises `msgOffset` to exactly the turn it needs. The jump is then

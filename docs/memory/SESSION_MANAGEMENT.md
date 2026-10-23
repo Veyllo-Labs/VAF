@@ -98,7 +98,7 @@ When the session is loaded, `load_session_context` first declares it (the agent'
 
 When the user clicks a different session in the Web UI, the frontend sends `load_session` with the session id. The server loads the session from disk, sends `history_update` to the client, and enqueues a system command:
 
-- **Command:** `__CMD__:LOAD_SESSION:{sid}` (with `session_id="system"` so the queue accepts it).
+- **Command:** `__CMD__:LOAD_SESSION:{sid}`, queued by `enqueue_system_command` (`vaf/core/task_queue.py`) under `session_id="system"` with a mark only VAF sets. The runner and the terminal run a task as a command only when `is_system_command` sees all three (session, mark, prefix): the text alone is anyone's to write, and a contact's message reading `__CMD__:RELOAD_CONFIG` used to run as one.
 - **Handler:** In `vaf/core/headless_runner.py`, `_handle_command()` handles `LOAD_SESSION` by parsing the session id from the command and calling `agent.load_session_context(sid)`.
 
 As a result, the agent’s context (history + ContextManager) is switched to the selected session immediately, even if the user does not send a new message: the session's own saved context state, or an empty one when it has none (a chat just created with New chat), never the state of the chat open before. The next message in that session then runs with the correct session context already loaded.

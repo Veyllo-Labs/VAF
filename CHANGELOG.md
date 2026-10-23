@@ -518,6 +518,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `vaf run --web`, which serves the web app from the terminal, is not covered yet. Restart VAF
   after updating so the fix takes effect.
 
+- **A contact's message is always answered as a message.** A message from a contact on
+  WhatsApp, Telegram or Discord that started with `__CMD__:` was not answered: it ran one of the
+  web interface's internal session commands instead (reloading the AI provider, switching or
+  resetting the agent's open chat). It now gets an ordinary Inbound answer, and the same text
+  typed into a web chat is a chat message too: only the commands VAF queues itself are run as
+  commands. Restart VAF after updating.
+
 ### Fixed
 
 - **A server install leaves out what only a desktop uses.** `./install.sh --server` no longer

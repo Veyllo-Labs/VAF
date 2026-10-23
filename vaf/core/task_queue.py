@@ -394,8 +394,10 @@ class TaskQueue:
         `_session_inflight` is checked first because it is the wider set: it carries
         the worker in-flight sessions AND the drain's try_claim_session() claims,
         which have no task object in `_inflight_by_worker` to iterate. Housekeeping
-        commands need no filter here: every `__CMD__` task is enqueued under
-        session_id="system", which no chat session id ever equals.
+        commands need no filter here: `enqueue_system_command` enqueues every one under
+        `SYSTEM_SESSION_ID`. A web client can name a chat `system` (the ownership gate admits
+        an id with no record); such a chat is never a command (`is_system_command`), it only
+        shares the commands' per-session serialization.
         """
         sid = str(session_id or "")
         if not sid:
@@ -454,7 +456,6 @@ class TaskQueue:
             return explicit
 
         src = (source or "").strip().lower()
-        text = (input_text or "").strip()
         if src == "automation" or metadata.get("automation_task_id"):
             return self.TASK_CLASS_AUTOMATION
         if src in ("system", "thinking", "background"):
@@ -462,8 +463,6 @@ class TaskQueue:
         if metadata.get("compaction") is True:
             return self.TASK_CLASS_BACKGROUND
         if str(session_id or "").strip().lower() == "system":
-            return self.TASK_CLASS_BACKGROUND
-        if text.startswith("__CMD__:"):
             return self.TASK_CLASS_BACKGROUND
         return self.TASK_CLASS_INTERACTIVE
 
@@ -615,6 +614,37 @@ def enqueue_wake_turn(*, kind: str, session_id: str, text: str, source: str = "w
         metadata["role"] = role
     metadata.update(extra or {})
     TaskQueue().add(session_id=session_id, input_text=text, source=source, metadata=metadata)
+
+
+SYSTEM_SESSION_ID = "system"
+SYSTEM_COMMAND_PREFIX = "__CMD__:"
+SYSTEM_COMMANDS = ("NEW_SESSION", "LOAD_SESSION", "RENAME_SESSION", "RELOAD_CONFIG")
+
+
+def enqueue_system_command(command: str, *, priority: int = 10, user_scope_id: Any = None):
+    """Queue a housekeeping command for the runner (`command` is the text after the prefix,
+    e.g. ``"LOAD_SESSION:<id>"``). The one producer, so the mark `is_system_command` reads is
+    set by VAF itself and never by whoever wrote the text: a contact's message reading
+    ``__CMD__:RELOAD_CONFIG`` was run as a command, and a web chat named ``system`` can carry
+    the same text. Not on the framework facade: the commands are the web server's."""
+    name = str(command or "").split(":", 1)[0]
+    if name not in SYSTEM_COMMANDS:
+        raise ValueError(f"unknown system command {name!r}")
+    metadata: Dict[str, Any] = {"task_class": "background", "system_command": True}
+    if user_scope_id is not None:
+        metadata["user_scope_id"] = user_scope_id
+    return TaskQueue().add(session_id=SYSTEM_SESSION_ID, input_text=SYSTEM_COMMAND_PREFIX + command,
+                           source="web", priority=priority, metadata=metadata)
+
+
+def is_system_command(task) -> bool:
+    """A command `enqueue_system_command` queued: its session, its mark and its prefix, all
+    three. The text alone is anyone's to write (a contact, a chat), and the session id alone
+    a web client can name."""
+    meta = getattr(task, "metadata", None) or {}
+    return (str(getattr(task, "session_id", "") or "") == SYSTEM_SESSION_ID
+            and meta.get("system_command") is True
+            and str(getattr(task, "input_text", "") or "").startswith(SYSTEM_COMMAND_PREFIX))
 
 
 def wake_kind(metadata: Optional[Dict[str, Any]]) -> Optional[str]:

@@ -5186,14 +5186,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         manager.subscribe_to_session(websocket, sid)
                         
                         # Push command to main loop to switch session
-                        from vaf.core.task_queue import TaskQueue
-                        tq = TaskQueue()
-                        tq.add(
-                            session_id="system",
-                            input_text=f"__CMD__:LOAD_SESSION:{sid}",
-                            source="web",
-                            metadata={"task_class": "background"},
-                        )
+                        from vaf.core.task_queue import enqueue_system_command
+                        enqueue_system_command(f"LOAD_SESSION:{sid}")
                         
                         # Helper to clean historical messages (same logic as run.py)
                         
@@ -5391,14 +5385,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 elif type == "new_session":
                     user_scope_id = manager.get_connection_user(websocket)
                     # Push command to main loop to create new session
-                    from vaf.core.task_queue import TaskQueue
-                    tq = TaskQueue()
-                    tq.add(
-                        session_id="system",
-                        input_text="__CMD__:NEW_SESSION",
-                        source="web",
-                        metadata={"user_scope_id": user_scope_id, "task_class": "background"},
-                    )
+                    from vaf.core.task_queue import enqueue_system_command
+                    enqueue_system_command("NEW_SESSION", user_scope_id=user_scope_id)
                     
                     # Create new session object AND SAVE IT IMMEDIATELY (temp, main loop will take over)
                     new_sess = session_mgr.new(user_scope_id=user_scope_id)
@@ -5432,14 +5420,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             continue
                         session_mgr.rename(sid, new_name)
                         # Notify Main Loop to update in-memory object
-                        from vaf.core.task_queue import TaskQueue
-                        tq = TaskQueue()
-                        tq.add(
-                            session_id="system",
-                            input_text=f"__CMD__:RENAME_SESSION:{sid}:{new_name}",
-                            source="web",
-                            metadata={"task_class": "background"},
-                        )
+                        from vaf.core.task_queue import enqueue_system_command
+                        enqueue_system_command(f"RENAME_SESSION:{sid}:{new_name}")
                         
                         # Broadcast update ONLY to this user's connections
                         web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)
@@ -5884,15 +5866,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
 
                         # Use TaskQueue for commands (headless_runner only reads from TaskQueue)
                         # Priority 1 so RELOAD_CONFIG is processed before any pending chat (priority 10)
-                        from vaf.core.task_queue import TaskQueue
-                        tq = TaskQueue()
-                        tq.add(
-                            session_id="system",
-                            input_text="__CMD__:RELOAD_CONFIG",
-                            source="web",
-                            priority=1,
-                            metadata={"task_class": "background"},
-                        )
+                        from vaf.core.task_queue import enqueue_system_command
+                        enqueue_system_command("RELOAD_CONFIG", priority=1)
                         await websocket.send_json({
                             "type": "config_saved",
                             "status": "success",

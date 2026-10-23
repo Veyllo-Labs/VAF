@@ -3759,7 +3759,6 @@ function VAFDashboardContent() {
     const filteredMessages = useMemo(() => {
         const isThinkingSession = (sessions.find(s => s.id === currentSessionId) as Session | undefined)?.source === 'thinking';
         return messages
-            .filter(m => !String(m?.content ?? '').includes('__CMD__'))
             .filter(m => {
                 if (!isThinkingSession) return true;
                 if ((m.role === 'system' || m.role === 'user') && isThinkingModePrompt(String(m.content ?? ''))) return false;
@@ -9448,8 +9447,8 @@ function VAFDashboardContent() {
                             scroll gesture, see MOBILE_UI.md. */}
                         {(() => {
                             // Addressed through filteredMessages, never through `messages`: a
-                            // prompt the chat filters out (a __CMD__ line, a thinking-mode
-                            // preamble) has no bubble, so a row for it would be a dead target.
+                            // prompt the chat filters out (a thinking-mode preamble) has no
+                            // bubble, so a row for it would be a dead target.
                             const trueIdxOf = new Map(messages.map((m, i) => [m, i] as const));
                             // Every user message, empty ones included: this is the same turn
                             // count visibleMessages cuts by, and the two must agree.

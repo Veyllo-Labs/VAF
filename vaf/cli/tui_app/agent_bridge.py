@@ -392,7 +392,8 @@ class AgentBridge:
           computed first and the pop is attempted before the expiry check, so the
           condition variable is never waited on and the lane is never held.
 
-        NAMED BOUNDARY: no `__CMD__` handling. All four producers of those tasks live
+        NAMED BOUNDARY: no system-command handling (`is_system_command`). All four producers
+        of those tasks (`enqueue_system_command`) live
         in the web server, and an explicit `--web` routes to the modern lane, so no
         such task can reach this process. The branch lands when a producer does.
         """

@@ -1428,7 +1428,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                     # We can set the event when web input arrives.
                     
                     # 1. Check queue immediately
-                    from vaf.core.task_queue import TaskQueue
+                    from vaf.core.task_queue import TaskQueue, is_system_command
                     tq = TaskQueue()
                     is_web_input = False
                     
@@ -1464,7 +1464,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                             agent._register_session()
                         
                         # Handle System Commands from Web UI
-                        if str(raw_input).startswith("__CMD__"):
+                        if is_system_command(task):
                             try:
                                 cmd_parts = str(raw_input).strip().split(":")
                                 if len(cmd_parts) < 2:
@@ -1604,7 +1604,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                     agent._register_session()
                                 
                                 # Handle System Commands (Copy logic from above)
-                                if str(raw_input).startswith("__CMD__"):
+                                if is_system_command(task):
                                     try:
                                         cmd_parts = str(raw_input).strip().split(":")
                                         if len(cmd_parts) < 2:

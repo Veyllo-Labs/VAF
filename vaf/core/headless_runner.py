@@ -22,7 +22,7 @@ from vaf.core.agent import Agent
 from vaf.core.channels import CHAT_CHANNELS, CHAT_SESSION_PREFIXES
 from vaf.core.identity_binding import (Identity, identity_from_metadata,
                                        resolve_scope_identity)
-from vaf.core.task_queue import TaskQueue
+from vaf.core.task_queue import TaskQueue, is_system_command
 from vaf.core.turn_binding import TurnBinding, TurnRefused, bind_turn, end_turn
 from vaf.core.subagent_ipc import take_result_notification
 from vaf.core.session import (SessionManager, Session, TurnStatus, failed_turn_meta,
@@ -1743,7 +1743,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     continue
                 except Exception as e:
                     print(f"[Headless] Failed to load session context: {e}")
-                    if not str(task.input_text).startswith("__CMD__"):
+                    if not is_system_command(task):
                         # A chat turn on a chat that did not load is answered as failed and
                         # does not run (answer_failed_load). A command still runs: it is no
                         # turn on that chat, and LOAD_SESSION loads the chat it names itself.
@@ -1804,7 +1804,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
 
                 # Process Input
                 input_text = task.input_text
-                is_cmd = str(input_text).startswith("__CMD__")
+                is_cmd = is_system_command(task)
 
                 # Check for System Commands (similar to run.py) - do NOT load model for commands
                 if is_cmd:

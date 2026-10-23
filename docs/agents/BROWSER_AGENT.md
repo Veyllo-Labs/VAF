@@ -544,7 +544,13 @@ the "browser is free" stop event goes out while another run is still counted. Wh
 last counted run is one that gave up at the concurrency gate without driving, its leaving
 (`agent_run_abandoned`) settles the give-back the run ahead of it left; so does a spawned run
 handing over to its child process, which can never settle this process's holder (it gives
-the browser back to the evicted person only, and announces no free browser).
+the browser back to the evicted person only, and announces no free browser). NAMED
+BOUNDARY: a spawned run (opt-in for workflows, `VAF_SPAWN_BROWSER_SUBAGENT`) drives in a child
+process, which never settles this process's holder. When that hand-over gives the browser
+back while the child still drives, the window's start is refused as `agent_active`, and
+nothing in this process asks again when the child ends, so the person opens the browser
+again by hand. It is reachable only when an in-process run and a spawned run are counted
+together in one process.
 
 **Logins persist, without a switch.** Interactive use is always the PERSISTENT mode - the
 counterpart of the agent's `persistent=true` runs, and deliberately without a toggle of its

@@ -1112,12 +1112,8 @@ class BrowserAgentTool(BaseTool):
         # only - the cookie-jar handover waits for the concurrency gate below,
         # because here another run may still be driving this browser and a
         # scrub would log it out mid-task. Never raises.
-        from vaf.core.browser_interactive import stop_for_agent_run, agent_run_ended, run_generation
+        from vaf.core.browser_interactive import stop_for_agent_run, agent_run_ended
         stop_for_agent_run(container_name=_container)
-        # Which run this is, read before anything can end it: the handover below
-        # waits in an executor thread a Stop does not wait for, and a claim that
-        # lands after this run's agent_run_ended must not take the browser.
-        _run_gen = run_generation(container_name=_container)
 
         # Optionally run as a separate, killable CHILD PROCESS. Workflows opt in via
         # VAF_SPAWN_BROWSER_SUBAGENT so a long browser run can be supervised/killed cleanly
@@ -1205,7 +1201,6 @@ class BrowserAgentTool(BaseTool):
                     session_id=_session_id,
                     cdp_base=_cdp_base,
                     container_name=_container,
-                    run_generation=_run_gen,
                 )
             )
         except ImportError as e:
@@ -1238,8 +1233,15 @@ class BrowserAgentTool(BaseTool):
                         "container.")
             return f"Error (browser_agent): {type(e).__name__}: {e}"
         finally:
-            _browser_semaphore(_container).release()
-            agent_run_ended(container_name=_container)
+            # The run's end BEFORE the gate opens: agent_run_ended moves the run
+            # generation on and releases this run's holder entry, and a run queued
+            # at the gate that got past it first would be retired by this end
+            # (its entry released, its handover refused) although it is the
+            # current run by then.
+            try:
+                agent_run_ended(container_name=_container)
+            finally:
+                _browser_semaphore(_container).release()
 
     # ── Internal async implementation ─────────────────────────────────────────
 
@@ -1254,7 +1256,6 @@ class BrowserAgentTool(BaseTool):
         session_id: Optional[str] = None,
         cdp_base: Optional[str] = None,
         container_name: str = "vaf-browser",
-        run_generation: Optional[int] = None,
     ) -> str:
         import os
         from browser_use import Agent
@@ -1311,19 +1312,26 @@ class BrowserAgentTool(BaseTool):
         # the task gains the instruction to CONTINUE there. Without it the run
         # opened the site fresh in a tab of its own while the person's tab
         # stood right beside it (measured live on a marketplace session).
-        from vaf.core.browser_interactive import hand_jar_to_run, take_agent_handover
+        from vaf.core.browser_interactive import (hand_jar_to_run, run_generation,
+                                                  take_agent_handover)
         _handover = await asyncio.get_running_loop().run_in_executor(
             None,
             lambda: take_agent_handover(user_scope_id=user_scope_id,
                                         container_name=container_name),
         )
+        # Which run this is, read here: after the concurrency gate, because a run
+        # queued there becomes the current run only once the one ahead of it has
+        # ended (that end moves the generation on); and before the executor,
+        # because a Stop does not wait for the executor thread, and a claim that
+        # lands after this run's own end must not take the browser.
+        _run_gen = run_generation(container_name=container_name)
         await asyncio.get_running_loop().run_in_executor(
             None,
             lambda: hand_jar_to_run(user_scope_id=user_scope_id,
                                     persistent=persistent,
                                     container_name=container_name,
                                     continuing=_handover is not None,
-                                    run_generation=run_generation),
+                                    run_generation=_run_gen),
         )
         # The owner's files, mirrored into this browser: the container paths
         # double as browser-use's upload whitelist, so "fill the form and

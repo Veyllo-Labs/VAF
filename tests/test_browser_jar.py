@@ -524,26 +524,114 @@ def test_a_run_stopped_while_it_waits_leaves_no_holder(box):
     web.agent_run_ended()
 
 
-def test_the_browser_agent_hands_its_run_generation_to_the_handover(box, monkeypatch):
-    """The generation is read in run() right after the eviction, before anything
-    can end the run, and travels to hand_jar_to_run.
+class _Reached(Exception):
+    """Ends a real BrowserAgentTool run right after its handover, before browser-use."""
 
-    MUTATIONS: stop passing it to _run_browser (red: None); stop forwarding it to
-    hand_jar_to_run (red on the source pin)."""
+
+def _two_runs_through_the_gate(box, monkeypatch, *, a_end_waits_for_b_claim):
+    """Drive two REAL BrowserAgentTool.run calls on the shared browser through the
+    real concurrency gate (one slot) and the real _run_browser up to its handover;
+    the workspace mirror right after it ends each run. A holds the gate until the
+    test lets it go; B queues behind it. Returns (result of B, B's view of the
+    record at the moment B had its handover)."""
+    pytest.importorskip("browser_use", exc_type=ImportError)
+    import vaf.tools.browser_agent as ba
+
+    monkeypatch.setitem(ba._BROWSER_SEMAPHORES, "vaf-browser", threading.Semaphore(1))
+    web = box["web"]
+    release_a = threading.Event()
+    b_claimed = threading.Event()
+    a_ended = threading.Event()
+    b_view = {}
+    real_hand = bi.hand_jar_to_run
+    real_end = bi.agent_run_ended
+
+    def hand(**kwargs):
+        real_hand(**kwargs)
+        if kwargs.get("user_scope_id") == "scope-b":
+            b_claimed.set()
+
+    def end(notify=True, container_name=None):
+        if threading.current_thread().name == "run-a" and a_end_waits_for_b_claim:
+            b_claimed.wait(1.0)
+        real_end(notify=notify, container_name=container_name)
+        if threading.current_thread().name == "run-a":
+            a_ended.set()
+
+    def mirror(user_scope_id=None, container_name=None):
+        if user_scope_id == "scope-a":
+            release_a.wait(10)
+        else:
+            a_ended.wait(3)
+            data = json.loads((bj._state_dir() / "vaf-browser.json").read_bytes())
+            b_view.update(token=web._run_token,
+                          runs=[h for h in data["holders"] if h["kind"] == bj.KIND_RUN])
+        raise _Reached(user_scope_id)
+
+    monkeypatch.setattr(bi, "hand_jar_to_run", hand)
+    monkeypatch.setattr(bi, "agent_run_ended", end)
+    monkeypatch.setattr(bi, "sync_workspace_for_run", mirror)
+    results = {}
+
+    def run(scope):
+        results[scope] = ba.BrowserAgentTool().run(task="look it up", user_scope_id=scope)
+
+    a = threading.Thread(target=run, args=("scope-a",), name="run-a")
+    a.start()
+    for _ in range(100):                       # A holds the gate, past its handover
+        if web._run_token is not None:
+            break
+        time.sleep(0.05)
+    b = threading.Thread(target=run, args=("scope-b",), name="run-b")
+    b.start()
+    time.sleep(0.4)                             # B is queued at the gate now
+    release_a.set()
+    a.join(15)
+    b.join(15)
+    return results.get("scope-b", ""), b_view
+
+
+def test_a_run_queued_at_the_gate_gets_the_browser_when_the_run_ahead_ends(box, monkeypatch):
+    """With one slot (the default) a second run waits at the gate. The end of the
+    run ahead of it moves the run generation on; a generation read before the gate
+    then retired the queued run as if it had been stopped, and the person got "the
+    browser could not be cleaned for this user change". It is read after the gate.
+
+    MUTATION: read the generation in run() before the gate again - red."""
+    out, _view = _two_runs_through_the_gate(box, monkeypatch, a_end_waits_for_b_claim=False)
+    assert "_Reached" in out, f"the queued run was refused: {out}"
+
+
+def test_a_run_past_the_gate_is_not_retired_by_the_end_of_the_one_before(box, monkeypatch):
+    """The run's end comes before the gate opens. With the gate released first, the
+    queued run passed it and took the browser while the run ahead was still ending,
+    and that end then released the new run's holder entry: other processes saw the
+    browser free while it was being driven.
+
+    MUTATION: release the gate before agent_run_ended in run()'s finally - red."""
+    out, view = _two_runs_through_the_gate(box, monkeypatch, a_end_waits_for_b_claim=True)
+    assert "_Reached" in out, f"the queued run was refused: {out}"
+    assert view.get("token") is not None and len(view.get("runs") or []) == 1, (
+        f"the run past the gate lost its holder entry to the end of the one before: {view}")
+
+
+def test_the_run_reads_its_generation_after_the_gate_and_ends_before_opening_it():
+    """The two orderings above, pinned in the source as well, so they hold where
+    browser-use is not installed and the real-run tests skip.
+
+    MUTATIONS: read the generation in run() again (red); release the gate before
+    agent_run_ended (red)."""
     import inspect
 
     from vaf.tools.browser_agent import BrowserAgentTool
 
-    src = inspect.getsource(BrowserAgentTool._run_browser)
-    seen = {}
-
-    async def _record(self, **kwargs):
-        seen.update(kwargs)
-        return "done"
-
-    monkeypatch.setattr(BrowserAgentTool, "_run_browser", _record)
-    before = box["web"].run_generation()
-    assert BrowserAgentTool().run(task="look up the opening hours", user_scope_id="scope-a") == "done"
-    assert seen.get("run_generation") == before
-    assert box["web"].run_generation() == before + 1, "the run's end did not move the generation"
-    assert "run_generation=run_generation" in src, "the handover lost the run's generation"
+    run_src = inspect.getsource(BrowserAgentTool.run)
+    assert "run_generation(" not in run_src, "run() reads the generation before the gate"
+    assert run_src.count("agent_run_ended(container_name=_container)") == 1
+    assert (run_src.index("agent_run_ended(container_name=_container)")
+            < run_src.index("_browser_semaphore(_container).release()")), (
+        "the gate opens before the run has ended")
+    body = inspect.getsource(BrowserAgentTool._run_browser)
+    read = body.index("_run_gen = run_generation(container_name=container_name)")
+    assert read < body.index("hand_jar_to_run(user_scope_id=user_scope_id"), body[read - 200:read]
+    assert "run_generation=_run_gen" in body

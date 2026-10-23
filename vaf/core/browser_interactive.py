@@ -1164,7 +1164,9 @@ class InteractiveBrowserManager:
 
     def run_generation(self) -> int:
         """Which run of this browser is current: agent_run_ended moves it on. A run
-        reads it right after stop_for_agent_run and hands it to hand_jar_to_run."""
+        reads it once it has passed its concurrency gate, right before it hands it
+        to hand_jar_to_run - not earlier: a run still queued at the gate would be
+        retired by the end of the run ahead of it."""
         with self._lock:
             return self._run_generation
 
@@ -1201,8 +1203,11 @@ class InteractiveBrowserManager:
         probe). The pool is the answer to that, since a per-user instance is only
         ever driven by that user's runs.
 
-        `run_generation` is what run_generation() answered when the run began. The
-        wait for a probe of another process runs in the run's executor thread, and
+        `run_generation` is what run_generation() answered after the run passed
+        its concurrency gate (BrowserAgentTool._run_browser reads it there, and
+        run() ends a run before it opens the gate for the next one, so a queued
+        run is never retired by the end of the one ahead of it). The wait for a
+        probe of another process runs in the run's executor thread, and
         a Stop cancels the run without waiting for that thread: agent_run_ended
         had already run when the late claim landed, so the run's entry stayed in
         the record for the life of the process and every other process saw the
@@ -2164,8 +2169,8 @@ def stop_for_agent_run(container_name: Optional[str] = None) -> None:
 
 
 def run_generation(container_name: Optional[str] = None) -> int:
-    """Hook for BrowserAgentTool.run(), right after stop_for_agent_run: which run of
-    the run's browser is current, for hand_jar_to_run. Never raises."""
+    """Hook for BrowserAgentTool._run_browser, after the concurrency gate and right
+    before hand_jar_to_run: which run of the run's browser is current. Never raises."""
     try:
         return _manager_for_run(container_name).run_generation()
     except Exception:

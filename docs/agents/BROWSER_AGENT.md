@@ -1078,7 +1078,11 @@ runs after the run has passed the concurrency gate and after its stop watchdog i
 run is still driving, logging that run out of every site mid-task; before the watchdog
 it would swallow a Stop for as long as an unresponsive browser makes it wait. A spawned
 child does its own handover behind its own gate rather than having the parent do it,
-and the record above is how the parent and every later holder learn what it did.
+and the record above is how the parent and every later holder learn what it did. The
+run also reads its generation there, after the gate: a run stopped while its handover
+still waits releases the claim when it lands, and a run that waited at the gate is
+never refused because the run ahead of it ended - a run ends before it lets the next
+one past the gate.
 Both orderings are pinned by `tests/test_browser_pool.py`. A per-user instance is exempt
 from the scope-change half entirely - its profile belongs to one person.
 

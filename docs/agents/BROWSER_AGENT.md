@@ -1045,11 +1045,15 @@ bound to the container and its last start, and wipes for anything it cannot vouc
 no record, one without its format tag, one for another container or an earlier start
 of this one, or a handover cut short (the owner is cleared before the wipe and named
 after it). The record also lists who holds the browser now - one entry per lease, run
-or probe, with its process's pid and start time. A live holder of another process
+or probe, with its process's pid and a mark of when that process started (on Linux the
+boot-relative tick count, which no clock step moves). A live holder of another process
 makes a probe busy, and a lease or a run waits up to 60 seconds for a probe there and
 refuses anything else ("Another user is driving the browser right now" in the window,
 "Browser agent is busy" for a run). An entry whose process is gone is dropped, so a
-crash never locks the browser.
+crash never locks the browser, and a run stopped while it waits releases its claim
+when the claim lands. A record file VAF cannot use (unreadable, not JSON, or without
+its format tag) is never overwritten: the shared browser answers busy until that file,
+which the `webui` log names, is removed with VAF stopped.
 
 What remains configurable is the SAME-SCOPE clean start (a non-persistent
 `browser_agent` run of the same user - a clean start is that lane's documented promise):

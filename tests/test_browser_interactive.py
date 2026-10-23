@@ -695,7 +695,9 @@ def test_sweep_delivers_through_the_threat_funnel(monkeypatch, tmp_path):
     out, asked past inspect_upload_file, and lands sanitized in the owner's
     VAF_Projects Downloads; a blocked file goes nowhere - and in BOTH cases
     the container copy is deleted. Deliberately WITHOUT the mgr fixture: it
-    stubs this very function for the manager-level tests."""
+    stubs this very function for the manager-level tests. The real function is
+    `_real_sweep_container_downloads`: the suite stubs the name itself (conftest
+    `_no_command_in_a_real_container`)."""
     monkeypatch.setenv("HOME", str(tmp_path))
     import types as _types
     import vaf.core.browser_pool as bp
@@ -724,7 +726,7 @@ def test_sweep_delivers_through_the_threat_funnel(monkeypatch, tmp_path):
     monkeypatch.setattr(threat_mod, "inspect_upload_file",
                         lambda p, **kw: _types.SimpleNamespace(blocked=blocked["value"]))
 
-    delivered = bi._sweep_container_downloads("vaf-browser", "scope-a")
+    delivered = bi._real_sweep_container_downloads("vaf-browser", "scope-a")
     target = tmp_path / "VAF_Projects" / "ab12cd34" / "Downloads"
     assert delivered and (target / delivered[0]).exists()
     assert "?" not in delivered[0]                  # sanitized name
@@ -733,14 +735,14 @@ def test_sweep_delivers_through_the_threat_funnel(monkeypatch, tmp_path):
     assert any(c[:3] == ["exec", "vaf-browser", "rm"] for c in calls)
 
     # Second file of the same name gets a collision suffix, not an overwrite.
-    delivered2 = bi._sweep_container_downloads("vaf-browser", "scope-a")
+    delivered2 = bi._real_sweep_container_downloads("vaf-browser", "scope-a")
     assert delivered2 and delivered2[0] != delivered[0]
 
     # Blocked verdict: nothing lands, the container copy still dies.
     calls.clear()
     blocked["value"] = True
     existing = sorted(target.iterdir())
-    assert bi._sweep_container_downloads("vaf-browser", "scope-a") == []
+    assert bi._real_sweep_container_downloads("vaf-browser", "scope-a") == []
     assert sorted(target.iterdir()) == existing
     assert any(c[:3] == ["exec", "vaf-browser", "rm"] for c in calls)
 
@@ -1363,3 +1365,24 @@ def test_verified_wipe_defuses_a_lingering_marker_on_timeout(monkeypatch):
     monkeypatch.setattr(bi, "_wipe_exec", script)
     assert bi._real_verified_profile_wipe("vaf-browser", "", deadline_s=0.1) is False
     assert any("rm -f" in c for c in script.calls)
+
+
+def test_the_suite_cannot_run_a_command_in_a_real_container():
+    """Counter-proof for conftest `_no_command_in_a_real_container`, written without
+    any fixture of its own so it sees what every test sees: the browser helpers
+    that act inside the container are stubs, and the docker seam refuses to run a
+    command in one. The container name does not exist, so even without the guard
+    nothing real is touched; with it, docker is never asked.
+
+    MUTATION: remove the guard's seam half - red."""
+    import warnings
+
+    from vaf.core import containers
+
+    assert bi._purge_container_downloads is not bi._real_purge_container_downloads
+    assert bi._sweep_container_downloads is not bi._real_sweep_container_downloads
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        r = containers.docker(["exec", "vaf-test-no-such-container", "true"], timeout=10)
+    assert r.returncode == 1 and "refused under test" in (r.stderr or "")
+    assert any("refused under test" in str(w.message) for w in caught)

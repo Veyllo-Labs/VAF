@@ -727,14 +727,22 @@ partition:
   named only after it is confirmed. The container survives restarts of VAF, and the
   record is how a restarted process knows whose state is in it. The record also lists
   who holds the browser now, one entry per lease, run or probe with its process's pid
-  and start time: a live holder of another process makes a probe answer busy, a lease
-  or a run wait out a probe there (up to 60 seconds) and refuse anything else, and an
-  entry whose process is gone, or whose pid now belongs to another process, is
-  dropped, so a crash never locks the browser. It lives on the host and not in the
-  container, because only the host can tell whether a process is alive, and because a
-  marker inside the container would be written by the browser user, the account a
+  and a mark of when that process started (on Linux the boot-relative tick count from
+  `/proc/<pid>/stat`: psutil's start time follows the wall clock, and a clock step of
+  15 ms once made every live holder of the web server look gone to the processes
+  started after it): a live holder of another process makes a probe answer busy, a
+  lease or a run wait out a probe there (up to 60 seconds) and refuse anything else,
+  and an entry whose process is gone, or whose pid now belongs to another process, is
+  dropped, so a crash never locks the browser. A run stopped while it waits releases
+  its claim when the claim lands. It lives on the host and not in the container,
+  because only the host can tell whether a process is alive, and because a marker
+  inside the container would be written by the browser user, the account a
   compromised page runs as. Hashes, pids and timestamps only, owner-only, written
-  under the same cross-process lock secure_store uses.
+  under the same cross-process lock and through the same atomic writer secure_store
+  uses. A record file that exists but cannot be used (unreadable, not JSON, without
+  the format tag or with another one) is never read as "nobody holds the browser"
+  and never overwritten: the shared browser answers busy and refuses a change of
+  hands until the file, which the `webui` log names, is removed with VAF stopped.
 - **The same scope, and serialised handovers.** A non-persistent agent run of the SAME
   scope still gets a quick scrub (its documented promise is a clean start;
   `VAF_BROWSER_SCRUB=full` deepens that to a best-effort profile wipe). Saved logins
@@ -768,8 +776,10 @@ partition:
   cross-user handover on the shared container, and indefinitely on a dedicated pool
   instance. What remains on the shared container is named in `hand_jar_to_run`:
   within one process `VAF_BROWSER_MAX_PARALLEL` above 1 lets that many runs share one
-  jar, and a second VAF installation under another OS account that drives the same
-  container keeps a record of its own - the pool is the answer to both.
+  jar and one holder entry (the first run to end releases it, so other processes see
+  the browser free while the second run still drives it), and a second VAF
+  installation under another OS account that drives the same container keeps a
+  record of its own - the pool is the answer to both.
   Downloads are not a residual: finished ones are swept to their owner's
   `VAF_Projects/<uid8>/Downloads`
   through the threat funnel (origin `browser_download`), and a scope change purges the

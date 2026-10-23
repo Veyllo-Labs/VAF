@@ -28,19 +28,24 @@ This record is what every process reads before it trusts its own memory:
   wipe is confirmed, so a crash in between leaves "unknown", never a wrong name.
   Binding to the last start keeps the rule that a restarted stack starts unknown.
 - `holders`: who is using the browser now, one entry per lease, run or probe, each
-  with its process's pid and start time. An entry whose process is gone, or whose
-  pid now belongs to another process, is dropped, so a crash never locks the
-  browser. A live entry of another process makes a claimant back off by the rules
-  the managers apply within one process.
+  with its process's pid and a mark of when that process started (on Linux the
+  boot-relative tick count, which a clock step cannot move). An entry whose process
+  is gone, or whose pid now belongs to another process, is dropped, so a crash
+  never locks the browser. A live entry of another process makes a claimant back
+  off by the rules the managers apply within one process.
 
 One small JSON file per container under the VAF data directory, read and written
-under the cross-process lock secure_store uses (filelock) and owner-only
-(harden_path). It holds hashes, pids and timestamps and no user content, so it is
-not encrypted, like the sandbox environments' state files.
+under the cross-process lock secure_store uses (filelock), through secure_store's
+atomic writer, owner-only. It holds hashes, pids and timestamps and no user
+content, so it is not encrypted, like the sandbox environments' state files. A
+file that exists but cannot be used (unreadable, not JSON, without this format's
+tag or with another one) is never read as "no holders" and never overwritten: the
+holder half answers JarRecordUnavailable, so a probe is busy and a handover is
+refused, and the log names the file, until it is removed with VAF stopped.
 
 Why on the host and not as a marker inside the container: the holders are host
 processes, whose liveness only the host can check (measured: `docker inspect` 7 ms,
-the locked read and write 0.2 ms, a process start time 0.04 ms), and a marker inside
+the locked read and write 0.2 ms, a process start mark 0.04 ms), and a marker inside
 the container is written by the browser user - the account a compromised page runs
 as. A record the browser itself can forge must never decide whether the next
 person's profile is wiped.
@@ -57,6 +62,7 @@ import hashlib
 import json
 import os
 import secrets
+import sys
 import threading
 import time
 from pathlib import Path
@@ -91,8 +97,43 @@ def _state_dir() -> Path:
     return Platform.vaf_dir() / "browser_jar"
 
 
+def _linux_start_ticks(pid: int) -> Optional[float]:
+    """Field 22 of /proc/<pid>/stat: when the process started, in clock ticks since
+    boot. None for a process that is gone or a zombie."""
+    try:
+        raw = Path(f"/proc/{int(pid)}/stat").read_bytes()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except PermissionError:
+        return 0.0
+    except OSError:
+        return None
+    try:
+        # The command name (field 2) is in parentheses and may hold spaces or
+        # parentheses itself; everything after the LAST ")" is fields 3 onward.
+        fields = raw[raw.rindex(b")") + 2:].split()
+        if fields[0] in (b"Z", b"X"):
+            return None
+        return float(int(fields[19]))
+    except Exception:
+        return 0.0
+
+
 def _process_started(pid: int) -> Optional[float]:
-    """The start time of a process, or None when it does not exist."""
+    """A mark of when a process started, or None when it does not exist. Compared
+    only with a mark this same function recorded, so its unit is its own.
+
+    On Linux the boot-relative start in clock ticks (`/proc/<pid>/stat`), not
+    psutil's create_time: that one adds the boot time, which /proc/stat derives
+    from the wall clock in whole seconds, so a clock step moved it - measured, a
+    forward step of 15 ms changed it by a full second, every start a long-running
+    process had recorded no longer matched, and its live leases read as gone to
+    every process started after the step (a coder child's render then wiped the
+    browser under a person's live lease). The tick count never changes for the
+    life of the process. Elsewhere psutil's create_time, which Windows and macOS
+    fix when the process is created."""
+    if sys.platform.startswith("linux"):
+        return _linux_start_ticks(pid)
     try:
         import psutil
     except Exception:
@@ -128,8 +169,10 @@ def _alive(entry: Dict[str, Any]) -> bool:
         return False
     if actual == 0.0 or recorded == 0.0:
         return True
-    # The same process reports the same start time; a reused pid does not.
-    return abs(actual - recorded) < 1.0
+    # The same process reports the same mark; a reused pid does not. On Linux the
+    # marks are whole clock ticks and match exactly; elsewhere they are seconds.
+    tolerance = 0.5 if sys.platform.startswith("linux") else 1.0
+    return abs(actual - recorded) < tolerance
 
 
 def container_instance(container: str) -> str:
@@ -188,28 +231,46 @@ class JarRecord:
                     except Exception:
                         pass
 
-    def _load(self) -> Dict[str, Any]:
-        """The record, or an empty one: a missing file, one that does not parse, and
-        one without this format's tag all vouch for nobody and list no holder."""
+    def _load(self, *, strict: bool) -> Dict[str, Any]:
+        """The record. A missing file is an empty record. A file that exists but
+        cannot be used - unreadable, not JSON, without this format's tag or with
+        another - vouches for nobody; with `strict` it raises JarRecordUnavailable
+        instead, because the holder half and every write must not read it as "no
+        holders" and overwrite it: the holders it lists would be lost, and a tag
+        of another VAF version would be clobbered by an older one."""
+        path = self._path()
         try:
-            data = json.loads(self._path().read_bytes().decode("utf-8"))
+            raw = path.read_bytes()
+        except FileNotFoundError:
+            return {"holders": []}
+        except Exception as e:
+            if strict:
+                raise JarRecordUnavailable(f"record {path} not readable: {e}") from e
+            return {"holders": []}
+        try:
+            data = json.loads(raw.decode("utf-8"))
         except Exception:
             data = None
         if not isinstance(data, dict) or data.get("format") != JAR_FORMAT:
-            data = {}
+            if strict:
+                raise JarRecordUnavailable(
+                    f"record {path} is not a {JAR_FORMAT} record; left as it is")
+            return {"holders": []}
         holders = data.get("holders")
         data["holders"] = [h for h in holders if isinstance(h, dict)] if isinstance(holders, list) else []
         return data
 
     def _save(self, data: Dict[str, Any]) -> None:
+        """Through the store writer every at-rest store uses: a 0600 temp file,
+        fsync, and a replace that retries the sharing violation Windows raises
+        while a scanner or the indexer holds the file open."""
+        from vaf.core.secure_store import atomic_write_bytes
         data["format"] = JAR_FORMAT
         path = self._path()
-        tmp = path.with_name(path.name + ".tmp")
         try:
-            tmp.write_bytes(json.dumps(data, indent=1).encode("utf-8"))
-            os.replace(tmp, path)
+            atomic_write_bytes(path, json.dumps(data, indent=1).encode("utf-8"))
         except Exception as e:
-            raise JarRecordUnavailable(f"record not written: {e}") from e
+            raise JarRecordUnavailable(f"record {path} not written: {e}") from e
         try:
             from vaf.core.secure_store import harden_path
             harden_path(path)
@@ -223,7 +284,7 @@ class JarRecord:
         if not instance:
             return False
         with self._locked():
-            data = self._load()
+            data = self._load(strict=False)
         owner = data.get("owner")
         return bool(owner) and owner == scope_key(scope) and data.get("instance") == instance
 
@@ -231,7 +292,7 @@ class JarRecord:
         """Name the owner (after a confirmed wipe, or a lane of the same scope), or
         clear it (None, before a wipe). Raises JarRecordUnavailable."""
         with self._locked():
-            data = self._load()
+            data = self._load(strict=True)
             data["owner"] = scope_key(scope) if scope else None
             data["instance"] = instance or ""
             data["owner_at"] = time.time()
@@ -246,7 +307,7 @@ class JarRecord:
         Raises JarRecordUnavailable."""
         pid, started = _own_identity()
         with self._locked():
-            data = self._load()
+            data = self._load(strict=True)
             live = [h for h in data["holders"] if _alive(h)]
             foreign = [h for h in live if int(h.get("pid") or 0) != pid]
             if foreign:
@@ -270,24 +331,31 @@ class JarRecord:
 
     def release(self, token: Optional[str]) -> None:
         """Drop the entry this token names. Never raises: a release that cannot be
-        written leaves an entry whose process will end, and ends with it."""
+        written leaves an entry that ends with its process, and until then other
+        processes answer busy - so the failure is logged, once per release."""
         if not token:
             return
         try:
             with self._locked():
-                data = self._load()
+                data = self._load(strict=True)
                 kept = [h for h in data["holders"] if h.get("token") != token and _alive(h)]
                 if kept != data["holders"]:
                     data["holders"] = kept
                     self._save(data)
-        except Exception:
-            pass
+        except Exception as e:
+            try:
+                from vaf.core.log_helper import append_domain_log
+                append_domain_log("webui", f"[browser_jar] holder entry not released, other "
+                                           f"processes see the browser busy until this one "
+                                           f"ends: {e}")
+            except Exception:
+                pass
 
     def foreign_holders(self) -> List[Dict[str, Any]]:
         """Live holders of other processes. Raises JarRecordUnavailable."""
         pid, _started = _own_identity()
         with self._locked():
-            data = self._load()
+            data = self._load(strict=True)
         return [dict(h) for h in data["holders"]
                 if _alive(h) and int(h.get("pid") or 0) != pid]
 

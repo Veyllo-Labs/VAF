@@ -1016,6 +1016,7 @@ class InteractiveBrowserManager:
         # record (vaf.core.browser_jar): the lease's and the in-process run's.
         self._lease_token: Optional[str] = None
         self._run_token: Optional[str] = None
+        self._run_generation = 0
 
     # -- environment -------------------------------------------------------
     def cdp_base(self) -> str:
@@ -1161,9 +1162,16 @@ class InteractiveBrowserManager:
             self._handover = None
             return dict(h)
 
+    def run_generation(self) -> int:
+        """Which run of this browser is current: agent_run_ended moves it on. A run
+        reads it right after stop_for_agent_run and hands it to hand_jar_to_run."""
+        with self._lock:
+            return self._run_generation
+
     def hand_jar_to_run(self, user_scope_id: Optional[str] = None,
                         persistent: bool = False,
-                        continuing: bool = False) -> None:
+                        continuing: bool = False,
+                        run_generation: Optional[int] = None) -> None:
         """Hand the browser's cookie jar over to the run that is about to use it.
 
         Called AFTER the concurrency gate, by the process that actually drives
@@ -1187,8 +1195,21 @@ class InteractiveBrowserManager:
         owner the handover compares with is the record's, never this process's
         memory alone. Named boundary: within one process the gate admits
         VAF_BROWSER_MAX_PARALLEL runs at once, and above 1 they share one jar,
-        as they always have; the pool is the answer to that, since a per-user
-        instance is only ever driven by that user's runs.
+        as they always have, and one holder entry: the first run to end releases
+        it, so other processes see the browser free while the second run still
+        drives it (and that end also retires a second run still waiting for a
+        probe). The pool is the answer to that, since a per-user instance is only
+        ever driven by that user's runs.
+
+        `run_generation` is what run_generation() answered when the run began. The
+        wait for a probe of another process runs in the run's executor thread, and
+        a Stop cancels the run without waiting for that thread: agent_run_ended
+        had already run when the late claim landed, so the run's entry stayed in
+        the record for the life of the process and every other process saw the
+        browser busy (measured: a coder's render_check busy until a restart). A
+        run that is no longer current when its claim lands releases it and
+        raises BrowserHandoverError before it touches the jar. Without the
+        argument the generation is read here, on entry.
 
         A SCOPE CHANGE is fail-closed: the verified profile wipe either
         confirms, or this raises BrowserHandoverError and the run must not
@@ -1196,9 +1217,14 @@ class InteractiveBrowserManager:
         Same-scope paths stay lenient (a failed clean-start scrub costs the
         promise, not isolation) and are only logged."""
         scope = resolve_browser_scope(user_scope_id)
+        with self._lock:
+            generation = self._run_generation if run_generation is None else run_generation
         with self._handover_mutex:
             with self._lock:
                 claimed = self._run_token is not None
+                current = self._run_generation == generation
+            if not current:
+                raise BrowserHandoverError("the run ended before it held the browser")
             if self._dedicated_scope is None and not claimed:
                 # The run is claimed in the cross-process record before it takes
                 # the jar: a probe of another process is waited out, a lease or a
@@ -1213,7 +1239,14 @@ class InteractiveBrowserManager:
                     raise BrowserHeldElsewhere(
                         f"shared browser in use by another VAF process ({(other or {}).get('kind')})")
                 with self._lock:
-                    self._run_token = token
+                    current = self._run_generation == generation
+                    if current:
+                        self._run_token = token
+                if not current:
+                    self._release_shared(token)
+                    append_domain_log("webui", "[browser_interactive] the run ended while it "
+                                               "waited for the shared browser; claim released")
+                    raise BrowserHandoverError("the run ended while it waited for the browser")
             self._hand_jar_locked(scope, persistent=persistent, continuing=continuing)
 
     @contextlib.contextmanager
@@ -1448,6 +1481,9 @@ class InteractiveBrowserManager:
             run_token = None
             if notify:
                 run_token, self._run_token = self._run_token, None
+                # The run is over: a handover of it still under way in an executor
+                # thread (stopped while it waited) must not take the browser now.
+                self._run_generation += 1
             # The watch-only ticket dies with the run; a stream that outlives
             # it would keep showing the browser to a window with no run behind.
             self._agent_stream = None
@@ -2127,10 +2163,20 @@ def stop_for_agent_run(container_name: Optional[str] = None) -> None:
         pass
 
 
+def run_generation(container_name: Optional[str] = None) -> int:
+    """Hook for BrowserAgentTool.run(), right after stop_for_agent_run: which run of
+    the run's browser is current, for hand_jar_to_run. Never raises."""
+    try:
+        return _manager_for_run(container_name).run_generation()
+    except Exception:
+        return 0
+
+
 def hand_jar_to_run(user_scope_id: Optional[str] = None,
                     persistent: bool = False,
                     container_name: Optional[str] = None,
-                    continuing: bool = False) -> None:
+                    continuing: bool = False,
+                    run_generation: Optional[int] = None) -> None:
     """Hook for BrowserAgentTool.run(), AFTER the concurrency gate: hand the
     browser's jar to this run's scope.
 
@@ -2139,7 +2185,7 @@ def hand_jar_to_run(user_scope_id: Optional[str] = None,
     logins. The old "Never raises" contract swallowed exactly that case."""
     _manager_for_run(container_name).hand_jar_to_run(
         user_scope_id=user_scope_id, persistent=persistent,
-        continuing=continuing)
+        continuing=continuing, run_generation=run_generation)
 
 
 def take_agent_handover(user_scope_id: Optional[str] = None,

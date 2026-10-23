@@ -94,6 +94,38 @@ def test_posix_does_not_retry(tmp_path, monkeypatch):
     assert calls["n"] == 1
 
 
+def test_the_browser_holder_record_retries_a_windows_sharing_violation(monkeypatch):
+    """The shared browser's holder record (vaf/core/browser_jar.py) is written by
+    every VAF process, and a release that fails leaves an entry that makes every
+    other process answer busy until this one ends. A Defender scan or the indexer
+    holding the file is enough on Windows, so the record goes through the store
+    writer and its retry like the stores above.
+
+    MUTATION: write the record with a bare os.replace again - red."""
+    import vaf.core.browser_jar as bj
+
+    calls = {"n": 0}
+    real_replace = os.replace
+
+    def flaky(src, dst):
+        calls["n"] += 1
+        if calls["n"] % 3 != 0:
+            raise PermissionError(32, "The process cannot access the file")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(secure_store, "_on_windows", lambda: True)
+    monkeypatch.setattr(secure_store.os, "replace", flaky)
+    monkeypatch.setattr(secure_store.time, "sleep", lambda *_a: None)
+
+    record = bj.record_for("vaf-browser")
+    token, other = record.claim(bj.KIND_PROBE, "scope-a")
+    assert token and other is None
+    record.release(token)
+    data = json.loads((bj._state_dir() / "vaf-browser.json").read_bytes())
+    assert data["holders"] == [], "a sharing violation kept the holder entry"
+    assert calls["n"] >= 6, "the writes must have been retried, not abandoned"
+
+
 # ── the recovery kit's write order ──────────────────────────────────────────────
 
 def test_an_unwritable_desktop_leaves_no_orphaned_wrap(tmp_path, monkeypatch):

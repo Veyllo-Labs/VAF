@@ -351,19 +351,67 @@ def test_the_record_is_tagged_and_names_a_hash_never_the_scope(box):
     assert b"scope-a" not in raw
 
 
-def test_an_untagged_record_vouches_for_nobody(box):
-    """A file without the format tag (a foreign or hand-made one) is not read as a
-    record: the owner is unknown and the next holder is wiped.
+@pytest.mark.parametrize("content", [
+    json.dumps({"owner": "x", "instance": "test-container@test-start", "holders": []}),
+    json.dumps({"format": "browserjar-9-ffffff", "owner": "x", "holders": []}),
+    "{not json",
+])
+def test_a_record_that_cannot_be_used_is_never_overwritten(box, content):
+    """A record without this format's tag, with another one (a newer VAF during an
+    update), or one that does not parse vouches for nobody - and its holder half
+    is not "no holders" either: reading it as empty would grant the browser past
+    the holders it lists and overwrite them. A probe answers busy, a lease is
+    refused, the file stays as it is; once it is removed the browser works again,
+    with the wipe an unknown owner gets.
 
-    MUTATION: read the file without checking the tag - red."""
+    MUTATIONS: read an unusable file as empty for the holders (red: granted and
+    overwritten); skip the tag check (red on the untagged case)."""
     path = bj._state_dir()
     path.mkdir(parents=True, exist_ok=True)
-    (path / "vaf-browser.json").write_bytes(json.dumps(
-        {"owner": bj.scope_key("scope-a"), "instance": "test-container@test-start",
-         "holders": []}).encode("utf-8"))
-    box["events"].clear()
+    record = path / "vaf-browser.json"
+    record.write_bytes(content.encode("utf-8"))
+    with box["procs"].be(CHILD):
+        out = br.render_page("https://example.com/", user_scope_id="scope-b")
+    assert out["busy"] is True and box["events"] == []
+    res = box["web"].start("scope-a", "sess-a", save=False)
+    assert res["status"] == "error" and res["reason"] == "handover_failed"
+    assert record.read_bytes() == content.encode("utf-8"), "an unusable record was overwritten"
+
+    record.unlink()
     assert box["web"].start("scope-a", "sess-a", save=False)["status"] == "active"
     assert "wipe" in box["events"]
+
+
+@pytest.mark.skipif(not __import__("sys").platform.startswith("linux"),
+                    reason="the boot clock seam is Linux's /proc")
+def test_a_clock_step_does_not_make_a_live_holder_look_gone(monkeypatch):
+    """psutil's create_time on Linux adds the boot time, which /proc/stat derives
+    from the wall clock in whole seconds: a clock step (measured, 15 ms forward was
+    enough) moved it by a second, every start a long-running process had recorded
+    stopped matching, and its live lease read as gone to every process started
+    after the step. The mark is the boot-relative tick count now, which no clock
+    step moves. A REAL second process, its entry recorded, then the boot time
+    shifted by a second.
+
+    MUTATION: mark processes with psutil's create_time again - red."""
+    import subprocess
+    import sys
+
+    import psutil._pslinux as pl
+
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        entry = {"pid": child.pid, "started": bj._process_started(child.pid)}
+        assert bj._alive(entry)
+        real_boot = pl.boot_time
+        monkeypatch.setattr(pl, "boot_time", lambda: real_boot() + 1.0)
+        assert bj._alive(entry), "a clock step made a live holder look gone"
+        assert not bj._alive({"pid": child.pid, "started": entry["started"] + 1}), (
+            "another start mark on the same pid must read as another process")
+    finally:
+        child.kill()
+        child.wait()
+    assert not bj._alive(entry), "a holder whose process is gone must read as gone"
 
 
 def test_an_owner_recorded_on_another_container_start_is_unknown(box, monkeypatch):
@@ -431,3 +479,71 @@ def test_a_run_refused_for_a_holder_elsewhere_says_busy(box, monkeypatch):
     out = BrowserAgentTool().run(task="look up the opening hours", user_scope_id="scope-a")
     assert out.startswith("Browser agent is busy"), out
     assert "could not be cleaned" not in out
+
+
+def test_a_run_stopped_while_it_waits_leaves_no_holder(box):
+    """The run's handover waits for a probe of another process in an executor
+    thread, and a Stop does not wait for that thread: run() returned, its
+    agent_run_ended ran, and the late claim then took the browser for a run that
+    no longer existed and kept its entry for the life of the process - every
+    coder render busy, every workflow browser run refused. A run carries the
+    generation it began in, and a claim that lands after its end is released.
+
+    MUTATION: drop the generation check after the claim - red."""
+    web = box["web"]
+    with box["procs"].be(CHILD):
+        token, _ = bj.record_for("vaf-browser").claim(bj.KIND_PROBE, "scope-b")
+    web.stop_for_agent_run()
+    generation = web.run_generation()
+    refused = []
+
+    def _handover():
+        try:
+            web.hand_jar_to_run(user_scope_id="scope-c", persistent=False,
+                                run_generation=generation)
+        except bi.BrowserHandoverError as e:
+            refused.append(e)
+
+    worker = threading.Thread(target=_handover)
+    worker.start()
+    time.sleep(0.3)
+    web.agent_run_ended()                       # Stop: run() returns, its finally runs
+    bj.record_for("vaf-browser").release(token)  # the probe ends, the claim lands
+    worker.join(10)
+    assert refused, "the late handover took the browser for a run that had ended"
+    data = json.loads((bj._state_dir() / "vaf-browser.json").read_bytes())
+    assert not [h for h in data["holders"] if h["pid"] == WEB], data["holders"]
+    assert web._run_token is None
+    assert "wipe" not in box["events"]
+
+    # The next run, a new generation, gets the browser as usual.
+    web.stop_for_agent_run()
+    web.hand_jar_to_run(user_scope_id="scope-c", persistent=False,
+                        run_generation=web.run_generation())
+    assert "wipe" in box["events"]
+    web.agent_run_ended()
+
+
+def test_the_browser_agent_hands_its_run_generation_to_the_handover(box, monkeypatch):
+    """The generation is read in run() right after the eviction, before anything
+    can end the run, and travels to hand_jar_to_run.
+
+    MUTATIONS: stop passing it to _run_browser (red: None); stop forwarding it to
+    hand_jar_to_run (red on the source pin)."""
+    import inspect
+
+    from vaf.tools.browser_agent import BrowserAgentTool
+
+    src = inspect.getsource(BrowserAgentTool._run_browser)
+    seen = {}
+
+    async def _record(self, **kwargs):
+        seen.update(kwargs)
+        return "done"
+
+    monkeypatch.setattr(BrowserAgentTool, "_run_browser", _record)
+    before = box["web"].run_generation()
+    assert BrowserAgentTool().run(task="look up the opening hours", user_scope_id="scope-a") == "done"
+    assert seen.get("run_generation") == before
+    assert box["web"].run_generation() == before + 1, "the run's end did not move the generation"
+    assert "run_generation=run_generation" in src, "the handover lost the run's generation"

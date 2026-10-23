@@ -363,6 +363,67 @@ def _no_container_wipe():
 
 
 @pytest.fixture(autouse=True, scope="session")
+def _no_command_in_a_real_container():
+    """No test may run a command INSIDE a real container, or start, stop or remove one.
+
+    Sibling of `_no_container_wipe` above, for the rest of the browser's docker
+    traffic: the transfer-folder purge (`rm -rf` of Downloads and Workspace), the
+    download sweep (`find`, `cp`, `rm`), the Workspace mirror's `tar -x`, the
+    full-scrub marker. A test that reached them without its own fake ran them
+    against whatever `vaf-browser` the developer's machine runs - measured: the
+    spawn-lane test of the run hook purged the LIVE browser's Workspace and
+    Downloads. Two layers:
+
+    - the browser helpers that issue those commands are stubbed for the session
+      (the real ones stay reachable as `bi._real_<name>` for the tests about them);
+    - `containers.docker`, the seam every other container command goes through,
+      refuses `exec`, `cp`, `run`, `rm`, `start`, `stop`, `restart` and `kill` while
+      `subprocess.run` is the real one. The refusal answers like a docker daemon
+      that is not reachable (returncode 1), the state hostile_env already runs the
+      suite in, and warns with the command. A test that fakes `containers.docker`
+      or `subprocess.run` replaces or passes the guard, as before.
+    """
+    import subprocess
+    import warnings
+
+    import vaf.core.browser_interactive as bi
+    import vaf.core.containers as containers
+
+    stubs = {
+        "_purge_container_downloads": lambda name: None,
+        "_sweep_container_downloads": lambda name, scope: [],
+        "_tar_stream_to_container": lambda name, tar_path: 1,
+        "request_profile_wipe": lambda name="vaf-browser": None,
+        "_wipe_exec": lambda name, cmd, timeout=20: 1,
+    }
+    saved = {name: getattr(bi, name) for name in stubs}
+    for name, stub in stubs.items():
+        setattr(bi, f"_real{name}" if name.startswith("_") else f"_real_{name}", saved[name])
+        setattr(bi, name, stub)
+
+    real_run = subprocess.run
+    real_docker = containers.docker
+    acting = {"exec", "cp", "run", "rm", "start", "stop", "restart", "kill"}
+
+    def guarded(args, *a, **kw):
+        if subprocess.run is real_run and args and str(args[0]) in acting:
+            warnings.warn(f"refused under test: docker {' '.join(map(str, args[:3]))}")
+            empty = b"" if kw.get("binary") else ""
+            message = b"refused under test" if kw.get("binary") else "refused under test"
+            return subprocess.CompletedProcess(["docker", *args], 1, empty, message)
+        return real_docker(args, *a, **kw)
+
+    containers.docker = guarded
+    containers._real_docker = real_docker
+    try:
+        yield
+    finally:
+        containers.docker = real_docker
+        for name, real in saved.items():
+            setattr(bi, name, real)
+
+
+@pytest.fixture(autouse=True, scope="session")
 def _no_service_stack():
     """No test may start the real Docker service stack.
 

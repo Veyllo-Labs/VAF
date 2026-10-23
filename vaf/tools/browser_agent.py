@@ -1112,8 +1112,12 @@ class BrowserAgentTool(BaseTool):
         # only - the cookie-jar handover waits for the concurrency gate below,
         # because here another run may still be driving this browser and a
         # scrub would log it out mid-task. Never raises.
-        from vaf.core.browser_interactive import stop_for_agent_run, agent_run_ended
+        from vaf.core.browser_interactive import stop_for_agent_run, agent_run_ended, run_generation
         stop_for_agent_run(container_name=_container)
+        # Which run this is, read before anything can end it: the handover below
+        # waits in an executor thread a Stop does not wait for, and a claim that
+        # lands after this run's agent_run_ended must not take the browser.
+        _run_gen = run_generation(container_name=_container)
 
         # Optionally run as a separate, killable CHILD PROCESS. Workflows opt in via
         # VAF_SPAWN_BROWSER_SUBAGENT so a long browser run can be supervised/killed cleanly
@@ -1201,6 +1205,7 @@ class BrowserAgentTool(BaseTool):
                     session_id=_session_id,
                     cdp_base=_cdp_base,
                     container_name=_container,
+                    run_generation=_run_gen,
                 )
             )
         except ImportError as e:
@@ -1249,6 +1254,7 @@ class BrowserAgentTool(BaseTool):
         session_id: Optional[str] = None,
         cdp_base: Optional[str] = None,
         container_name: str = "vaf-browser",
+        run_generation: Optional[int] = None,
     ) -> str:
         import os
         from browser_use import Agent
@@ -1316,7 +1322,8 @@ class BrowserAgentTool(BaseTool):
             lambda: hand_jar_to_run(user_scope_id=user_scope_id,
                                     persistent=persistent,
                                     container_name=container_name,
-                                    continuing=_handover is not None),
+                                    continuing=_handover is not None,
+                                    run_generation=run_generation),
         )
         # The owner's files, mirrored into this browser: the container paths
         # double as browser-use's upload whitelist, so "fill the form and

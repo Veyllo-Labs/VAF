@@ -12,8 +12,9 @@ Runs as a daemon thread every gc_interval_hours (default 12).
 - Temp files: deletes by mtime (older than gc_max_age_hours).
 - Cache dir: deletes by mtime. Thinking sessions: deleted by thinking_gc_hours.
 - Thinking run logs (thinking_mode_logs/**/*.json): deleted by mtime (gc_max_age_hours).
-- Session context dirs (.vaf/main/sessions/<id>/): one accumulates per chat; deleted by the
-  newest-file mtime (gc_max_age_hours), skipping the currently-live session.
+- Session context dirs (.vaf/main/sessions/<id>/, and .vaf/main/conversations/<key>/ for an
+  agent room's turn): one accumulates per chat and per room and account; deleted by the
+  newest-file mtime (gc_max_age_hours), skipping the currently-live one.
 Controlled via config: gc_enabled, gc_interval_hours, gc_max_age_hours, thinking_gc_hours,
 security_log_retention_days.
 """
@@ -27,7 +28,7 @@ import tempfile
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 logger = logging.getLogger("vaf.gc")
 
@@ -261,26 +262,30 @@ class GarbageCollector:
     # -- Per-session main-agent context dirs (.vaf/main/sessions/<id>/) -------
 
     def _clean_old_session_persistence(self, cutoff: datetime, stats: Dict[str, int]) -> None:
-        """Delete per-session main-agent context dirs (`.vaf/main/sessions/<id>/`) whose newest
-        file is older than cutoff. One accumulates per chat. Uses the NEWEST file mtime (not the
-        directory mtime, which a file rewrite does not bump) so an actively-updated session is
-        never deleted, and skips the currently-live session as a second safeguard.
+        """Delete per-session main-agent context dirs (`.vaf/main/sessions/<id>/`, and the
+        conversations of their own an agent room's turn keeps, `.vaf/main/conversations/<key>/`)
+        whose newest file is older than cutoff. One accumulates per chat and per room and
+        account. Uses the NEWEST file mtime (not the directory mtime, which a file rewrite does
+        not bump) so an actively-updated store is never deleted, and skips the currently-live
+        one as a second safeguard.
         """
         try:
-            from vaf.core.main_persistence import MAIN_CONTEXT_DIR, MainPersistenceManager
-            sessions_dir = Path.cwd() / MAIN_CONTEXT_DIR / "sessions"
+            from vaf.core.main_persistence import (CONVERSATIONS_DIR, MAIN_CONTEXT_DIR,
+                                                   MainPersistenceManager)
+            from vaf.core.subagent_ipc import get_current_conversation_id, get_current_session_id
+            live = {"sessions": get_current_session_id(),
+                    CONVERSATIONS_DIR: get_current_conversation_id()}
         except Exception:
             return
-        if not sessions_dir.exists():
-            return
-        active_name = None
-        try:
-            from vaf.core.subagent_ipc import get_current_session_id
-            _sid = get_current_session_id()
-            if _sid:
-                active_name = MainPersistenceManager._safe_session_dir(_sid)
-        except Exception:
-            active_name = None
+        for folder, live_key in live.items():
+            sessions_dir = Path.cwd() / MAIN_CONTEXT_DIR / folder
+            if not sessions_dir.exists():
+                continue
+            active_name = MainPersistenceManager._safe_session_dir(live_key) if live_key else None
+            self._clean_context_dirs(sessions_dir, active_name, cutoff, stats)
+
+    def _clean_context_dirs(self, sessions_dir: Path, active_name: Optional[str],
+                            cutoff: datetime, stats: Dict[str, int]) -> None:
         try:
             for sdir in sessions_dir.iterdir():
                 if not sdir.is_dir() or sdir.name == active_name:

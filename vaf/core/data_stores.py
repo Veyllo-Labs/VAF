@@ -261,7 +261,7 @@ def roots() -> Dict[str, Path]:
 
 # The working memory of a launch (vaf/core/main_persistence.py): under the launch directory,
 # so not a root (the named boundary above), and written through the encrypted seam all the same.
-LAUNCH_MEMORY_GLOBS = ("*.json", "*.md", "sessions/*/*")
+LAUNCH_MEMORY_GLOBS = ("*.json", "*.md", "sessions/*/*", "conversations/*/*")
 
 
 def sealed_trees(*, with_launch_dir: bool = False) -> Dict[str, Tuple[Path, Tuple[str, ...]]]:

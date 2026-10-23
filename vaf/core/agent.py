@@ -5597,13 +5597,17 @@ class Agent:
             return ""
         return f"## PROJECT CONTEXT (VAF.md)\nLoaded from: {ctx.path}\n{ctx.content}\n"
 
-    def _bind_session_persistence(self, session_id: str) -> None:
+    def _bind_session_persistence(self, session_id: Optional[str], *,
+                                  conversation: Optional[str] = None) -> None:
         """Re-point the persistence store to this session's isolated dir so plan/tasks/notes/team/
-        intent never leak across chats or users. init_chat rebuilds prompt_manager (with a global
-        store), so re-point prompt_manager.mpm too. Best-effort: never break a turn on failure."""
+        intent never leak across chats or users, or, with ``conversation``, to the store of a
+        conversation of its own (an agent room's turn), which no chat id reaches. init_chat
+        rebuilds prompt_manager (with a store of its own), so re-point prompt_manager.mpm too.
+        Best-effort: never break a turn on failure."""
         try:
             from vaf.core.main_persistence import MainPersistenceManager
-            self.main_persistence = MainPersistenceManager(os.getcwd(), session_id=session_id)
+            self.main_persistence = MainPersistenceManager(
+                os.getcwd(), session_id=session_id, conversation=conversation)
             if getattr(self, "prompt_manager", None) is not None:
                 self.prompt_manager.mpm = self.main_persistence
         except Exception:

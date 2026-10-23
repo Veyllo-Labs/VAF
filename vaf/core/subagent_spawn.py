@@ -156,6 +156,17 @@ def spawn_subagent(
             sub_env["VAF_ROOM_ID"] = str(_room)
     except Exception:
         pass
+    # ...and the conversation of its own such a turn runs in, so the child's working-memory
+    # tools (a coder's request_clarification) write into that room's store. With neither a
+    # session nor this, they wrote into the store of "no session known", which every
+    # sessionless lane of every account reads.
+    try:
+        from vaf.core.subagent_ipc import get_current_conversation_id
+        _conversation = None if effective_session else get_current_conversation_id()
+        if _conversation:
+            sub_env["VAF_CONVERSATION_ID"] = str(_conversation)
+    except Exception:
+        pass
     provider = subagent_provider_override()
     if provider:
         sub_env["VAF_PROVIDER"] = provider

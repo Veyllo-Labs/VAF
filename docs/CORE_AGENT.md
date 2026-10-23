@@ -417,7 +417,9 @@ before a turn and `end_turn(agent)` after it, from all three of its lanes (a que
 task, an agent room's turn, the summary of finished sub-agent work). Without it, one
 turn ran on what the previous one left: another account's context summary in the
 system message, the previous chat's tools in the tool array, a room turn inside the
-chat loaded last, a user's chat summarized with the previous turn's admin role.
+chat loaded last, a user's chat summarized with the previous turn's admin role. NAMED
+BOUNDARY: `vaf run --web` serves web tasks in the terminal's process, without the runner and
+without the turn binding (see AGENT_LOOP.md, "Before the turn").
 
 ## Advanced identity/scoping attributes
 
@@ -427,8 +429,10 @@ Every attribute a `CoreAgent` carries has one of five lifetimes, listed in
 registry and caches, hooks, the lane flags below), **step** (reset by `chat_step`
 itself), **chat** (one conversation: the history, the context state, the working
 memory, the recent tools; swapped by `load_session_context`, started fresh by
-`init_chat`), **account** (keyed by the account and read through the bound identity)
-and **binding** (one turn: the identity, the source and the turn markers). Inside VAF a
+`init_chat`), **account** (one account's state, which the binding neither swaps nor
+resets; NAMED BOUNDARY: neither member is keyed per account yet, the ask-first latch
+`_pending_user_question` is one value per agent and the room reply streak is keyed by room
+and cleared by any account's person, see the module docstring) and **binding** (one turn: the identity, the source and the turn markers). Inside VAF a
 binding attribute is written only by `bind_turn` / `end_turn`, by
 `vaf/core/identity_binding.py` (the identity, which the facade and the terminal lanes
 bind directly) and by the engine itself, never by hand (guarded by

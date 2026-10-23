@@ -30,12 +30,21 @@ lifetimes (guarded by tests/test_turn_binding.py, which reads the attributes fro
   by the lane that built the agent (`_background_run` and its siblings). `_resident_tools` is
   one of them on purpose: on a provider that restricts callability separately it keeps the
   tool array byte-identical for the prompt cache, while the callable set is the turn's own.
+  NAMED BOUNDARY: `_ww_training` is no such flag. A tool-training run sets it around its own
+  calls, on the runner's shared agent too, and while it holds those calls skip the
+  confirmation and turn gates; a turn the runner runs meanwhile on the same agent skips them
+  as well. It is not scoped per context yet.
 - ``step``: reset by `chat_step` itself at its start, per round or inside one call.
 - ``chat``: one conversation (the history, the context state, the working memory, the recent
   tools). Swapped by `load_session_context`, or started fresh by `init_chat`
   (`Agent._reset_chat_state`).
-- ``account``: one account, keyed by it and read through the bound identity at use, so there
-  is nothing to swap here.
+- ``account``: one account's state, which the binding neither swaps nor resets. NAMED
+  BOUNDARY: neither member is keyed per account yet. `_pending_user_question` (the ask-first
+  latch) is one value for the whole agent: the ask-first gate reads it at every write
+  (`Agent._ask_first_gate_decision`), and so does the drain's retry instruction, so one
+  account's open question holds another account's drain turns, and one account's answer
+  clears it for another. `_room_reply_streak` is keyed by room only, and any account's
+  person clears it for every room (`Agent.note_human_turn`).
 - ``binding``: one turn, set by the lane. Only `bind_turn` and `end_turn` write them.
 
 Plus four per-context variables in `vaf.core.subagent_ipc`: the session, the turn, the room
@@ -166,6 +175,10 @@ class TurnBinding:
     identity: Identity
     source: str
     session_id: Optional[str] = None
+    # Whose access decides whether the turn may start (`revocation.account_stands`), when
+    # the lane knows it apart from the identity: a queued web turn names the account that
+    # enqueued it. None asks about the identity's scope.
+    account: Optional[str] = None
     conversation: Optional[str] = None
     force_reload: bool = False
     turn_id: Optional[str] = None
@@ -247,7 +260,8 @@ def bind_turn(agent: Any, binding: TurnBinding) -> None:
     from vaf.core.subagent_ipc import (set_current_conversation_id, set_current_room_id,
                                        set_current_session_id, set_current_turn_id)
 
-    if not account_stands(binding.identity.scope):
+    account = binding.account if binding.account is not None else binding.identity.scope
+    if not account_stands(account):
         raise TurnRefused("this account may not start work: its access was taken away")
 
     bind_identity(agent, binding.identity)
@@ -271,7 +285,7 @@ def bind_turn(agent: Any, binding: TurnBinding) -> None:
         agent._chat_project_dir = ""
         agent.init_chat()
         # After init_chat, which rebuilds the prompt manager with a store of its own.
-        agent._bind_session_persistence(str(binding.conversation))
+        agent._bind_session_persistence(None, conversation=str(binding.conversation))
 
     agent._chat_project_dir = str(binding.project_dir or "")
 
@@ -279,9 +293,11 @@ def bind_turn(agent: Any, binding: TurnBinding) -> None:
 def end_turn(agent: Any) -> None:
     """Clear what gates and routes once a turn is over: the allowed set, the Front Office
     and room markers, the person and the wake, the synthetic flag, the hidden tools, the
-    project folder, the decision note, and the room id of this context. The identity, the
-    source and the loaded conversation stay until the next `bind_turn` replaces them."""
-    from vaf.core.subagent_ipc import set_current_room_id
+    project folder, the decision note, and this context's room and conversation of its own
+    (what runs between two turns writes into no room's store). The identity, the source and
+    the loaded conversation stay until the next `bind_turn` replaces them."""
+    from vaf.core.subagent_ipc import set_current_conversation_id, set_current_room_id
 
     _write_markers(agent, None)
     set_current_room_id(None)
+    set_current_conversation_id(None)

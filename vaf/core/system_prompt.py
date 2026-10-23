@@ -143,12 +143,7 @@ class SystemPromptManager:
         # A turn in a conversation of its own (an agent room's) names that conversation
         # instead; the same rule the working-memory tools write with.
         try:
-            try:
-                from vaf.core.subagent_ipc import current_working_memory_key
-                _sid = current_working_memory_key()
-            except Exception:
-                _sid = None
-            self.mpm = MainPersistenceManager(os.getcwd(), session_id=_sid)
+            self.mpm = MainPersistenceManager.for_current_context(os.getcwd())
         except Exception:
             self.mpm = None
         

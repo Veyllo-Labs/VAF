@@ -1293,7 +1293,8 @@ def get_current_room_id() -> Optional[str]:
 # Which CONVERSATION this context's working memory belongs to, for a turn that holds no
 # chat. An agent room's turn runs in a conversation of its own and declares no session,
 # so that its tools see no chat; its working memory still has a home, keyed per room and
-# account. The working-memory tools key their store on the session, so without this
+# account (`MainPersistenceManager(conversation=)`, a folder no chat id reaches). The
+# working-memory tools used to key their store on the session alone, so without this
 # declaration a note written in a room turn went into the store of "no session known",
 # the one every sessionless lane of every account reads (an automation's prompt included).
 _conversation_ctx: "contextvars.ContextVar[Any]" = contextvars.ContextVar(
@@ -1304,8 +1305,7 @@ _conversation_ctx: "contextvars.ContextVar[Any]" = contextvars.ContextVar(
 def set_current_conversation_id(key: Optional[str]):
     """Declare which conversation of its own this context serves, or `None` for a turn
     on a chat. Mirrors `set_current_session_id`: per context, `None` is a declaration,
-    sets never restores. No process-boundary fallback: a child process gets its chat
-    through `VAF_SESSION_ID` and has no conversation of its own."""
+    sets never restores."""
     try:
         _conversation_ctx.set(key)
     except Exception:
@@ -1313,25 +1313,18 @@ def set_current_conversation_id(key: Optional[str]):
 
 
 def get_current_conversation_id() -> Optional[str]:
-    """The conversation of its own this context serves, or `None`. Never raises."""
+    """The conversation of its own this context serves, or `None`. Context first, process
+    boundary second, like `get_current_session_id`: a context that was never told reads
+    `VAF_CONVERSATION_ID`, the CHILD case (a sub-agent started in a room turn has no
+    session, and its working-memory tools write into the room's store, never the shared
+    one). Never raises."""
     try:
         value = _conversation_ctx.get()
     except Exception:
-        return None
+        value = _UNSET
     if value is _UNSET:
-        return None
+        value = os.environ.get("VAF_CONVERSATION_ID") or ""
     return (str(value).strip() or None) if value else None
-
-
-def current_working_memory_key() -> Optional[str]:
-    """Which working-memory store this context reads and writes: its chat, else its own
-    conversation, else `None` (the store of "no session known").
-
-    One answer for every reader that builds a `MainPersistenceManager` from the context:
-    the system prompt and the working-memory tools have to agree, or a note is written
-    where the next prompt never looks. A declared session always wins, so every lane that
-    declares one behaves exactly as before."""
-    return get_current_session_id() or get_current_conversation_id()
 
 
 def get_ipc() -> SubAgentIPC:

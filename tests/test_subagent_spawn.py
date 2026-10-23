@@ -104,6 +104,44 @@ def test_the_ordering_room_rides_into_the_child_env(rig, monkeypatch):
     assert "VAF_ROOM_ID" not in opened["env"]
 
 
+def test_a_room_turns_conversation_rides_into_the_child_env(rig, monkeypatch, tmp_path):
+    """MUTATION: drop the VAF_CONVERSATION_ID stamp from the child env, or the child's
+    fallback to it in get_current_conversation_id.
+
+    A room turn runs with no session and in a conversation of its own. Without the key a
+    coder child's working-memory tools (request_clarification) wrote into the store of "no
+    session known", which every sessionless lane of every account reads.
+    """
+    import vaf.core.subagent_ipc as ipc_mod
+    from vaf.core.main_persistence import MainPersistenceManager
+
+    ipc, opened = rig
+    monkeypatch.setattr("vaf.core.subagent_ipc.get_current_session_id", lambda: None)
+    monkeypatch.setattr("vaf.core.subagent_ipc.get_current_conversation_id",
+                        lambda: "room-orderer.p-0123456789")
+    spawn_subagent("coding_agent", "extend the stats script")
+    assert opened["env"]["VAF_CONVERSATION_ID"] == "room-orderer.p-0123456789"
+
+    # A chat's spawn carries its session and no conversation.
+    monkeypatch.setattr("vaf.core.subagent_ipc.get_current_session_id", lambda: "sess-ctx")
+    spawn_subagent("coding_agent", "another task")
+    assert "VAF_CONVERSATION_ID" not in opened["env"]
+
+    # The child, a context nobody told, finds the room's store through the environment.
+    monkeypatch.undo()
+    token = ipc_mod._conversation_ctx.set(ipc_mod._UNSET)
+    session_token = ipc_mod._session_ctx.set(ipc_mod._UNSET)
+    try:
+        monkeypatch.delenv("VAF_SESSION_ID", raising=False)
+        monkeypatch.setenv("VAF_CONVERSATION_ID", "room-orderer.p-0123456789")
+        store = MainPersistenceManager.for_current_context(str(tmp_path))
+        assert store.conversation == "room-orderer.p-0123456789"
+        assert store.context_dir.parent.name == "conversations"
+    finally:
+        ipc_mod._session_ctx.reset(session_token)
+        ipc_mod._conversation_ctx.reset(token)
+
+
 def test_failed_spawn_cancels_the_ipc_task(rig):
     """The guard every copy carried: a task left pending would count against
     duplicate guards and make the drain report a zombie that never lived."""

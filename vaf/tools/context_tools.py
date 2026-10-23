@@ -38,18 +38,14 @@ def _run_async_in_new_loop(coro):
 from vaf.core.main_persistence import MainPersistenceManager
 
 
-def _current_store_key() -> Optional[str]:
-    """Which conversation's store the persistence writes land in: the chat this context
-    serves, else the conversation of its own an agent room's turn declares (both through
-    `subagent_ipc.current_working_memory_key`, the rule the system prompt reads with), so
-    a note goes where the next prompt looks and never into the shared global store by
-    accident. Sub-agents inherit the parent session via VAF_SESSION_ID. None -> legacy
-    global .vaf/main/."""
-    try:
-        from vaf.core.subagent_ipc import current_working_memory_key
-        return current_working_memory_key()
-    except Exception:
-        return None
+def _current_store(base_dir) -> MainPersistenceManager:
+    """The store the persistence writes land in: the chat this context serves, else the
+    conversation of its own an agent room's turn declares (`MainPersistenceManager.
+    for_current_context`, the rule the system prompt reads with), so a note goes where the
+    next prompt looks and never into the shared global store by accident. Sub-agents inherit
+    the parent's chat via VAF_SESSION_ID, or its room conversation via VAF_CONVERSATION_ID.
+    Neither -> legacy global .vaf/main/."""
+    return MainPersistenceManager.for_current_context(base_dir)
 
 class UpdateIntentTool(BaseTool):
     """
@@ -93,7 +89,7 @@ class UpdateIntentTool(BaseTool):
             return "Noted (intent not changed: a background run does not modify the main chat's user intent)."
 
         try:
-            mpm = MainPersistenceManager(base_dir, session_id=_current_store_key())
+            mpm = _current_store(base_dir)
             mpm.update_user_intent(intent)
             return "✅ User Intent updated successfully."
         except Exception as e:
@@ -192,7 +188,7 @@ class UpdateWorkingMemoryTool(BaseTool):
         mark_all_done = bool(mark_all_done)
 
         try:
-            mpm = MainPersistenceManager(base_dir, session_id=_current_store_key())
+            mpm = _current_store(base_dir)
             pre_tasks = mpm.get_working_memory().get("tasks", [])
 
             # Overwrite guard: replacing the whole task list (tasks=[...]) while steps are still
@@ -203,7 +199,7 @@ class UpdateWorkingMemoryTool(BaseTool):
                     from vaf.core.config import Config as _CfgOv
                     if bool(_CfgOv.get("task_overwrite_guard_enabled", True)):
                         import time as _time
-                        sid = _current_store_key() or "default"
+                        sid = str(mpm.context_dir)
                         pending = [
                             (i, t) for i, t in enumerate(pre_tasks)
                             if str((t.get("status") if isinstance(t, dict) else None) or "pending").lower() != "done"
@@ -381,7 +377,7 @@ class AddTaskAliasTool(BaseTool):
             )
         try:
             base_dir = kwargs.get("base_dir", ".")
-            mpm = MainPersistenceManager(base_dir, session_id=_current_store_key())
+            mpm = _current_store(base_dir)
             mpm.update_working_memory(add_task=task_text.strip())
             return (
                 f"✅ Task added: \"{task_text.strip()}\"\n\n"
@@ -443,7 +439,7 @@ class RequestClarificationTool(BaseTool):
             return "Error: Question and Task ID are required."
         
         try:
-            mpm = MainPersistenceManager(base_dir, session_id=_current_store_key())
+            mpm = _current_store(base_dir)
             mpm.update_subagent_status(
                 task_id=task_id,
                 agent_type=agent_type,

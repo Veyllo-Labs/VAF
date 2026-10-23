@@ -33,6 +33,8 @@ USER_INTENT_FILE = "user_intent.md"
 TEAM_STATE_FILE = "team_state.json"
 WORKING_MEMORY_FILE = "working_memory.json"
 RESULTS_DIR = "results"
+# Conversations of their own (an agent room's turn), apart from the chats' "sessions" folder.
+CONVERSATIONS_DIR = "conversations"
 SUBAGENT_VALIDATION_FILE = "subagent_validation.json"
 
 # Team state: a stuck entry (e.g. a sub-agent that crashed without reporting) is pruned
@@ -92,14 +94,29 @@ class MainPersistenceManager:
     Implements the Hybrid Architecture: Memory Blocks + JSON State + Tiered Results.
     """
 
-    def __init__(self, base_dir: str, session_id: Optional[str] = None):
+    def __init__(self, base_dir: str, session_id: Optional[str] = None, *,
+                 conversation: Optional[str] = None):
+        """``session_id`` names a chat, ``conversation`` a conversation of its own that is no
+        chat (an agent room's turn); at most one of them.
+
+        They live in two folders on purpose. A chat id is chosen by the client (a web chat
+        names its own id, and a chat with no file yet passes the ownership check), so a
+        conversation's store under the chats' folder could be opened by anybody who named a
+        chat after its key - and a room's key is visible to its members. ``conversations/``
+        is reached only by a key the server declared."""
         self.base_dir = Path(base_dir)
         self.session_id = (str(session_id).strip() or None) if session_id else None
+        self.conversation = (str(conversation).strip() or None) if conversation else None
+        if self.session_id and self.conversation:
+            raise ValueError("a store belongs to a chat or to a conversation of its own, not both")
         if self.session_id:
             # Per-session isolation: each conversation gets its own intent/plan/tasks/notes/team so
             # the live state never leaks across chats or users. Falls back to the legacy global
             # .vaf/main/ when no session is known (e.g. single-shot CLI), preserving old behavior.
             self.context_dir = self.base_dir / MAIN_CONTEXT_DIR / "sessions" / self._safe_session_dir(self.session_id)
+        elif self.conversation:
+            self.context_dir = (self.base_dir / MAIN_CONTEXT_DIR / CONVERSATIONS_DIR
+                                / self._safe_session_dir(self.conversation))
         else:
             self.context_dir = self.base_dir / MAIN_CONTEXT_DIR
         self.results_dir = self.context_dir / RESULTS_DIR
@@ -109,6 +126,22 @@ class MainPersistenceManager:
         self.results_dir.mkdir(parents=True, exist_ok=True)
 
         self._init_files()
+
+    @classmethod
+    def for_current_context(cls, base_dir: str) -> "MainPersistenceManager":
+        """The store of the conversation this context serves: its chat (the session context
+        variable), else the conversation of its own an agent room's turn declares, else the
+        store of "no session known". The one door for every reader that has only the
+        context - the system prompt and the working-memory tools - so a note is written
+        where the next prompt looks. A declared session always wins, so every lane that has
+        one is unchanged."""
+        try:
+            from vaf.core.subagent_ipc import get_current_conversation_id, get_current_session_id
+            session_id = get_current_session_id()
+            conversation = None if session_id else get_current_conversation_id()
+        except Exception:
+            session_id, conversation = None, None
+        return cls(base_dir, session_id=session_id, conversation=conversation)
 
     @staticmethod
     def _safe_session_dir(session_id: str) -> str:

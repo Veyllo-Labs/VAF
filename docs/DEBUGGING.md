@@ -105,7 +105,8 @@ To reconstruct a turn: iterate `messages`; an assistant message's
 proactive bubbles are tagged with `kind` (`thinking` | `nudge` | `timer`).
 
 Per-session working state of the main agent (plan/tasks/notes and tiered tool
-results) is separate, under `<cwd>/.vaf/main/sessions/<session_id>/`. Sub-agent
+results) is separate, under `<cwd>/.vaf/main/sessions/<session_id>/` (an agent room's turn:
+`<cwd>/.vaf/main/conversations/<room_id>.<peer_id>/`). Sub-agent
 IPC state (pending/completed tasks) is under `~/.vaf/subagent_queue/`, task
 instructions in its `task_payloads/*.txt`. Both go through the same at-rest
 encryption as the session files, so read them with

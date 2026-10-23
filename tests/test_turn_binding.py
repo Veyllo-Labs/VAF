@@ -361,6 +361,9 @@ def test_an_own_conversation_carries_nothing_and_loads_nothing(world, monkeypatc
     assert [m["role"] for m in agent.history] == ["system"]
     assert agent._chat_project_dir == ""
     assert Path(agent.main_persistence.context_dir).name == "room-x.p-abc"
+    # Apart from the chats' stores: a web chat names its own id, so a chat named after this
+    # key must not reach it.
+    assert Path(agent.main_persistence.context_dir).parent.name == "conversations"
     assert agent.prompt_manager.mpm is agent.main_persistence, (
         "the prompt reads another store than the conversation's")
     assert not agent.context_manager.state.narrative_summary
@@ -414,8 +417,14 @@ def test_a_refused_or_invalid_binding_changes_nothing(world):
 # ── AC 8: end_turn ─────────────────────────────────────────────────────────────────────────
 
 def test_end_turn_clears_what_gates_and_routes(world):
-    from vaf.core.subagent_ipc import get_current_room_id
+    from vaf.core.main_persistence import MainPersistenceManager
+    from vaf.core.subagent_ipc import get_current_conversation_id, get_current_room_id
     agent = world.make()
+    # Between two turns nothing writes into the last room's store.
+    bind_turn(agent, TurnBinding(identity=OWNER, source="web", conversation="room-x.p-abc"))
+    end_turn(agent)
+    assert get_current_conversation_id() is None
+    assert MainPersistenceManager.for_current_context(str(world.tmp)).conversation is None
     bind_turn(agent, TurnBinding(
         identity=BOB, source="whatsapp", session_id=BOB_SESSION, room_id="room-r",
         allowed_tools={"contact_history"}, front_office=True,
@@ -436,6 +445,47 @@ def test_end_turn_clears_what_gates_and_routes(world):
     assert agent._current_chat_source == "whatsapp"
     assert agent.current_session_id == BOB_SESSION
     assert json.dumps(agent.history, default=str) == history
+
+
+def test_the_account_check_asks_about_the_account_the_lane_names(world):
+    """A queued web turn names the account it was enqueued for apart from the identity it
+    carries; the check asks about that one, as the queue's own fairness does."""
+    agent = world.make()
+    vaf.revoke_account(BOB_SCOPE)
+    try:
+        with pytest.raises(TurnRefused):
+            bind_turn(agent, _web(Identity(scope=None, username=None), BOB_SESSION,
+                                  account=BOB_SCOPE))
+        bind_turn(agent, _web(Identity(scope=None, username=None), BOB_SESSION))
+    finally:
+        vaf.restore_account(BOB_SCOPE)
+
+
+def test_old_conversation_stores_are_collected_like_chats(world):
+    """One store accumulates per room and account, beside one per chat; the collector ages
+    both out and spares the live one."""
+    import os
+    import time as _time
+    from datetime import datetime, timedelta
+
+    from vaf.core.garbage_collector import GarbageCollector
+    from vaf.core.main_persistence import MainPersistenceManager
+    from vaf.core.subagent_ipc import set_current_conversation_id
+    old_room = MainPersistenceManager(str(world.tmp), conversation="room-old.p-0123456789")
+    live_room = MainPersistenceManager(str(world.tmp), conversation="room-live.p-0123456789")
+    old_chat = MainPersistenceManager(str(world.tmp), session_id="web-old-chat")
+    stale = _time.time() - 10 * 86400
+    for store in (old_room, live_room, old_chat):
+        for f in store.context_dir.rglob("*"):
+            if f.is_file():
+                os.utime(f, (stale, stale))
+    set_current_conversation_id("room-live.p-0123456789")
+    stats = {"deleted": 0, "freed_bytes": 0, "errors": 0}
+    GarbageCollector.__new__(GarbageCollector)._clean_old_session_persistence(
+        datetime.now() - timedelta(days=1), stats)
+    assert not old_room.context_dir.exists(), "an old room store is never collected"
+    assert not old_chat.context_dir.exists()
+    assert live_room.context_dir.exists(), "the live room's store was collected"
 
 
 # ── AC 9: nothing carries from one account's turn into the next ────────────────────────────

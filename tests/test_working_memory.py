@@ -66,12 +66,12 @@ def test_overwrite_guard_blocks_then_confirms(tmp_path):
     assert "pending" in r1.lower() and "confirm" in r1.lower()
 
     # the old task survived the bounce (nothing was overwritten)
-    survived = MainPersistenceManager(base, session_id=ct._current_store_key()).get_working_memory()
+    survived = ct._current_store(base).get_working_memory()
     assert any(t["text"] == "in progress step" for t in survived["tasks"])
 
     r2 = tool.run(base_dir=base, tasks=[{"text": "fresh list"}])   # re-call within window -> confirmed
     assert "updated" in r2.lower()
-    after = MainPersistenceManager(base, session_id=ct._current_store_key()).get_working_memory()
+    after = ct._current_store(base).get_working_memory()
     assert [t["text"] for t in after["tasks"]] == ["fresh list"]
 
 
@@ -85,7 +85,7 @@ def test_overwrite_guard_silent_when_no_pending(tmp_path):
     tool.run(base_dir=base, mark_task_done=0)                       # no pending left
     r = tool.run(base_dir=base, tasks=[{"text": "brand new"}])     # replacing with nothing pending
     assert "updated" in r.lower()                                   # no bounce
-    after = MainPersistenceManager(base, session_id=ct._current_store_key()).get_working_memory()
+    after = ct._current_store(base).get_working_memory()
     assert [t["text"] for t in after["tasks"]] == ["brand new"]
 
 
@@ -150,7 +150,7 @@ def test_tool_reports_duplicate_add_not_re_added(tmp_path):
     tool.run(base_dir=base, add_task="same step")
     r = tool.run(base_dir=base, add_task="same step")
     assert "already" in r.lower()
-    after = MainPersistenceManager(base, session_id=ct._current_store_key()).get_working_memory()
+    after = ct._current_store(base).get_working_memory()
     assert len(after["tasks"]) == 1
 
 
@@ -174,7 +174,7 @@ def test_mark_task_done_already_done_redirects_to_open_step(tmp_path):
     assert "[1]" in r and "Kauf abschliessen" in r     # redirected to the genuinely-open step
     assert "✅ Working Memory updated." not in r        # NOT a silent success
     # warn-only: the tool must never have auto-changed any status
-    wm = MainPersistenceManager(base, session_id=ct._current_store_key()).get_working_memory()
+    wm = ct._current_store(base).get_working_memory()
     assert wm["tasks"][1]["status"] == "pending"
 
 
@@ -200,7 +200,7 @@ def test_mark_task_done_happy_path_unchanged(tmp_path):
     tool.run(base_dir=base, add_task="the step")
     r = tool.run(base_dir=base, mark_task_done=0)      # marks the genuinely-pending step
     assert "✅ Working Memory updated." in r            # normal success preserved
-    wm = MainPersistenceManager(base, session_id=ct._current_store_key()).get_working_memory()
+    wm = ct._current_store(base).get_working_memory()
     assert wm["tasks"][0]["status"] == "done"
 
 

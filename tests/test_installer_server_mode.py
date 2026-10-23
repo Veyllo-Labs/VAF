@@ -347,6 +347,6 @@ def test_every_documented_install_sh_flag_is_one_the_installer_accepts():
         for m in re.finditer(r"install\.sh((?:\s+-{1,2}[A-Za-z][\w-]*(?:[ =](?!-)[\w.-]+)?)+)", text):
             for flag in re.findall(r"(-{1,2}[A-Za-z][\w-]*)", m.group(1)):
                 found.add(flag)
-                assert flag in labels, f"{path.relative_to(ROOT)} names install.sh {flag}, the installer knows {sorted(labels)}"
+                assert flag in labels, f"{path.relative_to(ROOT).as_posix()} names install.sh {flag}, the installer knows {sorted(labels)}"
     assert {"--profile", "--server"} <= found, f"the scan found too little: {sorted(found)}"
     assert "./install.sh --server --profile api" in (ROOT / "README.md").read_bytes().decode("utf-8")

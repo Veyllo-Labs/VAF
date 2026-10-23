@@ -480,18 +480,26 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   kept browsing without it, from your real address. It is now recreated with the current
   settings the next time it is opened after such a change; logins, history and bookmarks stay.
 
-- **Every turn on a server now starts from its own conversation and account.** VAF serves every
-  chat and every account of a worker with one agent, and some of what one turn left behind
-  reached the next. An agent room's turn ran inside whichever chat had been open last, with
-  that chat's messages, notes and project file, and that chat's next message then carried the
-  room's conversation. The tools of a room turn worked in that chat's folder. The summary of
-  finished sub-agent work could run with the rights of whoever had written to VAF last, and the
-  tools used in one chat were offered in the next one, another account's included. Each turn
-  now says whose turn it is and which conversation it belongs to before it starts, and nothing
-  else carries over. An agent room's turn runs in a conversation of its own, and what the agent
-  notes for itself there stays with that room and that account. An account whose access was
-  taken away no longer gets room turns, and a summary for work that belongs to no chat is no
-  longer shown in every open browser. Restart VAF after updating so the fix takes effect.
+- **Each turn of the VAF service now starts from its own conversation and account.** VAF
+  serves every chat and every account of a worker with one agent, and some of what one turn
+  left behind reached the next. Each turn now says whose turn it is and which conversation it
+  belongs to before it starts:
+  - An agent room's turn ran inside whichever chat had been open last, with that chat's
+    messages, notes and project file, and that chat's next message then carried the room's
+    conversation; its tools worked in that chat's folder. It now runs in a conversation of its
+    own, and what the agent notes for itself there stays with that room and that account. An
+    account whose access was taken away no longer gets room turns.
+  - Work a sub-agent finished for an agent room went into whichever chat had been open last,
+    another account's or a contact's included. It now goes into no chat, and the next restart
+    of VAF discards it.
+  - The summary of finished sub-agent work could run with the rights of whoever had written
+    to VAF last. It now runs as the chat's owner, not at all for a chat that was deleted
+    meanwhile, and a summary for work that belongs to no chat is no longer shown in every open
+    browser.
+  - The tools used in one chat were offered in the next one, another account's included.
+
+  `vaf run --web`, which serves the web app from the terminal, is not covered yet. Restart VAF
+  after updating so the fix takes effect.
 
 ### Fixed
 

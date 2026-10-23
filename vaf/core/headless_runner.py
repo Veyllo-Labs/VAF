@@ -1039,7 +1039,11 @@ def _chat_project_paths(session_mgr, session_id) -> _ProjectPaths:
         if not workspace:
             try:
                 from vaf.core.session import get_session_workspace_dir
-                derived = get_session_workspace_dir(session_id, create=False)
+                # The chat's own scope, from the file just read: the helper would read the
+                # file again through the module-global manager and repoint it.
+                owner_scope = (getattr(session, "metadata", None) or {}).get("user_scope_id")
+                derived = get_session_workspace_dir(session_id, create=False,
+                                                    user_scope_id=owner_scope)
                 if derived and os.path.isdir(str(derived)):
                     workspace = str(derived)
             except Exception:
@@ -1157,6 +1161,9 @@ def _task_turn_binding(task, session_mgr) -> TurnBinding:
         identity=identity_from_metadata(task_meta_for_env),
         source=str(getattr(task, "source", None) or "web"),
         session_id=task.session_id,
+        # The account the web enqueued the turn for, as the queue's fairness reads it.
+        account=(task_meta_for_env.get("enqueue_user_scope_id")
+                 or task_meta_for_env.get("user_scope_id")),
         force_reload=bool(task_meta_for_env.get("force_reload")),
         turn_id=getattr(task, "turn_id", None),
         allowed_tools=FRONT_OFFICE_ALLOWED_TOOLS if from_contact else None,
@@ -1189,10 +1196,12 @@ def _room_turn_binding(room_wake: dict, identity: Identity) -> TurnBinding:
     The conversation is keyed per room AND per account (``<room_id>.<peer_id>``, the agent's
     own handle in that room), so its working memory is the room's and this account's: a key
     without the account would share one working memory between two accounts' agents in a
-    shared room, which is why an empty handle raises. It cannot collide with a chat id (chat
-    ids carry no dot plus ``p-`` handle). The turn has no chat: none of the last chat's
-    messages, summary, working memory or project file, and its tools see no chat. Source
-    "web": the runner's baseline, not a channel, so outward sends are held as on the web.
+    shared room, which is why an empty handle raises. Its store lives apart from the chats'
+    (`MainPersistenceManager(conversation=)`): the key is visible to the room's members and a
+    web chat names its own id, so a store under the chats' folder could be opened as a chat.
+    The turn has no chat: none of the last chat's messages, summary, working memory or
+    project file, and its tools see no chat. Source "web": the runner's baseline, not a
+    channel, so outward sends are held as on the web.
 
     EVERY key a downstream reader consumes must be copied into ``room_turn``: the gate and
     the hint lane read ``agent._room_turn``, not the wake, and a key computed in the wake but
@@ -1233,13 +1242,20 @@ def _session_owner_identity(meta) -> Identity:
 def _drain_turn_binding(session_mgr, session_id) -> TurnBinding:
     """What the turn that summarizes a chat's finished sub-agent work is bound to: that
     chat's owner, its source and its project folder, marked synthetic (VAF wrote the prompt,
-    not a person). A chat whose file cannot be read has no owner to run as: no scope, no
-    name, no role. Never raises for an unreadable chat; an empty id raises ValueError."""
+    not a person).
+
+    A chat whose file is gone (deleted while its sub-agent ran) or cannot be read has no
+    owner to run as, and raises `TurnRefused`: bound as nobody, the turn would run with no
+    scope, which is the machine owner's freedoms (an open file jail, no account allowlist),
+    over a result the chat's account produced, and its reply would recreate the chat with
+    no owner. A readable chat that names no scope (a legacy chat) is bound as it is, as its
+    own queued turns are. An empty id raises ValueError."""
     try:
         session = session_mgr.load(session_id, restore_state=False, repoint=False)
         meta = dict(getattr(session, "metadata", None) or {})
-    except Exception:
-        meta = {}
+    except Exception as e:
+        raise TurnRefused(f"the chat of this result is gone or cannot be read "
+                          f"({type(e).__name__})") from e
     return TurnBinding(
         identity=_session_owner_identity(meta),
         source=str(meta.get("source") or "web"),
@@ -1249,6 +1265,27 @@ def _drain_turn_binding(session_mgr, session_id) -> TurnBinding:
         project_dir=_chat_project_paths(session_mgr, session_id).edit_path,
     )
 
+
+
+def _result_chat(record):
+    """The chat a sub-agent record belongs to: the session it names, else None. Never the
+    chat the worker happens to hold: one agent serves every chat and every account, so "the
+    current chat" is whoever wrote last. A record names no session when the lane that
+    started the work had none: an agent room's turn (the record carries the room instead),
+    a scheduled automation. Measured with that fallback: a room's coder result went into
+    another account's chat, and with a contact's turn last, to the contact."""
+    sid = str(getattr(record, "session_id", "") or "").strip()
+    return sid or None
+
+
+def _split_results_by_chat(results):
+    """(results with a chat, results without one). The drain delivers the first kind into
+    their own chats and leaves the second pending: no lane may read them yet, and consuming
+    them would drop them. The queue is cleared at the next start."""
+    with_chat, without_chat = [], []
+    for record in results or []:
+        (with_chat if _result_chat(record) else without_chat).append(record)
+    return with_chat, without_chat
 
 # The threads this process runs the agent loop in, by worker id: the health check
 # (vaf/core/health.py) asks whether they still live. A loop that died answers no chat
@@ -1476,6 +1513,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
     last_queue_metrics = 0.0
     waited_for_server_ready = False  # Wait for 8080 to return 200 before first chat (avoids 503)
     open_subagent_sessions = set()
+    _unrouted_results = set()   # results that name no chat, logged once each
     subagent_last_activity = {}
     subagent_last_steps = {}
     from vaf.core.config import Config
@@ -3470,6 +3508,17 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         # "current" one) — each is routed by its own session_id below via
                         # load_session_context, so a push for any session reacts at once.
                         pending_results = agent._check_subagent_results(all_sessions=True)
+                        # A result that names no chat is delivered into none: it stays pending,
+                        # logged once (_split_results_by_chat).
+                        pending_results, _no_chat = _split_results_by_chat(pending_results)
+                        for _rt in _no_chat:
+                            if _rt.task_id not in _unrouted_results:
+                                _unrouted_results.add(_rt.task_id)
+                                append_domain_log_always(
+                                    "headless",
+                                    f"[DRAIN] no chat for this result: it stays pending "
+                                    f"(agent={_rt.agent_type} task={_rt.task_id} "
+                                    f"room={getattr(_rt, 'room_id', None) or '-'})")
                         # Claim each result's session before touching it: this drain runs
                         # OUTSIDE the TaskQueue, so without the claim its load_session_context
                         # + summary chat_step would race a worker's concurrent chat turn on the
@@ -3490,7 +3539,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             cancelled_sessions = set()
                             for result_task in pending_results:
                                 # Ensure agent context is aligned with result session
-                                session_id = result_task.session_id or getattr(agent, "current_session_id", None)
+                                session_id = _result_chat(result_task)
                                 _drain_session = session_id
                                 if session_id:
                                     agent.load_session_context(session_id)
@@ -3619,14 +3668,15 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         tq.clear_stop(sid)
                                 except Exception:
                                     pass
-                            # The summary turn runs on the chat the results were loaded for, as
-                            # that chat's owner with its source (_drain_turn_binding). No chat
-                            # known: no summary turn, because a reply emitted without a session
-                            # reaches every connected browser. An account without access gets
-                            # none either.
+                            # The summary turn runs on the chat the results were loaded for (the
+                            # last result's own chat, never whatever the worker holds), as that
+                            # chat's owner with its source (_drain_turn_binding). No chat known:
+                            # no summary turn, because a reply emitted without a session reaches
+                            # every connected browser. A chat that is gone, or an account without
+                            # access, gets none either.
                             _drain_bound = False
                             if found_results_text or any_needs_retry:
-                                _drain_sid = getattr(agent, "current_session_id", None)
+                                _drain_sid = _drain_session
                                 if not _drain_sid:
                                     append_domain_log_always(
                                         "headless", "[DRAIN] no chat for this result: no summary turn")
@@ -3634,10 +3684,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     try:
                                         bind_turn(agent, _drain_turn_binding(session_mgr, _drain_sid))
                                         _drain_bound = True
-                                    except TurnRefused:
+                                    except TurnRefused as _refused:
                                         append_domain_log_always(
-                                            "headless", f"[REVOKED] No summary turn for a chat of an "
-                                                        f"account without access: {_drain_sid}")
+                                            "headless", f"[DRAIN] no summary turn for {_drain_sid}: "
+                                                        f"{_refused}")
                             if _drain_bound:
                                 user_lang = "auto"
                                 for msg in reversed(agent.history):
@@ -3895,7 +3945,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                 if now - last_subagent_ui_update >= 1.0:
                     last_subagent_ui_update = now
                     try:
-                        from vaf.core.subagent_ipc import get_ipc, get_current_session_id
+                        from vaf.core.subagent_ipc import get_ipc
                         ipc = get_ipc()
                         active_tasks = ipc.get_active_tasks()
                         # Skip workflow:* tasks — they are already displayed in the
@@ -3904,7 +3954,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         if active_tasks:
                             tasks_by_session = {}
                             for task in active_tasks:
-                                sid = task.session_id or getattr(agent, "current_session_id", None) or get_current_session_id()
+                                # Shown in the task's own chat only: a task that names none
+                                # (a room's, an automation's) has no window to show it in.
+                                sid = _result_chat(task)
                                 if not sid:
                                     continue
                                 tasks_by_session.setdefault(sid, []).append(task)

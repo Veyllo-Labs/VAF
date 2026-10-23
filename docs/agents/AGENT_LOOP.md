@@ -120,6 +120,11 @@ clears the markers again; the loop's per-iteration `finally` runs it on every ex
 attribute the agent carries is classified by lifetime (`AGENT_STATE`: engine, step, chat,
 account, binding), and only the binding class is written per turn.
 
+NAMED BOUNDARY: `vaf run --web` serves web tasks without the runner and without this binding.
+That mode hosts the web server in the terminal's process, and its loop takes a queued web task
+with `load_session_context` alone: no task identity, role, source, Front Office set or account
+check. Every other web, channel and room turn goes through the runner's lanes above.
+
 ## Phases and where they live
 
 All phases live in `chat_step` (and its helpers) in [agent.py](../../vaf/core/agent.py) -

@@ -474,7 +474,8 @@ def test_a_sub_agent_result_that_cannot_be_summarized_tells_only_its_own_chat(mo
 
     loop = inspect.getsource(hr.run_headless_agent).replace("\r\n", "\n")
     assert "drain_failure_notice(_drain_session, e)" in loop
-    assert ('session_id = result_task.session_id or getattr(agent, "current_session_id", None)\n'
+    # The result's own chat, never the one the worker holds (_result_chat).
+    assert ('session_id = _result_chat(result_task)\n'
             '                                _drain_session = session_id\n') in loop
 
 

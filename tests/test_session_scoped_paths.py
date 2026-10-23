@@ -141,10 +141,11 @@ def test_headless_runner_derives_workspace_from_task_session():
 
     import vaf.core.headless_runner as hr_mod
     paths = inspect.getsource(hr_mod._chat_project_paths)
-    assert "get_session_workspace_dir(session_id, create=False)" in paths, (
+    assert "get_session_workspace_dir(session_id, create=False,\n" in paths, (
         "headless_runner lost the deterministic workspace fallback keyed on the "
         "chat's own session"
     )
+    assert "user_scope_id=owner_scope)" in paths, "the fallback asks for another scope"
     # ...and the chat is the task's own, for the turn's VAF.md and for its note alike.
     assert "_chat_project_paths(session_mgr, task.session_id)" in inspect.getsource(
         hr_mod._task_turn_binding)

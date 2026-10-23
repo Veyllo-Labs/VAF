@@ -1174,9 +1174,12 @@ runner now binds the turn (`_room_turn_binding`, `vaf/core/turn_binding.py`) to 
 whose room it is and to a conversation of its own, keyed per room AND per account
 (`<room_id>.<peer_id>`, the agent's own handle in the room): it starts empty every turn and
 loads no chat, and the chat this worker served last is rebuilt from its store at its next
-turn. Its working memory is kept under that key, so a note the agent writes in one room is
-there at its next turn in that room and in no other room, no other account's agent in the same
-room, and no chat. Continuity between room turns comes from the room's transcript in the wake
+turn. Its working memory is kept under that key, in a folder of its own beside the chats'
+(`.vaf/main/conversations/`, `MainPersistenceManager(conversation=)`): the key is visible to the
+room's members and a web chat names its own id, so under the chats' folder another account could
+have opened the room's notes as a chat. A note the agent writes in one room is there at its next
+turn in that room and in no other room, no other account's agent in the same room, and no chat.
+Continuity between room turns comes from the room's transcript in the wake
 prompt and that working memory. The turn's source is `web`, the runner's baseline, not a
 channel, so an outward send is held as on the web. An account that no longer stands
 (`revocation.account_stands`) gets no room turn; a turn that cannot be bound is logged as
@@ -1184,8 +1187,13 @@ channel, so an outward send is held as on the web. An account that no longer sta
 
 NAMED BOUNDARY - what a room turn's tools see. They see no chat: the dispatch session is none,
 so a session-bound tool (the chat's workspace, a draft, a sub-agent's delivery stamp) has no
-chat to act on. A sub-agent the turn starts records the room and no session; where its result
-is delivered is not decided yet.
+chat to act on. A sub-agent the turn starts records the room and no session, and gets the
+room's conversation (`VAF_CONVERSATION_ID`), so its own working-memory tools write into that
+room's store. Its result is delivered into no chat: the runner's drain leaves a result that
+names no session pending (logged once as `[DRAIN] no chat for this result`) and shows its running
+state in no chat's window, because the only chat it could pick is the one the worker held last,
+any account's. The queue is cleared at the next start. Delivering it into its room is not
+built yet.
 
 **Retrieval.** The turn is given what this account already knows, through
 `turn_memory_context` - the same primitive the chat queue, automations and thinking runs

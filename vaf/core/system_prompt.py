@@ -140,10 +140,12 @@ class SystemPromptManager:
         # Initialize Persistence Manager, scoped to the current session so the injected
         # <working_memory>/<team_state>/<user_intent> belong to THIS chat, not a shared global
         # store. The agent also re-points this on session switch (_bind_session_persistence).
+        # A turn in a conversation of its own (an agent room's) names that conversation
+        # instead; the same rule the working-memory tools write with.
         try:
             try:
-                from vaf.core.subagent_ipc import get_current_session_id
-                _sid = get_current_session_id()
+                from vaf.core.subagent_ipc import current_working_memory_key
+                _sid = current_working_memory_key()
             except Exception:
                 _sid = None
             self.mpm = MainPersistenceManager(os.getcwd(), session_id=_sid)

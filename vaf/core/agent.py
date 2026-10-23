@@ -5476,6 +5476,12 @@ class Agent:
         stored it as that chat's own. Reset in place (`ContextManager.reset_chat_state`),
         so the state registry keeps serializing the live manager.
 
+        The recent tools belong to the conversation too: the tools the last two turns of a
+        chat used are pinned into that chat's next tool array (`_record_tool_used`), and
+        without the reset another account's next turn was offered the tools the previous
+        account's chat had used (measured: a mail tool from the owner's turn in another
+        account's request).
+
         A no-op without a context manager (stub agents built with `Agent.__new__`).
 
         NAMED BOUNDARY: only the `context` state provider is reset. The two others a real
@@ -5489,6 +5495,8 @@ class Agent:
         cm = getattr(self, "context_manager", None)
         if cm is not None:
             cm.reset_chat_state()
+        if hasattr(self, "_recent_tools"):
+            self._recent_tools = {}
 
     def init_chat(self, *, keep_chat_state: bool = False):
         """Build the system prompt and start a fresh conversation.
@@ -9440,9 +9448,11 @@ class Agent:
     )
 
     def _resident_tool_names(self):
-        """The array's contents for this session: the core, plus whatever was
+        """The array's contents for this agent: the core, plus whatever was
         genuinely needed since. Grows only, never shrinks and never reorders, so
-        a session converges on a stable array after the first few turns."""
+        the agent converges on a stable array after the first few turns. An engine
+        cache, shared by every chat the agent serves: the callable set inside it is
+        still the turn's own (`_tools_and_choice`)."""
         resident = getattr(self, "_resident_tools", None)
         if resident is None:
             resident = [t for t in self.STABLE_TOOL_CORE if t in self.tools]

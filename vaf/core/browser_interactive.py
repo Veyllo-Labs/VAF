@@ -1595,12 +1595,18 @@ class InteractiveBrowserManager:
             # it would keep showing the browser to a window with no run behind.
             self._agent_stream = None
             sid = self._last_session_id
-            holder = self._pre_agent_holder if (notify and last_run) else None
-            if notify and last_run:
-                self._pre_agent_holder = None
-            # Not settled now: by the last counted run, or by the notifying end of a
-            # spawned run (notify=False hands it on).
-            self._giveback_deferred = bool(notify and not last_run)
+            # Who settles the give-back: the last counted run's end. A spawned run's
+            # end (notify=False) settles one only when a run ahead of it already ended
+            # and left it deferred; otherwise the holder stays remembered for a
+            # notifying end, as before. A notifying end with a run still counted
+            # defers it, and the flag is left alone by every other end.
+            settle = last_run and (notify or self._giveback_deferred)
+            holder = None
+            if settle:
+                holder, self._pre_agent_holder = self._pre_agent_holder, None
+                self._giveback_deferred = False
+            elif notify:
+                self._giveback_deferred = True
             run_scope = self._last_cookie_scope
         # A run downloads too (the agent saves a PDF for the person): drain to
         # the run's OWN scope - the jar owner at this moment is that run's.
@@ -1614,9 +1620,11 @@ class InteractiveBrowserManager:
         # marker while the child is only starting - announcing a free browser
         # there would be a lie (the holder stays remembered for the run that
         # does end with a notification). A run still queued keeps both for its own end.
-        if not notify or not last_run:
+        # A spawned run that settles a deferred give-back hands the browser back to
+        # the evicted person only: its child drives now, so "free" would be a lie.
+        if not settle:
             return
-        self._announce_run_end(holder, sid)
+        self._announce_run_end(holder, sid if notify else None)
 
     def _announce_run_end(self, holder: Optional[tuple], sid: Optional[str]) -> None:
         """The last counted run is over: the evicted holder's window gets the browser back

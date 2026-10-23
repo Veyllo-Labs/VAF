@@ -436,6 +436,23 @@ def test_an_abandoned_run_behind_a_driving_one_settles_nothing(mgr, monkeypatch)
     assert [sid for p, sid in mgr._test_emitted if p.get("resumable")] == ["sess-1"]
 
 
+def test_a_spawned_run_counted_last_settles_a_deferred_give_back(mgr, monkeypatch):
+    """An in-process run ends while a spawned run is still counted, then the spawned run's
+    parent hands over to its child (notify=False) as the last counted run: the child runs in
+    another process and can never settle this manager's holder, so this end gives the
+    browser back, and announces no "free" browser. MUTATION: let the spawned end clear
+    the deferred flag - red."""
+    _no_ipc_tasks(monkeypatch)
+    mgr.start("scope-a", "sess-1")
+    mgr.stop_for_agent_run()             # in-process run A evicts the person
+    mgr.stop_for_agent_run()             # spawned run S is counted
+    mgr.agent_run_ended()                # A ends: deferred
+    mgr.agent_run_ended(notify=False)    # S hands over to its child
+    done = [(sid, p.get("resumable")) for p, sid in mgr._test_emitted
+            if p.get("reason") == "agent_done"]
+    assert done == [("sess-1", True)]
+
+
 def test_no_lease_means_no_give_back(mgr, monkeypatch):
     _no_ipc_tasks(monkeypatch)
     mgr.stop_for_agent_run()

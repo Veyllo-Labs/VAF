@@ -542,7 +542,9 @@ pending one. With runs queued behind each other it waits for the last of them: a
 finds no lease to evict and leaves the remembered holder alone, and neither the give-back nor
 the "browser is free" stop event goes out while another run is still counted. When the
 last counted run is one that gave up at the concurrency gate without driving, its leaving
-(`agent_run_abandoned`) settles the give-back the run ahead of it left.
+(`agent_run_abandoned`) settles the give-back the run ahead of it left; so does a spawned run
+handing over to its child process, which can never settle this process's holder (it gives
+the browser back to the evicted person only, and announces no free browser).
 
 **Logins persist, without a switch.** Interactive use is always the PERSISTENT mode - the
 counterpart of the agent's `persistent=true` runs, and deliberately without a toggle of its

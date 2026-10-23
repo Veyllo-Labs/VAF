@@ -90,7 +90,7 @@ def test_the_owners_switch_opens_the_profile_to_a_contact_only(prompt):
 
 
 def test_both_agent_prompts_say_when_somebody_else_is_answered():
-    src = (ROOT / "vaf" / "core" / "agent.py").read_bytes().decode("utf-8")
+    src = (ROOT / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
     calls = [m.end() for m in re.finditer(r"prompt_manager\.build_prompt\(", src)]
     assert len(calls) == 2
     for pos in calls:
@@ -98,7 +98,7 @@ def test_both_agent_prompts_say_when_somebody_else_is_answered():
         assert 'answers_somebody_else=getattr(self, "_allowed_tools", None) is not None' in window
     gate = src[src.index("def _refresh_cross_chat_hints"):]
     gate = gate[:gate.index("\n    def ")]
-    assert 'if getattr(self, "_allowed_tools", None) is not None:\n            return' in gate
+    assert re.search(r'if getattr\(self, "_allowed_tools", None\) is not None:\s+return', gate)
 
 
 def test_the_workspace_block_is_the_owners_only(prompt, tmp_path):

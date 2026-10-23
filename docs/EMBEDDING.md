@@ -721,7 +721,10 @@ What an embedded agent can and cannot do on the host - the short version of
   for the rest of a body whose request is answered (so a 403 or 413 stays readable), a
   request head of at most 16 KiB within 15 s (431 above it), a connection cap (503 above
   it, for a WebSocket upgrade too), at most 16 requests sent ahead of their answers, a
-  raised open-file limit, and no forwarded-header trust of uvicorn's own (it trusts
+  raised open-file limit, a WebSocket implementation that makes a sender wait while its
+  client reads nothing (uvicorn's sans-I/O one, which needs uvicorn 0.53 or newer, the floor
+  of the server extra; `door_options()` names it, so pass no `ws=` of your own beside it),
+  and no forwarded-header trust of uvicorn's own (it trusts
   `FORWARDED_ALLOW_IPS`, and with `*` a device that writes `X-Forwarded-For: 127.0.0.1` is
   this machine). Without them uvicorn holds a slow client open as long as it likes and
   accepts any head size and the static-RSA and CBC suites of OpenSSL's default (measured

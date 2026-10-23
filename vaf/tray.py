@@ -454,7 +454,10 @@ def start_uvicorn(wait_for_db: bool = True):
             log("Tray", f"Initializing Uvicorn Config with TLS ({host}:8001)...")
             # The TLS policy every listener shares. The door limits of the HTTPS proxy
             # (vaf/network/door.py) stay off this port and 8005: only this machine
-            # reaches them, and they keep uvicorn's forwarded-header defaults.
+            # reaches them, and they keep uvicorn's forwarded-header defaults. Their
+            # WebSocket implementation stays uvicorn's own choice, which from the 0.53
+            # floor is the sans-I/O protocol the door names (WS_PROTOCOL), pinned by
+            # test_uvicorns_own_websocket_choice_is_the_doors.
             from vaf.network.ssl_utils import register_tls_listener, server_tls_options
             config = uvicorn.Config(
                 app, host=host, port=8001, log_level="info", use_colors=False,

@@ -123,7 +123,7 @@ def server_tls_options(certfile: str, keyfile: str) -> dict:
     One policy for every TLS listener, so none of them can drift: the integrated HTTPS proxy
     asked for OpenSSL's DEFAULT, the desktop's TLS port and ``vaf run --web`` for nothing,
     which means OpenSSL's default list on uvicorn 0.48 and later and uvicorn's own old
-    default ("TLSv1") on the 0.27 to 0.40 releases ``requirements.txt`` still allows.
+    default ("TLSv1") on its 0.27 to 0.40 releases.
 
     - ``ssl_ciphers`` limits TLS 1.2 to ``SERVER_TLS12_CIPHERS``. ``set_ciphers`` does not
       touch TLS 1.3, whose suites are all AEAD and forward secret.

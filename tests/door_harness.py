@@ -12,11 +12,6 @@ server. Nothing here dials 3000, 8001, 8005 or 8443, where a running VAF may lis
 `tls_client()` is a client context that offers what a test asks for: a cipher list (with
 `@SECLEVEL=0`, so OpenSSL lets it offer the old suites a door must refuse) and a version
 range. It verifies nothing; the tests are about what the server accepts.
-
-`WS_IMPLEMENTATIONS` names the WebSocket implementations a door may serve with: the door picks
-one by what the installed uvicorn offers (vaf.network.door._websocket_protocol), and CI
-installs the newest uvicorn while the local gates run the locked one, so every live WebSocket
-test of a door runs on each of them.
 """
 from __future__ import annotations
 
@@ -27,9 +22,6 @@ import ssl
 import threading
 import time
 from typing import Callable, Iterator, Optional, Tuple
-
-# uvicorn's names (uvicorn.config.WS_PROTOCOLS): the legacy implementation, then the sans-I/O one.
-WS_IMPLEMENTATIONS = ("websockets", "websockets-sansio")
 
 
 @contextlib.contextmanager

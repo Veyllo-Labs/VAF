@@ -30,8 +30,7 @@ from pathlib import Path
 import pytest
 import uvicorn
 
-from door_harness import (WS_IMPLEMENTATIONS, closed_within, http_exchange, serving, tls_client,
-                          tls_connect)
+from door_harness import closed_within, http_exchange, serving, tls_client, tls_connect
 from ftp_stub import make_cert
 from vaf.network import door
 from vaf.network.ssl_utils import SERVER_TLS12_CIPHERS, server_tls_options
@@ -995,8 +994,8 @@ async def _streaming_socket(scope, receive, send):
     """A WebSocket that sends 64 KiB frames, 64 MiB at most, then waits for its end. Far more
     than a client that reads nothing takes (about 1.8 MB on Linux) or than Windows took in
     one send (4 MB), so bytes are still unsent when the client ends its side. A bound and not
-    an endless loop: uvicorn's sans-I/O protocol before 0.53 never makes a sender wait, and an
-    endless loop there never yields and grows until the process is killed (measured: the
+    an endless loop: uvicorn's sans-I/O protocol before 0.52.1 never makes a sender wait, and
+    an endless loop there never yields and grows until the process is killed (measured: the
     out-of-memory killer)."""
     if scope["type"] != "websocket":
         return
@@ -1011,33 +1010,36 @@ async def _streaming_socket(scope, receive, send):
         return
 
 
-@pytest.mark.parametrize("ws,path", [("websockets", "app transport"),
-                                     ("websockets", "tcp transport"),
-                                     ("websockets-sansio", "tcp transport")])
-def test_a_tls_websocket_that_ends_its_side_is_still_watched(cert, monkeypatch, ws, path):
+@pytest.mark.parametrize("protocol,path", [("legacy", "app transport"),
+                                           ("door", "tcp transport")],
+                         ids=["legacy protocol, app transport", "door protocol, tcp transport"])
+def test_a_tls_websocket_that_ends_its_side_is_still_watched(cert, monkeypatch, protocol, path):
     """A TLS WebSocket whose client stops reading and then sends close_notify was held without
     any limit (measured: past 150 s on Python 3.13 and 3.10.15). asyncio's TLS layer closes
-    the connection by itself there: on 3.11+ websockets then closed the TLS transport a second
-    time, which dropped its protocol and disarmed the watch; on 3.10 the TCP transport under
-    it was closed and nothing told the WebSocket. Two ways out: no second close of a closed
-    transport, so websockets' own abort after its close timeout (10 s) works again, and the
-    app transport's watch, which reads the TCP transport under it, ends a close that stops
-    moving (3.11+); and the close hook on the TCP transport itself, the only way on 3.10,
-    where nothing closes the app transport. MUTATION: close a closed transport again - red
-    (websockets, app transport). Without the hook on the TCP transport the legacy rows stay
-    green on 3.11+ (the app transport's watch ends it) and fail on 3.10; the hook itself is
-    pinned on every version by test_the_tcp_transport_under_tls_gets_the_close_hook.
+    the TCP connection under the TLS one by itself there, and the close hook on that TCP
+    transport bounds it.
 
-    uvicorn's sans-I/O protocol (the default from uvicorn 0.50) does nothing at its client's
-    own end and never closes the app transport there, so it has no app transport row: the
-    hook on the TCP transport is all that ends it, at SEND_TIMEOUT_S (measured: 30.0 s at a
-    limit of 30 s, uvicorn 0.49 and 0.54, against 10.0 s for the legacy protocol, which is
-    why the app transport row failed with uvicorn 0.54). MUTATION: no hook on the TCP
-    transport - red (websockets-sansio, every Python version)."""
+    The door's row: uvicorn's sans-I/O protocol (WS_PROTOCOL) does nothing at its client's own
+    end and never closes the app transport there, so the hook on the TCP transport is all that
+    ends it, at SEND_TIMEOUT_S (measured: 30.0 s at a limit of 30 s, uvicorn 0.49 and 0.54).
+    MUTATION: no hook on the TCP transport - red (every Python version).
+
+    The legacy row runs uvicorn's legacy protocol, which no VAF listener serves. It is kept as
+    the only measured trigger of the guard in close_now against closing an already closed
+    transport: on 3.11+ that protocol closed the TLS transport a second time after asyncio's
+    TLS layer had, which dropped its protocol and disarmed the watch; with the guard its own
+    abort after its close timeout (10 s) works again. MUTATION: close a closed transport
+    again - red (this row only). It passes the class, not the name "websockets": uvicorn
+    announced it will point that name at the sans-I/O protocol, which would make this row a
+    second door row. When uvicorn removes the legacy module, the row fails at its import and
+    the guard needs a synthetic trigger."""
     import base64
-    if path == "app transport":
+    extra = {}
+    if protocol == "legacy":
         if sys.version_info < (3, 11):
             pytest.skip("3.10 does not tell the WebSocket protocol about a close_notify")
+        from uvicorn.protocols.websockets.websockets_impl import WebSocketProtocol
+        extra["ws"] = WebSocketProtocol
         monkeypatch.setattr(door, "SEND_TIMEOUT_S", 30.0)
         monkeypatch.setattr(door, "CLOSE_TIMEOUT_S", 30.0)
         window = 15.0
@@ -1045,7 +1047,7 @@ def test_a_tls_websocket_that_ends_its_side_is_still_watched(cert, monkeypatch, 
         monkeypatch.setattr(door, "SEND_TIMEOUT_S", 1.0)
         monkeypatch.setattr(door, "CLOSE_TIMEOUT_S", 30.0)
         window = 8.0
-    with serving(_door_config(_streaming_socket, cert, ws=ws),
+    with serving(_door_config(_streaming_socket, cert, **extra),
                  door.door_event_loop) as (port, server):
         raw = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         raw.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
@@ -1262,8 +1264,7 @@ UPGRADE = (b"GET /ws HTTP/1.1\r\nHost: door\r\nConnection: Upgrade\r\nUpgrade: w
            b"Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n")
 
 
-@pytest.mark.parametrize("ws", WS_IMPLEMENTATIONS)
-def test_an_upgrade_at_the_cap_gets_503(monkeypatch, ws):
+def test_an_upgrade_at_the_cap_gets_503(monkeypatch):
     """uvicorn decides a WebSocket upgrade before it checks the cap, so sockets went past it
     (measured: 20 sockets at a cap of 3 while a request got 503), each holding a descriptor,
     three through the proxy. At the cap an upgrade gets the request's 503 now; below it, it
@@ -1280,7 +1281,7 @@ def test_an_upgrade_at_the_cap_gets_503(monkeypatch, ws):
         while (await receive())["type"] != "websocket.disconnect":
             pass
 
-    with serving(_door_config(sockets, ws=ws), door.door_event_loop) as (port, server):
+    with serving(_door_config(sockets), door.door_event_loop) as (port, server):
         with socket.create_connection(("127.0.0.1", port), timeout=5) as alone:
             assert http_exchange(alone, UPGRADE).startswith(b"HTTP/1.1 101")
         deadline = time.monotonic() + 5
@@ -1305,38 +1306,39 @@ def test_an_upgrade_at_the_cap_gets_503(monkeypatch, ws):
 
 def test_door_options_pin_the_websocket_implementation():
     """A door names its WebSocket implementation instead of taking uvicorn's own default,
-    which moved from the legacy protocol to the sans-I/O one at uvicorn 0.50 and there made no
-    sender wait until 0.52. uvicorn loads the one named, and both names a door may give exist
-    in the installed uvicorn, so the WebSocket rows run on each. MUTATION: drop ws from
-    door_options - red."""
+    which moved from the legacy protocol to the sans-I/O one at uvicorn 0.50, where until
+    0.52.1 it made no sender wait. The name exists in the installed uvicorn, uvicorn loads
+    the sans-I/O class for it, and that class has its own pause_writing: below the floor
+    (0.50.0 to 0.52.0) it has asyncio's empty one. MUTATION: drop ws from door_options, or
+    WS_PROTOCOL = "websockets" - red."""
     from uvicorn.config import WS_PROTOCOLS
-    assert set(WS_IMPLEMENTATIONS) <= set(WS_PROTOCOLS), "uvicorn renamed an implementation"
     options = door.door_options()
-    assert options["ws"] == door._websocket_protocol() and options["ws"] in WS_IMPLEMENTATIONS
+    assert options["ws"] == door.WS_PROTOCOL == "websockets-sansio"
+    assert options["ws"] in WS_PROTOCOLS, "uvicorn renamed its sans-I/O implementation"
     config = uvicorn.Config(_App(), log_config=None, **options)
     config.load()
-    assert config.ws_protocol_class.__name__ == WS_PROTOCOLS[options["ws"]].rsplit(":", 1)[1]
+    cls = config.ws_protocol_class
+    assert cls.__name__ == "WebSocketsSansIOProtocol"
+    assert cls.pause_writing is not asyncio.BaseProtocol.pause_writing, (
+        f"uvicorn {uvicorn.__version__}'s sans-I/O protocol never makes a sender wait: below "
+        "the floor, install requirements.txt")
 
 
-@pytest.mark.parametrize("own_pause,expected", [(True, "websockets-sansio"),
-                                                (False, "websockets"),
-                                                (None, "websockets")],
-                         ids=["sans-I/O that makes a sender wait", "sans-I/O without it",
-                              "no sans-I/O"])
-def test_the_door_picks_the_websocket_by_what_it_does(monkeypatch, own_pause, expected):
-    """The door takes uvicorn's sans-I/O WebSocket protocol only where it makes a sender wait
-    (it defines its own pause_writing: uvicorn 0.53 and later), and the legacy one where it
-    does not (0.35 to 0.52) or does not exist (before 0.35). Asked of the protocol, not of the
-    version. MUTATION: always the sans-I/O one - red (the last two rows)."""
-    import importlib
-    name = "uvicorn.protocols.websockets.websockets_sansio_impl"
-    if own_pause is None:
-        monkeypatch.setitem(sys.modules, name, None)      # the import fails
-    else:
-        cls = importlib.import_module(name).WebSocketsSansIOProtocol
-        monkeypatch.setattr(cls, "pause_writing", (lambda self: None) if own_pause
-                            else asyncio.BaseProtocol.pause_writing)
-    assert door._websocket_protocol() == expected
+def test_uvicorns_own_websocket_choice_is_the_doors():
+    """The tray's loopback listeners (8001, and 8005, where the HTTPS proxy relays every
+    device's WebSocket) build their uvicorn.Config without ws and keep uvicorn's own choice.
+    From VAF's uvicorn floor that choice is the class the door names, so the relay chain
+    makes a sender wait end to end. Measured with config.load(): ws="auto" loads the legacy
+    protocol on 0.49 and WebSocketsSansIOProtocol on 0.50.0, 0.52.0, 0.52.1, 0.53 and 0.54,
+    with its own pause_writing from 0.52.1. CI runs the newest uvicorn, so the day that
+    default moves, this goes red there. MUTATION: uvicorn's auto protocol pointed at the
+    legacy one - red."""
+    plain = uvicorn.Config(_App(), log_config=None)
+    plain.load()
+    pinned = uvicorn.Config(_App(), log_config=None, **door.door_options())
+    pinned.load()
+    assert plain.ws_protocol_class is pinned.ws_protocol_class
+    assert plain.ws_protocol_class.__name__ == "WebSocketsSansIOProtocol"
 
 
 def test_a_door_websocket_makes_its_sender_wait():
@@ -1344,10 +1346,11 @@ def test_a_door_websocket_makes_its_sender_wait():
     sent to a client that never reads, a small part is taken and the sender waits for the
     rest (measured: 28 of 1024 frames of 64 KiB on uvicorn 0.49, 29 on 0.54; the limit of
     half leaves room for a kernel that takes more, as Windows took 4 MB in one send).
-    uvicorn's sans-I/O protocol before 0.53, uvicorn's own default from 0.50 to 0.52, never
-    makes it wait: all 1024 frames went into the process at once (0.49), and a sender in an
-    endless loop grew it until the out-of-memory killer ended it. MUTATION: the door picks
-    the sans-I/O protocol on every uvicorn - red on one before 0.53 (the locked one)."""
+    uvicorn's sans-I/O protocol before 0.52.1, uvicorn's own default from 0.50 to 0.52.0,
+    never makes it wait: all 1024 frames went into the process at once (0.49), and a sender
+    in an endless loop grew it until the out-of-memory killer ended it. MUTATION: uvicorn's
+    sans-I/O protocol without its own pause_writing (0.50.0 to 0.52.0; simulated by setting
+    it to asyncio.BaseProtocol's) - red."""
     sent = []
 
     async def flood(scope, receive, send):
@@ -1464,7 +1467,7 @@ def test_door_options_switch_off_forwarded_trust(monkeypatch):
     assert options == {"http": door.BoundedHttpToolsProtocol,
                        "limit_concurrency": door.connection_cap(),
                        "timeout_keep_alive": 5, "server_header": False, "proxy_headers": False,
-                       "ws": door._websocket_protocol()}
+                       "ws": door.WS_PROTOCOL}
     monkeypatch.setenv("FORWARDED_ALLOW_IPS", "*")
     plain = uvicorn.Config(_App(), log_config=None)
     plain.load()
@@ -1507,7 +1510,7 @@ def _assert_a_door(seen):
     assert config.limit_concurrency == door.connection_cap()
     assert config.timeout_keep_alive == door.KEEP_ALIVE_S
     assert config.server_header is False and config.proxy_headers is False
-    assert config.ws == door._websocket_protocol()
+    assert config.ws == door.WS_PROTOCOL
     assert seen["loop"] in seen.get("door_loops", []), "not served on the door's loop"
 
 

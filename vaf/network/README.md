@@ -61,7 +61,9 @@ It never dials loopback, where a tokenless request is the owner.
   most 16 requests sent ahead of their answers; every close bounded by its progress (60 s
   without any) and 10 s for the goodbye after it, with lingering for the rest of an answered
   request's body; no `Server` header; uvicorn's forwarded-header trust off, so
-  `connection_client_ip` is the only reader of `X-Forwarded-For` there), `door_event_loop()`
+  `connection_client_ip` is the only reader of `X-Forwarded-For` there; a WebSocket
+  implementation that makes a sender wait while its client reads nothing, uvicorn's sans-I/O
+  one, named as `WS_PROTOCOL`, so a caller passes no `ws=` of its own), `door_event_loop()`
   (a 15 s TLS handshake), `raise_open_file_limit()`, and the body limits the proxy holds a
   request to. The HTTPS proxy and `vaf run --web` are built on it. Not imported by the
   package: it needs uvicorn.

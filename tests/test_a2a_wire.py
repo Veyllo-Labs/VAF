@@ -670,3 +670,96 @@ def test_a_verifier_the_door_cannot_hand_the_client_to_is_refused(monkeypatch):
     wire_mod.set_credential_verifier(_a2a_credential_verifier)
     assert wire_mod.credential_verifier() is _a2a_credential_verifier
     wire_mod.set_credential_verifier(lambda credential: None)
+
+
+def test_a_wrapper_that_adds_the_client_check_is_read_by_its_own_signature(monkeypatch):
+    """A `functools.wraps` decorator that adds the address check to a one-argument verifier
+    reports the wrapped `(credential)`, and so does an object whose `__wrapped__` is one;
+    read through, each was called without the address and admitted the LAN client. Their own
+    signature names `client_ip`, and that decides. A plain `(*args, **kwargs)` wrapper is
+    still read through to what it wraps, so one around a one-argument verifier keeps getting
+    the credential alone. MUTATION: read only the signature followed through `__wrapped__`;
+    read only the wrapper's own - red."""
+    import functools
+
+    import vaf.core.a2a.wire as wire_mod
+
+    def _one(credential):
+        return {"user_scope_id": "scope-1"}
+
+    def _rule(client_ip):
+        return None if client_ip not in (None, "127.0.0.1") else {"user_scope_id": "scope-2"}
+
+    @functools.wraps(_one)
+    def _checked(credential, client_ip=None):
+        return _rule(client_ip)
+
+    @functools.wraps(_one)
+    def _checked_by_position(credential, client_ip=None, /):
+        return _rule(client_ip)
+
+    class _Object:
+        __wrapped__ = _one
+
+        def __call__(self, credential, client_ip=None):
+            return _rule(client_ip)
+
+    def _aware(credential, client_ip=None):
+        return _rule(client_ip)
+
+    @functools.wraps(_aware)
+    def _logging(*a, **k):
+        return _aware(*a, **k)
+
+    monkeypatch.setattr(wire_mod, "_verifier", None)
+    for verify in (_checked, _checked_by_position, _Object(), _logging):
+        wire_mod.set_credential_verifier(verify)
+        with pytest.raises(HandshakeRefused):
+            resolve_account("t", client_ip="192.168.50.9")
+        assert resolve_account("t", client_ip="127.0.0.1")["user_scope_id"] == "scope-2"
+
+    @functools.wraps(_one)
+    def _logged_one(*a, **k):
+        return _one(*a, **k)
+
+    wire_mod.set_credential_verifier(_logged_one)
+    assert resolve_account("t", client_ip="192.168.50.9")["user_scope_id"] == "scope-1"
+
+
+def test_a_verifier_that_names_the_client_receives_it_when_it_is_not_known(monkeypatch):
+    """A door that passes no address still hands a verifier that names `client_ip` the
+    parameter, as None ("not known"), so the verifier decides; called with the credential
+    alone, it could not tell that from a call that never asked. An unreadable signature is
+    refused without an address too. MUTATION: call with the credential alone when the
+    address is None - red."""
+    import vaf.core.a2a.wire as wire_mod
+    seen = []
+
+    def _either(credential, client_ip="unset"):
+        seen.append(("either", client_ip))
+        return {"user_scope_id": "scope-1"}
+
+    def _position(credential, client_ip="unset", /):
+        seen.append(("position", client_ip))
+        return {"user_scope_id": "scope-1"}
+
+    def _any(credential, **kw):
+        seen.append(("kwargs", kw.get("client_ip", "unset")))
+        return {"user_scope_id": "scope-1"}
+
+    for verify in (_either, _position, _any):
+        monkeypatch.setattr(wire_mod, "_verifier", verify)
+        assert resolve_account("t")["user_scope_id"] == "scope-1"
+    assert seen == [("either", None), ("position", None), ("kwargs", None)]
+
+    class _Compiled:
+        @property
+        def __signature__(self):
+            raise ValueError("no signature found for builtin")
+
+        def __call__(self, credential, client_ip=None):
+            return {"user_scope_id": "scope-1"}
+
+    monkeypatch.setattr(wire_mod, "_verifier", _Compiled())
+    with pytest.raises(HandshakeRefused):
+        resolve_account("t")

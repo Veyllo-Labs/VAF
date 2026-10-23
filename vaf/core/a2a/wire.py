@@ -67,15 +67,22 @@ def set_credential_verifier(verify) -> None:
     real client's address (the door's own resolver, ``binding.connection_client_ip``),
     because whether a credential may open a session can depend on where it is used: VAF's
     own sessions of the window on the machine itself stand only for that machine. It gets
-    the address however it declares the parameter, by position right after the credential
-    when it is positional-only, and is never left without it, since a missing address
-    skips an address rule. So two shapes are refused here with a TypeError, because the
-    door could not hand them the address (``_client_slot``): a verifier whose signature
-    cannot be read (compiled code, a ``__signature__`` that raises or is not a Signature),
-    which may take ``client_ip`` unseen, and one whose positional-only ``client_ip`` is not
-    right after the credential. Wrap such a verifier in a Python function that names
-    ``client_ip``. A verifier with the one argument is called with the credential alone and
-    keeps working.
+    the parameter on every call, however it declares it (by position right after the
+    credential when it is positional-only), and None there means the door did not know
+    the client: the verifier decides what that means (VAF's own then skips its address
+    rule), so a door must pass the address it has. So two shapes are refused here with a
+    TypeError, because the door could not hand them the parameter (``_client_slot``): a
+    verifier whose signature cannot be read (compiled code, a ``__signature__`` that raises
+    or is not a Signature), which may take ``client_ip`` unseen, and one whose
+    positional-only ``client_ip`` is not right after the credential. Wrap such a verifier
+    in a Python function that names ``client_ip``. A verifier with the one argument is
+    called with the credential alone and keeps working.
+
+    NAMED BOUNDARY: a ``functools.wraps`` wrapper is read by its own signature when that
+    names ``client_ip`` (a decorator that adds the address check), and otherwise through to
+    what it wraps. So a wrapper that adds the address must name ``client_ip`` itself: one
+    that takes it only through ``**kwargs`` cannot be told apart from a plain logging
+    decorator and gets what its wrapped function declares.
     """
     global _verifier
     if verify is not None:
@@ -112,8 +119,15 @@ _WRAP_HINT = ("wrap it in a Python function that names client_ip, e.g. "
 def _client_slot(verify) -> Optional[str]:
     """How `verify` takes the client's address: ``"position"`` (a positional-only
     ``client_ip`` right after the credential), ``"keyword"`` (any other ``client_ip``, or
-    ``**kwargs``) or None (it names neither and gets the credential alone). Wrappers
-    (``functools.wraps``), partials and callable objects show the signature they forward to.
+    ``**kwargs``) or None (it names neither and gets the credential alone).
+
+    The verifier's own signature decides when it names ``client_ip``: a ``functools.wraps``
+    decorator that adds the address check to a one-argument verifier reports the wrapped
+    signature, and read through it would be called without the address. Otherwise the
+    signature it forwards to decides (wrappers, partials, callable objects), so a plain
+    ``(*args, **kwargs)`` wrapper is called as its wrapped function asks; a wrapper that
+    adds the address must name ``client_ip`` itself (the named boundary in
+    ``set_credential_verifier``).
 
     Raises TypeError when the address could not be handed over: a signature that cannot be
     read may hide a ``client_ip``, and a positional-only ``client_ip`` anywhere else has no
@@ -122,10 +136,17 @@ def _client_slot(verify) -> Optional[str]:
     rule (VAF's own verifier does exactly that): it would admit a client it means to refuse."""
     import inspect
     try:
-        params = list(inspect.signature(verify).parameters.values())
-    except Exception as e:  # inspect raises TypeError or ValueError; a __signature__ may raise anything
-        raise TypeError(f"the credential verifier's signature cannot be read ({e}); "
-                        f"{_WRAP_HINT}") from None
+        own = list(inspect.signature(verify, follow_wrapped=False).parameters.values())
+    except Exception:  # no own signature: the one it forwards to decides, or nothing does
+        own = []
+    if any(p.name == "client_ip" for p in own):
+        params = own
+    else:
+        try:
+            params = list(inspect.signature(verify).parameters.values())
+        except Exception as e:  # inspect raises TypeError or ValueError; a __signature__ may raise anything
+            raise TypeError(f"the credential verifier's signature cannot be read ({e}); "
+                            f"{_WRAP_HINT}") from None
     named = next((p for p in params if p.name == "client_ip"), None)
     if named is not None and named.kind is inspect.Parameter.POSITIONAL_ONLY:
         if params.index(named) != 1:
@@ -142,8 +163,9 @@ def _call_verifier(verify, credential: str, client_ip: Optional[str]):
     verifier whose way cannot be told raises here too (one set past `set_credential_verifier`,
     or whose signature changed after it), and the door reads that as a refusal: the address
     is never dropped."""
-    if client_ip is None:
-        return verify(credential)
+    # None is handed over like an address: it means the door did not know the client, and a
+    # verifier that names the parameter decides what that means. Called with the credential
+    # alone instead, it could not tell "not known" from "not asked".
     slot = _client_slot(verify)
     if slot == "position":
         return verify(credential, client_ip)
@@ -161,6 +183,10 @@ def resolve_account(credential: str, *, client_ip: Optional[str] = None) -> dict
     gates in this tree read "no scope" as unrestricted, so an unscoped connection is
     the most dangerous shape there is - worse than no connection at all - and a door
     that let one through would be handing out the thing those gates protect.
+
+    ``client_ip`` is the real client's address as the door resolved it. None means the
+    client is not known; a verifier that names the parameter receives that None and decides
+    (VAF's own then skips its address rule), so a door must pass the address it has.
     """
     if _verifier is None:
         raise HandshakeRefused("no credential verifier is registered")

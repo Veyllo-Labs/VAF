@@ -540,7 +540,9 @@ evicted nobody ends as before: the window auto-closes a few seconds after comple
 The give-back is consumed on first use, and a lease the person starts by hand clears any
 pending one. With runs queued behind each other it waits for the last of them: a queued run
 finds no lease to evict and leaves the remembered holder alone, and neither the give-back nor
-the "browser is free" stop event goes out while another run is still counted.
+the "browser is free" stop event goes out while another run is still counted. When the
+last counted run is one that gave up at the concurrency gate without driving, its leaving
+(`agent_run_abandoned`) settles the give-back the run ahead of it left.
 
 **Logins persist, without a switch.** Interactive use is always the PERSISTENT mode - the
 counterpart of the agent's `persistent=true` runs, and deliberately without a toggle of its

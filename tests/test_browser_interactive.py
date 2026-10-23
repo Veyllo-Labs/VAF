@@ -408,6 +408,34 @@ def test_a_queued_run_keeps_the_give_back_for_the_last_runs_end(mgr, monkeypatch
     assert resumable == ["sess-1"], "the evicted person did not get the browser back"
 
 
+def test_a_queued_run_that_leaves_without_driving_settles_the_give_back(mgr, monkeypatch):
+    """The run ahead ended while a second was queued, then the second gave up at the gate:
+    it is the last counted run, so its leaving gives the evicted person the browser back.
+    MUTATION: no settlement in agent_run_abandoned - red."""
+    _no_ipc_tasks(monkeypatch)
+    mgr.start("scope-a", "sess-1")
+    mgr.stop_for_agent_run()             # run A evicts the person
+    mgr.stop_for_agent_run()             # run B queues behind it
+    mgr.agent_run_ended()                # A ends; the give-back waits for B
+    mgr.agent_run_abandoned()            # B times out at the gate
+    resumable = [sid for p, sid in mgr._test_emitted
+                 if p.get("reason") == "agent_done" and p.get("resumable")]
+    assert resumable == ["sess-1"]
+
+
+def test_an_abandoned_run_behind_a_driving_one_settles_nothing(mgr, monkeypatch):
+    """A queued run that leaves while the run ahead still drives: the give-back stays that
+    run's to settle."""
+    _no_ipc_tasks(monkeypatch)
+    mgr.start("scope-a", "sess-1")
+    mgr.stop_for_agent_run()
+    mgr.stop_for_agent_run()
+    mgr.agent_run_abandoned()
+    assert not [p for p, _ in mgr._test_emitted if p.get("reason") == "agent_done"]
+    mgr.agent_run_ended()
+    assert [sid for p, sid in mgr._test_emitted if p.get("resumable")] == ["sess-1"]
+
+
 def test_no_lease_means_no_give_back(mgr, monkeypatch):
     _no_ipc_tasks(monkeypatch)
     mgr.stop_for_agent_run()

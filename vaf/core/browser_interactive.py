@@ -1009,6 +1009,10 @@ class InteractiveBrowserManager:
         # that session, whose window then re-enters the interactive mode
         # instead of closing; any freshly started lease clears it.
         self._pre_agent_holder: Optional[tuple] = None
+        # A run ended while another was still counted: its give-back waits for the last
+        # one, and a queued run that leaves without driving settles it
+        # (agent_run_abandoned).
+        self._giveback_deferred = False
         # The page the evicted person was on when an agent run took the
         # browser: {scope, url, title, at}. This is what turns a takeover into
         # a HANDOVER - the run is told to carry on there instead of opening
@@ -1560,6 +1564,16 @@ class InteractiveBrowserManager:
         generation, the holder entry and the give-back are that run's to settle."""
         with self._lock:
             self._agent_runs = max(0, self._agent_runs - 1)
+            # Unless the run ahead already ended and left its give-back to the last
+            # counted run, which this one now is.
+            settle = self._agent_runs == 0 and self._giveback_deferred
+            holder = sid = None
+            if settle:
+                self._giveback_deferred = False
+                holder, self._pre_agent_holder = self._pre_agent_holder, None
+                sid = self._last_session_id
+        if settle:
+            self._announce_run_end(holder, sid)
 
     def agent_run_ended(self, notify: bool = True) -> None:
         with self._lock:
@@ -1584,6 +1598,9 @@ class InteractiveBrowserManager:
             holder = self._pre_agent_holder if (notify and last_run) else None
             if notify and last_run:
                 self._pre_agent_holder = None
+            # Not settled now: by the last counted run, or by the notifying end of a
+            # spawned run (notify=False hands it on).
+            self._giveback_deferred = bool(notify and not last_run)
             run_scope = self._last_cookie_scope
         # A run downloads too (the agent saves a PDF for the person): drain to
         # the run's OWN scope - the jar owner at this moment is that run's.
@@ -1599,6 +1616,11 @@ class InteractiveBrowserManager:
         # does end with a notification). A run still queued keeps both for its own end.
         if not notify or not last_run:
             return
+        self._announce_run_end(holder, sid)
+
+    def _announce_run_end(self, holder: Optional[tuple], sid: Optional[str]) -> None:
+        """The last counted run is over: the evicted holder's window gets the browser back
+        (resumable), or the run's window is told it is free."""
         if holder is not None:
             self._emit({"status": "stopped", "reason": "agent_done",
                         "saving": False, "streamPath": "", "resumable": True},

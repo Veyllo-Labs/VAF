@@ -81,20 +81,29 @@ active **push**, modelled on the harness `<task-notification>`:
 - The headless runner's idle maintenance consumes the event and runs the result check
   **immediately**, draining **every** session's results (routing each by its own `session_id`),
   with the ~1s poll retained as a fallback if a push is ever undeliverable.
-- The summary turn that follows runs on the chat the results were loaded for, bound as that
-  chat's owner (scope and name from the session file, admin rights from the account,
+- The summary turn that follows runs on the last result's own chat, bound as that chat's owner
+  (scope and name from the session file, admin rights from the account,
   `config.is_admin_account`, because a session file carries no role) with that chat's source
   (`_drain_turn_binding`, `vaf/core/turn_binding.py`); it used to run with the role and the
-  source the last queued turn left on the shared agent. A result is delivered into the chat its
-  record names and no other (`_result_chat`): one that names no session (started in an agent
-  room's turn, which carries the room instead, or by a scheduled automation) stays pending,
-  logged once as `[DRAIN] no chat for this result`, and its running state is shown in no chat's
-  window. It used to go to the chat the worker had loaded last, any account's: measured, a
-  room's coder result in another account's chat, and with a contact's turn last, the contact's.
-  The queue is cleared at the next start. A chat that is gone (deleted while its sub-agent ran)
-  or cannot be read gets no summary turn: bound as nobody, the turn would have run with the
-  machine owner's freedoms. An account that no longer stands (`revocation.account_stands`)
-  gets none either.
+  source the last queued turn left on the shared agent. Each result's own side effects (its
+  window update and its `subagent_output`) go to the chat its record names (`_result_chat`).
+  NAMED BOUNDARY: one drain pass writes ONE summary turn for every result it took, so when
+  results of several chats finish in the same pass (common, because the drain waits for the
+  queue lane), all their texts are in that one turn, on the last result's chat and bound as its
+  owner. One summary per chat is not built yet.
+- A result that names no session (started in an agent room's turn, which carries the room
+  instead, or by a scheduled automation) is delivered into no chat. The drain leaves it pending,
+  logged once as `[DRAIN] no chat for this result`, and shows its running state in no chat's
+  window; it used to go to the chat the worker had loaded last, any account's (measured: a room's
+  coder result in another account's chat, and with a contact's turn last, the contact's). No
+  other lane takes it either: an in-lane check (`Agent._check_subagent_results` in a turn, the
+  terminal's own check) asks `SubAgentIPC.get_pending_results_for`, which hands a turn its own
+  chat's results and, when it serves no chat, only the tasks it started itself. Before, a turn
+  with no session (a scheduled automation, any account's) took every pending result, a room's
+  included, into its own prompt. The queue is cleared at the next start, which discards it.
+- A chat that is gone (deleted while its sub-agent ran) or cannot be read gets no summary turn:
+  bound as nobody, the turn would have run with the machine owner's freedoms. An account that
+  no longer stands (`revocation.account_stands`) gets none either.
 
 Guard: task_ids an **in-process workflow engine loop** (`engine._await_subagent`) is actively
 consuming are marked owned (time-stamped, TTL, auto-expiring) so the all-sessions runner drain
@@ -503,7 +512,9 @@ task_id = ipc.create_task("librarian_agent", "Show files...")
 ipc.mark_task_running(task_id)
 
 # Query results
-results = ipc.get_pending_results()  # List of SubAgentTask
+results = ipc.get_pending_results()  # every session's: the runner's drain only
+# What one lane may take: its chat's, or with no chat only the tasks it started
+mine = ipc.get_pending_results_for(session_id, own_task_ids=agent._async_subagent_tasks)
 
 # Consume a single result (remove from queue)
 task = ipc.consume_result(task_id)

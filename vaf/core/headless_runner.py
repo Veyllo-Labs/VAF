@@ -1207,6 +1207,7 @@ def _room_turn_binding(room_wake: dict, identity: Identity) -> TurnBinding:
     the hint lane read ``agent._room_turn``, not the wake, and a key computed in the wake but
     not copied fails CLOSED - measured with from_authority, which the gate read for a day
     while no runner ever handed it over."""
+    from vaf.core.a2a.room import conversation_key
     room_id = str((room_wake or {}).get("room_id") or "").strip()
     peer_id = str((room_wake or {}).get("peer_id") or "").strip()
     if not room_id or not peer_id:
@@ -1214,7 +1215,7 @@ def _room_turn_binding(room_wake: dict, identity: Identity) -> TurnBinding:
     return TurnBinding(
         identity=identity,
         source="web",
-        conversation=f"{room_id}.{peer_id}",
+        conversation=conversation_key(room_id, peer_id),
         room_id=room_id,
         room_turn={"room_id": room_wake["room_id"],
                    "mode": room_wake["mode"],
@@ -3668,12 +3669,17 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         tq.clear_stop(sid)
                                 except Exception:
                                     pass
-                            # The summary turn runs on the chat the results were loaded for (the
-                            # last result's own chat, never whatever the worker holds), as that
-                            # chat's owner with its source (_drain_turn_binding). No chat known:
-                            # no summary turn, because a reply emitted without a session reaches
-                            # every connected browser. A chat that is gone, or an account without
-                            # access, gets none either.
+                            # The summary turn runs on the last result's own chat (never
+                            # whatever the worker holds), as that chat's owner with its source
+                            # (_drain_turn_binding). No chat known: no summary turn, because a
+                            # reply emitted without a session reaches every connected browser.
+                            # A chat that is gone, or an account without access, gets none.
+                            # NAMED BOUNDARY: one pass writes ONE summary turn for every result
+                            # it took. When results of several chats finish in the same pass,
+                            # all their texts are in that one turn, on the last result's chat
+                            # and bound as its owner; each result's own window and output
+                            # pushes still go to its own chat. One summary per chat is not
+                            # built yet.
                             _drain_bound = False
                             if found_results_text or any_needs_retry:
                                 _drain_sid = _drain_session

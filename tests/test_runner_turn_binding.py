@@ -531,6 +531,103 @@ def test_a_result_is_summarized_in_its_own_chat_as_its_owner(world, monkeypatch)
     assert "Erledigt." in (_stored(world, BOB_SESSION) or "")
 
 
+def test_no_other_lane_takes_a_result_that_names_no_chat(world, monkeypatch):
+    """The order measured after the drain left such a result pending: the owner's room coder
+    finishes, Bob chats, then Bob's scheduled automation runs (a fresh agent, no session
+    declared, as `automation.py` builds it). It took every pending result into its own prompt
+    and removed it from the queue. An in-lane turn takes its chat's results, or with no chat
+    only the tasks it started itself."""
+    from vaf.cli.cmd import run as cli_run
+    from vaf.core.subagent_ipc import get_ipc, set_current_session_id
+    agent = world.make()
+    seeded = {}
+    _run_loop(monkeypatch, agent, [_task(BOB_SESSION, BOB, "Und morgen?")],
+              lambda: seeded.setdefault("room", _finished(
+                  None, "ROOM7QRESULT the logo page is ready", room_id="room-a")),
+              _DrainProvider(agent))
+
+    automation = world.make()
+    automation._background_run = True
+    from vaf.core.turn_binding import TurnBinding
+    bind_turn(automation, TurnBinding(identity=BOB, source="web", session_id=BOB_SESSION))
+    # ...and then, as `automation.py` declares it, no chat at all.
+    set_current_session_id(None)
+    own = _finished(None, "OWN7QRESULT the report is written")
+    automation._async_subagent_tasks[own] = {"agent_type": "coding_agent"}
+    provider = _Provider()
+    automation.api_backend.chat_completion = provider
+    automation.chat_step(user_input="Fasse den Tag zusammen", stream_callback=lambda t: None)
+
+    requests = "\n".join(provider.texts)
+    assert "ROOM7QRESULT" not in requests, "an automation took the room's result into its prompt"
+    pending = [t.task_id for t in get_ipc().get_pending_results()]
+    assert seeded["room"] in pending, "the room's result left the queue"
+    assert "OWN7QRESULT" in requests and own not in pending, (
+        "the automation no longer gets the result of the task it started itself")
+
+    # The terminal's own check asks the same question (it shares the service's queue).
+    shown = cli_run._check_subagent_results(SimpleNamespace(console=SimpleNamespace(
+        print=lambda *a, **k: None)), world.make())
+    assert not [r for r in shown or [] if "ROOM7QRESULT" in str(r)]
+    assert seeded["room"] in [t.task_id for t in get_ipc().get_pending_results()]
+
+
+def test_the_summary_runs_on_the_results_chat_whatever_the_agent_holds(world, monkeypatch):
+    """Something that runs while a result is processed (a resumed workflow) can move the agent
+    to another chat; the summary turn still runs on the result's own chat, as its owner."""
+    agent = world.make()
+    provider = _DrainProvider(agent)
+    real = agent._process_subagent_result
+
+    def _moves_the_agent(task):
+        out = real(task)
+        agent.load_session_context(OWNER_SESSION)
+        return out
+
+    monkeypatch.setattr(agent, "_process_subagent_result", _moves_the_agent)
+    _run_loop(monkeypatch, agent, [_task(OWNER_SESSION, OWNER, "Wann endet der Vertrag?")],
+              lambda: _finished(BOB_SESSION, "BOB7QRESULT the forecast is ready"), provider)
+
+    assert provider.seen[1:] == [(BOB_SCOPE, None, BOB_SESSION)], (
+        "the summary ran on the chat the agent was moved to")
+
+
+def test_an_open_rooms_working_memory_outlives_a_quiet_weekend(world):
+    """The collector ages a room's store out only once its room is closed or gone: an open room
+    that was quiet longer than `gc_max_age_hours` keeps its tasks and notes."""
+    import os
+    import time as _time
+    from datetime import datetime, timedelta
+
+    from vaf.core.garbage_collector import GarbageCollector
+    from vaf.core.main_persistence import MainPersistenceManager
+
+    def _store(room_id, scope=OWNER_SCOPE):
+        peer = derive_peer_id(participant_key("agent", scope), room_id)
+        return MainPersistenceManager(str(world.tmp), conversation=f"{room_id}.{peer}")
+
+    closing = Room.create(kind="round", owner_scope=OWNER_SCOPE, base=world.rooms,
+                          room_id="room-closing")
+    host = closing.join(display="Agent-owner", scope_id=OWNER_SCOPE,
+                        peer_id=derive_peer_id(participant_key("agent", OWNER_SCOPE),
+                                               "room-closing"))
+    closing.close(host)
+    stores = {"open": _store("room-a"), "closed": _store("room-closing"),
+              "gone": _store("room-deleted")}
+    stale = _time.time() - 10 * 86400
+    for store in stores.values():
+        for f in store.context_dir.rglob("*"):
+            if f.is_file():
+                os.utime(f, (stale, stale))
+
+    GarbageCollector.__new__(GarbageCollector)._clean_old_session_persistence(
+        datetime.now() - timedelta(hours=48), {"deleted": 0, "freed_bytes": 0, "errors": 0})
+
+    assert stores["open"].context_dir.exists(), "an open room lost its working memory"
+    assert not stores["closed"].context_dir.exists(), "a closed room's store is never collected"
+    assert not stores["gone"].context_dir.exists(), "a deleted room's store is never collected"
+
+
 # ── AC 11: the drain runs as the chat's owner ──────────────────────────────────────────────
 
 def test_the_drain_runs_as_the_chats_owner(world):

@@ -1192,8 +1192,11 @@ room's conversation (`VAF_CONVERSATION_ID`), so its own working-memory tools wri
 room's store. Its result is delivered into no chat: the runner's drain leaves a result that
 names no session pending (logged once as `[DRAIN] no chat for this result`) and shows its running
 state in no chat's window, because the only chat it could pick is the one the worker held last,
-any account's. The queue is cleared at the next start. Delivering it into its room is not
-built yet.
+any account's. No other lane takes it either: a turn that serves no chat (a scheduled automation
+of any account) takes only the results of tasks it started itself
+(`SubAgentIPC.get_pending_results_for`). The queue is cleared at the next start, which discards
+it. Delivering it into its room is not built yet. The room's working memory is kept while the
+room exists and is not closed; after that it ages out with `gc_max_age_hours`, like a chat's.
 
 **Retrieval.** The turn is given what this account already knows, through
 `turn_memory_context` - the same primitive the chat queue, automations and thinking runs

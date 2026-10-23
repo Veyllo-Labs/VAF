@@ -490,12 +490,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
     own, and what the agent notes for itself there stays with that room and that account. An
     account whose access was taken away no longer gets room turns.
   - Work a sub-agent finished for an agent room went into whichever chat had been open last,
-    another account's or a contact's included. It now goes into no chat, and the next restart
-    of VAF discards it.
+    another account's or a contact's included, or into the next scheduled automation of any
+    account. It now goes into no chat and no automation, and the next restart of VAF discards
+    it. A scheduled automation takes only the results of work it started itself.
   - The summary of finished sub-agent work could run with the rights of whoever had written
-    to VAF last. It now runs as the chat's owner, not at all for a chat that was deleted
-    meanwhile, and a summary for work that belongs to no chat is no longer shown in every open
-    browser.
+    to VAF last. It now runs as the owner of the chat it is written into, not at all for a
+    chat that was deleted meanwhile, and a summary for work that belongs to no chat is no
+    longer shown in every open browser. When work for several chats finishes at the same
+    time, one summary still covers all of it, in the last of those chats; that is not
+    separated yet.
   - The tools used in one chat were offered in the next one, another account's included.
 
   `vaf run --web`, which serves the web app from the terminal, is not covered yet. Restart VAF

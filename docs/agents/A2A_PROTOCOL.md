@@ -731,21 +731,30 @@ account's access token is a token for programs: made in Settings, Account with t
 account's 2FA code, or with `vaf users token NAME --label TEXT` in a terminal on the host
 (see "Tokens for programs" in [NETWORK_FEATURES.md](../setup/NETWORK_FEATURES.md#authentication-details));
 the web UI's own sign-in is an HttpOnly cookie a program never sees. The door tells the
-registered verifier the real client's address when the verifier names a `client_ip` parameter
-or takes `**kwargs` (`admit(..., client_ip=...)`, `set_credential_verifier` in
-`vaf/core/a2a/wire.py`): by position when that parameter is positional-only right after the
-credential, by keyword otherwise, and on every call. `client_ip=None` means the client is not
-known; the verifier receives that None and decides (VAF's own then skips its address rule),
-so a door must pass the address it has. Only a verifier that names neither is called with
-the credential alone. The door could not hand the parameter to two shapes, so
-`set_credential_verifier` refuses them with a `TypeError`: a verifier whose signature cannot
-be read (compiled code), which may take `client_ip` unseen, and one whose positional-only
-`client_ip` is not right after the credential, which would make every admission refuse,
-with an address or without. Wrap such a verifier in a Python function that names
-`client_ip`. Named boundary: a `functools.wraps` wrapper is read by its own signature when
-that names `client_ip`, and otherwise through to what it wraps, so a wrapper that adds the
-address must name `client_ip` itself; one that takes it only through `**kwargs` cannot be
-told apart from a plain logging decorator. VAF's
+registered verifier the real client's address when the verifier's signature names a
+`client_ip` parameter or takes `**kwargs` (`admit(..., client_ip=...)`; `set_credential_verifier`
+and `_client_slot` in `vaf/core/a2a/wire.py`): by position when that parameter is
+positional-only right after the credential, by keyword otherwise, on every call, with an
+address or without. A plain verifier that takes `**kwargs` gets the address too; only a
+`functools.wraps` wrapper is read through to what it wraps (the boundary below).
+`client_ip=None` means the client is not known; the verifier receives that None and decides
+(VAF's own then skips its address rule), so a door must pass the address it has. Only a
+verifier whose signature names neither is called with the credential alone. The door could
+not hand the parameter to two shapes, so `set_credential_verifier` refuses them with a
+`TypeError`: a verifier whose signature cannot be read (compiled code), which may take
+`client_ip` unseen, and one whose positional-only `client_ip` is not right after the
+credential, which would make every admission refuse, with an address or without. Wrap such
+a verifier in a Python function that names `client_ip`. Named boundary, wrapped verifiers:
+the outermost layer's own signature decides when it names `client_ip`; otherwise the
+signature at the end of the `__wrapped__` chain does (the innermost function, or the first
+layer on the way that declares a `__signature__`), and the layers in between are not read.
+So a decorator that adds the address must be the outermost layer, or name `client_ip`
+itself: below another `functools.wraps` layer (a logging wrapper, `lru_cache`) or a
+`staticmethod` it is read past, and the verifier is called with the credential alone. A
+wrapper that takes the address only through `**kwargs` is read past even as the outermost
+layer, since it cannot be told apart from a plain logging decorator. A declared
+`__signature__` (a Signature or a signature string) that leaves `client_ip` out is taken at
+its word. VAF's
 verifier refuses a session of the window on the host machine presented from another address. **There is no fallback**: no credential
 means no connection. An access token is refused when it was minted before the second
 factor, when its account no longer stands (deactivated, deleted, demoted) or when its

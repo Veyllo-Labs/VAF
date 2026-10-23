@@ -19,7 +19,7 @@ things ahead of time.
 ### 1. System Packages
 
 The PortAudio packages (`portaudio*`, `alsa-devel`) serve the terminal microphone, and the
-`# Desktop only` command of each block the tray icon. A server needs neither: `./install.sh
+`# Desktop only` command in each block serves the tray icon. A server needs neither: `./install.sh
 --server` leaves them out. Installing a server by hand on Ubuntu, leave out `portaudio19-dev`
 and the desktop line, and install ffmpeg with `sudo apt-get install --no-install-recommends
 ffmpeg`.

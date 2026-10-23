@@ -394,7 +394,7 @@ def _drop_shared_context_state(tree) -> Dict[str, int]:
             try:
                 state = _state_digest(reader._read_session_file(path))
             except Exception:
-                counts["key_missing" if _file_key_missing() else "unreadable"] += 1
+                counts["key_missing" if _locked_by_key(path) else "unreadable"] += 1
                 continue
             if state is not None:
                 groups.setdefault(state, []).append(path)
@@ -413,14 +413,28 @@ def _drop_shared_context_state(tree) -> Dict[str, int]:
 
 def _file_key_missing() -> bool:
     """Whether the file-store key cannot be opened at this start (a locked or missing
-    keyring). Asked only after a chat failed to open, so it never mints a key that a
-    plaintext installation does not need: the failed read already asked for it."""
+    keyring). Callers ask only about bytes that are ciphertext: `_key()` mints a key on an
+    installation that has none, and a plaintext chat that fails to parse never asked for
+    one (`decrypt_bytes` passes plaintext through), so asking there would hand a plaintext
+    installation a keyring, a key and a recovery note it never needed."""
     from vaf.core import data_files
     try:
         data_files._key()
         return False
     except Exception:
         return True
+
+
+def _locked_by_key(path: Path) -> bool:
+    """A chat that failed to open: is it ciphertext whose key is not available at this
+    start? Reads only the header, so the key is never asked for about plaintext."""
+    from vaf.core import data_files
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(len(data_files.FILE_MAGIC))
+    except OSError:
+        return False
+    return data_files.is_encrypted(head) and _file_key_missing()
 
 
 def _rewrite_group(paths: List[Path], state: str, counts: Dict[str, int]) -> bool:
@@ -456,7 +470,8 @@ def _drop_context_entry(path: Path, state: str) -> str:
         try:
             data = json.loads(data_files.decrypt_bytes(raw).decode("utf-8"))
         except Exception:
-            return "key_missing" if _file_key_missing() else "unreadable"
+            return "key_missing" if data_files.is_encrypted(raw) and _file_key_missing() \
+                else "unreadable"
         if _state_digest(data) != state:
             return "changed"
         data["runtime_state"]["providers"].pop("context", None)

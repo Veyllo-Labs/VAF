@@ -24,6 +24,7 @@ MUTATIONS, each turns the named tests red:
 - run without consulting the done flag -> the runs-once test;
 - set the done flag although a rewrite failed -> the without-the-journal test;
 - set it although the key was not there -> both key tests;
+- ask for the key about a chat that is not ciphertext -> the plaintext-installation test;
 - hold it open for a chat broken under the present key -> the broken-chat test;
 - no journal before the first write of a group -> the crash test;
 - rewrite a group whose journal could not be written -> the without-the-journal test;
@@ -386,6 +387,29 @@ def test_a_chat_broken_under_the_present_key_is_left_alone_and_does_not_hold_the
     assert report["context_copies"]["dropped"] == 2
     assert broken.read_bytes() == raw
     assert _done() is True, "one broken chat held the repair open for every later start"
+
+
+def test_a_plaintext_installation_is_never_handed_a_key(store, monkeypatch):
+    """With encryption off nothing asks for the file-store key, and a chat that fails to
+    parse must not either: `_key()` mints a key on an installation that has none, with a
+    keyring and a recovery note. Only bytes that are ciphertext may ask whether their key is
+    there."""
+    Config.CONFIG_FILE.write_text(json.dumps({"file_encryption_enabled": False}),
+                                  encoding="utf-8")
+    origin = _chat(store, "red654321", _runtime_state("owner"), encrypt=False)
+    copy = _chat(store, "green123456", _runtime_state("owner"), scope=OTHER_SCOPE, encrypt=False)
+    broken = store / "web-broken.json"
+    broken.write_text("{not json", encoding="utf-8")
+    asked, real_key = [], data_files._key
+    monkeypatch.setattr(data_files, "_key", lambda: asked.append(True) or real_key())
+
+    report = _start()
+
+    assert report["context_copies"]["unreadable"] == 1 and report["context_copies"]["dropped"] == 2
+    assert at_rest_migration._drop_context_entry(broken, "any") == "unreadable"
+    assert asked == [], "the repair asked for a file-store key on a plaintext installation"
+    assert not data_files.is_encrypted(origin.read_bytes()) and not _holds_state(copy)
+    assert _done() is True
 
 
 def test_a_key_that_is_not_there_yet_leaves_the_repair_open(store, monkeypatch):

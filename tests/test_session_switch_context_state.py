@@ -29,8 +29,12 @@ MUTATIONS, each turns the named tests red:
   working memory, the caller's identity) -> the failed-switch test;
 - M10 reset on a rebuild of the same chat too -> the same-chat test;
 - M11 restore the saved snapshot on a rebuild of the same chat -> the newer-live-state test;
-- M12 the runner runs the turn after a failed load, or does not answer it -> the two
-  failed-load tests;
+- M12 the runner runs the turn after a failed load, does not answer it, or keeps a stop
+  request meant for it -> the two failed-load tests;
+- M13 a turn on an empty history without starting a conversation, or the fail-closed
+  branch without the reset -> the failed-switch test;
+- M14 the drain's notice to the agent's current session, or out without one -> the
+  sub-agent-notice test;
 - M5 reset after `SessionManager.load` -> the account test's second half;
 - M6 declare the session after `init_chat` again -> the system message test;
 - M7 reset by building a new `ContextManager` -> the init_chat test;
@@ -120,11 +124,12 @@ class _Provider:
     """Records every request, the main call (it carries tools) and every side call alike."""
 
     def __init__(self, answer="Gern."):
-        self.answer, self.texts = answer, []
+        self.answer, self.texts, self.main = answer, [], []
 
     def __call__(self, messages=None, **kw):
         self.texts.append(json.dumps(messages or [], ensure_ascii=False, default=str))
         if kw.get("tools"):
+            self.main.append(messages or [])
             yield self.answer
             return
         yield "no"
@@ -311,6 +316,8 @@ def test_a_switch_that_fails_holds_no_chat(make_agent, monkeypatch):
     from vaf.core.subagent_ipc import get_current_session_id
 
     _seed(OTHER_NEW_SESSION, scope=OTHER_SCOPE)
+    _seed(OTHER_OWN_SESSION, scope=OTHER_SCOPE, runtime_state=_context_runtime_state(OTHER_TAG),
+          messages=[("user", "Plane die Reise"), ("assistant", "Gern.")])
     agent = make_agent()
     agent.load_session_context(OWNER_SESSION)
     assert any("Handyvertrag" in str(m.get("content")) for m in agent.history)
@@ -324,9 +331,11 @@ def test_a_switch_that_fails_holds_no_chat(make_agent, monkeypatch):
     bind_identity(agent, caller)
     monkeypatch.setattr(agent, "init_chat", broken)
     with pytest.raises(RuntimeError):
-        agent.load_session_context(OTHER_NEW_SESSION)
+        # The target has a saved state, which the load restores before the prompt fails.
+        agent.load_session_context(OTHER_OWN_SESSION)
 
     assert agent.history == [], "the failed switch kept the previous chat's history"
+    assert _empty(agent.context_manager), "the failed target's restored state survived"
     assert agent.current_session_id is None, "the failed switch still claims the new chat"
     assert get_current_session_id() is None and agent._dispatch_session_id() is None, \
         "a tool dispatched now would run under the chat that failed to load"
@@ -334,7 +343,16 @@ def test_a_switch_that_fails_holds_no_chat(make_agent, monkeypatch):
     assert (agent._current_user_scope_id, agent._current_username) == (CALLER_SCOPE, "carol"), \
         "the identity is not the one the caller bound"
 
+    # A caller that catches the failure and goes on (the thinking run, the terminal app's
+    # switch) still sends its turn with a system prompt, and with nothing of either chat.
     monkeypatch.setattr(agent, "init_chat", real_init_chat)
+    provider = _turn(agent)
+    first = provider.main[0][0]
+    assert first["role"] == "system" and "| home:" in first["content"], \
+        "the turn after a failed load went out without the system prompt"
+    assert not _carried("\n".join(provider.texts)) and not _carried("\n".join(provider.texts),
+                                                                       OTHER_TAG)
+
     agent.load_session_context(OTHER_NEW_SESSION)
     assert agent.current_session_id == OTHER_NEW_SESSION
     assert agent.history[0]["role"] == "system"
@@ -425,7 +443,39 @@ def test_the_runner_runs_no_turn_on_a_chat_that_did_not_load():
     failed = loop.split('print(f"[Headless] Failed to load session context: {e}")', 1)[1]
     branch = failed.split("# Process Input", 1)[0]
     assert "answer_failed_load(task, e)" in branch
-    assert "continue" in branch.split("answer_failed_load(task, e)", 1)[1]
+    after = branch.split("answer_failed_load(task, e)", 1)[1]
+    assert "continue" in after
+    # task_done keeps stop requests; one meant for this turn would stop the next one.
+    assert after.index("tq.clear_stop(task.session_id)") < after.index("continue")
+
+
+def test_a_sub_agent_result_that_cannot_be_summarized_tells_only_its_own_chat(monkeypatch):
+    """After a load that failed closed the agent names no current session, and an emit
+    without one goes to every connection. MUTATION: send the notice to the agent's current
+    session again, or let the notice out without a session - red."""
+    import inspect
+
+    import vaf.core.headless_runner as hr
+
+    sent = []
+
+    class _Web:
+        def emit_agent_message(self, role, content, session_id=None):
+            sent.append(("message", session_id))
+
+        def emit_message_complete(self, content="", session_id=None):
+            sent.append(("complete", session_id))
+
+    monkeypatch.setattr(hr, "get_web_interface", lambda: _Web())
+    hr.drain_failure_notice(None, RuntimeError("load failed"))
+    assert sent == [], "a notice without a chat went to every connection"
+    hr.drain_failure_notice(OTHER_NEW_SESSION, RuntimeError("load failed"))
+    assert sent == [("message", OTHER_NEW_SESSION), ("complete", OTHER_NEW_SESSION)]
+
+    loop = inspect.getsource(hr.run_headless_agent).replace("\r\n", "\n")
+    assert "drain_failure_notice(_drain_session, e)" in loop
+    assert ('session_id = result_task.session_id or getattr(agent, "current_session_id", None)\n'
+            '                                _drain_session = session_id\n') in loop
 
 
 def test_init_chat_starts_a_fresh_conversation_unless_told_to_keep_it(make_agent):

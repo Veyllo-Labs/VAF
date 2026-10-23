@@ -381,7 +381,10 @@ def answer_failed_load(task, error) -> None:
     to store the exchange in. Storing it anyway could replace a chat file that did not
     load because it could not be read, which is still recoverable. The web UI gets the
     error in the chat's timeline and its turn closed; a messenger gets the usual failure
-    reply (`_send_turn_error_reply`, the fixed sentence for a contact). Never raises."""
+    reply (`_send_turn_error_reply`, the fixed sentence for a contact). Never raises.
+
+    NAMED BOUNDARY: a contact gets that sentence in English. The runner pins the contact's
+    record, which carries the language, only after the load, so none is passed here."""
     try:
         get_web_interface().log(
             f"The chat could not be loaded for session {task.session_id}: {error}",
@@ -393,6 +396,21 @@ def answer_failed_load(task, error) -> None:
     except Exception:
         pass
     _send_turn_error_reply(task, error)
+
+
+def drain_failure_notice(session_id, error) -> None:
+    """Tell the chat whose sub-agent result could not be summarized, so its browser is not
+    left waiting. Only that chat: an emit without a session goes to every connection
+    (`web_interface._push_session_update`), and after a load that failed closed the agent
+    names no current session any more. No chat known, nobody is told. Never raises."""
+    if not session_id:
+        return
+    try:
+        msg = f"Sub-Agent completed - summary could not be generated ({type(error).__name__})."
+        get_web_interface().emit_agent_message("assistant", msg, session_id=session_id)
+        get_web_interface().emit_message_complete(content=msg, session_id=session_id)
+    except Exception:
+        pass
 
 
 def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=None,
@@ -1514,6 +1532,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         # does not run (answer_failed_load). A command still runs: it is no
                         # turn on that chat, and LOAD_SESSION loads the chat it names itself.
                         answer_failed_load(task, e)
+                        # A stop requested for this turn ends with it. task_done keeps stop
+                        # requests, and only the turn's own check further down consumes one;
+                        # left standing, it would stop the session's next turn instead.
+                        tq.clear_stop(task.session_id)
                         try:
                             tq.task_done(task=task)
                         except Exception:
@@ -3406,6 +3428,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                 if _pushed or (now - last_subagent_check >= 1.0):
                     last_subagent_check = now
                     _drain_claims = set()
+                    _drain_session = None   # the chat whose result is being processed
                     try:
                         # Drain EVERY session's results here (not just the runner's stale
                         # "current" one) — each is routed by its own session_id below via
@@ -3432,6 +3455,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             for result_task in pending_results:
                                 # Ensure agent context is aligned with result session
                                 session_id = result_task.session_id or getattr(agent, "current_session_id", None)
+                                _drain_session = session_id
                                 if session_id:
                                     agent.load_session_context(session_id)
                                     subagent_last_activity[session_id] = now
@@ -3803,13 +3827,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         import traceback as _tb
                         print(f"[Headless] Sub-agent result processing error: {e}")
                         # Emit a fallback notification so the browser is not left waiting
-                        try:
-                            _fb_sid = getattr(agent, "current_session_id", None)
-                            _fb_msg = f"Sub-Agent completed — summary could not be generated ({type(e).__name__})."
-                            get_web_interface().emit_agent_message("assistant", _fb_msg, session_id=_fb_sid)
-                            get_web_interface().emit_message_complete(content=_fb_msg, session_id=_fb_sid)
-                        except Exception:
-                            pass
+                        drain_failure_notice(_drain_session, e)
                     finally:
                         # Always release drain claims so a skipped/failed pass can never
                         # deadlock the session's queued chat turns.

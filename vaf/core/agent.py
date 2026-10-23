@@ -5652,12 +5652,14 @@ class Agent:
             # Fail closed. The target is already declared, so a load that dies here would
             # leave the agent claiming the new chat while it holds the previous chat's
             # history (another account's, on a runner worker), and every later load of
-            # that chat would return early on the claim. So it holds no history, claims no
-            # session (neither the attribute nor the context variable, which the tool
-            # dispatch reads first) and has no working memory bound; the identity is the
+            # that chat would return early on the claim. So it holds no history and no context
+            # state (the target's may already be restored), claims no session (neither the
+            # attribute nor the context variable, which the tool dispatch reads first) and has
+            # no working memory bound; the identity is the
             # one the caller bound, not the owner the target's file named. The next load
             # rebuilds; the runner answers the turn as failed and does not run it.
             self.history = []
+            self._reset_chat_state()
             self.current_session_id = None
             set_current_session_id(None)
             self.main_persistence = None
@@ -5677,9 +5679,10 @@ class Agent:
         # The restore only touches the providers a snapshot carries, and a chat without
         # one (no file yet, a file the web wrote without runtime_state, a runtime_state
         # holding only sidebar documents) used to keep whatever the previous chat left.
-        # The same chat keeps its state, the live one: a terminal chat stores no snapshot,
-        # so a reset would lose its summary to every background append, and the load below
-        # does not restore a chat's saved state over its newer live one either.
+        # The same chat keeps its live provider state (the context state and any other
+        # provider registered): a terminal chat stores no snapshot, so a reset would lose its
+        # summary to every background append, and the load below does not restore a chat's
+        # saved snapshot over its newer live state either.
         #
         # NAMED BOUNDARY: `_broadcast_context_status`, which ends every load and every
         # turn, reloads the session with the state registry and so still restores its
@@ -9715,6 +9718,15 @@ class Agent:
         with no open item sent a run into a 12-turn retry loop.
         """
         from vaf.cli.ui import UI
+        # An agent that holds no conversation starts one: a turn on an empty history would go
+        # out without the system message (no identity, no rules, no Front Office block), since
+        # the per-turn rebuild below only replaces one that is already there. That is the state
+        # a load that failed closed leaves, and four lanes catch that failure and go on to a
+        # turn (the thinking run, the terminal app's session switch, the classic terminal
+        # lanes); an embedder that never called init_chat gets the same. Only an EMPTY history:
+        # one an embedder built without a system message is theirs and stays as it is.
+        if not getattr(self, "history", None):
+            self.init_chat()
         # A credential forgotten in an earlier turn leaves the history before anything of this
         # turn is built from it: the signed replay blocks the last turn still needed, and
         # anything said after the store call. Here and not at the turn's end, because a turn

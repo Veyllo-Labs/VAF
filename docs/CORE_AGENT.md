@@ -60,7 +60,10 @@ agent.shutdown()       # idempotent cleanup; safe to call manually
   reach the model on every turn. `keep_chat_state=True` rebuilds the prompt for the
   SAME conversation and leaves that state alone; the engine uses it in exactly two
   places, `load_session_context` after it restored the session's own state, and
-  `reload_local_model`, which re-attaches the history. The
+  `reload_local_model`, which re-attaches the history. A `chat_step` on an agent that
+  holds no conversation (an empty history: `init_chat` never called, or a load that
+  failed closed) runs `init_chat()` first, so no turn goes out without the system
+  prompt; a history you built without a system message is left as it is. The
   `VAF.md` section is resolved again on every turn (`_project_context_block`):
   from the cwd upward when no chat source is set (a terminal, an embedder), and
   in VAF's runner (web, messaging channels; it sets `_current_chat_source`)
@@ -315,12 +318,13 @@ still runs a hidden tool, but never one outside the allowed set.
   session metadata, re-inits the prompt, and replays messages preserving tool-call
   linkage. A session without saved context state (no file yet, a new chat) carries
   nothing of the chat the agent served before. A rebuild of the session the agent is
-  already on is the same conversation: the loader neither resets its live context
-  state nor restores the saved one over it. (The context broadcast that ends every load
+  already on is the same conversation: the loader neither resets its live provider
+  state (the context state and any other registered provider) nor restores the saved
+  snapshot over it. (The context broadcast that ends every load
   and every turn still reloads the session with the state registry, so a session WITH a
   saved snapshot gets that snapshot back; the boundary is named in `_enter_session`.)
   If the load raises after the session was declared, the agent fails closed: no
-  history, no current session (neither `current_session_id` nor the session context
+  history, no context state, no current session (neither `current_session_id` nor the session context
   variable the tool dispatch reads first), no working memory bound, and the identity
   the caller bound before the load rather than the one the target's file named. The
   next call rebuilds rather than returning early on a chat it never loaded.

@@ -508,8 +508,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
     to VAF last. It now runs as the owner of the chat it is written into, not at all for a
     chat that was deleted meanwhile, and a summary for work that belongs to no chat is no
     longer shown in every open browser. When work for several chats finishes at the same
-    time, one summary still covers all of it, in the last of those chats; that is not
-    separated yet.
+    time, each chat gets its own summary with only its own results; before, one summary in
+    the last of those chats covered all of it, another account's results included.
   - The tools used in one chat were offered in the next one, another account's included.
 
   `vaf run --web`, which serves the web app from the terminal, is not covered yet. Restart VAF

@@ -87,10 +87,11 @@ active **push**, modelled on the harness `<task-notification>`:
   (`_drain_turn_binding`, `vaf/core/turn_binding.py`); it used to run with the role and the
   source the last queued turn left on the shared agent. Each result's own side effects (its
   window update and its `subagent_output`) go to the chat its record names (`_result_chat`).
-  NAMED BOUNDARY: one drain pass writes ONE summary turn for every result it took, so when
-  results of several chats finish in the same pass (common, because the drain waits for the
-  queue lane), all their texts are in that one turn, on the last result's chat and bound as its
-  owner. One summary per chat is not built yet.
+  One drain pass takes the results of ONE chat and writes one summary turn for them; results
+  of other chats are not consumed and stay pending for the next pass (a second later, or at
+  the next push). Before, a pass took every chat's results and wrote all their texts into one
+  summary on the last result's chat, bound as its owner, so one account could read another's
+  results.
 - A result that names no session (started in an agent room's turn, which carries the room
   instead, or by a scheduled automation) is delivered into no chat. The drain leaves it pending,
   logged once as `[DRAIN] no chat for this result`, and shows its running state in no chat's

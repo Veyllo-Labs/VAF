@@ -3525,13 +3525,24 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         # + summary chat_step would race a worker's concurrent chat turn on the
                         # same session (parallel_main_workers>1). A busy session's results stay
                         # pending and are picked up on a later pass once it frees up.
+                        # One chat per pass: the summary turn below is bound to ONE chat's
+                        # owner, so another chat's result text must never enter its prompt.
+                        # Results of two chats that finished together went into one summary
+                        # in the last one's chat, as its owner, another account's included.
+                        # The other chats' results are not consumed here (only
+                        # _process_subagent_result consumes) and stay pending for the next
+                        # pass, a second later or at the next push.
                         if pending_results:
                             _kept_results = []
+                            _pass_chat = None
                             for _rt in pending_results:
                                 _rs = str(_rt.session_id or "")
+                                if _pass_chat is not None and _rs != _pass_chat:
+                                    continue
                                 if _rs in _drain_claims or tq.try_claim_session(_rs):
                                     if _rs:
                                         _drain_claims.add(_rs)
+                                    _pass_chat = _rs
                                     _kept_results.append(_rt)
                             pending_results = _kept_results
                         if pending_results:
@@ -3674,12 +3685,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             # (_drain_turn_binding). No chat known: no summary turn, because a
                             # reply emitted without a session reaches every connected browser.
                             # A chat that is gone, or an account without access, gets none.
-                            # NAMED BOUNDARY: one pass writes ONE summary turn for every result
-                            # it took. When results of several chats finish in the same pass,
-                            # all their texts are in that one turn, on the last result's chat
-                            # and bound as its owner; each result's own window and output
-                            # pushes still go to its own chat. One summary per chat is not
-                            # built yet.
+                            # The pass took one chat's results (above), so this one summary
+                            # turn carries that chat's results only.
                             _drain_bound = False
                             if found_results_text or any_needs_retry:
                                 _drain_sid = _drain_session

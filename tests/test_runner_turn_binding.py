@@ -592,6 +592,32 @@ def test_the_summary_runs_on_the_results_chat_whatever_the_agent_holds(world, mo
         "the summary ran on the chat the agent was moved to")
 
 
+def test_one_drain_pass_summarizes_one_chat(world, monkeypatch):
+    """Results of two accounts' chats finish together: each chat gets its own summary turn, as
+    its owner, with its own result only; the other result waits, unconsumed, for the next pass
+    (here woken by a push each time). Before, one pass wrote both texts into one summary on the
+    last result's chat. MUTATION: drop the one-chat-per-pass gate in the drain - red."""
+    import vaf.core.headless_runner as hr
+    from vaf.core.subagent_ipc import get_ipc
+    agent = world.make()
+    provider = _DrainProvider(agent)
+    monkeypatch.setattr(hr, "take_result_notification", lambda: True)
+
+    def _both_finish():
+        _finished(OWNER_SESSION, "OWN7QRESULT the contract summary is ready")
+        _finished(BOB_SESSION, "BOB7QRESULT the forecast is ready")
+
+    _run_loop(monkeypatch, agent, [_task(OWNER_SESSION, OWNER, "Wann endet der Vertrag?")],
+              _both_finish, provider)
+
+    assert not get_ipc().get_pending_results(), "a result was never summarized"
+    assert not [t for t in provider.texts if "OWN7QRESULT" in t and "BOB7QRESULT" in t], (
+        "one summary turn carried both chats' results")
+    assert any("OWN7QRESULT" in t for t in provider.texts)
+    assert any("BOB7QRESULT" in t for t in provider.texts)
+    assert (BOB_SCOPE, None, BOB_SESSION) in provider.seen[1:]
+
+
 def test_an_open_rooms_working_memory_outlives_a_quiet_weekend(world):
     """The collector ages a room's store out only once its room is closed or gone: an open room
     that was quiet longer than `gc_max_age_hours` keeps its tasks and notes."""

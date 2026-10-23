@@ -23,12 +23,18 @@ MUTATIONS, each turns the named tests red:
 - read only `sessions/*.json` -> the archive test;
 - run without consulting the done flag -> the runs-once test;
 - set the done flag although a rewrite failed -> the without-the-journal test;
-- set it although a chat could not be read -> both unreadable tests;
+- set it although the key was not there -> both key tests;
+- hold it open for a chat broken under the present key -> the broken-chat test;
 - no journal before the first write of a group -> the crash test;
 - rewrite a group whose journal could not be written -> the without-the-journal test;
 - write the journal without encryption -> the crash test;
 - skip the journal at the next start -> the failed-rewrite and crash tests;
-- take a journal's file names without checking them -> the journal test;
+- take a journal's file names without `contained_path` -> the journal-names test (the
+  backslash case on any host);
+- stop at a journal that cannot be used instead of setting it aside -> the set-aside test;
+- set a journal aside while only the key is missing -> the journal-waits test;
+- the claim, the migration or the repair outside `CHAT_REWRITE_LOCK` -> the two overlap
+  tests;
 - drop without reading the file again -> the saved-since-the-scan test;
 - no lock around the repair -> the waits-for-it test;
 - the runner or a web lifespan without the repair before its first turn -> the wiring test;
@@ -97,17 +103,19 @@ def store(tmp_path, monkeypatch):
     return sessions
 
 
-def _chat(directory, session_id, runtime_state, *, scope=OWNER_SCOPE):
-    """A chat file as SessionManager writes it, encrypted, dated in the past."""
+def _chat(directory, session_id, runtime_state, *, scope=OWNER_SCOPE, encrypt=True):
+    """A chat file as SessionManager writes it, encrypted unless told, dated in the past;
+    `scope=None` is a chat from before scope stamping."""
     session = Session(id=session_id, name=session_id)
-    session.metadata["user_scope_id"] = scope
+    if scope:
+        session.metadata["user_scope_id"] = scope
     session.add_message(role="user", content=f"hello from {session_id}")
     session.add_message(role="assistant", content="Gern.")
     session.runtime_state = runtime_state
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{session_id}.json"
     data_files.write_bytes_atomic(path, json.dumps(session.to_dict(), indent=2).encode("utf-8"),
-                                  encrypt=True)
+                                  encrypt=encrypt)
     os.utime(path, ns=(PAST_NS, PAST_NS))
     return path
 
@@ -276,19 +284,77 @@ def test_no_chat_is_rewritten_without_the_journal(store, monkeypatch):
     assert _done() is False
 
 
-def test_a_journal_never_reaches_past_the_chats(store):
-    """The journal names the chats it still has to finish. A name that leaves the chat
-    store is refused, and the repair stays open rather than guess at the group."""
+def _set_aside(store):
+    return sorted(at_rest_migration._journal_path().parent.glob("context_repair.unusable-*.json"))
+
+
+@pytest.mark.parametrize("name", ["../../outside.json", "..\\..\\outside.json", "absolute"])
+def test_a_journal_never_reaches_past_the_chats(store, name):
+    """The journal names the chats it still has to finish, inside the sessions folder. A
+    name that leaves it is refused in either separator convention (a backslash walks out
+    on Windows only, so the check must not depend on the host) and as an absolute path;
+    the journal is set aside and the full scan runs instead."""
     outside = _chat(store.parent.parent, "outside", _runtime_state("owner"))
     state = at_rest_migration._state_digest(_read(outside))
-    at_rest_migration._write_journal(state, ["sessions/../../outside.json"])
+    at_rest_migration._write_journal(state, [str(outside) if name == "absolute" else name])
     raw = outside.read_bytes()
 
-    report = _start()
+    _start()
 
-    assert outside.read_bytes() == raw
-    assert report["context_copies"]["unreadable"] == 1
-    assert _done() is False
+    assert outside.read_bytes() == raw, "a journal name reached a file outside the chats"
+    assert len(_set_aside(store)) == 1 and not at_rest_migration._journal_path().exists()
+    assert _done() is True
+
+
+@pytest.mark.parametrize("kind", ["garbage", "plaintext_in_an_enforced_store", "foreign_format"])
+def test_a_journal_that_cannot_be_used_is_set_aside_and_the_scan_runs(store, kind):
+    """Only a key that is not there yet makes the repair wait. Any other journal it cannot
+    use would stop it at every start for good: a plaintext journal left while encryption
+    was off, read after the store was enforced, is the realistic way in."""
+    origin = _chat(store, "red654321", _runtime_state("owner"))
+    copy = _chat(store, "green123456", _runtime_state("owner"), scope=OTHER_SCOPE)
+    journal = at_rest_migration._journal_path()
+    journal.parent.mkdir(parents=True, exist_ok=True)
+    if kind == "garbage":
+        journal.write_bytes(data_files.FILE_MAGIC + b"\x01" * 48)
+    elif kind == "foreign_format":
+        data_files.write_json_atomic(journal, {"format": "ctxrepair-9-000000", "state": "x",
+                                               "chats": []})
+    else:
+        journal.write_text(json.dumps({"format": at_rest_migration.CONTEXT_REPAIR_FORMAT,
+                                       "state": "x", "chats": []}), encoding="utf-8")
+        Config.CONFIG_FILE.write_text(json.dumps({"allow_plaintext_at_rest": False}),
+                                      encoding="utf-8")
+    before = journal.read_bytes()
+
+    _start()
+
+    assert [p.read_bytes() for p in _set_aside(store)] == [before], "the journal was not kept aside"
+    assert not _holds_state(origin) and not _holds_state(copy), "the scan did not run"
+    assert _done() is True
+
+
+def test_a_journal_waits_while_the_key_is_not_there(store, monkeypatch):
+    """A journal that is ciphertext while the key cannot be opened is no broken journal:
+    it waits in place for the start where the key is back."""
+    origin = _chat(store, "red654321", _runtime_state("owner"))
+    copy = _chat(store, "green123456", _runtime_state("owner"), scope=OTHER_SCOPE)
+    state = at_rest_migration._state_digest(_read(origin))
+    at_rest_migration._write_journal(state, ["red654321.json", "green123456.json"])
+    real_key = data_files._key
+
+    def no_key():
+        raise RuntimeError("the keyring is locked")
+
+    monkeypatch.setattr(data_files, "_key", no_key)
+    report = _start()
+    assert report["context_copies"]["key_missing"] == 1 and _done() is False
+    assert at_rest_migration._journal_path().exists() and not _set_aside(store)
+
+    monkeypatch.setattr(data_files, "_key", real_key)
+    _start()
+    assert not _holds_state(origin) and not _holds_state(copy)
+    assert _done() is True and not at_rest_migration._journal_path().exists()
 
 
 def test_a_chat_saved_since_the_scan_is_not_overwritten(store):
@@ -304,30 +370,27 @@ def test_a_chat_saved_since_the_scan_is_not_overwritten(store):
     assert path.read_bytes() == raw
 
 
-def test_an_unreadable_chat_is_never_written_and_leaves_the_repair_open(store):
-    """A chat whose key the ring does not hold must stay recoverable: written over, it would
-    be lost for good. And it may be a copy, so the repair is not over while it is there."""
+def test_a_chat_broken_under_the_present_key_is_left_alone_and_does_not_hold_the_repair(store):
+    """A chat that cannot be read while the key is there is never written (it may still be
+    recoverable), and it does not keep the repair open: VAF cannot load it either, and a
+    repair held open by it would decrypt every chat at every start before the first turn."""
     _chat(store, "red654321", _runtime_state("owner"))
     _chat(store, "green123456", _runtime_state("owner"), scope=OTHER_SCOPE)
-    locked = store / "web-locked.json"
-    locked.write_bytes(data_files.FILE_MAGIC + b"\x00" * 64)
-    raw = locked.read_bytes()
+    broken = store / "web-broken.json"
+    broken.write_bytes(data_files.FILE_MAGIC + b"\x00" * 64)
+    raw = broken.read_bytes()
 
     report = _start()
 
     assert report["context_copies"]["unreadable"] == 1
     assert report["context_copies"]["dropped"] == 2
-    assert locked.read_bytes() == raw
-    assert _done() is False, "the repair was recorded as done with a chat it never read"
-
-    locked.unlink()
-    _start()
-    assert _done() is True
+    assert broken.read_bytes() == raw
+    assert _done() is True, "one broken chat held the repair open for every later start"
 
 
 def test_a_key_that_is_not_there_yet_leaves_the_repair_open(store, monkeypatch):
-    """At a start where the file-store key cannot be opened, every chat is unreadable. The
-    repair must not count that as done, or the copies come back with the key."""
+    """At a start where the file-store key cannot be opened, no chat can be read. The repair
+    must not count that as done, or the copies come back with the key."""
     origin = _chat(store, "red654321", _runtime_state("owner"))
     copy = _chat(store, "green123456", _runtime_state("owner"), scope=OTHER_SCOPE)
 
@@ -337,12 +400,82 @@ def test_a_key_that_is_not_there_yet_leaves_the_repair_open(store, monkeypatch):
     real_key = data_files._key
     monkeypatch.setattr(data_files, "_key", no_key)
     report = _start()
-    assert report["context_copies"]["unreadable"] == 2 and _done() is False
+    assert report["context_copies"]["key_missing"] == 2 and _done() is False
 
     monkeypatch.setattr(data_files, "_key", real_key)
     _start()
     assert not _holds_state(origin) and not _holds_state(copy)
     assert _done() is True
+
+
+def test_the_claim_of_unscoped_chats_and_the_repair_never_overlap(store, monkeypatch):
+    """Both read a chat and write it back later. Interleaved, the claim wrote its older copy
+    over the repair (the shared state back for good, the done flag already set), or the
+    repair over the claim (an unscoped chat listed to every account again)."""
+    from vaf.core.session import SessionManager
+
+    unscoped = _chat(store, "web-unscoped", _runtime_state("owner"), scope=None)
+    scoped = _chat(store, "green123456", _runtime_state("owner"), scope=OTHER_SCOPE)
+    real_load, held, go = SessionManager.load, threading.Event(), threading.Event()
+
+    def load(self, session_id, *a, **kw):
+        session = real_load(self, session_id, *a, **kw)
+        if session_id == "web-unscoped" and threading.current_thread().name == "claim":
+            held.set()
+            go.wait(5)
+        return session
+
+    monkeypatch.setattr(SessionManager, "load", load)
+    claim = threading.Thread(target=SessionManager(storage_dir=str(store)).claim_unscoped,
+                             args=(OWNER_SCOPE,), name="claim")
+    claim.start()
+    assert held.wait(5)
+    repair = threading.Thread(target=at_rest_migration.repair_context_copies_once)
+    repair.start()
+    repair.join(0.3)
+    try:
+        assert repair.is_alive(), "the repair ran while the claim held a chat it had read"
+    finally:
+        go.set()
+        claim.join(5)
+        repair.join(5)
+    data = _read(unscoped)
+    assert data["metadata"].get("user_scope_id") == OWNER_SCOPE, "the claim was undone"
+    assert "context" not in data["runtime_state"]["providers"], "the claim wrote the copy back"
+    assert not _holds_state(scoped)
+
+
+def test_the_at_rest_migration_and_the_repair_never_overlap(store, monkeypatch):
+    """The migration reads a plaintext chat and writes it back as ciphertext. A repair that
+    lands in between has its dropped copy written back by the migration's older bytes."""
+    plain = _chat(store, "web-plain", _runtime_state("owner"), encrypt=False)
+    other = _chat(store, "green123456", _runtime_state("owner"), scope=OTHER_SCOPE)
+    real, held, go = data_files.is_encrypted, threading.Event(), threading.Event()
+
+    def is_encrypted(data):
+        if (threading.current_thread().name == "migration" and data
+                and not data.startswith(data_files.FILE_MAGIC) and b"web-plain" in data):
+            held.set()
+            go.wait(5)
+        return real(data)
+
+    monkeypatch.setattr(data_files, "is_encrypted", is_encrypted)
+    migration = threading.Thread(target=at_rest_migration.run_once, kwargs={"force": True},
+                                 name="migration")
+    migration.start()
+    assert held.wait(5)
+    repair = threading.Thread(target=at_rest_migration.repair_context_copies_once)
+    repair.start()
+    repair.join(0.3)
+    try:
+        assert repair.is_alive(), "the repair ran while the migration held a chat it had read"
+    finally:
+        go.set()
+        migration.join(5)
+        repair.join(5)
+    assert data_files.is_encrypted(plain.read_bytes())
+    assert not _holds_state(plain), "the migration wrote the copy back"
+    assert not _holds_state(other)
 
 
 def test_the_repair_runs_once_and_the_others_wait_for_it(store, monkeypatch):
@@ -354,7 +487,8 @@ def test_the_repair_runs_once_and_the_others_wait_for_it(store, monkeypatch):
         calls.append(tree)
         started.set()
         release.wait(5)
-        return {"dropped": 0, "changed": 0, "gone": 0, "unreadable": 0, "failed": 0}
+        return {"dropped": 0, "changed": 0, "gone": 0, "unreadable": 0, "key_missing": 0,
+                "failed": 0}
 
     monkeypatch.setattr(at_rest_migration, "_drop_shared_context_state", slow_pass)
     first = threading.Thread(target=at_rest_migration.repair_context_copies_once)

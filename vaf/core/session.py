@@ -40,6 +40,18 @@ def _append_lock(session_id: str) -> threading.Lock:
         return _APPEND_LOCKS.setdefault(session_id, threading.Lock())
 
 
+#: Held by the start-up passes that rewrite chat files wholesale: the claim of unscoped
+#: chats (`SessionManager.claim_unscoped`), the at-rest migration of the chats and the
+#: context state repair (vaf/core/at_rest_migration.py). Each one reads a chat and writes
+#: it back later, so two of them interleaved write one's older copy over the other's
+#: change (measured: a claim undone, a dropped copy written back). They run at every
+#: start on different threads (the web startup, the second server of the TLS mode, the
+#: headless runner), and the order between them does not matter, only that they never
+#: overlap. Re-entrant, so a pass may call another under it. In-process only, like
+#: `_append_lock`.
+CHAT_REWRITE_LOCK = threading.RLock()
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # DATA CLASSES
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1405,6 +1417,10 @@ class SessionManager:
         scope = str(user_scope_id or "").strip()
         if not scope:
             return 0
+        with CHAT_REWRITE_LOCK:
+            return self._claim_unscoped(scope)
+
+    def _claim_unscoped(self, scope: str) -> int:
         claimed = 0
         seen = set()
         for p in sorted(self.storage_dir.glob("*.json*")):

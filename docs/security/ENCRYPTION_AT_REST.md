@@ -502,17 +502,23 @@ file time the chat list sorts by.
   rewritten, the group goes into a journal (`maintenance/context_repair.json` beside the
   config, encrypted like the stores). A start that finds a journal, after a crash or a
   write that failed, first finishes that group. Without it, the chats already rewritten
-  would leave the rest looking unique for good.
+  would leave the rest looking unique for good. A journal that cannot be used (broken, a
+  foreign format, a name outside the chats, a plaintext journal the enforced store
+  refuses) is moved aside as `context_repair.unusable-<time>.json`, with a warning, and
+  the full scan runs; only a key that is not available at this start makes it wait.
 - **Ciphertext stays ciphertext.** Each chat is read and written through the same seam as
   everything above, and a chat that was encrypted is written back encrypted even when
   `file_encryption_enabled` is off. A chat it cannot open is never written.
-- **No turn runs during it.** The headless runner waits for the repair before its first
-  task, and the web server before it answers or starts a scheduler, because a turn saved
-  between the repair's read and its write would be lost.
+- **No turn runs during it, and no other rewrite of the chats.** The headless runner
+  waits for the repair before its first task, and the web server before it answers or
+  starts a scheduler, because a turn saved between the repair's read and its write would
+  be lost. The claim of unscoped chats and the migration above hold the same lock as the
+  repair, so none of the three writes one chat's older copy over another's change.
 - **Done only when nothing is left open.** `context_copy_sweep_done` records that the
-  repair ran. It stays `false` while a chat could not be rewritten or could not be read
-  (for example because the key was not available at that start), and the next start runs
-  the repair again.
+  repair ran. It stays `false` while a chat could not be rewritten, or could not be
+  opened because the file-store key was not available at that start, and the next start
+  runs the repair again. A chat that cannot be read while the key is there is left as
+  it is and logged, and does not keep the repair open: VAF cannot load it either.
 
 **Downgrade:** `~/.vaf/config.json.pre-keyring.bak` is written once, before the
 first key is removed from config.json. Restoring it puts the keys back where an

@@ -16,12 +16,17 @@ the configuration, which is why they are static assertions.
 """
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 _REPO = Path(__file__).resolve().parent.parent
 _CI = _REPO / ".github" / "workflows" / "ci.yml"
 _RELEASE = _REPO / ".github" / "workflows" / "release.yml"
 _TSCONFIG = _REPO / "web" / "tsconfig.json"
+_NEXT_CONFIG = _REPO / "web" / "next.config.js"
 
 
 def test_ci_builds_the_frontend_on_all_three_operating_systems():
@@ -101,4 +106,48 @@ def test_the_release_gate_builds_the_frontend_before_publishing():
     assert re.search(r"needs:\s*release-web-build", gate), (
         "gate-and-release does not depend on the frontend build, so a red build would "
         "not stop the release"
+    )
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+def test_next_config_keeps_the_optimizer_off_and_the_build_reminder_out():
+    """Two settings in web/next.config.js are security and availability decisions,
+    and both are one edit away from being undone without anyone noticing.
+
+    The image optimizer: web/proxy.ts passes every /_next/ path without a session,
+    so with the optimizer on, /_next/image is an unauthenticated endpoint that decodes
+    any image it is pointed at (measured: 404 with it off, 200 with it on, no cookie).
+
+    The upgrade reminder of Next.js 16.4: under a coding agent's environment it
+    fetches the npm advisory list during `next build` and stops the build with exit 1
+    while the installed Next.js has an open advisory. VAF builds the frontend once at
+    start with the environment it was started from, so that stop leaves the web UI
+    down until someone rebuilds by hand.
+
+    The config is evaluated by node rather than read as text: a comment or a second
+    `images` key would fool a text match, the object node builds cannot be fooled.
+    """
+    # The path goes in as an argument, not inside the script: a Windows path's
+    # backslashes would be read as escapes in a JS string literal.
+    script = (
+        "const c = require(process.argv[1]);"
+        "console.log(JSON.stringify({"
+        "unoptimized: (c.images || {}).unoptimized,"
+        "agentUpgrade: (c.experimental || {}).agentUpgrade === undefined"
+        " ? 'unset' : (c.experimental || {}).agentUpgrade}));"
+    )
+    out = subprocess.run(
+        ["node", "-e", script, str(_NEXT_CONFIG)],
+        cwd=_NEXT_CONFIG.parent, capture_output=True, text=True, timeout=60,
+    )
+    assert out.returncode == 0, f"node could not evaluate web/next.config.js: {out.stderr}"
+    cfg = json.loads(out.stdout.strip().splitlines()[-1])
+    assert cfg["unoptimized"] is True, (
+        "images.unoptimized is no longer true: the image optimizer would answer on "
+        "/_next/image, which web/proxy.ts serves without a session check"
+    )
+    assert cfg["agentUpgrade"] is False, (
+        f"experimental.agentUpgrade is {cfg['agentUpgrade']!r}, not false: Next.js 16.4's "
+        "upgrade reminder can stop `next build` with exit 1 under an agent's environment, "
+        "and VAF's start-time build would leave the web UI down"
     )

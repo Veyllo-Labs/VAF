@@ -1127,10 +1127,15 @@ npm run build
 npm start
 ```
 
+`web/next.config.js` sets two things on purpose, and `tests/test_web_build_gates.py` pins both:
+
+- `images.unoptimized: true` keeps the image optimizer off, so `/_next/image` answers 404. `web/proxy.ts` lets every `/_next/` path through without a session, so switching the optimizer on would open an unauthenticated endpoint that decodes whatever image it is pointed at.
+- `experimental.agentUpgrade: false` turns off the upgrade reminder of Next.js 16.4. Under a coding agent's environment (`CLAUDECODE`, `CURSOR_AGENT`, `AI_AGENT` and others) it fetches the npm advisory list during `next build` and stops the build with exit 1 on its first run while the installed Next.js has an open advisory. VAF builds the frontend once at start, with the environment it was started from, so that stop would leave the web UI down. Advisories reach the repository through Dependabot instead.
+
 ### Frontend Dependencies
 
 See `web/package.json`:
-- `next`: 16.1.6
+- `next`: ^16.4.2
 - `react`: ^18
 - `lucide-react`: ^0.300.0 (icons)
 - `tailwind-merge`: ^2.2.0 (utility merging)

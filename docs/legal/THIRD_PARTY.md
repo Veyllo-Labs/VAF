@@ -195,27 +195,27 @@ VAF Web UI is itself licensed AGPL-3.0-or-later (per `web/package.json`).
 | @monaco-editor/react | ^4.7.0 | MIT |
 | chart.js | ^4.5.1 | MIT |
 | clsx | ^2.1.0 | MIT |
-| dompurify | ^3.4.16 | MPL-2.0 OR Apache-2.0 |
+| dompurify | ^3.4.17 | MPL-2.0 OR Apache-2.0 |
 | framer-motion | ^10.18.0 | MIT |
 | graphology | ^0.26.0 | MIT |
 | graphology-layout-forceatlas2 | ^0.10.1 | MIT |
 | html2pdf.js | ^0.14.0 | MIT |
 | lucide-react | ^0.300.0 | ISC |
-| mammoth | ^1.11.0 | BSD-2-Clause |
+| mammoth | ^1.12.1 | BSD-2-Clause |
 | marked | ^17.0.2 | MIT |
-| monaco-editor | ^0.55.1 | MIT |
-| next | ^16.3.8 | MIT |
-| next-intl | ^4.8.3 | MIT |
+| monaco-editor | ^0.56.0 | MIT |
+| next | ^16.4.2 | MIT |
+| next-intl | ^4.13.6 | MIT |
 | react | ^18 | MIT |
 | react-chartjs-2 | ^5.3.1 | MIT |
 | react-dom | ^18 | MIT |
 | react-markdown | ^10.1.0 | MIT |
-| react-pdf | ^10.3.0 | MIT |
+| react-pdf | ^10.4.1 | MIT |
 | reactflow | ^11.11.4 | MIT |
 | remark-gfm | ^4.0.1 | MIT |
 | sigma | ^3.0.3 | MIT |
 | tailwind-merge | ^2.2.0 | MIT |
-| zustand | ^5.0.10 | MIT |
+| zustand | ^5.0.15 | MIT |
 
 ### Build / dev tooling (devDependencies)
 | Package | Range | License |
@@ -223,13 +223,13 @@ VAF Web UI is itself licensed AGPL-3.0-or-later (per `web/package.json`).
 | @types/node | ^20 | MIT |
 | @types/react | ^18 | MIT |
 | @types/react-dom | ^18 | MIT |
-| autoprefixer | ^10.0.1 | MIT |
+| autoprefixer | ^10.5.4 | MIT |
 | eslint | ^9.39.2 | MIT |
 | eslint-config-next | ^16.3.8 | MIT |
-| postcss | ^8 | MIT |
+| postcss | ^8.5.23 | MIT |
 | tailwindcss | ^3.3.0 | MIT |
 | tailwindcss-animate | ^1.0.7 | MIT |
-| typescript | ^5 | Apache-2.0 |
+| typescript | ^6 | Apache-2.0 |
 
 Note: the `dev:insecure` script calls `cross-env` (MIT), which `web/package.json` does not
 declare; it is not part of any install and is listed here only so the script's use is on record.

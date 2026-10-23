@@ -135,7 +135,8 @@ Named boundaries:
 - An environment below the floor (a checkout updated without ``pip install -r
   requirements.txt``) serves a sans-I/O protocol that never makes a sender wait, and nothing
   at start detects it; its sign is the pin test and the sender-wait test going red. ``vaf
-  update`` and both installers install ``requirements.txt``.
+  update`` and both installers install ``requirements.txt`` (a server installs
+  ``requirements-headless.txt``, which carries the same floors).
 
 The limits are constants, not settings: they are the floor of the door, not a preference,
 and a config key's name is a security decision of its own.

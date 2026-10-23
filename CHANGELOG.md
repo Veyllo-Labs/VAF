@@ -523,7 +523,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   apt's recommendations, which brought pocketsphinx and GTK along. On Ubuntu 24.04 that is
   about 170 fewer system packages and about 1.1 GB less on disk. `vaf update` keeps the
   smaller set (`requirements-headless.txt`); an existing server keeps what it has, and
-  `docs/setup/SERVER_MODE.md` names how to remove it.
+  `docs/setup/SERVER_MODE.md` names how to remove it. On a desktop the installers still
+  install everything; only the start-up check no longer offers to install a missing tray or
+  terminal-microphone package itself (VAF then runs without the tray icon).
 - **The server service no longer calls sudo at every start.** The installed service cannot
   gain root (its systemd hardening rules that out), yet it tried to open the OS firewall at
   each start and the journal showed sudo refusing ("no new privileges flag is set"). It now

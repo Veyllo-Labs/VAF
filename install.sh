@@ -363,6 +363,7 @@ if [[ "$OS_TYPE" == "linux" ]]; then
     if [[ "$INSTALL_MODE" == "server" ]]; then
         SETUP_AUTOSTART=true
         SETUP_LAN=true
+        print_info "Server install: no tray icon, desktop window or terminal microphone (docs/setup/SERVER_MODE.md)"
     fi
 else
     if [[ "$INSTALL_MODE" == "server" ]]; then

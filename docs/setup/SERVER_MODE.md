@@ -89,11 +89,21 @@ venv/bin/python -m pip uninstall -y PySide6 PySide6_Addons PySide6_Essentials sh
 systemctl --user start vaf
 ```
 
-The system packages are shared with the rest of the machine, so remove them only when nothing
-else on it uses them: on Ubuntu, for example, `sudo apt-get remove portaudio19-dev python3-gi
-gir1.2-ayatanaappindicator3-0.1 gir1.2-webkit2-4.1 libgirepository1.0-dev libcairo2-dev
-pocketsphinx-en-us` and then `sudo apt-get autoremove` for what only those pulled in. Read the
-list apt prints before you confirm.
+A later `vaf update` does not bring them back: on a server it installs
+`requirements-headless.txt`.
+
+The system packages are shared with the rest of the machine, so let apt decide which of them
+nothing else needs. On Ubuntu, mark them as no longer wanted and let `autoremove` take only
+those that nothing installed still depends on:
+
+```bash
+sudo apt-mark auto portaudio19-dev gir1.2-ayatanaappindicator3-0.1 gir1.2-webkit2-4.1 \
+    libgirepository1.0-dev libcairo2-dev pocketsphinx-en-us
+sudo apt-get autoremove
+```
+
+`python3-gi` is left out on purpose: Ubuntu Server's own packages depend on it, and removing
+it takes the `ubuntu-server` package with it. Read the list apt prints before you confirm.
 
 ## On a rented server (VPS)
 

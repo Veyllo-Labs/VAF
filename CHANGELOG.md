@@ -457,8 +457,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   while VAF already treated the browser as free: another person's browser window (for example
   the one the first run had taken over, reopening on its own) got the browser in the middle of
   that run, with that person's logins and files, and a page check could open a page in it. A
-  run now holds the browser from the moment it queues until it ends, and one that gives up
-  waiting hands its place back.
+  run now holds the browser against everything else in the same part of VAF from the moment
+  it queues until it ends, and one that gives up waiting hands its place back. A page check
+  from another part of VAF can still slip in between two runs for a moment; the next run then
+  waits for it and cleans the browser before it starts. An interactive browser that was
+  still starting when a run began is now refused instead of opening under that run.
 
 - **Your own browser follows a proxy or timezone change.** A per-user browser kept the proxy,
   timezone and Safe Browsing key it was created with, so one created before you set a proxy

@@ -1700,45 +1700,63 @@ class InteractiveBrowserManager:
             append_domain_log("webui", f"[browser_interactive] cookie handover failed: {e}")
 
         with self._lock:
-            prev = self._lease
-            same_window = (prev is not None
-                           and prev.user_scope_id == user_scope_id
-                           and prev.session_id == session_id)
-            if same_window:
-                prev.save_enabled = save
-                prev.session_name = session_name
-                lease = prev
+            # The run check again, in the same lock step that installs the lease.
+            # start() checked at its top, and a run that began while this start
+            # was in its handover (seconds: the verified wipe) found no lease to
+            # evict - stop_for_agent_run reads the lease and counts itself under
+            # this same lock - and then drove under the lease installed here.
+            # Measured: the person kept a live ticket on the run's browser. Checked
+            # here, the run's count and this install cannot interleave.
+            refused_for_run = self._agent_runs > 0
+            stale_token = None
+            if refused_for_run:
+                if not had_lease:
+                    stale_token, self._lease_token = self._lease_token, None
             else:
-                if prev is not None and prev.session_id != session_id:
-                    # The old window's iframe dies with its ticket; tell it why.
-                    self._emit({"status": "stopped", "reason": "superseded",
-                                "saving": False, "streamPath": ""}, prev.session_id)
-                lease = InteractiveLease(
-                    user_scope_id=user_scope_id,
-                    session_id=session_id,
-                    save_enabled=save,
-                    session_name=session_name,
-                    ticket=secrets.token_urlsafe(24),
-                    started_at=time.time(),
-                    last_disconnect=time.time(),
-                )
-                self._lease = lease
-            self._last_session_id = session_id
-            # A fresh (or refreshed) lease supersedes any pending give-back
-            # from an earlier agent takeover: the browser has an owner again.
-            # The person returning also outdates any captured handover page.
-            self._pre_agent_holder = None
-            self._handover = None
-            # A stream is being handed out, so a viewer is about to draw its picture
-            # from scratch and will show its own splash while doing so. The count of
-            # what the PREVIOUS viewer received says nothing about that, and leaving
-            # it standing reported "picture is up" before a single pixel had arrived -
-            # which is how the foreign splash came back on every open after the first.
-            # Resetting here rather than only on the last disconnect makes it hold no
-            # matter how the window was closed.
-            lease.pixels_seen = 0
-            self._ensure_janitor()
-            payload = self._payload("active", lease=lease)
+                prev = self._lease
+                same_window = (prev is not None
+                               and prev.user_scope_id == user_scope_id
+                               and prev.session_id == session_id)
+                if same_window:
+                    prev.save_enabled = save
+                    prev.session_name = session_name
+                    lease = prev
+                else:
+                    if prev is not None and prev.session_id != session_id:
+                        # The old window's iframe dies with its ticket; tell it why.
+                        self._emit({"status": "stopped", "reason": "superseded",
+                                    "saving": False, "streamPath": ""}, prev.session_id)
+                    lease = InteractiveLease(
+                        user_scope_id=user_scope_id,
+                        session_id=session_id,
+                        save_enabled=save,
+                        session_name=session_name,
+                        ticket=secrets.token_urlsafe(24),
+                        started_at=time.time(),
+                        last_disconnect=time.time(),
+                    )
+                    self._lease = lease
+                self._last_session_id = session_id
+                # A fresh (or refreshed) lease supersedes any pending give-back
+                # from an earlier agent takeover: the browser has an owner again.
+                # The person returning also outdates any captured handover page.
+                self._pre_agent_holder = None
+                self._handover = None
+                # A stream is being handed out, so a viewer is about to draw its picture
+                # from scratch and will show its own splash while doing so. The count of
+                # what the PREVIOUS viewer received says nothing about that, and leaving
+                # it standing reported "picture is up" before a single pixel had arrived -
+                # which is how the foreign splash came back on every open after the first.
+                # Resetting here rather than only on the last disconnect makes it hold no
+                # matter how the window was closed.
+                lease.pixels_seen = 0
+                self._ensure_janitor()
+                payload = self._payload("active", lease=lease)
+        if refused_for_run:
+            # The record entry this start claimed goes back with it; the run's
+            # own handover finds this start's scope as the owner and wipes.
+            self._release_shared(stale_token)
+            return self._payload("agent_active", reason="agent_run")
         self._emit(payload, session_id)
         return payload
 
@@ -2148,13 +2166,34 @@ def _manager_for_run(container_name: Optional[str] = None) -> InteractiveBrowser
     an instance appeared later). That mismatch would clear `_agent_active` on a
     manager that never set it and leave the real one flagged forever, so every
     interactive start on that browser would be refused for the life of the
-    process. An unknown name answers with the shared manager - the same browser
-    the run itself falls back to."""
+    process. A pooled browser's manager exists because the run registered it
+    at its start (register_run_browser), before its first hook; an unknown name
+    therefore means the shared browser, which is also where a run without an
+    instance falls back to. Before that registration, a run on a pooled browser
+    nobody had opened since the start counted, evicted, wiped and mirrored on the
+    SHARED manager while it drove its own instance (measured: the shared run
+    count stayed at 1 for the life of the process once the pooled manager
+    appeared mid-run, and a spawned child was refused for a lease it never
+    touched)."""
     if container_name and container_name != "vaf-browser":
         mgr = peek_manager_for_container(container_name)
         if mgr is not None:
             return mgr
     return get_interactive_manager()
+
+
+def register_run_browser(instance) -> None:
+    """Hook for BrowserAgentTool.run(), right after the pool resolve and before
+    stop_for_agent_run: the manager of the pooled browser this run drives exists
+    from here on (`_manager_for_instance`), so every later hook addressed by its
+    container name lands on it, and the pool's reaper sees the run as activity.
+    No instance (the shared browser) is nothing to do. Never raises."""
+    if instance is None:
+        return
+    try:
+        _manager_for_instance(instance)
+    except Exception:
+        pass
 
 
 def get_manager_by_ticket(ticket: str) -> Optional[InteractiveBrowserManager]:

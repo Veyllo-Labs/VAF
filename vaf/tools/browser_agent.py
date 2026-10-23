@@ -1104,6 +1104,12 @@ class BrowserAgentTool(BaseTool):
         _cdp_base = (_endpoint.cdp_base if _endpoint
                      else _os.environ.get("VAF_BROWSER_CDP_URL", "http://localhost:9222"))
         _container = _endpoint.container_name if _endpoint else "vaf-browser"
+        # The pooled browser's manager, registered before the first hook: the hooks
+        # find a manager by container name, and one nobody had created yet sent
+        # them all to the shared browser while this run drove its own instance.
+        # In both lanes - a spawned child resolves and registers in its own process.
+        from vaf.core.browser_interactive import register_run_browser
+        register_run_browser(_endpoint)
 
         # Parsed BEFORE the eviction: the eviction counts this run as one of the
         # browser's runs until it ends, and an argument that does not parse must

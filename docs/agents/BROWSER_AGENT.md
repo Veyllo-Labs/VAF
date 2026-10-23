@@ -496,7 +496,12 @@ that browser that has evicted and not yet ended, a run queued at the concurrency
 included: with one flag, the end of the first of two queued runs cleared it while the
 second was about to drive, and another person's start (the evicted window resuming on
 its own) then got the browser under that run. A run whose gate times out gives its
-place back.
+place back. The count is checked when a start begins and again in the same step that
+installs its lease, so a start that was still in its handover (the wipe takes seconds)
+when a run began is refused too, instead of ending with a live lease under that run. A
+run on a pooled browser registers that browser's manager before it evicts, so its
+count, its handover and its end all land on that browser, even when nobody had opened
+it since VAF started.
 
 **A takeover of a live session is a HANDOVER, not a fresh start.** When the eviction
 found a person driving, the page they were on is captured (`_current_page`, HTTP target
@@ -1088,7 +1093,11 @@ run also reads its generation there, after the gate: a run stopped while its han
 still waits releases the claim when it lands, and a run that waited at the gate is
 never refused because the run ahead of it ended - a run ends before it lets the next
 one past the gate, and the queued run already counts as one of the browser's runs, so
-nobody else gets the browser in between.
+nobody else in this process gets the browser in between. Across processes there is a
+gap of milliseconds: the ending run releases its record entry, and the next run claims
+the browser only at its handover, so a page check from another process (a coder child)
+can take the browser in between; the next run then waits for that probe and wipes, as
+for any change of hands.
 Both orderings are pinned by `tests/test_browser_pool.py`. A per-user instance is exempt
 from the scope-change half entirely - its profile belongs to one person.
 

@@ -221,21 +221,23 @@ class JarRecord:
         from vaf.core.secure_store import _get_filelock_cls
         with _thread_lock:
             cls = _get_filelock_cls()
-            lock = None
-            if cls is not None:
-                try:
-                    lock = cls(str(self._path()) + ".lock", timeout=_LOCK_TIMEOUT_S)
-                    lock.acquire()
-                except Exception as e:
-                    raise JarRecordUnavailable(f"record lock not acquired: {e}") from e
+            if cls is None:
+                # filelock is a hard dependency; without it the record would be read
+                # and written with no cross-process exclusion at all, which is the
+                # record's whole point. Unavailable, so every caller fails closed.
+                raise JarRecordUnavailable("no cross-process lock (filelock is not importable)")
+            try:
+                lock = cls(str(self._path()) + ".lock", timeout=_LOCK_TIMEOUT_S)
+                lock.acquire()
+            except Exception as e:
+                raise JarRecordUnavailable(f"record lock not acquired: {e}") from e
             try:
                 yield
             finally:
-                if lock is not None:
-                    try:
-                        lock.release()
-                    except Exception:
-                        pass
+                try:
+                    lock.release()
+                except Exception:
+                    pass
 
     def _load(self, *, strict: bool) -> Dict[str, Any]:
         """The record. A missing file is an empty record. A file that exists but

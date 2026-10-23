@@ -756,9 +756,13 @@ partition:
   or any holder in another process answers busy): a lease or a run that started
   between its wipe and its navigation would otherwise get its jar restored under the
   page the probe reads. The same count refuses an interactive start while any run of
-  that browser is queued or driving; it used to be one flag, and the end of the first
-  of two queued runs cleared it, so the second drove while another person's start
-  and a probe were let in.
+  that browser is queued or driving - checked when the start begins and again in the
+  lock step that installs its lease, so a start still in its handover when a run
+  began is refused as well; it used to be one flag, and the end of the first of two
+  queued runs cleared it, so the second drove while another person's start and a
+  probe were let in. A run on a pooled browser registers that browser's manager
+  before its first hook, so it is counted on the browser it drives, never on the
+  shared one.
 - **Stream access is a per-lease ticket in the URL path** (`/api/browser-vnc/t/<ticket>/`),
   validated on every asset request and on the stream websocket, and dead the moment the
   lease ends. The path is auth-middleware-exempt for the same reason the A2A room seat

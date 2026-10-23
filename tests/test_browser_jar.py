@@ -843,3 +843,138 @@ def test_an_argument_that_does_not_parse_leaves_no_run_counted(box):
     with pytest.raises(ValueError):
         BrowserAgentTool().run(task="look it up", user_scope_id="scope-a", max_steps="many")
     assert box["web"]._agent_runs == 0
+
+
+_X_BROWSER = "vaf-browser-u-0123456789ab"
+
+
+def _pool_with_x(monkeypatch):
+    """The pool gives scope-x its own instance; nothing in this process has created
+    that instance's manager yet (nobody opened it since the start)."""
+    import vaf.core.browser_pool as bp
+
+    inst = bp.BrowserInstance(user_scope_id="scope-x", container_name=_X_BROWSER,
+                              cdp_base="http://127.0.0.1:49222", vnc_base="http://127.0.0.1:46901",
+                              last_used=time.time())
+
+    class _Pool:
+        def resolve(self, scope):
+            return inst if scope == "scope-x" else None
+
+    monkeypatch.setattr(bp, "get_browser_pool", lambda: _Pool())
+    monkeypatch.setattr(bi, "_pool_managers", {})
+    monkeypatch.setattr(bi.InteractiveBrowserManager, "_emit", lambda self, p, s: None)
+    monkeypatch.setattr(bi.InteractiveBrowserManager, "_ensure_janitor", lambda self: None)
+    return inst
+
+
+def _drive_and_look(seen, web):
+    """A stand-in for _run_browser: the same handover call, then a look at the
+    browsers while the run drives."""
+    async def _drive(self, **kw):
+        container = kw["container_name"]
+        bi.hand_jar_to_run(user_scope_id=kw["user_scope_id"], persistent=True,
+                           container_name=container,
+                           run_generation=bi.run_generation(container_name=container))
+        pooled = bi._pool_managers.get(container)
+        seen.update(container=container, shared_runs=web._agent_runs,
+                    pooled_runs=pooled._agent_runs if pooled else None,
+                    x_start=bi.get_manager_for_scope("scope-x").start("scope-x", "sess-x")["status"])
+        return "done"
+    return _drive
+
+
+def test_a_run_on_a_pooled_browser_nobody_opened_lands_on_that_browser(box, monkeypatch):
+    """X's run drives X's own instance, but no manager for it existed in this
+    process, so every hook fell back to the SHARED manager: it counted, evicted,
+    wiped and mirrored there, and once X opened the browser mid-run (creating the
+    pooled manager) the run's end went elsewhere and the shared count stayed at 1
+    for the life of the process. The run registers its browser's manager first.
+
+    MUTATION: drop the registration in run() - red."""
+    from vaf.tools.browser_agent import BrowserAgentTool
+
+    _pool_with_x(monkeypatch)
+    web = box["web"]
+    seen = {}
+    monkeypatch.setattr(BrowserAgentTool, "_run_browser", _drive_and_look(seen, web))
+    assert BrowserAgentTool().run(task="look it up", user_scope_id="scope-x") == "done"
+    assert seen["container"] == _X_BROWSER
+    assert seen["pooled_runs"] == 1 and seen["shared_runs"] == 0, seen
+    assert seen["x_start"] == "agent_active", "X's own browser opened under X's run"
+    assert web._agent_runs == 0 and bi._pool_managers[_X_BROWSER]._agent_runs == 0
+    path = bj._state_dir() / "vaf-browser.json"
+    assert not path.exists() or json.loads(path.read_bytes())["holders"] == []
+
+
+def test_a_spawned_step_on_its_own_browser_is_not_refused_for_a_shared_lease(box, monkeypatch):
+    """A workflow's browser step runs in a child process on the person's own
+    instance. With the hooks on the shared manager it claimed the SHARED browser
+    in the record and was refused whenever someone else held a lease there. The
+    child registers its browser's manager like any run.
+
+    MUTATION: drop the registration in run() - red."""
+    from vaf.tools.browser_agent import BrowserAgentTool
+
+    _pool_with_x(monkeypatch)
+    monkeypatch.setenv("VAF_IN_SUBAGENT_TERMINAL", "1")
+    box["procs"].table[OTHER] = 300.0
+    with box["procs"].be(OTHER):                 # Y's lease, in the web process
+        bj.record_for("vaf-browser").claim(bj.KIND_LEASE, "scope-y")
+    seen = {}
+    monkeypatch.setattr(BrowserAgentTool, "_run_browser", _drive_and_look(seen, box["web"]))
+    out = BrowserAgentTool().run(task="look it up", user_scope_id="scope-x")
+    assert out == "done", f"the step on its own browser was refused: {out}"
+    assert seen["container"] == _X_BROWSER and seen["shared_runs"] == 0
+
+
+def test_a_start_still_in_its_handover_when_a_run_begins_is_refused(box):
+    """start() checked for a run only at its top. A run that began while the start
+    was in its wipe found no lease to evict, waited for the start's handover, and
+    then drove with the person's lease live under it - a valid ticket on the run's
+    browser. The count is checked again in the lock step that installs the lease.
+
+    MUTATION: drop the check at the install - red."""
+    web = box["web"]
+    wiping, done = threading.Event(), threading.Event()
+    real_wipe = bi.verified_profile_wipe
+
+    def slow_wipe(name, cdp_base=""):
+        wiping.set()
+        time.sleep(0.5)
+        return real_wipe(name, cdp_base)
+
+    bi.verified_profile_wipe = slow_wipe
+    result = {}
+    try:
+        def y_start():
+            result.update(web.start("scope-y", "sess-y", save=False))
+            done.set()
+
+        t = threading.Thread(target=y_start)
+        t.start()
+        assert wiping.wait(5)
+        web.stop_for_agent_run()                  # run B begins mid-handover
+        bi.verified_profile_wipe = real_wipe
+        web.hand_jar_to_run(user_scope_id="scope-b", persistent=True,
+                            run_generation=web.run_generation())
+        t.join(5)
+        assert result.get("status") == "agent_active", result
+        assert web._lease is None and web._lease_token is None
+        data = json.loads((bj._state_dir() / "vaf-browser.json").read_bytes())
+        assert [h["kind"] for h in data["holders"]] == [bj.KIND_RUN], data["holders"]
+        web.agent_run_ended()
+    finally:
+        bi.verified_profile_wipe = real_wipe
+
+
+def test_without_a_cross_process_lock_the_record_is_unavailable(monkeypatch):
+    """filelock is a hard dependency; should it ever be missing the record must not
+    be read and written with no exclusion at all, so every caller fails closed.
+
+    MUTATION: go on without the lock - red."""
+    import vaf.core.secure_store as ss
+
+    monkeypatch.setattr(ss, "_get_filelock_cls", lambda: None)
+    with pytest.raises(bj.JarRecordUnavailable):
+        bj.record_for("vaf-browser").claim(bj.KIND_PROBE, "scope-a")

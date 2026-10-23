@@ -2704,11 +2704,12 @@ class Agent:
                 kind of learning.
 
                 Two things it must not inherit from the chat lane. The transcript is
-                handed over rather than read off the agent, because one process serves
-                every tenant and `agent.history` here holds whichever session was last
-                loaded - learning from that would teach one account another's
-                conversation. And the memories are stamped with this room as their
-                source, because a room is MULTI-VOICED: a fact can come from a foreign
+                handed over rather than read off the agent, because `agent.history` here
+                holds only this turn's conversation of its own (it starts empty every
+                turn, the runner's turn binding) while the room's conversation is its
+                frames, and one process serves every tenant. And the memories are
+                stamped with this room as their source, because a room is
+                MULTI-VOICED: a fact can come from a foreign
                 agent nobody here controls, and `delete_memories_by_source_scope` can
                 take back exactly what one room taught once it turns out to be wrong.
 
@@ -5717,7 +5718,7 @@ class Agent:
             # exists for: it answers "who owns this session", which is a different question
             # from "who is calling". Every lane whose caller identity is authoritative calls
             # reassert_identity() right after this returns (the facade, the thinking lane,
-            # the headless runner, the TUI's owner rebind).
+            # the headless runner's turn binding, the TUI's owner rebind).
             meta = getattr(session, "metadata", None) or {}
             self._current_user_scope_id = meta.get("user_scope_id")
             self._current_username = meta.get("username")

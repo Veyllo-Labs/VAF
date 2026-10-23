@@ -117,24 +117,27 @@ def test_the_wake_says_which_account_the_room_belongs_to(rooms):
         "a room turn must name the account whose room it is")
 
 
-def test_the_room_turn_is_bound_and_restored(rooms):
-    """MUTATION: run the turn without binding, or bind without restoring.
+def test_the_room_turn_is_bound_and_the_next_turn_binds_its_own(rooms):
+    """MUTATION: run the turn without binding, or let the drain run on what the room left.
 
-    Without the bind, the turn runs as whoever was there before. Without the restore,
-    the NEXT thing this loop does - a sub-agent drain, a summary, an automation -
-    inherits a tenant it was never given, which is the same leak one step later.
+    Without the bind, the turn runs as whoever was there before. Nothing is restored
+    afterwards (the binding is forward only, vaf/core/turn_binding.py): the NEXT turn this
+    loop runs - a sub-agent drain's summary - binds its own account before it starts, so it
+    can never inherit the room's tenant, which would be the same leak one step later.
     """
     src = (ROOT / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
     branch = src.split("_room_wake = agent.collect_room_wake", 1)[1].split(
         "_pushed = False", 1)[0]
 
-    assert "bind_identity(agent, room_identities[_room_scope])" in branch, (
-        "the room turn does not run as the account whose room it is")
-    assert branch.index("bind_identity(agent, room_identities[_room_scope])") \
-        < branch.index("agent.chat_step("), "bound after the turn is bound too late"
-    restore = branch.split("finally:", 1)[1]
-    assert "bind_identity(agent, _prev_identity)" in restore, (
-        "the previous identity is never put back")
+    bind = "bind_turn(agent, _room_turn_binding(_room_wake, room_identities[_room_scope]))"
+    assert bind in branch, "the room turn does not run as the account whose room it is"
+    assert branch.index(bind) < branch.index("agent.chat_step("), (
+        "bound after the turn is bound too late")
+    assert "end_turn(agent)" in branch.split("finally:", 1)[1], (
+        "the room's markers outlive its turn")
+    drain = src.split("_pushed = False", 1)[1]
+    assert drain.index("bind_turn(agent, _drain_turn_binding(") < drain.index(
+        "agent.chat_step("), "the drain's summary runs as whoever the room left bound"
     # The resolve is a database round trip; its own docstring says one per run is
     # affordable and one per call is not.
     assert "if _room_scope not in room_identities:" in branch, (

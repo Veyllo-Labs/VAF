@@ -10,6 +10,7 @@ import gc
 import re
 import logging
 import uuid
+from typing import NamedTuple
 
 # CRITICAL: Disable CUDA for PyTorch BEFORE any torch import to prevent memory explosion
 # PyTorch pre-allocates GPU memory even when using CPU-only models!
@@ -19,9 +20,10 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:32")
 import requests
 from vaf.core.agent import Agent
 from vaf.core.channels import CHAT_CHANNELS, CHAT_SESSION_PREFIXES
-from vaf.core.identity_binding import (Identity, bind_identity, identity_from_metadata,
-                                       reassert_identity, resolve_scope_identity)
+from vaf.core.identity_binding import (Identity, identity_from_metadata,
+                                       resolve_scope_identity)
 from vaf.core.task_queue import TaskQueue
+from vaf.core.turn_binding import TurnBinding, TurnRefused, bind_turn, end_turn
 from vaf.core.subagent_ipc import take_result_notification
 from vaf.core.session import (SessionManager, Session, TurnStatus, failed_turn_meta,
                               stored_turn_copy, turn_context_messages_since_last_user)
@@ -373,7 +375,7 @@ def _send_turn_error_reply(task, error, contact=None) -> None:
         pass
 
 
-def answer_failed_load(task, error) -> None:
+def answer_failed_load(task, error, contact=None) -> None:
     """Close a chat turn whose chat could not be loaded, the way a turn that raised is closed.
 
     The turn does not run. The agent holds no chat after a failed load
@@ -381,10 +383,9 @@ def answer_failed_load(task, error) -> None:
     to store the exchange in. Storing it anyway could replace a chat file that did not
     load because it could not be read, which is still recoverable. The web UI gets the
     error in the chat's timeline and its turn closed; a messenger gets the usual failure
-    reply (`_send_turn_error_reply`, the fixed sentence for a contact). Never raises.
-
-    NAMED BOUNDARY: a contact gets that sentence in English. The runner pins the contact's
-    record, which carries the language, only after the load, so none is passed here."""
+    reply (`_send_turn_error_reply`, the fixed sentence for a contact, in the language on
+    `contact`, the record the turn was bound with, which is resolved before the load).
+    Never raises."""
     try:
         get_web_interface().log(
             f"The chat could not be loaded for session {task.session_id}: {error}",
@@ -395,7 +396,7 @@ def answer_failed_load(task, error) -> None:
         get_web_interface().emit_message_complete(content="", session_id=task.session_id)
     except Exception:
         pass
-    _send_turn_error_reply(task, error)
+    _send_turn_error_reply(task, error, contact=contact)
 
 
 def drain_failure_notice(session_id, error) -> None:
@@ -997,6 +998,258 @@ def refuse_turn_without_backend(task, why: str, session_mgr) -> None:
                                              f"{type(e).__name__}: {e}")
 
 
+# ── The turn binding: what each lane's turn is bound to (vaf/core/turn_binding.py) ─────────
+# One producer per lane. The lane hands its result to bind_turn before the turn and calls
+# end_turn after it; no lane writes a binding attribute on the agent itself.
+
+_EDITOR_WRITE_TOOLS = ("replace_editor_selection", "replace_editor_text")
+
+
+class _ProjectPaths(NamedTuple):
+    """A chat's project folders: its workspace and the folder its edits go to. The second is
+    also where its VAF.md is looked for (`Agent._project_context_block`); empty is none."""
+    workspace: str
+    edit_path: str
+
+
+def _chat_project_paths(session_mgr, session_id) -> _ProjectPaths:
+    """This chat's workspace and active project, as the turn's note and its VAF.md use them.
+
+    [SESSION WORKSPACE] is the stable workspace root set on first file creation
+    (session.project_path); [ACTIVE PROJECT] is the most recently created or edited project
+    (runtime_state["last_project_path"]). A chat whose recorded folder is unsafe (a home
+    directory, recorded before the project-dir guard existed) gets none of it, or the agent
+    keeps sending the coder back there. A chat whose files were written in-process never got
+    project_path anchored (the setter lived only in the subprocess HTTP path), so the
+    workspace is derived from THIS chat's id when its folder exists, never from the
+    process-global pointer. Sessions from before session.project_path keep their last
+    project as the edit folder with no workspace.
+
+    A read, nothing more: it restores no state into the agent and repoints nothing, because
+    it runs before the turn is bound. Never raises."""
+    try:
+        session = session_mgr.load(session_id, restore_state=False, repoint=False)
+        workspace = getattr(session, "project_path", "") or ""
+        last_proj = (getattr(session, "runtime_state", None) or {}).get("last_project_path") or ""
+        from vaf.core.workspace_guard import is_unsafe_project_dir
+        if last_proj and is_unsafe_project_dir(last_proj):
+            last_proj = ""
+        if workspace and is_unsafe_project_dir(workspace):
+            workspace = ""
+        if not workspace:
+            try:
+                from vaf.core.session import get_session_workspace_dir
+                derived = get_session_workspace_dir(session_id, create=False)
+                if derived and os.path.isdir(str(derived)):
+                    workspace = str(derived)
+            except Exception:
+                pass
+        if workspace and os.path.isdir(workspace):
+            edit_path = (last_proj
+                         if (last_proj and last_proj != workspace and os.path.isdir(last_proj))
+                         else workspace)
+            return _ProjectPaths(workspace, edit_path)
+        if last_proj and os.path.isdir(last_proj):
+            return _ProjectPaths("", last_proj)
+    except Exception:
+        pass
+    return _ProjectPaths("", "")
+
+
+def _editor_tool_exclusions(session_mgr, session_id) -> frozenset:
+    """The editor write tools this turn may not see: both while no editor document is open,
+    the selection tool while nothing is selected. A turn with no chat (an agent room's) has
+    no editor document. A read like `_chat_project_paths`; an unreadable chat hides both.
+    Never raises."""
+    if session_mgr is None or not session_id:
+        return frozenset(_EDITOR_WRITE_TOOLS)
+    try:
+        session = session_mgr.load(session_id, restore_state=False, repoint=False)
+        runtime_state = getattr(session, "runtime_state", None) or {}
+        editor_document = runtime_state.get("editor_document") or {}
+        has_content = bool((editor_document.get("content") or "").strip())
+        selections = runtime_state.get("editor_selections") or []
+    except Exception:
+        return frozenset(_EDITOR_WRITE_TOOLS)
+    if not has_content:
+        return frozenset(_EDITOR_WRITE_TOOLS)
+    if not selections:
+        return frozenset({"replace_editor_selection"})
+    return frozenset()
+
+
+def _front_office_book_owner(task, meta):
+    """Whose address book and calendar a contact's turn reads: the task's account; on Discord
+    the local admin's real one, because the Discord lane is the local admin's alone and its
+    tasks carry the literal "admin" identity. Raises what `local_admin_identity` raises."""
+    username = meta.get("username") or "admin"
+    scope = meta.get("user_scope_id")
+    if getattr(task, "source", None) == "discord":
+        from vaf.core.contacts_store import local_admin_identity
+        username, scope = local_admin_identity()
+    return username, scope
+
+
+def _front_office_contact_record(task, meta):
+    """The contact record of a contact's turn, or None.
+
+    Whoever was ADMITTED, whatever the book says about them: this turn exists because the
+    bridge let the message through, so the question here is who is speaking, not whether
+    they may. Filtering by the permission left an open channel's sender without their own
+    record, and the model was told "no contact record" about a person who is in the book.
+    Pinned on the agent for the turn: contact_history reads that person's correspondence
+    across every channel and nothing else, which is why it needs no identity argument
+    (FRONT_OFFICE.md). Never raises."""
+    contact = None
+    try:
+        from vaf.core.contacts_store import find_contact_by_channel
+        task_source = getattr(task, "source", None)
+        if task_source == "telegram":
+            tid = meta.get("telegram_user_id")
+            if tid:
+                username, scope = _front_office_book_owner(task, meta)
+                contact = find_contact_by_channel("telegram", str(tid), username, user_scope_id=scope)
+        elif task_source == "whatsapp":
+            jid = meta.get("whatsapp_chat_jid")
+            if jid:
+                username, scope = _front_office_book_owner(task, meta)
+                contact = find_contact_by_channel("whatsapp", str(jid), username, user_scope_id=scope)
+        elif task_source == "email":
+            addr = str(meta.get("email_from") or "").strip().lower()
+            if addr:
+                username, scope = _front_office_book_owner(task, meta)
+                contact = find_contact_by_channel("email", addr, username, user_scope_id=scope)
+        elif task_source == "discord":
+            aid = str(meta.get("discord_author_id") or "").strip()
+            if aid:
+                username, scope = _front_office_book_owner(task, meta)
+                contact = find_contact_by_channel("discord", aid, username, user_scope_id=scope)
+    except Exception:
+        contact = None
+    return dict(contact) if isinstance(contact, dict) else None
+
+
+def _task_turn_binding(task, session_mgr) -> TurnBinding:
+    """What a queued task's turn is bound to, decided from the task and its chat.
+
+    The identity is the task's, taken raw (`identity_from_metadata`), and the chat is the
+    task's own, reloaded from the store when its transcript changed under a live agent (a
+    rewind: the in-memory history is otherwise authoritative, so without it the worker
+    answers from the very reply the store no longer has). A contact's turn (Front Office)
+    gets the Front Office tools and nothing else, offered and run: the engine's allowed set
+    holds against the router, the riders, the owner's recent tools and any name the model
+    calls, and a set that cannot be applied fails the task rather than opening every tool to
+    a stranger. Raises nothing of its own beyond what building the binding raises."""
+    from vaf.core.front_office_tools import FRONT_OFFICE_ALLOWED_TOOLS
+    from vaf.core.task_queue import wake_kind as _wake_kind
+    task_meta_for_env = (task.metadata or {}) if getattr(task, "metadata", None) else {}
+    # Did a PERSON send this turn? Only the queue boundary can tell: a timer and an
+    # automation arrive with the user's own text and no marker. The agent uses it for the
+    # ask-first latch and for the room streak, and the lane reads this one decision.
+    _wake = _wake_kind(task_meta_for_env)
+    _turn_is_human = bool(
+        getattr(task, "task_class", "") == "interactive"
+        and not _wake
+        and str(task.input_text or "").strip()
+    )
+    from_contact = bool(task_meta_for_env.get("from_contact"))
+    return TurnBinding(
+        identity=identity_from_metadata(task_meta_for_env),
+        source=str(getattr(task, "source", None) or "web"),
+        session_id=task.session_id,
+        force_reload=bool(task_meta_for_env.get("force_reload")),
+        turn_id=getattr(task, "turn_id", None),
+        allowed_tools=FRONT_OFFICE_ALLOWED_TOOLS if from_contact else None,
+        front_office=from_contact,
+        front_office_chat=(_front_office_chat_ref(task_meta_for_env, task_meta_for_env.get("username"))
+                           if from_contact else None),
+        front_office_contact=(_front_office_contact_record(task, task_meta_for_env)
+                              if from_contact else None),
+        # Nobody is at the screen for this one. A timer fires on a clock and a compaction is
+        # housekeeping, and both arrive with the source of the chat they belong to - "web"
+        # for a timer the person set in the browser. The outward hold reads this: a message
+        # the person SCHEDULED must leave at the scheduled time, not wait for a click they
+        # are not there to give (vaf/core/outbound_hold.py). Only a timer: a finished
+        # background command orders no send.
+        unattended=bool(_wake == "timer" or task_meta_for_env.get("compaction")),
+        is_human=_turn_is_human,
+        # Which wake this turn is, from the queue and never from the text, with the text as
+        # VAF wrote it: the input the agent reads carries this turn's workspace note in
+        # front of it. The result-grounding judge counts a report kind's text as evidence
+        # (Agent._turn_reports).
+        wake=(_wake, str(task.input_text or "")) if _wake else None,
+        excluded_tools=_editor_tool_exclusions(session_mgr, task.session_id),
+        project_dir=_chat_project_paths(session_mgr, task.session_id).edit_path,
+    )
+
+
+def _room_turn_binding(room_wake: dict, identity: Identity) -> TurnBinding:
+    """What an agent room's turn is bound to: the room's account and a conversation of its own.
+
+    The conversation is keyed per room AND per account (``<room_id>.<peer_id>``, the agent's
+    own handle in that room), so its working memory is the room's and this account's: a key
+    without the account would share one working memory between two accounts' agents in a
+    shared room, which is why an empty handle raises. It cannot collide with a chat id (chat
+    ids carry no dot plus ``p-`` handle). The turn has no chat: none of the last chat's
+    messages, summary, working memory or project file, and its tools see no chat. Source
+    "web": the runner's baseline, not a channel, so outward sends are held as on the web.
+
+    EVERY key a downstream reader consumes must be copied into ``room_turn``: the gate and
+    the hint lane read ``agent._room_turn``, not the wake, and a key computed in the wake but
+    not copied fails CLOSED - measured with from_authority, which the gate read for a day
+    while no runner ever handed it over."""
+    room_id = str((room_wake or {}).get("room_id") or "").strip()
+    peer_id = str((room_wake or {}).get("peer_id") or "").strip()
+    if not room_id or not peer_id:
+        raise ValueError("a room turn needs its room and the agent's own handle in it")
+    return TurnBinding(
+        identity=identity,
+        source="web",
+        conversation=f"{room_id}.{peer_id}",
+        room_id=room_id,
+        room_turn={"room_id": room_wake["room_id"],
+                   "mode": room_wake["mode"],
+                   "query": room_wake.get("query", ""),
+                   "from_user": room_wake.get("from_user", False),
+                   "from_user_only": room_wake.get("from_user_only", False),
+                   "from_authority": room_wake.get("from_authority", False)},
+        synthetic=True,
+        excluded_tools=_editor_tool_exclusions(None, None),
+    )
+
+
+def _session_owner_identity(meta) -> Identity:
+    """Who owns a stored chat, for a lane that has only the chat: its scope and name from the
+    session file, and admin rights from the ACCOUNT (`config.is_admin_account`), because
+    session files carry no role. A chat with no scope (a legacy chat, a Discord chat) gets
+    no role, which is what its own queued turns get."""
+    from vaf.core.config import is_admin_account
+    meta = meta or {}
+    scope = meta.get("user_scope_id")
+    return Identity(scope=scope, username=meta.get("username"),
+                    role="admin" if is_admin_account(scope) else None)
+
+
+def _drain_turn_binding(session_mgr, session_id) -> TurnBinding:
+    """What the turn that summarizes a chat's finished sub-agent work is bound to: that
+    chat's owner, its source and its project folder, marked synthetic (VAF wrote the prompt,
+    not a person). A chat whose file cannot be read has no owner to run as: no scope, no
+    name, no role. Never raises for an unreadable chat; an empty id raises ValueError."""
+    try:
+        session = session_mgr.load(session_id, restore_state=False, repoint=False)
+        meta = dict(getattr(session, "metadata", None) or {})
+    except Exception:
+        meta = {}
+    return TurnBinding(
+        identity=_session_owner_identity(meta),
+        source=str(meta.get("source") or "web"),
+        session_id=session_id,
+        synthetic=True,
+        excluded_tools=_editor_tool_exclusions(session_mgr, session_id),
+        project_dir=_chat_project_paths(session_mgr, session_id).edit_path,
+    )
+
+
 # The threads this process runs the agent loop in, by worker id: the health check
 # (vaf/core/health.py) asks whether they still live. A loop that died answers no chat
 # again, while the web server around it keeps answering every request but the chat.
@@ -1429,13 +1682,19 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         continue
                 except Exception:
                     pass
-                identity = identity_from_metadata(meta)
-                # A turn of an account without access does not start: one queued before the
-                # access was taken away would run with the role it was queued with, and a
-                # deactivated account's paired messenger still queues turns
-                # (vaf.core.revocation.account_stands).
-                from vaf.core.revocation import account_stands
-                if not account_stands(meta.get("enqueue_user_scope_id") or meta.get("user_scope_id")):
+                # Bind the turn before anything is built for it: account, identity, source,
+                # the Front Office set and the other markers, the chat and its project folder
+                # (vaf/core/turn_binding.py). A turn of an account without access does not
+                # start: one queued before the access was taken away would run with the role
+                # it was queued with, and a deactivated account's paired messenger still
+                # queues turns (vaf.core.revocation.account_stands).
+                _binding = None
+                _bound = False
+                try:
+                    _binding = _task_turn_binding(task, session_mgr)
+                    bind_turn(agent, _binding)
+                    _bound = True
+                except TurnRefused:
                     append_domain_log("headless", f"[REVOKED] Dropping a queued task of an account "
                                                   f"without access for {task.session_id}")
                     try:
@@ -1443,38 +1702,27 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     except Exception:
                         tq.task_done()
                     continue
-                bind_identity(agent, identity)
+                except Exception as e:
+                    print(f"[Headless] Failed to load session context: {e}")
+                    if not str(task.input_text).startswith("__CMD__"):
+                        # A chat turn on a chat that did not load is answered as failed and
+                        # does not run (answer_failed_load). A command still runs: it is no
+                        # turn on that chat, and LOAD_SESSION loads the chat it names itself.
+                        answer_failed_load(task, e, contact=(
+                            _binding.front_office_contact if _binding is not None else None))
+                        # A stop requested for this turn ends with it. task_done keeps stop
+                        # requests, and only the turn's own check further down consumes one;
+                        # left standing, it would stop the session's next turn instead.
+                        tq.clear_stop(task.session_id)
+                        try:
+                            tq.task_done(task=task)
+                        except Exception:
+                            tq.task_done()
+                        continue
                 # Debug: Log user scope for RAG troubleshooting (consolidated in rag.log)
                 append_domain_log("rag", f"[Headless] Task user_scope_id={meta.get('user_scope_id')}, username={meta.get('username')}")
 
-                # Publish current session ID so sub-agent tools (coding_agent, etc.)
-                # can register their child processes under the right session.
-                # Without this, stop_webui_subagent_processes() can't find them.
-                try:
-                    from vaf.core.subagent_ipc import set_current_session_id
-                    set_current_session_id(task.session_id)
-                except Exception:
-                    pass
-
-                # Same declaration one level finer: which EXCHANGE this run is.
-                # Everything the turn emits carries it, so a file written mid-tool
-                # can be bound to the answer of THIS turn instead of the newest
-                # answer that happens to exist when the event arrives.
-                try:
-                    from vaf.core.subagent_ipc import set_current_turn_id
-                    set_current_turn_id(getattr(task, "turn_id", None))
-                except Exception:
-                    pass
-
-                # Load Session Context. `force_reload` says the STORED transcript
-                # changed under a live agent (a rewind): the in-memory history is
-                # otherwise authoritative, so without this the worker answers from
-                # the very reply the store no longer has.
-                try:
-                    agent.load_session_context(
-                        task.session_id,
-                        force=bool((getattr(task, "metadata", None) or {}).get("force_reload")),
-                    )
+                if _bound:
                     # Persist user to session metadata so load_session_context gets it on next load
                     # Also persist telegram_chat_id for sessions from Telegram (needed when subagent completes later)
                     if (
@@ -1511,36 +1759,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             session_mgr.save(session)
                         except Exception:
                             pass
-                    # Re-apply task user context after session load:
-                    # load_session_context() may hydrate stale session metadata (e.g. legacy admin scope),
-                    # but for queued channel tasks the TaskQueue metadata is authoritative for routing/isolation.
-                    # Inside the try on purpose: a failed load must leave the identity
-                    # it left standing, which a finally would overwrite.
-                    reassert_identity(agent, identity)
-                    # Sync internal session ID
-                    if hasattr(agent, '_session_id') and agent._session_id != task.session_id:
-                        agent._unregister_session()
-                        agent._session_id = task.session_id
-                        agent._register_session()
                     # Channel sessions are intentionally bounded to a short recent history
                     # window to avoid stale chat outputs being reused instead of fresh tool calls.
                     _apply_channel_history_window(agent, getattr(task, "source", None))
-                except Exception as e:
-                    print(f"[Headless] Failed to load session context: {e}")
-                    if not str(task.input_text).startswith("__CMD__"):
-                        # A chat turn on a chat that did not load is answered as failed and
-                        # does not run (answer_failed_load). A command still runs: it is no
-                        # turn on that chat, and LOAD_SESSION loads the chat it names itself.
-                        answer_failed_load(task, e)
-                        # A stop requested for this turn ends with it. task_done keeps stop
-                        # requests, and only the turn's own check further down consumes one;
-                        # left standing, it would stop the session's next turn instead.
-                        tq.clear_stop(task.session_id)
-                        try:
-                            tq.task_done(task=task)
-                        except Exception:
-                            tq.task_done()
-                        continue
 
                 # Process Input
                 input_text = task.input_text
@@ -1955,79 +2176,17 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
 
                     webui_stream_callback.clear = clear_stream_buffer
 
-                    # So build_prompt knows current channel (WebUI vs Telegram)
-                    agent._current_chat_source = getattr(task, "source", "web")
-
+                    # The source, the Front Office set, the unattended mark and the contact
+                    # record were bound with the turn (_task_turn_binding).
                     _meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
-                    # Nobody is at the screen for this one. A timer fires on a clock and a
-                    # compaction is housekeeping, and both arrive with the source of the chat
-                    # they belong to - "web" for a timer the person set in the browser. The
-                    # outward hold reads this: a message the person SCHEDULED must leave at
-                    # the scheduled time, not wait for a click they are not there to give
-                    # (vaf/core/outbound_hold.py).
-                    from vaf.core.task_queue import wake_kind as _wake_kind
-                    # Only a timer: a finished background command orders no send.
-                    agent._unattended_turn = bool(_wake_kind(_meta) == "timer" or _meta.get("compaction"))
-                    if _meta.get("from_contact"):
-                        agent._front_office_mode = True
-                        agent._front_office_chat = _front_office_chat_ref(_meta, _meta.get("username"))
-                        agent._front_office_contact = None   # pinned below once the record is resolved
-                        # The contact gets the Front Office tools and nothing else, offered and
-                        # run: the engine's allowed set holds against the router, the riders,
-                        # the owner's recent tools and any name the model calls. No try/except:
-                        # a set that cannot be applied fails this task rather than opening
-                        # every tool to a stranger.
-                        from vaf.core.front_office_tools import FRONT_OFFICE_ALLOWED_TOOLS
-                        agent.set_allowed_tools(FRONT_OFFICE_ALLOWED_TOOLS)
-                    else:
-                        agent._front_office_mode = False
-                        agent._front_office_chat = None
-                        agent._front_office_contact = None
-                        agent.set_allowed_tools(None)
 
                     # Sidebar documents: inject into this turn only (session history stays clean)
                     effective_input = input_text or ""
                     # When message is from a contact (front office), pass contact data so the agent can personalize
                     if _meta.get("from_contact"):
-                        contact = None
-                        _username = _meta.get("username") or "admin"
-                        _user_scope = _meta.get("user_scope_id")
-                        try:
-                            from vaf.core.contacts_store import find_contact_by_channel
-                            # Whoever was ADMITTED, whatever the book says about them: this
-                            # turn exists because the bridge let the message through, so the
-                            # question here is who is speaking, not whether they may. Filtering
-                            # by the permission left an open channel's sender without their
-                            # own record, and the model was told "no contact record" about a
-                            # person who is in the book.
-                            task_source = getattr(task, "source", None)
-                            if task_source == "telegram":
-                                _tid = _meta.get("telegram_user_id")
-                                if _tid:
-                                    contact = find_contact_by_channel("telegram", str(_tid), _username, user_scope_id=_user_scope)
-                            elif task_source == "whatsapp":
-                                _jid = _meta.get("whatsapp_chat_jid")
-                                if _jid:
-                                    contact = find_contact_by_channel("whatsapp", str(_jid), _username, user_scope_id=_user_scope)
-                            elif task_source == "email":
-                                _addr = str(_meta.get("email_from") or "").strip().lower()
-                                if _addr:
-                                    contact = find_contact_by_channel("email", _addr, _username, user_scope_id=_user_scope)
-                            elif task_source == "discord":
-                                from vaf.core.contacts_store import find_contact_by_channel, local_admin_identity
-                                _aid = str(_meta.get("discord_author_id") or "").strip()
-                                if _aid:
-                                    # The Discord lane is the local admin's alone and its tasks carry
-                                    # the literal "admin" identity; the book, the calendar and the
-                                    # contact's own view are the admin's real one.
-                                    _username, _user_scope = local_admin_identity()
-                                    contact = find_contact_by_channel("discord", _aid, _username, user_scope_id=_user_scope)
-                        except Exception:
-                            pass
-                        # The contact of THIS turn, pinned on the agent: contact_history reads
-                        # that person's correspondence across every channel and nothing else,
-                        # which is why it needs no identity argument (FRONT_OFFICE.md).
-                        agent._front_office_contact = dict(contact) if isinstance(contact, dict) else None
+                        # The contact of THIS turn, pinned on the agent with the turn
+                        # (_front_office_contact_record).
+                        contact = getattr(agent, "_front_office_contact", None)
                         # No contact record: this sender reached Front Office through the reply
                         # window (the agent wrote to them first) rather than through a contact
                         # with "Can reach your assistant". Tell the model exactly that, so it
@@ -2054,6 +2213,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             from vaf.core.contacts_store import contact_events, contact_self_view, format_contact_self_view
                             # contact_events reads the calendar only when one exists on disk (a
                             # glance never creates a store for a message from a contact).
+                            _username, _user_scope = _front_office_book_owner(task, _meta)
                             view = contact_self_view(contact, events=contact_events(contact, _username, _user_scope))
                             contact_block = format_contact_self_view(view)
                             if view.get("preferred_language"):
@@ -2388,87 +2548,37 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         pass
 
                     # Session workspace + active project: inject so agent knows where to edit files.
-                    # [SESSION WORKSPACE] = stable workspace root set on first file creation (session.project_path).
-                    # [ACTIVE PROJECT]    = most recently created/edited project (runtime_state["last_project_path"]).
-                    # Old sessions without session.project_path fall back to [PROJECT CONTEXT] for compatibility.
-                    # This turn's project folder for the chat's VAF.md (Agent._project_context_block).
-                    # Reset first: one agent serves every chat, and a folder left from the last
-                    # task would hand that chat's VAF.md to this one.
-                    agent._chat_project_dir = ""
-                    try:
-                        session_for_proj = session_mgr.load(task.session_id)
-                        _workspace = getattr(session_for_proj, "project_path", "") or ""
-                        _last_proj = (getattr(session_for_proj, "runtime_state", None) or {}).get("last_project_path") or ""
+                    # The same folders the turn was bound with (_chat_project_paths): its VAF.md
+                    # is read from the edit folder (Agent._project_context_block).
+                    _proj = _chat_project_paths(session_mgr, task.session_id)
+                    if _proj.workspace:
+                        _workspace, _edit_path = _proj.workspace, _proj.edit_path
+                        proj_note = (
+                            f"[SESSION WORKSPACE] All files for this chat are stored in: {_workspace}\n"
+                            f"[ACTIVE PROJECT] Most recently created/edited: {_edit_path}\n"
+                            f"Final deliverables belong IN the session workspace - it is the ONLY folder "
+                            f"the user's UI file browser shows (remote/LAN clients cannot browse anywhere "
+                            f"else). When the user says 'Projekte-Ordner' / 'projects folder', they mean "
+                            f"THIS workspace, never the VAF_Projects root. write_file with a relative path "
+                            f"lands here automatically; move artifacts created via shell commands here.\n"
+                            f'To edit or modify: coding_agent(task="<your task>", project_path="{_edit_path}")\n\n'
+                        )
+                        effective_input = proj_note + effective_input
+                    elif _proj.edit_path:
+                        _last_proj = _proj.edit_path
+                        # Fallback for sessions predating session.project_path support
+                        proj_note = (
+                            f"[PROJECT CONTEXT] The most recently created project is at: {_last_proj}\n"
+                            f'To edit, update, or modify files from this project call: '
+                            f'coding_agent(task="<your edit task>", project_path="{_last_proj}")\n\n'
+                        )
+                        effective_input = proj_note + effective_input
 
-                        # Self-heal sessions that recorded an unsafe dir (e.g. /home/<user>)
-                        # before the project-dir guard existed: never re-inject such paths,
-                        # otherwise the agent keeps sending the coder back there.
-                        from vaf.core.workspace_guard import is_unsafe_project_dir as _is_unsafe_proj
-                        if _last_proj and _is_unsafe_proj(_last_proj):
-                            _last_proj = ""
-                        if _workspace and _is_unsafe_proj(_workspace):
-                            _workspace = ""
-
-                        # Defense-in-depth: sessions whose files were written in-process
-                        # never got project_path anchored (the setter lived only in the
-                        # subprocess HTTP path). Derive the workspace deterministically
-                        # when the folder already exists on disk, keyed on THIS task's
-                        # session - never the process-global pointer.
-                        if not _workspace:
-                            try:
-                                from vaf.core.session import get_session_workspace_dir as _gswd
-                                _derived = _gswd(task.session_id, create=False)
-                                if _derived and os.path.isdir(str(_derived)):
-                                    _workspace = str(_derived)
-                            except Exception:
-                                pass
-
-                        if _workspace and os.path.isdir(_workspace):
-                            _edit_path = (
-                                _last_proj
-                                if (_last_proj and _last_proj != _workspace and os.path.isdir(_last_proj))
-                                else _workspace
-                            )
-                            agent._chat_project_dir = _edit_path
-                            proj_note = (
-                                f"[SESSION WORKSPACE] All files for this chat are stored in: {_workspace}\n"
-                                f"[ACTIVE PROJECT] Most recently created/edited: {_edit_path}\n"
-                                f"Final deliverables belong IN the session workspace - it is the ONLY folder "
-                                f"the user's UI file browser shows (remote/LAN clients cannot browse anywhere "
-                                f"else). When the user says 'Projekte-Ordner' / 'projects folder', they mean "
-                                f"THIS workspace, never the VAF_Projects root. write_file with a relative path "
-                                f"lands here automatically; move artifacts created via shell commands here.\n"
-                                f'To edit or modify: coding_agent(task="<your task>", project_path="{_edit_path}")\n\n'
-                            )
-                            effective_input = proj_note + effective_input
-                        elif _last_proj and os.path.isdir(_last_proj):
-                            agent._chat_project_dir = _last_proj
-                            # Fallback for sessions predating session.project_path support
-                            proj_note = (
-                                f"[PROJECT CONTEXT] The most recently created project is at: {_last_proj}\n"
-                                f'To edit, update, or modify files from this project call: '
-                                f'coding_agent(task="<your edit task>", project_path="{_last_proj}")\n\n'
-                            )
-                            effective_input = proj_note + effective_input
-                    except Exception:
-                        pass
-
-                    # Editor write tools depend on whether an editor document is open and whether selections exist.
-                    editor_has_content = False
-                    try:
-                        session_for_editor = session_mgr.load(task.session_id)
-                        runtime_state = getattr(session_for_editor, "runtime_state", None) or {}
-                        editor_document = runtime_state.get("editor_document") or {}
-                        editor_has_content = bool((editor_document.get("content") or "").strip())
-                        editor_selections = runtime_state.get("editor_selections") or []
-                        excluded_tools = set()
-                        if not editor_has_content:
-                            excluded_tools.update({"replace_editor_selection", "replace_editor_text"})
-                        elif not editor_selections:
-                            excluded_tools.add("replace_editor_selection")
-                        agent._excluded_tools = excluded_tools
-                    except Exception:
-                        agent._excluded_tools = {"replace_editor_selection", "replace_editor_text"}
+                    # Editor write tools depend on whether an editor document is open and whether
+                    # selections exist; the turn was bound with the tools that hides
+                    # (_editor_tool_exclusions), and both are hidden exactly when no document is
+                    # open.
+                    editor_has_content = "replace_editor_text" not in (_binding.excluded_tools or ())
 
                     try:
                         if is_debug_logging_enabled():
@@ -2505,26 +2615,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # sub-agent (live incident 2026-07-20).
                     _manage_webui_env = force_webui_active and total_workers <= 1
                     _task_images = task_meta_for_env.get("images") or None
-                    # Did a PERSON send this turn? Only the queue boundary can tell: a
-                    # timer and an automation arrive with the user's own text and no
-                    # marker. The agent uses it for the ask-first latch and for the room
-                    # streak, and it is restored on every exit path below (Rule 4.5) so
-                    # one task's answer can never colour the next one's.
-                    from vaf.core.task_queue import wake_kind as _wake_kind
-                    _wake = _wake_kind(task_meta_for_env)
-                    _turn_is_human = bool(
-                        getattr(task, "task_class", "") == "interactive"
-                        and not _wake
-                        and str(task.input_text or "").strip()
-                    )
-                    _prev_turn_is_human = getattr(agent, "_turn_is_human", None)
-                    agent._turn_is_human = _turn_is_human
-                    # Which wake this turn is, from the queue and never from the text, with the
-                    # text as VAF wrote it: the input the agent reads carries this turn's
-                    # workspace note in front of it. The result-grounding judge counts a report
-                    # kind's text as evidence (Agent._turn_reports). Cleared in the finally
-                    # below, like the flag above.
-                    agent._turn_wake = (_wake, str(input_text or "")) if _wake else None
+                    # Whether a PERSON sent this turn and which wake it is: decided once, at the
+                    # queue boundary, by the turn's binding (_task_turn_binding), and held on the
+                    # agent until the task ends (end_turn).
+                    _turn_is_human = _binding.is_human is True
+                    _wake = _binding.wake[0] if _binding.wake else None
                     # Timer wake-turn: a timer task has no preceding user message, so without a boundary
                     # the agent's reply overwrites the previous assistant bubble (same slot + timestamp).
                     # Emit the trigger as a "wake" system-activity message (kind="timer") -> the Web UI
@@ -2542,10 +2637,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             )
                         except Exception:
                             pass
-                    # The draft note is per turn and the agent serves every chat: a turn that
-                    # ends before chat_step writes it (an early workflow exit) must not leave
-                    # the previous chat's note behind for this chat's session file.
-                    agent._turn_decision_note = None
+                    # The draft note is per turn: the bind cleared the previous chat's (an early
+                    # workflow exit ends a turn before chat_step writes this one's).
                     try:
                         if _manage_webui_env:
                             os.environ["VAF_WEBUI_ACTIVE"] = "1"
@@ -2567,14 +2660,6 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         if tq.should_stop(task.session_id):
                             raise _StopGenerationRequested("Stop requested by user")
                     finally:
-                        agent._turn_wake = None
-                        if _prev_turn_is_human is None:
-                            try:
-                                del agent._turn_is_human
-                            except AttributeError:
-                                pass
-                        else:
-                            agent._turn_is_human = _prev_turn_is_human
                         if _manage_webui_env:
                             if prev_webui_active is None:
                                 os.environ.pop("VAF_WEBUI_ACTIVE", None)
@@ -2818,7 +2903,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         except Exception:
                             pass
                     else:
-                        # The contact pinned for THIS turn: the finally that clears it runs later.
+                        # The contact pinned for THIS turn: end_turn clears it once the task ends.
                         _deliver_channel_reply(
                             task, final_text, session_mgr=session_mgr,
                             contact=getattr(agent, "_front_office_contact", None),
@@ -3212,20 +3297,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         pass
                     # A messenger turn answers its failure there too. A contact's turn gets
                     # a fixed sentence, never the exception text; the contact is the one
-                    # pinned for THIS turn (still set: the finally below clears it).
+                    # pinned for THIS turn (still set: end_turn clears it once the task ends).
                     _send_turn_error_reply(
                         task, e, contact=getattr(agent, "_front_office_contact", None))
-                finally:
-                    agent._front_office_mode = False
-                    agent._front_office_chat = None
-                    agent._front_office_contact = None
-                    agent.set_allowed_tools(None)
-                    # Cleared with them, for the same reason: one agent object serves every
-                    # queued turn, and a mark left standing by a timer would tell the next
-                    # turn that nobody is watching - which is exactly when the outward hold
-                    # stands down. The per-task assignment above covers the loop's own path;
-                    # this covers every other turn that reaches the same object.
-                    agent._unattended_turn = False
                 try:
                     if is_debug_logging_enabled():
                         from datetime import datetime as _dt
@@ -3244,12 +3318,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                 # ~1s interval kept as a reliable fallback if a push was ever missed.
                 now = time.time()
                 # Rooms: deliver what other agents said, as a synthetic turn that is
-                # bound to the mode the LOCAL user granted for that room. _room_turn is
-                # what the mode gate keys on and is restored on EVERY exit path
-                # (Rule 4.5); the cursor advances only afterwards, so an interruption
-                # costs a repeat rather than a lost message.
-                # Named boundary: the turn lands in the agent's current session. Routing
-                # a room to a chosen chat needs a session model rooms do not have yet.
+                # bound to the mode the LOCAL user granted for that room and to the
+                # account whose room it is, in a conversation of its own
+                # (_room_turn_binding): never on the chat this worker served last. The
+                # cursor advances only afterwards, so an interruption costs a repeat
+                # rather than a lost message.
                 # Rooms this machine HOLDS check in on members that have drifted
                 # off - per peer, addressed to that one, so a check-in never costs
                 # the whole room a turn. Host-side by construction: is_host is keyed
@@ -3277,34 +3350,6 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     except Exception:
                         _room_wake = None
                     if _room_wake:
-                        # EVERY key a downstream reader consumes must be copied here:
-                        # the gate and the hint lane read agent._room_turn, not the
-                        # wake, and a key computed in the wake but not copied fails
-                        # CLOSED - measured with from_authority, which the gate read
-                        # for a day while no runner ever handed it over.
-                        agent._room_turn = {"room_id": _room_wake["room_id"],
-                                            "mode": _room_wake["mode"],
-                                            "query": _room_wake.get("query", ""),
-                                            "from_user": _room_wake.get("from_user", False),
-                                            "from_user_only": _room_wake.get("from_user_only", False),
-                                            "from_authority": _room_wake.get("from_authority", False)}
-                        agent._synthetic_drain_turn = True
-                        # Workers spawned during this turn inherit the room in their
-                        # IPC record (create_task reads this context), so the result
-                        # delivery can know WHERE the work was ordered. Declared None
-                        # again on every exit path, same discipline as the marker
-                        # above: a leaked room id would stamp the next session's
-                        # spawns as room work (Rule 4.5's shape).
-                        try:
-                            from vaf.core.subagent_ipc import set_current_room_id
-                            set_current_room_id(str(_room_wake["room_id"]))
-                        except Exception:
-                            pass
-                        # The turn RUNS AS the account whose room it is. Without this
-                        # the prompt, the memory seed, the workspace and the tool set
-                        # are built for whoever was bound last - the cross-user leak the
-                        # binding contract exists to prevent. Restored on every exit
-                        # path, same discipline as the markers around it (Rule 4.5).
                         # And the same for a SHELL this turn might open. An agent has
                         # its own handle in a room, but `vaf a2a` acts as the machine
                         # owner by design - so an agent that reached for a shell instead
@@ -3315,107 +3360,98 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         # Bound to THIS room, not just to this turn, because a coder
                         # subprocess can outlive the turn: a later call in another room
                         # does not match the id and falls back to the ordinary answer.
-                        # Restored on every exit path like everything else here - a
-                        # marker left standing is how one wrong mode used to leak into
-                        # every later run.
+                        # Restored on every exit path - a marker left standing is how one
+                        # wrong mode used to leak into every later run.
                         from vaf.core.a2a.room import (ROOM_ACTOR_ENV, participant_key,
                                                        room_actor_value)
                         _prev_actor = os.environ.get(ROOM_ACTOR_ENV)
                         try:
-                            os.environ[ROOM_ACTOR_ENV] = room_actor_value(
-                                _room_wake["room_id"],
-                                participant_key("agent", _room_wake.get("scope")))
-                        except Exception:
-                            pass
-                        _prev_identity = None
-                        try:
-                            # Identity/bind_identity/resolve_scope_identity are imported at module
-                            # level. Re-importing them HERE made bind_identity a function-local name
-                            # for the whole of run_headless_agent, so the much earlier call at the
-                            # top of the loop raised UnboundLocalError and every local-model turn
-                            # died with "[Headless] Loop error: cannot access local variable
-                            # 'bind_identity'" - the agent simply never answered.
-                            _prev_identity = Identity(
-                                scope=getattr(agent, "_current_user_scope_id", None),
-                                username=getattr(agent, "_current_username", None),
-                                role=getattr(agent, "_current_user_role", None))
-                            _room_scope = _room_wake.get("scope")
-                            if _room_scope not in room_identities:
-                                room_identities[_room_scope] = resolve_scope_identity(_room_scope)
-                            bind_identity(agent, room_identities[_room_scope])
-                        except Exception as _bind_err:
-                            append_domain_log_always(
-                                "headless", f"[ROOM] identity bind failed: {_bind_err}")
-                        # A room turn is a turn, so it gets what a turn gets. This was
-                        # the half that was missing: the chat lane fills `memory_context`
-                        # a thousand lines up and the room lane filled nothing, so the
-                        # agent answered its own room knowing none of what it had ever
-                        # been told. Same primitive, same account, and the query is what
-                        # was just SAID rather than the instructions wrapped around it.
-                        _room_memory = ""
-                        try:
-                            from uuid import UUID as _UUID
-                            from vaf.memory.rag import turn_memory_context
-                            _rs = _room_wake.get("scope")
-                            _room_memory = turn_memory_context(
-                                _room_wake.get("query") or "",
-                                user_scope_id=(_UUID(str(_rs)) if _rs else None),
-                                caller="room")
-                        except Exception:
-                            _room_memory = ""
-                        try:
-                            _hist_before = len(getattr(agent, "history", []) or [])
-                            _room_answer = agent.chat_step(
-                                user_input=_room_wake["prompt"],
-                                skip_input=False,
-                                disable_workflows=True,
-                                disable_tools=False,
-                                memory_context=_room_memory or None,
-                            )
-                            # The turn's words must not evaporate. The prompt
-                            # tells the model to answer via room_send, but when
-                            # it answers in plain text instead there is nobody
-                            # on the other end of that text - a synthetic drain
-                            # turn has no chat window - and the room saw an
-                            # agent think for a minute and say nothing. Live
-                            # incident: a direct question in the room, a
-                            # finished 264-character answer, zero tool calls,
-                            # and the answer vanished; the owner read it as the
-                            # agent being dead. If the turn ran no room_send,
-                            # its text IS the answer and is delivered as one.
-                            deliver_stray_room_answer(
-                                agent, _room_wake, _room_answer, _hist_before)
-                        except Exception as _room_err:
-                            append_domain_log_always(
-                                "headless", f"[ROOM] delivery failed: {_room_err}"
-                            )
-                        else:
-                            # AFTER the turn and only when it ran: learning from a turn
-                            # that failed would store half a conversation as fact. Its
-                            # own interval decides whether anything happens, exactly as
-                            # on the chat lane - this is a nudge, not a schedule.
                             try:
-                                _room_wake["learn"]()
-                            except Exception as _learn_err:
+                                os.environ[ROOM_ACTOR_ENV] = room_actor_value(
+                                    _room_wake["room_id"],
+                                    participant_key("agent", _room_wake.get("scope")))
+                            except Exception:
+                                pass
+                            _room_started = False
+                            try:
+                                # The turn RUNS AS the account whose room it is, in a
+                                # conversation of its own: without this the prompt, the
+                                # memory seed, the workspace and the tool set are built for
+                                # whoever was bound last, on that person's chat. An account
+                                # that no longer stands gets no room turn (TurnRefused).
+                                # resolve_scope_identity and bind_turn are module-level
+                                # names. Importing one of them HERE would make it
+                                # function-local for the whole of run_headless_agent, and
+                                # the queue lane's earlier call would raise
+                                # UnboundLocalError on every turn (it happened once).
+                                _room_scope = _room_wake.get("scope")
+                                if _room_scope not in room_identities:
+                                    room_identities[_room_scope] = resolve_scope_identity(_room_scope)
+                                bind_turn(agent, _room_turn_binding(_room_wake, room_identities[_room_scope]))
+                                _room_started = True
+                            except Exception as _bind_err:
                                 append_domain_log_always(
-                                    "headless", f"[ROOM] learning skipped: {_learn_err}")
+                                    "headless", f"[ROOM] turn not started: {_bind_err}")
+                            if _room_started:
+                                # A room turn is a turn, so it gets what a turn gets. This was
+                                # the half that was missing: the chat lane fills `memory_context`
+                                # a thousand lines up and the room lane filled nothing, so the
+                                # agent answered its own room knowing none of what it had ever
+                                # been told. Same primitive, same account, and the query is what
+                                # was just SAID rather than the instructions wrapped around it.
+                                _room_memory = ""
+                                try:
+                                    from uuid import UUID as _UUID
+                                    from vaf.memory.rag import turn_memory_context
+                                    _rs = _room_wake.get("scope")
+                                    _room_memory = turn_memory_context(
+                                        _room_wake.get("query") or "",
+                                        user_scope_id=(_UUID(str(_rs)) if _rs else None),
+                                        caller="room")
+                                except Exception:
+                                    _room_memory = ""
+                                try:
+                                    _hist_before = len(getattr(agent, "history", []) or [])
+                                    _room_answer = agent.chat_step(
+                                        user_input=_room_wake["prompt"],
+                                        skip_input=False,
+                                        disable_workflows=True,
+                                        disable_tools=False,
+                                        memory_context=_room_memory or None,
+                                    )
+                                    # The turn's words must not evaporate. The prompt
+                                    # tells the model to answer via room_send, but when
+                                    # it answers in plain text instead there is nobody
+                                    # on the other end of that text - a synthetic drain
+                                    # turn has no chat window - and the room saw an
+                                    # agent think for a minute and say nothing. Live
+                                    # incident: a direct question in the room, a
+                                    # finished 264-character answer, zero tool calls,
+                                    # and the answer vanished; the owner read it as the
+                                    # agent being dead. If the turn ran no room_send,
+                                    # its text IS the answer and is delivered as one.
+                                    deliver_stray_room_answer(
+                                        agent, _room_wake, _room_answer, _hist_before)
+                                except Exception as _room_err:
+                                    append_domain_log_always(
+                                        "headless", f"[ROOM] delivery failed: {_room_err}"
+                                    )
+                                else:
+                                    # AFTER the turn and only when it ran: learning from a turn
+                                    # that failed would store half a conversation as fact. Its
+                                    # own interval decides whether anything happens, exactly as
+                                    # on the chat lane - this is a nudge, not a schedule.
+                                    try:
+                                        _room_wake["learn"]()
+                                    except Exception as _learn_err:
+                                        append_domain_log_always(
+                                            "headless", f"[ROOM] learning skipped: {_learn_err}")
                         finally:
                             if _prev_actor is None:
                                 os.environ.pop(ROOM_ACTOR_ENV, None)
                             else:
                                 os.environ[ROOM_ACTOR_ENV] = _prev_actor
-                            if _prev_identity is not None:
-                                try:
-                                    bind_identity(agent, _prev_identity)
-                                except Exception:
-                                    pass
-                            agent._synthetic_drain_turn = False
-                            agent._room_turn = None
-                            try:
-                                from vaf.core.subagent_ipc import set_current_room_id
-                                set_current_room_id(None)
-                            except Exception:
-                                pass
+                            end_turn(agent)
                             try:
                                 _room_wake["advance"]()
                             except Exception:
@@ -3583,7 +3619,26 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         tq.clear_stop(sid)
                                 except Exception:
                                     pass
+                            # The summary turn runs on the chat the results were loaded for, as
+                            # that chat's owner with its source (_drain_turn_binding). No chat
+                            # known: no summary turn, because a reply emitted without a session
+                            # reaches every connected browser. An account without access gets
+                            # none either.
+                            _drain_bound = False
                             if found_results_text or any_needs_retry:
+                                _drain_sid = getattr(agent, "current_session_id", None)
+                                if not _drain_sid:
+                                    append_domain_log_always(
+                                        "headless", "[DRAIN] no chat for this result: no summary turn")
+                                else:
+                                    try:
+                                        bind_turn(agent, _drain_turn_binding(session_mgr, _drain_sid))
+                                        _drain_bound = True
+                                    except TurnRefused:
+                                        append_domain_log_always(
+                                            "headless", f"[REVOKED] No summary turn for a chat of an "
+                                                        f"account without access: {_drain_sid}")
+                            if _drain_bound:
                                 user_lang = "auto"
                                 for msg in reversed(agent.history):
                                     if msg.get("role") == "user":
@@ -3694,12 +3749,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                             session_id=getattr(agent, "current_session_id", None)
                                         )
 
-                                # SYNTHETIC background turn for the whole drain call: the ask-first
-                                # gate keys on this flag, and chat_step must not treat the
+                                # A SYNTHETIC background turn, bound so (_drain_turn_binding): the
+                                # ask-first gate keys on it, and chat_step must not treat the
                                 # instruction prompt as a real user message (it would clear the
-                                # pending-question latch). Restored on EVERY exit path (Rule 4.5).
+                                # pending-question latch). Ended on EVERY exit path (Rule 4.5).
                                 drain_summary_text = ""
-                                agent._synthetic_drain_turn = True
                                 try:
                                     # Capture the return value: chat_step returns the FINAL answer with
                                     # reasoning stripped (AGENT_LOOP design) - the messenger summary is
@@ -3714,7 +3768,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         disable_tools=False
                                     )
                                 finally:
-                                    agent._synthetic_drain_turn = False
+                                    end_turn(agent)
                                 # What chat_step left about this turn: read before anything else
                                 # runs a turn on the agent, like the chat lane.
                                 _drain_status = agent.last_turn
@@ -3943,6 +3997,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
         except Exception as e:
             print(f"[Headless] Loop error: {e}")
             time.sleep(1)
+        finally:
+            # Every exit path of every lane, the early `continue`s included, ends with the
+            # markers neutral: what runs between two turns (the drain's result handling,
+            # the room sweep) is no turn and gates and routes as none.
+            end_turn(agent)
 
 def _handle_command(cmd_str, agent, session_mgr):
     """Handle system commands from Web UI."""

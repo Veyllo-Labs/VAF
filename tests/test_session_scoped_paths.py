@@ -137,12 +137,19 @@ def test_agent_passes_session_id_to_build_prompt():
 
 
 def test_headless_runner_derives_workspace_from_task_session():
+    import inspect
+
     import vaf.core.headless_runner as hr_mod
-    src = Path(hr_mod.__file__).read_text(encoding="utf-8")
-    assert "_gswd(task.session_id" in src, (
+    paths = inspect.getsource(hr_mod._chat_project_paths)
+    assert "get_session_workspace_dir(session_id, create=False)" in paths, (
         "headless_runner lost the deterministic workspace fallback keyed on the "
-        "task's own session"
+        "chat's own session"
     )
+    # ...and the chat is the task's own, for the turn's VAF.md and for its note alike.
+    assert "_chat_project_paths(session_mgr, task.session_id)" in inspect.getsource(
+        hr_mod._task_turn_binding)
+    assert "_chat_project_paths(session_mgr, task.session_id)" in inspect.getsource(
+        hr_mod.run_headless_agent)
 
 
 # ── document_writer resolves its output dir with the injected session ────────

@@ -136,9 +136,32 @@ def test_without_a_pin_the_tool_refuses(world):
 
 
 def test_the_runner_pins_and_clears_the_contact_where_it_sets_the_mode():
+    """The contact is pinned with the turn's binding, the one place that also sets the Front
+    Office mode, and cleared with it (vaf/core/turn_binding.py). MUTATION: pin the record in
+    the runner by hand again, or drop the clear from the turn binding's marker writer."""
+    import ast
+    import inspect
     from pathlib import Path
+
+    import vaf.core.headless_runner as hr
+    from vaf.core.turn_binding import end_turn
+
     src = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
-    assert src.count("agent._front_office_contact = None") == 3, "cleared in the else branch, at the pin site's default, and in finally"
-    assert "agent._front_office_contact = dict(contact) if isinstance(contact, dict) else None" in src
+    hand = [n for n in ast.walk(ast.parse(src)) if isinstance(n, ast.Assign)
+            and any(isinstance(t, ast.Attribute) and t.attr == "_front_office_contact"
+                    for t in n.targets)]
+    assert not hand, "the runner pins the contact by hand again"
+    producer = inspect.getsource(hr._task_turn_binding)
+    assert producer.count("front_office_contact=(_front_office_contact_record(") == 1
+    assert producer.count("front_office=from_contact") == 1
+
+    class _Agent:
+        def set_allowed_tools(self, names):
+            self._allowed_tools = names
+
+    stub = _Agent()
+    stub._front_office_contact = {"name": "Alice"}
+    end_turn(stub)
+    assert stub._front_office_contact is None
     from vaf.core.front_office_tools import FRONT_OFFICE_ALLOWED_TOOLS
     assert "contact_history" in FRONT_OFFICE_ALLOWED_TOOLS

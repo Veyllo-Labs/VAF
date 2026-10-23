@@ -103,7 +103,7 @@ When the user clicks a different session in the Web UI, the frontend sends `load
 
 As a result, the agent’s context (history + ContextManager) is switched to the selected session immediately, even if the user does not send a new message: the session's own saved context state, or an empty one when it has none (a chat just created with New chat), never the state of the chat open before. The next message in that session then runs with the correct session context already loaded.
 
-`load_session_context` also re-points the **per-session persistence store** (`Agent._bind_session_persistence`): the agent's intent, plan, tasks, notes, and team state live in `.vaf/main/sessions/<session_id>/`, so one chat's working memory never leaks into another (the legacy global `.vaf/main/` is the fallback when no session is known). See [CONTEXT_GLUE.md](CONTEXT_GLUE.md).
+`load_session_context` also re-points the **per-session persistence store** (`Agent._bind_session_persistence`): the agent's intent, plan, tasks, notes, and team state live in `.vaf/main/sessions/<session_id>/`, so one chat's working memory never leaks into another (the legacy global `.vaf/main/` is the fallback when no session is known). An agent room's turn loads no session: the runner's turn binding starts a conversation of its own and binds its store under `<room_id>.<peer_id>` (`vaf/core/turn_binding.py`). See [CONTEXT_GLUE.md](CONTEXT_GLUE.md).
 
 ### 4. Agent → Frontend (Broadcasting Updates)
 

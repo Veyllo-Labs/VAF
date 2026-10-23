@@ -289,7 +289,8 @@ def test_the_runner_hands_over_every_key_a_reader_consumes():
     without its copy fails here by name.
     """
     runner_src = (ROOT / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
-    literal = runner_src.split("agent._room_turn = {", 1)[1].split("}", 1)[0]
+    # The room's turn binding carries the dict (_room_turn_binding, vaf/core/turn_binding.py).
+    literal = runner_src.split("room_turn={", 1)[1].split("}", 1)[0]
     handed = set(re.findall(r'"([a-z_]+)":', literal))
 
     consumed = set(re.findall(r'room_turn\.get\("([a-z_]+)"\)', AGENT_SRC))

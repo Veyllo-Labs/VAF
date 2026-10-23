@@ -81,6 +81,14 @@ active **push**, modelled on the harness `<task-notification>`:
 - The headless runner's idle maintenance consumes the event and runs the result check
   **immediately**, draining **every** session's results (routing each by its own `session_id`),
   with the ~1s poll retained as a fallback if a push is ever undeliverable.
+- The summary turn that follows runs on the chat the results were loaded for, bound as that
+  chat's owner (scope and name from the session file, admin rights from the account,
+  `config.is_admin_account`, because a session file carries no role) with that chat's source
+  (`_drain_turn_binding`, `vaf/core/turn_binding.py`); it used to run with the role and the
+  source the last queued turn left on the shared agent. With no chat loaded (a result that names
+  no session, after a turn that had none) it runs no summary turn and logs `[DRAIN] no chat for
+  this result`: a reply emitted without a session reaches every connected browser. An account
+  that no longer stands (`revocation.account_stands`) gets no summary turn either.
 
 Guard: task_ids an **in-process workflow engine loop** (`engine._await_subagent`) is actively
 consuming are marked owned (time-stamped, TTL, auto-expiring) so the all-sessions runner drain
@@ -329,7 +337,8 @@ sending unlocked (no banner - the SubAgent window already shows the work). A Sto
 generation - killing the sub-agent requires pressing Stop again when nothing is streaming
 (explicit `scope: "all"`). Completed results are delivered exclusively by the headless
 runner's drain (full side effects: SubAgent window, `subagent_output`, messenger summaries) -
-a user chat turn no longer consumes them mid-reply. Drain messenger summaries pass the SAME
+a user chat turn no longer consumes them mid-reply. The drain's summary turn runs as the chat's
+owner with that chat's source, and runs none when no chat is loaded (Result push above). Drain messenger summaries pass the SAME
 outbound sanitizer chain as normal headless replies (`_prepare_channel_outbound`: think-strip,
 tool-JSON strip, workflow-async strip, internal-phrase net, untagged-CoT prefix guard) and are
 based on `chat_step`'s reasoning-stripped return value, not the raw stream buffer; when

@@ -442,8 +442,8 @@ def test_the_runner_runs_no_turn_on_a_chat_that_did_not_load():
     loop = inspect.getsource(hr.run_headless_agent).replace("\r\n", "\n")
     failed = loop.split('print(f"[Headless] Failed to load session context: {e}")', 1)[1]
     branch = failed.split("# Process Input", 1)[0]
-    assert "answer_failed_load(task, e)" in branch
-    after = branch.split("answer_failed_load(task, e)", 1)[1]
+    assert "answer_failed_load(task, e, contact=" in branch
+    after = branch.split("answer_failed_load(task, e, contact=", 1)[1]
     assert "continue" in after
     # task_done keeps stop requests; one meant for this turn would stop the next one.
     assert after.index("tq.clear_stop(task.session_id)") < after.index("continue")

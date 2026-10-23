@@ -148,7 +148,7 @@ def test_a_room_turn_is_given_what_it_knows_and_learns_only_if_it_ran():
         "it retrieves with the wake PROMPT, which is instructions - a query built from "
         "instructions retrieves instructions")
 
-    after = branch.split("append_domain_log_always(\n                                \"headless\", f\"[ROOM] delivery failed", 1)[1]
+    after = branch.split('f"[ROOM] delivery failed', 1)[1]
     assert "else:" in after.split('_room_wake["learn"]()', 1)[0], (
         "learning does not hang off `else`, so a failed turn teaches half a conversation")
 

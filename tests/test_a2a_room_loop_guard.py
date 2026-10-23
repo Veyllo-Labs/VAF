@@ -260,13 +260,21 @@ def test_a_timer_and_an_automation_are_not_a_person():
     # The runner decides once, at the queue boundary, and both consumers ride on that
     # one decision: the ask-first latch and this streak. Two copies of "was that a
     # person" would drift, and one of them would be the enforcing one.
-    decision = runner_src.split("_turn_is_human = bool(")[1].split("\n                    )")[0]
+    # The decision lives in the queue task's turn binding (_task_turn_binding), and the
+    # lane reads that one decision back before it notes a person.
+    import inspect
+
+    import vaf.core.headless_runner as hr
+    producer = inspect.getsource(hr._task_turn_binding).replace("\r\n", "\n")
+    assert "\n    )\n" in producer
+    decision = producer.split("_turn_is_human = bool(")[1].split("\n    )")[0]
     assert 'task_class", "") == "interactive"' in decision
     # A wake turn (a fired timer, a finished background command) is nobody typing: the
     # runner reads its kind once, from the metadata, right above the decision.
     assert "not _wake" in decision
-    assert "_wake = _wake_kind(task_meta_for_env)" in runner_src.split("_turn_is_human = bool(")[0][-300:]
+    assert "_wake = _wake_kind(task_meta_for_env)" in producer.split("_turn_is_human = bool(")[0][-300:]
     assert "task.input_text" in decision
+    assert "_turn_is_human = _binding.is_human is True" in runner_src
     assert "if _turn_is_human:" in runner_src.split("agent.note_human_turn()")[0][-200:]
 
 

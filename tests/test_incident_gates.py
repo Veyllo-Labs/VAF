@@ -112,13 +112,19 @@ def test_gates_wired_after_plan_gate():
 
 
 def test_drain_sets_and_restores_synthetic_flag():
+    """The drain's turn is bound synthetic and ended in a finally (Rule 4.5). MUTATION: drop
+    `synthetic=True` from the drain's binding, or the `end_turn` from its finally."""
+    import inspect
+
     import vaf.core.headless_runner as hr
+    assert "synthetic=True" in inspect.getsource(hr._drain_turn_binding)
     src = Path(hr.__file__).read_text(encoding="utf-8")
-    assert "agent._synthetic_drain_turn = True" in src
-    i_set = src.index("agent._synthetic_drain_turn = True")
-    i_finally = src.index("finally:", i_set)
-    i_unset = src.index("agent._synthetic_drain_turn = False", i_finally)
-    assert i_set < i_finally < i_unset, "drain flag must be restored in finally (Rule 4.5)"
+    i_bind = src.index("bind_turn(agent, _drain_turn_binding(")
+    i_turn = src.index("drain_summary_text = agent.chat_step(", i_bind)
+    i_finally = src.index("finally:", i_turn)
+    i_end = src.index("end_turn(agent)", i_finally)
+    assert i_bind < i_turn < i_finally < i_end, "drain flag must be cleared in finally (Rule 4.5)"
+    assert src[i_finally:i_end].count("\n") == 1, "end_turn is not the finally's first line"
 
 
 def test_drain_retry_respects_pending_question():

@@ -98,11 +98,23 @@ def test_a_send_to_a_third_party_a_failed_send_and_a_normal_turn_mark_nothing(wo
 
 
 def test_the_runner_stamps_the_chat_where_it_sets_the_mode_and_resets_it_where_it_resets_it():
+    # The chat is stamped where the mode is set, the queue task's turn binding, and both are
+    # reset together by the turn binding's marker writer (vaf/core/turn_binding.py).
     src = RUNNER.read_text(encoding="utf-8")
-    sets = len(re.findall(r"agent\._front_office_mode = True", src))
-    resets = len(re.findall(r"agent\._front_office_mode = False", src))
-    assert sets == len(re.findall(r"agent\._front_office_chat = _front_office_chat_ref\(", src)) == 1
-    assert resets == len(re.findall(r"agent\._front_office_chat = None", src)) == 2
+    assert not re.search(r"agent\._front_office_(mode|chat) = ", src), "set by hand in the runner"
+    producer = src.split("def _task_turn_binding(", 1)[1].split("\ndef ", 1)[0]
+    assert producer.count("front_office=from_contact") == 1
+    assert len(re.findall(r"front_office_chat=\(_front_office_chat_ref\(", producer)) == 1
+    from vaf.core.turn_binding import end_turn
+
+    class _Agent:
+        def set_allowed_tools(self, names):
+            self._allowed_tools = names
+
+    stub = _Agent()
+    stub._front_office_mode, stub._front_office_chat = True, {"channel": "telegram", "chat_id": "7"}
+    end_turn(stub)
+    assert stub._front_office_mode is False and stub._front_office_chat is None
     from vaf.core.headless_runner import _front_office_chat_ref
     assert _front_office_chat_ref({"telegram_chat_id": "7"}, "alice") == {"channel": "telegram", "chat_id": "7"}
     assert _front_office_chat_ref({"discord_author_id": "42"}, "alice") == {"channel": "discord", "chat_id": "42"}

@@ -1002,7 +1002,10 @@ Hard limits you must respect (they are architecture, not fine print):
 - **One tenant per process.** Two differently-scoped `Agent` instances in
   one process share process-global state (environment variables written
   during tool calls, singletons, the working-context fallback directory).
-  Run one OS process per tenant.
+  Run one OS process per tenant. VAF's own server runs one engine per worker
+  and moves it between conversations and accounts only through its internal
+  turn binding (`vaf.core.turn_binding`); an embedder builds one `Agent` per
+  conversation, which the facade fixes at construction.
 - **Standing grants are per user, not per machine**: `set_tool_policy(...,
   "allow")` and a trusted directory are stored under the caller's
   `user_scope_id` (`trust/<scope>.json` under the platform config dir, see
@@ -2306,8 +2309,8 @@ Stable public surface (safe to build on):
   user's answers, or while an allowed set holds (`set_allowed_tools`), which is how
   a turn that answers somebody else on the user's behalf is kept from it. A per-call
   origin parameter does not exist yet; that is a named boundary, not an oversight -
-  VAF's own runner marks its synthetic turns with two attributes on the agent, one
-  public value replacing them is a facade decision, and the one origin an embedder
+  VAF's own runner marks its synthetic turns through its turn binding
+  (`vaf.core.turn_binding`, internal), one public value replacing it is a facade decision, and the one origin an embedder
   needs today, a third party speaking, is the allowed set.
 - `Agent.on_compaction(cb)` / `CoreAgent.set_compaction_hook(hook)` - the seam after a
   structural compaction, on both paths that compact. `hook(info)` gets `{"before",

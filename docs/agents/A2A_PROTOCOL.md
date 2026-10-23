@@ -1166,6 +1166,27 @@ room (`deliver_stray_room_answer`), except the text of a turn that failed or was
 (the agent's `last_turn.failed`, a loop-protection note): it is the engine's, a provider's raw
 answer or the owner's spend, and every member reads what is posted.
 
+**A conversation of its own.** One agent per worker serves every chat and every account, and
+a room turn used to run inside whichever chat the worker had loaded last: that chat's
+messages (another account's included), its working memory, its summary and its project file
+were in the room turn's request, and the room's exchange was in that chat's next one. The
+runner now binds the turn (`_room_turn_binding`, `vaf/core/turn_binding.py`) to the account
+whose room it is and to a conversation of its own, keyed per room AND per account
+(`<room_id>.<peer_id>`, the agent's own handle in the room): it starts empty every turn and
+loads no chat, and the chat this worker served last is rebuilt from its store at its next
+turn. Its working memory is kept under that key, so a note the agent writes in one room is
+there at its next turn in that room and in no other room, no other account's agent in the same
+room, and no chat. Continuity between room turns comes from the room's transcript in the wake
+prompt and that working memory. The turn's source is `web`, the runner's baseline, not a
+channel, so an outward send is held as on the web. An account that no longer stands
+(`revocation.account_stands`) gets no room turn; a turn that cannot be bound is logged as
+`[ROOM] turn not started` and the cursor advances.
+
+NAMED BOUNDARY - what a room turn's tools see. They see no chat: the dispatch session is none,
+so a session-bound tool (the chat's workspace, a draft, a sub-agent's delivery stamp) has no
+chat to act on. A sub-agent the turn starts records the room and no session; where its result
+is delivered is not decided yet.
+
 **Retrieval.** The turn is given what this account already knows, through
 `turn_memory_context` - the same primitive the chat queue, automations and thinking runs
 use. It retrieves with what was just SAID in the room, not with the wake prompt: a query
@@ -1183,7 +1204,7 @@ fact is worse than nothing stored. Three things differ from a chat, each for a r
 | | |
 |---|---|
 | Counted in FRAMES | a room can say twenty things while this agent answers once |
-| Transcript handed OVER | one process serves every tenant, so `agent.history` holds whichever session was last loaded; compaction reading it would teach one account another's conversation |
+| Transcript handed OVER | `agent.history` holds only this turn's conversation of its own, which starts empty; what the room said over time is the room's transcript, and one process serves every tenant, so the transcript is passed in rather than read off the agent |
 | Stamped `source: room/<room_id>` | a room is multi-voiced, so a fact may come from a foreign agent, and `delete_memories_by_source_scope` can take back exactly what one room taught |
 
 The transcript names its SPEAKER on every line and leaves out bookkeeping and pings. In

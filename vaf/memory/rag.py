@@ -1546,11 +1546,12 @@ def run_session_compaction_sync(
     skips without a model call.
 
     ``conversation`` supplies the transcript instead of reading it off the agent. A room
-    turn MUST pass it: one process serves every tenant, so `agent.history` at that moment
-    holds whatever session was last loaded, and learning from it would teach one account
-    another account's conversation. A caller that has its own transcript is also the only
-    caller that can label the speakers, which a group chat needs and a two-party chat
-    does not.
+    turn MUST pass it: `agent.history` at that moment holds only that turn's conversation
+    of its own, which starts empty every turn (the runner's turn binding), while what the
+    room said over time is in its frames; and one process serves every tenant, so a
+    history read off the shared agent is never the right account's by construction. A
+    caller that has its own transcript is also the only caller that can label the
+    speakers, which a group chat needs and a two-party chat does not.
 
     ``source`` overrides the value written into each memory's `meta["source"]`. It is the
     provenance handle: `delete_memories_by_source_scope` already deletes by exactly this

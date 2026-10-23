@@ -118,8 +118,11 @@ def test_a_live_agent_can_be_forced_to_reread_the_rewound_session():
     assert "if not force and hasattr(self, 'current_session_id')" in body, \
         "the early return ignores force again - a rewind would be a no-op on the live history"
     runner = (_REPO / "vaf" / "core" / "headless_runner.py").read_bytes().decode("utf-8")
-    assert 'force=bool((getattr(task, "metadata", None) or {}).get("force_reload"))' in runner, \
+    assert 'force_reload=bool(task_meta_for_env.get("force_reload"))' in runner, \
         "the runner no longer honours force_reload, so the rewind never reaches the agent"
+    binding = (_REPO / "vaf" / "core" / "turn_binding.py").read_bytes().decode("utf-8")
+    assert "load_session_context(binding.session_id, force=bool(binding.force_reload))" in binding, \
+        "the turn binding drops force_reload on the way to the load"
 
 
 def test_the_gates_run_before_anything_is_discarded():

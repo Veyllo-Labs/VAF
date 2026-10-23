@@ -12,8 +12,8 @@ used ("archive_mail") in its tool array; a fresh agent serving the same turn had
 MUTATIONS, each turns the named tests red:
 - add a `self._carry_probe = 1` store in `chat_step`, or delete one `AGENT_STATE` entry
   -> test_every_agent_attribute_has_a_lifetime;
-- drop the `_recent_tools` line from `_reset_chat_state` -> test_recent_tools_belong_to_the_chat;
-  add a "chat" entry nobody swaps
+- drop the `_recent_tools` line from `_reset_chat_state` -> test_recent_tools_belong_to_the_chat
+  and test_nothing_carries_into_another_accounts_turn; add a "chat" entry nobody swaps
   (`_pending_user_question`) -> test_the_chat_class_is_swapped_by_the_loader;
 - drop any one marker from `_write_markers` -> its test_bind_resets_every_binding_attribute
   parameter; for `_chat_project_dir`, which the bind writes again after the load,
@@ -28,10 +28,13 @@ MUTATIONS, each turns the named tests red:
 - drop the account check, or validate after the markers are written
   -> test_a_refused_or_invalid_binding_changes_nothing;
 - leave `_room_turn`, `_synthetic_drain_turn` or the allowed set in `end_turn`
-  -> test_end_turn_clears_what_gates_and_routes.
+  -> test_end_turn_clears_what_gates_and_routes;
+- drop the chat switch's context reset (`cm.reset_chat_state()` in `_reset_chat_state`), the
+  `_recent_tools` reset, or any marker write -> test_nothing_carries_into_another_accounts_turn.
 """
 import ast
 import json
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -54,6 +57,8 @@ CAROL_SCOPE = "9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
 
 OWNER = Identity(scope=OWNER_SCOPE, username="ownerq7", role="admin")
 BOB = Identity(scope=BOB_SCOPE, username="bobq7", role="user")
+
+MARKERS = ("OWNER7QSUMMARY", "OWNER7QDECISION", "OWNER7QGOAL")
 
 # The twelve markers a binding sets beside the identity triple and the source, with the value
 # a lane that says nothing means. _ABSENT: the attribute is deleted (the engine reads its
@@ -431,6 +436,69 @@ def test_end_turn_clears_what_gates_and_routes(world):
     assert agent._current_chat_source == "whatsapp"
     assert agent.current_session_id == BOB_SESSION
     assert json.dumps(agent.history, default=str) == history
+
+
+# ── AC 9: nothing carries from one account's turn into the next ────────────────────────────
+
+def _task(session_id, identity, text, source="web", **meta):
+    from vaf.core.task_queue import AgentTask
+    metadata = {"user_scope_id": identity.scope, "username": identity.username,
+                "role": identity.role, "enqueue_session_id": session_id,
+                "task_class": "interactive", **meta}
+    return AgentTask(session_id=session_id, input_text=text, source=source, metadata=metadata)
+
+
+def _chat_state(agent):
+    """The chat-class attributes as comparable values; timestamps excluded."""
+    def _drop_times(d):
+        return {k: v for k, v in d.items() if k not in ("last_updated", "captured_at")}
+    cm = agent.context_manager
+    return {
+        "history": json.dumps(agent.history[1:], default=str, sort_keys=True),
+        "current_session_id": agent.current_session_id,
+        "main_persistence": str(agent.main_persistence.context_dir),
+        "prompt_manager": str(agent.prompt_manager.mpm.context_dir),
+        "context_manager": (_drop_times(asdict(cm.state)), _drop_times(asdict(cm.intent))),
+        "_is_new_session": _value(agent, "_is_new_session"),
+        "_recent_tools": dict(agent._recent_tools),
+    }
+
+
+def test_nothing_carries_into_another_accounts_turn(world):
+    from vaf.core.headless_runner import _task_turn_binding
+    from vaf.core.session import SessionManager
+    session_mgr = SessionManager()
+    text = "Was steht heute an?"
+
+    shared = world.make()
+    bind_turn(shared, _task_turn_binding(_task(OWNER_SESSION, OWNER, "Archiviere die Mail"),
+                                         session_mgr))
+    # What the owner's turn left on the agent: its context state, a tool it used, and every
+    # marker a lane can set.
+    cm = shared.context_manager
+    cm.state.narrative_summary = MARKERS[0]
+    cm.state.key_decisions = [MARKERS[1]]
+    cm.intent.primary_goal = MARKERS[2]
+    shared._record_tool_used("archive_mail")
+    assert "archive_mail" in shared._get_recent_tools()
+    for attr, value in DIRTY.items():
+        setattr(shared, attr, value)
+
+    bind_turn(shared, _task_turn_binding(_task(BOB_SESSION, BOB, text), session_mgr))
+    carried = _turn(shared, text)
+
+    fresh = world.make()
+    bind_turn(fresh, _task_turn_binding(_task(BOB_SESSION, BOB, text), session_mgr))
+    clean = _turn(fresh, text)
+
+    requests = "\n".join(carried.texts)
+    assert not [m for m in MARKERS if m in requests], "the owner's context reached Bob's turn"
+    assert "BOB7QHIST" in requests, "the probe does not see Bob's own chat"
+    assert carried.tools and carried.tools == clean.tools, (
+        "Bob was offered another tool set than a fresh agent offers him")
+    binding = sorted(n for n, kind in AGENT_STATE.items() if kind == "binding")
+    assert {a: _value(shared, a) for a in binding} == {a: _value(fresh, a) for a in binding}
+    assert _chat_state(shared) == _chat_state(fresh)
 
 
 # ── AC 15: not on the facade ───────────────────────────────────────────────────────────────

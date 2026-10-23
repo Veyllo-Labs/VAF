@@ -138,9 +138,13 @@ def test_the_same_words_typed_by_a_person_are_no_evidence(agent):
 
 def test_the_runner_says_which_wake_a_turn_is_and_forgets_it_after(agent):
     import vaf.core.headless_runner as runner
-    src = inspect.getsource(runner)
-    assert 'agent._turn_wake = (_wake, str(input_text or "")) if _wake else None' in src
-    assert src.count("agent._turn_wake = None") >= 1
+    from vaf.core.turn_binding import end_turn
+    # The queue task's binding names the wake with the text VAF wrote; end_turn forgets it.
+    src = inspect.getsource(runner._task_turn_binding)
+    assert 'wake=(_wake, str(task.input_text or "")) if _wake else None' in src
+    agent._turn_wake = ("timer", "Erinnerung")
+    end_turn(agent)
+    assert agent._turn_wake is None
     from vaf.core.task_queue import WAKE_KINDS, WAKE_REPORT_KINDS
     assert set(WAKE_REPORT_KINDS) == {"draft", "process"} and set(WAKE_REPORT_KINDS) < set(WAKE_KINDS)
 

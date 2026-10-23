@@ -365,18 +365,37 @@ def test_a_refused_call_teaches_nothing_and_re_feeds_nothing(agent, monkeypatch,
 # ── the runner ───────────────────────────────────────────────────────────────
 
 def test_the_runner_applies_and_lifts_the_set_through_the_engine():
+    """The contact's set is decided once, by the queue task's binding, applied by the turn
+    binding through the engine's own setter, and lifted by the next bind and by end_turn
+    (vaf/core/turn_binding.py). MUTATION: call set_allowed_tools in the runner by hand
+    again, wrap the apply in a try, or drop the lift from the marker writer."""
+    import ast
+    import inspect
+
+    import vaf.core.headless_runner as hr
+    import vaf.core.turn_binding as tb
+
     src = (ROOT / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
     assert "agent._active_tools" not in src, "the runner writes the engine's private scope again"
-    assert src.count("agent.set_allowed_tools(FRONT_OFFICE_ALLOWED_TOOLS)") == 1
-    branch = src.split("if _meta.get(\"from_contact\"):", 1)[1].split("else:", 1)
-    # Code only: the comment above the call explains why there is no try/except.
-    applied = "\n".join(line for line in branch[0].splitlines() if not line.strip().startswith("#"))
-    after = branch[1]
-    assert "agent.set_allowed_tools(FRONT_OFFICE_ALLOWED_TOOLS)" in applied
-    assert "try:" not in applied and "except" not in applied, (
+    assert "set_allowed_tools(" not in src, "the runner applies a tool set by hand again"
+    producer = inspect.getsource(hr._task_turn_binding)
+    assert producer.count("allowed_tools=FRONT_OFFICE_ALLOWED_TOOLS if from_contact else None") == 1
+
+    # Applied as a plain statement of the one marker writer: no try/except around it, so a
+    # set that cannot be applied fails the task rather than opening every tool.
+    writer = ast.parse(inspect.getsource(tb._write_markers)).body[0]
+    applies = [stmt for stmt in writer.body
+               if isinstance(stmt, ast.Expr) and "set_allowed_tools" in ast.dump(stmt)]
+    assert len(applies) == 1, "the set is not applied as a top-level statement"
+    assert not any(isinstance(n, ast.Try) and "set_allowed_tools" in ast.dump(n)
+                   for n in ast.walk(writer)), (
         "a set that cannot be applied must fail the task, not open every tool")
-    assert "agent.set_allowed_tools(None)" in after.split("\n\n", 1)[0], "the else branch"
-    final = src.split("                finally:\n                    agent._front_office_mode = False", 1)
-    assert len(final) == 2, "the finally that clears the Front Office state moved"
-    assert "agent.set_allowed_tools(None)" in final[1].split("agent._unattended_turn = False", 1)[0], (
-        "the finally clear")
+
+    class _Agent:
+        def set_allowed_tools(self, names):
+            self._allowed_tools = names
+
+    stub = _Agent()
+    stub._allowed_tools = frozenset({"contact_history"})
+    tb.end_turn(stub)
+    assert stub._allowed_tools is None, "end_turn leaves the contact's set standing"

@@ -576,7 +576,18 @@ def test_the_runner_keeps_the_draft_note_with_its_turn_and_its_chat():
     """
     runner = (ROOT / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
     call = runner.index("response = agent.chat_step(")
-    assert "agent._turn_decision_note = None" in runner[call - 600:call]
+    # The reset is part of binding the turn (vaf/core/turn_binding.py), before the call.
+    assert -1 < runner.index("bind_turn(agent, _binding)") < call
+    from vaf.core.turn_binding import end_turn
+
+    class _Agent:
+        def set_allowed_tools(self, names):
+            self._allowed_tools = names
+
+    stub = _Agent()
+    stub._turn_decision_note = "[Context: draft 3 was discarded]"
+    end_turn(stub)          # the same marker writer the bind runs
+    assert stub._turn_decision_note is None
     store_at = runner.index('_draft_note = getattr(agent, "_turn_decision_note", None)')
     user_at = runner.index('session.add_message(role="user", content=_user_input.strip(),')
     assert store_at < user_at

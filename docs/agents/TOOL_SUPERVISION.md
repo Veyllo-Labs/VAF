@@ -147,7 +147,8 @@ Boundaries, each deliberate:
 - **The wake is not an unattended turn.** A fired timer is the person's own scheduled order,
   so what it sends leaves at its time; a finished command orders no send, so anything the
   agent drafts after it stays behind the outward hold like any chat turn
-  (`_unattended_turn` in `headless_runner.py`).
+  (`_unattended_turn`, set by the queued task's turn binding, `_task_turn_binding` in
+  `headless_runner.py`).
 - **The Stop button leaves them running**, deliberately: it stops the turn, and a command the
   agent put in the background on purpose is not part of the turn. `host_process(stop)` is
   how one ends early.

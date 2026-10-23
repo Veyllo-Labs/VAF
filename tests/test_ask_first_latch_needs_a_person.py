@@ -117,10 +117,16 @@ def test_the_queue_boundary_decides_and_excludes_timers_and_automations():
     class keeps automations out, the metadata keeps timers out, and dropping either one
     puts the leak back.
     """
-    source = (ROOT / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
+    import inspect
+
+    import vaf.core.headless_runner as hr
+
+    # The decision lives in the queue task's turn binding, the one producer the lane reads.
+    source = inspect.getsource(hr._task_turn_binding).replace("\r\n", "\n")
     # Up to the line that closes the bool(...) call, not to the first ")" - the
     # expression has nested calls of its own.
-    decision = source.split("_turn_is_human = bool(")[1].split("\n                    )")[0]
+    assert "_turn_is_human = bool(\n" in source and "\n    )\n" in source
+    decision = source.split("_turn_is_human = bool(")[1].split("\n    )")[0]
 
     assert 'task_class", "") == "interactive"' in decision
     # The metadata half: every wake kind (a timer, a finished background command) is kept
@@ -132,23 +138,37 @@ def test_the_queue_boundary_decides_and_excludes_timers_and_automations():
     assert "task.input_text" in decision
 
 
-def test_the_flag_is_restored_on_every_exit_path():
-    """MUTATION: set the flag without restoring it.
+def test_the_flag_is_cleared_on_every_exit_path():
+    """MUTATION: drop the `_turn_is_human` clear from the turn binding's marker writer, or
+    the `end_turn` from the runner loop's finally.
 
     A flag left standing colours the NEXT task, which is the env-hygiene failure this
     repo already has a rule about: one automation would silently mark every following
-    turn as non-human, and the latch would then never clear at all.
+    turn as non-human, and the latch would then never clear at all. The task's binding
+    sets it, `end_turn` takes it away again (absent: a person typing, the engine's
+    default), and the loop's per-iteration finally runs `end_turn` on every exit path.
     """
-    source = (ROOT / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
-    tree = ast.parse(source)
+    import inspect
 
-    restored = False
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Try) and node.finalbody:
-            body = ast.dump(ast.Module(body=node.finalbody, type_ignores=[]))
-            if "_turn_is_human" in body and "_prev_turn_is_human" in body:
-                restored = True
-    assert restored, "_turn_is_human is not restored from a finally block"
+    import vaf.core.headless_runner as hr
+    from vaf.core.turn_binding import end_turn
+
+    assert "is_human=_turn_is_human" in inspect.getsource(hr._task_turn_binding)
+
+    class _Agent:
+        def set_allowed_tools(self, names):
+            self._allowed_tools = names
+
+    stub = _Agent()
+    stub._turn_is_human = False
+    end_turn(stub)
+    assert not hasattr(stub, "_turn_is_human"), "end_turn leaves the flag standing"
+
+    loop = ast.parse(inspect.getsource(hr.run_headless_agent).replace("\r\n", "\n"))
+    whiles = [n for n in ast.walk(loop) if isinstance(n, ast.While)]
+    outer = [n.body[0] for n in whiles if n.body and isinstance(n.body[0], ast.Try)]
+    assert any("end_turn" in ast.dump(ast.Module(body=t.finalbody, type_ignores=[]))
+               for t in outer), "the loop does not end every iteration's turn"
 
 
 # ── the lanes without a queue must not change ──────────────────────────────
@@ -165,4 +185,4 @@ def test_a_lane_with_no_queue_still_clears_the_latch():
         "the no-queue lanes no longer default to 'a person typed this'")
 
     runner = (ROOT / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
-    assert "agent._turn_is_human = _turn_is_human" in runner
+    assert "is_human=_turn_is_human" in runner

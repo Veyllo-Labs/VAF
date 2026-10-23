@@ -338,38 +338,52 @@ def test_listing_rooms_reports_unread_and_mode(wired):
 # ── the wiring, not only the stage ──────────────────────────────────────────
 
 def test_the_runner_sets_and_clears_the_room_turn_marker():
-    """MUTATION: delete the `agent._room_turn = None` line in the runner's finally.
+    """MUTATION: drop `end_turn(agent)` from the room branch's finally, or the `_room_turn`
+    clear from the turn binding's marker writer.
 
     A marker left standing would put every later turn under a room's mode, and one
     that is never set would leave the gate unreachable - the failure this repo already
-    paid for once, where a stage worked perfectly and nothing called it.
+    paid for once, where a stage worked perfectly and nothing called it. The marker is
+    set in ONE place, the room's turn binding, and nothing in the runner writes it by
+    hand (vaf/core/turn_binding.py).
     """
+    import inspect
+
+    import vaf.core.headless_runner as hr
+    from vaf.core.turn_binding import end_turn
+
     source = (ROOT / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
 
-    sets, clears, calls_collect = 0, 0, 0
+    hand_writes, calls_collect = 0, 0
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Attribute) and target.attr == "_room_turn":
-                    if isinstance(node.value, ast.Constant) and node.value.value is None:
-                        clears += 1
-                    else:
-                        sets += 1
+                    hand_writes += 1
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
                 and node.func.attr == "collect_room_wake":
             calls_collect += 1
 
     assert calls_collect == 1, "the runner must ask the agent for pending room frames"
-    assert sets == 1 and clears == 1, f"set={sets} cleared={clears}"
+    assert hand_writes == 0, f"the runner writes _room_turn by hand {hand_writes} time(s)"
+    producer = inspect.getsource(hr._room_turn_binding)
+    assert producer.count("room_turn=") == 1, "the room's binding does not set the marker"
 
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Try) and node.finalbody:
-            body = ast.dump(ast.Module(body=node.finalbody, type_ignores=[]))
-            if "_room_turn" in body:
-                assert "_synthetic_drain_turn" in body
-                return
-    raise AssertionError("_room_turn is not cleared from a finally block")
+    branch = source.split("_room_wake = agent.collect_room_wake", 1)[1].split(
+        "_pushed = False", 1)[0]
+    assert "end_turn(agent)" in branch.split("finally:")[-1], (
+        "_room_turn is not cleared from the room branch's finally block")
+
+    class _Agent:
+        def set_allowed_tools(self, names):
+            self._allowed_tools = names
+
+    stub = _Agent()
+    stub._room_turn = {"room_id": "room-x", "mode": "assist"}
+    stub._synthetic_drain_turn = True
+    end_turn(stub)
+    assert stub._room_turn is None and stub._synthetic_drain_turn is False
 
 
 def test_the_gate_is_reached_from_the_turn_gates():

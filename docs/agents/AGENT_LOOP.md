@@ -101,6 +101,25 @@ user input
 final answer (reasoning stripped)
 ```
 
+## Before the turn: the turn binding
+
+`chat_step` runs on whatever the agent holds, so a host that moves one agent between
+conversations has to put the next one in place first. VAF's runner does: one agent per worker
+serves every chat and every account, and each of its three lanes (a queued task, an agent
+room's turn, the summary of finished sub-agent work) binds its turn through
+`vaf/core/turn_binding.py` before calling `chat_step`, with a producer of its own in
+`vaf/core/headless_runner.py` (`_task_turn_binding`, `_room_turn_binding`,
+`_drain_turn_binding`). `bind_turn(agent, binding)`, in this order: the account check
+(`revocation.account_stands`; a refused turn changes nothing), the identity, the source and
+every turn marker (the allowed set, the Front Office mode, chat and contact, unattended, the
+person, the wake, the room turn, synthetic, the hidden tools, the decision note), the per-context
+session, turn, room and conversation, then the conversation itself (the chat through
+`load_session_context`, with the caller's identity re-asserted after a successful load, or a
+conversation of its own for a room turn), and last the chat's project folder. `end_turn(agent)`
+clears the markers again; the loop's per-iteration `finally` runs it on every exit path. Every
+attribute the agent carries is classified by lifetime (`AGENT_STATE`: engine, step, chat,
+account, binding), and only the binding class is written per turn.
+
 ## Phases and where they live
 
 All phases live in `chat_step` (and its helpers) in [agent.py](../../vaf/core/agent.py) -
@@ -109,7 +128,7 @@ grep the symbol names to find them.
 | # | Phase | Key methods / symbols |
 |---|-------|------------------------|
 | 1 | Pre-turn setup / intent / context decay / compress | An empty history first gets a conversation (`init_chat()`): an agent whose load failed closed, or that never had `init_chat` called, would otherwise send the turn without the system message. Then `_forget_at_turn_boundary` before anything else: a credential stored in an earlier turn (`BaseTool.secret_args`, `vaf/core/forget_secrets.py`) leaves the history, and the signed replay blocks that turn still needed are dropped where they carry it. Then `main_persistence.update_user_intent`: the system prompt built right after carries it in `<user_intent>`, and writing it after the build left that block one message behind in every turn (measured live: a long turn followed the stale block back to the previous task). Written from `raw_user_input` (the person's words, never the lane's enrichment) and only when `_turn_is_from_a_person` (1b) says a person sent the turn: a wake, a timer or a drain turn does not become the goal, while a contact's words do become the goal of the contact's own chat (the intent store is bound per session). Then `decay_state`, `prompt_manager.build_prompt` (with no last-interaction record while an allowed set holds: the record is the user's own, and a turn under a set answers somebody else), `context_manager.should_compress`, `_compress_history_if_needed` (fires the compaction hook, `set_compaction_hook`) |
-| 1b | Who is speaking: the two "the user replied" latches | `_turn_is_from_the_user` decides whether this turn is the user in their own chat; only then is the ask-first latch (`_pending_user_question`) cleared and a waiting background question (`thinking_mode.get_waiting_for_reply`) picked up as answered and cleared. It is `_turn_is_from_a_person` (did a person send it) plus "no allowed set holds". A synthetic drain turn (`_synthetic_drain_turn`: runner drain, A2A room wake), a queue turn the harness marked as not a person (`_turn_is_human=False`: timer, automation) and a background run's own prompt (`run_kind` thinking/automation) fail both tests. A turn under an allowed set (`set_allowed_tools`, every Front Office turn) is a person but not the user: it answers somebody else under the user's identity, so it neither answers nor clears the user's questions, and phase 10 does not set the ask-first latch for it either (one agent serves every chat of a runner worker). See [Thinking-Mode.md](Thinking-Mode.md) (Automatic Cleanup) |
+| 1b | Who is speaking: the two "the user replied" latches | `_turn_is_from_the_user` decides whether this turn is the user in their own chat; only then is the ask-first latch (`_pending_user_question`) cleared and a waiting background question (`thinking_mode.get_waiting_for_reply`) picked up as answered and cleared. It is `_turn_is_from_a_person` (did a person send it) plus "no allowed set holds". A synthetic drain turn (`_synthetic_drain_turn`: runner drain, A2A room wake), a queue turn the harness marked as not a person (`_turn_is_human=False`: timer, automation) and a background run's own prompt (`run_kind` thinking/automation) fail both tests. A turn under an allowed set (`set_allowed_tools`, every Front Office turn) is a person but not the user: it answers somebody else under the user's identity, so it neither answers nor clears the user's questions, and phase 10 does not set the ask-first latch for it either (one agent serves every chat of a runner worker; see "Before the turn: the turn binding"). See [Thinking-Mode.md](Thinking-Mode.md) (Automatic Cleanup) |
 | 2 | Workflow / skill match (not run while the agent has an allowed set: the explicit `@workflow_id` lane would run a workflow past the set with no model call in between) | `_try_workflow` |
 | 3 | Record input | the user message is appended; the intent was recorded in phase 1 |
 | 4 | Tool router (not asked while the agent has an allowed set: the set is the turn's tool set and nothing rides along, see `set_allowed_tools`) | `_select_turn_tools`, `_route_tools` |
@@ -195,7 +214,7 @@ and nothing since has reported (`outbound_hold.decision_notes`), so the agent le
 discard, a replacement or a send from the terminal once. Before, not after: the person's
 message stays the last one, which is what `_append_turn_block` needs to place the turn block
 ahead of it. The runner stores the note ahead of the user message itself
-(`_turn_decision_note`, cleared before every turn because one agent serves every chat), since
+(`_turn_decision_note`, cleared by the turn binding before every turn because one agent serves every chat), since
 the turn's own context persistence starts after the user message.
 
 **A question ends the turn the same way, and so can any tool.** The turn end is a declaration

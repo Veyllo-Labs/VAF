@@ -401,27 +401,49 @@ still runs a hidden tool, but never one outside the allowed set.
 
 ## Concurrency contract
 
-One `CoreAgent` is one conversation and is effectively **single-threaded**:
-per-turn state lives in instance attributes, `history` and `tools` are
-mutated without locks. Do not call `chat_step` on the same instance from two
-threads. Multiple instances in one process (each on its own thread) are the
-intended parallel pattern. Pass `register_signals=False` off the main thread
-(the facade always does). The engine's `chat_step` is synchronous and blocks;
-the facade offers `await agent.run_async(...)`, a thread-executor wrapper over
-`run()` (not a natively async engine).
+One `CoreAgent` holds one conversation and one identity at a time and is
+effectively **single-threaded**: per-turn state lives in instance attributes,
+`history` and `tools` are mutated without locks. Do not call `chat_step` on the
+same instance from two threads. Multiple instances in one process (each on its
+own thread) are the intended parallel pattern. Pass `register_signals=False` off
+the main thread (the facade always does). The engine's `chat_step` is synchronous
+and blocks; the facade offers `await agent.run_async(...)`, a thread-executor
+wrapper over `run()` (not a natively async engine).
+
+VAF's runner is the one place that moves ONE engine between conversations: a
+worker's agent serves every chat and every account of the machine. It does so only
+through its turn binding, `vaf.core.turn_binding.bind_turn(agent, TurnBinding(...))`
+before a turn and `end_turn(agent)` after it, from all three of its lanes (a queued
+task, an agent room's turn, the summary of finished sub-agent work). Without it, one
+turn ran on what the previous one left: another account's context summary in the
+system message, the previous chat's tools in the tool array, a room turn inside the
+chat loaded last, a user's chat summarized with the previous turn's admin role.
 
 ## Advanced identity/scoping attributes
 
-The product harness sets these per session; an advanced embedder may set them
-too (they are underscore-prefixed: subject to change, announced via
-changelog):
+Every attribute a `CoreAgent` carries has one of five lifetimes, listed in
+`vaf.core.turn_binding.AGENT_STATE` (guarded against the code by
+`tests/test_turn_binding.py`): **engine** (the agent's life: config, backend, tool
+registry and caches, hooks, the lane flags below), **step** (reset by `chat_step`
+itself), **chat** (one conversation: the history, the context state, the working
+memory, the recent tools; swapped by `load_session_context`, started fresh by
+`init_chat`), **account** (keyed by the account and read through the bound identity)
+and **binding** (one turn: the identity, the source and the turn markers). Inside VAF a
+binding attribute is written only by `bind_turn` / `end_turn`, by
+`vaf/core/identity_binding.py` (the identity, which the facade and the terminal lanes
+bind directly) and by the engine itself, never by hand (guarded by
+`tests/test_runner_turn_binding.py`). NAMED BOUNDARY: the module is internal, not on
+the facade, because the facade fixes its scope and session at construction and never
+moves its engine; an embedder serving several conversations builds one `Agent` per
+conversation. The ones an embedder meets (they are underscore-prefixed: subject to
+change, announced via changelog):
 
 | Attribute | Effect |
 |---|---|
 | `_current_username`, `_current_user_scope_id` | identity injected into tools, memory scoping |
 | `_current_user_role` | `"admin"` unlocks `admin_only` tools |
 | `_current_chat_source` | e.g. `"telegram"` - activates channel restrictions |
-| `_background_run` | marks automation runs (suppresses UI pushes) |
+| `_background_run` | marks automation runs (suppresses UI pushes); an engine flag, set once by the lane that built the agent |
 
 The first three are written through `vaf/core/identity_binding.py`, never by hand:
 `bind_identity(agent, identity)` writes all three unconditionally, so a field the new

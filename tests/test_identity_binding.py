@@ -308,7 +308,8 @@ def _finally_spans(path: Path) -> list:
 
 
 @pytest.mark.parametrize("module", [
-    "vaf/core/headless_runner.py",
+    # The runner's three lanes re-assert through their turn binding.
+    "vaf/core/turn_binding.py",
     "vaf/core/thinking_mode.py",
     "vaf/framework.py",
 ])

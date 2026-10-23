@@ -436,11 +436,16 @@ def test_the_runner_marks_the_unattended_turn_where_it_names_the_source():
     """
     from pathlib import Path
 
-    runner = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
-    region = runner.split('agent._current_chat_source = getattr(task, "source", "web")', 1)[1][:900]
+    import inspect
+
+    import vaf.core.headless_runner as hr
+
+    # The queue task's turn binding holds both facts together (vaf/core/turn_binding.py).
+    region = inspect.getsource(hr._task_turn_binding)
+    assert 'source=str(getattr(task, "source", None) or "web")' in region
     # Only a TIMER is unattended - the person's own scheduled order. A finished background
     # command is not an order to send, so what follows it stays behind the hold.
-    assert 'agent._unattended_turn = bool(_wake_kind(_meta) == "timer" or _meta.get("compaction"))' in region
+    assert 'unattended=bool(_wake == "timer" or task_meta_for_env.get("compaction"))' in region
 
 
 # ---- one chat, one card --------------------------------------------------------

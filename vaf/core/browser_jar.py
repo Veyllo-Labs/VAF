@@ -99,15 +99,21 @@ def _state_dir() -> Path:
 
 def _linux_start_ticks(pid: int) -> Optional[float]:
     """Field 22 of /proc/<pid>/stat: when the process started, in clock ticks since
-    boot. None for a process that is gone or a zombie."""
+    boot. None only for a process that is known to be gone (or a zombie); a read
+    that fails for another reason - a full file-descriptor table (EMFILE), say -
+    answers 0.0, "exists", because reading a live holder as gone writes it out of
+    the record and lets another process take the browser under it."""
     try:
         raw = Path(f"/proc/{int(pid)}/stat").read_bytes()
     except (FileNotFoundError, ProcessLookupError):
-        return None
-    except PermissionError:
-        return 0.0
+        if os.path.isdir("/proc/self"):
+            return None
+        # No /proc at all: nothing says the process is gone. Existence without a
+        # start mark, so a crash is still noticed.
+        from vaf.core.platform import Platform
+        return 0.0 if Platform.is_process_running(int(pid)) else None
     except OSError:
-        return None
+        return 0.0
     try:
         # The command name (field 2) is in parentheses and may hold spaces or
         # parentheses itself; everything after the LAST ")" is fields 3 onward.

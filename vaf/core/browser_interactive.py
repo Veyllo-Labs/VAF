@@ -1017,6 +1017,10 @@ class InteractiveBrowserManager:
         self._lease_token: Optional[str] = None
         self._run_token: Optional[str] = None
         self._run_generation = 0
+        # The lease a run on ANOTHER browser evicted here: (scope, session), for
+        # that run's give-back. Kept apart from _pre_agent_holder, which belongs
+        # to a run of this browser.
+        self._elsewhere_holder: Optional[tuple] = None
 
     # -- environment -------------------------------------------------------
     def cdp_base(self) -> str:
@@ -1092,6 +1096,34 @@ class InteractiveBrowserManager:
         except Exception:
             # An interactive-manager failure must never fail an agent run.
             pass
+
+    def evict_for_run_elsewhere(self) -> None:
+        """A run pinned to ANOTHER browser takes this one's lease (see the module
+        stop_for_agent_run): evict it and remember the holder for the give-back,
+        and nothing else. No agent drives this browser, so it is not marked as
+        driven, and this manager's own run state (`_agent_active`, its holder
+        entry in the cross-process record, its run generation) is left alone: it
+        may belong to a run of its own that is still driving."""
+        with self._lock:
+            lease = self._lease
+            if lease is None:
+                return
+            self._elsewhere_holder = (lease.user_scope_id, lease.session_id)
+        try:
+            self.stop("agent_takeover", force=True)
+        except Exception:
+            pass
+
+    def give_back_elsewhere(self) -> None:
+        """The other half: the run elsewhere has ended, so the evicted holder may
+        resume here. Emits the give-back only."""
+        with self._lock:
+            holder, self._elsewhere_holder = self._elsewhere_holder, None
+        if holder is None:
+            return
+        self._emit({"status": "stopped", "reason": "agent_done",
+                    "saving": False, "streamPath": "", "resumable": True}, holder[1])
+        self._arm_unclaimed_parker()
 
     def give_back_pending(self) -> bool:
         """Is an evicted person waiting to get this browser back?
@@ -2163,7 +2195,10 @@ def stop_for_agent_run(container_name: Optional[str] = None) -> None:
             with mgr._lock:
                 has_lease = mgr._lease is not None
             if has_lease:
-                mgr.stop_for_agent_run()
+                # Eviction and give-back only: that browser is not the one this
+                # run drives, and its own run state may belong to a run of its
+                # own (agent_run_ended below says why).
+                mgr.evict_for_run_elsewhere()
     except Exception:
         pass
 
@@ -2238,22 +2273,28 @@ def agent_run_ended(notify: bool = True,
                     container_name: Optional[str] = None) -> None:
     """Hook for BrowserAgentTool.run()'s finally. Never raises.
 
-    Mirrors stop_for_agent_run: whichever manager was made to give up its lease
-    also has to be released and told to hand back. Only managers that actually
-    remember a holder are touched, so a manager that never evicted anybody keeps
-    its own `_agent_active` untouched - the asymmetry `_manager_for_run` exists to
-    prevent (clearing the flag on a manager that never set it) is not reintroduced
-    here.
+    Mirrors stop_for_agent_run: the run's own manager ends the run, and every
+    other manager whose lease this run evicted is told to hand back - the
+    give-back only (give_back_elsewhere). Another manager's `_agent_active`, its
+    holder entry in the cross-process record and its run generation belong to
+    that browser's own run, which may still be driving: ending them here was the
+    asymmetry `_manager_for_run` exists to prevent, one level up. notify=False
+    (the spawn lane) leaves the remembered holders for the run that ends with a
+    notification.
     """
     try:
         run_mgr = _manager_for_run(container_name)
         run_mgr.agent_run_ended(notify=notify)
+        if not notify:
+            return
         for mgr in _all_managers():
             if mgr is run_mgr:
                 continue
-            with mgr._lock:
-                remembered = mgr._pre_agent_holder is not None
-            if remembered:
-                mgr.agent_run_ended(notify=notify)
+            # The give-back only. The full agent_run_ended on another manager
+            # ended THAT browser's run too: measured, a run ending on a dedicated
+            # instance released the shared browser's holder entry and moved its
+            # generation on while another run still drove it there, so a coder
+            # child's render would wipe under that run.
+            mgr.give_back_elsewhere()
     except Exception:
         pass

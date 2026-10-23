@@ -1374,13 +1374,18 @@ def test_the_suite_cannot_run_a_command_in_a_real_container():
     command in one. The container name does not exist, so even without the guard
     nothing real is touched; with it, docker is never asked.
 
-    MUTATION: remove the guard's seam half - red."""
+    MUTATIONS: remove the guard's seam half (red); leave the stop escalation's
+    docker restart unstubbed (red)."""
     import warnings
 
     from vaf.core import containers
 
     assert bi._purge_container_downloads is not bi._real_purge_container_downloads
     assert bi._sweep_container_downloads is not bi._real_sweep_container_downloads
+    from vaf.tools.browser_agent import BrowserAgentTool
+    assert (BrowserAgentTool.__dict__["_restart_browser_container"]
+            is not BrowserAgentTool.__dict__["_real_restart_browser_container"]), (
+        "the stop escalation's docker restart reaches the real container")
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         r = containers.docker(["exec", "vaf-test-no-such-container", "true"], timeout=10)

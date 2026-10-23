@@ -375,7 +375,10 @@ def _no_command_in_a_real_container():
     Downloads. Two layers:
 
     - the browser helpers that issue those commands are stubbed for the session
-      (the real ones stay reachable as `bi._real_<name>` for the tests about them);
+      (the real ones stay reachable as `bi._real_<name>` for the tests about them),
+      and so is the stop escalation's `docker restart` of the run's container
+      (`BrowserAgentTool._restart_browser_container`, real one as
+      `_real_restart_browser_container`), which calls subprocess directly;
     - `containers.docker`, the seam every other container command goes through,
       refuses `exec`, `cp`, `run`, `rm`, `start`, `stop`, `restart` and `kill` while
       `subprocess.run` is the real one. The refusal answers like a docker daemon
@@ -388,6 +391,12 @@ def _no_command_in_a_real_container():
 
     import vaf.core.browser_interactive as bi
     import vaf.core.containers as containers
+    from vaf.tools.browser_agent import BrowserAgentTool
+
+    real_restart = BrowserAgentTool.__dict__["_restart_browser_container"]
+    BrowserAgentTool._real_restart_browser_container = real_restart
+    BrowserAgentTool._restart_browser_container = staticmethod(
+        lambda container_name="vaf-browser": None)
 
     stubs = {
         "_purge_container_downloads": lambda name: None,
@@ -421,6 +430,7 @@ def _no_command_in_a_real_container():
         containers.docker = real_docker
         for name, real in saved.items():
             setattr(bi, name, real)
+        BrowserAgentTool._restart_browser_container = real_restart
 
 
 @pytest.fixture(autouse=True, scope="session")

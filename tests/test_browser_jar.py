@@ -635,3 +635,107 @@ def test_the_run_reads_its_generation_after_the_gate_and_ends_before_opening_it(
     read = body.index("_run_gen = run_generation(container_name=container_name)")
     assert read < body.index("hand_jar_to_run(user_scope_id=user_scope_id"), body[read - 200:read]
     assert "run_generation=_run_gen" in body
+
+
+def _dedicated(monkeypatch, scope="scope-x", name="vaf-browser-u-0123456789ab"):
+    """A per-user instance's manager, registered the way the pool registers it."""
+    m = bi.InteractiveBrowserManager(cdp_base_url="http://127.0.0.1:49222",
+                                     container_name=name, dedicated_scope=scope)
+    m._emit = lambda payload, session_id: None
+    m._ensure_janitor = lambda: None
+    monkeypatch.setitem(bi._pool_managers, name, m)
+    return m, name
+
+
+def test_a_run_ending_on_another_browser_leaves_the_shared_run_alone(box, monkeypatch):
+    """Run B drives the SHARED browser (it evicted Y's lease there); run P runs and
+    ends on X's own instance. The module hook used to call the full
+    agent_run_ended on every manager remembering an evicted lease - so P's end
+    released B's holder entry, moved the shared generation on and cleared its
+    flag while B still drove, and a coder child's render would have wiped under
+    B. Other managers get the give-back only, and only for a lease THIS run
+    evicted.
+
+    MUTATION: call the full agent_run_ended on the other managers again - red."""
+    web = box["web"]
+    emitted = []
+    web._emit = lambda payload, session_id: emitted.append((dict(payload), session_id))
+    assert web.start("scope-y", "sess-y", save=False)["status"] == "active"
+    bi.stop_for_agent_run(container_name="vaf-browser")
+    bi.hand_jar_to_run(user_scope_id="scope-y", persistent=True, container_name="vaf-browser",
+                       run_generation=bi.run_generation(container_name="vaf-browser"))
+    generation = web.run_generation()
+
+    _ded, name = _dedicated(monkeypatch)
+    bi.stop_for_agent_run(container_name=name)
+    bi.hand_jar_to_run(user_scope_id="scope-x", persistent=True, container_name=name,
+                       run_generation=bi.run_generation(container_name=name))
+    bi.agent_run_ended(container_name=name)
+
+    data = json.loads((bj._state_dir() / "vaf-browser.json").read_bytes())
+    assert [h["kind"] for h in data["holders"]] == [bj.KIND_RUN], data["holders"]
+    assert web._run_token is not None and web._agent_active is True
+    assert web.run_generation() == generation
+    assert not [p for p, _ in emitted if p.get("resumable")], "Y was told to resume while B drives"
+
+    bi.agent_run_ended(container_name="vaf-browser")           # B ends
+    data = json.loads((bj._state_dir() / "vaf-browser.json").read_bytes())
+    assert data["holders"] == []
+    assert [sid for p, sid in emitted if p.get("resumable")] == ["sess-y"]
+
+
+def test_a_lease_evicted_for_a_run_elsewhere_gets_the_give_back_and_nothing_else(box, monkeypatch):
+    """The case the cross-manager loop exists for: the person's lease sits on the
+    shared browser while their run pinned their own instance. The lease is evicted
+    and handed back at the run's end; the shared browser is never marked as driven
+    by an agent (none drives it), so it is not left refusing every start.
+
+    MUTATION: evict through the full stop_for_agent_run again - red."""
+    web = box["web"]
+    emitted = []
+    web._emit = lambda payload, session_id: emitted.append((dict(payload), session_id))
+    assert web.start("scope-x", "sess-x", save=False)["status"] == "active"
+    _ded, name = _dedicated(monkeypatch)
+    bi.stop_for_agent_run(container_name=name)
+    assert web._lease is None and web._agent_active is False
+    bi.agent_run_ended(container_name=name)
+    assert [sid for p, sid in emitted if p.get("resumable")] == ["sess-x"]
+    assert web.start("scope-x", "sess-x", save=False)["status"] == "active"
+
+
+@pytest.mark.skipif(not __import__("sys").platform.startswith("linux"),
+                    reason="the /proc read is Linux's")
+def test_a_read_error_is_not_taken_for_a_gone_holder(monkeypatch):
+    """Only "this pid is not in /proc" means gone. With the file-descriptor table
+    full (EMFILE) the read fails although the holder lives, and reading it as gone
+    wrote it out of the record. Without /proc at all, existence is asked of the
+    OS instead.
+
+    MUTATIONS: answer gone for any OSError (red on EMFILE); answer gone when /proc
+    is missing (red on the second half)."""
+    import errno
+    import os
+    import pathlib
+
+    me = {"pid": os.getpid(), "started": bj._process_started(os.getpid())}
+    real_read = pathlib.Path.read_bytes
+
+    def emfile(self):
+        if str(self).startswith("/proc/"):
+            raise OSError(errno.EMFILE, "Too many open files")
+        return real_read(self)
+
+    monkeypatch.setattr(pathlib.Path, "read_bytes", emfile)
+    assert bj._alive(me), "a read error made a live holder look gone"
+
+    def no_proc(self):
+        if str(self).startswith("/proc/"):
+            raise FileNotFoundError(errno.ENOENT, "No such file or directory")
+        return real_read(self)
+
+    monkeypatch.setattr(pathlib.Path, "read_bytes", no_proc)
+    real_isdir = bj.os.path.isdir
+    monkeypatch.setattr(bj.os.path, "isdir",
+                        lambda p: False if str(p).startswith("/proc") else real_isdir(p))
+    assert bj._alive(me), "a missing /proc made a live holder look gone"
+    assert not bj._alive({"pid": 4194304 + 7, "started": 5.0}), "a pid that cannot exist lived"

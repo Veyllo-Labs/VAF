@@ -1676,8 +1676,12 @@ The contract:
   automation question with its handoff, whose waiting record, request and bundle
   are keyed on the user's scope), does not latch one itself, and the
   system prompt carries no `last_interaction` or `prior_topic` line, which would
-  show your customer what your user last wrote elsewhere. The customer's words
-  still become the goal of the chat they wrote in. If you narrow an agent that
+  show your customer what your user last wrote elsewhere. Nor does it carry your
+  user's profile digest (`known_facts`), their city, country, preferences, do's
+  and don'ts (name, language, main messenger and time settings stay), any home,
+  workspace or working-directory path, or hints from your user's other chats.
+  There is no opt-in under a set: put what the customer may know in the persona.
+  The customer's words still become the goal of the chat they wrote in. If you narrow an agent that
   talks to your own user, its turns stop answering those questions too: lift the
   set (`None`) for the turns your user sends.
 - **Not inherited by what a tool starts.** The set binds the agent's own calls.

@@ -599,13 +599,22 @@ If no suggestion is shown but you think a workflow would help: call `list_workfl
         last_interaction: Optional[Dict[str, Any]] = None,
         front_office: bool = False,
         session_id: Optional[str] = None,
+        answers_somebody_else: bool = False,
     ) -> str:
         """Build the complete system prompt.
 
         session_id: the chat this prompt is FOR. Required for anything
         session-derived (the workspace line): with parallel main workers the
         process-global session pointer can belong to a DIFFERENT chat, so
-        session-scoped content must never fall back to it (Rule 4)."""
+        session-scoped content must never fall back to it (Rule 4).
+
+        answers_somebody_else: True while the agent answers somebody else under its user's
+        identity (an allowed set holds). The user's profile digest (`known_facts`), the
+        machine's paths and the workspace stay out, and so do the profile details (city,
+        country, preferences, dos and don'ts) unless the owner opened their general memory
+        for Front Office turns (`use_general_memory`). A Front Office prompt is such a
+        prompt whatever the caller passes."""
+        third_party = bool(answers_somebody_else or front_office)
         parts = []
         # The <Action> declaration is a SOFT, optional transparency convention (docs/agents/ACTION_TAG.md):
         # the tool call is meant to follow it, and nothing breaks when it is omitted. gemma-4 uses native
@@ -839,15 +848,19 @@ Then use the results to answer. Do NOT guess from your training data!
                     _proj_base = str(_ws).rstrip("/") + "/"
             except Exception:
                 pass
-            context_lines.append(
-                f"os: {_os_name} | home: {_home} | this chat's workspace (agent files & projects): {_proj_base}"
-            )
-            context_lines.append(
-                "Never invent or shorten file paths - open files using the EXACT path "
-                "from a tool's output (e.g. a research report's 'Saved to:' line) or the "
-                "user. Agent-created files live in this chat's workspace folder above, not "
-                "directly under VAF_Projects/."
-            )
+            if third_party:
+                # Somebody else is answered: the user's home and folders are not theirs to see.
+                context_lines.append(f"os: {_os_name}")
+            else:
+                context_lines.append(
+                    f"os: {_os_name} | home: {_home} | this chat's workspace (agent files & projects): {_proj_base}"
+                )
+                context_lines.append(
+                    "Never invent or shorten file paths - open files using the EXACT path "
+                    "from a tool's output (e.g. a research report's 'Saved to:' line) or the "
+                    "user. Agent-created files live in this chat's workspace folder above, not "
+                    "directly under VAF_Projects/."
+                )
         except Exception:
             pass
 
@@ -1058,7 +1071,7 @@ Then use the results to answer. Do NOT guess from your training data!
         # When CWD is the application directory, do not expose the path or name so the agent
         # is not tempted to search or modify it; show a neutral workspace label instead.
         # ═
-        if self.agent and hasattr(self.agent, 'workspace'):
+        if self.agent and hasattr(self.agent, 'workspace') and not third_party:
             ws_info = self.agent.workspace.get_context_info()
             _vaf_root = Path(__file__).resolve().parents[2]
             _cwd_path = Path(ws_info['cwd']).resolve()
@@ -1196,6 +1209,17 @@ Then use the results to answer. Do NOT guess from your training data!
         if username or user_scope_id:
             user_data = {}
             known_facts = ""
+            # What the user's profile shows beyond what a reply needs: always to the user, to
+            # somebody else only when the owner opened their general memory for Front Office
+            # turns. An embedder's allowed set has no such switch and stays closed.
+            owner_profile_open = not third_party
+            if third_party and front_office:
+                try:
+                    from vaf.core.front_office_profile import load_front_office_profile
+                    owner_profile_open = bool(
+                        load_front_office_profile(username).get("use_general_memory"))
+                except Exception:
+                    owner_profile_open = False
             
             if username:
                 try:
@@ -1206,16 +1230,16 @@ Then use the results to answer. Do NOT guess from your training data!
                     if ui.get("preferred_language"):
                         user_data["preferred_language"] = ui.get("preferred_language")
                     city_val = (ui.get("city") or "").strip()
-                    if city_val:
+                    if city_val and owner_profile_open:
                         user_data["city"] = city_val
                     country_val = (ui.get("country") or "").strip()
-                    if country_val:
+                    if country_val and owner_profile_open:
                         user_data["country"] = country_val
-                    if ui.get("preferences"):
+                    if ui.get("preferences") and owner_profile_open:
                         user_data["preferences"] = ui.get("preferences")
-                    if ui.get("dos"):
+                    if ui.get("dos") and owner_profile_open:
                         user_data["dos"] = ui.get("dos")
-                    if ui.get("donts"):
+                    if ui.get("donts") and owner_profile_open:
                         user_data["donts"] = ui.get("donts")
                     if ui.get("main_messenger") and str(ui.get("main_messenger")).strip().lower() in MAIN_MESSENGERS:
                         user_data["main_messenger"] = (ui.get("main_messenger") or "").strip().lower()
@@ -1231,7 +1255,9 @@ Then use the results to answer. Do NOT guess from your training data!
                 except Exception:
                     user_data["name"] = username
 
-            if user_scope_id:
+            # The digest is the top facts of the user's general memory: somebody else sees it
+            # only when the owner opened that memory for Front Office turns.
+            if user_scope_id and owner_profile_open:
                 try:
                     scope_str = str(user_scope_id)
                     cache_dir = Path(Config.APP_DIR) / "user_profile_cache"

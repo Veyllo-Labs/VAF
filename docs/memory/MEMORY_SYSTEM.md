@@ -428,7 +428,7 @@ Measured on a real store on 2026-08-30 - 704 chunks, of which 475 (67.5%) were d
 
 | query the product actually runs | document chunks in its top 8 |
 |---|---|
-| `user profile facts preferences about this user` (the `known_facts` block of **every** system prompt) | 4 / 8 |
+| `user profile facts preferences about this user` (the `known_facts` block of every system prompt of the user's own turns; a Front Office turn carries it only with **Also use my general memory** on) | 4 / 8 |
 | `plans, deadlines, appointments and commitments the user has stated` (relevance rung) | 6 / 8 |
 | `a recurring routine or habit the user does regularly` (proactive digest) | 6 / 8 |
 

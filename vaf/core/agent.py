@@ -5577,6 +5577,7 @@ class Agent:
             # Session-derived prompt content (workspace line) must key on THIS
             # chat - the process-global fallback races under parallel workers.
             session_id=getattr(self, "current_session_id", None),
+            answers_somebody_else=getattr(self, "_allowed_tools", None) is not None,
         )
         
         # Optional: Load Project Context (VAF.md), for the chat's own project folder.
@@ -9304,6 +9305,9 @@ class Agent:
         - front-office mode means a STRANGER is driving this turn, and the repo's
           authoritative filter for that is the from_contact flag the runner sets
           here, not a session-id prefix;
+        - an allowed set means the agent answers somebody else under its user's
+          identity, so the user's other chats are not theirs to read
+          (`_front_office_mode` alone missed an embedder's set);
         - a voice call without an enrolled speaker profile treats every voice in
           the room as the owner, and the answer is spoken out loud.
         """
@@ -9312,6 +9316,8 @@ class Agent:
         if not query or not str(query).strip():
             return
         if getattr(self, "_background_run", False) or getattr(self, "_front_office_mode", False):
+            return
+        if getattr(self, "_allowed_tools", None) is not None:
             return
         if str(getattr(self, "_current_chat_source", "") or "") == "voice_call":
             return
@@ -10120,6 +10126,7 @@ class Agent:
                 last_interaction=self._last_interaction_for_prompt(),
                 front_office=getattr(self, "_front_office_mode", False),
                 session_id=getattr(self, "current_session_id", None),
+                answers_somebody_else=getattr(self, "_allowed_tools", None) is not None,
             )
         
         # ------------------------------------------------------------------

@@ -36,6 +36,8 @@ When the user has at least one messaging connection (Telegram, Discord, WhatsApp
 
 That block is rebuilt every turn (dynamic system prompt), so the model always sees the latest user identity.
 
+A turn that answers somebody else under the user's identity (an allowed set holds: a Front Office contact, or an embedder's set; `build_prompt(answers_somebody_else=True)`) keeps the name, preferred language, main messenger and time settings, which the reply needs, and leaves out the city, country, preferences, do's and don'ts and the `known_facts` summary. A Front Office turn gets them back only while the owner's **Also use my general memory** is on; an embedder's set has no such switch.
+
 ## Tool: update_user_identity
 
 - **Module**: `vaf/tools/user_identity.py`

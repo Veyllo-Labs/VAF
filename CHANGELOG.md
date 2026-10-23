@@ -16,7 +16,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **`Agent.set_allowed_tools(names)`** fixes which tools an agent offers and runs, for every
   identity, until lifted with `None`, so an agent that answers a stranger cannot use your
   own tools, and a turn under the set never answers a question the agent has open for your
-  user; `ToolCaller(allowed_tools=)` is the same for a lane of your own. See "Which
+  user, and its prompt carries none of your user's profile, machine paths or other chats;
+  `ToolCaller(allowed_tools=)` is the same for a lane of your own. See "Which
   tools this agent may use" in `docs/EMBEDDING.md`.
 
 - **`vaf.is_error_reply(text)`** tells a turn that failed from a turn that answered. `run()`
@@ -532,6 +533,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   without anyone answering. While a question was open, every other account's background work
   was held back as well. A question now belongs to the account it was asked of. Restart VAF
   after updating so the fix takes effect.
+
+- **A contact no longer sees what your agent knows about you.** When the agent answered a
+  contact on WhatsApp, Telegram, Discord or mail, its instructions still held a summary of
+  facts from your memory, your city, country, preferences, do's and don'ts, and the folders of
+  the computer VAF runs on, so a contact who asked could be told them, even with **Also use my
+  general memory** switched off. A contact's turn now gets your name, your language and how to
+  reach you, and the rest of what the agent knows about you only while that switch is on.
+  Restart VAF after updating so the fix takes effect.
 
 ### Fixed
 

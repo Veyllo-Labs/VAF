@@ -133,6 +133,7 @@ def test_a_normal_chat_turn_gets_them(spy):
     {"_front_office_mode": True},     # a STRANGER is driving this turn
     {"_current_chat_source": "voice_call"},  # every voice in the room counts as the owner
     {"_current_user_scope_id": None},        # fail closed on an unknown caller
+    {"_allowed_tools": frozenset({"web_search"})},  # somebody else is answered (any set)
 ])
 def test_the_gated_lanes_never_even_look(spy, attrs):
     agent = _Agent(**attrs)

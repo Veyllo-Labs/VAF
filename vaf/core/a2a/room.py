@@ -276,6 +276,36 @@ def derive_peer_id(key: str, room_id: str) -> str:
     return "p-" + digest[:10]
 
 
+def conversation_key(room_id: str, peer_id: str) -> str:
+    """The key of the conversation of its own one participant's agent has in one room: the
+    runner binds an agent room's turn to it, and its working memory is stored under it
+    (`MainPersistenceManager(conversation=)`). Per room AND per participant, so two accounts'
+    agents in a shared room never share one."""
+    return f"{room_id}.{peer_id}"
+
+
+def conversation_room_open(key: str, *, base: Optional[Path] = None) -> bool:
+    """Whether the room a conversation key belongs to still exists on this machine and is
+    not closed: while it is, its working memory is the room's to keep, however long the room
+    has been quiet. A key that names no room (not of `conversation_key`'s shape, a room
+    deleted or never here) answers False. A room that cannot be read answers True: the
+    question decides a deletion, and keeping a store is the recoverable answer."""
+    text = str(key or "").strip()
+    room_id, sep, peer = text.rpartition(".p-")
+    if not (room_id and sep and peer):
+        return False
+    try:
+        room = Room.open(room_id, base=base)
+    except StoreError:              # absent, or an id no room can have (UnsafeName)
+        return False
+    except Exception:
+        return True
+    try:
+        return not room.closed
+    except Exception:
+        return True
+
+
 def peer_tag(peer_id: str, *, width: int = 2) -> str:
     """A short, stable number for a peer: the "51" in "Codex51".
 

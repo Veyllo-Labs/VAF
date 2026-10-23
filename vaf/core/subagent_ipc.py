@@ -32,7 +32,7 @@ except ImportError:
         HAS_MSVCRT = True
     except ImportError:
         HAS_MSVCRT = False
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, Iterable, List
 from datetime import datetime
 from dataclasses import dataclass, asdict, field, fields
 from enum import Enum
@@ -567,9 +567,28 @@ class SubAgentIPC:
         # Filter by session if requested
         if session_id:
             tasks = [t for t in tasks if t.session_id == session_id]
-        
+
         return tasks
-    
+
+    def get_pending_results_for(self, session_id: Optional[str],
+                                own_task_ids: Iterable[str] = ()) -> List[SubAgentTask]:
+        """The results a turn inside ONE lane may take: its chat's, or, when it serves no
+        chat, only the tasks it started itself (``own_task_ids``).
+
+        `get_pending_results(None)` answers "every session's results", which is the drain's
+        question and nobody else's. An in-lane check that asked it with no session declared
+        (a scheduled automation, a terminal run with no chat) took every account's results:
+        measured, an agent room's coder result, which names no chat and waits for nobody,
+        went into another account's automation prompt and was removed from the queue. A
+        result that names no session belongs to the lane that started it and to no other;
+        a chat's results are that chat's."""
+        if session_id:
+            return self.get_pending_results(session_id=session_id)
+        own = {str(t) for t in (own_task_ids or ())}
+        if not own:
+            return []
+        return [t for t in self.get_pending_results() if t.task_id in own]
+
     def consume_result(self, task_id: str) -> Optional[SubAgentTask]:
         """
         Get and remove a specific result from the queue.

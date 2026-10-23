@@ -369,6 +369,28 @@ def test_an_own_conversation_carries_nothing_and_loads_nothing(world, monkeypatc
     assert not agent.context_manager.state.narrative_summary
 
 
+def test_a_room_store_that_cannot_open_leaves_no_store_and_no_turn(world, monkeypatch):
+    """The store of a conversation of its own cannot be created (a full disk, a lost mount).
+    The binder used to leave the previous chat's store attached, whose plan and tasks the plan
+    gate and the auto-continue read. Now nothing is bound and the turn does not start."""
+    import vaf.core.main_persistence as mp
+    agent = world.make()
+    bind_turn(agent, _web(OWNER, OWNER_SESSION))
+    assert agent.main_persistence.session_id == OWNER_SESSION
+    real_init = mp.MainPersistenceManager.__init__
+
+    def _no_room_store(self, base_dir, session_id=None, *, conversation=None):
+        if conversation:
+            raise OSError("no space left on device")
+        real_init(self, base_dir, session_id=session_id, conversation=conversation)
+
+    monkeypatch.setattr(mp.MainPersistenceManager, "__init__", _no_room_store)
+    with pytest.raises(RuntimeError):
+        bind_turn(agent, TurnBinding(identity=OWNER, source="web", conversation="room-x.p-abc"))
+    assert agent.main_persistence is None, "the previous chat's store stayed bound"
+    assert agent.prompt_manager.mpm is None
+
+
 # ── AC 7: refusal and validation change nothing ────────────────────────────────────────────
 
 def _snapshot(agent):

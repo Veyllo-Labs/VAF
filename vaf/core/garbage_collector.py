@@ -14,7 +14,8 @@ Runs as a daemon thread every gc_interval_hours (default 12).
 - Thinking run logs (thinking_mode_logs/**/*.json): deleted by mtime (gc_max_age_hours).
 - Session context dirs (.vaf/main/sessions/<id>/, and .vaf/main/conversations/<key>/ for an
   agent room's turn): one accumulates per chat and per room and account; deleted by the
-  newest-file mtime (gc_max_age_hours), skipping the currently-live one.
+  newest-file mtime (gc_max_age_hours), skipping the currently-live one. A room's store is
+  kept while its room exists and is not closed, and ages out like a chat's after that.
 Controlled via config: gc_enabled, gc_interval_hours, gc_max_age_hours, thinking_gc_hours,
 security_log_retention_days.
 """
@@ -57,6 +58,16 @@ VAF_TEMP_PREFIXES = ("vaf_",)
 _DEFAULT_ENABLED = True
 _DEFAULT_INTERVAL_HOURS = 12
 _DEFAULT_MAX_AGE_HOURS = 48
+
+
+def _room_still_open(store_name: str) -> bool:
+    """Whether a conversation store's room still exists and is not closed (its folder name is
+    the conversation key). Never raises; an answer it cannot give keeps the store."""
+    try:
+        from vaf.core.a2a.room import conversation_room_open
+        return conversation_room_open(store_name)
+    except Exception:
+        return True
 
 
 class GarbageCollector:
@@ -282,13 +293,21 @@ class GarbageCollector:
             if not sessions_dir.exists():
                 continue
             active_name = MainPersistenceManager._safe_session_dir(live_key) if live_key else None
-            self._clean_context_dirs(sessions_dir, active_name, cutoff, stats)
+            # A room's working memory is the room's while the room is open, however long it
+            # has been quiet: an idle weekend must not cost an open room its tasks and notes.
+            # Only once its room is closed or gone does it age out like a chat's store.
+            # Decided here, where the store lives: a room can be deleted from a terminal
+            # (`vaf a2a`) whose working directory holds no such store.
+            keep = _room_still_open if folder == CONVERSATIONS_DIR else None
+            self._clean_context_dirs(sessions_dir, active_name, cutoff, stats, keep=keep)
 
     def _clean_context_dirs(self, sessions_dir: Path, active_name: Optional[str],
-                            cutoff: datetime, stats: Dict[str, int]) -> None:
+                            cutoff: datetime, stats: Dict[str, int], *, keep=None) -> None:
         try:
             for sdir in sessions_dir.iterdir():
                 if not sdir.is_dir() or sdir.name == active_name:
+                    continue
+                if keep is not None and keep(sdir.name):
                     continue
                 try:
                     files = [f for f in sdir.rglob("*") if f.is_file()]

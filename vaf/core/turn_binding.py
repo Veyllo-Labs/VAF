@@ -253,7 +253,8 @@ def bind_turn(agent: Any, binding: TurnBinding) -> None:
 
     Raises `TurnRefused` when the account may not start work, before anything changes. Any
     other exception (a session that cannot be loaded, which fails closed in
-    `load_session_context`) propagates: the lane decides, and a turn that could not be bound
+    `load_session_context`; a conversation of its own whose store cannot be opened, which
+    raises RuntimeError) propagates: the lane decides, and a turn that could not be bound
     does not run. No ``with`` and no rollback (module docstring).
     """
     from vaf.core.revocation import account_stands
@@ -286,6 +287,12 @@ def bind_turn(agent: Any, binding: TurnBinding) -> None:
         agent.init_chat()
         # After init_chat, which rebuilds the prompt manager with a store of its own.
         agent._bind_session_persistence(None, conversation=str(binding.conversation))
+        # A conversation of its own whose store did not open does not run: it would run with
+        # no working memory of its own. The binder already left no store bound, so nothing of
+        # the chat this agent served before is reachable either.
+        store = getattr(agent, "main_persistence", None)
+        if getattr(store, "conversation", None) != str(binding.conversation).strip():
+            raise RuntimeError("the working memory of this conversation could not be opened")
 
     agent._chat_project_dir = str(binding.project_dir or "")
 

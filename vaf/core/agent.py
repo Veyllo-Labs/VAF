@@ -4408,7 +4408,13 @@ class Agent:
             hb_timeout = max(20, min(600, hb_timeout))
             ipc.check_zombies(timeout_seconds=hb_timeout)
             
-            results = ipc.get_pending_results(session_id=current_session)
+            # An in-lane check takes its own chat's results, or with no chat only the tasks
+            # this agent started; never every session's (get_pending_results_for).
+            if all_sessions:
+                results = ipc.get_pending_results()
+            else:
+                results = ipc.get_pending_results_for(
+                    current_session, own_task_ids=list(self._async_subagent_tasks))
             # Never drain a result an in-process workflow engine loop is actively awaiting
             # and will consume itself (engine._await_subagent). Without this, the all-sessions
             # runner drain would steal a step result, timing out a successful step. The engine
@@ -5603,7 +5609,13 @@ class Agent:
         intent never leak across chats or users, or, with ``conversation``, to the store of a
         conversation of its own (an agent room's turn), which no chat id reaches. init_chat
         rebuilds prompt_manager (with a store of its own), so re-point prompt_manager.mpm too.
-        Best-effort: never break a turn on failure."""
+        Best-effort: never break a turn on failure, and fail closed: the store being left is
+        unbound first, so a store that cannot be opened leaves NONE bound, never the previous
+        chat's (whose plan and tasks the plan gate and the auto-continue read). Every reader
+        tolerates None, as after a failed session load."""
+        self.main_persistence = None
+        if getattr(self, "prompt_manager", None) is not None:
+            self.prompt_manager.mpm = None
         try:
             from vaf.core.main_persistence import MainPersistenceManager
             self.main_persistence = MainPersistenceManager(

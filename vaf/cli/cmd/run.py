@@ -186,9 +186,13 @@ def _check_subagent_results(tui, agent):
         from vaf.core.subagent_ipc import get_ipc, get_current_session_id
         ipc = get_ipc()
         
-        # CRITICAL: Only get results for CURRENT session (not old sessions!)
+        # CRITICAL: Only get results for CURRENT session (not old sessions!), and with no
+        # session only the tasks this agent started: the queue is shared with the running
+        # service, whose sessionless results (an agent room's) belong to nobody here.
         current_session = get_current_session_id()
-        results = ipc.get_pending_results(session_id=current_session)
+        results = ipc.get_pending_results_for(
+            current_session,
+            own_task_ids=list(getattr(agent, "_async_subagent_tasks", {}) or {}))
         if not results:
             return []
         

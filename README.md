@@ -226,10 +226,13 @@ vaf prompt "List modified files" --output-format json
 
 ### Web UI only
 
-If you want the web interface without the tray:
+If you want the web interface without the tray icon, `vaf start` runs VAF in the background.
+`vaf run --web` hosts the web UI from a terminal chat instead:
 ```bash
 vaf run --web
 ```
+It ends with the terminal session, answers no messengers or mail (that is the service's job),
+and uses an already running VAF instead of starting a second server.
 
 ---
 

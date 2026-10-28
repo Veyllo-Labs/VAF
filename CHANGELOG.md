@@ -620,6 +620,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   git-lfs, still runs, and `vaf git` and `vaf update` behave as before. `vaf audit` refuses a
   linked worktree (`git worktree add`) unless you add `--linked-worktree`. Applications built
   on VAF get the same runner as `vaf.run_project_git`. Restart VAF after updating.
+- **`vaf run --web` no longer lets a messenger contact drive your terminal.** In the terminal
+  lane that hosts the web UI, a message from a WhatsApp, Telegram or Discord contact, or a mail
+  the agent was to answer, ran as your own turn with all your tools and without the Inbound
+  limits, and a bare `quit`, `settings`, `restart` or `/export <path>` in it acted on your
+  terminal (ending the session, opening the settings menu, restarting VAF, writing a file);
+  `@<path>` read a file into the turn. That lane now declines messenger and mail tasks with a
+  note in the terminal: they are answered by VAF running as a service (`vaf start` or
+  `vaf tray`). Text that arrives from the web UI is never a terminal command either. And when
+  VAF is already running, `vaf run --web` no longer starts a second server, which used to start
+  a second copy of the messenger bridges, the mail sync and the schedulers. Restart a running
+  `vaf run --web` session after updating.
 
 ### Fixed
 

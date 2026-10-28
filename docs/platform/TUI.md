@@ -278,6 +278,27 @@ What it can change is decided by where a key is READ, not by how it looks:
   heartbeat is NOT part of that wiring and runs on every interactive lane: it
   is the only signal the tray has that a CLI session is alive, and without it
   the tray unloads the local model mid-session.)
+- What `vaf run --web` takes from its queue: the browser's chats and the web
+  server's session commands, nothing else. A task a messenger bridge or the
+  mail answering lane queued (`CHANNEL_TASK_SOURCES` in
+  `vaf/core/channel_ingress_policy.py`), and any task a contact sent
+  (`from_contact`), is declined with a note in the terminal and is gone (the
+  queue is in memory; the message stays in its chat's history). Only the
+  queue runner answers on a channel: it holds a contact's turn to the Front
+  Office tool set, briefs the model, pins the turn to the contact and
+  delivers the reply, and this lane would run the text as the owner's own
+  turn with every tool. The owner's own messenger tasks are declined too,
+  because the answer would never reach the messenger. Queued text is never
+  a shortcut, a command or an `@file` reference: those act on the operator's
+  terminal and disk, and only typed input reaches them. When a VAF service
+  already runs (`vaf.core.instance.find_service()`), the lane starts no
+  backend of its own: uvicorn runs the server's startup before it binds the
+  port, so a second server started a second set of bridges, the mail sync
+  and the schedulers before it failed on port 8001. The frontend step then
+  reuses the running frontend. NAMED BOUNDARY: a port 8001 held by something
+  that is not a found VAF service (another program, another account's VAF)
+  is not asked about; the lane starts its server, whose startup runs before
+  the bind fails. Guard: `tests/test_cli_web_lane_queue_tasks.py`.
   The transcript-replay half of that boundary is closed: a session switch
   clears the transcript and repaints the loaded conversation (newest
   `REPLAY_CAP` messages, an honest note names what was trimmed and points at

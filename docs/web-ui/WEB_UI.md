@@ -1059,9 +1059,13 @@ Cross Chat Hint: pointers into the user's **other** chats that were added to thi
 
 **Via CLI Flag**:
 ```bash
-vaf run --no-web  # Disable Web UI
-vaf run --web     # Enable Web UI (default)
+vaf run --no-web  # Disable Web UI (the default)
+vaf run --web     # Host the Web UI from this terminal session
 ```
+
+`vaf run --web` serves the web UI's chats from the terminal and ends with it. It answers no
+messengers and no mail (it declines their tasks with a note; `vaf start` or `vaf tray` answers
+them), and when VAF already runs it starts no second server and uses the running one.
 
 **Via Config File** (`config.json` in the VAF app directory):
 ```json

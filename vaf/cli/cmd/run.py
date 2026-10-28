@@ -16,6 +16,8 @@ from rich.console import Console
 from rich.panel import Panel
 from vaf.core.agent import Agent
 from vaf.core.session import failed_turn_meta, stored_turn_copy
+from vaf.core.channel_ingress_policy import CHANNEL_TASK_SOURCES, MAIL_CHANNEL
+from vaf.core.channels import channel_label
 from vaf.cli.ui import UI
 from vaf.core.log_helper import append_crash_log, get_dated_log_path
 import threading
@@ -946,6 +948,36 @@ def run_prompt(
     prompt_once(prompt_text(prompt_arg, prompt), output_format, session, save_session)
 
 
+def _declined_queue_task(task):
+    """The terminal note for a queued task this lane does not run, or None to run it.
+
+    `vaf run --web` takes the browser's chats and the web server's session commands from the
+    in-process queue. A task a channel lane queued (a messenger bridge, the mail answering
+    lane), and any task a contact sent, is answered on its channel by the queue runner alone:
+    it holds the turn to the Front Office tool set, briefs the model on who is writing, pins
+    the turn to the contact and delivers the reply. This loop has none of that, so it would
+    run the sender's text as the owner's own turn with every tool, and the answer would reach
+    the terminal and never the channel. The owner's own messenger tasks are declined too: a
+    turn whose answer cannot reach its channel is no answer. The queue is in memory, so a
+    declined task is gone; the message itself stays in its chat's history. The note never
+    quotes the task's text or chat label: both are the sender's words, and the terminal
+    prints with markup."""
+    source = str(getattr(task, "source", "") or "").strip().lower()
+    metadata = getattr(task, "metadata", None) or {}
+    from_contact = bool(metadata.get("from_contact")) if isinstance(metadata, dict) else False
+    if source not in CHANNEL_TASK_SOURCES and not from_contact:
+        return None
+    if source == MAIL_CHANNEL:
+        where = "mail"
+    elif source in CHANNEL_TASK_SOURCES:
+        where = channel_label(source)
+    else:
+        where = "a contact"
+    return (f"Not run here: a task from {where}. This terminal does not answer messengers or "
+            "mail, and the task is not run later. To answer them, run VAF as a service: "
+            "vaf start (or vaf tray).")
+
+
 def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None, web_enabled: bool = False):
     """Run with modern TUI interface."""
     global global_agent
@@ -1024,8 +1056,11 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
     # the dashboard ends with the session. An auto-started tray predates the
     # self-hosting and left a detached background service behind a command
     # that promised the opposite. Anyone who wants the persistent service
-    # starts `vaf tray`; if one is already running, its server on port 8001
-    # simply keeps serving and nothing here changes.
+    # starts `vaf tray`. When one already runs, this lane starts no backend of
+    # its own (the web UI block below asks find_service()): the server's
+    # startup runs before uvicorn binds the port, so a second server failed only
+    # after it had started a second set of messenger bridges, the mail sync and
+    # the schedulers in this process.
 
     # ═══════════════════════════════════════════════════════════════
     # SESSION-BASED SUB-AGENT CLEANUP
@@ -1217,13 +1252,23 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                 # installs lack. The --web gate in run() already fails friendly
                 # there; this import only runs once the extra is present.
                 from vaf.core.web_server import start_background_server
+                from vaf.core.instance import find_service
 
-                # 1. Start Python Backend (FastAPI + WebSocket)
-                # Respect local_network_enabled setting for host binding
-                local_network_enabled = Config.get("local_network_enabled", False)
-                api_host = "0.0.0.0" if local_network_enabled else "127.0.0.1"
-                tui.event("WebUI", f"Starting Backend API (Port 8001, Host: {api_host})...", style="dim")
-                start_background_server(host=api_host, port=8001)
+                # 1. Start Python Backend (FastAPI + WebSocket), unless VAF already runs:
+                # uvicorn runs the server's startup BEFORE it binds port 8001, so a second
+                # server would start a second copy of the messenger bridges, the mail sync
+                # and the schedulers in this process and only then fail on the port.
+                running_service = find_service()
+                if running_service is not None:
+                    tui.event("WebUI", f"VAF is already running (pid {running_service.pid}); it serves "
+                              "the web UI, messengers and mail. This terminal starts no second server.",
+                              style="warning")
+                else:
+                    # Respect local_network_enabled setting for host binding
+                    local_network_enabled = Config.get("local_network_enabled", False)
+                    api_host = "0.0.0.0" if local_network_enabled else "127.0.0.1"
+                    tui.event("WebUI", f"Starting Backend API (Port 8001, Host: {api_host})...", style="dim")
+                    start_background_server(host=api_host, port=8001)
                 
                 # 2. Start Next.js Frontend
                 from vaf.core.frontend_manager import FrontendManager
@@ -1442,6 +1487,12 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                         # never clears it.
                         if task is None:
                             continue
+                        # Before the session load: a declined task leaves no session behind.
+                        _declined_note = _declined_queue_task(task)
+                        if _declined_note:
+                            tq.task_done(task=task)
+                            tui.warning(_declined_note)
+                            continue
                         agent.load_session_context(task.session_id)
 
                         # Sync current_session with task session
@@ -1583,6 +1634,12 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                 if task is None:
                                     wake_word_detected_flag.clear()
                                     continue
+                                _declined_note = _declined_queue_task(task)
+                                if _declined_note:
+                                    tq.task_done(task=task)
+                                    tui.warning(_declined_note)
+                                    wake_word_detected_flag.clear()
+                                    continue
                                 agent.load_session_context(task.session_id)
 
                                 # Sync current_session with task session
@@ -1685,6 +1742,9 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                     tui.error(f"Console interaction failed: {e}")
                     tui.warning("Switching to standard input mode (no auto-complete/history)")
                     console_broken = True
+                    # What follows is typed, also when the failure came after a queued task
+                    # was taken (that task is lost with the failed prompt).
+                    is_web_input = False
                     try:
                         user_input = input("Message: ")
                     except EOFError:
@@ -1799,6 +1859,16 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                 try:
                     current_session = session_mgr.load(target_session_id)
                 except: pass
+
+            # Text from the queue is a chat message and nothing else. The shortcuts, the slash
+            # commands and the @file expansion below act on the operator's terminal and disk
+            # (quit ends this session, settings opens a menu here, /export writes a file,
+            # @<path> reads one into the turn), and the text was written in a browser, by
+            # whoever is signed in there. Typed input keeps all three.
+            if is_web_input:
+                current_session.add_message("user", user_input)
+                _process_agent_message(agent, user_input, tui, current_session)
+                continue
             
             # ═══════════════════════════════════════════════════════════════
             # KEYBOARD SHORTCUTS (single letters)

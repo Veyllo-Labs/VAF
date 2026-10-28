@@ -124,9 +124,10 @@ NAMED BOUNDARY: `vaf run --web` serves the owner's browser chats without the run
 this binding. That mode hosts the web server in the terminal's process, and its loop takes a
 queued chat with `load_session_context` alone, on an agent bound to the machine owner: it cannot
 bind a task's identity, role or account. So it runs only the owner's own chats (the local admin's
-scope) and the web server's session commands; a messenger or mail task, any task a contact sent,
-and another account's chat (a LAN account, a second admin) are declined with a note in the
-terminal (`_declined_queue_task` in `vaf/cli/cmd/run.py`). While a VAF service runs, that mode
+scope), the owner's session commands and the config reload; a messenger or mail task, any task
+a contact sent, another account's chat or session command (a LAN account, a second admin), and a
+wake turn (a fired timer, a background command's or a draft's report) are declined with a note in
+the terminal (`_declined_queue_task` in `vaf/cli/cmd/run.py`). While a VAF service runs, that mode
 starts no server of its own, so the service's runner serves the browser. Every other web, channel
 and room turn goes through the runner's lanes above.
 

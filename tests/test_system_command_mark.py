@@ -84,7 +84,8 @@ def test_no_code_decides_a_command_from_its_text():
     runner = (ROOT / "vaf" / "core" / "headless_runner.py").read_bytes().decode("utf-8")
     assert "is_cmd = is_system_command(task)" in runner
     run = (ROOT / "vaf" / "cli" / "cmd" / "run.py").read_bytes().decode("utf-8")
-    assert run.count("if is_system_command(task):") == 2
+    # Both terminal blocks, and the decline that judges a command by whose it is.
+    assert run.count("if is_system_command(task):") == 3
 
 
 def test_the_classifier_does_not_read_the_text(queue):

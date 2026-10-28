@@ -232,8 +232,8 @@ If you want the web interface without the tray icon, `vaf start` runs VAF in the
 vaf run --web
 ```
 It ends with the terminal session, answers only your own web chats (no messengers, no mail, no
-other accounts: that is the service's job), and uses an already running VAF instead of starting
-a second server.
+other accounts, no timers or background-command reports: that is the service's job), and uses an
+already running VAF instead of starting a second server.
 
 ---
 

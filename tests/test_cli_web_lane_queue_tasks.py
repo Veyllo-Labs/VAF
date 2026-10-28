@@ -348,7 +348,7 @@ def test_the_owners_own_channel_task_is_declined_too(modern_lane, wake, source, 
 def test_a_browser_chat_still_runs_and_a_session_command_still_runs_as_a_command(modern_lane):
     sid = "web-chat-0001"
     _queue("web", "Wie spaet ist es?", contact=False, sid=sid)
-    enqueue_system_command("NEW_SESSION")
+    enqueue_system_command("NEW_SESSION", user_scope_id=_owner_scope())
     rec = modern_lane.run()
     assert rec["chat_steps"] == ["Wie spaet ist es?"]
     assert sid in rec["loaded"]
@@ -501,6 +501,15 @@ def test_the_echo_shows_markup_as_written_and_drops_control_characters():
     assert "\n\tok" in echo, "newline and tab are kept"
 
 
+
+@pytest.mark.parametrize("mark", ["\u200e", "\u200f", "\u061c", "\u202a", "\u202e", "\u2066",
+                                  "\u2069"])
+def test_the_echo_drops_every_bidirectional_control(mark):
+    """The marks (left-to-right, right-to-left, the Arabic letter mark) reorder a line as much
+    as the embeddings, overrides and isolates do."""
+    assert run_mod._terminal_echo(f"abc{mark}def") == "abcdef"
+
+
 @pytest.mark.parametrize("wake", [False, True])
 def test_a_finished_browser_chat_does_not_keep_its_chat_busy(modern_lane, wake):
     sid = "web-chat-0006"
@@ -569,11 +578,262 @@ def test_the_owners_signed_in_browser_chat_runs(modern_lane, wake):
     assert rec["chat_steps"] == ["Hallo"] and rec["warnings"] == []
 
 
-def test_a_session_command_without_a_scope_still_runs_as_a_command(modern_lane):
-    """RENAME_SESSION and LOAD_SESSION are queued without any identity (web_server): they are
-    commands for this terminal's session pointer, not chats to judge by their owner."""
-    enqueue_system_command("RENAME_SESSION:web-chat-0009:Notizen")
+def test_the_owners_rename_still_runs_as_a_command(modern_lane):
+    enqueue_system_command("RENAME_SESSION:web-chat-0009:Notizen", user_scope_id=_owner_scope())
     rec = modern_lane.run()
     assert rec["loaded"] == ["system"], "the command was not taken as a command"
     assert rec["warnings"] == [] and rec["chat_steps"] == []
     assert not TaskQueue().is_busy_for_session("system")
+
+
+# Whose session commands this lane follows. LOAD_SESSION appends the named chat's messages to
+# this terminal's agent, whose next turn then runs in that chat as the owner; NEW_SESSION and
+# RENAME_SESSION move and rename this terminal's session. The web server stamps each with the
+# connection's scope, and only the owner's are followed. RELOAD_CONFIG moves no session.
+_BOB_SID = "web-chat-0010"
+_DECLINED_COMMAND = ("Not run here: another account opened, started or renamed a chat in its "
+                     "browser. This terminal follows only its owner's chats.")
+
+
+def _seed_bobs_chat():
+    from vaf.core.session import SessionManager
+    mgr = SessionManager()
+    s = mgr.new(name="Bobs Geheimnisse", user_scope_id=SCOPE)
+    s.id = _BOB_SID
+    s.add_message("user", "BOB-SECRET-0001")
+    mgr.save(s)
+
+
+def _command_arrives(lane, wake, command, scope):
+    def _enqueue():
+        enqueue_system_command(command, user_scope_id=scope)
+    if wake:
+        def _arrives():
+            _enqueue()
+            return WAKE
+        lane.rec["script"] = [_arrives, None]
+    else:
+        _enqueue()
+
+
+_SESSION_COMMANDS = [
+    ("load", f"LOAD_SESSION:{_BOB_SID}"),
+    ("new", "NEW_SESSION"),
+    ("rename", f"RENAME_SESSION:{_BOB_SID}:Umbenannt"),
+]
+
+
+@pytest.mark.parametrize("label,command", _SESSION_COMMANDS, ids=[c[0] for c in _SESSION_COMMANDS])
+@pytest.mark.parametrize("scope", [SCOPE, None], ids=["other account", "no scope"])
+@pytest.mark.parametrize("wake", [False, True])
+def test_another_accounts_session_command_is_declined(modern_lane, wake, scope, label, command):
+    _seed_bobs_chat()
+    _command_arrives(modern_lane, wake, command, scope)
+    rec = modern_lane.run()
+    assert rec["loaded"] == [], "the command was taken into this terminal's agent"
+    assert rec["init_chat"] == 1, "the command reset this terminal's conversation"
+    assert not [e for e in rec["events"] if e[0] == "WebUI"], rec["events"]
+    assert rec["warnings"] == [_DECLINED_COMMAND]
+    screen = rec["screen"].getvalue()
+    assert _BOB_SID not in screen and "Bobs Geheimnisse" not in screen and "BOB-SECRET" not in screen
+    assert not TaskQueue().is_busy_for_session("system"), "the declined command was not released"
+    assert rec["prompts"] == (2 if wake else 1)
+
+
+@pytest.mark.parametrize("wake", [False, True])
+def test_the_owners_session_commands_still_run(modern_lane, wake):
+    from vaf.core.session import SessionManager
+    mgr = SessionManager()
+    s = mgr.new(name="Notizen", user_scope_id=_owner_scope())
+    s.add_message("user", "OWNER-LINE-0001")
+    mgr.save(s)
+    owner = _owner_scope()
+    if wake:
+        def _arrives():
+            enqueue_system_command(f"LOAD_SESSION:{s.id}", user_scope_id=owner)
+            return WAKE
+        modern_lane.rec["script"] = [_arrives, None]
+    else:
+        enqueue_system_command(f"LOAD_SESSION:{s.id}", user_scope_id=owner)
+    rec = modern_lane.run()
+    assert ("WebUI", "Switched to session: Notizen", "success") in rec["events"]
+    assert rec["warnings"] == []
+    assert not TaskQueue().is_busy_for_session("system")
+
+
+@pytest.mark.parametrize("scope", [None, SCOPE], ids=["no scope", "other account"])
+def test_reload_config_runs_with_any_scope(modern_lane, scope):
+    import vaf.core.agent as agent_mod
+    reloads = []
+    modern_lane.monkeypatch.setattr(agent_mod, "reload_all_api_backends",
+                                    lambda **k: reloads.append(k) or False)
+    TaskQueue().add(session_id="system", input_text="__CMD__:RELOAD_CONFIG", source="web",
+                    metadata={"task_class": "background", "system_command": True,
+                              **({"user_scope_id": scope} if scope else {})})
+    rec = modern_lane.run()
+    assert reloads == [{"force": True}], "RELOAD_CONFIG did not run"
+    assert rec["warnings"] == []
+
+
+def _ws_commands(monkeypatch, tmp_path, frames):
+    """Drive the real WebSocket handler as a signed-in account (Bob) and return what it
+    queued through enqueue_system_command."""
+    import json
+    import jwt
+    from starlette.testclient import TestClient
+
+    import vaf.auth.crypto as crypto
+    import vaf.auth.permissions as permissions
+    import vaf.core.session as session_mod
+    import vaf.core.task_queue as tq_mod
+    import vaf.core.web_server as real_server
+
+    sessions_dir = tmp_path / "ws-sessions"
+    sessions_dir.mkdir()
+    monkeypatch.setattr(session_mod, "default_sessions_dir", lambda: sessions_dir)
+    mgr = session_mod.SessionManager(storage_dir=str(sessions_dir))
+    monkeypatch.setattr(real_server, "session_mgr", mgr)
+    s = mgr.new(name="Bobs Chat", user_scope_id=SCOPE)
+    s.id = _BOB_SID
+    mgr.save(s)
+
+    async def _unknown(scope):
+        return ("unknown", "")
+    monkeypatch.setattr(permissions, "account_standing_async", _unknown)
+    monkeypatch.setattr(crypto, "get_jwt_secret", lambda: "s" * 32)
+    queued = []
+    monkeypatch.setattr(tq_mod, "enqueue_system_command",
+                        lambda command, **k: queued.append((command, k.get("user_scope_id"))))
+    token = jwt.encode({"sub": "2", "user_scope_id": SCOPE, "username": "bob", "role": "user"},
+                       "s" * 32, algorithm="HS256")
+    with TestClient(real_server.app, client=("127.0.0.1", 40001)).websocket_connect(
+            f"/ws?token={token}") as ws:
+        for frame in frames:
+            ws.send_text(json.dumps(frame))
+        import time
+        deadline = time.monotonic() + 10
+        while len(queued) < len(frames) and time.monotonic() < deadline:
+            time.sleep(0.05)
+    return queued
+
+
+def test_the_web_server_stamps_the_connections_scope_on_session_commands(monkeypatch, tmp_path):
+    queued = _ws_commands(monkeypatch, tmp_path, [
+        {"type": "load_session", "id": _BOB_SID},
+        {"type": "rename_session", "id": _BOB_SID, "newName": "Neu"},
+        {"type": "new_session"},
+    ])
+    by_name = {c.split(":", 1)[0]: scope for c, scope in queued}
+    assert by_name == {"LOAD_SESSION": SCOPE, "RENAME_SESSION": SCOPE, "NEW_SESSION": SCOPE}, queued
+
+
+# A turn VAF starts by itself, the way its producers queue it (enqueue_wake_turn): the owner's
+# scope, source "web" and the wake kind. The runner binds it as such; this loop cannot.
+_WAKES = [
+    ("timer", "a timer"),
+    ("process", "a background command's report"),
+    ("draft", "a draft's report"),
+]
+
+
+@pytest.mark.parametrize("kind,what", _WAKES, ids=[w[0] for w in _WAKES])
+@pytest.mark.parametrize("wake", [False, True])
+def test_a_wake_turn_is_declined(modern_lane, wake, kind, what):
+    from vaf.core.task_queue import enqueue_wake_turn
+    sid = "web-chat-0011"
+    text = "Background command finished. End of its output:\nquit"
+
+    def _enqueue():
+        enqueue_wake_turn(kind=kind, session_id=sid, text=text, source="web",
+                          user_scope_id=_owner_scope(), username="admin", role="admin")
+    if wake:
+        def _arrives():
+            _enqueue()
+            return WAKE
+        modern_lane.rec["script"] = [_arrives, None]
+    else:
+        _enqueue()
+    rec = modern_lane.run()
+    assert rec["chat_steps"] == [] and rec["loaded"] == []
+    assert not _session_exists(sid), "a declined wake left a session file behind"
+    assert rec["warnings"] == [
+        f"Not run here: {what}. This terminal does not run the turns VAF starts by itself "
+        "(timers, background command and draft reports), and this one is not run later. "
+        "To have them run, run VAF as a service: vaf start (or vaf tray)."]
+    assert "End of its output" not in rec["screen"].getvalue()
+    assert not TaskQueue().is_busy_for_session(sid)
+    assert rec["prompts"] == (2 if wake else 1)
+
+
+# A failure between the take and the turn: the session load or its fallback save raises. The
+# task was taken, so the handler must release it, once.
+@pytest.mark.parametrize("where", ["load_session_context", "fallback save"])
+@pytest.mark.parametrize("wake", [False, True])
+def test_a_task_whose_session_setup_fails_is_released_once(modern_lane, wake, where):
+    sid = "web-chat-0012"
+    if where == "load_session_context":
+        def _boom(self, *a, **k):
+            raise RuntimeError("session store gone")
+        modern_lane.monkeypatch.setattr(_FakeAgent, "load_session_context", _boom)
+    else:
+        from vaf.core.session import SessionManager
+        real_save = SessionManager.save
+
+        def _save(self, session, *a, **k):
+            if getattr(session, "id", None) == sid:
+                raise RuntimeError("disk full")
+            return real_save(self, session, *a, **k)
+        modern_lane.monkeypatch.setattr(SessionManager, "save", _save)
+    released = []
+    real_done = TaskQueue.task_done
+
+    def _done(self, task=None, worker_id=None):
+        released.append(getattr(task, "session_id", None))
+        return real_done(self, task=task, worker_id=worker_id)
+    modern_lane.monkeypatch.setattr(TaskQueue, "task_done", _done)
+    _arrive(modern_lane, wake, "web", "Hallo", contact=False, sid=sid, scope=_owner_scope())
+    rec = modern_lane.run(console_breaks=True)
+    assert rec["chat_steps"] == []
+    assert released == [sid], f"released {released}, expected exactly once"
+    tq = TaskQueue()
+    assert not tq.is_busy_for_session(sid), "the taken task was left in flight"
+    assert tq._inflight_by_worker == {}
+
+
+def test_a_session_command_counts_as_nobodys_turn_in_the_queue(monkeypatch):
+    """Scoped or not, a system command is housekeeping for the queue's fairness and for the
+    revocation's stop: counted as the account's, revoking it would stop the shared command
+    session and drop every account's queued commands."""
+    from vaf.core.trust import _scope_key
+    monkeypatch.setattr(TaskQueue, "_instance", None)
+    enqueue_system_command(f"LOAD_SESSION:{_BOB_SID}", user_scope_id=SCOPE)
+    tq = TaskQueue()
+    assert tq.sessions_for_scope(SCOPE) == set()
+    assert tq.is_busy_for_scope(_scope_key(SCOPE), _scope_key) is False
+    tq.add(session_id=_BOB_SID, input_text="Hallo", source="web", metadata={"user_scope_id": SCOPE})
+    assert tq.sessions_for_scope(SCOPE) == {_BOB_SID}
+    assert tq.is_busy_for_scope(_scope_key(SCOPE), _scope_key) is True
+
+
+@pytest.mark.parametrize("wake", [False, True])
+def test_a_declined_task_whose_note_fails_is_released_once(modern_lane, wake):
+    """The decline releases the task before its note; a note that raises reaches the handler,
+    which must not release it a second time (that would free a claim someone else holds)."""
+    sid = "web-chat-0013"
+    released = []
+    real_done = TaskQueue.task_done
+
+    def _done(self, task=None, worker_id=None):
+        released.append(getattr(task, "session_id", None))
+        return real_done(self, task=task, worker_id=worker_id)
+    modern_lane.monkeypatch.setattr(TaskQueue, "task_done", _done)
+
+    def _warning(self, msg, *a, **k):
+        self._rec["warnings"].append(str(msg))
+        if str(msg).startswith("Not run here:"):
+            raise RuntimeError("terminal gone")
+    modern_lane.monkeypatch.setattr(_FakeTUI, "warning", _warning)
+    _arrive(modern_lane, wake, "web", "Hallo", contact=False, sid=sid, scope=SCOPE)
+    rec = modern_lane.run(console_breaks=True)
+    assert rec["chat_steps"] == []
+    assert released == [sid], f"released {released}, expected exactly once"

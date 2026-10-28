@@ -326,8 +326,14 @@ class TaskQueue:
     def _task_scope(task: "AgentTask") -> Optional[str]:
         """Best-effort user_scope_id for a task. Enqueue sites use two different metadata keys:
         web interactive turns set 'enqueue_user_scope_id'; thinking/timer/automation/compaction set
-        'user_scope_id'. Read BOTH. Returns None for scope-less housekeeping tasks (e.g. LOAD_SESSION
-        system commands), which must NOT count as a user's turn for fairness gating."""
+        'user_scope_id'. Read BOTH. Returns None for housekeeping tasks, which must NOT count as a
+        user's turn for fairness gating: a scope-less task, and every system command, also one
+        that carries the scope of the account that sent it (the session commands do, so a
+        terminal lane can tell whose chat they name). Counted as that account's, a command
+        would hold its thinking run back, and revoking the account would stop the shared
+        command session and drop every account's queued commands with it."""
+        if is_system_command(task):
+            return None
         md = task.metadata or {}
         scope = md.get("enqueue_user_scope_id") or md.get("user_scope_id")
         if scope is None:
@@ -352,7 +358,7 @@ class TaskQueue:
         """The sessions with an in-flight or queued task of this account. For stopping
         everything one account runs (vaf.core.revocation). Scopes are compared by trust's
         canonical key, as `processes.list_for_scope` does, so the local admin's aliases match;
-        scope-less housekeeping tasks never do."""
+        housekeeping tasks (`_task_scope`) never do."""
         if not str(user_scope_id or "").strip():
             return set()
         from vaf.core.trust import _scope_key
@@ -371,8 +377,9 @@ class TaskQueue:
         `target_key` is the canonical key of the user we are gating (already run through the
         caller's canonicalizer, e.g. thinking_mode._key). `canonicalize` maps each task's raw
         metadata scope to its canonical key, so admin aliases (None/'default'/local-admin-UUID)
-        collapse and match correctly. Scope-less housekeeping tasks (LOAD_SESSION etc.) are
-        skipped — they are not a user's turn and must not block another user's thinking run."""
+        collapse and match correctly. Housekeeping tasks (`_task_scope`: system commands and
+        scope-less tasks) are skipped: they are not a user's turn and must not block another
+        user's thinking run."""
         if not target_key:
             return False
         with self._cv:

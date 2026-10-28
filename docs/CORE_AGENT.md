@@ -425,7 +425,9 @@ system message, the previous chat's tools in the tool array, a room turn inside 
 chat loaded last, a user's chat summarized with the previous turn's admin role. NAMED
 BOUNDARY: `vaf run --web` serves the owner's browser chats in the terminal's process, without
 the runner and without the turn binding, and declines every other task: a messenger, mail or
-contact task and another account's chat (see AGENT_LOOP.md, "Before the turn").
+contact task, another account's chat or session command, and a wake turn, so a timer or a
+background command's report never runs in the modern terminal lane (see AGENT_LOOP.md, "Before
+the turn", and docs/platform/TUI.md).
 
 ## Advanced identity/scoping attributes
 

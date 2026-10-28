@@ -135,6 +135,10 @@ Boundaries, each deliberate:
   both leaves them running; the registry is in memory.
 - **Not where nobody can be woken**: a messaging-channel chat has no wake delivery, and a
   sub-agent's own process ends before the command, so the tool refuses both.
+- **Not woken in the modern terminal lane** (`vaf run --web`, `tui_mode: modern`): that loop
+  declines every wake turn with a note, because it cannot bind one (see
+  [TUI.md](../platform/TUI.md)). The command still runs and its log stays readable with
+  `host_process`; the full-screen app and VAF as a service deliver the wake.
 - **Stopped as a tree and as its process group**: `Platform.terminate_process_tree`, the one
   kill used for sub-agent children too - a command run through a shell is only the shell's
   child, and a grandchild that detached (`( server & )`) is nobody's child any more but keeps

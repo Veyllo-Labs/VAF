@@ -960,8 +960,9 @@ def _declined_queue_task(task):
     the terminal and never the channel. The owner's own messenger tasks are declined too: a
     turn whose answer cannot reach its channel is no answer. The queue is in memory, so a
     declined task is gone; the message itself stays in its chat's history. The note never
-    quotes the task's text or chat label: both are the sender's words, and the terminal
-    prints with markup."""
+    quotes the task's text, chat label, session id or chat name: the text and the label are
+    the sender's words, the terminal prints with markup, and a session command of another
+    account names that account's chat."""
     source = str(getattr(task, "source", "") or "").strip().lower()
     metadata = getattr(task, "metadata", None) or {}
     if not isinstance(metadata, dict):
@@ -977,26 +978,48 @@ def _declined_queue_task(task):
         return (f"Not run here: a task from {where}. This terminal does not answer messengers or "
                 "mail, and the task is not run later. To answer them, run VAF as a service: "
                 "vaf start (or vaf tray).")
-    # Everything else runs as a turn of this terminal's agent, which is bound to the machine
-    # owner (_make_cli_agent) and cannot be bound per task: an account's chat would run with
-    # the owner's identity and read the owner's other chats. So only the owner's own tasks
-    # run: the local admin's scope. Deliberately not is_admin_identity: a second admin has
-    # admin rights but is another person with chats of their own (config.is_local_admin_lane
-    # draws the same line). A task with no scope is nobody's and is declined. The session
-    # commands are not judged by an owner: LOAD_SESSION and RENAME_SESSION are queued without
-    # a scope, and they move only this terminal's own session pointer.
+    # Everything else runs on this terminal's agent, which is bound to the machine owner
+    # (_make_cli_agent) and cannot be bound per task: an account's chat would run with the
+    # owner's identity and read the owner's other chats. So only the owner's own tasks run:
+    # the local admin's scope. Deliberately not is_admin_identity: a second admin has admin
+    # rights but is another person with chats of their own (config.is_local_admin_lane draws
+    # the same line). A task with no scope is nobody's and is declined.
     from vaf.core.config import is_local_admin_lane
-    from vaf.core.task_queue import is_system_command
+    from vaf.core.task_queue import SYSTEM_COMMAND_PREFIX, is_system_command, wake_kind
     scope = str(metadata.get("user_scope_id") or "").strip()
-    if is_system_command(task) or (scope and is_local_admin_lane(scope)):
+    owners = bool(scope) and is_local_admin_lane(scope)
+    if is_system_command(task):
+        name = str(task.input_text)[len(SYSTEM_COMMAND_PREFIX):].split(":", 1)[0].strip()
+        # RELOAD_CONFIG re-reads the global config and moves no session; the web server queues
+        # it without a scope. The session commands load, start or rename a chat in THIS
+        # terminal, whose agent then runs the next turns in that chat as the owner: another
+        # account's chat would be loaded into the owner's conversation. The web server stamps
+        # them with the connection's scope (enqueue_system_command).
+        if name == "RELOAD_CONFIG" or owners:
+            return None
+        return ("Not run here: another account opened, started or renamed a chat in its browser. "
+                "This terminal follows only its owner's chats.")
+    # A turn VAF starts by itself (a fired timer, a background command's or a draft's report)
+    # runs in the queue runner bound as one: unattended for a timer, not a person's turn, the
+    # report counted as evidence (_task_turn_binding). This loop would run the text as if the
+    # owner had typed it, a report's command output included.
+    kind = wake_kind(metadata)
+    if kind is not None:
+        what = {"timer": "a timer", "process": "a background command's report",
+                "draft": "a draft's report"}.get(kind, "a turn VAF started by itself")
+        return (f"Not run here: {what}. This terminal does not run the turns VAF starts by itself "
+                "(timers, background command and draft reports), and this one is not run later. "
+                "To have them run, run VAF as a service: vaf start (or vaf tray).")
+    if owners:
         return None
     return ("Not run here: a chat from another account. This terminal answers only its owner's "
             "chats, and the task is not run later. To serve every account, run VAF as a "
             "service: vaf start (or vaf tray).")
 
 
-#: Bidirectional embeddings, overrides and isolates: they reorder how a line reads.
-_BIDI_CONTROLS = frozenset("\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
+#: The bidirectional marks, embeddings, overrides and isolates: they reorder how a line reads.
+_BIDI_CONTROLS = frozenset("\u061c\u200e\u200f\u202a\u202b\u202c\u202d\u202e"
+                           "\u2066\u2067\u2068\u2069")
 
 
 def _terminal_echo(text) -> str:
@@ -1520,10 +1543,16 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                         # never clears it.
                         if task is None:
                             continue
+                        # Taken from here on: whatever raises below (the session load, its
+                        # fallback save, the echo) reaches the handler below with the task
+                        # marked, and the handler releases it. Every release clears the mark,
+                        # so no task is released twice.
+                        is_web_input = True
                         # Before the session load: a declined task leaves no session behind.
                         _declined_note = _declined_queue_task(task)
                         if _declined_note:
                             tq.task_done(task=task)
+                            is_web_input = False
                             tui.warning(_declined_note)
                             continue
                         agent.load_session_context(task.session_id)
@@ -1538,7 +1567,6 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                             session_mgr.save(current_session)
                             
                         raw_input = str(task.input_text or "")
-                        is_web_input = True
                         
                         # CRITICAL: Sync agent session ID with current session
                         # This ensures WebSocket updates go to the correct session
@@ -1571,9 +1599,10 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                         set_current_session_id(current_session.id)
                                         # Restore agent history
                                         agent.init_chat()
+                                        # Session.messages holds Message objects, not dicts.
                                         for msg in current_session.messages:
-                                            if msg.get("role") in ["user", "assistant"]:
-                                                agent.history.append({"role": msg.get("role"), "content": msg.get("content")})
+                                            if msg.role in ["user", "assistant"]:
+                                                agent.history.append({"role": msg.role, "content": msg.content})
                                         tui.event("WebUI", f"Switched to session: {current_session.name}", style="success")
                                     except Exception as e:
                                         tui.error(f"Failed to switch session: {e}")
@@ -1625,6 +1654,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                 continue
                             finally:
                                 tq.task_done(task=task)
+                                is_web_input = False
                         
                         # Normal Chat Input
                         user_input = raw_input
@@ -1669,9 +1699,12 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                 if task is None:
                                     wake_word_detected_flag.clear()
                                     continue
+                                # Taken from here on, as in the poll above.
+                                is_web_input = True
                                 _declined_note = _declined_queue_task(task)
                                 if _declined_note:
                                     tq.task_done(task=task)
+                                    is_web_input = False
                                     tui.warning(_declined_note)
                                     wake_word_detected_flag.clear()
                                     continue
@@ -1687,7 +1720,6 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                     session_mgr.save(current_session)
                                     
                                 raw_input = str(task.input_text or "")
-                                is_web_input = True
                                 
                                 # CRITICAL: Sync agent session ID with current session
                                 if hasattr(agent, '_session_id') and agent._session_id != current_session.id:
@@ -1719,9 +1751,10 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                                 current_session = session_mgr.load(sid)
                                                 set_current_session_id(current_session.id)
                                                 agent.init_chat()
+                                                # Session.messages holds Message objects, not dicts.
                                                 for msg in current_session.messages:
-                                                    if msg.get("role") in ["user", "assistant"]:
-                                                        agent.history.append({"role": msg.get("role"), "content": msg.get("content")})
+                                                    if msg.role in ["user", "assistant"]:
+                                                        agent.history.append({"role": msg.role, "content": msg.content})
                                                 tui.event("WebUI", f"Switched to session: {current_session.name}", style="success")
                                             except Exception as e:
                                                 tui.error(f"Failed to switch session: {e}")
@@ -1767,6 +1800,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                         continue
                                     finally:
                                         tq.task_done(task=task)
+                                        is_web_input = False
                                 
                                 user_input = raw_input
                                 tui.console.print(f"\n[bold green]Web UI Input:[/bold green] {_terminal_echo(user_input)}")

@@ -629,11 +629,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   note in the terminal: they are answered by VAF running as a service (`vaf start` or
   `vaf tray`). It also answers only your own web chats now: a chat from another account on
   your network ran there with your identity and could read your other chats, and is declined
-  the same way. Text that arrives from the web UI is never a terminal command either, not even
-  one that looks like markup or carries terminal control characters. And when VAF is already
-  running, `vaf run --web` no longer starts a second server, which used to start a second copy
-  of the messenger bridges, the mail sync and the schedulers. Restart a running
-  `vaf run --web` session after updating.
+  the same way, and so is another account opening, starting or renaming a chat in its browser,
+  which used to switch your terminal into that account's chat. Text that arrives from the web
+  UI is never a terminal command either, not even one that looks like markup or carries
+  terminal control characters. A fired timer and the report of a finished background command
+  or of a sent draft are no longer run there as if you had typed them: the lane declines them
+  with a note, so in the prompt interface (`vaf run --web`, or `tui_mode: modern`) a timer or a
+  background command does not wake the chat any more; the full-screen app and VAF as a service
+  still do. And when VAF is already running, `vaf run --web` no longer starts a second server,
+  which used to start a second copy of the messenger bridges, the mail sync and the schedulers.
+  Restart a running `vaf run --web` session after updating.
 
 ### Fixed
 

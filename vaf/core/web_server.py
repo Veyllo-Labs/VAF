@@ -5189,9 +5189,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # Subscribe this connection to the session for scoped updates
                         manager.subscribe_to_session(websocket, sid)
                         
-                        # Push command to main loop to switch session
+                        # Push command to main loop to switch session. With the
+                        # connection's scope: a terminal lane (vaf run --web) follows only
+                        # its owner's chats, and the scope is how it tells.
                         from vaf.core.task_queue import enqueue_system_command
-                        enqueue_system_command(f"LOAD_SESSION:{sid}")
+                        enqueue_system_command(f"LOAD_SESSION:{sid}", user_scope_id=user_scope_id)
                         
                         # Helper to clean historical messages (same logic as run.py)
                         
@@ -5425,7 +5427,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         session_mgr.rename(sid, new_name)
                         # Notify Main Loop to update in-memory object
                         from vaf.core.task_queue import enqueue_system_command
-                        enqueue_system_command(f"RENAME_SESSION:{sid}:{new_name}")
+                        enqueue_system_command(f"RENAME_SESSION:{sid}:{new_name}",
+                                               user_scope_id=user_scope_id)
                         
                         # Broadcast update ONLY to this user's connections
                         web_sessions = session_mgr.list_ui(limit=SESSION_LIST_LIMIT, user_scope_id=user_scope_id)

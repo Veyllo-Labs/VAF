@@ -288,8 +288,8 @@ What it can change is decided by where a key is READ, not by how it looks:
   feed/done against a just-scheduled mount races on_mount and would leave
   the 100 ms interval running forever (the avatar-leak class). What still
   blocks the `__CMD__` session commands is only their producer wiring.
-- What `vaf run --web` takes from its queue: the owner's browser chats and
-  the web server's session commands, nothing else. Its agent is bound to the
+- What `vaf run --web` takes from its queue: the owner's browser chats, the
+  owner's session commands and the config reload, nothing else. Its agent is bound to the
   machine owner (`_make_cli_agent`) and cannot be bound per task, so every
   other task is declined with a note in the terminal that never quotes the
   sender, and is gone (the queue is in memory; a message stays in its chat's
@@ -307,8 +307,27 @@ What it can change is decided by where a key is READ, not by how it looks:
   `is_admin_identity` calls them an admin, for the reason
   `config.is_local_admin_lane` gives: admin rights do not make them the
   owner. A declined account's browser gets no answer. The session commands
-  are not judged by an owner: `LOAD_SESSION` and `RENAME_SESSION` are queued
-  without a scope, and they move only this terminal's own session pointer.
+  (`NEW_SESSION`, `LOAD_SESSION`, `RENAME_SESSION`) are judged the same way:
+  the web server stamps each with the connection's scope, and a load would
+  append another account's chat to this terminal's conversation, whose next
+  turn then runs in that chat as the owner. Another account's command is
+  declined with a note that names neither the chat nor its id; that browser
+  opens its chat as before. `RELOAD_CONFIG` re-reads the global config, moves
+  no session and runs whoever queued it. For the queue's fairness and the
+  revocation's stop every system command stays nobody's turn
+  (`TaskQueue._task_scope`).
+  A turn VAF starts by itself, `enqueue_wake_turn`'s fired timer, a
+  background command's report or a draft's report (`task_queue.wake_kind`),
+  is declined too, with a note naming its kind, and is gone: the runner binds
+  it as such a turn (unattended for a timer, not a person's turn, a report
+  counted as evidence) and this loop would run the text as if the owner had
+  typed it, a command's output included. NAMED BOUNDARY: this holds for the
+  whole modern lane, also without `--web` (`tui_mode: modern`, or the
+  fallback when the full-screen app cannot load). A timer set or a
+  background command started from a chat in this lane therefore never wakes
+  it, although the timer tool and `host_bash(background=true)` say it will;
+  the full-screen app and VAF as a service run those turns. Binding a wake
+  turn in this loop needs the per-task binding it does not have.
   Queued text is chat text and nothing else, handled before the input is
   read for anything: never the microphone sentinel, a shortcut, a command or
   an `@file` reference, all of which act on the operator's terminal and disk
@@ -317,7 +336,10 @@ What it can change is decided by where a key is READ, not by how it looks:
   (`_terminal_echo`), so `[/]` cannot break the prompt into the fallback and
   an escape sequence never reaches the terminal. Every task the loop takes
   is marked done when its turn ends, however it ends, so its chat does not
-  read as busy (`TaskQueue.is_busy_for_session`).
+  read as busy (`TaskQueue.is_busy_for_session`); it counts as taken from
+  the moment the loop has it, so a session load or save that fails before
+  the turn releases it too, and every release clears that mark, so none
+  happens twice.
   When a VAF service already runs (`vaf.core.instance.find_service()`), the
   lane starts no backend of its own: uvicorn runs the server's startup before
   it binds the port, so a second server started a second set of bridges, the

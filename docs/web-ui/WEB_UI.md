@@ -1064,9 +1064,9 @@ vaf run --web     # Host the Web UI from this terminal session
 ```
 
 `vaf run --web` serves your own web UI chats from the terminal and ends with it. It answers no
-messengers, no mail and no other account's chats (it declines their tasks with a note; `vaf start`
-or `vaf tray` answers them), and when VAF already runs it starts no second server and uses the
-running one.
+messengers, no mail and no other account's chats, and runs no timers or background-command
+reports (it declines those tasks with a note; `vaf start` or `vaf tray` answers them), and when
+VAF already runs it starts no second server and uses the running one.
 
 **Via Config File** (`config.json` in the VAF app directory):
 ```json

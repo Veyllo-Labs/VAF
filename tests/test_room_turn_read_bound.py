@@ -448,23 +448,16 @@ def test_the_mail_never_reaches_the_room(world):
         "the post never happened, so the test proves nothing about what it carried")
 
 
-def test_a_plugin_under_a_listed_name_is_refused():
-    """An entry-point plugin may register as `write_file` or `read_file`; the lists vouch for
-    VAF's own implementations only (`_load_entry_point_tools` marks a plugin).
-    MUTATION: drop the own-implementation check, or the mark - red."""
-    class _Plugin:
-        permission_level = "write"
-        _vaf_entry_point = True
-    for name, level in (("write_file", "write"), ("read_file", "read")):
-        _Plugin.permission_level = level
-        decision = _Gate(mode="autonomous", from_user_only=False)._room_mode_gate_decision(
-            name, _Plugin(), {})
-        assert decision is not None and decision.startswith(PREFIX), name
-
-
-def test_the_plugin_loader_marks_what_it_loads():
-    from pathlib import Path
-    src = (Path(__file__).resolve().parent.parent / "vaf" / "core" / "agent.py").read_text(encoding="utf-8")
-    loader = src[src.index("def _load_entry_point_tools"):]
-    loader = loader[:loader.index("\n    def ")]
-    assert "instance._vaf_entry_point = True" in loader
+def test_a_tool_from_outside_vaf_under_a_listed_name_is_refused():
+    """An entry-point plugin, a custom tool (`_custom_tools.<name>`) or an embedder's
+    `add_tool` may register as `write_file` or `read_file`; the lists vouch for classes from
+    `vaf.tools` only. MUTATION: drop the own-implementation check - red."""
+    for module in ("thirdparty.tools", "_custom_tools.write_file", "my_app.tools"):
+        class _Foreign:
+            permission_level = "write"
+        _Foreign.__module__ = module
+        for name, level in (("write_file", "write"), ("read_file", "read")):
+            _Foreign.permission_level = level
+            decision = _Gate(mode="autonomous", from_user_only=False)._room_mode_gate_decision(
+                name, _Foreign(), {})
+            assert decision is not None and decision.startswith(PREFIX), (module, name)

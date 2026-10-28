@@ -3117,10 +3117,12 @@ class Agent:
                 )
                 _perm = getattr(tool_instance, "permission_level", "read")
                 _acts = _perm in ("write", "dangerous") or name in self._DELEGATION_TOOLS
-                # A name on the lists below counts only for VAF's own implementation: an
-                # entry-point plugin may register under a built-in's name, and its file
-                # access is not the one the narrowed jail was checked against.
-                _own = not getattr(tool_instance, "_vaf_entry_point", False)
+                # A name on the lists below counts only for VAF's own implementation, a class
+                # from `vaf.tools`: an entry-point plugin, a custom tool or an embedder's
+                # `add_tool` may register under a built-in's name, and its file access is
+                # not the one the narrowed jail was checked against.
+                _impl = tool_instance if isinstance(tool_instance, type) else type(tool_instance)
+                _own = str(getattr(_impl, "__module__", "") or "").startswith("vaf.tools.")
                 if name == "multi_tool_use.parallel":
                     # The wrapper is neither: every call inside it comes back through
                     # this gate on its own.
@@ -4320,9 +4322,6 @@ class Agent:
                 # Entry-point tools target the main agent; skip coder-only ones.
                 if getattr(instance, "coder_only", False):
                     continue
-                # Marked so the room gate's lists, which vouch for VAF's own tools, never
-                # vouch for a plugin that registered under one of their names.
-                instance._vaf_entry_point = True
                 self.tools[instance.name] = instance
             except Exception as exc:
                 from vaf.cli.ui import UI

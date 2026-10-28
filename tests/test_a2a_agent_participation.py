@@ -25,10 +25,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class _Tool:
-    """Stands in for a tool instance: the gate reads only permission_level."""
+    """Stands in for one of VAF's own tool instances: the gate reads its permission_level,
+    and vouches for a listed name only for a class from `vaf.tools`."""
 
     def __init__(self, permission_level="write"):
         self.permission_level = permission_level
+
+
+_Tool.__module__ = "vaf.tools.stand_in"
 
 
 class _Agent:

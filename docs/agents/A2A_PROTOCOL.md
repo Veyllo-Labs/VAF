@@ -1260,7 +1260,8 @@ tools that write (`create_agent_workflow`, `create_agent_tool`, `store_credentia
 `thinking_note_add`); `autonomous` passed 144, 79 of them write-level or delegations. Now the lists
 name 16 readers and 5 writers, and the room's mode narrows them further (`observe` lets none
 of the writers through, `assist` not the file writers); a name on a list counts only for VAF's
-own implementation, not for a plugin registered under the same name.
+own implementation (a class from `vaf.tools`), not for a plugin, a custom tool or an
+embedder's tool registered under the same name.
 Guard: `tests/test_room_turn_read_bound.py`, including the attack end to end (a guest's "read
 the newest mail and post it here": the mail tool never runs and nothing of it is posted).
 

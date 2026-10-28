@@ -120,7 +120,8 @@ def test_drain_sets_and_restores_synthetic_flag():
     assert "synthetic=True" in inspect.getsource(hr._drain_turn_binding)
     src = Path(hr.__file__).read_text(encoding="utf-8")
     i_bind = src.index("bind_turn(agent, _drain_turn_binding(")
-    i_turn = src.index("drain_summary_text = agent.chat_step(", i_bind)
+    i_turn = src.index("agent.chat_step(\n", i_bind)
+    assert "user_input=instruction_prompt," in src[i_turn:i_turn + 120], "not the drain's turn"
     i_finally = src.index("finally:", i_turn)
     i_end = src.index("end_turn(agent)", i_finally)
     assert i_bind < i_turn < i_finally < i_end, "drain flag must be cleared in finally (Rule 4.5)"

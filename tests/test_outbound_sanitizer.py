@@ -75,12 +75,17 @@ def test_all_messenger_send_paths_use_the_shared_chain():
     )
 
 
-def test_drain_summary_based_on_chat_step_return():
+def test_drain_summary_is_the_chats_copy():
+    # chat_step's return is a status ("..." on a normal completion, docs/CORE_AGENT.md
+    # "Return contract"), so the drain's messenger text is its stored copy of the stream,
+    # the same text the chat shows. Sending the return delivered "..." to the messenger.
     src = Path(hr.__file__).read_text(encoding="utf-8")
-    assert "drain_summary_text = agent.chat_step(" in src, (
-        "drain messenger summary must be based on chat_step's reasoning-stripped return"
+    assert "_prepare_channel_outbound(_clean_result" in src, (
+        "drain messenger summary must be the chat's copy of the streamed summary"
     )
-    assert "_prepare_channel_outbound(drain_summary_text" in src
+    assert "_prepare_channel_outbound(drain_summary_text" not in src, (
+        "drain messenger summary is chat_step's return again, which is a status"
+    )
 
 
 # ── the net's neutral home (vaf/core/outbound_sanitizer.py) ─────────────────────────

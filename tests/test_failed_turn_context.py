@@ -629,7 +629,7 @@ def test_the_hosts_that_store_the_stream_mark_a_failed_turn():
     assert read < loop.index("_hallucination_detected = (")
     assert loop.count("turn=_turn_status)") == 2       # the stored copy and the delivery
 
-    drain_call = loop.index("drain_summary_text = agent.chat_step(")
+    drain_call = loop.index("agent.chat_step( user_input=instruction_prompt,")
     assert (drain_call < loop.index("_drain_status = agent.last_turn")
             < loop.index("_clean_result, _drain_meta"))
     assert ("_clean_result, _drain_meta = _drain_turn_copy( response_parts, "

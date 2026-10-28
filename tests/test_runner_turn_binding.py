@@ -618,6 +618,142 @@ def test_one_drain_pass_summarizes_one_chat(world, monkeypatch):
     assert (BOB_SCOPE, None, BOB_SESSION) in provider.seen[1:]
 
 
+# ── the drain's messenger text ─────────────────────────────────────────────────────────────
+# `chat_step` returns a status, not the answer (docs/CORE_AGENT.md, "Return contract"): on a
+# normal completion it is "...". MEASURED BEFORE THE FIX, through the real loop: the drain sent
+# that return to the messenger first, so Telegram received "..." while the chat stored the real
+# summary from the stream. The drain's collector also had no `.clear`, so a reply a guard took
+# back stayed in the stored copy; and delivery after the turn addressed whatever chat the agent
+# held, not the chat the turn was bound to.
+
+def _telegram_chat(monkeypatch):
+    """Bob's Telegram chat, and the record of what was sent to Telegram."""
+    _seed(TELEGRAM_SESSION, scope=BOB_SCOPE, username="bobq7",
+          messages=[("user", "Please send me the forecast for tomorrow.")],
+          metadata={"source": "telegram", "telegram_chat_id": "4242"})
+    sent = []
+    monkeypatch.setattr("vaf.core.telegram_reply.send_telegram_reply",
+                        lambda chat_id, text, *a, **k: sent.append((chat_id, text)))
+    return sent
+
+
+def _summary_turn(agent, monkeypatch, turn):
+    """Replaces the drain's summary turn with `turn(stream_callback)`; returns its status,
+    the "..." a normal completion returns."""
+    def _chat_step(user_input=None, stream_callback=None, **kwargs):
+        turn(stream_callback)
+        return "..."
+    monkeypatch.setattr(agent, "chat_step", _chat_step)
+
+
+def _assistant_messages(world, session_id):
+    stored = json.loads(_stored(world, session_id) or "{}")
+    return [m.get("content", "") for m in stored.get("messages", [])
+            if m.get("role") == "assistant"]
+
+
+def test_the_messenger_gets_the_drains_summary_not_a_status(world, monkeypatch):
+    """The real turn answers; Telegram receives that answer once, the same text the chat
+    stores. MUTATION: send `chat_step`'s return to the messenger again - Telegram gets "..."."""
+    sent = _telegram_chat(monkeypatch)
+    agent = world.make()
+    _run_loop(monkeypatch, agent, [],
+              lambda: _finished(TELEGRAM_SESSION, "TG7QRESULT the forecast is ready"),
+              _Provider(answer="FORECAST7Q morgen Sonne"))
+
+    assert len(sent) == 1, f"Telegram received {len(sent)} messages: {sent}"
+    chat_id, text = sent[0]
+    assert chat_id == "4242"
+    assert "FORECAST7Q" in text and text.strip() != "...", f"Telegram received {text!r}"
+    assert any("FORECAST7Q" in m for m in _assistant_messages(world, TELEGRAM_SESSION))
+
+
+def test_a_retracted_reply_leaves_the_drain_nowhere(world, monkeypatch):
+    """A guard takes a streamed reply back the way the engine does (`_retract_streamed_reply`
+    calls the collector's `clear` when it has one) and the turn answers again. The retracted
+    text reaches neither Telegram nor the stored chat. MUTATION: drop the collector's `clear`
+    - WRONG7Q in both."""
+    sent = _telegram_chat(monkeypatch)
+    agent = world.make()
+
+    def _retracts(stream):
+        stream("WRONG7Q the forecast is rain")
+        if hasattr(stream, "clear"):
+            stream.clear()
+        stream("RIGHT7Q answer")
+
+    _summary_turn(agent, monkeypatch, _retracts)
+    _run_loop(monkeypatch, agent, [],
+              lambda: _finished(TELEGRAM_SESSION, "TG7QRESULT the forecast is ready"),
+              _Provider())
+
+    assert len(sent) == 1 and "RIGHT7Q" in sent[0][1], f"Telegram received {sent}"
+    assert "WRONG7Q" not in sent[0][1], "the retracted reply reached Telegram"
+    stored = _assistant_messages(world, TELEGRAM_SESSION)
+    assert any("RIGHT7Q" in m for m in stored)
+    assert not [m for m in stored if "WRONG7Q" in m], "the retracted reply was stored"
+
+
+def test_the_drain_delivers_to_the_chat_it_bound(world, monkeypatch):
+    """Something in the summary turn moves the agent to another chat halfway through its
+    stream. Every emit, the stored copy and the messenger still address the chat the turn was
+    bound to. MUTATION, one site at a time: read the agent's current chat again for the
+    stream emit, for the stored copy and its final emits, or for the messenger - red."""
+    sent = _telegram_chat(monkeypatch)
+    agent = world.make()
+
+    def _moves_the_agent(stream):
+        stream("BOUND7Q first")
+        agent.load_session_context(OWNER_SESSION)
+        stream(" and second")
+
+    _summary_turn(agent, monkeypatch, _moves_the_agent)
+    run = _run_loop(monkeypatch, agent, [],
+                    lambda: _finished(TELEGRAM_SESSION, "TG7QRESULT the forecast is ready"),
+                    _Provider())
+
+    emits = [(name, args, kwargs) for name, args, kwargs in run.web.events
+             if name in ("emit_agent_message", "emit_message_complete")
+             and "BOUND7Q" in json.dumps([args, kwargs], default=str)]
+    assert {name for name, _, _ in emits} == {"emit_agent_message", "emit_message_complete"}
+    assert [kwargs.get("session_id") for _, _, kwargs in emits] == (
+        [TELEGRAM_SESSION] * len(emits)), f"an emit named another chat: {emits}"
+    assert any("BOUND7Q first and second" in m
+               for m in _assistant_messages(world, TELEGRAM_SESSION))
+    assert "BOUND7Q" not in (_stored(world, OWNER_SESSION) or ""), (
+        "the summary was stored in the chat the agent was moved to")
+    assert sent == [("4242", "BOUND7Q first and second")], f"Telegram received {sent}"
+
+
+def test_an_empty_summary_sends_the_fallback_never_a_status(world, monkeypatch):
+    """The summary turn streams nothing. Telegram receives the deterministic fallback, the
+    head and the result, never the "..." status. MUTATION: drop the fallback tier (nothing is
+    sent), or send the return again ("...")."""
+    sent = _telegram_chat(monkeypatch)
+    agent = world.make()
+    _summary_turn(agent, monkeypatch, lambda stream: None)
+    _run_loop(monkeypatch, agent, [],
+              lambda: _finished(TELEGRAM_SESSION, "TG7QRESULT the forecast is ready"),
+              _Provider())
+
+    assert len(sent) == 1, f"Telegram received {sent}"
+    text = sent[0][1]
+    assert text.startswith("The sub-agent finished. Result:"), f"Telegram received {text!r}"
+    assert "TG7QRESULT the forecast is ready" in text and "..." not in text
+
+
+def test_the_drain_reads_no_return_value():
+    """The drain's messenger text is the chat's copy of the stream. MUTATION: capture the
+    turn's return and send it - red."""
+    import vaf.core.headless_runner as hr
+    src = Path(hr.__file__).read_text(encoding="utf-8")
+    assert "drain_summary_text" not in src
+    assert "_prepare_channel_outbound(_clean_result" in src
+    drain = inspect.getsource(hr.run_headless_agent).split("_pushed = False", 1)[1]
+    call = drain.split("agent.chat_step(", 1)[0].rsplit("\n", 1)[1]
+    assert call.strip() == "", f"the drain keeps the turn's return: {call.strip()!r}"
+
+
 def test_an_open_rooms_working_memory_outlives_a_quiet_weekend(world):
     """The collector ages a room's store out only once its room is closed or gone: an open room
     that was quiet longer than `gc_max_age_hours` keeps its tasks and notes."""
@@ -821,7 +957,8 @@ def test_every_runner_lane_binds_before_its_turn():
     assert "end_turn(agent)" in room.split("finally:")[-1]
     drain = loop.split("_pushed = False", 1)[1]
     assert drain.index("bind_turn(agent, _drain_turn_binding(") < drain.index("agent.chat_step(")
-    turn_and_after = drain.split("drain_summary_text = agent.chat_step(", 1)[1]
+    assert drain.count("agent.chat_step(") == 1, "the drain runs one summary turn"
+    turn_and_after = drain.split("agent.chat_step(", 1)[1]
     assert turn_and_after.split("finally:", 1)[1].lstrip().startswith("end_turn(agent)")
 
     tree = ast.parse(loop)

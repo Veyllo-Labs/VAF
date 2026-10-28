@@ -3577,6 +3577,13 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         or "cancelled by user via stop button" in err_lower
                                     )
                                 )
+                                # Named boundary: this runs after the chat's load and before
+                                # the summary turn's bind. The load already set the chat's own
+                                # scope and name, so only the role is the last turn's; nothing in
+                                # it reads the role or the scope (a resumed workflow builds its
+                                # engine from the paused record's own scope and name, the
+                                # validation is a model call with no identity input), and the
+                                # history and working memory it touches are the loaded chat's.
                                 if agent._process_subagent_result(result_task):
                                     any_needs_retry = True
                                 
@@ -3812,6 +3819,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
 
                                 response_parts = []
 
+                                # Everything the turn shows goes to the chat it was bound to,
+                                # never to whatever chat the agent holds when the text arrives.
                                 def webui_stream_callback(text):
                                     response_parts.append(text)
                                     full_text = "".join(response_parts)
@@ -3819,21 +3828,27 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         get_web_interface().emit_agent_message(
                                             "assistant",
                                             full_text,
-                                            session_id=getattr(agent, "current_session_id", None)
+                                            session_id=_drain_sid
                                         )
+
+                                # A reply a guard takes back (_retract_streamed_reply) leaves the
+                                # buffer, so it reaches neither the stored copy nor the messenger.
+                                def clear_stream_buffer():
+                                    response_parts.clear()
+
+                                webui_stream_callback.clear = clear_stream_buffer
 
                                 # A SYNTHETIC background turn, bound so (_drain_turn_binding): the
                                 # ask-first gate keys on it, and chat_step must not treat the
                                 # instruction prompt as a real user message (it would clear the
                                 # pending-question latch). Ended on EVERY exit path (Rule 4.5).
-                                drain_summary_text = ""
                                 try:
-                                    # Capture the return value: chat_step returns the FINAL answer with
-                                    # reasoning stripped (AGENT_LOOP design) - the messenger summary is
-                                    # based on it, never on the raw stream buffer (which carried untagged
-                                    # chain-of-thought to Telegram on 2026-07-13). The WebUI lane keeps
-                                    # using response_parts: the browser already saw that stream (4.2).
-                                    drain_summary_text = agent.chat_step(
+                                    # The return is a status, not the answer (CORE_AGENT.md,
+                                    # "Return contract": "..." on a normal completion). The answer
+                                    # is the stream; its stored copy below (_drain_turn_copy,
+                                    # reasoning and leaked tool calls removed) is what the chat
+                                    # shows and what the messenger is sent.
+                                    agent.chat_step(
                                         user_input=instruction_prompt,
                                         stream_callback=webui_stream_callback,
                                         skip_input=False,
@@ -3849,7 +3864,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 # POST-CHAT: Emit final message + save session
                                 # (mirrors main chat path – ensures browser sees the response even
                                 # if WebSocket dropped during streaming, and persists it for reload)
-                                _result_sid = getattr(agent, "current_session_id", None)
+                                _result_sid = _drain_sid
                                 # The stored copy is the cleaned stream, marked so no later
                                 # context reads a failure back (session.model_text).
                                 _clean_result, _drain_meta = _drain_turn_copy(
@@ -3909,18 +3924,17 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         pass
 
                                 # Send subagent summary to Telegram/Discord if this session originated from there.
-                                # Same sanitizer chain as the normal reply path (the old hand-copied short
+                                # The text is the chat's own copy of the summary, through the same
+                                # sanitizer chain as the normal reply path (the old hand-copied short
                                 # chain here let 1034 chars of untagged chain-of-thought reach Telegram),
                                 # and a DETERMINISTIC fallback instead of the old noise placeholder: the
                                 # drain owns delivery (4.3) - it must send something useful, never noise
                                 # and never nothing.
                                 try:
-                                    sid = getattr(agent, "current_session_id", None)
+                                    sid = _drain_sid
                                     if sid:
                                         session = session_mgr.load(sid)
-                                        out = _prepare_channel_outbound(drain_summary_text or "")
-                                        if not out:
-                                            out = _prepare_channel_outbound("".join(response_parts))
+                                        out = _prepare_channel_outbound(_clean_result or "")
                                         if not out:
                                             _mb_head = ("Der Sub-Agent ist fertig. Ergebnis:"
                                                         if user_lang == "de" else "The sub-agent finished. Result:")

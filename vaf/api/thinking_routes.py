@@ -43,18 +43,19 @@ def _requests_by_key(admin_scope: str) -> Dict[str, List[Dict[str, Any]]]:
     except OSError:
         dirs = []
     for raw in dirs:
-        # requests use "_default" for the no-scope dir; thinking_mode uses
-        # "default" - and the admin's raw scope id also collapses to "default".
-        key = "default" if raw == "_default" else scope_storage_key(raw)
-        rows = list_requests(None if raw == "_default" else raw)[:8]
-        sanitized = [
+        # "_default" holds a blank scope's records and, on older installs, owner records
+        # written before the writers resolved the owner's scope. The store files nobody
+        # there any more, so it is no account to show.
+        if raw == "_default":
+            continue
+        # The store resolves the owner's aliases (thinking_mode.scope_data_id): an alias
+        # directory reads the owner's own rows and assigns them to the same key again.
+        key = scope_storage_key(raw)
+        rows = list_requests(raw)[:8]
+        out[key] = [
             {f: r.get(f) for f in _REQUEST_FIELDS} | {"question": str(r.get("question") or "")[:200]}
             for r in rows
         ]
-        if key in out:  # "_default" and the admin uuid dir can both map here
-            out[key] = sorted(out[key] + sanitized, key=lambda r: r.get("created_at") or "", reverse=True)[:8]
-        else:
-            out[key] = sanitized
     return out
 
 

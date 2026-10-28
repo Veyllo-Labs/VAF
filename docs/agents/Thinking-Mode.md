@@ -38,8 +38,11 @@ lifecycle, so the background run and the main agent stay coordinated and nothing
 
 - **Lifecycle:** `asked` → `replied` → `done` / `declined` (a `replied` outcome the next run finds
   ambiguous re-opens to `asked` with `needs_reconfirm` for ONE soft check-back). Stored per user in
-  `thinking_requests/<scope>/requests.json` (see `vaf/core/thinking_requests.py`). `confirmed` is a legacy
-  status kept valid for old entries.
+  `thinking_requests/<scope>/requests.json` (see `vaf/core/thinking_requests.py`). The machine owner's
+  requests are under the configured owner scope whether the turn carries that scope or none
+  (`scope_data_id`, which uses the owner test of `scope_storage_key`), so an answer on Discord or from an
+  agent embedded without `user_scope` finds the request, its proposal and its handoff. `confirmed` is a
+  legacy status kept valid for old entries.
 - **Handoff to the main agent:** the request is linked to `waiting_for_reply`. When the user replies in
   chat, `chat_step` classifies the RAW message deterministically (`_classify_background_reply`; the
   enriched WebUI text with the workspace preamble defeated every leading-text check here - live
@@ -185,7 +188,7 @@ The thinking-mode prompt allows the agent to perform **at most one** targeted we
 
 ## Proactive profile evolution (`save_thinking_suggestion`)
 
-The agent can call **`save_thinking_suggestion`** (thinking-mode only) to propose updates to the user profile (e.g. *"User cares about package tracking"*). Suggestions are stored per user and presented in Settings for review; the agent does not overwrite identity or preferences without the user approving. See `vaf/tools/thinking_suggestion.py` and `vaf/core/thinking_suggestions.py`.
+The agent can call **`save_thinking_suggestion`** (thinking-mode only) to propose updates to the user profile (e.g. *"User cares about package tracking"*). Suggestions are stored, but nothing reads the store yet (no Settings view, no reader in the code), and the tool receives no scope, so every suggestion lands in `thinking_suggestions/_default/`; the agent does not overwrite identity or preferences without the user approving. See `vaf/tools/thinking_suggestion.py` and `vaf/core/thinking_suggestions.py`.
 
 ---
 
@@ -572,7 +575,9 @@ endpoint (`vaf/api/thinking_routes.py`) that reports the proactive agent
 **per user across all scopes**: active run, waiting-for-reply question (with
 channel and nudge state), minutes since the last completed run, tools of the
 newest run log, and the recent question lifecycle from `thinking_requests`
-(whitelisted fields only - replies and details stay in the chat surfaces).
+(whitelisted fields only - replies and details stay in the chat surfaces;
+one entry per account directory, and the no-scope `_default` directory, which
+the store no longer files anyone under, is not shown).
 It is built on `thinking_status_snapshot()` in `thinking_mode.py`, which is
 strictly read-only: an expired waiting latch is skipped but never deleted
 (deletion belongs to the lifecycle readers, not to a status probe). The
@@ -636,7 +641,7 @@ Thinking mode output is **not shown in the Web UI chat list**. It is logged to:
 | `thinking_last_completed.json` | Per-user timestamp of last completed run (for cooldown) |
 | `thinking_declined_questions.json` | Per-user list of refused questions (auto-expire 30 days) |
 | `thinking_notes.db` | Per-user SQLite DB of persistent agent notes (auto-expire 30 days) |
-| `thinking_suggestions/` | Per-user directory for profile suggestions from `save_thinking_suggestion` (review in Settings) |
+| `thinking_suggestions/` | Profile suggestions from `save_thinking_suggestion`. Nothing reads the store yet, and the tool receives no scope, so it writes under `_default` |
 | `thinking_requests/<scope>/requests.json` | Per-user background requests + status (`asked`/`replied`/`done`/`declined`; `confirmed` legacy) from `ask_user` or the `thinking_done(message=)` fallback. Fields incl. `proposed_action`, `details` (real content for the handoff), `source_note_id`/`source_todo_id`, `user_reply`/`main_reply` (the captured triple for outcome classification), `needs_reconfirm`, `original_question` (the subject a follow-up would otherwise have overwritten - see [Follow up](#proactive-intelligence-level-2)) |
 | `thinking_run_seq.json` | Per-user monotonic run counter (drives the "recently asked" window and the gate's "this run" boundary) |
 | `automation_planner/<scope>/notes.json` · `todos.json` | Per-user notes/todos - the Level-0 ledger source; a note is cleared by delete or `handled`, a todo by delete or `done` |
@@ -653,7 +658,7 @@ Debug log: `logs/vaf_think_YYYY-MM-DD.log` (human-readable, all users in one fil
 | Component | File | Key functions |
 |-----------|------|---------------|
 | Loop & run | `vaf/core/thinking_mode.py` | `start_thinking_mode_background()`, `thinking_loop_iteration()`, `maybe_start_thinking_for_user()`, `_run_thinking_for_user()` |
-| Scope / key | `vaf/core/thinking_mode.py` | `_key()`, `get_idle_user_scope_ids()` |
+| Scope / key | `vaf/core/thinking_mode.py` | `_key()`, `scope_storage_key()`, `scope_data_id()` (the owner's scope id for the request and handoff stores), `get_idle_user_scope_ids()` |
 | Cooldown | `vaf/core/thinking_mode.py` | `_last_completed_path()`, `_set_last_run_completed()`, `_minutes_since_last_run()` |
 | Declined questions | `vaf/core/thinking_mode.py` | `_declined_path()`, `_save_declined_entry()`, `_get_declined_questions_prompt()` |
 | Reply classification | `vaf/core/thinking_mode.py` | `_classify_replied_requests()`, `_classify_reply_outcome()`; `agent._generate_for_classification()` |

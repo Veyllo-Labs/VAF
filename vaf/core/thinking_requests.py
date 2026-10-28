@@ -16,9 +16,11 @@ Status lifecycle:
 A 'replied' request that the classifier finds ambiguous is re-opened to 'asked' with
 needs_reconfirm=True, so the follow-up node asks ONE soft retrospective check-back.
 
-Stored per user under thinking_requests / <user_scope_id> (mirrors thinking_suggestions.py). Keyed by
-the raw scope id: both the thinking run and the main agent now operate under the user's real scope, so
-they read/write the same store (see thinking_mode._run_thinking_for_user's scope resolution).
+Stored per user under thinking_requests / <user_scope_id>. Keyed by the scope id, with the machine
+owner's aliases resolved here (`thinking_mode.scope_data_id`: no scope, "default" and the configured
+local-admin scope are the owner, filed under the configured scope id): the thinking run writes under the
+user's real scope, and a reader with no scope (the Discord bridge's owner lane, an agent embedded
+without `user_scope`) finds the owner's records the way it finds the owner's waiting record.
 """
 from __future__ import annotations
 
@@ -35,10 +37,10 @@ _MAX_ENTRIES = 50  # keep the newest N per user
 
 
 def _dir(user_scope_id: Optional[str]) -> Path:
+    from vaf.core.thinking_mode import scope_data_id
     base = Platform.vaf_dir() / "thinking_requests"
-    if user_scope_id:
-        return base / str(user_scope_id).strip()
-    return base / "_default"
+    sid = scope_data_id(user_scope_id)
+    return base / sid if sid else base / "_default"
 
 
 def _path(user_scope_id: Optional[str]) -> Path:

@@ -12,11 +12,12 @@ request (thinking_requests) carrying this bundle's id. When the user replies, th
 bundle and continues the work with full context — deliberately integrated (a concise note + a bounded,
 compacted slice of the history), never raw-dumped over the user's chat.
 
-Storage mirrors thinking_requests.py: one directory per user, keyed by the RAW scope id, so a bundle is
-only ever read under the same scope it was written for. The writer resolves the scope exactly as the
-request store does (`user_scope_id or get_local_admin_scope_id()`) and passes that SAME scope to both the
-request and the bundle, so the main agent — which finds the request under its own scope — finds the
-matching bundle under that scope too. A bundle written for user A is unreadable for user B.
+Storage mirrors thinking_requests.py: one directory per user, keyed by the scope id, so a bundle is only
+ever read under the same account it was written for. The writer resolves the scope exactly as the request
+store's writers do (`user_scope_id or get_local_admin_scope_id()`) and passes that SAME scope to both the
+request and the bundle; both stores resolve the machine owner's aliases themselves
+(`thinking_mode.scope_data_id`), so the owner's main agent finds request and bundle whether its turn
+carries the owner's scope or none. A bundle written for user A is unreadable for user B.
 
 Bundle status lifecycle:
     open      -> the automation raised a handoff and is waiting for the user
@@ -43,12 +44,12 @@ _MSG_KEYS = ("role", "content", "tool_calls", "tool_call_id", "name", "kind")
 
 
 def _dir(user_scope_id: Optional[str]) -> Path:
-    # Raw-scope keying, identical to thinking_requests._dir, so a bundle stays aligned with the request
-    # that links to it (same scope -> same directory -> reader finds both or neither).
+    # Keyed through thinking_mode.scope_data_id, like thinking_requests._dir, so a bundle stays aligned
+    # with the request that links to it (same account -> same directory -> reader finds both or neither).
+    from vaf.core.thinking_mode import scope_data_id
     base = Platform.vaf_dir() / "handoff_bundles"
-    if user_scope_id:
-        return base / str(user_scope_id).strip()
-    return base / "_default"
+    sid = scope_data_id(user_scope_id)
+    return base / sid if sid else base / "_default"
 
 
 def _path(user_scope_id: Optional[str], bundle_id: str) -> Path:

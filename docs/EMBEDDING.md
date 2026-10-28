@@ -750,8 +750,10 @@ What an embedded agent can and cannot do on the host - the short version of
   operate on the local admin's memory bucket and file tools get the
   no-scope jail exemption (home-wide access as the gate allows). That is
   the intended single-tenant default: embedding VAF on your own machine
-  means acting as yourself. For anything multi-tenant, read the next
-  section.
+  means acting as yourself. Its turns also answer the background and
+  automation questions VAF asked the machine owner, with the proposal, the
+  findings and the handoff behind them. For anything multi-tenant, read the
+  next section.
 - **No account allowlist applies until you register one.** A bare agent
   consults no per-account tool list, because nothing is registered; a
   multi-tenant application registers one resolver process-wide with

@@ -559,6 +559,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   does not serve (`/oauth2/v2/authorize` instead of `/oauth2/v2.0/authorize`), so the sign-in
   could not start. A test now checks every Microsoft sign-in address VAF uses.
 
+- **Answering a background question on Discord counts as your answer again.** When the agent had
+  asked you something in the background (a thinking-mode question, or an automation that needed
+  your decision) and you answered on Discord, the agent got your answer without the action it had
+  proposed, what it had found or the automation's paused work, and the question stayed open, so a
+  later background run could ask it again. Your answer on Discord is now handled like one in the
+  web chat. The same applies to an agent you embed without a user scope. Restart VAF after
+  updating so the fix takes effect.
+
 - **A server install leaves out what only a desktop uses.** `./install.sh --server` no longer
   installs the tray icon's GTK, AppIndicator and WebKitGTK libraries, the PortAudio headers,
   the desktop window and tray packages (PySide6, pywebview, pystray, qtpy) or SpeechRecognition

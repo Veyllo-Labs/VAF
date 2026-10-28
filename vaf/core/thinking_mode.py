@@ -3631,6 +3631,40 @@ def scope_storage_key(user_scope_id: Any) -> str:
     return _key(user_scope_id)
 
 
+def scope_data_id(user_scope_id: Any) -> str:
+    """The scope id a raw-keyed per-user store files the caller's records under.
+
+    The owner test is `scope_storage_key`'s, so these stores (`thinking_requests`,
+    `handoff_bundle`) and the stores keyed by `scope_storage_key` (the waiting record, the
+    last reply) agree on who the machine owner is: no scope, ``"default"`` and the configured
+    local-admin scope. The owner's records live under the configured scope id, because every
+    writer resolves to it before writing (`deliver_tracked_message`, the `thinking_done`
+    fallback, `handoff_bundle.deliver_handoff`). Any other scope is returned stripped, and a
+    blank one as ``""`` (not the owner, the same answer `scope_storage_key` gives); the store
+    then uses its no-scope directory. So is a configured scope that cannot be read: never
+    another account's directory.
+
+    Measured before the stores resolved through here: a reply from a turn with no scope (the
+    Discord bridge's owner lane, an agent embedded without ``user_scope``) deleted the owner's
+    waiting record while the request stayed open, and neither the proposal, the findings nor
+    the automation's handoff reached the turn.
+
+    NAMED BOUNDARY: the other per-user keys that collapse the owner by hand
+    (`thinking_workspace`, `cost`, `trust`, `user_notifications`, which disagree on a blank
+    scope; `last_interaction`, `reminders`; the inline ``or get_local_admin_scope_id()``
+    resolutions; `automation_planner` and `thinking_suggestions`, which still file no scope
+    under ``_default``) are separate stores off this path and are not converted here.
+    """
+    key = _key(user_scope_id)
+    if key != "default":
+        return key
+    try:
+        from vaf.core.config import get_local_admin_scope_id
+        return str(get_local_admin_scope_id() or "").strip()
+    except Exception:
+        return ""
+
+
 def _last_run_overview(scope_key: str) -> Optional[Dict[str, Any]]:
     """Newest run-log overview for one storage key: end time, duration, tools used."""
     try:

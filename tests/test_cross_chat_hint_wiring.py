@@ -247,8 +247,8 @@ def test_a_room_turn_asks_with_what_was_said_and_excludes_its_own_room(spy):
     assert query == "der Matrix Regen in team.html", "it asked with the prompt, not the words"
     assert kwargs.get("current_room_id") == "room-w", "the room would hint into itself"
     assert kwargs.get("current_session_id") is None, (
-        "the stale session is a legitimate OTHER chat during a room turn - excluding "
-        "it hides a real conversation for no reason")
+        "a room turn runs in a conversation of its own, so every chat is another "
+        "conversation - excluding one hides it for no reason")
     assert agent._cross_chat_block, "the block never reached the room turn's prompt"
 
 

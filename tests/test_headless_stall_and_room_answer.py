@@ -185,3 +185,16 @@ def test_a_failed_room_turn_posts_nothing(room):
     answered = _agent([])
     assert hr.deliver_stray_room_answer(answered, WAKE, "Ich übernehme den zweiten Teil.", 0) is True
     assert room.said == ["Ich übernehme den zweiten Teil."]
+
+
+def test_an_observer_posts_nothing(room):
+    """An agent its user set to only observe a room does not speak there: the mode gate
+    refuses its room_send, and its plain text is not posted either. A mode is the local
+    user's decision, an absent one is the default. MUTATION: drop the observe check - red."""
+    agent = _agent([])
+    observer = dict(WAKE, mode="observe")
+    assert hr.deliver_stray_room_answer(agent, observer, "Summary for my user: they asked X", 0) is False
+    assert room.said == []
+    assert hr.deliver_stray_room_answer(agent, dict(WAKE, mode="assist"), "assist answer", 0) is True
+    assert hr.deliver_stray_room_answer(agent, WAKE, "no mode given", 0) is True
+    assert room.said == ["assist answer", "no mode given"]

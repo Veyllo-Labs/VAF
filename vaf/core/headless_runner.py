@@ -892,9 +892,17 @@ def deliver_stray_room_answer(agent, room_wake: dict, answer, hist_before: int) 
     not delivered, and neither is the text of a turn that failed or was stopped
     (the agent's `last_turn.failed`, a loop-protection note): it is the engine's, a
     provider's raw answer or the owner's spend, and the room's other members
-    read what is posted. Returns True when a fallback delivery happened.
+    read what is posted. Nor is anything of a turn in 'observe': an observer does not
+    speak in the room (the autonomy table in docs/agents/A2A_PROTOCOL.md, and the mode
+    gate refuses its room_send), and the wake prompt tells it its text is dropped.
+    Returns True when a fallback delivery happened.
     """
     try:
+        if str(room_wake.get("mode") or "") == "observe":
+            append_domain_log_always(
+                "headless",
+                f"[ROOM] observe: plain reply not posted room={room_wake.get('room_id')}")
+            return False
         text = str(answer or "").strip()
         if not text or text == "...":
             return False

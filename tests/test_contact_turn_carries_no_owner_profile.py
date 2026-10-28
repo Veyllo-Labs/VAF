@@ -95,7 +95,10 @@ def test_both_agent_prompts_say_when_somebody_else_is_answered():
     assert len(calls) == 2
     for pos in calls:
         window = src[pos:src.index("\n        )", pos)]
-        assert 'answers_somebody_else=getattr(self, "_allowed_tools", None) is not None' in window
+        assert "answers_somebody_else=self._answers_somebody_else()," in window
+    predicate = src[src.index("def _answers_somebody_else"):]
+    predicate = predicate[:predicate.index("\n    def ")]
+    assert 'getattr(self, "_allowed_tools", None) is not None' in predicate
     gate = src[src.index("def _refresh_cross_chat_hints"):]
     gate = gate[:gate.index("\n    def ")]
     assert re.search(r'if getattr\(self, "_allowed_tools", None\) is not None:\s+return', gate)

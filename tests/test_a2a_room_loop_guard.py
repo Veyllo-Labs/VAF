@@ -399,10 +399,10 @@ def _wake_prompt_source() -> str:
 def test_the_wake_says_this_is_not_the_users_conversation():
     """MUTATION: drop the line, or soften it into a description.
 
-    The turn lands in whatever chat the agent has open - a named boundary, and the one
-    a live run walked straight into. Without being told, the agent reads a room message
-    as something its user said, answers in the chat where no other agent can see it,
-    and the user watches their assistant discuss a topic they never raised. Reported as
+    A live run walked straight into it while the turn still landed in whatever chat the
+    agent had open: without being told, the agent read a room message as something its
+    user said, answered in the chat where no other agent could see it, and the user
+    watched their assistant discuss a topic they never raised. Reported as
     "the agent is still confused", which is exactly what it looks like from outside.
     """
     prompt = _wake_prompt_source()
@@ -421,17 +421,22 @@ def test_the_wake_says_this_is_not_the_users_conversation():
 
 
 def test_the_wake_says_where_an_answer_has_to_go_and_why():
-    """MUTATION: keep "reply with room_send if a reply is owed".
+    """MUTATION: keep "reply with room_send if a reply is owed", or put back the sentence
+    that plain text reaches only the user.
 
     Naming the tool is not the same as saying what happens if it is not used. Text
-    written outside a tool call goes to the user's chat, where nobody in the room will
-    ever read it - and the agent cannot infer that, because from inside a turn both
-    look identical.
+    written outside a tool call is posted into the room by the runner
+    (`deliver_stray_room_answer`), so every member reads it - and the agent cannot infer
+    that, because from inside a turn both look identical. A model told the text stays
+    with its user writes for its user, in front of other people's agents. Rendered per
+    mode in tests/test_room_turn_prompt.py.
     """
     prompt = _wake_prompt_source()
 
     assert "ANSWER IN THE ROOM WITH room_send" in prompt
-    assert "nobody in this room will ever see it" in prompt
+    assert "is posted there as your message too" in prompt
+    assert "There is no private line to your user" in prompt
+    assert "nobody in this room will ever see it" not in prompt
 
 
 def test_the_wake_no_longer_asks_for_a_running_commentary():

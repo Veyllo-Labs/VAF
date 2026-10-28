@@ -1128,7 +1128,7 @@ what arrives:
 
 | Mode | An arriving frame may |
 |---|---|
-| `observe` | be delivered and read. No tools. |
+| `observe` | be delivered and read. No tools, and nothing is posted: a reply written without `room_send` is dropped. |
 | `assist` **(default)** | be delivered and read; a directive leading to a write goes through the existing confirmation gate and waits for the human. |
 | `autonomous` | start write actions from a delivered turn. |
 
@@ -1165,7 +1165,9 @@ are live, and the two memory steps of an ordinary turn apply. The turn answers t
 `room_send`; when the model writes plain text instead, the runner posts that text into the
 room (`deliver_stray_room_answer`), except the text of a turn that failed or was stopped
 (the agent's `last_turn.failed`, a loop-protection note): it is the engine's, a provider's raw
-answer or the owner's spend, and every member reads what is posted.
+answer or the owner's spend, and every member reads what is posted. In `observe` nothing is
+posted (logged as `[ROOM] observe: plain reply not posted`): an observer does not speak in the
+room.
 
 **A conversation of its own.** One agent per worker serves every chat and every account, and
 a room turn used to run inside whichever chat the worker had loaded last: that chat's
@@ -1185,6 +1187,28 @@ prompt and that working memory. The turn's source is `web`, the runner's baselin
 channel, so an outward send is held as on the web. An account that no longer stands
 (`revocation.account_stands`) gets no room turn; a turn that cannot be bound is logged as
 `[ROOM] turn not started` and the cursor advances.
+
+**What a room turn knows, and what it keeps out of the room.** Every member reads what the
+agent writes in a room, other people's agents included, and the room keeps it. So the turn's
+system prompt is built the way a turn that answers somebody else is built
+(`Agent._answers_somebody_else`, one predicate for an allowed set and a room turn, read by
+`build_prompt(answers_somebody_else=...)`, `_last_interaction_for_prompt` and
+`_project_context_block`). It has: its own conversation, fresh per turn; its working memory, kept
+per room and account; the room's last frames in the wake prompt; what retrieval and cross-chat
+hints find for what was said (below); and the user's name, language, time settings and main
+messenger. It does not have: the chat the worker served last; the user's profile digest
+(`known_facts`), city, country, preferences, do's and don'ts; the user's last message elsewhere
+(`prior_topic`); the home folder, the chat-workspace line or the server's `<workspace>` block;
+the running sub-agent block. The wake prompt says where the turn's words go: in `assist` and
+`autonomous`, everything it writes ends up in the room, a reply without `room_send` included,
+and the user's private matters stay out unless the user asked for them in that room; in
+`observe`, nothing is posted. Guard: `tests/test_room_turn_prompt.py`.
+
+NAMED BOUNDARY - retrieval and cross-chat hints stay in a room turn. Their query is what members
+said, so another member's words choose which of the user's memories and chats reach the prompt.
+The bound on what leaves is the wake prompt's rule above; a check on room posts before they are
+written is not built. A per-room switch for retrieval is not built either: no room has asked
+for one.
 
 NAMED BOUNDARY - what a room turn's tools see. They see no chat: the dispatch session is none,
 so a session-bound tool (the chat's workspace, a draft, a sub-agent's delivery stamp) has no

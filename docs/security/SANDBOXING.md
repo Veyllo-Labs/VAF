@@ -385,8 +385,9 @@ only through `host_bash`, which an account has or does not have.**
 
 One more tool starts processes on the host: `mcp_call`, for a local MCP server. It starts only
 a server an administrator registered in `mcp_servers.json` (`mcp_registry.registered_server`),
-the same processes discovery starts at every startup; a command the model writes is refused
-for every account, the admin's included. It used to start any `server_command` it was given,
+the same processes discovery starts at every startup, and none while `mcp_native_tools_enabled`
+is off; a command the model writes is refused for every account, the admin's included. In a
+coding run it reaches only `read`-level tools. It used to start any `server_command` it was given,
 which made it a host shell that nobody granted. Details in
 [MCP_INTEGRATION.md](../agents/MCP_INTEGRATION.md).
 

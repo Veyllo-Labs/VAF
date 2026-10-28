@@ -919,7 +919,10 @@ The raw `mcp_call` carries no caller identity, so it refuses such a server and n
 tools; it could otherwise only run as the local admin's session. It also starts only a server an
 administrator registered: the command that starts a local server is the admin's decision, never
 an account's or a model's, so an unregistered command is refused for every account (it used to
-run on the host for any account that had the tool). See
+run on the host for any account that had the tool). The account's tool allowlist is asked for
+the `mcp_<server>_<tool>` a call reaches, not only for `mcp_call`, so a list that leaves a
+server's tool out cannot reach it through the raw tool (`tool_dispatch.caller_allows_tool`; in
+the coder's child the list that crossed as `VAF_ALLOWED_TOOLS`). See
 [MCP_INTEGRATION.md](../agents/MCP_INTEGRATION.md).
 
 ### Config: global vs user-scoped

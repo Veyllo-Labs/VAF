@@ -121,10 +121,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   computer, for every account and with no question asked, so a chat or a coding run could
   start any program. It now reaches only a server an admin registered under Settings,
   Advanced, MCP, named by `server`; any other command is refused for every account, the
-  admin's included. A registered server's tool that asks for a confirmation, and a server
-  where every account signs in, stay with their own `mcp_<server>_<tool>` tools. A remote
-  server at a `server_url` without a login is reached as before. Takes effect after a
-  restart of VAF.
+  admin's included. A call on a registered server obeys the rules of that server's own
+  `mcp_<server>_<tool>` tool: an account whose tool list leaves that tool out is refused,
+  switching MCP tools off in Settings switches them off here too, and a tool that asks for a
+  confirmation, or a server where every account signs in, stays with its own tool. A coding
+  run reaches only tools set to `read`. A remote server at a `server_url` without a login is
+  reached as before, outside a coding run. Takes effect after a restart of VAF.
 
 - **Each chat's working memory is now kept under its exact id.** A signed-in account could
   open another account's chat working memory (goal, plan, tasks, notes) by starting a chat

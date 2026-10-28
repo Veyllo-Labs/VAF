@@ -29,20 +29,34 @@ measured through the real dispatcher, a regular account's headless turn created 
   (the same argv) is accepted too, and `server_command` is read as an old name of the field.
   Anything else is refused, for every account, the admin's included, because the admin did not
   write that command either. The refusal names the registered servers.
-- A server switched off in the manifest (`"enabled": false`) is not reached.
+- A server switched off in the manifest (`"enabled": false`) is not reached, and with
+  `mcp_native_tools_enabled` off no registered server is reached through `mcp_call` either.
+- The account allowlist is asked for the tool the call reaches, `mcp_<server>_<tool>`, not only
+  for `mcp_call` (`tool_dispatch.caller_allows_tool`; the tool declares
+  `identity_kwargs = ("user_scope_id", "user_role")` for it). A list that grants `mcp_call` and
+  not a server's delete tool, as the Standard preset does, does not run the delete here. In the
+  coding agent's child the list that crossed as `VAF_ALLOWED_TOOLS` decides. The refusal for an
+  unregistered command names only the servers the account has a tool of.
 - The call runs the way the server's own `mcp_<server>_<tool>` tools do
   (`mcp_registry.call_registered_tool`): the shared warm process, the server's `env` from the
-  key ring, a remote server's registered URL, headers and destination rule.
+  key ring, a remote server's registered URL, headers and destination rule. An error names a
+  remote server's URL without its query, user name or password (`mcp_remote.display_url`).
 - Two kinds of call stay with the server's own tools, because those carry a rule this lane
   cannot: a tool whose level is `dangerous` (it asks on every call) and a server that signs every
   account in (its tools run as the caller).
-- A `server_url` (with `transport` `http` or `sse`) is still reached as before, under the
-  instance destination policy and with no stored token.
+- In a coding run (`VAF_AGENT_TYPE` is `coding_agent`: the coder's child process, or a
+  workflow's in-process coding step) only `read`-level tools are reached and no `server_url`:
+  the coder's tools are for looking things up.
+- Outside a coding run, a `server_url` (with `transport` `http` or `sse`) is still reached as
+  before, under the instance destination policy and with no stored token.
 
 Named boundary: `mcp_call` stays a `write` tool, neither `admin_only` nor granted only by name.
-What it can reach is what every account already has as the registered tools, and the processes
-it can start are the ones discovery starts at every startup. Code of your own that has chosen a
-command itself calls `get_mcp_client().call_stdio(command, tool, arguments, env)`.
+With the rules above it reaches nothing the account does not already have as the registered
+tools, and the processes it can start are the ones discovery starts. A coder run inline in the
+application's process (`sub_agents_in_separate_terminals` off, or a terminal that could not be
+opened) carries no `VAF_AGENT_TYPE`, so the read-level rule does not hold there; the account's
+rules do. Code of your own that has chosen a command itself calls
+`get_mcp_client().call_stdio(command, tool, arguments, env)`.
 
 ## Registering servers - `mcp_servers.json`
 
@@ -233,8 +247,9 @@ entry to override individual tools (the rest fall back to the server level) - ma
 
 ## Settings
 
-- `mcp_native_tools_enabled` (default `true`) - kill-switch for the whole registration step;
-  `mcp_call` still works when it is off.
+- `mcp_native_tools_enabled` (default `true`) - kill-switch for the whole registration step and
+  for the registered servers through `mcp_call`; only a `server_url` without a login is still
+  reached by `mcp_call` when it is off.
 - `mcp_discovery_timeout_seconds` (default `5`) - the parallel-discovery deadline.
 - `mcp_oauth_callback_base_url` (default empty) - the base of the sign-in's redirect address behind
   a reverse proxy; empty derives it like the email and cloud sign-ins.

@@ -37,7 +37,8 @@ def test_the_fallback_names_the_owner_or_nothing():
 
 
 def test_the_spelling_exists_once():
-    """The builder, and the sidebar's ownership prefix (a prefix, not an id) - nothing else."""
+    """The builder and nothing else. The history route's ownership prefix used to be the
+    second site; it decided ownership by the id's shape, and now asks the session rule."""
     hits = []
     for path in _VAF.rglob("*.py"):
         for no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
@@ -48,8 +49,4 @@ def test_the_spelling_exists_once():
             str(no) for no, line in enumerate(
                 (_VAF / "core" / "messaging_connections.py").read_text(encoding="utf-8").splitlines(), 1)
             if 'return f"whatsapp_{uname}_{key}"' in line),
-        "vaf/api/whatsapp_routes.py:" + next(
-            str(no) for no, line in enumerate(
-                (_VAF / "api" / "whatsapp_routes.py").read_text(encoding="utf-8").splitlines(), 1)
-            if "prefix = f\"whatsapp_{" in line),
     ]), f"the session-id recipe is spelled by hand again: {hits}"

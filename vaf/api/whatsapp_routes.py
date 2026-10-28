@@ -829,11 +829,17 @@ async def get_whatsapp_session_history(session_id: str, request: Request):
     """Return message history and compaction stats for a WhatsApp session."""
     if not session_id.startswith("whatsapp_"):
         raise HTTPException(status_code=400, detail="Invalid session id")
-    current_user = get_current_vaf_user(request)
     if not caller_is_admin(request):
-        # Session IDs are scoped by vaf_username: whatsapp_<username>_<digits>
-        prefix = f"whatsapp_{(current_user.get('username') or '').strip()}_"
-        if not session_id.startswith(prefix):
+        # The one ownership rule, by the scope the chat's file records. Not by the id's
+        # shape: "whatsapp_<username>_" is a prefix of another account's chats whenever
+        # that account's name extends this one's ("anna" and "anna_m"). The scope is the
+        # one the request was authenticated with; a missing chat is refused, there is no
+        # history to show for it.
+        from vaf.core.session import get_manager, session_access_allowed
+        scope = (getattr(request.state, "user", None) or {}).get("user_scope_id")
+        allowed, _ = session_access_allowed(get_manager(), session_id,
+                                            user_scope_id=scope, is_admin=False)
+        if not allowed:
             raise HTTPException(status_code=403, detail="Access denied")
     try:
         from vaf.core.session import SessionManager

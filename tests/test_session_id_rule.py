@@ -56,6 +56,8 @@ SERVER_FORMS = [
     "whatsapp_anna m_4915112345678", "whatsapp_Jörg_4915112345678",
     "whatsapp_" + "\U0001f600" * 50 + "_" + "9" * 20,  # the longest: 230 bytes
     "thinking_default_20261028", "thinking_aaaa1111-2222-3333-4444-5555_0123abcd",
+    "email_alice_bob_example_com",
+    "email_alice_" + "x" * 238,                       # the longest a mail id may be: 250
     "system",
 ]
 
@@ -116,7 +118,7 @@ def test_a_plain_id_keeps_its_folder_and_every_other_id_is_hashed():
         else:
             assert _HEX_NAME.fullmatch(name), f"{sid!r} -> {name!r}"
     kept = [s for s in SERVER_FORMS if _old_safe_session_dir(s) == s]
-    assert len(kept) == len(SERVER_FORMS) - 3, "a server-minted plain id is no longer kept"
+    assert len(kept) == len(SERVER_FORMS) - 4, "a server-minted plain id is no longer kept"
 
 
 def test_an_old_store_is_read_in_place(tmp_path):
@@ -196,7 +198,7 @@ def test_a_room_conversation_store_is_named_by_its_key_and_the_collector_reads_i
     "", " red654321", "red654321 ",
     "../escape", "a/b", "a\\b", ".", "..",
     ".hidden", "x\x00y", "D:escape",
-    "x" * 241,
+    "x" * 251, "x" * 125 + "\u00e4" * 63,           # 251 bytes
     None, 123,
 ])
 def test_check_session_id_refuses(bad):
@@ -211,7 +213,9 @@ def test_check_session_id_accepts_every_server_form(sid):
 
 def test_every_server_form_round_trips_through_the_store(tmp_path):
     sm = SessionManager(storage_dir=str(tmp_path / "sessions"))
-    for sid in SERVER_FORMS:
+    # The longest forms stay out: under a temp folder their full path passes the 260
+    # characters a Windows host refuses without long-path support.
+    for sid in (s for s in SERVER_FORMS if len(s) <= 100):
         sm.save(Session(id=sid, name=sid))
         assert sm.load(sid, repoint=False).id == sid
 
@@ -380,3 +384,104 @@ def test_every_minted_id_may_be_started_by_its_account(tmp_path, monkeypatch):
         assert check_session_id(sid) == sid
         assert session_access_allowed(sm, sid, user_scope_id=BOB, is_admin=False,
                                       allow_missing=True)[0] is True, sid
+
+
+# ── the WhatsApp history route asks the one rule, not the id's prefix ──────────────────────
+
+ANNA = "dddd1111-2222-3333-4444-555555555555"
+ANNA_M = "eeee1111-2222-3333-4444-555555555555"
+
+
+@pytest.fixture
+def channel_store(tmp_path, monkeypatch):
+    """The default session store under tmp, for routes that open it themselves."""
+    import vaf.core.session as session_mod
+    monkeypatch.setattr(session_mod, "default_sessions_dir", lambda: tmp_path / "sessions")
+    monkeypatch.setattr(session_mod, "_manager", None)
+    monkeypatch.setattr(cfg, "get_local_admin_scope_id", lambda: ADMIN)
+    return SessionManager()
+
+
+def _account(username, scope, role="user"):
+    from types import SimpleNamespace
+    return SimpleNamespace(state=SimpleNamespace(
+        user={"username": username, "role": role, "user_scope_id": scope}))
+
+
+def _history(request, session_id):
+    import asyncio
+
+    from vaf.api import whatsapp_routes
+    return asyncio.run(whatsapp_routes.get_whatsapp_session_history(session_id, request))
+
+
+def test_whatsapp_history_is_refused_to_an_account_whose_name_prefixes_the_owners(channel_store):
+    """"whatsapp_anna_" is a prefix of every chat of the account "anna_m"; the route
+    decided ownership by that prefix, and "anna" read "anna_m"'s messages."""
+    from fastapi import HTTPException
+    sid = "whatsapp_anna_m_4915112345678"
+    chat = Session(id=sid, name="anna_m's contact")
+    chat.metadata["user_scope_id"] = ANNA_M
+    chat.add_message("user", "ANNA-M-PRIVATE-TEXT")
+    channel_store.save(chat)
+
+    with pytest.raises(HTTPException) as refused:
+        _history(_account("anna", ANNA), sid)
+    assert refused.value.status_code == 403
+
+    own = _history(_account("anna_m", ANNA_M), sid)
+    assert "ANNA-M-PRIVATE-TEXT" in str(own["messages"])
+    assert "ANNA-M-PRIVATE-TEXT" in str(_history(_account("admin", ADMIN, "admin"), sid))
+    with pytest.raises(HTTPException) as shape:
+        _history(_account("anna_m", ANNA_M), "telegram_123456789")
+    assert shape.value.status_code == 400
+
+
+# ── a lossy workspace name never reaches another chat's legacy folder ──────────────────────
+
+@pytest.fixture
+def documents(tmp_path, monkeypatch, channel_store):
+    from vaf.core.platform import Platform
+    docs = tmp_path / "docs"
+    monkeypatch.setattr(Platform, "documents_dir", staticmethod(lambda: docs))
+    return docs / "VAF_Projects"
+
+
+def _chat(store, sid, scope=None):
+    chat = Session(id=sid, name=sid)
+    if scope:
+        chat.metadata["user_scope_id"] = scope
+    store.save(chat)
+
+
+def test_a_variant_chat_does_not_get_the_legacy_folder_of_the_chat_it_resembles(
+        channel_store, documents):
+    from vaf.core.session import get_session_workspace_dir
+    legacy = documents / "red654321"
+    legacy.mkdir(parents=True)
+    _chat(channel_store, "red654321", OWNER)
+    _chat(channel_store, "red654321.", BOB)        # claimed before the id rule
+
+    assert get_session_workspace_dir("red654321.") is None, (
+        "a variant id reached the flat legacy folder of another account's chat")
+    assert get_session_workspace_dir("red654321") == legacy, (
+        "a chat lost its own legacy folder")
+
+
+def test_a_chat_without_a_scope_keeps_the_legacy_fallback(channel_store, documents):
+    from vaf.core.session import get_session_workspace_dir
+    legacy = documents / "green123456"
+    legacy.mkdir(parents=True)
+    _chat(channel_store, "green123456.")
+    assert get_session_workspace_dir("green123456.") == legacy
+
+
+def test_an_id_no_session_can_have_has_no_workspace(channel_store, documents):
+    """Trimming first read the owner of another chat and returned its folder."""
+    from vaf.core.session import get_session_workspace_dir
+    own = documents / OWNER[:8] / "red654321"
+    own.mkdir(parents=True)
+    _chat(channel_store, "red654321", OWNER)
+    assert get_session_workspace_dir("red654321") == own
+    assert get_session_workspace_dir(" red654321") is None
+    assert get_session_workspace_dir("../red654321") is None

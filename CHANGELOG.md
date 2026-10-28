@@ -121,7 +121,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   whose id differed from it only by a dot or a space, and write into it. The browser may now
   only start chats with ids the server hands out, an id with a path separator or `..` is
   refused everywhere, and the working memory of a WhatsApp chat whose account name holds a
-  space or a letter outside A-Z starts empty once. Takes effect after a restart of VAF.
+  space or a letter outside A-Z starts empty once. An account could also read the WhatsApp
+  chat history of another account whose name begins with its own ("anna" and "anna_m"); the
+  history now goes only to the account that owns the chat. Takes effect after a restart of
+  VAF.
 
 - **Turning on Local Network in Settings asks other devices to sign in at once.** Before, a
   VAF started with Local Network off and switched on later let other devices in without a

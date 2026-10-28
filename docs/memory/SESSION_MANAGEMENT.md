@@ -71,7 +71,7 @@ if not session_id:
 allowed, _ = _ws_session_owner_ok(websocket, session_id, allow_missing=True)
 ```
 
-The gate refuses an id that cannot name a session file for everyone (`check_session_id`: a path separator, `.` or `..`, a leading dot, a control character, a drive prefix, surrounding spaces, more than 240 bytes). For an id with no file yet, a non-admin passes only with an id the server hands out: a minted `<colour><6 digits>` (the New chat button saves one before the first message) or their own default chat. The admin passes every missing id.
+The gate refuses an id that cannot name a session file for everyone (`check_session_id`: a path separator, `.` or `..`, a leading dot, a control character, a drive prefix, surrounding spaces, more than 250 bytes). For an id with no file yet, a non-admin passes only with an id the server hands out: a minted `<colour><6 digits>` (the New chat button saves one before the first message) or their own default chat. The admin passes every missing id.
 
 ### 3. Task Queue → Agent
 

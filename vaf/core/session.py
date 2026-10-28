@@ -586,11 +586,14 @@ def truncate_to_last_user_turn(session: "Session") -> Optional["Message"]:
 #: tests/test_public_repo_hygiene.py is pinned to it, so the three cannot drift apart.
 SESSION_COLOURS = ("yellow", "red", "blue", "green", "purple", "cyan", "orange")
 
-#: Upper bound for a session id, in UTF-8 bytes. The longest id the server builds is a
-#: WhatsApp chat: "whatsapp_" + a 50-character account name at 4 bytes each + "_" + 20
-#: digits = 230 bytes. 240 leaves that room and stays below the 255-byte name limit of
-#: the common filesystems once ".json.gz" is appended.
-SESSION_ID_MAX_BYTES = 240
+#: Upper bound for a session id, in UTF-8 bytes: the 255-byte name limit of the common
+#: filesystems minus ".json", the limit a session file already had. The longest ids the
+#: server builds reach it: a mail correspondent is "email_<account>_<address>" with the
+#: address (up to 254 characters) folded to ASCII, so its id can pass 255 bytes and was
+#: never storable beyond this; a WhatsApp chat is at most "whatsapp_" + a 50-character
+#: account name at 4 bytes each + "_" + 20 digits = 230 bytes. The legacy ".json.gz" form
+#: is only rewritten for files that already exist, so their ids already fit.
+SESSION_ID_MAX_BYTES = 250
 
 _NEW_SESSION_ID = re.compile(r"(?:%s)[0-9]{6}" % "|".join(SESSION_COLOURS))
 
@@ -619,9 +622,15 @@ def check_session_id(session_id) -> str:
     Every form the server mints passes unchanged: ``<colour><6 digits>``, the legacy
     8-character uuid prefix, ``web-default-<8>``, ``telegram_<id>`` (negative group ids
     too), ``discord_<id>``, ``whatsapp_<account name>_<digits|self|unknown>`` (account
-    names are free text and may hold spaces and any letter), ``thinking_<key>_<run>`` and
+    names are free text and may hold spaces and any letter), ``email_<account>_<address>``
+    (both folded to ASCII; up to `SESSION_ID_MAX_BYTES`), ``thinking_<key>_<run>`` and
     ``system``. Windows device names (CON, NUL) are not refused: the server never mints
     them, and a non-admin cannot start a chat under an id the server did not hand out.
+
+    Named boundary: account names are free text, so an account whose name holds ``/``,
+    ``\\`` or a tab gets WhatsApp chat ids this rule refuses (those chats are not stored),
+    and one whose name holds ``:`` gets ids that pass here but name an alternate data
+    stream on NTFS; closing that needs a username grammar, not a wider id rule.
     """
     if not isinstance(session_id, str) or not session_id or session_id != session_id.strip():
         raise InvalidSessionId(f"invalid session id: {session_id!r}")
@@ -1914,10 +1923,18 @@ def session_access_allowed(
       corrupt or empty. Any doubt about whether the file is there resolves to "it is",
       i.e. to deny.
 
-    Named boundary: three handlers check ownership by hand instead of calling this rule
-    (`_resolve_session_workspace`, `/api/image/describe` and the workflow-status check in
-    web_server.py). None of them creates anything from a missing id, and they reach the
-    store through `load`, which refuses what `check_session_id` refuses.
+    Named boundary: these checks still decide ownership by hand instead of calling this
+    rule. In web_server.py, `_resolve_session_workspace` and `/api/image/describe` compare
+    the scope of the session they loaded by its exact id (`load` refuses what
+    `check_session_id` refuses, and neither creates anything from a missing id);
+    `get_workflow_run_state` answers only for the session the connection is subscribed to,
+    which the gate let it subscribe to; `_viewer_agent_workers` is a display filter that
+    fails closed. `supervisor_routes._owned_session_ids` filters by the caller's own scoped
+    session list. Two channel routes are sound on their own terms: Telegram's history
+    route admits a non-admin only for a chat id on that account's own whitelist entries,
+    and Discord's is admin-only. The WhatsApp history route used to compare the id's
+    "whatsapp_<username>_" prefix, which another account's chats match when its name
+    extends the caller's; it calls this rule now.
     """
     try:
         check_session_id(session_id)
@@ -2033,11 +2050,17 @@ def get_session_workspace_dir(session_id: Optional[str] = None, create: bool = F
     ``A-Z a-z 0-9 _ -`` and is cut to 32, so it is not one folder per id. Two
     chats of ONE account can share a folder (every thinking run of an account
     maps to one; a WhatsApp chat keeps only 6 digits of its number once the
-    account name has 16 characters). It never crosses accounts: the folder sits
-    under the session owner's uid8. Left as it is because the folders hold the
+    account name has 16 characters). It does not cross accounts: the folder
+    sits under the session owner's uid8, and the legacy fallback below is
+    closed to a lossy name. Left as it is because the folders hold the
     user's own files and the derivation has 8 copies (this one,
     `get_session_attachments_dir`, four in web_server.py, the coder and the
     workflow engine); changing it moves real folders.
+
+    The flat legacy root ``VAF_Projects/<folder>`` (folders from before the
+    per-account level) is a second candidate for a chat without a recorded
+    scope, and for a chat with one only when ``<folder>`` equals the id, so a
+    lossy name never reaches another chat's legacy folder.
     """
     import re as _re
 
@@ -2054,6 +2077,12 @@ def get_session_workspace_dir(session_id: Optional[str] = None, create: bool = F
             session_id = ""
     sid = (session_id or "").strip()
     if not sid:
+        return None
+    try:
+        # An id no session can have has no workspace. Trimming it first used to read the
+        # owner of ANOTHER chat (" red654321" loaded "red654321") and hand back its folder.
+        check_session_id(session_id)
+    except InvalidSessionId:
         return None
     folder = _re.sub(r'[^a-zA-Z0-9_-]', '', sid)[:32]
     if not folder:
@@ -2072,7 +2101,12 @@ def get_session_workspace_dir(session_id: Optional[str] = None, create: bool = F
     candidates = []
     if uid:
         candidates.append(root / uid[:8] / folder)
-    candidates.append(root / folder)
+    if not uid or folder == sid:
+        # The flat legacy root, from before per-account folders. For a chat with an owner
+        # only when the folder name IS the id: a lossy name ("red654321." -> "red654321")
+        # would hand the legacy folder of another chat, possibly another account's, to
+        # whoever holds the variant id. Server-made ids are plain, so legacy chats keep it.
+        candidates.append(root / folder)
 
     if create:
         target = candidates[0]

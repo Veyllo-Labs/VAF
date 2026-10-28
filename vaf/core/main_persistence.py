@@ -103,10 +103,13 @@ class MainPersistenceManager:
         names its own id, and a chat with no file yet passes the ownership check), so a
         conversation's store under the chats' folder could be opened by anybody who named a
         chat after its key - and a room's key is visible to its members. ``conversations/``
-        is reached only by a key the server declared."""
+        is reached only by a key the server declared.
+
+        Both are kept exactly as given, never trimmed: " red654321" is another chat than
+        "red654321" (see `_safe_session_dir`). Empty or blank means none."""
         self.base_dir = Path(base_dir)
-        self.session_id = (str(session_id).strip() or None) if session_id else None
-        self.conversation = (str(conversation).strip() or None) if conversation else None
+        self.session_id = self._exact_key(session_id)
+        self.conversation = self._exact_key(conversation)
         if self.session_id and self.conversation:
             raise ValueError("a store belongs to a chat or to a conversation of its own, not both")
         if self.session_id:
@@ -144,14 +147,37 @@ class MainPersistenceManager:
         return cls(base_dir, session_id=session_id, conversation=conversation)
 
     @staticmethod
+    def _exact_key(key: Optional[str]) -> Optional[str]:
+        text = str(key) if key else ""
+        return text if text.strip() else None
+
+    @staticmethod
     def _safe_session_dir(session_id: str) -> str:
-        """Sanitize a session id into a single safe path segment (prevents traversal):
-        non-allowed chars -> '_', dot-runs collapsed (no '..'), no leading/trailing punctuation."""
+        """The folder name of one chat's (or one conversation's) store: a single safe path
+        segment, and a DIFFERENT one for every id.
+
+        A plain id is its own folder name: only ``A-Z a-z 0-9 _ . -``, no "..", a letter or
+        digit first and last, at most 128 characters. Every other id gets ``_`` plus the
+        first 40 hex digits of its SHA-256. The two sets cannot meet, because a plain name
+        never starts with ``_``.
+
+        Not a sanitiser on purpose. The earlier mapping rewrote characters and trimmed
+        punctuation, so "red654321." and "red654321" shared one folder, and the ownership
+        check, which reads the session by its exact id, let a second account open the first
+        account's goal, plan, tasks and notes through the variant; the server itself mints
+        ids it folded together ("whatsapp_anna m_<n>" and "whatsapp_anna_m_<n>" belong to
+        two accounts). Every id the earlier mapping kept unchanged keeps its folder, so the
+        chats' and the agent rooms' stores (``<room>.p-<hex>``, whose folder name the
+        collector reads back as the room key) are where they were. An id it folded starts
+        with an empty store, and the old shared folder ages out with the collector's sweep.
+        """
+        import hashlib
         import re as _re
-        safe = _re.sub(r"[^A-Za-z0-9_.-]", "_", str(session_id).strip())
-        safe = _re.sub(r"\.+", ".", safe)          # collapse dot runs so no '..' survives
-        safe = safe.strip("._-") or "default"      # no leading/trailing punctuation
-        return safe[:128]
+        text = str(session_id)
+        if (len(text) <= 128 and ".." not in text
+                and _re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?", text)):
+            return text
+        return "_" + hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()[:40]
 
     def _init_files(self):
         """Initialize empty context files if they don't exist."""

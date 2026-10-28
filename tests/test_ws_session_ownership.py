@@ -188,7 +188,7 @@ def test_an_unreadable_session_is_denied_even_with_allow_missing():
             sm.load.side_effect = Exception("0-byte session file")
 
             corrupt_ok, _ = w._ws_session_owner_ok(ws, "corrupt", allow_missing=True)
-            fresh_ok, _ = w._ws_session_owner_ok(ws, "never-used", allow_missing=True)
+            fresh_ok, _ = w._ws_session_owner_ok(ws, "green123456", allow_missing=True)
 
     assert corrupt_ok is False, (
         "an unreadable session still passes: its id can be taken over by whoever asks next"

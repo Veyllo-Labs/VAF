@@ -19,7 +19,7 @@ import queue
 log("WebServer", "Basic imports done")
 
 from vaf.core.web_interface import get_web_interface
-from vaf.core.session import SessionManager, Session
+from vaf.core.session import SessionManager, Session, default_session_id
 from vaf.cli.autosuggest import autosuggest_for
 import json
 from vaf.core.config import Config, is_admin_identity
@@ -829,10 +829,12 @@ def _ws_session_owner_ok(websocket, session_id, *, loaded=None, allow_missing=Fa
     """Ownership gate for WebSocket session commands (chat / load / delete / rename / hide / artifact_edit).
 
     Returns (allowed: bool, loaded_session_or_None). This resolves WHO is asking from the
-    connection; the rule itself is `SessionManager.may_access`, so the HTTP endpoints that
-    name a session id answer identically. Admin is `config.is_admin_identity` over the
-    connection's role and scope, the rule every other gate asks. `allow_missing=True` passes a not-yet-created
-    id, for the chat's first-message-into-a-new-session flow.
+    connection; the rule itself is `vaf.core.session.session_access_allowed`, so the HTTP
+    endpoints that name a session id answer identically. Admin is `config.is_admin_identity`
+    over the connection's role and scope, the rule every other gate asks. `allow_missing=True`
+    passes a not-yet-created id, for the chat's first-message-into-a-new-session flow: for a
+    non-admin only an id the server hands out (a minted one, or the caller's own default
+    chat). An id that cannot name a session file (`check_session_id`) is refused for everyone.
     """
     user_scope_id = manager.get_connection_user(websocket)
     role = manager.get_connection_user_role(websocket)
@@ -862,9 +864,11 @@ def _session_record_exists(session_id) -> bool:
     about, and a dialog for a chat that is already gone (a double-clicked trash
     icon, a second tab) would be a question with no subject.
     """
+    from vaf.core.session import InvalidSessionId, session_file_paths
     try:
-        return any((session_mgr.storage_dir / f"{session_id}{ext}").exists()
-                   for ext in (".json", ".json.gz"))
+        return any(p.exists() for p in session_file_paths(session_mgr.storage_dir, session_id))
+    except InvalidSessionId:
+        return False         # no file can live under it; the gate refuses it anyway
     except Exception:
         return True          # cannot tell -> treat as present -> ask
 
@@ -5890,8 +5894,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     user_scope_id = manager.get_connection_user(websocket)
                     if not session_id:
                         # Use user-scoped default to prevent crosstalk
-                        safe_scope = str(user_scope_id or "default").replace("-", "")[:8]
-                        session_id = f"web-default-{safe_scope}"
+                        session_id = default_session_id(user_scope_id)
                     allowed, _ = _ws_session_owner_ok(websocket, session_id, allow_missing=True)
                     if not allowed:
                         log("API", f"Access denied: artifact_edit {session_id} not owned by {user_scope_id}")
@@ -6067,8 +6070,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             session_id = None
                         if not session_id:
                             # Use user-scoped default to prevent crosstalk
-                            safe_scope = str(user_scope_id or "default").replace("-", "")[:8]
-                            session_id = f"web-default-{safe_scope}"
+                            session_id = default_session_id(user_scope_id)
 
                         # Ownership gate: never subscribe to / enqueue into a session owned by another user
                         # (subscribe itself leaks the live stream). allow_missing lets the first message into
@@ -6582,8 +6584,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                     user_scope_id = manager.get_connection_user(websocket)
                     if not session_id:
                         # Use user-scoped default to prevent crosstalk
-                        safe_scope = str(user_scope_id or "default").replace("-", "")[:8]
-                        session_id = f"web-default-{safe_scope}"
+                        session_id = default_session_id(user_scope_id)
                     # OWNERSHIP. Without it this handler loads the named session, replaces its
                     # sidebar_documents and saves the file - on BOTH paths, with no scope filter
                     # anywhere: an empty payload wipes another user's sidebar, a full one plants

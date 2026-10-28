@@ -65,9 +65,13 @@ if (not requested_session_id) and isinstance(connection_session_id, str) and con
     session_id = None
 
 if not session_id:
-    safe_scope = str(manager.get_connection_user(websocket) or "default").replace("-", "")[:8]
-    session_id = f"web-default-{safe_scope}"
+    session_id = default_session_id(manager.get_connection_user(websocket))
+
+# Ownership gate before the first side effect (session_access_allowed).
+allowed, _ = _ws_session_owner_ok(websocket, session_id, allow_missing=True)
 ```
+
+The gate refuses an id that cannot name a session file for everyone (`check_session_id`: a path separator, `.` or `..`, a leading dot, a control character, a drive prefix, surrounding spaces, more than 240 bytes). For an id with no file yet, a non-admin passes only with an id the server hands out: a minted `<colour><6 digits>` (the New chat button saves one before the first message) or their own default chat. The admin passes every missing id.
 
 ### 3. Task Queue → Agent
 
@@ -103,7 +107,7 @@ When the user clicks a different session in the Web UI, the frontend sends `load
 
 As a result, the agent’s context (history + ContextManager) is switched to the selected session immediately, even if the user does not send a new message: the session's own saved context state, or an empty one when it has none (a chat just created with New chat), never the state of the chat open before. The next message in that session then runs with the correct session context already loaded.
 
-`load_session_context` also re-points the **per-session persistence store** (`Agent._bind_session_persistence`): the agent's intent, plan, tasks, notes, and team state live in `.vaf/main/sessions/<session_id>/`, so one chat's working memory never leaks into another (the legacy global `.vaf/main/` is the fallback when no session is known). An agent room's turn loads no session: the runner's turn binding starts a conversation of its own and binds its store under `.vaf/main/conversations/<room_id>.<peer_id>/` (`vaf/core/turn_binding.py`), apart from the chats' folder. See [CONTEXT_GLUE.md](CONTEXT_GLUE.md).
+`load_session_context` also re-points the **per-session persistence store** (`Agent._bind_session_persistence`): the agent's intent, plan, tasks, notes, and team state live in `.vaf/main/sessions/<folder>/`, one folder per session id (the id itself when it is a plain name, otherwise `_` plus 40 hex digits of its SHA-256; `MainPersistenceManager._safe_session_dir`), so one chat's working memory never leaks into another (the legacy global `.vaf/main/` is the fallback when no session is known). An agent room's turn loads no session: the runner's turn binding starts a conversation of its own and binds its store under `.vaf/main/conversations/<room_id>.<peer_id>/` (`vaf/core/turn_binding.py`), apart from the chats' folder. See [CONTEXT_GLUE.md](CONTEXT_GLUE.md).
 
 ### 4. Agent → Frontend (Broadcasting Updates)
 
@@ -120,7 +124,8 @@ def _push_session_update(self, session_id: str, data: dict):
 - **Session list:** The backend filters sessions by the connection's `user_scope_id` (`SessionManager.list(..., user_scope_id=...)`). Users only see their own sessions and legacy sessions (no scope).
 - **An empty chat, defined once.** `is_untouched(session)` in `vaf/core/session.py` answers "did anybody put anything in here": no message with role `user` or `assistant`, no stored `sidebar_documents`, no file in the chat's workspace folder. System and tool rows are scaffolding and do not count, which is what makes an abandoned chat collectable at all. Every surface that can remove a chat asks THIS: the husk sweep (`SessionManager.cleanup_empty`), the terminal app on leaving and on quitting, and the Web UI's delete and hide commands, which use it to decide whether they may skip the confirmation dialog. There used to be four separate versions of the question and they disagreed - most consequentially the browser's, which read a cached message count that nothing refreshes after a turn and so deleted a full conversation without asking. An assistant message counts on its own because automation results and proactive questions are delivered into chats nobody has answered yet; the older rule read those as husks and collected them.
 - **Session-command ownership:** A single shared gate verifies ownership before the first side effect of every Web UI session command - chat (before subscribing), load, delete, rename, hide, and artifact edit. The session's `metadata.user_scope_id` must match the current user, or the connection must be admin (connection role `admin` or local-admin scope). A session with no recorded scope is treated as admin-only (unlike the session list, which still shows no-scope sessions to all users). On denial the server replies `Access denied` and keeps the connection open.
-- **Default session:** When no session is selected, the fallback session ID is per-user (`web-default-<scope>`), not a single global `web-default`.
+- **Default session:** When no session is selected, the fallback session ID is per-user (`web-default-<scope>`, `default_session_id`), not a single global `web-default`.
+- **New ids:** a non-admin can start a chat only under an id the server hands out (a minted `<colour><6 digits>` or their own default chat); any other id with no file yet is refused, so nobody claims a channel chat's id, another account's default chat or a variant of an existing id before its first message. An id that is not one plain file name is refused for everyone. Details in [USER_ISOLATION.md](../security/USER_ISOLATION.md).
 - **Reading session CONTENT uses the strict rule, not the list rule.** `SessionManager.iter_owned_sessions()` / `list_owned()` require the caller's scope and the session's scope to both be non-empty and equal, so a no-scope session belongs to nobody and an admin is not widened. `SessionManager.search()` runs on that walker and takes a mandatory `user_scope_id`; it previously globbed the whole store unscoped, and its only caller is `vaf session search`, which now passes the machine owner's scope. Cross Chat Hint uses the same walker. Details in [USER_ISOLATION.md](../security/USER_ISOLATION.md).
 - **What counts as a still-existing chat:** the file is present in the sessions directory (deletion is an `unlink` of `<id>.json`/`.json.gz`; there is no paused state). There IS an archived state, and it is a MOVE rather than a flag: `SessionManager.archive` relocates the file to `<sessions>/archive/<scope>/`, so an archived chat leaves every listing that globs the sessions directory while staying a fully readable session - which is what lets the memory lane retrieve from it (`iter_owned_sessions` reads the caller's own archive alongside the live chats). `list_archived` is the listing for it, and it re-checks the owner recorded inside each file, so isolation does not rest on the directory alone. `delete_archived` ends it for good and repeats that check before the unlink rather than trusting the path - a deleter that skipped it could remove what the listing refuses to show, `metadata.hidden_from_list` is not set, and - for surfaces that show chats - it is neither a channel session nor a thinking run (`list_ui`). Cross Chat Hint keeps channel sessions as sources but drops those whose endpoint belongs to a known contact.
 
@@ -217,17 +222,17 @@ agent._register_session()
 
 **Symptom:** Error loading session from storage.
 
-**Cause:** WebUI created new session ID that doesn't exist in `~/.vaf/sessions/`.
+**Cause:** A turn arrived for a chat that has no file yet: a contact's first message on a channel, or a fresh chat id whose empty file was swept before the first message.
 
-**Fix:** Create session on-the-fly if not found:
+**Behavior:** The runner creates the file at the end of the turn with the caller's username and scope (`new_session_for_task` in `vaf/core/headless_runner.py`):
 ```python
 try:
-    current_session = session_mgr.load(task.session_id)
-except:
-    current_session = session_mgr.new()
-    current_session.id = task.session_id
-    session_mgr.save(current_session)
+    session = session_mgr.load(task.session_id)
+except FileNotFoundError:
+    session = new_session_for_task(task)
 ```
+
+Before that, the web gate decides whether the id may be created at all: a non-admin only under an id the server hands out, and an id that cannot name a session file is refused for everyone (see Backend Processing). `load` answers such an id with `FileNotFoundError` and never looks outside the store.
 
 ---
 
@@ -274,7 +279,8 @@ itself stays as a belt for odd cases.
 ## Session Storage Format
 
 One file per session, `~/.vaf/sessions/<session_id>.json`, holding the JSON
-below. **The file itself is encrypted at rest** (`VAFENC1:` ‖ 12-byte nonce ‖
+below. An id that is not a single plain file name is refused by every read and
+write of the store (`check_session_id`), never rewritten. **The file itself is encrypted at rest** (`VAFENC1:` ‖ 12-byte nonce ‖
 AES-256-GCM, mode 0600), so `cat` shows ciphertext, not this structure - the
 shape is what `SessionManager.load()` hands back after decrypting. Reading
 tolerates both forms while the store is still mixed, so a plaintext file
@@ -329,7 +335,7 @@ Rules:
 - Only set for paths inside `~/Documents/VAF_Projects/` - temporary files and one-off outputs are excluded.
 - New projects are created per chat: `VAF_Projects/<uid[:8]>/<session_id>/<ProjectName>` (the session level applies whenever a session id is available).
 - `runtime_state["last_project_path"]` continues to track the **most recently created or edited** project and is updated on every `file_created` event - except for unsafe directories (home dir, `~/.vaf`, ...), which are never recorded or re-injected (`is_unsafe_project_dir` guard; legacy sessions holding such paths are corrected automatically on load).
-- **Image attachments** uploaded in a chat are stored as files under `VAF_Projects/<uid[:8]>/<session_id>/attachments/` (`get_session_attachments_dir()`); `Message.metadata["images"]` holds only `{name, mime_type, path, base_description}`, not inline base64. The agent reads them by path (`analyze_image` / `read_file`); the Web UI serves them via `GET /api/file`. See the vision section in `docs/llm/API_INTEGRATION.md`.
+- **Image attachments** uploaded in a chat are stored as files under `VAF_Projects/<uid[:8]>/<session_id>/attachments/` (the `<session_id>` level is the id without characters outside `A-Z a-z 0-9 _ -`, cut to 32, the chat workspace folder) (`get_session_attachments_dir()`); `Message.metadata["images"]` holds only `{name, mime_type, path, base_description}`, not inline base64. The agent reads them by path (`analyze_image` / `read_file`); the Web UI serves them via `GET /api/file`. See the vision section in `docs/llm/API_INTEGRATION.md`.
 
 At the start of each agent turn, `vaf/core/headless_runner.py` injects both values into the effective input:
 

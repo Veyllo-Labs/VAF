@@ -22,7 +22,7 @@ all, so the agent's goal, plan, tasks and sub-agent state were readable by
 anyone who could reach the port - which on a local-network install is the
 network. Naming a session id without an ownership check would have turned that
 into a way to read another user's working memory on purpose, so the two halves
-had to land together. The ownership rule is `SessionManager.may_access`, the
+had to land together. The ownership rule is `session_access_allowed`, the
 same one the WebSocket commands use.
 """
 from __future__ import annotations

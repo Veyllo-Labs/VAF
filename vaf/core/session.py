@@ -6,6 +6,7 @@ VAF Session Management - Save and restore conversations
 Provides persistent storage for chat sessions
 """
 import json
+import re
 import uuid
 import gzip
 import random
@@ -16,6 +17,7 @@ from typing import Callable, Dict, Any, Iterator, List, Optional, Tuple
 from dataclasses import dataclass, field, asdict, fields
 
 from vaf.core.channels import CHANNEL_LABELS, CHAT_CHANNELS
+from vaf.core.path_jail import PathEscape, is_rooted, safe_entry_name
 
 #: One lock per session, so two background lanes appending to the SAME chat cannot
 #: lose a message. The sequence is read-modify-write against a whole file: both callers
@@ -575,6 +577,91 @@ def truncate_to_last_user_turn(session: "Session") -> Optional["Message"]:
     return removed
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# WHAT MAY NAME A SESSION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+#: The colours of the ids the server mints (`_generate_session_id`). The new-id rule in
+#: `session_access_allowed` reads the same tuple, and the session-id pattern of
+#: tests/test_public_repo_hygiene.py is pinned to it, so the three cannot drift apart.
+SESSION_COLOURS = ("yellow", "red", "blue", "green", "purple", "cyan", "orange")
+
+#: Upper bound for a session id, in UTF-8 bytes. The longest id the server builds is a
+#: WhatsApp chat: "whatsapp_" + a 50-character account name at 4 bytes each + "_" + 20
+#: digits = 230 bytes. 240 leaves that room and stays below the 255-byte name limit of
+#: the common filesystems once ".json.gz" is appended.
+SESSION_ID_MAX_BYTES = 240
+
+_NEW_SESSION_ID = re.compile(r"(?:%s)[0-9]{6}" % "|".join(SESSION_COLOURS))
+
+
+class InvalidSessionId(PathEscape):
+    """An id that cannot name a session file: see `check_session_id`."""
+
+
+def check_session_id(session_id) -> str:
+    """The one rule for what may name a session at all. Returns the id unchanged, or
+    raises `InvalidSessionId`.
+
+    Rejected rather than sanitised. The session file is ``<sessions>/<id>.json``, so the
+    id is a path component, and a rewritten id names a DIFFERENT chat than the one the
+    caller asked for: a sanitiser that folded "red654321." onto "red654321" let one
+    account open another account's working memory. Refused here:
+
+    - anything that is not a non-empty ``str`` equal to its own ``.strip()``;
+    - what `safe_entry_name` refuses: a path separator, "." or "..", more than one
+      entry, a control character, a leading dot (``<sessions>/../escape.json`` was
+      written outside the store before this rule);
+    - a rooted id (`is_rooted`), such as "D:escape", which is a drive-relative path on
+      Windows;
+    - more than `SESSION_ID_MAX_BYTES` UTF-8 bytes.
+
+    Every form the server mints passes unchanged: ``<colour><6 digits>``, the legacy
+    8-character uuid prefix, ``web-default-<8>``, ``telegram_<id>`` (negative group ids
+    too), ``discord_<id>``, ``whatsapp_<account name>_<digits|self|unknown>`` (account
+    names are free text and may hold spaces and any letter), ``thinking_<key>_<run>`` and
+    ``system``. Windows device names (CON, NUL) are not refused: the server never mints
+    them, and a non-admin cannot start a chat under an id the server did not hand out.
+    """
+    if not isinstance(session_id, str) or not session_id or session_id != session_id.strip():
+        raise InvalidSessionId(f"invalid session id: {session_id!r}")
+    try:
+        safe_entry_name(session_id)
+    except PathEscape as exc:
+        raise InvalidSessionId(f"invalid session id {session_id!r}: {exc}") from None
+    if is_rooted(session_id):
+        raise InvalidSessionId(f"invalid session id {session_id!r}: rooted")
+    if len(session_id.encode("utf-8", "surrogatepass")) > SESSION_ID_MAX_BYTES:
+        raise InvalidSessionId(f"invalid session id: longer than {SESSION_ID_MAX_BYTES} bytes")
+    return session_id
+
+
+def session_file_paths(storage_dir, session_id) -> Tuple[Path, Path]:
+    """The two files a session can live in, ``<id>.json`` and the legacy ``<id>.json.gz``,
+    inside ``storage_dir``. Raises `InvalidSessionId` for an id `check_session_id` refuses,
+    so no reader or writer that builds its path here can reach outside the store."""
+    sid = check_session_id(session_id)
+    base = Path(storage_dir)
+    return base / f"{sid}.json", base / f"{sid}.json.gz"
+
+
+def default_session_id(user_scope_id: Optional[str]) -> str:
+    """The chat a web connection falls back to when it names none: one per account,
+    ``web-default-`` plus the first 8 characters of the scope without dashes."""
+    return "web-default-" + str(user_scope_id or "default").replace("-", "")[:8]
+
+
+def _may_name_new(session_id: str, user_scope_id: Optional[str]) -> bool:
+    """May a non-admin start a chat under this id, which has no file yet? Only under an id
+    the server hands out to everybody: a minted ``<colour><6 digits>`` (an untouched chat
+    may have been swept before its first message), or the caller's own default chat. Any
+    other free id is a name in someone's namespace: a channel chat (``telegram_<id>``),
+    another account's default chat, the task queue's ``system``, or a variant of an
+    existing chat's id. The first message into it would create the file with the caller's
+    scope and keep it."""
+    return bool(_NEW_SESSION_ID.fullmatch(session_id)) or session_id == default_session_id(user_scope_id)
+
+
 def _generate_session_id() -> str:
     """
     Generate a human-friendly session ID: <color><6 digits>
@@ -582,7 +669,7 @@ def _generate_session_id() -> str:
 
     Collisions are unlikely, but we still try a few times against the default storage dir.
     """
-    colors = ("yellow", "red", "blue", "green", "purple", "cyan", "orange")
+    colors = SESSION_COLOURS
     sessions_dir = default_sessions_dir()
 
     for _ in range(20):
@@ -746,6 +833,9 @@ class SessionManager:
         session = session or self._current
         if not session:
             raise ValueError("No session to save")
+        # Before anything is written: an id that is not one plain entry would put the
+        # file (and the gz branch's temp file) outside the store.
+        json_path, gz_path = session_file_paths(self.storage_dir, session.id)
         
         # Capture state from registry if available
         if sync_state and self.state_registry and self.state_registry.is_enabled():
@@ -766,12 +856,7 @@ class SessionManager:
         # Update timestamp
         session.updated_at = datetime.now().isoformat()
         
-        # Determine file path
-        filename = f"{session.id}.json"
-        if compress:
-            filename += ".gz"
-        
-        filepath = self.storage_dir / filename
+        filepath = gz_path if compress else json_path
         
         # A credential the person handed over in this chat and the agent stored is replaced
         # wherever the chat carries it - the person's own message, which the runner writes
@@ -853,9 +938,13 @@ class SessionManager:
         Returns:
             Loaded Session instance
         """
+        try:
+            paths = session_file_paths(self.storage_dir, session_id)
+        except InvalidSessionId:
+            # No such session can exist, and nothing outside the store is looked at.
+            raise FileNotFoundError(f"Session not found: {session_id!r}") from None
         # Try both compressed and uncompressed
-        for ext in [".json", ".json.gz"]:
-            filepath = self.storage_dir / f"{session_id}{ext}"
+        for filepath in paths:
             if filepath.exists():
                 data = self._read_session_file(filepath)
 
@@ -1158,10 +1247,13 @@ class SessionManager:
         The caller checks ownership (the web layer does this before delete
         too); the scope here decides which account's archive it lands in.
         """
+        try:
+            paths = session_file_paths(self.storage_dir, session_id)
+        except InvalidSessionId:
+            return False
         target_dir = self.archive_dir(user_scope_id)
         moved = False
-        for ext in [".json", ".json.gz"]:
-            src = self.storage_dir / f"{session_id}{ext}"
+        for src in paths:
             if not src.exists():
                 continue
             try:
@@ -1170,7 +1262,7 @@ class SessionManager:
                     target_dir.chmod(0o700)
                 except Exception:
                     pass  # best effort; Windows has no meaningful mode here
-                src.replace(target_dir / f"{session_id}{ext}")
+                src.replace(target_dir / src.name)
                 moved = True
             except Exception:
                 import logging
@@ -1300,10 +1392,13 @@ class SessionManager:
         """
         from vaf.core.cost import _scope_key
 
+        try:
+            paths = session_file_paths(self.archive_dir(user_scope_id), session_id)
+        except InvalidSessionId:
+            return False
         want = _scope_key(user_scope_id)
         removed = False
-        for ext in (".json", ".json.gz"):
-            path = self.archive_dir(user_scope_id) / f"{session_id}{ext}"
+        for path in paths:
             if not path.exists():
                 continue
             try:
@@ -1332,13 +1427,18 @@ class SessionManager:
         folder keeps a human name in the Data Explorer instead of falling
         back to the raw session-id folder name.
         """
+        try:
+            paths = session_file_paths(self.storage_dir, session_id)
+        except InvalidSessionId:
+            # Before the workspace steps: they derive a folder from the id by dropping
+            # characters, so "../escape" would reach the workspace of a chat named "escape".
+            return False
         _cleanup_empty_session_workspace(session_id)
         _preserve_workspace_title(self, session_id)
 
         deleted = False
 
-        for ext in [".json", ".json.gz"]:
-            filepath = self.storage_dir / f"{session_id}{ext}"
+        for filepath in paths:
             if filepath.exists():
                 filepath.unlink()
                 deleted = True
@@ -1795,29 +1895,45 @@ def session_access_allowed(
     session does not load it twice.
 
     Policy, strict:
+    - an id that `check_session_id` refuses is refused for EVERYONE, the admin included:
+      no session can live under it, and a path built from it would leave the store;
     - an admin passes (the machine owner must never be locked out of their own store);
     - otherwise the session's recorded `user_scope_id` must be non-empty and equal to the
       caller's - a session with NO scope predates isolation and therefore belongs to the
       local admin alone, not to everyone;
     - `allow_missing` passes an id that does not exist yet, for the flow where the first
-      message creates the session. It does NOT pass a session that exists but cannot be
-      read: those two used to arrive here as one, and answering them alike let a caller
-      claim a stranger's id whose file was corrupt or empty. Any doubt about whether the
-      file is there resolves to "it is", i.e. to deny.
+      message creates the session - for a non-admin only an id the server hands out
+      (`_may_name_new`: a minted ``<colour><6 digits>`` or the caller's own
+      `default_session_id`). The first message into a free id creates the file with the
+      caller's scope, so naming one claims it: ``telegram_<id>`` before the channel's
+      first message, another account's default chat, or a variant of an existing chat's
+      id. The admin keeps every missing id, as the machine owner whose flows (answering a
+      channel turn's question before that chat has a file) name such ids. It does NOT
+      pass a session that exists but cannot be read: those two used to arrive here as
+      one, and answering them alike let a caller claim a stranger's id whose file was
+      corrupt or empty. Any doubt about whether the file is there resolves to "it is",
+      i.e. to deny.
+
+    Named boundary: three handlers check ownership by hand instead of calling this rule
+    (`_resolve_session_workspace`, `/api/image/describe` and the workflow-status check in
+    web_server.py). None of them creates anything from a missing id, and they reach the
+    store through `load`, which refuses what `check_session_id` refuses.
     """
+    try:
+        check_session_id(session_id)
+    except InvalidSessionId:
+        return (False, None)
     try:
         loaded = manager.load(session_id)
     except Exception:
         exists = True
         try:
-            storage_dir = Path(manager.storage_dir)
-            exists = any((storage_dir / f"{session_id}{ext}").exists()
-                         for ext in (".json", ".json.gz"))
+            exists = any(p.exists() for p in session_file_paths(manager.storage_dir, session_id))
         except Exception:
             exists = True           # cannot tell -> treat as existing -> restrictive
         if exists:
             return (is_admin, None)
-        return (bool(allow_missing) or is_admin, None)
+        return (is_admin or (bool(allow_missing) and _may_name_new(session_id, user_scope_id)), None)
 
     if is_admin:
         return (True, loaded)
@@ -1912,6 +2028,16 @@ def get_session_workspace_dir(session_id: Optional[str] = None, create: bool = F
     `get_session_attachments_dir` takes it explicitly. It matters beyond speed:
     that lookup goes through the module-global manager's `load()`, which
     repoints its current session at whatever it read.
+
+    Named boundary: the folder name drops every character outside
+    ``A-Z a-z 0-9 _ -`` and is cut to 32, so it is not one folder per id. Two
+    chats of ONE account can share a folder (every thinking run of an account
+    maps to one; a WhatsApp chat keeps only 6 digits of its number once the
+    account name has 16 characters). It never crosses accounts: the folder sits
+    under the session owner's uid8. Left as it is because the folders hold the
+    user's own files and the derivation has 8 copies (this one,
+    `get_session_attachments_dir`, four in web_server.py, the coder and the
+    workflow engine); changing it moves real folders.
     """
     import re as _re
 
@@ -2047,8 +2173,7 @@ def _preserve_workspace_title(manager, session_id: str) -> None:
         # load() always repoints manager._current at whatever it loads, and
         # deleting a background chat must not touch the active-session pointer.
         title = ""
-        for ext in (".json", ".json.gz"):
-            fp = manager.storage_dir / f"{session_id}{ext}"
+        for fp in session_file_paths(manager.storage_dir, session_id):
             if fp.exists():
                 data = manager._read_session_file(fp)
                 title = str((data or {}).get("name") or "").strip()

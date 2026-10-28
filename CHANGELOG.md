@@ -116,6 +116,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   your LAN and your VPN only: the app refuses public addresses, and putting it on the public
   internet is not supported.
 
+- **Each chat's working memory is now kept under its exact id.** A signed-in account could
+  open another account's chat working memory (goal, plan, tasks, notes) by starting a chat
+  whose id differed from it only by a dot or a space, and write into it. The browser may now
+  only start chats with ids the server hands out, an id with a path separator or `..` is
+  refused everywhere, and the working memory of a WhatsApp chat whose account name holds a
+  space or a letter outside A-Z starts empty once. Takes effect after a restart of VAF.
+
 - **Turning on Local Network in Settings asks other devices to sign in at once.** Before, a
   VAF started with Local Network off and switched on later let other devices in without a
   sign-in, as the machine's admin, until it was restarted. With Local Network off, the web UI

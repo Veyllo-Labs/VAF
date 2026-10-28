@@ -19,7 +19,7 @@ session id to the request without an ownership check would have upgraded a
 wrong-lane display bug into a deliberate cross-user read, so the two halves
 belong in one change.
 
-The ownership rule itself is `SessionManager.may_access` - the same one the
+The ownership rule itself is `session_access_allowed` - the same one the
 WebSocket commands use - so a session id cannot mean one thing over a socket and
 another over HTTP.
 """

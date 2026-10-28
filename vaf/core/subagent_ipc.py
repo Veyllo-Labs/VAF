@@ -852,11 +852,19 @@ class SubAgentIPC:
     
     def find_task(self, task_id: str) -> Optional[SubAgentTask]:
         """The queue's record of one task, wherever it stands: pending, active or completed
-        (not yet consumed). None when the queue does not hold that id."""
-        for file in [self.pending_file, self.active_file, self.results_file]:
-            for task in self._read_json(file):
-                if task.get('task_id') == task_id:
-                    return SubAgentTask.from_dict(task)
+        (not yet consumed). None when the queue does not hold that id.
+
+        The three reads run under `_mutation_guard`: a move (mark_task_running, complete_task,
+        fail_task) writes the file it takes the task OUT of before the one it puts it IN, and
+        a reader in between finds it in neither. That holds in-process; across processes the
+        guard is best-effort (its file lock is dropped after its timeout), so a reader in
+        another process can still meet the gap.
+        """
+        with self._mutation_guard():
+            for file in [self.pending_file, self.active_file, self.results_file]:
+                for task in self._read_json(file):
+                    if task.get('task_id') == task_id:
+                        return SubAgentTask.from_dict(task)
         return None
 
     def get_task_status(self, task_id: str) -> Optional[str]:

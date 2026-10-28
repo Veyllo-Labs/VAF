@@ -341,8 +341,9 @@ a confirmed record: the account allowlist, the authorizer's deny with its own re
 `admin_only`, a revoked account and the headless confirmation each re-fed the know-how with
 "retry if appropriate" and let the runtime re-learn distil the refusal and the call's arguments
 into a pitfall ("list_contacts is not available here; never call it") in the machine-wide
-record every account reads. A schema error and a tool that ran and failed, the path jail's
-`Access denied` included, did reach the tool and stay lessons. Guards:
+record every account reads. A schema error passed dispatch (`tool_start`) but was refused
+before `run()`, on the tool's own contract, so it stays a lesson; so does a tool that ran and
+failed, the path jail's `Access denied` included. Guards:
 `tests/test_refused_calls_teach_nothing.py`, `tests/test_front_office_tool_set.py`. The error is re-checked from the raw result, and a cheap
 `delivery.known_pitfall_hit` classifies it as a **known pitfall** (the agent saw it via the schema
 and fell for it anyway -> put the procedure first) vs a **novel error** (logged `[WW-SURPRISE]`).

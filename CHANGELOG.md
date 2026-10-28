@@ -380,7 +380,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   sub-agent marker ended the turn with "the coding_agent is now working on your request" for a
   task that did not exist, hid the real tool result, and inside a workflow paused the run to
   wait for it. The marker of a real task another chat or agent room had started could also
-  hand that task's result to the wrong conversation. The marker now counts only for a
+  hand that task's result to the wrong conversation, and a workflow step that waits for its
+  sub-agent could take that task's result or, when stopped, cancel that task. The marker now counts only for a
   sub-agent this call actually started. Restart VAF after updating so the fix takes effect.
 
 - **Archived chats, agent rooms and word suggestions are encrypted on disk like the chats.**

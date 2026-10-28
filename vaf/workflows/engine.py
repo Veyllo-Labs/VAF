@@ -466,10 +466,11 @@ def _books_to_the_runs_account(execute):
 
 
 def _collects_its_spawns(execute):
-    """A run's sub-agent tasks are recorded while it runs (`spawn_ledger`), so the pause below
-    honours only the marker of a task one of its own steps started. A step's text that merely
-    carries the marker - a fetched page, a file, another lane's task id - is step output.
-    Inside a chat call the run shares that call's ledger."""
+    """A run's sub-agent tasks are recorded while it runs (`spawn_ledger`), so the pause and
+    the wait below honour only the marker of a task one of its own steps started. A step's
+    text that merely carries the marker - a fetched page, a file, another lane's task id, a
+    task the enclosing chat call started - is step output. The run's ledger starts empty and
+    hands its ids to the enclosing call's ledger when the run ends."""
     import functools
 
     @functools.wraps(execute)
@@ -1723,10 +1724,12 @@ class WorkflowEngine:
         """
         import time as _time
         from vaf.core.bounded_run import TIMEOUT_PREFIX, STOPPED_PREFIX
-        from vaf.core.subagent_spawn import parse_async_marker
-        # Shape only, deliberately: the input is the spawnable step tool's OWN direct return,
-        # never another tool's text, and without a marker it already is the result.
-        _marker = parse_async_marker(spawn_output)
+        from vaf.core.subagent_spawn import delegated_task
+        # Verified, not parsed: when the spawn fell back to in-process, the step tool's return
+        # is its real output, and that can carry any text - a fetched page, a file, another
+        # lane's marker. Waiting on such an id consumed that lane's result, and a stop or a
+        # timeout failed its task. Only a task this run started is waited for.
+        _marker = delegated_task(spawn_output)
         if not _marker:
             return spawn_output  # ran in-process / spawn fell back → already the result
         task_id = _marker[0]

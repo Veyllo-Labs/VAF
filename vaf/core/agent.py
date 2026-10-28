@@ -12522,8 +12522,9 @@ class Agent:
                         # the tool, and its refusal says who was asking, not how the tool
                         # works. Re-fed, the know-how went out with "retry if appropriate";
                         # re-learned, the refusal and its arguments became a pitfall in the
-                        # record every account reads. A schema error and a tool that ran and
-                        # failed did reach the tool, and stay lessons.
+                        # record every account reads. A schema error passed dispatch but was
+                        # refused before run() on the tool's own contract, and a tool that ran
+                        # and failed reached it: both stay lessons.
                         if _rs.startswith(("error", "failed", "tool error", "security error",
                                            "exception", "❌", "[error]", "access denied")) \
                                 and _outcome is not None and _outcome.dispatched \

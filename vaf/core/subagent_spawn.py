@@ -46,8 +46,8 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Iterable, Mapping, Optional, Sequence, Tuple
 
-# The one reader of the marker's shape. Every consumer goes through parse_async_marker or
-# delegated_task (guarded by tests/test_subagent_spawn.py).
+# The one reader of the marker's shape. Every consumer goes through delegated_task
+# (guarded by tests/test_subagent_spawn.py).
 _MARKER_RE = re.compile(r"\[SUBAGENT_ASYNC:([^:]+):([^\]]+)\]")
 _MARKER_NEEDLE = "[SUBAGENT_ASYNC:"
 
@@ -76,33 +76,26 @@ class SpawnedSubagent:
 def spawn_ledger():
     """Collect the task ids `spawn_subagent` starts inside this block; yields the set.
 
-    Nested blocks share the outermost set: a workflow run inside a chat call records into
-    that call's ledger, so the call can still recognise the marker the run hands back. The
-    set stays readable after the block ends.
+    Every block starts EMPTY, nested ones included, and hands its ids up to the enclosing
+    ledger when it ends. A workflow run inside a chat call therefore pauses only on a task
+    one of its own steps started - never on one the call started before it - while the call
+    still recognises the marker the run hands back. The set stays readable after the block.
     """
-    current = _spawn_ledger_ctx.get()
-    if current is not None:
-        yield current
-        return
+    parent = _spawn_ledger_ctx.get()
     ledger: set = set()
     token = _spawn_ledger_ctx.set(ledger)
     try:
         yield ledger
     finally:
         _spawn_ledger_ctx.reset(token)
+        if parent is not None:
+            parent.update(ledger)
 
 
 def _record_spawn(task_id: str) -> None:
     ledger = _spawn_ledger_ctx.get()
     if ledger is not None:
         ledger.add(str(task_id))
-
-
-def parse_async_marker(text) -> Optional[Tuple[str, str]]:
-    """``(task_id, agent_type)`` of the first marker in ``text``, or None. Shape only: it
-    says nothing about whether such a task exists - `delegated_task` does."""
-    m = _MARKER_RE.search(str(text or ""))
-    return (m.group(1), m.group(2)) if m else None
 
 
 def delegated_task(text, *, spawned: Optional[Iterable[str]] = None) -> Optional[Tuple[str, str]]:

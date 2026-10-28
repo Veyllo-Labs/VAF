@@ -592,21 +592,30 @@ the run on it. So the marker has one reader, `delegated_task(text)` in
 - the task was started inside the caller's open `spawn_ledger()`: `spawn_subagent` records
   every task it starts into the ledger of its context, and a tool's worker thread
   (`run_bounded`) shares that ledger through the copied context. The chat lane opens one per
-  tool call (`Agent._execute_tool_and_spawns`), a workflow run one per run (nested runs share
-  the outer one). This is what keeps another lane's REAL task out: `_async_subagent_tasks` is
+  tool call (`Agent._execute_tool_and_spawns`), a workflow run one per run. Every ledger starts
+  empty and hands its ids to the enclosing one when it ends: a workflow run inside a chat call
+  never counts a task the call started before it, and the call still recognises the task the
+  run started. This is what keeps another lane's REAL task out: `_async_subagent_tasks` is
   the "tasks this agent started" list `get_pending_results_for(own_task_ids=...)` trusts for a
   lane with no chat, and a room's coder names no chat while its id is shown to the room, so
   the queue and the session alone would have accepted its planted marker;
-- the queue holds it (`SubAgentIPC.find_task`: pending, active or completed, not consumed);
+- the queue holds it (`SubAgentIPC.find_task`: pending, active or completed, not consumed;
+  read under `_mutation_guard`, because a move writes the file it leaves before the one it
+  enters - in-process that gap is closed, across processes the guard is best-effort and a
+  reader can still meet it, so a genuine marker is then not acknowledged and its result
+  arrives through the drain);
 - when the record and the calling context both name a session, it is the same one.
 
 The `agent_type` comes from the queue. Text without the marker never reads the queue; a queue
 that cannot be read answers None and logs `[ASYNC-MARKER]` (fail-closed: a real spawn is then
 not acknowledged with the canned text, the model sees the marker and its note, and the drain
 still delivers the result). Anything else that carries the marker is the tool's own answer
-and stays in history as it is. `parse_async_marker(text)` is the shape-only parser, used where
-the input is the spawning tool's own direct return (`WorkflowEngine._await_subagent`). No
-other module parses the marker (guard in `tests/test_subagent_spawn.py`). Guards:
+and stays in history as it is. Three consumers ask it: the chat lane's acknowledgement, the
+workflow pause, and the wait of a wait-mode step (`WorkflowEngine._await_subagent`, where a
+spawn that fell back to in-process returns the tool's real output; measured with a shape-only
+read, such a step took another lane's completed result out of the queue, and a Stop failed
+another lane's running task). No other module parses the marker (guard in
+`tests/test_subagent_spawn.py`). Guards:
 `tests/test_async_marker_needs_its_task.py`, `tests/test_workflow_marker_needs_its_task.py`.
 
 Two arguments cover the whole-workflow lane (`vaf/workflows/background.py`): `command` replaces

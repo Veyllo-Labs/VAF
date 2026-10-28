@@ -232,8 +232,7 @@ def test_converted_tools_have_no_private_spawn_blocks():
 
 import threading  # noqa: E402
 
-from vaf.core.subagent_spawn import (delegated_task, parse_async_marker,  # noqa: E402
-                                     spawn_ledger)
+from vaf.core.subagent_spawn import delegated_task, spawn_ledger  # noqa: E402
 
 
 @pytest.fixture
@@ -264,6 +263,29 @@ def test_find_task_finds_every_stage_and_get_task_status_answers_from_it(queue):
     assert found.session_id == "s1" and found.agent_type == "coding_agent"
     queue.consume_result(tid)
     assert queue.find_task(tid) is None and queue.get_task_status(tid) is None
+
+
+def test_find_task_does_not_miss_a_task_in_the_middle_of_a_move(queue, monkeypatch):
+    """complete_task writes the active file (task gone) before the results file (task there).
+    A reader in that gap found the task nowhere, and a genuine marker was turned away.
+    MUTATION: drop the `_mutation_guard` in find_task -> red."""
+    tid = _task(queue, None)
+    queue.mark_task_running(tid)
+    real_write, found, reader = queue._write_json, [], []
+
+    def _write(path, data, *a, **k):
+        real_write(path, data, *a, **k)
+        if path == queue.active_file and not reader:
+            t = threading.Thread(target=lambda: found.append(queue.find_task(tid)))
+            reader.append(t)
+            t.start()
+            t.join(0.5)     # without the guard the reader finishes inside the gap
+
+    monkeypatch.setattr(queue, "_write_json", _write)
+    queue.complete_task(tid, "done")
+    reader[0].join(5)
+    assert found and found[0] is not None, "the task was missed while it moved"
+    assert found[0].status == "completed"
 
 
 def test_text_without_a_marker_never_touches_the_queue(monkeypatch):
@@ -340,20 +362,32 @@ def test_no_open_ledger_means_nothing_was_spawned(queue):
     assert delegated_task(f"[SUBAGENT_ASYNC:{tid}:coding_agent]") is None
 
 
-def test_parse_async_marker_is_shape_only():
-    assert parse_async_marker("a [SUBAGENT_ASYNC:t1:workflow:deep_research] b") == (
-        "t1", "workflow:deep_research")
-    assert parse_async_marker("no marker") is None
-    assert parse_async_marker(None) is None
+def test_a_workflow_agent_type_with_colons_is_read_whole(queue):
+    tid = _task(queue, None, agent_type="workflow:deep_research")
+    text = f"a [SUBAGENT_ASYNC:{tid}:workflow:deep_research] b"
+    assert delegated_task(text, spawned={tid}) == (tid, "workflow:deep_research")
 
 
-def test_a_spawn_lands_in_the_open_ledger_and_nested_ledgers_share_it(rig):
-    with spawn_ledger() as outer:
-        with spawn_ledger() as inner:
-            out = spawn_subagent("coding_agent", "t")
-        assert inner is outer
-    assert out is not None and outer == {"tid12345"}
+def test_a_spawn_lands_in_the_open_ledger(rig):
+    with spawn_ledger() as ledger:
+        out = spawn_subagent("coding_agent", "t")
+    assert out is not None and ledger == {"tid12345"}
     assert spawn_subagent("coding_agent", "t") is not None   # no ledger open: no error
+
+
+def test_a_nested_ledger_starts_empty_and_hands_its_ids_up(rig, monkeypatch):
+    """A workflow run inside a chat call: the run must not count a task the call started
+    before it (it would pause on a task none of its steps started), and the call must still
+    count the task the run started (it recognises the marker the run hands back)."""
+    ids = iter(["call-task", "run-task"])
+    monkeypatch.setattr(rig[0], "create_task", lambda *a, **k: next(ids))
+    with spawn_ledger() as call:
+        spawn_subagent("coding_agent", "the call's own work")
+        with spawn_ledger() as run:
+            assert run == set(), "the run starts with the call's task in its ledger"
+            spawn_subagent("coding_agent", "the run's work")
+            assert run == {"run-task"}
+        assert call == {"call-task", "run-task"}, "the run's task did not reach the call"
 
 
 def test_a_failed_spawn_is_not_recorded(rig):

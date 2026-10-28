@@ -1058,6 +1058,9 @@ Hard limits you must respect (they are architecture, not fine print):
   scope, so a tool that never receives one would run completely unconfined while looking
   confined - the contract refuses to be declared halfway. Nesting only ever NARROWS: if a
   boundary is already installed, yours can shrink what it inherits and never add to it.
+  What a nested boundary keeps is the intersection of the two: when the outer one is a
+  folder inside your user's tree, your tool reaches that folder, not the whole tree and not
+  nothing.
 
   Until this existed, the example here told you to write `with user_jail(scope, role, ...)`
   inside `run()` yourself. That was honest about what the framework offered and it was the
@@ -1905,9 +1908,14 @@ Everything an agent writes into a room is read by every member and kept. When yo
 reply is going into a room, run that turn under an allowed set (`set_allowed_tools`, see
 "Which tools this agent may use"): its prompt then carries none of your user's profile
 digest and details, machine paths, last message elsewhere or other chats, as for a turn that
-answers a customer. VAF's own room turns get the same reduction without a set, except that
-they keep retrieval and cross-chat hints for what was said in the room (named boundary in
-`docs/agents/A2A_PROTOCOL.md`).
+answers a customer. Leave your user's private readers (mail, chats, calendar, contacts,
+memory, your own data tools) out of that set unless your user alone asked in the room:
+whatever such a tool returns, the turn can post. `room.wake_authority(scope, senders)` tells
+you whether the words that woke the turn were your user's alone. VAF's own room turns get the
+same prompt reduction without a set, except that they keep retrieval and cross-chat hints for
+what was said in the room; and when somebody other than the user woke them they read only
+the room, the web and the room's shared folder, in every mode (named boundaries and the table
+in `docs/agents/A2A_PROTOCOL.md`, "Who woke the turn").
 
 Three things the room does for you, so an embedder does not rebuild them:
 
@@ -2343,8 +2351,13 @@ Stable public surface (safe to build on):
   the ones that are due with the frames that made them so; persist `hit.newest` back as
   `trigger["cursor"]` before running. The loop guard (the owner's own agent never fires
   a trigger), the membership guard and the start-at-newest cursor are inside it, so a
-  scheduler built on it does not have to know them. See
-  [AUTOMATIONS.md](platform/AUTOMATIONS.md), "Event triggers".
+  scheduler built on it does not have to know them. The run a hit starts is driven by
+  whoever spoke in the room, so treat it as a room turn: ask the room who that was with
+  `room.wake_authority(scope, [f.sender for f in hit.frames])` (`from_user_only` is your
+  user's words alone, `from_authority` your user or a leader), and unless it is your user
+  alone, run it under an allowed set that leaves your user's private readers out. VAF's
+  own lane does exactly that. See [AUTOMATIONS.md](platform/AUTOMATIONS.md), "Event
+  triggers".
 - `file_encryption_enabled` as the switch between the two at-rest modes, and the
   promise that turning it off leaves the whole store readable: encrypted files
   still decrypt, and plaintext is tolerated on read again. A store that is

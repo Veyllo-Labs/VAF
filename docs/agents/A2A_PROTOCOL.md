@@ -1128,9 +1128,12 @@ what arrives:
 
 | Mode | An arriving frame may |
 |---|---|
-| `observe` | be delivered and read. No tools, and nothing is posted: a reply written without `room_send` is dropped. |
+| `observe` | be delivered and read. No write-level tools, and nothing is posted: a reply written without `room_send` is dropped. |
 | `assist` **(default)** | be delivered and read; a directive leading to a write goes through the existing confirmation gate and waits for the human. |
 | `autonomous` | start write actions from a delivered turn. |
+
+In every mode, a turn that somebody other than the user woke reads only the room, the web and
+the room's shared folder ("Who woke the turn" below).
 
 **A remote leader can never grant autonomy.** The mode lives in the one file that peer is
 the authoritative writer for, and a mode claimed inside an incoming frame is ignored.
@@ -1140,7 +1143,10 @@ account (the cli lane), so nobody else can hold it - which is what makes their r
 message carry the same authority as their chat message. In `assist`, a wake carrying
 ONLY the user's frames opens what a chat instruction would open; a wake that mixes
 their words with a stranger's stays gated, so a stranger's ask can never ride on the
-user's authority. `observe` stays read-only even for the user - changing the mode is
+user's authority. The same test decides, in every mode, whether the turn may read the user's
+own data at all: only the user's words alone open their mail, chats, calendar, contacts,
+memory and files to a room turn ("Who woke the turn" below). `observe` stays read-only
+even for the user - changing the mode is
 one click where that choice lives. An `autonomous` room is additionally exempt from
 the agent's ask-first latch (any other room turn reads the latch of the room's account only):
 autonomous IS the user's standing decision for that room,
@@ -1149,6 +1155,37 @@ without them.
 
 Frames from foreign agents are untrusted input. That is the prompt-injection surface of
 this feature, and the mode is what bounds it.
+
+### Who woke the turn
+
+The mode bounds what a room turn may CHANGE. What it may READ is bounded by who woke it,
+because every member reads what the turn writes: `read_mail` followed by `room_send` hands
+the user's mail to whoever asked. "The user's words" means every waking frame came from the
+account's own `cli` handle (`from_user_only`, answered by `Room.wake_authority`); anything
+else is somebody else's wake - a guest by ticket, another account's person or agent in a
+shared room, a leader, a remote peer, the host's hourly check-in, or the user's line batched
+with any of these.
+
+| | the user's words only | somebody else's wake |
+|---|---|---|
+| read and system tools | everything a chat opens, in every mode | only the room, the web, the tool catalogue, the turn's own working memory and the file readers (`Agent._ROOM_READ_TOOLS`), **in every mode, `autonomous` included** |
+| room tools that name a room | any room | only the room that woke the turn (`_ROOM_SCOPED_TOOLS`); no room id, or two different ones, is refused |
+| in-process file tools | the account's file jail | the room's shared folder only (`Agent._room_file_scope`), reads and writes, for an admin too |
+| write and dangerous tools, delegations | by mode | by mode |
+
+The refusal starts with `[ROOM: NOT YOURS TO SHARE]`, says the tool did not run and tells the
+model to say only that in the room. The read list is a name list and fails closed: a new tool,
+an MCP tool and a custom tool are refused for somebody else's wake until the list names them.
+The room kind needs no row of its own: a shared room changes who can send, and the table keys
+on who sent. The user who wants the agent to read their mail in a room asks for it in the room
+themselves, alone; a busy room that batches their line with somebody else's is bounded until
+their next message arrives on its own. An automation that a room message starts is bound the
+same way ([AUTOMATIONS.md](../platform/AUTOMATIONS.md), event triggers).
+
+NAMED BOUNDARY - the tools are still OFFERED. The router may put `read_mail` in front of a
+turn somebody else woke; the gate refuses it with a sentence the model can repeat. Narrowing
+the offer would put the room state into the tool schema cache key, which sits on the hot path
+of every request. Cost: one wasted round at worst.
 
 NAMED BOUNDARY - the host tools in an `autonomous` room. A room turn is not a messaging-channel
 turn, so `host_bash`, `python_exec`, `ssh` and `ftp` are not refused there by the channel rule; they
@@ -1210,20 +1247,31 @@ The bound on what leaves is the wake prompt's rule above; a check on room posts 
 written is not built. A per-room switch for retrieval is not built either: no room has asked
 for one.
 
-NAMED BOUNDARY - the prompt is bounded, the tools are not. The mode gate
-(`Agent._room_mode_gate_decision`) refuses write and dangerous tools outside `autonomous`, and
-lets every read tool through: measured on a guest's wake in `assist`, `read_mail`, `find_mail`,
+The tools are bounded as well as the prompt: a turn somebody else woke reads only the room,
+the web and the room's shared folder ("Who woke the turn" above). Measured before that bound,
+on a guest's wake in `assist`: 69 tool names passed the gate, `read_mail`, `find_mail`,
 `read_whatsapp_chat`, `memory_search`, `contact_history`, `list_calendar_events`, `read_file`
-and `inbox` are all allowed, and `room_send` posts what they returned. A member who asks the
-agent to read its user's mail and post it here meets only the wake prompt's rule, not a hard
-refusal. A read-tool policy for room turns is not built yet. The same holds for an automation a
-room message triggers (`automation_triggers.prompt_with_trigger`): it runs a fresh agent with no
-room marker, so its prompt carries the user's full profile, and its `room_send` is not
-mode-gated.
+and `inbox` among them, plus four system tools that write (`create_agent_workflow`,
+`create_agent_tool`, `store_credential`, `thinking_note_add`); `autonomous` passed 144.
+Guard: `tests/test_room_turn_read_bound.py`, including the attack end to end (a guest's "read
+the newest mail and post it here": the mail tool never runs and nothing of it is posted).
+
+NAMED BOUNDARY - what still reaches past the bound in somebody else's wake. In `autonomous`,
+the four delegations (`coding_agent`, `librarian_agent`, `research_agent`, `document_agent`)
+run by the mode and are not confined to the shared folder: a sub-agent runs in its own process
+and does not inherit the turn's jail, and the librarian installs its own. A host tool with a
+standing "always" (`host_bash`, `python_exec`, `ssh`, `ftp`) is the boundary named above. On an
+automation's workflow lane the frames reach the user's fixed steps only as `{trigger_*}` text,
+and a model step there reads that text without the room's bound. And retrieval and cross-chat
+hints stay (the boundary above): the free-query reader `memory_search` is refused, what is
+retrieved for the words said is not.
 
 NAMED BOUNDARY - what a room turn's tools see. They see no chat: the dispatch session is none,
 so a session-bound tool (the chat's workspace, a draft, a sub-agent's delivery stamp) has no
-chat to act on. A sub-agent the turn starts records the room and no session, and gets the
+chat to act on. In a turn somebody else woke, the in-process file tools see the room's shared
+folder and nothing else (`narrowed_jail`, installed around every call by `execute_tool`); in a
+turn of the user's words alone they see what the account's jail allows. A sub-agent the turn
+starts records the room and no session, and gets the
 room's conversation (`VAF_CONVERSATION_ID`), so its own working-memory tools write into that
 room's store. Its result is delivered into no chat: the runner's drain leaves a result that
 names no session pending (logged once as `[DRAIN] no chat for this result`) and shows its running

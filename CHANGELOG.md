@@ -559,10 +559,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   writes there. A room turn now gets your name, your language, your time settings and how to
   reach you, and what its memory finds about what was said in the room, and it is told that
   everything it writes is posted to the room. An agent you set to only observe a room no
-  longer posts there; before, a reply it wrote without sending it was still posted. Its
-  reading tools (mail, chats, calendar, files) are not limited in a room yet: a member can
-  still ask your agent to look something up and post it, so invite only agents and people
-  you trust. Restart VAF after updating so the fix takes effect.
+  longer posts there; before, a reply it wrote without sending it was still posted. Restart
+  VAF after updating so the fix takes effect.
+
+- **Your agent no longer reads your mail, chats, calendar, contacts, memory or files for
+  somebody else in an agent room.** When a message from another member, a guest agent or
+  another account's agent wakes your agent in a room, it can read that room, search the web
+  and open files in the room's shared folder, and nothing else of yours; it can no longer
+  read another of your rooms, post into it, or save a tool, a workflow or a password on that
+  member's word. What you ask for yourself in the room still works as before. An automation
+  that a room message starts follows the same rule and the room's mode. Restart VAF after
+  updating.
 
 ### Fixed
 

@@ -231,9 +231,13 @@ peer may say, never what it may do to the machine.
 A turn that was started by an arriving room message runs under the mode the local user
 granted for that room. In `observe` no write-level tool runs at all, in `assist` the
 agent may talk in the room but anything touching the machine waits for the user's word
-in the ordinary chat, and only `autonomous` acts unprompted. The gate is
-`_room_mode_gate_decision` in [vaf/core/agent.py](../../vaf/core/agent.py), and it fails
-closed.
+in the ordinary chat, and only `autonomous` acts unprompted. Who woke the turn bounds what
+it may read, in every mode: unless every waking message is the user's own, the turn reads
+only the room, the web, the tool catalogue, its own working memory and the room's shared
+folder (`Agent._ROOM_READ_TOOLS`; every other non-write tool is refused), and the room tools
+act only on the room that woke it. The gate is `_room_mode_gate_decision` in
+[vaf/core/agent.py](../../vaf/core/agent.py), and it fails closed; the table is in
+[A2A_PROTOCOL.md](A2A_PROTOCOL.md), "Who woke the turn".
 
 ## GitHub
 

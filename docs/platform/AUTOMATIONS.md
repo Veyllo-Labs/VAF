@@ -184,6 +184,27 @@ on last week's transcript; after a fire the position is persisted, so a restart 
 same frames twice and frames that arrived while the process was down are caught up in one run.
 The per-task run lock keeps a trigger that fires again mid-run from overlapping it.
 
+**A prompt-lane run a room message started is a room turn.** The prompt is the user's, but the
+words steering the run are whoever spoke in the room, so the run is bound like the agent's own
+room turn (`_room_trigger_binding` in `vaf/core/automation.py`, through `bind_turn`): the room's
+mode for the account's agent decides the writes (`room_send` posts nothing in an `observe`
+room); a trigger whose frames are not all the user's own reads only the room, the web and the
+room's shared folder, and no tool that reads the user's mail, chats, calendar, contacts or
+memory runs (the memory the run is handed up front from what was said stays, the retrieval
+boundary of a room turn); the system prompt leaves out the user's profile; and the run's
+working memory is the room's conversation
+of its own, not the account's global notes. Who spoke is asked of the room
+(`Room.wake_authority`), the same answer the wake uses; a room the run cannot read binds the
+closed answer (`observe`, not the user's words, no shared folder). It stays unattended: an
+outward send it was told to make is not held for a person. A trigger narrowed with `from` to
+the user's own handle keeps the user's reach. The rule is in
+[A2A_PROTOCOL.md](../agents/A2A_PROTOCOL.md), "Who woke the turn".
+
+NAMED BOUNDARY - the workflow lane. Its steps are the ones the user wrote, and the frames reach
+them only as `{trigger_*}` text; a model step there (for example `coding_agent`) reads that
+text without the room's bound. Clock automations and `vaf automation run <id>` (no trigger) are
+unchanged.
+
 Creating one: the agent's `create_automation` with `frequency: on_event`, `trigger_room` and
 `trigger_match` or `trigger_emoji`; the terminal's `vaf automation create --on-room <id>
 [--on-match <text> | --on-reaction <emoji|any>]`; the browser accepts a `trigger` object on

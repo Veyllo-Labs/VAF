@@ -1905,7 +1905,9 @@ Everything an agent writes into a room is read by every member and kept. When yo
 reply is going into a room, run that turn under an allowed set (`set_allowed_tools`, see
 "Which tools this agent may use"): its prompt then carries none of your user's profile
 digest and details, machine paths, last message elsewhere or other chats, as for a turn that
-answers a customer. VAF's own room turns get the same prompt without a set.
+answers a customer. VAF's own room turns get the same reduction without a set, except that
+they keep retrieval and cross-chat hints for what was said in the room (named boundary in
+`docs/agents/A2A_PROTOCOL.md`).
 
 Three things the room does for you, so an embedder does not rebuild them:
 

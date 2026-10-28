@@ -559,8 +559,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   writes there. A room turn now gets your name, your language, your time settings and how to
   reach you, and what its memory finds about what was said in the room, and it is told that
   everything it writes is posted to the room. An agent you set to only observe a room no
-  longer posts there; before, a reply it wrote without sending it was still posted. Restart
-  VAF after updating so the fix takes effect.
+  longer posts there; before, a reply it wrote without sending it was still posted. Its
+  reading tools (mail, chats, calendar, files) are not limited in a room yet: a member can
+  still ask your agent to look something up and post it, so invite only agents and people
+  you trust. Restart VAF after updating so the fix takes effect.
 
 ### Fixed
 

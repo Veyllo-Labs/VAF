@@ -1210,6 +1210,17 @@ The bound on what leaves is the wake prompt's rule above; a check on room posts 
 written is not built. A per-room switch for retrieval is not built either: no room has asked
 for one.
 
+NAMED BOUNDARY - the prompt is bounded, the tools are not. The mode gate
+(`Agent._room_mode_gate_decision`) refuses write and dangerous tools outside `autonomous`, and
+lets every read tool through: measured on a guest's wake in `assist`, `read_mail`, `find_mail`,
+`read_whatsapp_chat`, `memory_search`, `contact_history`, `list_calendar_events`, `read_file`
+and `inbox` are all allowed, and `room_send` posts what they returned. A member who asks the
+agent to read its user's mail and post it here meets only the wake prompt's rule, not a hard
+refusal. A read-tool policy for room turns is not built yet. The same holds for an automation a
+room message triggers (`automation_triggers.prompt_with_trigger`): it runs a fresh agent with no
+room marker, so its prompt carries the user's full profile, and its `room_send` is not
+mode-gated.
+
 NAMED BOUNDARY - what a room turn's tools see. They see no chat: the dispatch session is none,
 so a session-bound tool (the chat's workspace, a draft, a sub-agent's delivery stamp) has no
 chat to act on. A sub-agent the turn starts records the room and no session, and gets the

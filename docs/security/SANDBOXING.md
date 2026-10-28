@@ -440,7 +440,10 @@ and the work tree to the project itself (`--git-dir=<top>/.git --work-tree=<top>
 `core.worktree` in that config moved the work tree to any host folder (a rollback wrote there,
 `add -A` pulled its files into the project, measured), and it refuses a `.git` that is a
 file or a link, or leads into another repository through `commondir`, alternates or a link
-inside it. The full list is in
+inside it (a reflog line was appended through a linked `logs/HEAD`, measured). A repository
+the model makes inside the project with `git init` would have git start a child git there,
+reading that repository's own config; status and diff ignore submodules, `add` excludes every
+gitlink and `stash create` is refused while one exists. The full list is in
 [CODER_ARCHITECTURE.md](../agents/CODER_ARCHITECTURE.md) ("Git in the project folder"). A
 driver the person's own global or system config defines (git-lfs) keeps running; `vaf git`
 and `vaf update` stay on plain git, because a person runs those in their own repositories.

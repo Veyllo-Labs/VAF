@@ -123,6 +123,13 @@ PROJECT_GIT_CONFIG: Tuple[Tuple[str, str], ...] = (
     ("tag.gpgSign", "false"),
     ("log.showSignature", "false"),     # set, `git log` hands every signed commit to gpg.program
     ("credential.helper", ""),          # empty resets the helper list
+    # status and diff otherwise start a `git status` inside every submodule, an embedded
+    # repository the model made with `git init` included, and that child reads its own
+    # config, whose filters this runner never read (measured). `add` and `stash create` do not
+    # honour diff.ignoreSubmodules; they are handled where the subcommand flags are added.
+    ("diff.ignoreSubmodules", "all"),
+    ("status.submoduleSummary", "false"),
+    ("submodule.recurse", "false"),     # reset and checkout otherwise recurse into submodules
 )
 
 # The environment beside them. GIT_ASKPASS is set EMPTY rather than removed: git reads it
@@ -232,25 +239,36 @@ def _foreign_link(dotgit: str) -> str:
     """What in `.git` leads into another repository, or "".
 
     git follows `commondir` and `objects/info/alternates` to another git directory, and a
-    symbolic link anywhere it reads or writes (refs, objects, the index) takes the read or the
-    write to the link's target; a project VAF made has none of them."""
+    symbolic link anywhere it reads or writes takes the read or the write to the link's target:
+    a reflog line (which ends with a commit subject the model wrote) is appended through a
+    linked `logs/HEAD`, measured. A project VAF made has none of them. Everything under `.git`
+    is looked at except inside `objects/` (only its top entries: the object folders are many,
+    and git writes a new object beside them, never through one) and `lfs/`, and except
+    `hooks/`, which the runner never uses and which a person may well link in their own
+    repository. Half a millisecond on a working repository's `.git`."""
     for rel in ("commondir", os.path.join("objects", "info", "alternates")):
         if os.path.lexists(os.path.join(dotgit, rel)):
             return f".git/{Path(rel).as_posix()} points at another repository"
-    for folder in (dotgit, os.path.join(dotgit, "objects")):
-        try:
-            with os.scandir(folder) as entries:
-                for entry in entries:
-                    if entry.is_symlink():
-                        rel = Path(os.path.relpath(entry.path, dotgit)).as_posix()
-                        return f".git/{rel} is a link"
-        except OSError:
-            continue
-    for root, dirs, files in os.walk(os.path.join(dotgit, "refs")):
+
+    def _link(path: str) -> str:
+        return f".git/{Path(os.path.relpath(path, dotgit)).as_posix()} is a link"
+
+    try:
+        with os.scandir(os.path.join(dotgit, "objects")) as entries:
+            for entry in entries:
+                if entry.is_symlink():
+                    return _link(entry.path)
+    except OSError:
+        pass
+    for root, dirs, files in os.walk(dotgit):
+        at_top = os.path.normcase(root) == os.path.normcase(dotgit)
         for name in dirs + files:
+            if at_top and name == "hooks":
+                continue
             if os.path.islink(os.path.join(root, name)):
-                rel = Path(os.path.relpath(os.path.join(root, name), dotgit)).as_posix()
-                return f".git/{rel} is a link"
+                return _link(os.path.join(root, name))
+        dirs[:] = [d for d in dirs
+                   if d != "objects" and not (at_top and d in ("hooks", "lfs"))]
     return ""
 
 
@@ -352,7 +370,48 @@ def project_git_command(args: Sequence[str], cwd: str, *, env: Optional[Dict[str
             for var, value in _DRIVER_OVERRIDES.get(section, ()):
                 pinned += ["-c", f"{section}.{name}.{var}={value}"]
     added = list(_SUBCOMMAND_FLAGS.get(sub[0], ())) if sub else []
+    if sub and sub[0] in ("add", "stash"):
+        links = _gitlinks(cwd, layout, pinned, env, timeout)
+        if links and sub[0] == "stash":
+            raise ProjectGitRefused(f"the project holds another repository at {links[0]}; "
+                                    f"git stash would run git inside it")
+        if links:
+            rest = _add_excluding(rest, links)
     return [resolve_git(), *layout, *caller_config, *pinned, *sub, *added, *rest]
+
+
+def _gitlinks(cwd: str, layout: Sequence[str], pinned: Sequence[str], env: Dict[str, str],
+              timeout: float) -> List[str]:
+    """Repository-relative paths of the index's gitlinks (submodules and embedded
+    repositories). `git add` over one, and `git stash create` always, start a child git in it
+    that reads that repository's own config, filters included, whatever diff.ignoreSubmodules
+    says (measured). Reading the index starts nothing."""
+    argv = [resolve_git(), *layout, *pinned, "ls-files", "-s", "-z", "--full-name", "--", ":/"]
+    proc = subprocess.run(argv, **_popen_kwargs(cwd, env, timeout))
+    if proc.returncode != 0:
+        raise RuntimeError(f"cannot read the index: {(proc.stderr or '').strip()[:200]}")
+    links = []
+    for entry in (proc.stdout or "").split("\0"):
+        head, _, path = entry.partition("\t")
+        if path and head.split(" ", 1)[0] == "160000":
+            links.append(path)
+    return links
+
+
+def _add_excluding(rest: List[str], links: Sequence[str]) -> List[str]:
+    """`git add` arguments with every gitlink excluded, so add starts no git inside one.
+    Their recorded commit is then not updated by VAF's commits."""
+    if "--" in rest:
+        cut = rest.index("--")
+        opts, paths = rest[:cut], rest[cut + 1:]
+    else:
+        cut = next((i for i, a in enumerate(rest) if not a.startswith("-")), len(rest))
+        opts, paths = rest[:cut], rest[cut:]
+    if not paths:
+        if not any(o in ("-A", "--all", "-u", "--update") for o in opts):
+            return rest        # nothing named: git refuses on its own
+        paths = [":/"]         # the whole tree, as -A and -u mean without a pathspec
+    return [*opts, "--", *paths, *(f":(top,exclude,literal){p}" for p in links)]
 
 
 def run_project_git(args: Sequence[str], cwd: str, *, timeout: float = 60,

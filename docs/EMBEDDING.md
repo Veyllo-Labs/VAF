@@ -921,11 +921,16 @@ outranks every config file and comes after your own pairs: an empty hooks direct
 owns, and no fsmonitor, pager, editor, askpass, credential helper, signing, external diff,
 textconv or signature check. Every filter, diff and merge driver the repository's own config
 names is switched off by name, so a merge that needed one becomes a conflict. `diff`, `log`
-and `show` get `--no-ext-diff --no-textconv`, `commit` gets `--no-verify`.
+and `show` get `--no-ext-diff --no-textconv`, `commit` gets `--no-verify`. A repository inside
+the folder (a submodule, or one the model made with `git init`) would make git start a child
+git there that reads that repository's own config: status and diff ignore submodules, `add`
+leaves every gitlink out of its pathspec (their recorded commit is not updated), and
+`stash create` is refused while one exists.
 
 It also pins where git works. The same config can move the work tree to any folder on the
 host (`core.worktree`), and a `.git` file, a `commondir`, `objects/info/alternates` or a
-symbolic link inside `.git` points the project at another repository, whose files a checkout
+symbolic link inside `.git` (a reflog line, ending with a commit subject the model wrote, is
+appended through a linked `logs/HEAD`) points the project at another repository, whose files a checkout
 would then write and whose branch a commit would move. The runner passes
 `--git-dir=<top>/.git --work-tree=<top>`, `<top>` being the nearest folder at or above `cwd`
 that holds a `.git` (a caller in a subfolder keeps working), and refuses any of those

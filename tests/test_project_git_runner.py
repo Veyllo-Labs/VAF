@@ -12,6 +12,7 @@ import ast
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -60,6 +61,9 @@ _PINNED = [
     "tag.gpgSign=false",
     "log.showSignature=false",
     "credential.helper=",
+    "diff.ignoreSubmodules=all",
+    "status.submoduleSummary=false",
+    "submodule.recurse=false",
 ]
 
 
@@ -505,7 +509,42 @@ def _linked_object_dir(repo, tmp_path):
     os.symlink(target, pack, target_is_directory=True)
 
 
-_LINKS = [_linked_dotgit, _linked_ref, _linked_index, _linked_object_dir]
+def _relink(repo, tmp_path, rel):
+    """Replace .git/<rel> with a link to a file outside that holds the same bytes."""
+    path = repo / ".git" / rel
+    target = tmp_path / ("outside-" + rel.replace("/", "-"))
+    target.write_bytes(path.read_bytes() if path.exists() else b"")
+    if path.exists():
+        path.unlink()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(target, path)
+
+
+def _linked_reflog(repo, tmp_path):
+    """A commit appends a reflog line, ending with the subject, through the link (measured)."""
+    _relink(repo, tmp_path, "logs/HEAD")
+
+
+def _linked_branch_reflog(repo, tmp_path):
+    branch = _git("symbolic-ref", "--short", "HEAD", cwd=repo).stdout.strip()
+    _relink(repo, tmp_path, f"logs/refs/heads/{branch}")
+
+
+def _linked_info_exclude(repo, tmp_path):
+    _relink(repo, tmp_path, "info/exclude")
+
+
+def _linked_orig_head(repo, tmp_path):
+    _relink(repo, tmp_path, "ORIG_HEAD")
+
+
+def _linked_sequencer_file(repo, tmp_path):
+    (repo / ".git" / "sequencer").mkdir()
+    _relink(repo, tmp_path, "sequencer/todo")
+
+
+_LINKS = [_linked_dotgit, _linked_ref, _linked_index, _linked_object_dir, _linked_reflog,
+          _linked_branch_reflog, _linked_info_exclude, _linked_orig_head, _linked_sequencer_file]
 
 
 @pytest.mark.parametrize("plant", [_gitdir_file, _commondir, _alternates, *(
@@ -563,3 +602,117 @@ def test_project_history_names_the_refusal(repo, tmp_path):
     from vaf.tools.project_git import ProjectHistoryTool
     _commondir(repo, tmp_path)
     assert ProjectHistoryTool().run(project_path=str(repo)).startswith("Error: Refused:")
+
+
+@_POSIX_ONLY
+@pytest.mark.parametrize("whole_folder", [True, False], ids=["hooks-folder", "one-hook"])
+def test_a_linked_hook_is_not_a_refusal(repo, tmp_path, whole_folder):
+    """Hooks are never run, and a person may link the folder or one hook in their own
+    repository. MUTATION: check the hooks entry, or descend into hooks/."""
+    shared = tmp_path / "shared-hooks"
+    shared.mkdir()
+    (shared / "pre-commit").write_text("#!/bin/sh\n", encoding="utf-8")
+    hooks = repo / ".git" / "hooks"
+    if hooks.exists():
+        shutil.rmtree(hooks)
+    if whole_folder:
+        os.symlink(shared, hooks, target_is_directory=True)
+    else:
+        hooks.mkdir()
+        os.symlink(shared / "pre-commit", hooks / "pre-commit")
+    assert gr.project_repo_problem(str(repo)) == ""
+
+
+@_POSIX_ONLY
+def test_no_reflog_line_reaches_a_file_outside(repo, tmp_path):
+    """The case the reflog check exists for, end to end. MUTATION: skip logs/ in the walk."""
+    _linked_reflog(repo, tmp_path)
+    outside = tmp_path / "outside-logs-HEAD"
+    before = outside.read_bytes()
+    (repo / "a.txt").write_text("changed\n", encoding="utf-8")
+    gr.run_project_git(["add", "-A"], cwd=str(repo))
+    gr.run_project_git(["commit", "-m", "x; echo planted"], cwd=str(repo))
+    assert outside.read_bytes() == before
+
+
+# ── a repository inside the project ───────────────────────────────────────────
+
+@pytest.mark.parametrize("rest, expected", [
+    (["-A"], ["-A", "--", ":/", ":(top,exclude,literal)sub"]),
+    (["."], ["--", ".", ":(top,exclude,literal)sub"]),
+    (["--", "x.py"], ["--", "x.py", ":(top,exclude,literal)sub"]),
+    (["m.py"], ["--", "m.py", ":(top,exclude,literal)sub"]),
+    ([], []),
+])
+def test_add_excludes_every_gitlink(rest, expected):
+    assert gr._add_excluding(rest, ["sub"]) == expected
+
+
+@pytest.fixture
+def embedded(repo, filter_marker):
+    """A project that holds a repository the model made with `git init`, staged as a gitlink,
+    whose OWN config names a clean filter, and which is dirty."""
+    filt, ran = filter_marker
+    sub = repo / "sub"
+    sub.mkdir()
+    _git("init", "-q", cwd=sub)
+    _git("config", "user.name", "T", cwd=sub)
+    _git("config", "user.email", "t@example.org", cwd=sub)
+    (sub / ".gitattributes").write_text("*.x filter=fx\n", encoding="utf-8")
+    (sub / "f.x").write_text("one\n", encoding="utf-8")
+    _git("add", "-A", cwd=sub)
+    _git("commit", "-qm", "s", cwd=sub)
+    _git("-c", "core.hooksPath=", "add", "-A", cwd=repo)
+    _git("-c", "core.hooksPath=", "commit", "-qm", "with an embedded repository", cwd=repo)
+    _git("config", "filter.fx.clean", f"{filt.as_posix()} clean", cwd=sub)
+    (sub / "f.x").write_text("two\n", encoding="utf-8")
+    later = time.time() + 5
+    os.utime(sub / "f.x", (later, later))
+    (repo / "a.txt").write_text("changed\n", encoding="utf-8")
+    return repo, ran
+
+
+@_POSIX_ONLY
+@pytest.mark.parametrize("args", [["status", "--porcelain"], ["diff"], ["diff", "--name-only", "HEAD"]])
+def test_status_and_diff_start_no_git_in_an_embedded_repository(embedded, args):
+    """Measured without the pin: the filter in sub/.git/config ran.
+    MUTATION: drop diff.ignoreSubmodules=all."""
+    repo, ran = embedded
+    assert gr.run_project_git(args, cwd=str(repo)).returncode == 0
+    assert not ran.exists(), ran.read_text(encoding="utf-8")
+
+
+@_POSIX_ONLY
+@pytest.mark.parametrize("args", [["add", "-A"], ["add", "."]])
+def test_add_starts_no_git_in_an_embedded_repository_and_still_adds(embedded, args):
+    """add ignores diff.ignoreSubmodules. MUTATION: do not exclude the gitlinks."""
+    repo, ran = embedded
+    assert gr.run_project_git(args, cwd=str(repo)).returncode == 0
+    assert not ran.exists(), ran.read_text(encoding="utf-8")
+    staged = gr.run_project_git(["diff", "--cached", "--name-only"], cwd=str(repo)).stdout.split()
+    assert staged == ["a.txt"]
+
+
+@_POSIX_ONLY
+def test_stash_create_is_refused_beside_an_embedded_repository(embedded):
+    """stash create takes no pathspec to exclude it with. MUTATION: drop the refusal."""
+    repo, ran = embedded
+    proc = gr.run_project_git(["stash", "create"], cwd=str(repo))
+    assert proc.returncode == -1 and "sub" in proc.stderr
+    assert not ran.exists()
+
+
+@_POSIX_ONLY
+def test_the_coder_and_rollback_still_work_beside_an_embedded_repository(embedded):
+    """The final commit, the diff view and a rollback, with the embedded repository left alone."""
+    from vaf.tools.coder import _build_file_diffs, _final_commit
+    from vaf.tools.project_git import ProjectRollbackTool
+    repo, ran = embedded
+    base = _git("rev-parse", "HEAD", cwd=repo).stdout.strip()
+    assert "a.txt" in _build_file_diffs(str(repo), base, [])
+    assert _final_commit(str(repo), "VAF Coder: change").startswith("Git: committed")
+    assert _git("show", "--name-only", "--format=", "HEAD", cwd=repo).stdout.split() == ["a.txt"]
+    out = ProjectRollbackTool().run(commit=base[:7], project_path=str(repo))
+    assert "restored" in out, out
+    assert (repo / "a.txt").read_text(encoding="utf-8") == "one\n"
+    assert not ran.exists(), ran.read_text(encoding="utf-8")

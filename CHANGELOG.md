@@ -598,6 +598,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **A finished sub-agent's summary on Telegram, WhatsApp and Discord is the summary.** The
+  message VAF sent there after background work finished read "..." while the chat showed the
+  real summary. It now carries the same text as the chat. Restart VAF after updating.
+
 - **"Connect OneDrive" reaches Microsoft's sign-in page.** The OneDrive connection under
   Settings -> Connections -> Cloud Storage sent the browser to an authorize address Microsoft
   does not serve (`/oauth2/v2/authorize` instead of `/oauth2/v2.0/authorize`), so the sign-in

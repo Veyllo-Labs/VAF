@@ -585,6 +585,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   that a room message starts follows the same rule and the room's mode. Restart VAF after
   updating.
 
+- **git in a project folder the coding agent writes no longer runs programs that folder
+  chooses.** The agent's shell can write the project's `.git`, and VAF's own git calls there
+  (the final commit, history and rollback, the code review, the live diff, `/undo`) ran its
+  hooks, its fsmonitor, its filters, diff and merge drivers and gpg on your computer. They
+  now run with all of those switched off; a filter your own global git config sets up, such
+  as git-lfs, still runs, and `vaf git` and `vaf update` behave as before. Applications built
+  on VAF get the same runner as `vaf.run_project_git`. Restart VAF after updating.
+
 ### Fixed
 
 - **"Connect OneDrive" reaches Microsoft's sign-in page.** The OneDrive connection under

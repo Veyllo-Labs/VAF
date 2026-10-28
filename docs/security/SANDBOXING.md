@@ -428,6 +428,18 @@ user at the main agent instead. Confinement is verified by real escape attempts 
 `tests/test_workspace_exec.py` (VAF-core write blocked, source invisible, host DB unreachable,
 env secrets not leaked, docker always refused).
 
+**The project's `.git` is written from inside the jail, and git outside it reads it.** The
+workspace mount includes `.git`, so the jailed command can write its config and hooks, and
+VAF then runs git there on the host (the final commit, history and rollback, the code audit,
+the SubAgent window's diffs, `/undo`). Those calls go through
+`vaf.core.git_runner.run_project_git`, which pins with `-c` everything through which that
+config names a program: an empty VAF-owned `core.hooksPath`, no fsmonitor, pager, editor,
+askpass, credential helper or signing, no external diff or textconv, and every filter and merge
+driver the repository's config defines switched off by name. The full list is in
+[CODER_ARCHITECTURE.md](../agents/CODER_ARCHITECTURE.md) ("Git in the project folder"). A
+driver the person's own global config defines (git-lfs) keeps running; `vaf git` and
+`vaf update` stay on plain git, because a person runs those in their own repositories.
+
 **In a sandbox environment** (the coder bound with `coding_agent(environment=...)`, or one
 exists for its project folder) none of the above applies as written: `bash` runs in that
 container (`exec_in`, `/workspace` is the project), with the environment's network and its

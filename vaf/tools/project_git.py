@@ -22,12 +22,10 @@ a backup first, then the target state is restored via `git revert` as a NEW
 commit — so a rollback can itself be rolled back.
 """
 import os
-import platform
 import re
 import subprocess
-from typing import List, Optional
 
-from vaf.core.git_runner import resolve_commit, resolve_git
+from vaf.core.git_runner import resolve_commit, run_project_git
 from vaf.tools.base import BaseTool
 
 
@@ -74,12 +72,25 @@ def _detect_history_rollback_intent(task: str) -> "tuple[str, str]":
     return "", ""
 
 
-def _run_git(args: List[str], cwd: str) -> subprocess.CompletedProcess:
-    kwargs = {"cwd": cwd, "capture_output": True, "text": True}
-    if platform.system() == "Windows":
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-    # The same git resolve_commit runs: VAF's portable git when none is on PATH (Windows).
-    return subprocess.run([resolve_git(), *args], **kwargs)
+def commit_project_state(path: str, message: str) -> subprocess.CompletedProcess:
+    """Commit what is staged in a project folder, as VAF, with the co-author trailer.
+
+    The coder's final commit and the rollback's own commits go through here. With no git
+    identity configured on the machine the commit is retried once with a one-off VAF identity
+    (`-c` only, the person's git config is never touched)."""
+    # verbatim keeps the two blank lines before the co-author trailer block;
+    # the message is fully programmatic, so there is nothing to clean up.
+    message = apply_coauthor_trailer(message)
+    result = run_project_git(["commit", "--cleanup=verbatim", "-m", message], cwd=path)
+    if result.returncode != 0:
+        err = (result.stderr or "") + (result.stdout or "")
+        if any(s in err for s in ("user.name", "user.email", "identity")):
+            result = run_project_git(
+                ["-c", "user.name=VAF Coder", "-c", "user.email=coder@vaf.local",
+                 "commit", "--cleanup=verbatim", "-m", message],
+                cwd=path,
+            )
+    return result
 
 
 def apply_coauthor_trailer(message: str) -> str:
@@ -189,7 +200,7 @@ class ProjectHistoryTool(BaseTool):
             return f"Error: {err}"
         limit = max(1, min(int(kwargs.get("limit") or 15), 50))
 
-        log = _run_git(
+        log = run_project_git(
             ["log", f"-n{limit}", "--date=format:%Y-%m-%d %H:%M",
              "--pretty=format:@@%h|%ad|%s", "--name-only"],
             cwd=path,
@@ -262,42 +273,42 @@ class ProjectRollbackTool(BaseTool):
         if not target:
             return f"Error: version '{commit}' not found in {path}. Use project_history to list valid ids."
 
-        head = _run_git(["rev-parse", "HEAD"], cwd=path)
+        head = run_project_git(["rev-parse", "HEAD"], cwd=path)
         previous_head = (head.stdout or "").strip()[:7]
 
         # 1) Never lose uncommitted work: back it up as its own history entry.
         backup_note = ""
-        status = _run_git(["status", "--porcelain"], cwd=path)
+        status = run_project_git(["status", "--porcelain"], cwd=path)
         if (status.stdout or "").strip():
-            _run_git(["add", "-A"], cwd=path)
+            run_project_git(["add", "-A"], cwd=path)
             backup = self._commit(path, "Backup before rollback (VAF)")
             if backup.returncode != 0:
                 return f"Error: could not back up current state: {(backup.stderr or '').strip()[:200]}"
             backup_note = "Uncommitted changes were saved as 'Backup before rollback (VAF)'.\n"
-            previous_head = _run_git(["rev-parse", "HEAD"], cwd=path).stdout.strip()[:7]
+            previous_head = run_project_git(["rev-parse", "HEAD"], cwd=path).stdout.strip()[:7]
 
         if target.startswith(previous_head) or previous_head.startswith(target[:7]):
             return f"{backup_note}Project is already at version {commit}. Nothing to do."
 
         # 2) Restore the target state as a NEW commit (history preserved).
-        revert = _run_git(["revert", "--no-commit", f"{target}..HEAD"], cwd=path)
+        revert = run_project_git(["revert", "--no-commit", f"{target}..HEAD"], cwd=path)
         if revert.returncode != 0:
-            _run_git(["revert", "--abort"], cwd=path)
+            run_project_git(["revert", "--abort"], cwd=path)
             return (
                 f"Error: rollback to {commit} failed (history is not linear or has conflicts): "
                 f"{(revert.stderr or '').strip()[:200]}. The project was left unchanged."
             )
 
-        staged = _run_git(["diff", "--cached", "--quiet"], cwd=path)
+        staged = run_project_git(["diff", "--cached", "--quiet"], cwd=path)
         if staged.returncode == 0:
-            _run_git(["revert", "--quit"], cwd=path)
+            run_project_git(["revert", "--quit"], cwd=path)
             return f"{backup_note}Project content is already identical to version {commit}. Nothing to do."
 
-        subject = _run_git(["log", "-1", "--pretty=%s", target], cwd=path).stdout.strip()
+        subject = run_project_git(["log", "-1", "--pretty=%s", target], cwd=path).stdout.strip()
         result = self._commit(path, f"Rollback to {target[:7]}: {subject}"[:120])
         if result.returncode != 0:
-            _run_git(["revert", "--quit"], cwd=path)
-            _run_git(["reset", "--hard", "HEAD"], cwd=path)
+            run_project_git(["revert", "--quit"], cwd=path)
+            run_project_git(["reset", "--hard", "HEAD"], cwd=path)
             return f"Error: rollback commit failed: {(result.stderr or '').strip()[:200]}. The project was left unchanged."
 
         return (
@@ -309,16 +320,4 @@ class ProjectRollbackTool(BaseTool):
 
     @staticmethod
     def _commit(path: str, message: str) -> subprocess.CompletedProcess:
-        # verbatim keeps the two blank lines before the co-author trailer block;
-        # the message is fully programmatic, so there is nothing to clean up.
-        message = apply_coauthor_trailer(message)
-        result = _run_git(["commit", "--cleanup=verbatim", "-m", message], cwd=path)
-        if result.returncode != 0:
-            err = (result.stderr or "") + (result.stdout or "")
-            if any(s in err for s in ("user.name", "user.email", "identity")):
-                result = _run_git(
-                    ["-c", "user.name=VAF Coder", "-c", "user.email=coder@vaf.local",
-                     "commit", "--cleanup=verbatim", "-m", message],
-                    cwd=path,
-                )
-        return result
+        return commit_project_state(path, message)

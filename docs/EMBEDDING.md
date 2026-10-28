@@ -881,12 +881,53 @@ and `to_text()` / `to_json()` / `to_prompt()`.
 your `ask`: decide whose repository that may be (VAF's own tool asks the account's file
 jail first, `vaf.jail_allows`). What reaches `ask` is redacted with VAF's credential
 patterns, and the reading stays inside the repository (no symlink out, no file git does not
-track, no guideline file git ignores), but the code itself is what a review is for. Size
+track, no guideline file git ignores), but the code itself is what a review is for. Its
+git calls go through `vaf.run_project_git` (below), so the repository's own hooks, filters
+and drivers do not run while it is read. Size
 `batch_chars` to your model's window, pass `parallel` > 1 only for an API that serves
 concurrent requests, and give it a `should_stop` if a person can cancel. A repository can
 tune it with `.vaf/code-audit.json` (profile, path filters, path instructions, plain-language
 checks); the pipeline, the budgets and the named boundaries are in
 [CODE_AUDIT.md](agents/CODE_AUDIT.md).
+
+---
+
+## git in a folder a model writes: `vaf.run_project_git`
+
+Once a model has written a folder, its `.git` is as much the model's work as the code:
+the config and hooks in it name programs, and git starts them on every call you make there,
+on your host and with your rights, whatever jail the model itself ran in. A `post-index-change`
+hook runs on `git add`, an fsmonitor hook on `git status`, a clean filter on `git add`, a
+textconv on `git diff`, a merge driver on `git revert`, gpg on `git log` once
+`log.showSignature` is set; `--no-verify` stops only some of the hooks. VAF's own coding agent
+needed this for its final commit, its history and rollback, its review and `/undo`.
+
+```python
+import vaf
+
+proc = vaf.run_project_git(["add", "-A"], cwd=project_dir)
+proc = vaf.run_project_git(["-c", "user.name=My App", "-c", "user.email=app@example.org",
+                            "commit", "-m", "the model's work"], cwd=project_dir)
+if proc.returncode != 0:
+    print(proc.stderr)
+```
+
+`args` is what follows `git`, optionally led by `-c key=value` pairs of your own (an
+identity); the result is a `subprocess.CompletedProcess` with text output, and it never
+raises: a missing git, a missing folder, a timeout (`timeout=`, 60 seconds by default) or a
+refusal come back as `returncode` -1 with the reason in `stderr`. It pins with `-c`, which
+outranks every config file and comes after your own pairs: an empty hooks directory VAF
+owns, and no fsmonitor, pager, editor, askpass, credential helper, signing, external diff,
+textconv or signature check. Every filter, diff and merge driver the repository's own config
+names is switched off by name, so a merge that needed one becomes a conflict. `diff`, `log`
+and `show` get `--no-ext-diff --no-textconv`, `commit` gets `--no-verify`.
+
+**What you are responsible for.** A driver only the person's global config names (the
+filter `git lfs install` writes) keeps running, because the folder cannot write that file;
+a driver name the command line cannot carry (one with `=` in it) makes the call refuse
+rather than run unprotected. It decides which programs git starts, not which files it reads:
+which folder you point it at is your decision. For a repository the person owns and works in
+themselves, use plain git: there their hooks are their choice.
 
 ---
 
@@ -2442,6 +2483,11 @@ Stable public surface (safe to build on):
   (`status` is `complete` only when everything in scope was reviewed, and `exit_code()`
   never returns 0 otherwise) and the fields named in "Reviewing a code change"; the prompts,
   the budgets and the finding ids' hashing are not.
+- `vaf.run_project_git(args, cwd, *, timeout=60) -> subprocess.CompletedProcess` - git in
+  a folder a model writes, starting no program that folder's config or hooks name. The
+  promise is the call shape, that it never raises, that a leading `-c` of yours is kept and
+  that the repository's config does not choose the hooks or a filter; the exact list of
+  pinned settings is not. See "git in a folder a model writes" above.
 - `vaf.ToolCaller` - running a tool with the agent's own policy, gate, identity
   and bounds, without an agent. Its **documented arguments** (the table under
   "Running a tool yourself") and `execute(name, args) -> str` are the promise;

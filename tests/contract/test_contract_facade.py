@@ -72,6 +72,7 @@ EXPORTED = [
     "revoke_account",
     "revoke_standing_grants",
     "room_invitation",
+    "run_project_git",
     "safe_entry_name",
     "set_account_allowlist_resolver",
     "set_account_directory_resolver",

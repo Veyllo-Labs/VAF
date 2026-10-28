@@ -295,10 +295,10 @@ def _detect_run_changes(base_dir: str, run_start_sha: str) -> List[str]:
     Best-effort: returns [] on any git error - the caller must never lose the run.
     """
     try:
-        from vaf.tools.project_git import _run_git
+        from vaf.core.git_runner import run_project_git
         base = run_start_sha or _EMPTY_TREE_SHA
-        tracked = _run_git(["diff", "--name-only", "--diff-filter=ACMR", base], cwd=base_dir).stdout or ""
-        untracked = _run_git(["ls-files", "--others", "--exclude-standard"], cwd=base_dir).stdout or ""
+        tracked = run_project_git(["diff", "--name-only", "--diff-filter=ACMR", base], cwd=base_dir).stdout or ""
+        untracked = run_project_git(["ls-files", "--others", "--exclude-standard"], cwd=base_dir).stdout or ""
         names = {ln.strip() for ln in (tracked.splitlines() + untracked.splitlines()) if ln.strip()}
         return sorted(names)
     except Exception:
@@ -496,38 +496,23 @@ def _final_commit(base_dir: str, message: str) -> str:
     if not os.path.isdir(os.path.join(base_dir, '.git')):
         return ""
 
-    run_kwargs = {'cwd': base_dir, 'capture_output': True, 'text': True}
-    if platform.system() == "Windows":
-        run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+    from vaf.core.git_runner import run_project_git
+    from vaf.tools.project_git import commit_project_state
 
-    from vaf.tools.project_git import apply_coauthor_trailer
-    message = apply_coauthor_trailer(message)
+    for step in (["add", "-A"], ["status", "--porcelain"]):
+        proc = run_project_git(step, cwd=base_dir)
+        if proc.returncode != 0:
+            return f"Git commit skipped: {(proc.stderr or '').strip()[:120]}"
+    if not (proc.stdout or "").strip():
+        return "Git: nothing new to commit"
 
-    try:
-        subprocess.run(['git', 'add', '-A'], check=True, **run_kwargs)
-        status = subprocess.run(['git', 'status', '--porcelain'], check=True, **run_kwargs)
-        if not (status.stdout or "").strip():
-            return "Git: nothing new to commit"
+    commit = commit_project_state(base_dir, message)
+    if commit.returncode != 0:
+        return f"Git commit failed: {(commit.stderr or '').strip()[:120]}"
 
-        commit = subprocess.run(['git', 'commit', '--cleanup=verbatim', '-m', message], **run_kwargs)
-        if commit.returncode != 0:
-            err = (commit.stderr or "") + (commit.stdout or "")
-            if any(s in err for s in ("user.name", "user.email", "identity")):
-                # No git identity configured on this machine: retry with a
-                # one-off VAF identity (does not touch the user's git config).
-                commit = subprocess.run(
-                    ['git', '-c', 'user.name=VAF Coder', '-c', 'user.email=coder@vaf.local',
-                     'commit', '--cleanup=verbatim', '-m', message],
-                    **run_kwargs,
-                )
-            if commit.returncode != 0:
-                return f"Git commit failed: {(commit.stderr or '').strip()[:120]}"
-
-        short = subprocess.run(['git', 'rev-parse', '--short', 'HEAD'], **run_kwargs)
-        sha = (short.stdout or "").strip()
-        return f"Git: committed final state ({sha})" if sha else "Git: committed final state"
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        return f"Git commit skipped: {str(e)[:120]}"
+    short = run_project_git(["rev-parse", "--short", "HEAD"], cwd=base_dir)
+    sha = (short.stdout or "").strip()
+    return f"Git: committed final state ({sha})" if sha else "Git: committed final state"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -693,17 +678,17 @@ def _build_file_diffs(
     if not run_start_sha or not os.path.isdir(os.path.join(base_dir, '.git')):
         return diffs
     try:
-        from vaf.tools.project_git import _run_git
+        from vaf.core.git_runner import run_project_git
         # Derive the changed files from GIT itself (committed this run OR still uncommitted in the
         # working tree) rather than the files_created bookkeeping, which can lag behind the actual
         # edits - that lag is why the diff view showed nothing while the agent was editing.
         def _is_infra(p: str) -> bool:
             # Hide the coder's own internals (.vaf/, dotfiles) - the user wants the deliverable diff.
             return (not p) or p.startswith(".") or "/." in p
-        names = (_run_git(["diff", "--name-only", run_start_sha], cwd=base_dir).stdout or "")
+        names = (run_project_git(["diff", "--name-only", run_start_sha], cwd=base_dir).stdout or "")
         rels: List[str] = [ln.strip() for ln in names.splitlines() if ln.strip() and not _is_infra(ln.strip())]
         # Include brand-new (untracked) files the agent just wrote.
-        untracked = (_run_git(["ls-files", "--others", "--exclude-standard"], cwd=base_dir).stdout or "")
+        untracked = (run_project_git(["ls-files", "--others", "--exclude-standard"], cwd=base_dir).stdout or "")
         for ln in untracked.splitlines():
             ln = ln.strip()
             if ln and not _is_infra(ln) and ln not in rels:
@@ -719,11 +704,11 @@ def _build_file_diffs(
                     rels.append(rel)
         for rel in rels[:max_files]:
             try:
-                r = _run_git(["diff", "--no-color", run_start_sha, "--", rel], cwd=base_dir)
+                r = run_project_git(["diff", "--no-color", run_start_sha, "--", rel], cwd=base_dir)
                 d = (r.stdout or "").strip()
                 if not d:
                     # Untracked/new file: show it fully added (all green) so the editor still shows it.
-                    r2 = _run_git(["diff", "--no-color", "--no-index", "--", os.devnull, rel], cwd=base_dir)
+                    r2 = run_project_git(["diff", "--no-color", "--no-index", "--", os.devnull, rel], cwd=base_dir)
                     d = (r2.stdout or "").strip()
                 if d:
                     diffs[os.path.basename(rel)] = d[:max_chars]
@@ -740,12 +725,12 @@ def _build_git_state(base_dir: str, max_commits: int = 5) -> Dict[str, Any]:
     if not os.path.isdir(os.path.join(base_dir, '.git')):
         return state
     try:
-        from vaf.tools.project_git import _run_git
-        branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=base_dir)
+        from vaf.core.git_runner import run_project_git
+        branch = run_project_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=base_dir)
         state["branch"] = (branch.stdout or "").strip()
-        status = _run_git(["status", "--porcelain"], cwd=base_dir)
+        status = run_project_git(["status", "--porcelain"], cwd=base_dir)
         state["dirty"] = len([ln for ln in (status.stdout or "").splitlines() if ln.strip()])
-        log = _run_git(
+        log = run_project_git(
             ["log", f"-n{max_commits}", "--date=relative", "--pretty=format:%h|%ad|%s"],
             cwd=base_dir,
         )
@@ -2660,19 +2645,13 @@ class GitInitTool(BaseTool):
     def run(self, **kwargs) -> str:
         # base_dir will be passed from the CodingAgentTool context
         base_dir = kwargs.get('base_dir', '.')
-        try:
-            import subprocess
-            git_dir = os.path.join(base_dir, '.git')
-            if os.path.exists(git_dir):
-                return "✅ Git repository already initialized."
-            
-            kwargs = {'cwd': base_dir, 'check': True, 'capture_output': True}
-            if platform.system() == "Windows":
-                kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-            subprocess.run(['git', 'init'], **kwargs)
-            return "✅ Git repository initialized successfully."
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            return f"❌ Error initializing Git: {e}"
+        if os.path.exists(os.path.join(base_dir, '.git')):
+            return "✅ Git repository already initialized."
+        from vaf.core.git_runner import run_project_git
+        proc = run_project_git(["init"], cwd=base_dir)
+        if proc.returncode != 0:
+            return f"❌ Error initializing Git: {(proc.stderr or '').strip()[:200]}"
+        return "✅ Git repository initialized successfully."
 
 
 class GitAddCommitTool(BaseTool):
@@ -2704,32 +2683,25 @@ class GitAddCommitTool(BaseTool):
         message = kwargs.get('message', 'Update')
         files = kwargs.get('files', [])
         
-        try:
-            import subprocess
-            git_dir = os.path.join(base_dir, '.git')
-            if not os.path.exists(git_dir):
-                return "❌ Git repository not initialized. Call git_init first."
-            
-            # Add files
-            run_kwargs = {'cwd': base_dir, 'check': True, 'capture_output': True}
-            if platform.system() == "Windows":
-                run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
+        if not os.path.exists(os.path.join(base_dir, '.git')):
+            return "❌ Git repository not initialized. Call git_init first."
+        from vaf.core.git_runner import run_project_git
 
-            if files:
-                for f in files:
-                    file_path = os.path.join(base_dir, f) if not os.path.isabs(f) else f
-                    if os.path.exists(file_path):
-                        subprocess.run(['git', 'add', file_path], **run_kwargs)
-            else:
-                subprocess.run(['git', 'add', '.'], **run_kwargs)
-
-            # Commit
-            subprocess.run(['git', 'commit', '-m', message], **run_kwargs)
-            return f"✅ Committed changes: {message}"
-        except subprocess.CalledProcessError as e:
-            return f"❌ Error committing: {e}"
-        except FileNotFoundError:
-            return "❌ Git not found. Please install Git."
+        steps = []
+        if files:
+            for f in files:
+                file_path = os.path.join(base_dir, f) if not os.path.isabs(f) else f
+                if os.path.exists(file_path):
+                    # "--": a path is never read as an option.
+                    steps.append(["add", "--", file_path])
+        else:
+            steps.append(["add", "."])
+        steps.append(["commit", "-m", message])
+        for step in steps:
+            proc = run_project_git(step, cwd=base_dir)
+            if proc.returncode != 0:
+                return f"❌ Error committing: {((proc.stderr or '') + (proc.stdout or '')).strip()[:200]}"
+        return f"✅ Committed changes: {message}"
 
 
 class GitStatusTool(BaseTool):
@@ -2748,24 +2720,15 @@ class GitStatusTool(BaseTool):
     
     def run(self, **kwargs) -> str:
         base_dir = kwargs.get('base_dir', '.')
-        try:
-            import subprocess
-            git_dir = os.path.join(base_dir, '.git')
-            if not os.path.exists(git_dir):
-                return "❌ Git repository not initialized. Call git_init first."
-            
-            run_kwargs = {'cwd': base_dir, 'capture_output': True, 'text': True, 'check': True}
-            if platform.system() == "Windows":
-                run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-            result = subprocess.run(['git', 'status', '--short'], **run_kwargs)
-            if result.stdout.strip():
-                return f"Git Status:\n{result.stdout}"
-            else:
-                return "✅ Working directory clean (no changes)"
-        except subprocess.CalledProcessError as e:
-            return f"❌ Error getting status: {e}"
-        except FileNotFoundError:
-            return "❌ Git not found. Please install Git."
+        if not os.path.exists(os.path.join(base_dir, '.git')):
+            return "❌ Git repository not initialized. Call git_init first."
+        from vaf.core.git_runner import run_project_git
+        result = run_project_git(["status", "--short"], cwd=base_dir)
+        if result.returncode != 0:
+            return f"❌ Error getting status: {(result.stderr or '').strip()[:200]}"
+        if result.stdout.strip():
+            return f"Git Status:\n{result.stdout}"
+        return "✅ Working directory clean (no changes)"
 
 
 class GitLogTool(BaseTool):
@@ -2792,27 +2755,15 @@ class GitLogTool(BaseTool):
         base_dir = kwargs.get('base_dir', '.')
         limit = kwargs.get('limit', 10)
         
-        try:
-            import subprocess
-            git_dir = os.path.join(base_dir, '.git')
-            if not os.path.exists(git_dir):
-                return "❌ Git repository not initialized. Call git_init first."
-            
-            run_kwargs = {'cwd': base_dir, 'capture_output': True, 'text': True, 'check': True}
-            if platform.system() == "Windows":
-                run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-            result = subprocess.run(
-                ['git', 'log', f'--max-count={limit}', '--oneline'],
-                **run_kwargs
-            )
-            if result.stdout.strip():
-                return f"Recent commits:\n{result.stdout}"
-            else:
-                return "No commits yet."
-        except subprocess.CalledProcessError as e:
-            return f"❌ Error getting log: {e}"
-        except FileNotFoundError:
-            return "❌ Git not found. Please install Git."
+        if not os.path.exists(os.path.join(base_dir, '.git')):
+            return "❌ Git repository not initialized. Call git_init first."
+        from vaf.core.git_runner import run_project_git
+        result = run_project_git(["log", f"--max-count={limit}", "--oneline"], cwd=base_dir)
+        if result.returncode != 0:
+            return f"❌ Error getting log: {(result.stderr or '').strip()[:200]}"
+        if result.stdout.strip():
+            return f"Recent commits:\n{result.stdout}"
+        return "No commits yet."
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -3393,26 +3344,22 @@ class CodingAgentTool(BaseTool):
         # there would make them look like project roots forever after.
         if is_unsafe_project_dir(base_dir):
             return
-        # Never git-init a file path or a nonexistent dir: subprocess(cwd=<file>)
-        # raises NotADirectoryError, which the except below does not catch.
+        # Never git-init a file path or a nonexistent dir.
         if not os.path.isdir(base_dir):
             return
         git_dir = os.path.join(base_dir, '.git')
         if os.path.exists(git_dir):
             return  # Already a git repo
         
-        try:
-            import subprocess
-            run_kwargs = {'cwd': base_dir, 'check': True, 'capture_output': True}
-            if platform.system() == "Windows":
-                run_kwargs['creationflags'] = subprocess.CREATE_NO_WINDOW
-            # Initialize git repo - OS-independent (git works on all platforms)
-            subprocess.run(['git', 'init'], **run_kwargs)
+        from vaf.core.git_runner import run_project_git
+        # Git not available or failed: continue without git (graceful degradation).
+        if run_project_git(["init"], cwd=base_dir).returncode != 0:
+            return
 
-            # Create .gitignore - OS-independent
-            gitignore_path = os.path.join(base_dir, '.gitignore')
-            if not os.path.exists(gitignore_path):
-                gitignore_content = """# Python
+        # Create .gitignore - OS-independent
+        gitignore_path = os.path.join(base_dir, '.gitignore')
+        if not os.path.exists(gitignore_path):
+            gitignore_content = """# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -3440,18 +3387,12 @@ Thumbs.db
 *.tmp
 *.log
 """
-                with open(gitignore_path, 'w', encoding='utf-8') as f:
-                    f.write(gitignore_content)
+            with open(gitignore_path, 'w', encoding='utf-8') as f:
+                f.write(gitignore_content)
 
-            # Initial commit if there are files - OS-independent
-            try:
-                subprocess.run(['git', 'add', '.'], **run_kwargs)
-                subprocess.run(['git', 'commit', '-m', 'Initial commit'], **run_kwargs)
-            except:
-                pass  # No files to commit yet
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            # Git not available or failed - continue without git (graceful degradation)
-            pass
+        # Initial commit if there are files; with none, the commit fails harmlessly.
+        if run_project_git(["add", "."], cwd=base_dir).returncode == 0:
+            run_project_git(["commit", "-m", "Initial commit"], cwd=base_dir)
 
     def _run_document_phase(self, base_dir: str, run_start_sha: str, tui=None) -> str:
         """Final DOCUMENT phase: create or update the README to reflect this run's changes.
@@ -4067,8 +4008,8 @@ Thumbs.db
             tui.set_action("Git initialization...")
             self._ensure_git_repo(base_dir)
             try:
-                from vaf.tools.project_git import _run_git as _rg
-                _hs = _rg(["rev-parse", "--verify", "--quiet", "HEAD"], cwd=base_dir)
+                from vaf.core.git_runner import run_project_git
+                _hs = run_project_git(["rev-parse", "--verify", "--quiet", "HEAD"], cwd=base_dir)
                 _run_start_sha = (_hs.stdout or "").strip()
             except Exception:
                 _run_start_sha = ""
@@ -4081,8 +4022,8 @@ Thumbs.db
         _diff_baseline_sha = _run_start_sha
         if _run_start_sha and not skip_template:
             try:
-                from vaf.tools.project_git import _run_git as _rg2
-                _snap = (_rg2(["stash", "create"], cwd=base_dir).stdout or "").strip()
+                from vaf.core.git_runner import run_project_git
+                _snap = (run_project_git(["stash", "create"], cwd=base_dir).stdout or "").strip()
                 if _snap:
                     _diff_baseline_sha = _snap
             except Exception:

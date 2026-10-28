@@ -54,11 +54,10 @@ NAMED BOUNDARIES:
 - What is read goes to a model provider, so reading stays inside the repository: a symlink
   out of it is skipped and listed, and a file the model names outside the change is read
   only when git tracks it there (never an ignored .env, never an absolute path).
-- git runs with the repository's fsmonitor hook, external diff driver and textconv filters
-  switched off. Clean filters a repository's config defines still run on a working-tree
-  diff: they cannot be switched off without knowing their names, and that config is local
-  to the clone (git never transfers it), so it is config the same account already runs git
-  under in that directory.
+- git runs through `vaf.core.git_runner.run_project_git`: no hook, no fsmonitor, no
+  external diff or textconv, and no filter or merge driver the repository's own config
+  names, so reading a change starts no program the repository chose. A filter the person's
+  global config defines (git-lfs) still runs.
 """
 from __future__ import annotations
 
@@ -365,14 +364,13 @@ def _rank(f: AuditFinding):
 # ── git and files ─────────────────────────────────────────────────────────────
 
 def _git(root: str, *args: str, timeout: float = 60) -> Tuple[int, str]:
-    from vaf.core.git_runner import run_git
-    # A repository's own config can name programs that git runs on a read: an fsmonitor
-    # hook on every status or diff, an external diff driver, a textconv filter. Reading a
-    # change must not start any of them (see NAMED BOUNDARIES for the clean filters).
+    from vaf.core.git_runner import run_project_git
+    # A repository's own config can name programs that git runs on a read (an fsmonitor
+    # hook, an external diff, a textconv or clean filter); the project runner starts none.
     # core.quotepath=false: a non-ASCII path is printed as itself, not as an octal-escaped
     # quoted string the file system has never heard of.
-    code, out, err = run_git(["-c", "core.fsmonitor=false", "-c", "core.quotepath=false", *args],
-                             cwd=root, timeout=timeout)
+    proc = run_project_git(["-c", "core.quotepath=false", *args], cwd=root, timeout=timeout)
+    code, out, err = proc.returncode, proc.stdout or "", proc.stderr or ""
     return code, out if code == 0 else (err or out)
 
 
@@ -600,8 +598,7 @@ def _collect(top: str, scope: str, base: str, paths: Optional[Sequence[str]],
             diff_args = ["HEAD"]
         else:
             diff_args = [base]
-        code, out = _git(top, "diff", "--no-ext-diff", "--no-textconv", "--name-status", "-M",
-                         *diff_args)
+        code, out = _git(top, "diff", "--name-status", "-M", *diff_args)
         if code != 0:
             return [], [], f"git diff failed: {out.strip()[:200]}"
         for line in out.splitlines():
@@ -648,8 +645,7 @@ def _collect(top: str, scope: str, base: str, paths: Optional[Sequence[str]],
             if status == "untracked":
                 item.diff = "(new file, not yet tracked)"
         else:
-            code, diff = _git(top, "diff", "--no-ext-diff", "--no-textconv", "-U3", "-M",
-                              *diff_args, "--", rel)
+            code, diff = _git(top, "diff", "-U3", "-M", *diff_args, "--", rel)
             item.diff = diff if code == 0 else ""
             item.changed = _hunk_lines(item.diff)
             if not item.changed:

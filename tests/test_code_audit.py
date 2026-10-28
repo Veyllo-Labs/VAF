@@ -366,7 +366,7 @@ def test_a_finding_in_a_file_git_does_not_track_is_dropped(repo, tmp_path):
 @pytest.mark.skipif(__import__("os").name == "nt", reason="a shell script as the hook")
 def test_reading_a_change_starts_no_program_the_repository_configures(repo, tmp_path):
     """core.fsmonitor in the repository's own config names a program git would run on every
-    diff. MUTATION: drop `-c core.fsmonitor=false`."""
+    diff. MUTATION: drop `core.fsmonitor` from git_runner.PROJECT_GIT_CONFIG."""
     marker = tmp_path / "ran"
     hook = tmp_path / "hook.sh"
     hook.write_text(f"#!/bin/sh\ntouch '{marker}'\n", encoding="utf-8")

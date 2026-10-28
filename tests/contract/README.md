@@ -26,6 +26,7 @@ One file per contract module:
 | `test_contract_pdf_extract.py` | `extract_pdf_markdown` signature, result dict, missing-extra ImportError |
 | `test_contract_session_turn_context.py` | session/turn context API (`vaf.core.subagent_ipc`) |
 | `test_contract_entry_points.py` | the `vaf.tools` entry-point group loader |
+| `test_contract_project_git.py` | `run_project_git`: the call shape, the `CompletedProcess` result, a caller's own leading `-c` kept, the repository's config choosing neither hooks nor filters, never raising |
 | `test_contract_code_audit.py` | `code_audit`: the `ask` parameter, verified findings with fix prompts, the completion contract (`status`, `exit_code()`) |
 | `test_contract_environments.py` | `EnvironmentManager` / `get_environment_manager`: the kinds, the network profiles, `EnvironmentRefused`, the documented signatures |
 | `test_contract_revocation.py` | `revoke_account` / `restore_account` / `stop_account_work` / `stop_session` / revocation listeners, and the standing-grant read and undo |

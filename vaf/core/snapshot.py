@@ -5,22 +5,17 @@
 VAF Snapshot - Git-based code change tracking and undo
 Track file changes and revert to previous states
 """
-import subprocess
 import shutil
-import platform
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 import json
 import hashlib
 
+# The folder can be a coding agent's project, whose .git its jailed shell writes: git runs
+# through the project runner, which starts no hook, filter or driver that config names.
+from vaf.core.git_runner import resolve_commit, run_project_git
 
-def _get_subprocess_kwargs() -> dict:
-    """Get platform-specific kwargs for headless subprocess execution."""
-    kwargs = {}
-    if platform.system() == "Windows":
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-    return kwargs
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # SNAPSHOT CLASS
@@ -43,17 +38,8 @@ class Snapshot:
     
     def _check_git(self) -> bool:
         """Check if we can use Git for snapshots."""
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "--is-inside-work-tree"],
-                cwd=self.project_path,
-                capture_output=True,
-                text=True,
-                **_get_subprocess_kwargs()
-            )
-            return result.returncode == 0
-        except Exception:
-            return False
+        result = run_project_git(["rev-parse", "--is-inside-work-tree"], cwd=str(self.project_path))
+        return result.returncode == 0
     
     def _load_index(self):
         """Load snapshot index."""
@@ -85,86 +71,41 @@ class Snapshot:
     
     def _git_snapshot(self, message: str = None) -> Optional[str]:
         """Create a Git-based snapshot (stash or commit)."""
-        try:
-            sp_kwargs = _get_subprocess_kwargs()
+        cwd = str(self.project_path)
+        status = run_project_git(["status", "--porcelain"], cwd=cwd)
+        if status.returncode != 0 or not status.stdout.strip():
+            return None  # No changes, or no git
 
-            # Check for changes
-            status = subprocess.run(
-                ["git", "status", "--porcelain"],
-                cwd=self.project_path,
-                capture_output=True,
-                text=True,
-                **sp_kwargs
-            )
+        run_project_git(["add", "-A"], cwd=cwd)
 
-            if not status.stdout.strip():
-                return None  # No changes
-
-            # Stage all changes
-            subprocess.run(
-                ["git", "add", "-A"],
-                cwd=self.project_path,
-                capture_output=True,
-                **sp_kwargs
-            )
-
-            # Create commit with VAF marker
-            msg = message or f"VAF snapshot {datetime.now().isoformat()}"
-            result = subprocess.run(
-                ["git", "commit", "-m", f"[VAF] {msg}", "--no-verify"],
-                cwd=self.project_path,
-                capture_output=True,
-                text=True,
-                **sp_kwargs
-            )
-
-            if result.returncode == 0:
-                # Get commit hash
-                hash_result = subprocess.run(
-                    ["git", "rev-parse", "HEAD"],
-                    cwd=self.project_path,
-                    capture_output=True,
-                    text=True,
-                    **sp_kwargs
-                )
-                return hash_result.stdout.strip()[:8]
-            
-            return None
-            
-        except Exception:
-            return None
+        # Create commit with VAF marker
+        msg = message or f"VAF snapshot {datetime.now().isoformat()}"
+        result = run_project_git(["commit", "-m", f"[VAF] {msg}"], cwd=cwd)
+        if result.returncode == 0:
+            hash_result = run_project_git(["rev-parse", "HEAD"], cwd=cwd)
+            return hash_result.stdout.strip()[:8] or None
+        return None
     
     def _git_restore(self, commit_hash: str) -> bool:
         """Restore to a Git commit."""
-        try:
-            result = subprocess.run(
-                ["git", "checkout", commit_hash, "--", "."],
-                cwd=self.project_path,
-                capture_output=True,
-                text=True,
-                **_get_subprocess_kwargs()
-            )
-            return result.returncode == 0
-        except Exception:
+        # The id comes from an index file inside the project: only a commit id it resolves
+        # to reaches the command line, never an option-shaped value.
+        commit = resolve_commit(commit_hash, str(self.project_path))
+        if not commit:
             return False
+        result = run_project_git(["checkout", commit, "--", "."], cwd=str(self.project_path))
+        return result.returncode == 0
 
     def _git_diff(self, commit_hash: str = None) -> str:
         """Get Git diff."""
-        try:
-            cmd = ["git", "diff"]
-            if commit_hash:
-                cmd.append(commit_hash)
-
-            result = subprocess.run(
-                cmd,
-                cwd=self.project_path,
-                capture_output=True,
-                text=True,
-                **_get_subprocess_kwargs()
-            )
-            return result.stdout
-        except Exception:
-            return ""
+        args = ["diff"]
+        if commit_hash:
+            # `git diff --output=<file>` would write over that file: a commit id only.
+            commit = resolve_commit(commit_hash, str(self.project_path))
+            if not commit:
+                return ""
+            args.append(commit)
+        return run_project_git(args, cwd=str(self.project_path)).stdout or ""
     
     # ═══════════════════════════════════════════════════════════════════════════
     # FILE-BASED SNAPSHOTS (fallback)

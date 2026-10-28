@@ -217,13 +217,17 @@ def test_rollback_of_rollback_restores_newest_state(project):
     assert (project / "styles.css").exists()
 
 
-def test_history_and_rollback_run_the_git_vaf_resolved(monkeypatch, tmp_path):
+def test_history_and_rollback_run_the_git_vaf_resolved(monkeypatch, project):
     """On Windows without git on PATH VAF brings its own; resolve_commit used it while every
-    other rollback step ran a bare "git" that was not there. MUTATION: run "git" again."""
-    import vaf.tools.project_git as pg
+    other rollback step ran a bare "git" that was not there. History and rollback run git
+    through the project runner, which starts the resolved one.
+    MUTATION: start "git" instead of resolve_git() in vaf.core.git_runner."""
+    import vaf.core.git_runner as gr
     ran = []
-    monkeypatch.setattr(pg, "resolve_git", lambda: "/opt/vaf/git/bin/git")
-    monkeypatch.setattr(pg.subprocess, "run",
+    monkeypatch.setattr(gr, "resolve_git", lambda: "/opt/vaf/git/bin/git")
+    monkeypatch.setattr(gr.subprocess, "run",
                         lambda argv, **kw: ran.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""))
-    pg._run_git(["status", "--porcelain"], cwd=str(tmp_path))
-    assert ran == [["/opt/vaf/git/bin/git", "status", "--porcelain"]]
+    ProjectHistoryTool().run(project_path=str(project))
+    ProjectRollbackTool().run(commit="abc1234", project_path=str(project))
+    assert ran and all(argv[0] == "/opt/vaf/git/bin/git" for argv in ran)
+    assert any("log" in argv for argv in ran) and any("rev-parse" in argv for argv in ran)

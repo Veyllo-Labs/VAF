@@ -283,11 +283,13 @@ the next run.
   symlink out of it is skipped and listed, a file the model names outside the change is read
   only when git tracks it, and a guideline file git ignores is someone's private notes and
   stays out.
-- **git runs with the repository's fsmonitor hook, external diff driver and textconv filters
-  switched off.** Clean filters a repository's config defines still run on a working-tree
-  diff: they cannot be switched off without knowing their names, and that config is local to
-  the clone (git never transfers it), so it is config the same account already runs git under
-  in that directory.
+- **git starts no program the repository's own config names.** Every call goes through
+  `vaf.core.git_runner.run_project_git`: no hook, no fsmonitor, no external diff or textconv,
+  and the clean, smudge and merge drivers the repository's config defines are switched off by
+  name (the runner reads the names first). The repository being reviewed may be a coding
+  agent's project, whose `.git` the agent's shell writes. The price: a working-tree diff of a
+  file such a filter converts compares the file as it is on disk. A filter only the person's
+  global config defines (git-lfs) still runs.
 - **Stop in the chat** ends the review before its next model call; a call already in flight
   finishes in the background (an in-process tool cannot be killed), and its answer is
   discarded.

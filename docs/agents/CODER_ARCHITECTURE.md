@@ -98,11 +98,21 @@ return an actionable error string instead of a traceback.
 
 ### `_ensure_git_repo(base_dir)`
 *   **Logic:**
-    1.  Refuses unsafe locations (`is_unsafe_project_dir`) - a `.git` in e.g. the home directory would make it look like a project root forever after. Also refuses any `base_dir` that is not an existing directory (a file path would raise `NotADirectoryError` inside subprocess, which the git error handling does not catch).
+    1.  Refuses unsafe locations (`is_unsafe_project_dir`) - a `.git` in e.g. the home directory would make it look like a project root forever after. Also refuses any `base_dir` that is not an existing directory.
     2.  Checks for `.git` folder.
     3.  If missing, runs `git init`.
     4.  Writes a default `.gitignore` (Python/Node/IDE patterns).
     5.  Runs `git add .` and `git commit -m "Initial commit"` to secure the starting state.
+
+### Git in the project folder (`run_project_git`)
+Every git command the coder side runs in a project goes through `vaf.core.git_runner.run_project_git`: `_ensure_git_repo`, `_final_commit`, the run-start baseline (`rev-parse`, `stash create`), the DOCUMENT phase's change detection, the SubAgent window's diffs and git state, the `git_init`/`git_add_commit`/`git_status`/`git_log` tools, `project_history`/`project_rollback` (`vaf/tools/project_git.py`), the code audit (`vaf/core/code_audit.py`) and the snapshots behind `/undo` (`vaf/core/snapshot.py`). The coder's `bash` writes the project folder, `.git` included, and git starts the programs that folder's config and hooks name, on the host and outside the jail. The runner switches all of them off with `-c`, which outranks every config file:
+
+*   `core.hooksPath` points at an empty directory under VAF's data directory (no hook runs; `--no-verify` alone still runs `post-index-change`, `reference-transaction` and `post-commit`), plus `core.fsmonitor=false`, `core.pager=cat`, `core.editor=true`, `core.askPass=`, `core.sshCommand=ssh`, `diff.external=`, `commit.gpgSign=false`, `tag.gpgSign=false`, `log.showSignature=false` (set, `git log` hands a signed commit to `gpg.program`) and `credential.helper=`.
+*   Every filter, diff and merge driver the repository's own config names (read first with a read-only `git config --show-scope --get-regexp`) gets an empty `clean`/`smudge`/`process` with `required=false`, an empty `textconv`, an empty merge `driver` (that merge becomes a conflict, so a rollback stops instead of running it). A driver only the person's global config names, such as the one `git lfs install` writes, keeps running.
+*   `diff`, `log` and `show` get `--no-ext-diff --no-textconv` (a diff driver's `command` cannot be emptied: git then tries to run an empty program and fails), `commit` gets `--no-verify`.
+*   The environment is the whole process environment with `GIT_CONFIG_NOSYSTEM=1`, `GIT_TERMINAL_PROMPT=0`, `GIT_PAGER=cat`, `GIT_EDITOR=true` and an empty `GIT_ASKPASS`.
+
+`tests/test_project_git_runner.py` pins each setting and refuses any other git start in those four modules. Named boundary: `vaf git` and `vaf update` stay on the plain `run_git`, because a person starts them in their own repository or in VAF's checkout, where that repository's hooks are their own choice.
 
 ---
 
@@ -482,7 +492,7 @@ The prompt has always stated these rules ("run_tests must be green before `task_
     4.  End-of-run cleanup of stale `PARTIAL_*` files.
     5.  DOCUMENT phase (section 5a): one model call writes or updates the README from what git says changed. It runs after the audit, so the README it writes is not reviewed.
     6.  Final commit, then the summary: files, task status, the commit line and the audit outcome line.
-*   **Final Commit (every exit path):** before the final summary is built, `_final_commit(base_dir, message)` runs `git add -A` and commits when changes exist. Each code audit round commits through the same helper first (`... Code audit round k: the state under review`), so the final commit may find nothing new besides the README. The commit message is `VAF Coder: <task excerpt>` plus a status line (`Status: COMPLETE|PARTIAL (n/m tasks)`); runs with failed or remaining tasks commit too, so no work is ever left untracked. If no git identity is configured, the commit retries once with a one-off VAF identity (`-c user.name=... -c user.email=...`, the user's git config is never modified). Unsafe directories and CONTENT_ONLY temp dirs are excluded. The result line appears in the final summary. These commits are what powers the history/rollback delegation (section 3.A0).
+*   **Final Commit (every exit path):** before the final summary is built, `_final_commit(base_dir, message)` runs `git add -A` and commits when changes exist. Each code audit round commits through the same helper first (`... Code audit round k: the state under review`), so the final commit may find nothing new besides the README. The commit message is `VAF Coder: <task excerpt>` plus a status line (`Status: COMPLETE|PARTIAL (n/m tasks)`); runs with failed or remaining tasks commit too, so no work is ever left untracked. If no git identity is configured, the commit retries once with a one-off VAF identity (`-c user.name=... -c user.email=...`, the user's git config is never modified); `commit_project_state` in `vaf/tools/project_git.py` holds that retry for both this commit and the rollback's own. Unsafe directories and CONTENT_ONLY temp dirs are excluded. The result line appears in the final summary. These commits are what powers the history/rollback delegation (section 3.A0).
 *   **Logic:**
     *   Stops TUI thread (`live.stop()`).
     *   Cleans up temporary handles.

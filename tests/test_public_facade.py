@@ -68,7 +68,7 @@ def test_facade_exports_exactly_the_documented_surface():
         "markers", "model_text", "participant_key", "record_threat",
         "remove_revocation_listener",
         "restore_account", "revoke_account", "revoke_standing_grants", "room_invitation",
-        "safe_entry_name", "set_account_allowlist_resolver",
+        "run_project_git", "safe_entry_name", "set_account_allowlist_resolver",
         "set_account_directory_resolver", "set_confirmation_bypass_resolver",
         "set_tool_policy", "stop_account_work", "stop_session", "stored_turn_copy",
         "unread_counts", "user_jail",

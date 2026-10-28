@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from .core.code_audit import AuditFinding, AuditReport, code_audit
     from .core.completion import is_error_reply
     from .core.environments import EnvironmentManager, get_environment_manager
+    from .core.git_runner import run_project_git
     from .core.pdf_extract import extract_pdf_markdown
     from .core.session import TurnStatus, model_text, stored_turn_copy
     from .core.revocation import (add_revocation_listener, remove_revocation_listener,
@@ -54,7 +55,7 @@ __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_K
            "list_standing_grants", "mark_trusted_dir", "markers", "model_text",
            "participant_key", "record_threat", "remove_revocation_listener",
            "restore_account", "revoke_account", "revoke_standing_grants", "room_invitation",
-           "safe_entry_name", "set_account_allowlist_resolver",
+           "run_project_git", "safe_entry_name", "set_account_allowlist_resolver",
            "set_account_directory_resolver",
            "set_confirmation_bypass_resolver", "set_tool_policy", "stop_account_work",
            "stop_session", "stored_turn_copy", "unread_counts", "user_jail"]
@@ -109,6 +110,13 @@ def __getattr__(name):
         # dispatcher to have set it. See docs/EMBEDDING.md.
         from .tools.filesystem import user_jail
         return user_jail
+    if name == "run_project_git":
+        # git in a folder a model writes. Its .git is as writable as the rest, and git starts
+        # the programs that directory's config and hooks name, outside any jail the model ran
+        # in. VAF's coder, project history, snapshots and code audit each needed this, and two
+        # of them hand-rolled half of it. Stdlib at module level. See docs/EMBEDDING.md.
+        from .core.git_runner import run_project_git
+        return run_project_git
     if name == "jail_allows":
         # The same boundary asked from OUTSIDE a tool run: may this account reach this path?
         # A route that serves or stores a file for an account needs the answer its tools

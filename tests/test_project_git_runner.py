@@ -205,7 +205,7 @@ def test_a_driver_named_by_a_key_without_a_value_is_switched_off(repo):
 
 def test_a_driver_in_the_per_worktree_config_is_switched_off(repo):
     """With extensions.worktreeConfig on, config.worktree is a scope --local does not read.
-    MUTATION: drop --worktree from _UNTRUSTED_SCOPES."""
+    MUTATION: read only .git/config (`--local`) instead of the effective config."""
     _git("config", "extensions.worktreeConfig", "true", cwd=repo)
     _git("config", "--worktree", "filter.wt.clean", "harmless", cwd=repo)
     assert "filter.wt.clean=" in _pairs(gr.project_git_command(["status"], str(repo)))
@@ -233,11 +233,66 @@ def test_an_older_git_without_scope_labels_or_worktree_config_gets_the_same_pins
     pairs = _pairs(gr.project_git_command(["status"], str(repo)))
     assert "filter.fx.clean=" in pairs and "merge.mx.driver=" in pairs
     assert gr.run_project_git(["status", "--porcelain"], cwd=str(repo)).returncode == 0
-    assert refused, "the simulation never saw an option an older git lacks"
+    assert refused == [], "the runner asked for an option an older git lacks"
+
+
+def _git_version():
+    out = _git("--version", cwd=_ROOT).stdout
+    return tuple(int(x) for x in out.split()[2].split(".")[:2])
+
+
+@pytest.mark.skipif(_git_version() < (2, 36), reason="includeIf hasconfig arrived in git 2.36")
+def test_a_driver_from_an_include_that_depends_on_another_file_is_switched_off(repo, tmp_path):
+    """An includeIf hasconfig in .git/config whose remote is set only in config.worktree: a
+    read of either file alone missed the included filter, which then ran on add (measured).
+    MUTATION: read .git/config and config.worktree one at a time again."""
+    inc = tmp_path / "inc-hc.cfg"
+    inc.write_text('[filter "hc"]\n\tclean = harmless\n', encoding="utf-8")
+    _git("config", "extensions.worktreeConfig", "true", cwd=repo)
+    _git("config", "--worktree", "remote.origin.url", "https://example.org/x.git", cwd=repo)
+    _git("config", "includeIf.hasconfig:remote.*.url:https://example.org/**.path", inc.as_posix(),
+         cwd=repo)
+    assert _git("config", "--includes", "--get", "filter.hc.clean", cwd=repo).stdout.strip() == "harmless"
+    assert "filter.hc.clean=" in _pairs(gr.project_git_command(["status"], str(repo)))
+
+
+def test_a_global_driver_the_repository_adds_to_through_an_include_is_switched_off(
+        repo, tmp_path, monkeypatch):
+    """Same name as the person's global filter, one more key from the project: the driver is no
+    longer entirely theirs. MUTATION: call a driver trusted when any one of its pairs is."""
+    glob = tmp_path / "global.cfg"
+    glob.write_text('[filter "lfs"]\n\tclean = git-lfs clean -- %f\n\trequired = true\n',
+                    encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(glob))
+    inc = tmp_path / "inc.cfg"
+    inc.write_text('[filter "lfs"]\n\tsmudge = harmless\n', encoding="utf-8")
+    _git("config", "include.path", inc.as_posix(), cwd=repo)
+    pairs = _pairs(gr.project_git_command(["status"], str(repo)))
+    assert "filter.lfs.clean=" in pairs and "filter.lfs.smudge=" in pairs
+
+
+def test_a_global_driver_the_person_keeps_in_an_included_file_keeps_running(
+        repo, tmp_path, monkeypatch):
+    """A global config that includes the file with the person's filter: still theirs.
+    MUTATION: read the trusted config without --includes."""
+    lfs = tmp_path / "lfs.cfg"
+    lfs.write_text('[filter "lfs"]\n\tclean = git-lfs clean -- %f\n', encoding="utf-8")
+    glob = tmp_path / "global.cfg"
+    glob.write_text(f"[include]\n\tpath = {lfs.as_posix()}\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(glob))
+    assert not any(p.startswith("filter.lfs.") for p in _pairs(gr.project_git_command(["status"], str(repo))))
+
+
+def test_a_config_that_cannot_be_read_is_refused_by_the_runner(repo):
+    """Fail closed. MUTATION: treat a failed read as "no drivers"."""
+    with open(repo / ".git" / "config", "a", encoding="utf-8") as f:
+        f.write("[broken\n")
+    proc = gr.run_project_git(["status"], cwd=str(repo))
+    assert proc.returncode == -1 and "cannot read the repository's drivers" in proc.stderr
 
 
 def test_init_in_a_new_folder_works(tmp_path):
-    """There is no repository config to read before init. MUTATION: read the drivers for init."""
+    """The driver read runs before init too, where there is no repository yet."""
     proj = tmp_path / "fresh"
     proj.mkdir()
     proc = gr.run_project_git(["init"], cwd=str(proj))
@@ -418,8 +473,8 @@ def test_every_git_process_starts_the_git_vaf_resolved(monkeypatch, tmp_path):
     monkeypatch.setattr(gr.subprocess, "run",
                         lambda argv, **kw: ran.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""))
     gr.run_project_git(["status", "--porcelain"], cwd=str(tmp_path))
-    # The repository's config, its per-worktree config, then the command.
-    assert len(ran) == 3 and all(argv[0] == "/opt/vaf/git/bin/git" for argv in ran)
+    # The global and system config, the effective config, then the command.
+    assert len(ran) == 4 and all(argv[0] == "/opt/vaf/git/bin/git" for argv in ran)
     assert ran[-1][-2:] == ["status", "--porcelain"]
     # The driver read looks at the same repository the command will use.
     # MUTATION: read the drivers without the layout options.

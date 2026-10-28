@@ -1909,12 +1909,14 @@ reply is going into a room, run that turn under an allowed set (`set_allowed_too
 "Which tools this agent may use"): its prompt then carries none of your user's profile
 digest and details, machine paths, last message elsewhere or other chats, as for a turn that
 answers a customer. Leave your user's private readers (mail, chats, calendar, contacts,
-memory, your own data tools) out of that set unless your user alone asked in the room:
-whatever such a tool returns, the turn can post. `room.wake_authority(scope, senders)` tells
+memory, your own data tools) and the tools that act for your user out of that set unless your
+user alone asked in the room: whatever such a tool returns, the turn can post, and a tool
+labelled as a write often reads as much. `room.wake_authority(scope, senders)` tells
 you whether the words that woke the turn were your user's alone. VAF's own room turns get the
 same prompt reduction without a set, except that they keep retrieval and cross-chat hints for
 what was said in the room; and when somebody other than the user woke them they read only
-the room, the web and the room's shared folder, in every mode (named boundaries and the table
+the room, the web and the room's shared folder and change only their posts in that room and
+files in that folder, in every mode (named boundaries and the table
 in `docs/agents/A2A_PROTOCOL.md`, "Who woke the turn").
 
 Three things the room does for you, so an embedder does not rebuild them:
@@ -2355,7 +2357,8 @@ Stable public surface (safe to build on):
   whoever spoke in the room, so treat it as a room turn: ask the room who that was with
   `room.wake_authority(scope, [f.sender for f in hit.frames])` (`from_user_only` is your
   user's words alone, `from_authority` your user or a leader), and unless it is your user
-  alone, run it under an allowed set that leaves your user's private readers out. VAF's
+  alone, run it under an allowed set that leaves your user's private readers, and every
+  tool that acts for your user, out. VAF's
   own lane does exactly that. See [AUTOMATIONS.md](platform/AUTOMATIONS.md), "Event
   triggers".
 - `file_encryption_enabled` as the switch between the two at-rest modes, and the

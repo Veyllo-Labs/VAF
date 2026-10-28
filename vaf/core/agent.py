@@ -3044,6 +3044,24 @@ class Agent:
         "room_read", "room_verify", "room_send", "room_react", "room_join", "room_invite",
     })
 
+    # What such a turn may still CHANGE, whatever the mode allows, also a name list that
+    # fails closed. The mode bounds writes by how far the user trusts the room; this bounds
+    # them by who is asking. Measured before it, in `autonomous`: 79 write-level and
+    # delegation names passed a guest's wake, and many of them read as much as they write -
+    # `cloud_storage` lists and downloads the user's cloud files, `mcp_call` and every MCP
+    # tool (registered as write) reach whatever the server holds, `execute_workflow` runs a
+    # saved workflow with no turn gate at all, a delegation runs in a process of its own.
+    # Left: talking in the waking room, and the three file writers, which declare
+    # `file_access` and ask `is_safe_path` for their target, so `_room_file_scope` holds them
+    # to the shared folder. Not here on purpose: `room_join` (it re-sets the agent's own mode
+    # in the room), `room_invite` and `room_open` (they widen who is in a room), and the
+    # sandbox tools (the container is the account's own and keeps its earlier runs' files,
+    # and `python_sandbox` exports to the host outside the jail).
+    _ROOM_FOREIGN_WRITE_TOOLS = frozenset({
+        "room_send", "room_react",
+        "write_file", "edit_file", "download_file",
+    })
+
     def _room_mode_gate_decision(self, name, tool_instance, args=None):
         """Gate (d): a message that arrived from a room is a MESSAGE, not a warrant.
 
@@ -3064,12 +3082,13 @@ class Agent:
         fire, and the authorisation came from the person rather than from whoever
         happened to be at the keyboard.
 
-        WHO WOKE IT bounds what it may READ, in every mode. A wake that is not the user's
-        words alone reads only `_ROOM_READ_TOOLS` and acts on its own room only
-        (`_ROOM_SCOPED_TOOLS`); its file tools see only the room's shared folder
-        (`_room_file_scope`). `autonomous` included: it is the user's grant to act on the
-        room's work, not to hand the user's mail, chats, calendar and memory to its members.
-        Write tools keep the mode's verdict. ``args`` are the model's raw arguments: the
+        WHO WOKE IT bounds what it may read and change, in every mode. A wake that is not
+        the user's words alone reads only `_ROOM_READ_TOOLS`, changes only
+        `_ROOM_FOREIGN_WRITE_TOOLS` (and those still only as far as the mode allows), acts on
+        its own room only (`_ROOM_SCOPED_TOOLS`), and its file tools see only the room's
+        shared folder (`_room_file_scope`). `autonomous` included: it is the user's grant to
+        act on the room's work, not to hand the user's mail, chats, calendar, memory or
+        tools to whoever speaks in it. ``args`` are the model's raw arguments: the
         gate runs before the dispatch repairs them, so the room id is read under its
         aliases too.
 
@@ -3097,11 +3116,18 @@ class Agent:
                     f"guess what it would have shown."
                 )
                 _perm = getattr(tool_instance, "permission_level", "read")
-                _acts = (_perm in ("write", "dangerous") or name in self._DELEGATION_TOOLS
-                         # The wrapper is no reader: every call inside it comes back
-                         # through this gate on its own.
-                         or name == "multi_tool_use.parallel")
-                if not _acts and name not in self._ROOM_READ_TOOLS:
+                _acts = _perm in ("write", "dangerous") or name in self._DELEGATION_TOOLS
+                if name == "multi_tool_use.parallel":
+                    # The wrapper is neither: every call inside it comes back through
+                    # this gate on its own.
+                    pass
+                elif _acts:
+                    # Remembering on a leader's word stays the authority exception below.
+                    _authority = (name in self._ROOM_AUTHORITY_TOOLS
+                                  and room_turn.get("from_authority"))
+                    if name not in self._ROOM_FOREIGN_WRITE_TOOLS and not _authority:
+                        return refusal
+                elif name not in self._ROOM_READ_TOOLS:
                     return refusal
                 if name in self._ROOM_SCOPED_TOOLS:
                     # Every place the dispatch could take the room from must name THIS

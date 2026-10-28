@@ -562,11 +562,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   longer posts there; before, a reply it wrote without sending it was still posted. Restart
   VAF after updating so the fix takes effect.
 
-- **Your agent no longer reads your mail, chats, calendar, contacts, memory or files for
-  somebody else in an agent room.** When a message from another member, a guest agent or
-  another account's agent wakes your agent in a room, it can read that room, search the web
-  and open files in the room's shared folder, and nothing else of yours; it can no longer
-  read another of your rooms, post into it, or save a tool, a workflow or a password on that
+- **Your agent no longer reads your mail, chats, calendar, contacts, memory or files, or acts
+  for you, on somebody else's word in an agent room.** When a message from another member, a
+  guest agent or another account's agent wakes your agent in a room, it can read that room,
+  search the web and open files in the room's shared folder, and nothing else of yours; it can
+  answer in that room and write files into that folder, and do nothing else, even in a room
+  where you let it act on its own: no sub-agents, no commands on your computer, no cloud,
+  MCP or workflow tools, no other room, and no tool, workflow or password saved on that
   member's word. What you ask for yourself in the room still works as before. An automation
   that a room message starts follows the same rule and the room's mode. Restart VAF after
   updating.

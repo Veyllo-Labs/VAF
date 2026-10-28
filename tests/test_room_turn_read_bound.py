@@ -203,6 +203,78 @@ def test_a_leader_may_still_ask_to_remember():
                    from_authority=True) is None
 
 
+# ── What somebody else's wake may change ──────────────────────────────────────────────────
+
+# Spelled out for the same reason as OPEN.
+FOREIGN_WRITES = ("room_send", "room_react", "write_file", "edit_file", "download_file")
+MEASURED_WRITES = ("cloud_storage", "mcp_call", "execute_workflow")
+
+
+class _McpTool(BaseTool):
+    """What an MCP server's tool looks like to the gate: a name nobody listed, write-level."""
+    name = "mcp__notes__read_everything"
+    permission_level = "write"
+    parameters = {"type": "object", "properties": {}}
+
+    def run(self, **kwargs):
+        return "NOTES7QSECRET"
+
+
+@pytest.mark.parametrize("name", MEASURED_WRITES + ("coding_agent", "librarian_agent",
+                                                    "research_agent", "document_agent",
+                                                    "host_bash", "python_sandbox", "room_join",
+                                                    "room_invite", "room_open"))
+def test_autonomous_changes_nothing_else_on_somebody_elses_word(name):
+    """MUTATION: drop the write half of the branch (the measured 79 names pass again)."""
+    assert name in TOOLS, f"{name} is no longer a tool"
+    foreign = {"mode": "autonomous", "from_user": False, "from_user_only": False}
+    decision = _decide(name, {"room_id": ROOM}, **foreign)
+    assert decision is not None and decision.startswith(PREFIX), (name, decision)
+    own = {"mode": "autonomous", "from_user": True, "from_user_only": True}
+    assert _decide(name, {"room_id": ROOM}, **own) is None, (
+        f"{name} is refused on the user's own words")
+
+
+def test_an_unknown_mcp_tool_is_refused():
+    gate = _Gate(mode="autonomous", from_user_only=False)
+    decision = gate._room_mode_gate_decision(_McpTool.name, _McpTool(), {})
+    assert decision is not None and decision.startswith(PREFIX)
+
+
+def test_the_change_list_is_what_autonomous_keeps():
+    """MUTATION: drop a name from `_ROOM_FOREIGN_WRITE_TOOLS` (its row goes red), or add one
+    (the subset check names it)."""
+    foreign = {"mode": "autonomous", "from_user_only": False}
+    for name in FOREIGN_WRITES:
+        assert _decide(name, {"room_id": ROOM}, **foreign) is None, name
+    passed = sorted(
+        n for n, cls in TOOLS.items()
+        if (getattr(cls, "permission_level", "read") in ("write", "dangerous")
+            or n in Agent._DELEGATION_TOOLS)
+        and _decide(n, {"room_id": ROOM}, **foreign) is None)
+    assert set(passed) == set(FOREIGN_WRITES), passed
+
+
+def test_the_file_writers_on_the_list_are_jailed():
+    """The list keeps a file writer only because `_room_file_scope` holds it: it declares
+    `file_access` and asks `is_safe_path` for its target."""
+    import vaf.tools.download_file as download_file
+    import vaf.tools.filesystem as fs
+    for name in ("write_file", "edit_file", "download_file"):
+        assert getattr(TOOLS[name], "file_access", None) == "write", name
+    for cls in (fs.WriteFileTool, fs.EditFileTool, download_file.DownloadFileTool):
+        assert "is_safe_path(" in inspect.getsource(cls.run), cls.__name__
+
+
+def test_a_guest_cannot_raise_the_agents_mode():
+    """`room_join` on a room the agent is already in re-sets its own mode, and it is a talk
+    tool in assist: before this, a guest could have the agent rejoin its room as
+    autonomous. MUTATION: put `room_join` on the change list."""
+    decision = _decide("room_join", {"room_id": ROOM, "mode": "autonomous"},
+                       mode="assist", from_user_only=False)
+    assert decision is not None and decision.startswith(PREFIX)
+
+
 # ── AC 5: the waking room only ────────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("name", ["room_read", "room_send"])

@@ -234,8 +234,10 @@ agent may talk in the room but anything touching the machine waits for the user'
 in the ordinary chat, and only `autonomous` acts unprompted. Who woke the turn bounds what
 it may read, in every mode: unless every waking message is the user's own, the turn reads
 only the room, the web, the tool catalogue, its own working memory and the room's shared
-folder (`Agent._ROOM_READ_TOOLS`; every other non-write tool is refused), and the room tools
-act only on the room that woke it. The gate is `_room_mode_gate_decision` in
+folder (`Agent._ROOM_READ_TOOLS`; every other non-write tool is refused), it changes only
+its posts in that room and files in that folder (`Agent._ROOM_FOREIGN_WRITE_TOOLS`; every
+other write, delegation and MCP tool is refused), and the room tools act only on the room
+that woke it. The gate is `_room_mode_gate_decision` in
 [vaf/core/agent.py](../../vaf/core/agent.py), and it fails closed; the table is in
 [A2A_PROTOCOL.md](A2A_PROTOCOL.md), "Who woke the turn".
 

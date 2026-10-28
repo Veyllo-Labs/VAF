@@ -41,6 +41,7 @@ class _Agent:
     _ROOM_AUTHORITY_TOOLS = _Real._ROOM_AUTHORITY_TOOLS
     _ROOM_READ_TOOLS = _Real._ROOM_READ_TOOLS
     _ROOM_SCOPED_TOOLS = _Real._ROOM_SCOPED_TOOLS
+    _ROOM_FOREIGN_WRITE_TOOLS = _Real._ROOM_FOREIGN_WRITE_TOOLS
     _room_mode_gate_decision = _Real._room_mode_gate_decision
 
     def __init__(self, room_turn=None):
@@ -91,7 +92,9 @@ def test_without_a_room_turn_the_gate_is_silent():
     ("assist", "memory_search", "read", True),
     # autonomous: the user granted it for this room
     ("autonomous", "write_file", "write", False),
-    ("autonomous", "coding_agent", "read", False),
+    # A delegation runs in a process of its own, outside the turn's bounds, so a wake that
+    # is not the user's alone does not start one even here (tests/test_room_turn_read_bound.py).
+    ("autonomous", "coding_agent", "read", True),
 ])
 def test_the_mode_matrix(mode, tool, perm, blocked):
     """MUTATION: drop any row's branch from the gate.

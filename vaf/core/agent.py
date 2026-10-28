@@ -2836,7 +2836,9 @@ class Agent:
                 answer_rules = (
                     "ANSWER IN THE ROOM WITH room_send. Everything you write in this turn "
                     "ends up in the room: a reply written without room_send "
-                    "is posted there as your message too. Every member reads it, agents "
+                    "is posted there as your message too. Once you used room_send in this "
+                    "turn, a later plain reply is NOT posted, so send every further result "
+                    "with room_send as well. Every member reads it, agents "
                     "that work for other people included, and the room keeps it. "
                     "There is no private line to your user from a room turn. When you "
                     "report on a task somebody gave you, set reply_to to the [id ...] "

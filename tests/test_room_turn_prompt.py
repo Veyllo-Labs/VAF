@@ -170,6 +170,7 @@ def test_wake_prompt_says_where_text_goes(world, mode):
     for gone in ("goes into your user's chat", "nobody in this room will ever see it"):
         assert gone not in prompt, gone
     speaks = ("ANSWER IN THE ROOM WITH room_send", "is posted there as your message too",
+              "a later plain reply is NOT posted",
               "There is no private line to your user", "STAYS WITH YOU")
     if mode == "observe":
         assert "YOU ONLY READ THIS ROOM" in prompt
@@ -213,3 +214,6 @@ def test_the_room_skill_says_the_same_as_the_wake():
     assert "lands in your user's chat" not in flat
     assert "is posted there as your message too" in flat
     assert "There is no private line to your user from a room turn" in flat
+    # The fallback posts plain text only when room_send never ran in the turn
+    # (deliver_stray_room_answer): both texts say so.
+    assert "already used `room_send` in that turn" in flat

@@ -87,14 +87,18 @@ def test_a_planted_hook_in_the_vaf_directory_is_not_used(repo, monkeypatch):
     """The directory is checked on every call: a file in it means a fresh one.
     MUTATION: return the memoized directory without checking it is empty."""
     first = Path(gr.empty_hooks_dir())
+    # Recorded now, so teardown puts the VAF directory back rather than the fresh one.
+    monkeypatch.setattr(gr, "_HOOKS_DIR", gr._HOOKS_DIR)
     planted = first / "pre-commit"
     planted.write_text("#!/bin/sh\n", encoding="utf-8")
+    second = None
     try:
         second = Path(gr.empty_hooks_dir())
         assert second != first and not any(second.iterdir())
     finally:
         planted.unlink()
-        monkeypatch.setattr(gr, "_HOOKS_DIR", None)
+        if second is not None and second != first:
+            second.rmdir()
 
 
 _ENV = {
@@ -189,6 +193,61 @@ def test_a_driver_only_the_persons_global_config_names_keeps_running(repo, tmp_p
     assert not any(p.startswith("filter.lfs.") for p in _pairs(gr.project_git_command(["status"], str(repo))))
     _git("config", "filter.lfs.smudge", "harmless", cwd=repo)
     assert "filter.lfs.clean=" in _pairs(gr.project_git_command(["status"], str(repo)))
+
+
+def test_a_driver_named_by_a_key_without_a_value_is_switched_off(repo):
+    """`required` alone is a valid line; -z then prints the key with no newline after it.
+    MUTATION: take only keys that are followed by a value."""
+    with open(repo / ".git" / "config", "a", encoding="utf-8") as f:
+        f.write('[filter "nv"]\n\trequired\n')
+    assert "filter.nv.clean=" in _pairs(gr.project_git_command(["status"], str(repo)))
+
+
+def test_a_driver_in_the_per_worktree_config_is_switched_off(repo):
+    """With extensions.worktreeConfig on, config.worktree is a scope --local does not read.
+    MUTATION: drop --worktree from _UNTRUSTED_SCOPES."""
+    _git("config", "extensions.worktreeConfig", "true", cwd=repo)
+    _git("config", "--worktree", "filter.wt.clean", "harmless", cwd=repo)
+    assert "filter.wt.clean=" in _pairs(gr.project_git_command(["status"], str(repo)))
+
+
+def test_an_older_git_without_scope_labels_or_worktree_config_gets_the_same_pins(repo, tmp_path,
+                                                                                  monkeypatch):
+    """git before 2.26 has no --show-scope, before 2.20 no --worktree: both end in "unknown
+    option" (exit 129). The repository's drivers must still be found and the command run.
+    MUTATION: require the --worktree read, or read with --show-scope again."""
+    _git("config", "filter.fx.clean", "harmless", cwd=repo)
+    inc = tmp_path / "inc.cfg"
+    inc.write_text('[merge "mx"]\n\tdriver = harmless\n', encoding="utf-8")
+    _git("config", "include.path", inc.as_posix(), cwd=repo)
+    real_run = subprocess.run
+    refused = []
+
+    def old_git(argv, **kw):
+        if any(a in ("--show-scope", "--worktree") for a in argv):
+            refused.append(argv)
+            return subprocess.CompletedProcess(argv, 129, "", "error: unknown option\n")
+        return real_run(argv, **kw)
+
+    monkeypatch.setattr(gr.subprocess, "run", old_git)
+    pairs = _pairs(gr.project_git_command(["status"], str(repo)))
+    assert "filter.fx.clean=" in pairs and "merge.mx.driver=" in pairs
+    assert gr.run_project_git(["status", "--porcelain"], cwd=str(repo)).returncode == 0
+    assert refused, "the simulation never saw an option an older git lacks"
+
+
+def test_init_in_a_new_folder_works(tmp_path):
+    """There is no repository config to read before init. MUTATION: read the drivers for init."""
+    proj = tmp_path / "fresh"
+    proj.mkdir()
+    proc = gr.run_project_git(["init"], cwd=str(proj))
+    assert proc.returncode == 0, proc.stderr
+    assert (proj / ".git").is_dir()
+
+
+def test_the_runner_never_asks_for_scope_labels():
+    """--show-scope needs git 2.26. MUTATION: put it back into the driver read."""
+    assert "--show-scope" not in (_ROOT / "vaf" / "core" / "git_runner.py").read_text(encoding="utf-8")
 
 
 def test_a_driver_name_a_command_line_cannot_carry_is_refused(repo):
@@ -301,7 +360,7 @@ def test_no_textconv_or_external_diff_runs_on_diff_or_log(repo, marker, filter_m
 
 @_POSIX_ONLY
 def test_a_merge_driver_does_not_run_on_revert(repo, marker):
-    """The rollback reverts. An empty driver turns that merge into a conflict.
+    """The rollback reverts. An empty driver makes that merge fail (a conflict, or an error).
     MUTATION: drop the merge section from _DRIVER_OVERRIDES."""
     prog, ran = marker
     (repo / ".gitattributes").write_text("*.m merge=mx\n", encoding="utf-8")
@@ -359,7 +418,8 @@ def test_every_git_process_starts_the_git_vaf_resolved(monkeypatch, tmp_path):
     monkeypatch.setattr(gr.subprocess, "run",
                         lambda argv, **kw: ran.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""))
     gr.run_project_git(["status", "--porcelain"], cwd=str(tmp_path))
-    assert len(ran) == 2 and all(argv[0] == "/opt/vaf/git/bin/git" for argv in ran)
+    # The repository's config, its per-worktree config, then the command.
+    assert len(ran) == 3 and all(argv[0] == "/opt/vaf/git/bin/git" for argv in ran)
     assert ran[-1][-2:] == ["status", "--porcelain"]
     # The driver read looks at the same repository the command will use.
     # MUTATION: read the drivers without the layout options.

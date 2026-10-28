@@ -145,7 +145,7 @@ PROJECT_GIT_ENV: Tuple[Tuple[str, str], ...] = (
 
 # Per named driver. An empty clean/smudge/process runs no filter, `required=false` keeps the
 # missing filter from failing the command, an empty merge driver makes a merge that needed it
-# a conflict (measured with `git revert`). A diff driver's `command` cannot be emptied (git
+# fail: a conflict on git 2.56, an error that stops the revert on 2.25 (both measured). A diff driver's `command` cannot be emptied (git
 # then tries to run "" and dies), so diffs carry --no-ext-diff instead, added below.
 _DRIVER_OVERRIDES: Dict[str, Tuple[Tuple[str, str], ...]] = {
     "filter": (("clean", ""), ("smudge", ""), ("process", ""), ("required", "false")),
@@ -153,10 +153,15 @@ _DRIVER_OVERRIDES: Dict[str, Tuple[Tuple[str, str], ...]] = {
     "merge": (("driver", ""),),
 }
 
-# Config scopes the project's own folder cannot write. A driver named only there (the filter
-# `git lfs install` writes into the global config) is the person's own and keeps running; a
-# driver named, or redefined, in the repository's config is switched off whole.
-_TRUSTED_SCOPES = frozenset({"global", "system", "command"})
+# The config the project's own folder can write: the repository's config with what it
+# includes, and the per-worktree config.worktree once extensions.worktreeConfig is on (then
+# --local no longer sees it, measured). A driver named only in the global or system config
+# (the filter `git lfs install` writes) is the person's own and keeps running; a driver named,
+# or redefined, in the repository's config is switched off whole. Read one scope at a time:
+# git labels each value with its scope only from 2.26 on (Ubuntu 20.04 ships 2.25). A specific
+# scope reads no includes unless told to (measured), hence --includes. --worktree fails on a
+# git before 2.20, which has no per-worktree config to read.
+_UNTRUSTED_SCOPES: Tuple[Tuple[str, bool], ...] = (("--local", True), ("--worktree", False))
 
 # Flags added right after the subcommand, so no caller has to remember them.
 _SUBCOMMAND_FLAGS: Dict[str, Tuple[str, ...]] = {
@@ -311,26 +316,30 @@ def _untrusted_drivers(cwd: str, env: Dict[str, str], timeout: float,
                        layout: Sequence[str] = ()) -> Dict[str, List[str]]:
     """Driver names per section ("filter", "diff", "merge") that repository config defines.
 
-    A read-only `git config` call, pinned to the same repository as the command: reading config
-    starts no program. Raises RuntimeError when the names cannot be read, so the caller refuses
-    instead of running unprotected."""
-    argv = [resolve_git(), *layout, "config", "--show-scope", "-z", "--get-regexp",
-            r"^(filter|diff|merge)\."]
-    proc = subprocess.run(argv, **_popen_kwargs(cwd, env, timeout))
-    # Exit 1 is "no such key"; anything else is an error worth refusing on.
-    if proc.returncode not in (0, 1):
-        raise RuntimeError(f"cannot read the repository's drivers: {(proc.stderr or '').strip()[:200]}")
+    Read-only `git config` calls, pinned to the same repository as the command: reading config
+    starts no program. Raises RuntimeError when the repository's config cannot be read, so the
+    caller refuses instead of running unprotected."""
     found: Dict[str, List[str]] = {}
-    tokens = (proc.stdout or "").split("\0")
-    for scope, entry in zip(tokens[0::2], tokens[1::2]):
-        key = entry.split("\n", 1)[0]
-        section, _, rest = key.partition(".")
-        name, dot, _var = rest.rpartition(".")
-        if not dot or not name or scope in _TRUSTED_SCOPES:
-            continue   # no subsection (diff.renames, merge.ff), or the person's own config
-        names = found.setdefault(section.lower(), [])
-        if name not in names:
-            names.append(name)
+    for scope, required in _UNTRUSTED_SCOPES:
+        argv = [resolve_git(), *layout, "config", scope, "--includes", "-z", "--get-regexp",
+                r"^(filter|diff|merge)\."]
+        proc = subprocess.run(argv, **_popen_kwargs(cwd, env, timeout))
+        # Exit 1 is "no such key"; anything else is an error worth refusing on.
+        if proc.returncode not in (0, 1):
+            if not required:
+                continue
+            raise RuntimeError(f"cannot read the repository's drivers: "
+                               f"{(proc.stderr or '').strip()[:200]}")
+        # -z: "key\nvalue\0" per entry, "key\0" for a key without a value.
+        for entry in (proc.stdout or "").split("\0"):
+            key = entry.split("\n", 1)[0]
+            section, _, rest = key.partition(".")
+            name, dot, _var = rest.rpartition(".")
+            if not dot or not name:
+                continue   # no subsection: diff.renames, merge.ff
+            names = found.setdefault(section.lower(), [])
+            if name not in names:
+                names.append(name)
     return found
 
 
@@ -362,7 +371,9 @@ def project_git_command(args: Sequence[str], cwd: str, *, env: Optional[Dict[str
     pinned: List[str] = ["-c", f"core.hooksPath={empty_hooks_dir()}"]
     for key, value in PROJECT_GIT_CONFIG:
         pinned += ["-c", f"{key}={value}"]
-    for section, names in _untrusted_drivers(cwd, env, timeout, layout).items():
+    # init creates the repository: there is no config of its own to read yet.
+    drivers = {} if sub and sub[0] == "init" else _untrusted_drivers(cwd, env, timeout, layout)
+    for section, names in drivers.items():
         for name in names:
             if _UNSAFE_DRIVER_NAME.search(name):
                 raise ValueError(f"the repository defines a {section} driver whose name cannot "

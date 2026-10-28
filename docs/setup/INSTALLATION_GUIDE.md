@@ -12,7 +12,7 @@ A detailed, beginner-friendly walkthrough of installing VAF. Each operating syst
 - A 64-bit computer running Linux, macOS, or Windows 10/11.
 - An internet connection - the installer downloads a few GB.
 - Roughly 10 GB of free disk space.
-- `git`, a small tool used to download the code (each section below installs it first). If you would rather not use git, see the [ZIP alternative](#alternative-install-without-git).
+- `git`, a small tool used to download the code (each section below installs it first). The coding agent's version history needs git 2.13 or newer, which every current system's package has. If you would rather not use git, see the [ZIP alternative](#alternative-install-without-git).
 - A phone with an authenticator app (Google Authenticator, Authy, ...) for the final two-factor step on first launch.
 
 **You do NOT need to install these yourself** - the installer sets them all up:

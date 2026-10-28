@@ -920,12 +920,14 @@ refusal come back as `returncode` -1 with the reason in `stderr`. It pins with `
 outranks every config file and comes after your own pairs: an empty hooks directory VAF
 owns, and no fsmonitor, pager, editor, askpass, credential helper, signing, external diff,
 textconv or signature check. Every filter, diff and merge driver the repository's own config
-names is switched off by name, so a merge that needed one becomes a conflict. `diff`, `log`
+names is switched off by name, so a merge that needed one fails instead (a conflict, or an
+error that stops the revert on an older git). `diff`, `log`
 and `show` get `--no-ext-diff --no-textconv`, `commit` gets `--no-verify`. A repository inside
 the folder (a submodule, or one the model made with `git init`) would make git start a child
 git there that reads that repository's own config: status and diff ignore submodules, `add`
 leaves every gitlink out of its pathspec (their recorded commit is not updated), and
-`stash create` is refused while one exists.
+`stash create` is refused while one exists. It needs git 2.9 or newer (`core.hooksPath`);
+VAF's own callers need 2.13.
 
 It also pins where git works. The same config can move the work tree to any folder on the
 host (`core.worktree`), and a `.git` file, a `commondir`, `objects/info/alternates` or a

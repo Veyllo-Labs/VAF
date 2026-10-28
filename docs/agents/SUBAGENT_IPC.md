@@ -528,6 +528,7 @@ task = ipc.consume_result(task_id)
 # Check status
 has_results = ipc.has_pending_results()  # bool
 status = ipc.get_task_status(task_id)    # "pending", "running", "completed", etc.
+task = ipc.find_task(task_id)            # the SubAgentTask record, or None once consumed
 
 # Liveness, and optionally how far along the run is
 ipc.update_heartbeat(task_id)                    # pulse only
@@ -577,6 +578,36 @@ call site as DATA (extra env like the coder's `VAF_TURN_ID`/`VAF_ALLOWED_TOOLS`,
 extra argv like `--project-path`, or `payload=` for a machine-readable spec that
 must stay off the OS command line). Five tools used to carry this block copy-pasted;
 the sixth consumer (the learn agent) is what proved the primitive's shape.
+
+**The marker counts only for a task the call started.** Any text can carry
+`[SUBAGENT_ASYNC:<id>:<type>]`: a refusal echoes the tool name the model chose, and a fetched
+page, a file or a contact's message can hold it. Measured on the real `chat_step` before the
+check, each of those (the name with no allowed set, the same name under the Front Office set,
+and the text of a tool that ran) registered the id in `_async_subagent_tasks`, wrote a
+"running" team-state entry, replaced the real result in history with "TASK DELEGATED" and
+ended the turn with `[ASYNC_ACK]` for a task that did not exist; a workflow step's text paused
+the run on it. So the marker has one reader, `delegated_task(text)` in
+`vaf/core/subagent_spawn.py`, and it answers `(task_id, agent_type)` only when:
+
+- the task was started inside the caller's open `spawn_ledger()`: `spawn_subagent` records
+  every task it starts into the ledger of its context, and a tool's worker thread
+  (`run_bounded`) shares that ledger through the copied context. The chat lane opens one per
+  tool call (`Agent._execute_tool_and_spawns`), a workflow run one per run (nested runs share
+  the outer one). This is what keeps another lane's REAL task out: `_async_subagent_tasks` is
+  the "tasks this agent started" list `get_pending_results_for(own_task_ids=...)` trusts for a
+  lane with no chat, and a room's coder names no chat while its id is shown to the room, so
+  the queue and the session alone would have accepted its planted marker;
+- the queue holds it (`SubAgentIPC.find_task`: pending, active or completed, not consumed);
+- when the record and the calling context both name a session, it is the same one.
+
+The `agent_type` comes from the queue. Text without the marker never reads the queue; a queue
+that cannot be read answers None and logs `[ASYNC-MARKER]` (fail-closed: a real spawn is then
+not acknowledged with the canned text, the model sees the marker and its note, and the drain
+still delivers the result). Anything else that carries the marker is the tool's own answer
+and stays in history as it is. `parse_async_marker(text)` is the shape-only parser, used where
+the input is the spawning tool's own direct return (`WorkflowEngine._await_subagent`). No
+other module parses the marker (guard in `tests/test_subagent_spawn.py`). Guards:
+`tests/test_async_marker_needs_its_task.py`, `tests/test_workflow_marker_needs_its_task.py`.
 
 Two arguments cover the whole-workflow lane (`vaf/workflows/background.py`): `command` replaces
 the child's CLI verb (a workflow runs as `workflow run <id>`, with its own lifecycle and the
@@ -803,7 +834,10 @@ vaf subagent run librarian_agent --task "..." --no-auto-close
 
 Workflows support **async sub-agents with pause/resume**. When a workflow step calls a
 sub-agent running in a separate terminal, the workflow **pauses** and returns control to the
-user. A paused run is **not** a failed run: the engine returns
+user. It pauses only on a task one of its own steps started (`delegated_task`, see
+"Spawning" above): a step whose text merely carries the marker - measured, a forged one paused
+the run waiting for a task that did not exist and step two never ran - is ordinary step
+output. A paused run is **not** a failed run: the engine returns
 `WorkflowResult(success=False, error=None, paused=True)`, and every consumer must branch on
 `paused` before it looks at `success`. A consumer that knows only success and failure reports
 `failed: None` for a run that is still going (live incident 2026-07-20); this is pinned by

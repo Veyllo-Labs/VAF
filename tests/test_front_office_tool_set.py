@@ -23,8 +23,8 @@ MUTATIONS, each turns the named test red:
 - drop the `finally` clear in the runner, or put the try/except back -> the runner pin;
 - handle thinking_done inline on its name alone, or drop either half of its condition ->
   the thinking_done cases;
-- let the Whare Wananga reactive lane react to a tool outside `visible_tools()` -> the
-  refused-call learning test.
+- let the Whare Wananga reactive lane react to a call the funnel did not dispatch
+  (`ToolCallOutcome.dispatched`) -> the refused-call learning test.
 """
 import json
 from pathlib import Path

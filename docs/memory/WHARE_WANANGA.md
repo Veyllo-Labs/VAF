@@ -329,13 +329,21 @@ facts ("no required arguments", "requires an admin session", "limit is optional"
 *fuller* know-how -- pitfalls + procedure + verification (`delivery.tool_knowhow`) -- as a deferred
 system nudge (the same `_post_tc_messages` channel used for other tool-error nudges), so the loop's
 natural re-generation retries informed. Once per tool per turn (to avoid an inject->fail->inject
-loop), hard fail-safe. Only for a tool the model may see (`Agent.visible_tools()`): a call the
-agent's allowed set refused (`set_allowed_tools`) also starts with "Security Error", but the
-tool never ran, so nothing about it is re-fed or re-learned. Measured before that condition, on
-a Front Office turn: the refused tool's know-how reached the contact's turn with "retry if
-appropriate", and the runtime re-learn distilled the refusal and the contact's arguments into
-"list_contacts is not available here; never call it" in the machine-wide record the owner's
-next turn read. Guard: `tests/test_front_office_tool_set.py`. The error is re-checked from the raw result, and a cheap
+loop), hard fail-safe. Only for a call the funnel DISPATCHED (`ToolCallOutcome.dispatched`,
+see "Refused before `tool_start`" in [TOOL_ROUTER_ARCHITECTURE.md](../agents/TOOL_ROUTER_ARCHITECTURE.md)):
+a call refused before the tool started - arguments that are not JSON, the agent's allowed set
+(`set_allowed_tools`), `admin_only` or a channel block, the account allowlist, the
+application's authorizer, a chat-lane gate, the confirmation gate, a revoked account - never
+reached the tool, and its refusal describes who was asking, not the tool, so nothing about it is
+re-fed or re-learned. The lane used to decide from the result's text plus "the model may see the
+tool", which covered only the allowed set. Measured before the flag, with a non-admin account and
+a confirmed record: the account allowlist, the authorizer's deny with its own reason,
+`admin_only`, a revoked account and the headless confirmation each re-fed the know-how with
+"retry if appropriate" and let the runtime re-learn distil the refusal and the call's arguments
+into a pitfall ("list_contacts is not available here; never call it") in the machine-wide
+record every account reads. A schema error and a tool that ran and failed, the path jail's
+`Access denied` included, did reach the tool and stay lessons. Guards:
+`tests/test_refused_calls_teach_nothing.py`, `tests/test_front_office_tool_set.py`. The error is re-checked from the raw result, and a cheap
 `delivery.known_pitfall_hit` classifies it as a **known pitfall** (the agent saw it via the schema
 and fell for it anyway -> put the procedure first) vs a **novel error** (logged `[WW-SURPRISE]`).
 The matcher strips VAF's OWN dispatcher wrapping first (the `invalid arguments for '<tool>'`
@@ -503,4 +511,4 @@ bypassed and probes reach the tool's own validation.
 
 ---
 
-*Last updated: 2026-08-20*
+*Last updated: 2026-10-28*

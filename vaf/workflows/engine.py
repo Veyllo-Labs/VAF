@@ -465,6 +465,21 @@ def _books_to_the_runs_account(execute):
     return wrapper
 
 
+def _collects_its_spawns(execute):
+    """A run's sub-agent tasks are recorded while it runs (`spawn_ledger`), so the pause below
+    honours only the marker of a task one of its own steps started. A step's text that merely
+    carries the marker - a fetched page, a file, another lane's task id - is step output.
+    Inside a chat call the run shares that call's ledger."""
+    import functools
+
+    @functools.wraps(execute)
+    def wrapper(self, *args, **kwargs):
+        from vaf.core.subagent_spawn import spawn_ledger
+        with spawn_ledger():
+            return execute(self, *args, **kwargs)
+    return wrapper
+
+
 class WorkflowEngine:
     """
     Executes multi-step workflows with automatic output chaining.
@@ -564,6 +579,7 @@ class WorkflowEngine:
                 "An administrator can enable it in user management.")
 
     @_books_to_the_runs_account
+    @_collects_its_spawns
     def execute(
         self,
         steps: List[WorkflowStep],
@@ -1375,15 +1391,16 @@ class WorkflowEngine:
                 # ═══════════════════════════════════════════════════════════════
                 # ASYNC SUB-AGENT HANDLING: Pause workflow and yield control
                 # ═══════════════════════════════════════════════════════════════
-                # If result contains async marker, save state and return immediately
-                # The workflow will be resumed when the sub-agent finishes
-                import re
+                # If a step started a sub-agent task, save state and return immediately
+                # The workflow will be resumed when the sub-agent finishes. Only a task
+                # this run started and the queue holds counts (delegated_task): a marker
+                # in a step's text alone would pause the run on a task nobody runs.
+                from vaf.core.subagent_spawn import delegated_task
                 result_str_check = str(result) if result else ""
-                async_match = re.search(r'\[SUBAGENT_ASYNC:([^:]+):([^\]]+)\]', result_str_check)
+                _delegated = delegated_task(result_str_check)
                 
-                if async_match:
-                    task_id = async_match.group(1)
-                    agent_type = async_match.group(2)
+                if _delegated is not None:
+                    task_id, agent_type = _delegated
                     
                     # Generate workflow ID for tracking
                     workflow_id = str(uuid.uuid4())[:8]
@@ -1704,12 +1721,15 @@ class WorkflowEngine:
         Returns the sub-agent's result string, or a bounded_run sentinel on stop/timeout
         (the caller treats it as a hard workflow abort via ``is_abort_sentinel``).
         """
-        import re as _re, time as _time
+        import time as _time
         from vaf.core.bounded_run import TIMEOUT_PREFIX, STOPPED_PREFIX
-        m = _re.search(r'\[SUBAGENT_ASYNC:([^:]+):([^\]]+)\]', str(spawn_output or ""))
-        if not m:
+        from vaf.core.subagent_spawn import parse_async_marker
+        # Shape only, deliberately: the input is the spawnable step tool's OWN direct return,
+        # never another tool's text, and without a marker it already is the result.
+        _marker = parse_async_marker(spawn_output)
+        if not _marker:
             return spawn_output  # ran in-process / spawn fell back → already the result
-        task_id = m.group(1)
+        task_id = _marker[0]
         try:
             from vaf.core.subagent_ipc import get_ipc, get_current_session_id, mark_engine_owned
             ipc = get_ipc()

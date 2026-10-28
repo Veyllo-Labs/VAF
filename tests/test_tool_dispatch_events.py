@@ -131,7 +131,8 @@ def test_the_chat_dispatcher_applies_the_mirror_itself():
     from vaf.core.agent import Agent
     from vaf.core import tool_dispatch
 
-    assert "_with_subagent_debug_mirror" in inspect.getsource(Agent.execute_tool), (
+    # The body of execute_tool lives in _execute_tool_outcome (execute_tool is its .result).
+    assert "_with_subagent_debug_mirror" in inspect.getsource(Agent._execute_tool_outcome), (
         "the chat lane no longer applies the mirror to its own sink"
     )
     assert "get_subagent_logger_from_env" not in inspect.getsource(tool_dispatch.emit_event), (

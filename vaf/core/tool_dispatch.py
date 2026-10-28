@@ -32,6 +32,7 @@ from __future__ import annotations
 import difflib
 import json
 import uuid as _uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -688,6 +689,29 @@ class ToolCallHooks:
         self.after_emit = after_emit
 
 
+@dataclass(frozen=True)
+class ToolCallOutcome:
+    """What one call through the pipeline came to: the answer, and whether the tool started.
+
+    - ``result`` - exactly what ``ToolCaller.execute`` returns for the call (truncated, or
+      whole for a tool that declared ``result_is_deliverable``).
+    - ``dispatched`` - True exactly when this call emitted ``tool_start``. False means it was
+      refused before the tool could do anything: arguments that are not a JSON object, a
+      revoked account, a name outside the allowed set, a hard policy block, the account
+      allowlist, the authorizer's ``deny()``, an ``after_policy`` hook's string, or the
+      confirmation gate (refused or cancelled).
+
+    The flag exists because the answer's text cannot carry it. A refusal reads
+    ``Security Error: ...``, ``Tool Error: ...``, ``[ERROR] ...``, ``[CANCELLED] ...`` or
+    whatever a hook returned, and a tool of anyone's may answer with the same words. A caller
+    that has to know whether the tool could have done anything - one that learns from a
+    failure, or counts tool use - reads this instead of a prefix.
+    """
+
+    result: Any
+    dispatched: bool
+
+
 class ToolRequest:
     """One tool call, put to an authorizer before anything happens.
 
@@ -1273,7 +1297,18 @@ class ToolCaller:
     # ── the pipeline ─────────────────────────────────────────────────────────
 
     def execute(self, name: str, args: dict | str | None = None) -> str:
-        """Dispatch one tool call. Always returns a string; never raises for tool failures.
+        """Dispatch one tool call and return its answer: ``call(name, args).result``.
+
+        Always returns a string; never raises for tool failures. The ordering contract is
+        on ``call``, which is the same call with the "did the tool start" flag beside it.
+        """
+        return self.call(name, args).result
+
+    def call(self, name: str, args: dict | str | None = None) -> "ToolCallOutcome":
+        """Dispatch one tool call. Returns a ``ToolCallOutcome``; never raises for tool failures.
+
+        ``dispatched`` is False for every exit before ``tool_start`` below and True for every
+        exit after it, which is the line the event stream and ``after_emit`` already draw.
 
         ``args`` may be the JSON text the model sent, as it arrived: text that is not a JSON
         object is refused (`decode_arguments`) and nothing runs, where a loop's own
@@ -1305,15 +1340,16 @@ class ToolCaller:
         if malformed:
             # Like a schema error, about THIS call and nothing else; unlike one, there are no
             # arguments to put to the gate or the authorizer, so it answers before them.
-            return malformed
+            return ToolCallOutcome(malformed, False)
 
         # An account whose access was taken away runs nothing more, BEFORE the policy and its
         # admin exemption: a turn queued earlier still carries the role it was queued with,
         # so a demoted or deleted admin would otherwise keep every tool (vaf.core.revocation).
         from vaf.core.revocation import is_revoked
         if is_revoked(self.user_scope_id):
-            return ("Security Error: this account's access was changed by an administrator; "
-                    "nothing more runs in this turn.")
+            return ToolCallOutcome(
+                "Security Error: this account's access was changed by an administrator; "
+                "nothing more runs in this turn.", False)
 
         # The caller's allowed set, BEFORE the policy and with no exemption: an admin or a
         # scope-less caller passes `admin_only` and the account allowlist, and an agent that
@@ -1322,12 +1358,13 @@ class ToolCaller:
         # pointing at a tool outside), and nothing after this line sees it: no account
         # resolver, no authorizer, no hook, no event.
         if self.allowed_tools is not None and name not in self.allowed_tools:
-            return (f"Security Error: '{name}' is not available here; only the tools this "
-                    "agent was given can run.")
+            return ToolCallOutcome(
+                f"Security Error: '{name}' is not available here; only the tools this "
+                "agent was given can run.", False)
 
         decision = self._policy(name, tool)
         if decision.blocked:
-            return f"Security Error: {decision.reason}"
+            return ToolCallOutcome(f"Security Error: {decision.reason}", False)
 
         # The account-level allowlist, in the SAME rank as the hard policy block. The list
         # comes from whatever the application registered via set_account_allowlist_resolver
@@ -1338,7 +1375,7 @@ class ToolCaller:
         # authorizer - an account-level ban must not be overridable by an embedder's allow().
         blocked_reason = self._account_allowlist_blocks(name, tool)
         if blocked_reason:
-            return f"Security Error: {blocked_reason}"
+            return ToolCallOutcome(f"Security Error: {blocked_reason}", False)
 
         # The application's own say, AFTER the hard block (an allow() must not be able to
         # defeat admin_only) and BEFORE everything else. Before the chat gates in particular:
@@ -1347,12 +1384,12 @@ class ToolCaller:
         # gate, so a deny answers immediately instead of parking a refused call on a dialog.
         verdict = self._authorized(name, tool, args)
         if verdict.decision == "deny":
-            return f"Security Error: {verdict.reason}"
+            return ToolCallOutcome(f"Security Error: {verdict.reason}", False)
 
         if callable(self.hooks.after_policy):
             gate_msg = self.hooks.after_policy(name, tool, args)
             if gate_msg is not None:
-                return gate_msg
+                return ToolCallOutcome(gate_msg, False)
 
         forced_ask = verdict.decision == "ask"
         ask_reason = verdict.reason if forced_ask else ""
@@ -1384,7 +1421,7 @@ class ToolCaller:
                 on_gate_required=self.on_gate_required,
             )
             if refusal is not None:
-                return refusal
+                return ToolCallOutcome(refusal, False)
             confirmed = True
 
         emit_event(self.on_event, {"type": "tool_start", "tool": name,
@@ -1418,8 +1455,8 @@ class ToolCaller:
             # promised to keep itself bounded (the flag's contract on BaseTool).
             # The event stream above stays capped either way - `event_result`
             # applies its own limit, so observation never inherits the exemption.
-            return result
-        return self._truncate(result)
+            return ToolCallOutcome(result, True)
+        return ToolCallOutcome(self._truncate(result), True)
 
     # ── stages ───────────────────────────────────────────────────────────────
 

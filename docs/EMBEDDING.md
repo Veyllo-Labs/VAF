@@ -1427,13 +1427,37 @@ that until a tool whose parameters were all optional reported success for a call
 had never received. Handing the text over is how your loop gets that refusal for free.
 
 It never raises for a tool failure and never blocks on a human. Everything comes
-back as a string: `Security Error: ...` for a policy block or a name outside the
-allowed set, `Tool Error: ...`
+back as a string: `Security Error: ...` for a policy block, a name outside the
+allowed set, the account allowlist, your authorizer's `deny()` or a revoked account,
+`Tool Error: ...`
 for malformed arguments, a schema failure or an exception inside the tool, `Error: Unknown tool
-'<name>'` for a name no registered tool carries, and the
+'<name>'` for a name no registered tool carries, the
 `vaf.markers.TOOL_CONFIRMATION_REQUIRED` marker when a gated tool had nobody to
-ask. A hard block emits **no events at all**, so an observer never sees a
-blocked tool reported as having run.
+ask, `[CANCELLED] ...` when the person at the gate said no, and whatever your
+`after_policy` hook returned. A hard block emits **no events at all**, so an observer
+never sees a blocked tool reported as having run.
+
+**Did the tool start? Ask `call()`, not the text.** `caller.call(name, args)` runs
+the same pipeline and returns a `vaf.ToolCallOutcome` with two fields: `result`,
+exactly what `execute()` would have returned, and `dispatched`, which is `True`
+exactly when the call emitted `tool_start`. It is `False` for every stage that turns
+a call away before the tool can do anything: arguments that are not a JSON object, a
+revoked account, a name outside the allowed set, a policy block, the account
+allowlist, your authorizer's `deny()`, an `after_policy` hook's string, and the
+confirmation gate (refused or cancelled). An unknown name, a `before_dispatch`
+refusal, a schema error, a tool that raised and a tool that was stopped or ran out
+of time all count as dispatched. Read the flag, not the prefix, whenever it matters
+whether the tool could have done anything, such as learning from a failure or
+counting tool use: the prefixes above are not reserved, so a tool of yours may
+answer `Security Error: ...` itself, and a refusal may be a hook's own words.
+VAF's own chat loop reads it the same way, so a refused call never teaches the
+agent anything about the tool.
+
+```python
+outcome = caller.call("tenant_notes", {"path": "todo.md"})
+if outcome.dispatched and outcome.result.startswith("Tool Error:"):
+    remember_failure("tenant_notes", outcome.result)   # the tool really failed
+```
 
 The unknown-tool refusal carries a correction after its prefix whenever the
 registry allows one, because a model told only "no such tool" guesses again and
@@ -2518,9 +2542,10 @@ Stable public surface (safe to build on):
   list of pinned settings is not. See "git in a folder a model writes" above.
 - `vaf.ToolCaller` - running a tool with the agent's own policy, gate, identity
   and bounds, without an agent. Its **documented arguments** (the table under
-  "Running a tool yourself") and `execute(name, args) -> str` are the promise;
-  the constructor's remaining parameters exist for VAF's internal lanes and are
-  not.
+  "Running a tool yourself"), `execute(name, args) -> str` and
+  `call(name, args) -> vaf.ToolCallOutcome` (`result`, `dispatched`) are the
+  promise; the constructor's remaining parameters exist for VAF's internal lanes
+  and are not.
 - `set_tool_authorizer(fn)` on both `Agent` and `CoreAgent`, and `vaf.ToolRequest`
   with `deny()` / `ask()` / `allow()` and its context fields.
 - `set_allowed_tools(names)` on both `Agent` and `CoreAgent`, and `ToolCaller(allowed_tools=)` -
@@ -2571,7 +2596,7 @@ Two that are easy to mistake for surface because this page names them:
 Both are engine-internal by design: VAF exposes no session enumeration on the
 façade, and no embedder has asked for one. If you need it, say so - the export is
 one lazy branch away, and it is not being added on speculation.
-`vaf.ToolCaller`, `vaf.ToolRequest`, `vaf.set_account_allowlist_resolver`,
+`vaf.ToolCaller`, `vaf.ToolCallOutcome`, `vaf.ToolRequest`, `vaf.set_account_allowlist_resolver`,
 `vaf.extract_pdf_markdown`, `vaf.install_thread_excepthook`, `vaf.is_error_reply`,
 `vaf.TurnStatus`, `vaf.stored_turn_copy` and `vaf.model_text`
 are the deliberate exceptions: they live in `vaf.core` but are re-exported on the façade, and the

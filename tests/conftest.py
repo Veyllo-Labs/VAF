@@ -699,7 +699,7 @@ def _isolated_threat_db(tmp_path_factory):
 # the stages ask about what the model may see (the python_exec fallback asks it), and the
 # real one reads the fake's own registry, exclusions and allowed set.
 CHAT_STAGES = (
-    "execute_tool", "_dispatch_session_id", "_is_channel_turn",
+    "execute_tool", "_execute_tool_outcome", "_dispatch_session_id", "_is_channel_turn",
     "_chat_turn_gates", "_chat_session_plumbing", "_chat_post_dispatch",
     "_chat_after_dispatch_bookkeeping", "_ask_user_about_gate",
     "_push_gate_to_websocket", "_run_multi_tool_use", "_announce_held_send",

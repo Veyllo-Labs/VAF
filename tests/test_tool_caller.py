@@ -318,3 +318,148 @@ def test_the_module_stays_importable_on_the_slim_base():
     # nothing: it is where the chat sources this module judges are declared.
     allowed = ("from vaf.core.channels import ",)
     assert all("vaf" not in l or l.startswith(allowed) for l in top), top
+
+
+# ── call(): the answer, and whether the tool started ─────────────────────────
+#
+# A refusal before dispatch and a tool's own failure can read alike ("Security Error: ...",
+# "[ERROR] ...", a hook's own words), so a caller that learns from failures cannot tell them
+# apart by text. `call` says it: `dispatched` is True exactly when `tool_start` went out.
+# MUTATIONS: flip any one exit's flag in `ToolCaller.call` (that case goes red); give
+# `execute` a body of its own (the parity test goes red).
+
+import contextlib  # noqa: E402
+
+from vaf.core.tool_dispatch import ToolCallOutcome  # noqa: E402
+
+
+@contextlib.contextmanager
+def _ask_policy():
+    with patch("vaf.core.trust.get_tool_policy", return_value="ask"), \
+         patch("vaf.core.trust.is_trusted_dir", return_value=False):
+        yield
+
+
+@contextlib.contextmanager
+def _resolver(answer):
+    from vaf.core.tool_dispatch import (get_account_allowlist_resolver,
+                                        set_account_allowlist_resolver)
+    previous = get_account_allowlist_resolver()
+    if isinstance(answer, Exception):
+        def _raise(scope):
+            raise answer
+        set_account_allowlist_resolver(_raise)
+    else:
+        set_account_allowlist_resolver(lambda scope: answer)
+    try:
+        yield
+    finally:
+        set_account_allowlist_resolver(previous)
+
+
+@contextlib.contextmanager
+def _revoked():
+    from vaf.core import revocation
+    revocation.revoke_account(SCOPE)
+    try:
+        yield
+    finally:
+        revocation.restore_account(SCOPE)
+
+
+def _deny(req):
+    req.deny("contacts are off for this deployment")
+
+
+# (case id, tool attrs, caller kwargs, args, context)
+_REFUSED_BEFORE_DISPATCH = [
+    ("malformed_json", {}, {}, '{"x": unquoted}', contextlib.nullcontext),
+    ("revoked_account", {}, {}, {}, _revoked),
+    ("outside_the_allowed_set", {}, {"allowed_tools": {"other"}}, {}, contextlib.nullcontext),
+    ("policy_admin_only", {"admin_only": True}, {}, {}, contextlib.nullcontext),
+    ("account_allowlist", {}, {}, {}, lambda: _resolver(frozenset({"other"}))),
+    ("account_allowlist_raising", {}, {}, {}, lambda: _resolver(RuntimeError("db down"))),
+    ("authorizer_deny", {}, {"authorize": _deny}, {}, contextlib.nullcontext),
+    ("after_policy_hook", {}, {"hooks": ToolCallHooks(after_policy=lambda n, t, a: "[PLAN REQUIRED] x")},
+     {}, contextlib.nullcontext),
+    ("gate_headless", {"permission_level": "dangerous"},
+     {"interactive": False, "trust_dir": Path("/tmp/p")}, {}, _ask_policy),
+    ("gate_cancelled", {"permission_level": "dangerous"},
+     {"interactive": True, "decide": lambda name, reason, **kw: "cancel",
+      "trust_dir": Path("/tmp/p")}, {}, _ask_policy),
+]
+
+
+@pytest.mark.parametrize("case,attrs,kw,args,ctx", _REFUSED_BEFORE_DISPATCH,
+                         ids=[c[0] for c in _REFUSED_BEFORE_DISPATCH])
+def test_a_refusal_before_dispatch_is_reported_as_not_dispatched(case, attrs, kw, args, ctx):
+    events, plain = [], []
+    with ctx():
+        tool = _tool(**attrs)
+        outcome = _caller(tool, events, **kw).call("probe", args)
+        expected = _caller(_tool(**attrs), plain, **kw).execute("probe", args)
+    assert isinstance(outcome, ToolCallOutcome)
+    assert outcome.dispatched is False, (case, outcome.result)
+    assert outcome.result == expected, case
+    assert tool.seen is None, f"{case}: the tool ran"
+    assert not any(e.get("type") == "tool_start" for e in events), f"{case}: tool_start went out"
+
+
+def _sleepy(**kw):
+    import time
+    time.sleep(2)
+    return "late"
+
+
+def _raises(**kw):
+    raise ValueError("kaputt")
+
+
+# (case id, called name, tool attrs, caller kwargs, expected result prefix)
+_DISPATCHED = [
+    ("ran", "probe", {}, {}, "OK"),
+    ("raised", "probe", {"fn": _raises}, {}, "Tool Error: kaputt"),
+    ("unknown", "nope", {}, {}, "Error: Unknown tool"),
+    ("before_dispatch_refused", "probe", {},
+     {"hooks": ToolCallHooks(before_dispatch=lambda n, a: "already running")}, "already running"),
+    ("schema_error", "probe",
+     {"parameters": {"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]}},
+     {}, "Tool Error: invalid arguments"),
+    ("timed_out", "probe", {"fn": _sleepy}, {"timeout_for": lambda n: 0.2, "poll": 0.05}, ""),
+]
+
+
+@pytest.mark.parametrize("case,name,attrs,kw,prefix", _DISPATCHED, ids=[c[0] for c in _DISPATCHED])
+def test_every_path_past_tool_start_is_dispatched(case, name, attrs, kw, prefix):
+    from vaf.core.tool_dispatch import abort_kind
+    events = []
+    outcome = _caller(_tool(**attrs), events, **kw).call(name, {})
+    assert outcome.dispatched is True, (case, outcome.result)
+    assert str(outcome.result).startswith(prefix), (case, outcome.result)
+    if case == "timed_out":
+        assert abort_kind(outcome.result), outcome.result
+    assert [e["type"] for e in events][:1] == ["tool_start"], case
+
+
+def test_the_outcome_carries_the_same_cut_and_the_deliverable_exemption():
+    long = "y" * 5000
+    cut = _caller(_tool(fn=lambda **kw: long)).call("probe", {})
+    assert cut.result == _caller(_tool(fn=lambda **kw: long)).execute("probe", {})
+    assert "[Output Truncated." in cut.result
+    whole = _caller(_tool(fn=lambda **kw: long, result_is_deliverable=True)).call("probe", {})
+    assert whole.result == long and whole.dispatched is True
+
+
+def test_execute_is_call_result():
+    sentinel = ToolCallOutcome("from call", False)
+    with patch.object(ToolCaller, "call", return_value=sentinel) as spy:
+        assert _caller(_tool()).execute("probe", {"x": "1"}) == "from call"
+    spy.assert_called_once_with("probe", {"x": "1"})
+
+
+def test_the_outcome_is_immutable_and_has_exactly_two_fields():
+    import dataclasses
+    outcome = _caller(_tool()).call("probe", {})
+    assert [f.name for f in dataclasses.fields(outcome)] == ["result", "dispatched"]
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        outcome.dispatched = False

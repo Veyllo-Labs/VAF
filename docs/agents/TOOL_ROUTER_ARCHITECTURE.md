@@ -396,6 +396,20 @@ never restricted, a raising registered resolver refuses). Guard:
 7. **Bounded execution** - per-tool timeout and stop polling; see [TOOL_SUPERVISION.md](TOOL_SUPERVISION.md).
 8. **`tool_end` event**, then truncation of the result (the chat lane cuts at 2000 chars; the workflow engine passes `max_result_chars=None`, because step outputs are chained into later steps).
 
+**Refused before `tool_start`, and said so.** Every stage up to and including the
+confirmation gate (0 to 3, plus the revocation check and a chat-lane gate hooked in after
+the policy) ends the call without `tool_start`, and `ToolCaller.call(name, args)` reports it
+with `ToolCallOutcome.dispatched = False`; `execute()` is that call's `.result`. Step 4 and
+everything after it, the unknown-tool answer and a schema error included, is
+`dispatched = True`. The chat lane reads the flag where it learns from a failure: the
+reactive Whare Wananga lane re-feeds know-how and re-learns only for a dispatched call,
+because a refusal's text (`Security Error: ...`, `[ERROR] ... requires confirmation`, a
+gate's own words) describes who was asking, not the tool. Before the flag the lane read the
+prefix, and five refusals of a visible tool (the account allowlist, the authorizer's deny,
+`admin_only`, a revoked account, the headless confirmation) each planted a pitfall in the
+record every account reads. Guards: `tests/test_tool_caller.py`,
+`tests/test_refused_calls_teach_nothing.py`.
+
 **An unknown tool name is answered, not only refused.** A name no registered tool carries
 passes the policy stages with nothing to evaluate, but not the account allowlist: an
 account restricted to a list refuses the unknown name with the allowlist's `Security Error`

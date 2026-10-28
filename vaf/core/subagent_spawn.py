@@ -31,13 +31,31 @@ Contract points:
   make the drain report a zombie that never lived.
 - The marker string is the contract the agent loop keys on
   (`[SUBAGENT_ASYNC:<task_id>:<agent_type>]`, see markers.py) - format changes
-  break async detection in agent.py.
+  break async detection in agent.py. It is honoured only for a task THIS module
+  started inside the caller's open `spawn_ledger`, that the queue still holds, for
+  the calling session (`delegated_task`). The same text anywhere else - a tool name
+  the model chose, a fetched page, a file, a message, the marker of a task some
+  other lane started - is text: no acknowledgement, no registration, no pause.
 """
 from __future__ import annotations
 
+import contextvars
+import re
 import sys
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Mapping, Optional, Sequence
+from typing import Iterable, Mapping, Optional, Sequence, Tuple
+
+# The one reader of the marker's shape. Every consumer goes through parse_async_marker or
+# delegated_task (guarded by tests/test_subagent_spawn.py).
+_MARKER_RE = re.compile(r"\[SUBAGENT_ASYNC:([^:]+):([^\]]+)\]")
+_MARKER_NEEDLE = "[SUBAGENT_ASYNC:"
+
+# The tasks spawned inside the innermost open spawn_ledger of this context. A worker thread
+# that runs a tool under a copied context (run_bounded) sees the same set object, so a spawn
+# deep inside a tool lands in the ledger of the call that dispatched it.
+_spawn_ledger_ctx: "contextvars.ContextVar[Optional[set]]" = contextvars.ContextVar(
+    "vaf_spawn_ledger", default=None)
 
 
 class SpawnRefused(Exception):
@@ -52,6 +70,92 @@ class SpawnedSubagent:
     """A successfully spawned, IPC-tracked child."""
     task_id: str
     marker: str  # "[SUBAGENT_ASYNC:<task_id>:<agent_type>] <note>" - return this from the tool
+
+
+@contextmanager
+def spawn_ledger():
+    """Collect the task ids `spawn_subagent` starts inside this block; yields the set.
+
+    Nested blocks share the outermost set: a workflow run inside a chat call records into
+    that call's ledger, so the call can still recognise the marker the run hands back. The
+    set stays readable after the block ends.
+    """
+    current = _spawn_ledger_ctx.get()
+    if current is not None:
+        yield current
+        return
+    ledger: set = set()
+    token = _spawn_ledger_ctx.set(ledger)
+    try:
+        yield ledger
+    finally:
+        _spawn_ledger_ctx.reset(token)
+
+
+def _record_spawn(task_id: str) -> None:
+    ledger = _spawn_ledger_ctx.get()
+    if ledger is not None:
+        ledger.add(str(task_id))
+
+
+def parse_async_marker(text) -> Optional[Tuple[str, str]]:
+    """``(task_id, agent_type)`` of the first marker in ``text``, or None. Shape only: it
+    says nothing about whether such a task exists - `delegated_task` does."""
+    m = _MARKER_RE.search(str(text or ""))
+    return (m.group(1), m.group(2)) if m else None
+
+
+def delegated_task(text, *, spawned: Optional[Iterable[str]] = None) -> Optional[Tuple[str, str]]:
+    """The sub-agent task a tool result really delegated to: ``(task_id, agent_type)``, or None.
+
+    The marker's text is not the proof, because any text can carry it: a tool name the model
+    chose (refusals echo it), a fetched page, a file, a contact's message. A marker counts
+    only when all three hold:
+
+    - ``spawned`` holds its id: this call started that task (`spawn_ledger`). Default: the
+      ledger open in this context; none open means nothing was spawned. Without this, the
+      marker of a task another lane started - an id that is in the queue and names no chat -
+      would be registered as this lane's own, and the lane then takes that task's result
+      (`get_pending_results_for(own_task_ids=...)`);
+    - the queue holds the task (`SubAgentIPC.find_task`);
+    - when the record and this context both name a session, it is the same one
+      (`get_current_session_id`, the resolver `create_task` used).
+
+    ``agent_type`` is the queue's, not the text's. The queue is read only when the text
+    carries the marker. Never raises: a queue that cannot be read answers None, because this
+    is a guard; the miss is logged as ``[ASYNC-MARKER]``.
+    """
+    text = str(text or "")
+    if _MARKER_NEEDLE not in text:
+        return None
+    own = _spawn_ledger_ctx.get() if spawned is None else spawned
+    own = {str(t) for t in (own or ())}
+    try:
+        from vaf.core.subagent_ipc import get_current_session_id, get_ipc
+        for m in _MARKER_RE.finditer(text):
+            task_id = m.group(1)
+            if task_id not in own:
+                continue
+            record = get_ipc().find_task(task_id)
+            if record is None:
+                continue
+            here = get_current_session_id()
+            if record.session_id and here and str(record.session_id) != str(here):
+                continue
+            return (record.task_id, record.agent_type or m.group(2))
+    except Exception as exc:                                    # noqa: BLE001
+        _log(f"[ASYNC-MARKER] queue unreadable, marker not honoured: {type(exc).__name__}")
+        return None
+    _log("[ASYNC-MARKER] marker ignored: no task this call started carries its id")
+    return None
+
+
+def _log(line: str) -> None:
+    try:
+        from vaf.core.log_helper import append_domain_log
+        append_domain_log("backend", line)
+    except Exception:
+        pass
 
 
 def _escape_cmd(cmd_parts: Sequence[str], windows: bool) -> str:
@@ -192,6 +296,7 @@ def spawn_subagent(
         opened = False
     if opened:
         ipc.mark_task_running(task_id)
+        _record_spawn(task_id)
         UI.event("Sub-Agent", f"{display} started in new terminal [Task: {task_id}]",
                  style="bold cyan")
         note = marker_note or f"Sub-Agent running in separate terminal. Task: {task[:80]}..."

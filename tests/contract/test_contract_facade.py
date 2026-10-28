@@ -34,6 +34,7 @@ EXPORTED = [
     "SOUL_CONTINUITY_ADDENDUM",
     "StoreError",
     "ToolCallHooks",
+    "ToolCallOutcome",
     "ToolCaller",
     "ToolRequest",
     "TurnOutcome",
@@ -128,6 +129,7 @@ def test_the_resolver_setter_is_the_engine_function_itself():
 
     assert vaf.set_account_allowlist_resolver is td.set_account_allowlist_resolver
     assert vaf.set_confirmation_bypass_resolver is td.set_confirmation_bypass_resolver
+    assert vaf.ToolCallOutcome is td.ToolCallOutcome
 
 
 def test_pdf_extraction_is_the_engine_function_itself():
@@ -140,6 +142,8 @@ def test_the_tool_contract_names_are_classes_with_their_documented_members():
     assert isinstance(vaf.BaseTool.identity_kwargs, tuple)
     assert callable(vaf.BaseTool.log)
     assert callable(vaf.ToolCaller.execute)
+    assert callable(vaf.ToolCaller.call)
+    assert {f for f in vaf.ToolCallOutcome.__dataclass_fields__} == {"result", "dispatched"}
     for method in ("deny", "ask", "allow"):
         assert callable(getattr(vaf.ToolRequest, method)), f"ToolRequest lost {method}()"
     assert callable(vaf.user_jail)

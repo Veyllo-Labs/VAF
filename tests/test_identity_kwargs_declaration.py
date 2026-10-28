@@ -214,13 +214,15 @@ def test_the_dispatcher_no_longer_hands_out_identity_by_tool_name():
     """The deletion this change is for. A leftover name list would drift again, and would
     still leave a third-party tool with nothing.
 
-    Scans the WHOLE of execute_tool rather than a delimited region: the assignment has since
-    moved into vaf/core/tool_dispatch.py, and a guard anchored on two markers inside a method
-    stops guarding the moment either marker moves. Whole-method is both simpler and stricter.
+    Scans the WHOLE of execute_tool and of `_execute_tool_outcome`, which holds its body,
+    rather than a delimited region: the assignment has since moved into
+    vaf/core/tool_dispatch.py, and a guard anchored on two markers inside a method stops
+    guarding the moment either marker moves. Whole-method is both simpler and stricter.
     """
     import inspect
 
-    src = inspect.getsource(agent_mod.Agent.execute_tool)
+    src = (inspect.getsource(agent_mod.Agent.execute_tool)
+           + inspect.getsource(agent_mod.Agent._execute_tool_outcome))
     leftovers = re.findall(r'tool_args\["(user_scope_id|username|user_role)"\]\s*=', src)
     # ask_user's conditional branch is the single sanctioned exception (2 keys) - its
     # injection depends on the run kind, so it cannot become a declaration.

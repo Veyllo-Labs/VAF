@@ -32,8 +32,10 @@ from vaf.core.system_prompt import SystemPromptManager
 from vaf.core.last_interaction import get_last_interaction
 from vaf.core.text_match import compile_de, contains_any, fold, fold_all
 from vaf.core.completion import is_failure_chunk
+from vaf.core.subagent_spawn import delegated_task as _delegated_task, spawn_ledger as _spawn_ledger
 from vaf.core.tool_dispatch import (
     ToolCallHooks as _ToolCallHooks,
+    ToolCallOutcome as _ToolCallOutcome,
     ToolCaller as _ToolCaller,
     assign_declared_identity as _assign_declared_identity,
     decode_arguments as _decode_arguments,
@@ -5255,54 +5257,42 @@ class Agent:
         ipc.consume_result(task.task_id)
         return needs_retry
 
-    def _handle_async_subagent_marker(self, result: str) -> bool:
+    def _handle_async_subagent_marker(self, task_id: str, agent_type: str) -> None:
+        """Track a delegated sub-agent task as this agent's own.
+
+        Takes the pair ``delegated_task`` verified (a task this call started, held by the
+        queue for this session), never a marker parsed from text: ``_async_subagent_tasks``
+        is the "tasks this agent started" answer ``get_pending_results_for`` trusts for a
+        lane with no chat, so an id registered from a planted marker would hand this lane
+        another lane's result.
         """
-        Check if a tool result contains an async sub-agent marker.
-        If so, track the task and return True.
-        
-        Args:
-            result: Tool result string
-            
-        Returns:
-            True if this was an async sub-agent task, False otherwise
-        """
-        import re
         from datetime import datetime
-        
-        # Pattern: [SUBAGENT_ASYNC:task_id:agent_type]
-        match = re.search(r'\[SUBAGENT_ASYNC:([^:]+):([^\]]+)\]', result)
-        if match:
-            task_id = match.group(1)
-            agent_type = match.group(2)
 
-            # Track the async task
-            self._async_subagent_tasks[task_id] = {
-                "agent_type": agent_type,
-                "started_at": datetime.now()
-            }
+        # Track the async task
+        self._async_subagent_tasks[task_id] = {
+            "agent_type": agent_type,
+            "started_at": datetime.now()
+        }
 
-            # Durable 'running' team-state entry: lights up the <team_state> renderer
-            # (whose 'running' branch was dead code — only completion was ever written)
-            # and survives compression and restarts, unlike the in-memory dict above.
-            # Cleared by the existing completion writer in _process_subagent_result.
-            try:
-                if getattr(self, "main_persistence", None):
+        # Durable 'running' team-state entry: lights up the <team_state> renderer
+        # (whose 'running' branch was dead code - only completion was ever written)
+        # and survives compression and restarts, unlike the in-memory dict above.
+        # Cleared by the existing completion writer in _process_subagent_result.
+        try:
+            if getattr(self, "main_persistence", None):
+                _task_desc = ""
+                try:
+                    _d = self.main_persistence.get_subagent_delegation_intent(agent_type)
+                    _task_desc = (_d or {}).get("goal") or (_d or {}).get("intent") or ""
+                except Exception:
                     _task_desc = ""
-                    try:
-                        _d = self.main_persistence.get_subagent_delegation_intent(agent_type)
-                        _task_desc = (_d or {}).get("goal") or (_d or {}).get("intent") or ""
-                    except Exception:
-                        _task_desc = ""
-                    self.main_persistence.update_subagent_status(
-                        task_id, agent_type, "running",
-                        details=(_task_desc[:200] or "Working..."),
-                    )
-            except Exception:
-                pass
+                self.main_persistence.update_subagent_status(
+                    task_id, agent_type, "running",
+                    details=(_task_desc[:200] or "Working..."),
+                )
+        except Exception:
+            pass
 
-            return True
-        return False
-    
     def get_active_subagents(self) -> dict:
         """Get currently running async sub-agent tasks."""
         return self._async_subagent_tasks.copy()
@@ -12331,6 +12321,10 @@ class Agent:
                     # Show spinner while tool works
                     from vaf.cli.ui import UI as UI_Class
                     result = None
+                    # The funnel's answer to "did the tool start" (None: the call never reached
+                    # the dispatch, or raised out of it) and the sub-agent tasks it started.
+                    _outcome = None
+                    _spawned = frozenset()
                     try:
                         # Special Case: Tools with their own immersive UI (no spinner needed).
                         # The workflow orchestrators MUST be here: they redirect sys.stdout to
@@ -12354,21 +12348,25 @@ class Agent:
                                     # Show full message without truncation
                                     UI.event("( OO) Agent Chat", f"( OO) Main Agent → (OO ) Coding Agent: {tool_args_str}", style="green")
                             # No spinner, just run. The tool will print its own updates.
-                            result = self.execute_tool(function_name, arguments)
+                            _outcome, _spawned = self._execute_tool_and_spawns(function_name, arguments)
+                            result = _outcome.result
                         else:
                             # IMPORTANT: Some tools require interactive confirmation (trust gate).
                             # Rich's live status spinner can hide/break interactive prompts.
                             # So for risky/gated tools, run WITHOUT the status spinner.
                             from vaf.core.trust import should_gate_tool
                             if should_gate_tool(function_name):
-                                result = self.execute_tool(function_name, arguments)
+                                _outcome, _spawned = self._execute_tool_and_spawns(function_name, arguments)
+                                result = _outcome.result
                             else:
                                 # Standard Tool Spinner
                                 with UI_Class.console.status(
                                     f"[bold cyan](O_O) Executing {function_name}...[/bold cyan]",
                                     spinner="dots"
                                 ):
-                                    result = self.execute_tool(function_name, arguments)
+                                    _outcome, _spawned = self._execute_tool_and_spawns(
+                                        function_name, arguments)
+                                result = _outcome.result
                     except Exception as e:
                         error_msg = f"Error executing tool: {e}"
                         result = error_msg
@@ -12425,15 +12423,17 @@ class Agent:
                         if _fb.startswith("❌") or _fb.startswith("error") or _fb.startswith("failed"):
                             time.sleep(2)
 
-                    # Check if this is an async sub-agent task BEFORE adding to history
+                    # Check if this is an async sub-agent task BEFORE adding to history.
+                    # Only a task this call started counts (delegated_task): the marker's text
+                    # alone is in a refusal that echoes the model's tool name, in a page or a
+                    # message, and there it is the tool's answer, kept as it is.
                     result_str = str(result) if result else ""
-                    is_async_subagent = "[SUBAGENT_ASYNC:" in result_str
+                    _delegated = _delegated_task(result_str, spawned=_spawned) if result else None
+                    is_async_subagent = _delegated is not None
                     
                     if is_async_subagent:
                         # Replace the async marker with a clear "waiting" message for history
-                        task_match = re.search(r'\[SUBAGENT_ASYNC:([^:]+):([^\]]+)\]', result_str)
-                        task_id = task_match.group(1) if task_match else "unknown"
-                        agent_type = task_match.group(2) if task_match else "sub-agent"
+                        task_id, agent_type = _delegated
                         log_timeline_event('subagent_start', tool=function_name,
                                            call_id=_tl_call_id,
                                            session=str(getattr(self, 'current_session_id', '') or ''),
@@ -12514,19 +12514,20 @@ class Agent:
                         # live (sandbox tracebacks, filesystem jail denials) that the
                         # original prefix set missed - the retry ran uninformed.
                         # Deliberately NOT matched: "blocked"/"[security]" guard messages,
-                        # which already carry their own instructions, and a call whose
-                        # arguments were not JSON: the tool never ran, so there is nothing
-                        # about the tool to re-feed or re-learn. Nor a tool the model may not
-                        # see: the allowed set's refusal says "Security Error" too, and the
-                        # tool never ran. Re-fed, its know-how reached a contact's turn with
-                        # "retry if appropriate"; re-learned, the refusal (with the arguments
-                        # the contact steered) became a pitfall in the machine-wide record the
-                        # owner's next turn reads (measured on the real chat_step).
+                        # which already carry their own instructions.
+                        # Only a call the funnel dispatched (ToolCallOutcome.dispatched): a
+                        # call refused before the tool started - arguments that are not JSON,
+                        # the allowed set, admin_only, the account allowlist, the authorizer,
+                        # a turn gate, the confirmation gate, a revoked account - never reached
+                        # the tool, and its refusal says who was asking, not how the tool
+                        # works. Re-fed, the know-how went out with "retry if appropriate";
+                        # re-learned, the refusal and its arguments became a pitfall in the
+                        # record every account reads. A schema error and a tool that ran and
+                        # failed did reach the tool, and stay lessons.
                         if _rs.startswith(("error", "failed", "tool error", "security error",
                                            "exception", "❌", "[error]", "access denied")) \
-                                and not _malformed_args \
-                                and function_name not in _ww_reactive_injected \
-                                and function_name in self.visible_tools():
+                                and _outcome is not None and _outcome.dispatched \
+                                and function_name not in _ww_reactive_injected:
                             from vaf.whare_wananga.delivery import tool_knowhow, known_pitfall_hit
                             # allow_unverified: the call ALREADY failed, so a tagged hint from a
                             # gate-failing record (declare/stale/draft) costs little and is often
@@ -12577,12 +12578,10 @@ class Agent:
                     except Exception:
                         pass
 
-                    # Check if this was an async sub-agent task
-                    if result and self._handle_async_subagent_marker(result_str):
-                        # Extract task_id from marker for display
-                        task_match = re.search(r'\[SUBAGENT_ASYNC:([^:]+):([^\]]+)\]', str(result))
-                        task_id = task_match.group(1) if task_match else "unknown"
-                        agent_type = task_match.group(2) if task_match else "sub-agent"
+                    # Check if this was an async sub-agent task (verified above)
+                    if _delegated is not None:
+                        task_id, agent_type = _delegated
+                        self._handle_async_subagent_marker(task_id, agent_type)
                         
                         # ═══════════════════════════════════════════════════════════════
                         # NON-BLOCKING: Register task and continue immediately
@@ -13601,14 +13600,23 @@ class Agent:
         a property of this lane, not of dispatching, and each travels to the shared pipeline
         as a hook at the point where it actually belongs.
         """
+        return self._execute_tool_outcome(name, args).result
+
+    def _execute_tool_outcome(self, name, args) -> "_ToolCallOutcome":
+        """``execute_tool`` with the funnel's flag beside the answer (``ToolCallOutcome``):
+        ``dispatched`` is False for a call that was refused before the tool started, here or
+        in the shared pipeline. ``chat_step`` reads it; ``execute_tool`` is its ``.result``."""
         from pathlib import Path
 
         # Thinking-only tool guard (runtime): never allow these in normal chat turns.
         is_thinking_turn = bool(getattr(self, "_current_turn_thinking_mode", False))
         if name == "thinking_done" and not is_thinking_turn:
-            return "Error: 'thinking_done' is only available in background thinking mode."
+            return _ToolCallOutcome(
+                "Error: 'thinking_done' is only available in background thinking mode.", False)
         if str(name).startswith("thinking_workspace_") and not is_thinking_turn:
-            return "Error: thinking_workspace tools are only available in background thinking mode."
+            return _ToolCallOutcome(
+                "Error: thinking_workspace tools are only available in background thinking "
+                "mode.", False)
 
         # Which session this dispatch serves. Read here, published NOWHERE: this used to
         # also write os.environ["VAF_SESSION_ID"], process-wide, on every tool call, and
@@ -13638,8 +13646,9 @@ class Agent:
             if not _ww:
                 gate_msg = self._chat_turn_gates(name, None, args)
                 if gate_msg is not None:
-                    return gate_msg
-            return self._run_multi_tool_use(args, emit)
+                    return _ToolCallOutcome(gate_msg, False)
+            # Dispatched: the wrapper emits its own tool_start before its inner calls.
+            return _ToolCallOutcome(self._run_multi_tool_use(args, emit), True)
 
         caller = _ToolCaller(
             self.tools,
@@ -13677,7 +13686,14 @@ class Agent:
         with fanout_scope(self._fanout_for(name)), \
                 authorizer_scope(getattr(self, "_tool_authorizer", None)), \
                 self._room_file_scope():
-            return caller.execute(name, args)
+            return caller.call(name, args)
+
+    def _execute_tool_and_spawns(self, name, args):
+        """One call of a chat turn: its ``ToolCallOutcome`` and the sub-agent tasks it started
+        (``spawn_ledger``). Only those tasks' markers are this call's delegation."""
+        with _spawn_ledger() as spawned:
+            outcome = self._execute_tool_outcome(name, args)
+        return outcome, frozenset(spawned)
 
     def _room_file_scope(self):
         """The file jail of a room turn somebody else woke: the room's shared folder only.

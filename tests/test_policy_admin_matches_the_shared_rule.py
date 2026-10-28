@@ -83,7 +83,7 @@ def test_the_dispatcher_has_no_second_admin_definition_left():
 
     from vaf.core.agent import Agent
 
-    src = inspect.getsource(Agent.execute_tool)
+    src = inspect.getsource(Agent.execute_tool) + inspect.getsource(Agent._execute_tool_outcome)
     assert 'get_local_admin_scope_id' not in src, (
         "execute_tool resolves the local-admin scope itself again - that is how the two "
         "definitions drifted apart the first time"

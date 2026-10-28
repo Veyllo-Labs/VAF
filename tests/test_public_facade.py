@@ -53,7 +53,8 @@ def test_facade_exports_exactly_the_documented_surface():
         "EgressRefused", "EnvironmentManager", "NON_CONVERSATION_KINDS",
         "PathEscape", "RemoteRefused", "RemoteRoom",
         "Room", "RoomError", "RoomTriggerWatch", "SOUL_CONTINUITY_ADDENDUM", "StoreError",
-        "ToolCallHooks", "ToolCaller", "ToolRequest", "TurnOutcome", "TurnStatus",
+        "ToolCallHooks", "ToolCallOutcome", "ToolCaller", "ToolRequest", "TurnOutcome",
+        "TurnStatus",
         "UnsafeName", "UploadVerdict",
         "VoiceTurnEngine",
         "__version__",
@@ -84,6 +85,9 @@ def test_the_newly_public_names_actually_resolve():
     assert isinstance(vaf.BaseTool.identity_kwargs, tuple)
     assert vaf.ToolCaller.__name__ == "ToolCaller"
     assert callable(vaf.ToolCaller.execute)
+    assert callable(vaf.ToolCaller.call)
+    from vaf.core.tool_dispatch import ToolCallOutcome
+    assert vaf.ToolCallOutcome is ToolCallOutcome
     assert vaf.ToolRequest.__name__ == "ToolRequest"
     for method in ("deny", "ask", "allow"):
         assert callable(getattr(vaf.ToolRequest, method)), f"ToolRequest lost {method}()"

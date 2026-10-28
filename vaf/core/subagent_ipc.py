@@ -850,15 +850,19 @@ class SubAgentIPC:
         results = self._read_json(self.results_file)
         return len(results) > 0
     
+    def find_task(self, task_id: str) -> Optional[SubAgentTask]:
+        """The queue's record of one task, wherever it stands: pending, active or completed
+        (not yet consumed). None when the queue does not hold that id."""
+        for file in [self.pending_file, self.active_file, self.results_file]:
+            for task in self._read_json(file):
+                if task.get('task_id') == task_id:
+                    return SubAgentTask.from_dict(task)
+        return None
+
     def get_task_status(self, task_id: str) -> Optional[str]:
         """Get the status of a specific task."""
-        # Check all queues
-        for file in [self.pending_file, self.active_file, self.results_file]:
-            tasks = self._read_json(file)
-            for task in tasks:
-                if task.get('task_id') == task_id:
-                    return task.get('status')
-        return None
+        task = self.find_task(task_id)
+        return task.status if task else None
     
     # ═══════════════════════════════════════════════════════════════════════════
     # SUB-AGENT METHODS

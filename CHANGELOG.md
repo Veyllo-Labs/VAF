@@ -20,6 +20,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `ToolCaller(allowed_tools=)` is the same for a lane of your own. See "Which
   tools this agent may use" in `docs/EMBEDDING.md`.
 
+- **`ToolCaller.call(name, args)`** returns what `execute()` returns plus `dispatched`, which
+  is False when the call was refused before the tool started (the allowed set, policy, the
+  account allowlist, your authorizer, a gate, a revoked account, arguments that are not JSON).
+  Read it instead of the result's prefix when it matters whether the tool could have done
+  anything. The type is `vaf.ToolCallOutcome`. See "Running a tool yourself" in
+  `docs/EMBEDDING.md`.
+
 - **`vaf.is_error_reply(text)`** tells a turn that failed from a turn that answered. `run()`
   does not raise for a provider that fails during the turn: the failure comes back as the
   answer's text, with the provider's raw answer in it. Ask this before that text reaches
@@ -358,6 +365,23 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   a turn that failed no longer posts its error into the room. The web UI still shows the
   error, and your own messenger chats still receive it in full. Restart VAF after updating
   so the fix takes effect.
+
+- **A refused tool call no longer teaches every account a lesson.** When a call was turned
+  away before the tool ran (a tool not enabled for the account, an administrators-only tool,
+  your application's veto, an account whose access was just taken away, a confirmation nobody
+  could give), the agent took the refusal for the tool's own error: it fed the tool's learned
+  know-how back with "retry if appropriate" and could save the refusal, with the call's
+  arguments, as a learned pitfall that every account on the machine then read. A refused call
+  now teaches nothing; a tool that ran and failed still does. Restart VAF after updating so
+  the fix takes effect.
+
+- **A sub-agent marker in a tool name or in a tool's text no longer fakes a running task.** A
+  tool name the model chose, a web page, a file or a message containing the text of VAF's
+  sub-agent marker ended the turn with "the coding_agent is now working on your request" for a
+  task that did not exist, hid the real tool result, and inside a workflow paused the run to
+  wait for it. The marker of a real task another chat or agent room had started could also
+  hand that task's result to the wrong conversation. The marker now counts only for a
+  sub-agent this call actually started. Restart VAF after updating so the fix takes effect.
 
 - **Archived chats, agent rooms and word suggestions are encrypted on disk like the chats.**
   Their writers already encrypted every new file, but the start-up sweep that encrypts what

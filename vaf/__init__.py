@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from .core.threat_db import UploadVerdict, inspect_upload, record_threat
     from .core.trust import (list_standing_grants, mark_trusted_dir, revoke_standing_grants,
                              set_tool_policy)
-    from .core.tool_dispatch import (ToolCallHooks, ToolCaller, ToolRequest,
+    from .core.tool_dispatch import (ToolCallHooks, ToolCallOutcome, ToolCaller, ToolRequest,
                                      set_account_allowlist_resolver,
                                      set_account_directory_resolver,
                                      set_confirmation_bypass_resolver)
@@ -41,7 +41,8 @@ __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_K
            "PathEscape", "RemoteRefused",
            "RemoteRoom", "Room", "RoomError", "RoomTriggerWatch",
            "SOUL_CONTINUITY_ADDENDUM",
-           "StoreError", "ToolCallHooks", "ToolCaller", "ToolRequest", "TurnOutcome",
+           "StoreError", "ToolCallHooks", "ToolCallOutcome", "ToolCaller", "ToolRequest",
+           "TurnOutcome",
            "TurnStatus",
            "UnsafeName",
            "UploadVerdict", "VoiceTurnEngine",
@@ -179,6 +180,14 @@ def __getattr__(name):
         # facade gap. See docs/EMBEDDING.md.
         from .core.tool_dispatch import ToolCallHooks
         return ToolCallHooks
+    if name == "ToolCallOutcome":
+        # What `ToolCaller.call(name, args)` returns: the answer, and whether the tool
+        # started at all. A refusal before dispatch and a tool's own failure can read the
+        # same, so a loop that learns from failures or counts tool use reads the flag. A
+        # public method whose return type is not public is a facade gap. See
+        # docs/EMBEDDING.md.
+        from .core.tool_dispatch import ToolCallOutcome
+        return ToolCallOutcome
     if name == "account_allows_tool":
         # The allowlist resolver's read side: would this account be allowed to run
         # this tool? The funnel asks it before every call; a UI that LISTS tools asks

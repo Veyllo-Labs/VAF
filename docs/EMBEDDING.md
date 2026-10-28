@@ -2295,7 +2295,11 @@ usable from an embedded engine too, documented in their own pages:
   server with `"auth": "oauth"` signs every account in on its own:
   `vaf.core.mcp_oauth.start_sign_in` hands your UI the authorization address,
   `finish_sign_in` completes it from your callback, and its tools declare
-  `identity_kwargs = ("user_scope_id",)`, so each call runs as the caller. See
+  `identity_kwargs = ("user_scope_id",)`, so each call runs as the caller. The raw
+  `mcp_call` tool reaches only a server registered there
+  (`vaf.core.mcp_registry.registered_server`), never a command from the model's
+  arguments; code of your own that chose a command calls
+  `vaf.tools.mcp_client.get_mcp_client().call_stdio(...)`. See
   [MCP_INTEGRATION.md](agents/MCP_INTEGRATION.md).
 - **Update-surviving local tools** - a `custom_tools/` folder in the platform
   data dir (managed via the Web UI, admin-only), see

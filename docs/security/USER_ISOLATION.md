@@ -915,6 +915,13 @@ The editor's test of such a server runs as the tester's own account. The tool LI
 signed-in account (the local admin's when it has one): it is the server's, the same for everybody.
 A missing scope is the local admin's here too (`is_local_admin_lane`).
 
+The raw `mcp_call` carries no caller identity, so it refuses such a server and names its own
+tools; it could otherwise only run as the local admin's session. It also starts only a server an
+administrator registered: the command that starts a local server is the admin's decision, never
+an account's or a model's, so an unregistered command is refused for every account (it used to
+run on the host for any account that had the tool). See
+[MCP_INTEGRATION.md](../agents/MCP_INTEGRATION.md).
+
 ### Config: global vs user-scoped
 
 - **Global (admin-only to change):** Backend and network settings apply to all users. Only admins can edit them. This includes: Network tab (local network, ports, TLS, hosting), Advanced tab (server, tray, timeouts, etc.), API keys and provider/model settings, OAuth client IDs, TTS/STT engines, URLs and enable toggles (`stt_enabled` included), the voice provider selection (`speech_tts_provider`, `speech_stt_provider` and their model/voice keys, plus `api_key_elevenlabs`), and similar server-wide options. The auto-speak preference `tts_auto_speak` is deliberately user-writable (playback preference; billing exposure is bounded by the admin-gated enable and provider keys). Stored in the single `config.json`; non-admin PATCH and WebSocket `save_config` are filtered so these keys are not overwritten. To reduce accidental data loss, config merge also preserves existing sensitive values when an incoming update contains empty API key strings or `null` connection configs.

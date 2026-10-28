@@ -383,6 +383,13 @@ Beyond the Python sandbox there are several shell-execution surfaces (the coder'
 the sandbox environments above), each with a distinct confinement model. The guiding rule: **the coder's own shell is jailed; the host is reached
 only through `host_bash`, which an account has or does not have.**
 
+One more tool starts processes on the host: `mcp_call`, for a local MCP server. It starts only
+a server an administrator registered in `mcp_servers.json` (`mcp_registry.registered_server`),
+the same processes discovery starts at every startup; a command the model writes is refused
+for every account, the admin's included. It used to start any `server_command` it was given,
+which made it a host shell that nobody granted. Details in
+[MCP_INTEGRATION.md](../agents/MCP_INTEGRATION.md).
+
 ### Coder `bash` - kernel-jailed workspace shell (`vaf/tools/workspace_exec.py`)
 
 The coding agent's `bash` (`coder_only`) needs a real shell for its project - run scripts,

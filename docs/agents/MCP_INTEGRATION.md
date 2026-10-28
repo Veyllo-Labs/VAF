@@ -10,12 +10,39 @@ MCP is one of VAF's tool-discovery paths; for the full list and how tools fit th
 
 | | `mcp_call` (raw) | Registered native tools |
 |---|---|---|
-| How | one generic tool; pass `server_command` + `tool_name` + `arguments` each call | configure a server once in `mcp_servers.json`; its tools appear as `mcp_<server>_<tool>` |
-| Use for | ad-hoc / unregistered servers, CI, a fallback | day-to-day use - the agent calls `mcp_filesystem_read(path=…)` directly |
+| How | one generic tool; pass `server` (a registered server's name) + `tool_name` + `arguments` each call, or a `server_url` without a login | configure a server once in `mcp_servers.json`; its tools appear as `mcp_<server>_<tool>` |
+| Use for | a lane that sees only one tool name (the coding agent), a remote server without a login, a fallback | day-to-day use - the agent calls `mcp_filesystem_read(path=…)` directly |
 | Discovery | none | the server's `tools/list` is queried at startup; the LLM sees typed tools |
 
 Both coexist (like `write_file` vs `python_sandbox`): `mcp_call` is the low-level raw path, the
 registered tools are the high-level convenience path.
+
+### `mcp_call` starts only a registered server
+
+The arguments of `mcp_call` are the model's. It used to take the command that starts a local
+server (`server_command`) and run it on the host, as the user VAF runs as: the tool has no
+`admin_only`, a write-level tool asks nobody, and the coding agent's lane asks nobody at all, so
+measured through the real dispatcher, a regular account's headless turn created a file with
+`server_command="touch <file>"`. Now:
+
+- A local server is named by `server`, the name it has in `mcp_servers.json`; its exact command
+  (the same argv) is accepted too, and `server_command` is read as an old name of the field.
+  Anything else is refused, for every account, the admin's included, because the admin did not
+  write that command either. The refusal names the registered servers.
+- A server switched off in the manifest (`"enabled": false`) is not reached.
+- The call runs the way the server's own `mcp_<server>_<tool>` tools do
+  (`mcp_registry.call_registered_tool`): the shared warm process, the server's `env` from the
+  key ring, a remote server's registered URL, headers and destination rule.
+- Two kinds of call stay with the server's own tools, because those carry a rule this lane
+  cannot: a tool whose level is `dangerous` (it asks on every call) and a server that signs every
+  account in (its tools run as the caller).
+- A `server_url` (with `transport` `http` or `sse`) is still reached as before, under the
+  instance destination policy and with no stored token.
+
+Named boundary: `mcp_call` stays a `write` tool, neither `admin_only` nor granted only by name.
+What it can reach is what every account already has as the registered tools, and the processes
+it can start are the ones discovery starts at every startup. Code of your own that has chosen a
+command itself calls `get_mcp_client().call_stdio(command, tool, arguments, env)`.
 
 ## Registering servers - `mcp_servers.json`
 
@@ -114,8 +141,8 @@ by hand), signs in with PKCE and refreshes the tokens.
   installation's `/api/mcp/oauth/callback` on the same base as the email and cloud sign-ins, and
   `mcp_oauth_callback_base_url` overrides the base behind a reverse proxy.
 
-Named boundaries, also in the module docstring: the raw `mcp_call` has no sign-in (it knows a URL,
-not a configured server); scopes are the ones the server asks for in its metadata; the sign-ins of a
+Named boundaries, also in the module docstring: the raw `mcp_call` has no sign-in (it carries no
+caller identity, so it refuses such a server and points at its own tools); scopes are the ones the server asks for in its metadata; the sign-ins of a
 deleted account stay in the ring until the server is removed, as no store in VAF has a per-account
 deletion hook; the terminal has no sign-in (there is no `vaf mcp` command at all), while the
 framework functions take the redirect address from their caller, so one could offer a loopback

@@ -116,6 +116,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   your LAN and your VPN only: the app refuses public addresses, and putting it on the public
   internet is not supported.
 
+- **The agent no longer starts a program of its own choosing through `mcp_call`.** The raw
+  MCP tool took the command that starts a local MCP server from the model and ran it on this
+  computer, for every account and with no question asked, so a chat or a coding run could
+  start any program. It now reaches only a server an admin registered under Settings,
+  Advanced, MCP, named by `server`; any other command is refused for every account, the
+  admin's included. A registered server's tool that asks for a confirmation, and a server
+  where every account signs in, stay with their own `mcp_<server>_<tool>` tools. A remote
+  server at a `server_url` without a login is reached as before. Takes effect after a
+  restart of VAF.
+
 - **Each chat's working memory is now kept under its exact id.** A signed-in account could
   open another account's chat working memory (goal, plan, tasks, notes) by starting a chat
   whose id differed from it only by a dot or a space, and write into it. The browser may now

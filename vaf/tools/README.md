@@ -205,21 +205,21 @@ Full details (transports, permission levels, per-tool overrides):
 
 ### Option 2: Raw `mcp_call` Tool (Low-Level Fallback)
 
-For ad-hoc calls to servers that are not registered in the manifest, VAF ships a
-generic `mcp_call` tool (`vaf/tools/mcp_client.py`). The server command is passed on
-every call:
+VAF also ships a generic `mcp_call` tool (`vaf/tools/mcp_client.py`) for a lane that
+sees one tool name only (the coding agent) and for a remote server without a login.
+It names a REGISTERED server; it never starts a command the model wrote, for any
+account:
 
 ```python
-# The LLM can call unregistered MCP servers directly:
 # mcp_call(
-#   server_command="npx -y @modelcontextprotocol/server-filesystem",
+#   server="filesystem",            # the server's name in mcp_servers.json
 #   tool_name="read_file",
 #   arguments={"path": "/path/to/file.txt"}
 # )
 ```
 
 Both paths coexist: registered `mcp_<server>_<tool>` tools are the day-to-day
-convenience path, `mcp_call` is the low-level raw path for unregistered servers.
+convenience path, `mcp_call` is the low-level raw path to the same servers.
 
 ### Using Your Own MCP Server
 
@@ -239,14 +239,12 @@ If you have your own MCP server (Node.js, Go, Rust, Python, ...), register it in
 ```
 
 Its tools appear as `mcp_my_server_<tool>` after the next startup or manifest reload.
-For a quick one-off test without registering the server, use the raw tool:
+To test it before that, use the test button in the Settings editor, or call it from
+code of your own, which may start a command it chose itself:
 
 ```python
-# mcp_call(
-#   server_command="python my_mcp_server.py",
-#   tool_name="my_custom_tool",
-#   arguments={"param1": "value1"}
-# )
+from vaf.tools.mcp_client import get_mcp_client
+get_mcp_client().call_stdio("python my_mcp_server.py", "my_custom_tool", {"param1": "value1"})
 ```
 
 ### MCP Server Examples

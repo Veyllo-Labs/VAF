@@ -189,13 +189,15 @@ words steering the run are whoever spoke in the room, so the run is bound like t
 room turn (`_room_trigger_binding` in `vaf/core/automation.py`, through `bind_turn`): the room's
 mode for the account's agent decides the writes (`room_send` posts nothing in an `observe`
 room); a trigger whose frames are not all the user's own reads only the room, the web and the
-room's shared folder, and no tool that reads the user's mail, chats, calendar, contacts or
+room's shared folder, changes only its posts in that room and files in that folder, and no tool that reads the user's mail, chats, calendar, contacts or
 memory runs (the memory the run is handed up front from what was said stays, the retrieval
 boundary of a room turn); the system prompt leaves out the user's profile; and the run's
 working memory is the room's conversation
 of its own, not the account's global notes. Who spoke is asked of the room
 (`Room.wake_authority`), the same answer the wake uses; a room the run cannot read binds the
-closed answer (`observe`, not the user's words, no shared folder). It stays unattended: an
+closed answer (`observe`, not the user's words, no shared folder). A run that outlives its time
+limit and grace is abandoned with its bound in place: its worker may still call tools, so the
+agent's room marker is not cleared under it. It stays unattended: an
 outward send it was told to make is not held for a person. A trigger narrowed with `from` to
 the user's own handle keeps the user's reach. The rule is in
 [A2A_PROTOCOL.md](../agents/A2A_PROTOCOL.md), "Who woke the turn".

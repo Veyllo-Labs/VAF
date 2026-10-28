@@ -2363,8 +2363,20 @@ vaf automation delete <id>   # Delete task
         finally:
             if _room_bound_agent is not None:
                 try:
-                    from vaf.core.turn_binding import end_turn
-                    end_turn(_room_bound_agent)
+                    if prompt_timeout_unresolved:
+                        # The run was abandoned, not finished: its worker may still be
+                        # calling tools on this agent, and ending the turn would clear
+                        # the room marker those calls are gated by. The agent is this
+                        # run's own and never reused, so its markers stay with it; only
+                        # this thread's room and conversation are cleared (the worker
+                        # runs on a copy of the context, `run_bounded`).
+                        from vaf.core.subagent_ipc import (set_current_conversation_id,
+                                                           set_current_room_id)
+                        set_current_room_id(None)
+                        set_current_conversation_id(None)
+                    else:
+                        from vaf.core.turn_binding import end_turn
+                        end_turn(_room_bound_agent)
                 except Exception:
                     pass
             # 🔓 RELEASE LOCK

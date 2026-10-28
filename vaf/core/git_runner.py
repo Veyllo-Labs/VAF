@@ -327,7 +327,12 @@ def _untrusted_drivers(cwd: str, env: Dict[str, str], timeout: float,
     running unprotected."""
     trusted = set()
     for scope in _TRUSTED_READS:
-        trusted |= _driver_pairs([scope], cwd, env, timeout, layout)
+        try:
+            trusted |= _driver_pairs([scope], cwd, env, timeout, layout)
+        except RuntimeError:
+            # An unreadable trusted file (no HOME, a broken ~/.gitconfig) trusts nothing:
+            # that only switches more drivers off. Only the effective read fails closed.
+            pass
     found: Dict[str, List[str]] = {}
     for key, value in sorted(_driver_pairs([], cwd, env, timeout, layout), key=str):
         if (key, value) in trusted:

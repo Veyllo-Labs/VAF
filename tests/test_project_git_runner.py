@@ -291,6 +291,24 @@ def test_a_config_that_cannot_be_read_is_refused_by_the_runner(repo):
     assert proc.returncode == -1 and "cannot read the repository's drivers" in proc.stderr
 
 
+def test_an_unreadable_trusted_config_switches_more_off_and_still_runs(repo, monkeypatch):
+    """A failed --global or --system read trusts nothing instead of refusing every call.
+    MUTATION: let the trusted read's error propagate - red."""
+    real = gr._driver_pairs
+
+    def _broken(scope, *a, **kw):
+        if scope and scope[0] in ("--global", "--system"):
+            raise RuntimeError("cannot read the trusted config")
+        return real(scope, *a, **kw)
+
+    monkeypatch.setattr(gr, "_driver_pairs", _broken)
+    with open(repo / ".git" / "config", "a", encoding="utf-8") as f:
+        f.write('[filter "loc"]\n\tclean = cat\n')
+    proc = gr.run_project_git(["status"], cwd=str(repo))
+    assert proc.returncode == 0, proc.stderr
+    assert "filter.loc.clean=" in " ".join(gr.project_git_command(["status"], cwd=str(repo)))
+
+
 def test_init_in_a_new_folder_works(tmp_path):
     """The driver read runs before init too, where there is no repository yet."""
     proj = tmp_path / "fresh"

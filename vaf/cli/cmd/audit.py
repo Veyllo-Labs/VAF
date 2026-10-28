@@ -64,6 +64,10 @@ def run(
                                                     "in the repository per confirmed finding "
                                                     "(default 6); 0: first check only "
                                                     "(cheaper, more false findings)"),
+    linked_worktree: bool = typer.Option(False, "--linked-worktree",
+                                         help="Allow a linked worktree (`git worktree add`, "
+                                              "where .git is a file); refused otherwise, "
+                                              "because a .git file can point anywhere"),
 ) -> None:
     """Audit the change in PATH and print the findings."""
     from vaf.core.code_audit import VERIFY_STEPS, ask_via_complete, code_audit, parallel_for
@@ -86,7 +90,8 @@ def run(
                             include_untracked=untracked, profile=profile, ask=ask,
                             max_files=max_files, parallel=parallel or parallel_for(provider),
                             progress=lambda line: sys.stderr.write(f"  {line}\n"),
-                            verify_steps=VERIFY_STEPS if verify_steps is None else verify_steps)
+                            verify_steps=VERIFY_STEPS if verify_steps is None else verify_steps,
+                            linked_worktree=linked_worktree)
     if fmt == "json":
         sys.stdout.write(report.to_json() + "\n")
     elif fmt == "prompt":
@@ -97,11 +102,15 @@ def run(
 
 
 @app.command("show")
-def show(path: str = typer.Argument(".", help="The repository")) -> None:
+def show(path: str = typer.Argument(".", help="The repository"),
+         linked_worktree: bool = typer.Option(False, "--linked-worktree",
+                                         help="Allow a linked worktree (`git worktree add`, "
+                                              "where .git is a file); refused otherwise, "
+                                              "because a .git file can point anywhere")) -> None:
     """Print the last audit of this repository."""
     from vaf.core.code_audit import last_report
 
-    text = last_report(os.path.abspath(path))
+    text = last_report(os.path.abspath(path), linked_worktree=linked_worktree)
     if not text:
         UI.info("No audit of this repository yet: run `vaf audit run`.")
         raise typer.Exit(1)
@@ -113,11 +122,16 @@ def dismiss(
     finding_id: str = typer.Argument(..., help="The finding's id, as the report shows it"),
     reason: str = typer.Option(..., "--reason", "-r", help="Why it is not a problem"),
     path: str = typer.Option(".", "--repo", help="The repository"),
+    linked_worktree: bool = typer.Option(False, "--linked-worktree",
+                                         help="Allow a linked worktree (`git worktree add`, "
+                                              "where .git is a file); refused otherwise, "
+                                              "because a .git file can point anywhere"),
 ) -> None:
     """Record that a finding is not a problem; it is not reported again in this repository."""
     from vaf.core.code_audit import dismiss_finding
 
-    if not dismiss_finding(os.path.abspath(path), finding_id.strip(), reason.strip()):
-        UI.error("Not a git repository.")
+    if not dismiss_finding(os.path.abspath(path), finding_id.strip(), reason.strip(),
+                           linked_worktree=linked_worktree):
+        UI.error("Not a git repository (a linked worktree needs --linked-worktree).")
         raise typer.Exit(2)
     UI.success(f"Dismissed {finding_id}: {reason.strip()}")

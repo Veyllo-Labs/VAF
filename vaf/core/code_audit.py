@@ -57,10 +57,13 @@ NAMED BOUNDARIES:
 - git runs through `vaf.core.git_runner.run_project_git`: no hook, no fsmonitor, no
   external diff or textconv, and no filter or merge driver the repository's own config
   names, so reading a change starts no program the repository chose. A filter the person's
-  global config defines (git-lfs) still runs.
+  global config defines (git-lfs) still runs. A linked worktree (`.git` is a file) is refused
+  unless the caller passes `linked_worktree=True`, which `vaf audit --linked-worktree` does
+  for a person's own checkout; the model's `code_audit` tool never does.
 """
 from __future__ import annotations
 
+import contextvars
 import fnmatch
 import hashlib
 import json
@@ -363,13 +366,20 @@ def _rank(f: AuditFinding):
 
 # ── git and files ─────────────────────────────────────────────────────────────
 
+# Whether this run may follow a linked worktree's `.git` file. Set for the length of one
+# public call and read by every git call in it; _parallel_map hands it to its threads.
+_LINKED_WORKTREE: "contextvars.ContextVar[bool]" = contextvars.ContextVar(
+    "code_audit_linked_worktree", default=False)
+
+
 def _git(root: str, *args: str, timeout: float = 60) -> Tuple[int, str]:
     from vaf.core.git_runner import run_project_git
     # A repository's own config can name programs that git runs on a read (an fsmonitor
     # hook, an external diff, a textconv or clean filter); the project runner starts none.
     # core.quotepath=false: a non-ASCII path is printed as itself, not as an octal-escaped
     # quoted string the file system has never heard of.
-    proc = run_project_git(["-c", "core.quotepath=false", *args], cwd=root, timeout=timeout)
+    proc = run_project_git(["-c", "core.quotepath=false", *args], cwd=root, timeout=timeout,
+                           linked_worktree=_LINKED_WORKTREE.get())
     code, out, err = proc.returncode, proc.stdout or "", proc.stderr or ""
     return code, out if code == 0 else (err or out)
 
@@ -1127,7 +1137,10 @@ def _parallel_map(fn: Callable, items: Sequence, parallel: int) -> list:
         return [fn(x) for x in items]
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=min(parallel, len(items))) as pool:
-        return list(pool.map(fn, items))
+        # One copy of the caller's context per item: a thread starts with an empty one, and
+        # the run's settings (_LINKED_WORKTREE) must reach the git calls made in it.
+        futures = [pool.submit(contextvars.copy_context().run, fn, x) for x in items]
+        return [f.result() for f in futures]
 
 
 class _Stopped(Exception):
@@ -1461,27 +1474,37 @@ def _save_state(top: str, name: str, data: dict) -> None:
         pass
 
 
-def dismiss_finding(root: str, finding_id: str, reason: str) -> bool:
+def dismiss_finding(root: str, finding_id: str, reason: str, *,
+                    linked_worktree: bool = False) -> bool:
     """Record that a person rejected a finding, and why; it is not reported again in this
-    repository. False when `root` is not a git repository."""
-    top = _repo_top(root)
-    if not top:
-        return False
-    data = _load_state(top, "dismissed.json")
-    last = _load_state(top, "last.json")
-    info = (last.get("open") or {}).get(finding_id) or {}
-    data[finding_id] = {"reason": reason, "title": info.get("title", ""),
-                        "file": info.get("file", ""), "at": time.strftime("%Y-%m-%d %H:%M")}
-    _save_state(top, "dismissed.json", data)
-    return True
+    repository. False when `root` is not a git repository (or a linked worktree, unless
+    `linked_worktree`)."""
+    token = _LINKED_WORKTREE.set(bool(linked_worktree))
+    try:
+        top = _repo_top(root)
+        if not top:
+            return False
+        data = _load_state(top, "dismissed.json")
+        last = _load_state(top, "last.json")
+        info = (last.get("open") or {}).get(finding_id) or {}
+        data[finding_id] = {"reason": reason, "title": info.get("title", ""),
+                            "file": info.get("file", ""), "at": time.strftime("%Y-%m-%d %H:%M")}
+        _save_state(top, "dismissed.json", data)
+        return True
+    finally:
+        _LINKED_WORKTREE.reset(token)
 
 
-def last_report(root: str) -> Optional[str]:
+def last_report(root: str, *, linked_worktree: bool = False) -> Optional[str]:
     """The text of the last audit of this repository, or None."""
-    top = _repo_top(root)
-    if not top:
-        return None
-    return _load_state(top, "last.json").get("text") or None
+    token = _LINKED_WORKTREE.set(bool(linked_worktree))
+    try:
+        top = _repo_top(root)
+        if not top:
+            return None
+        return _load_state(top, "last.json").get("text") or None
+    finally:
+        _LINKED_WORKTREE.reset(token)
 
 
 # ── checks ────────────────────────────────────────────────────────────────────
@@ -1527,7 +1550,8 @@ def code_audit(root: str, *, scope: str = "changes", base: Optional[str] = None,
                progress: Optional[Callable[[str], None]] = None,
                parallel: int = 1,
                should_stop: Optional[Callable[[], bool]] = None,
-               verify_steps: int = VERIFY_STEPS) -> AuditReport:
+               verify_steps: int = VERIFY_STEPS,
+               linked_worktree: bool = False) -> AuditReport:
     """Audit the code change in the git repository at `root` (see the module docstring).
 
     `scope`: "changes" (base to the working tree, the default), "committed" (base to HEAD),
@@ -1542,7 +1566,10 @@ def code_audit(root: str, *, scope: str = "changes", base: Optional[str] = None,
     `should_stop` is asked before every model call; once it says yes no further call is
     made and the report is `failed` ("stopped") - a review nobody waits for costs nothing
     more. `verify_steps` bounds the searches and reads of the deep check per confirmed
-    finding; 0 leaves it at the first check (cheaper, more false findings). Never raises."""
+    finding; 0 leaves it at the first check (cheaper, more false findings).
+    `linked_worktree=True` follows a `.git` file to the repository it names (`git worktree
+    add`); without it such a checkout is refused, because the folder could point anywhere.
+    Pass it only for a repository a person chose. Never raises."""
     started = time.monotonic()
     scope = scope if scope in SCOPES else "changes"
     profile = profile if profile in PROFILES else "chill"
@@ -1554,6 +1581,7 @@ def code_audit(root: str, *, scope: str = "changes", base: Optional[str] = None,
             if should_stop():
                 raise _Stopped()
             return inner(messages, max_tokens)
+    token = _LINKED_WORKTREE.set(bool(linked_worktree))
     try:
         _run(report, root, scope, base, paths, include_untracked, profile, ask, checks,
              max_files, remember, max(4_000, int(batch_chars)), progress or (lambda _m: None),
@@ -1562,6 +1590,8 @@ def code_audit(root: str, *, scope: str = "changes", base: Optional[str] = None,
         report.status, report.status_reason = "failed", "stopped before it finished"
     except Exception as exc:                                   # noqa: BLE001
         report.status, report.status_reason = "failed", f"the audit stopped: {exc}"
+    finally:
+        _LINKED_WORKTREE.reset(token)
     report.duration_s = round(time.monotonic() - started, 1)
     return report
 
@@ -1573,7 +1603,10 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
          started: float, verify_steps: int = 0) -> None:
     top = _repo_top(root)
     if not top:
-        report.status, report.status_reason = "failed", f"{root} is not a git repository"
+        from vaf.core.git_runner import project_repo_problem
+        # The runner's own reason: a linked worktree reads differently from no repository.
+        problem = project_repo_problem(root, linked_worktree=_LINKED_WORKTREE.get())
+        report.status, report.status_reason = "failed", problem or f"{root} is not a git repository"
         return
     report.root = top
     config = _load_config(top)
@@ -1585,7 +1618,8 @@ def _run(report: AuditReport, root: str, scope: str, base: Optional[str],
         from vaf.core.git_runner import resolve_commit
         # `base` can come from the model (the code_audit tool): only the commit id it names
         # reaches `git diff`, where `--output=<file>` would write over any file.
-        rev = report.base if report.base == EMPTY_TREE else resolve_commit(report.base, top)
+        rev = (report.base if report.base == EMPTY_TREE
+               else resolve_commit(report.base, top, linked_worktree=_LINKED_WORKTREE.get()))
         if not rev:
             report.status, report.status_reason = "failed", f"{report.base[:80]!r} names no commit"
             return

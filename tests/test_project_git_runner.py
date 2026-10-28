@@ -94,7 +94,6 @@ def test_a_planted_hook_in_the_vaf_directory_is_not_used(repo, monkeypatch):
 
 
 _ENV = {
-    "GIT_CONFIG_NOSYSTEM": "1",
     "GIT_TERMINAL_PROMPT": "0",
     "GIT_PAGER": "cat",
     "GIT_EDITOR": "true",
@@ -107,6 +106,22 @@ def test_the_environment_carries_the_setting(name, monkeypatch):
     """MUTATION: drop the entry from PROJECT_GIT_ENV."""
     monkeypatch.setenv(name, "from-the-parent")
     assert gr.project_git_env()[name] == _ENV[name]
+
+
+def test_the_system_config_stays_readable(monkeypatch):
+    """The folder cannot write it, and Git for Windows keeps its LFS filter, autocrlf and
+    credential manager there. MUTATION: add GIT_CONFIG_NOSYSTEM back to PROJECT_GIT_ENV."""
+    monkeypatch.delenv("GIT_CONFIG_NOSYSTEM", raising=False)
+    assert "GIT_CONFIG_NOSYSTEM" not in gr.project_git_env()
+
+
+@pytest.mark.parametrize("name", ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+                                  "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"])
+def test_an_inherited_repository_location_is_dropped(name, monkeypatch, tmp_path):
+    """Set by a parent git (VAF started from a hook), it would move the repository.
+    MUTATION: drop the entry from _LAYOUT_ENV."""
+    monkeypatch.setenv(name, str(tmp_path))
+    assert name not in gr.project_git_env()
 
 
 def test_the_environment_is_the_whole_environment(monkeypatch):
@@ -205,6 +220,8 @@ def test_the_runners_values_win_over_the_repositorys_config(repo):
 def marker(tmp_path):
     """A program that records that it ran. It reads no stdin: an external diff command that
     did run would otherwise wait on it until the timeout."""
+    if os.name == "nt":
+        pytest.skip("a shell script as the planted program")
     ran = tmp_path / "ran"
     prog = tmp_path / "prog.sh"
     prog.write_text(f"#!/bin/sh\necho \"$0 $*\" >> '{ran.as_posix()}'\n", encoding="utf-8")
@@ -215,6 +232,8 @@ def marker(tmp_path):
 @pytest.fixture
 def filter_marker(marker, tmp_path):
     """The same record, passing stdin through as a filter must."""
+    if os.name == "nt":
+        pytest.skip("a shell script as the planted program")
     prog, ran = marker
     filt = tmp_path / "filter.sh"
     filt.write_text(f"#!/bin/sh\necho \"$0 $*\" >> '{ran.as_posix()}'\ncat\n", encoding="utf-8")
@@ -331,12 +350,16 @@ def test_every_git_process_starts_the_git_vaf_resolved(monkeypatch, tmp_path):
     """On Windows without git on PATH VAF brings its own; the driver read and the command
     itself both start it. MUTATION: start "git" instead of resolve_git() in either."""
     ran = []
+    (tmp_path / ".git").mkdir()
     monkeypatch.setattr(gr, "resolve_git", lambda: "/opt/vaf/git/bin/git")
     monkeypatch.setattr(gr.subprocess, "run",
                         lambda argv, **kw: ran.append(argv) or subprocess.CompletedProcess(argv, 0, "", ""))
     gr.run_project_git(["status", "--porcelain"], cwd=str(tmp_path))
     assert len(ran) == 2 and all(argv[0] == "/opt/vaf/git/bin/git" for argv in ran)
     assert ran[-1][-2:] == ["status", "--porcelain"]
+    # The driver read looks at the same repository the command will use.
+    # MUTATION: read the drivers without the layout options.
+    assert all(argv[1].startswith("--git-dir=") for argv in ran)
 
 
 # ── no in-scope module runs git any other way ────────────────────────────────
@@ -380,3 +403,163 @@ def test_the_guard_sees_each_shape_it_forbids():
                     "from vaf.core.git_runner import run_git\nrun_git(['status'])\n",
                     "import subprocess\nsubprocess.Popen(('git', 'log'))\n"):
         assert _git_starts_other_than_the_runner(snippet), snippet
+
+
+# ── where git works: the project's own repository and folder ─────────────────
+
+def _plain(*args, cwd):
+    """git with the layout given explicitly, to look at a repository from outside."""
+    return _git(*args, cwd=cwd)
+
+
+def test_the_repository_and_work_tree_are_pinned_from_a_subfolder(repo):
+    """From a subfolder the pin is the folder that holds .git, not the caller's folder.
+    MUTATION: pin --work-tree to cwd."""
+    sub = repo / "pkg" / "inner"
+    sub.mkdir(parents=True)
+    argv = gr.project_git_command(["status"], str(sub))
+    top = repo.resolve()
+    assert argv[1:3] == [f"--git-dir={(top / '.git').as_posix()}", f"--work-tree={top.as_posix()}"]
+
+
+def test_a_subfolder_caller_still_works(repo):
+    """Paths stay relative to the caller's folder, the top is the repository's."""
+    sub = repo / "pkg"
+    sub.mkdir()
+    (sub / "m.py").write_text("x = 1\n", encoding="utf-8")
+    top = gr.run_project_git(["rev-parse", "--show-toplevel"], cwd=str(sub)).stdout.strip()
+    assert Path(top) == repo.resolve()
+    assert gr.run_project_git(["add", "m.py"], cwd=str(sub)).returncode == 0
+    staged = gr.run_project_git(["diff", "--cached", "--name-only"], cwd=str(sub)).stdout
+    assert staged.split() == ["pkg/m.py"]
+
+
+def test_core_worktree_does_not_move_git_out_of_the_project(repo, tmp_path):
+    """core.worktree in .git/config made add -A pull an outside folder in and a checkout
+    write into it. MUTATION: return no layout options."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("outside\n", encoding="utf-8")
+    _git("config", "core.worktree", outside.as_posix(), cwd=repo)
+    (repo / "b.txt").write_text("two\n", encoding="utf-8")
+    assert Path(gr.run_project_git(["rev-parse", "--show-toplevel"], cwd=str(repo)).stdout.strip()) \
+        == repo.resolve()
+    assert gr.run_project_git(["add", "-A"], cwd=str(repo)).returncode == 0
+    staged = _plain(f"--git-dir={(repo / '.git').as_posix()}", "ls-files", cwd=repo).stdout.split()
+    assert "secret.txt" not in staged and "b.txt" in staged
+    (repo / "a.txt").unlink()
+    assert gr.run_project_git(["checkout", "HEAD", "--", "."], cwd=str(repo)).returncode == 0
+    assert (repo / "a.txt").exists() and not (outside / "a.txt").exists()
+
+
+def test_the_git_directories_stay_inside_the_project(repo):
+    """With the pin, git's own answer for both directories is the project's .git."""
+    top = repo.resolve()
+    for flag in ("--absolute-git-dir", "--git-common-dir"):
+        out = gr.run_project_git(["rev-parse", flag], cwd=str(repo)).stdout.strip()
+        assert Path(out).resolve() == top / ".git", flag
+
+
+def _gitdir_file(repo, tmp_path):
+    other = tmp_path / "other"
+    _git("init", "-q", str(other), cwd=tmp_path)
+    # Moved, not deleted: git's object files are read-only on Windows, and rmtree refuses them.
+    shutil.move(str(repo / ".git"), str(tmp_path / "old-git"))
+    (repo / ".git").write_text(f"gitdir: {(other / '.git').as_posix()}\n", encoding="utf-8")
+
+
+def _commondir(repo, tmp_path):
+    (repo / ".git" / "commondir").write_text(str(tmp_path), encoding="utf-8")
+
+
+def _alternates(repo, tmp_path):
+    (repo / ".git" / "objects" / "info").mkdir(parents=True, exist_ok=True)
+    (repo / ".git" / "objects" / "info" / "alternates").write_text(str(tmp_path), encoding="utf-8")
+
+
+def _linked_dotgit(repo, tmp_path):
+    moved = tmp_path / "moved-git"
+    shutil.move(str(repo / ".git"), str(moved))
+    os.symlink(moved, repo / ".git", target_is_directory=True)
+
+
+def _linked_ref(repo, tmp_path):
+    target = tmp_path / "foreign-heads"
+    target.mkdir()
+    heads = repo / ".git" / "refs" / "heads"
+    shutil.move(str(heads), str(target / "heads"))
+    os.symlink(target / "heads", heads, target_is_directory=True)
+
+
+def _linked_index(repo, tmp_path):
+    target = tmp_path / "foreign-index"
+    shutil.move(str(repo / ".git" / "index"), str(target))
+    os.symlink(target, repo / ".git" / "index")
+
+
+def _linked_object_dir(repo, tmp_path):
+    target = tmp_path / "foreign-pack"
+    target.mkdir()
+    pack = repo / ".git" / "objects" / "pack"
+    shutil.rmtree(pack)
+    os.symlink(target, pack, target_is_directory=True)
+
+
+_LINKS = [_linked_dotgit, _linked_ref, _linked_index, _linked_object_dir]
+
+
+@pytest.mark.parametrize("plant", [_gitdir_file, _commondir, _alternates, *(
+    pytest.param(f, marks=_POSIX_ONLY) for f in _LINKS)], ids=lambda f: f.__name__)
+def test_a_git_folder_that_leads_into_another_repository_is_refused(repo, tmp_path, plant):
+    """A .git file, a commondir, alternates, or a link inside .git: log and checkout read the
+    other repository, commit and reset move its branch. MUTATION: drop that check."""
+    plant(repo, tmp_path)
+    assert gr.project_repo_problem(str(repo))
+    proc = gr.run_project_git(["status"], cwd=str(repo))
+    assert proc.returncode == -1 and proc.stderr
+
+
+def test_a_linked_worktree_runs_only_when_the_caller_says_so(repo, tmp_path):
+    """A person's own `git worktree add` checkout. MUTATION: ignore linked_worktree."""
+    wt = tmp_path / "wt"
+    _git("worktree", "add", "-q", "-b", "side", str(wt), cwd=repo)
+    assert gr.run_project_git(["status"], cwd=str(wt)).returncode == -1
+    proc = gr.run_project_git(["rev-parse", "--show-toplevel"], cwd=str(wt), linked_worktree=True)
+    assert proc.returncode == 0 and Path(proc.stdout.strip()) == wt.resolve()
+    argv = gr.project_git_command(["status"], str(wt), linked_worktree=True)
+    assert argv[1] == f"--work-tree={wt.resolve().as_posix()}" and "--git-dir" not in argv[2]
+
+
+def test_a_folder_without_a_repository_is_refused(tmp_path):
+    proc = gr.run_project_git(["status"], cwd=str(tmp_path))
+    assert proc.returncode == -1 and "Not a git repository" in proc.stderr
+
+
+@_POSIX_ONLY
+def test_init_does_not_follow_a_git_link(tmp_path):
+    """git init through a dangling .git link created the repository at the link's target
+    (measured). MUTATION: drop the init link check."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    target = tmp_path / "outside" / "target"
+    target.parent.mkdir()
+    os.symlink(target, proj / ".git", target_is_directory=True)
+    assert gr.run_project_git(["init"], cwd=str(proj)).returncode == -1
+    assert not target.exists()
+
+
+@_POSIX_ONLY
+def test_the_init_tool_treats_a_git_link_as_present(tmp_path):
+    """MUTATION: os.path.exists in GitInitTool (a dangling link is then 'missing')."""
+    from vaf.tools.coder import GitInitTool
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    os.symlink(tmp_path / "nowhere", proj / ".git", target_is_directory=True)
+    assert "already initialized" in GitInitTool().run(base_dir=str(proj))
+
+
+def test_project_history_names_the_refusal(repo, tmp_path):
+    """MUTATION: drop project_repo_problem from _resolve_project."""
+    from vaf.tools.project_git import ProjectHistoryTool
+    _commondir(repo, tmp_path)
+    assert ProjectHistoryTool().run(project_path=str(repo)).startswith("Error: Refused:")

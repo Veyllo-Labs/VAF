@@ -25,7 +25,7 @@ import os
 import re
 import subprocess
 
-from vaf.core.git_runner import resolve_commit, run_project_git
+from vaf.core.git_runner import project_repo_problem, resolve_commit, run_project_git
 from vaf.tools.base import BaseTool
 
 
@@ -154,11 +154,16 @@ def _resolve_project(provided: str) -> "tuple[str, str]":
     from vaf.core.workspace_guard import is_unsafe_project_dir
     if is_unsafe_project_dir(path):
         return "", f"Refused: {path} is not a valid project directory."
-    if not os.path.isdir(os.path.join(path, ".git")):
+    if not os.path.lexists(os.path.join(path, ".git")):
         return "", (
             f"No version history: {path} is not a git repository. "
             "Projects created by the coding agent get one automatically."
         )
+    # A .git that is a file or a link, or leads into another repository, would make the
+    # history and the rollback read and move that other repository.
+    problem = project_repo_problem(path)
+    if problem:
+        return "", f"Refused: {problem}."
     return path, ""
 
 

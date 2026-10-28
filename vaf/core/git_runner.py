@@ -14,7 +14,21 @@ starts the programs they name (hooks on commit, add and checkout, an fsmonitor h
 clean and smudge filters on add and checkout, textconv and external diff drivers on diff, merge
 drivers on revert, gpg on `log` once `log.showSignature` is set), outside the jail and with the
 account's rights. `run_project_git` pins all of them off with `-c`, which outranks every
-config file, so that git starts nothing but itself there.
+config file, so that git starts nothing but itself there. It also pins WHERE git works: the
+same config can move the work tree anywhere (`core.worktree`), and a `.git` file, a
+`commondir` or a symbolic link inside `.git` points the project at another repository. The
+runner passes `--git-dir=<top>/.git --work-tree=<top>`, `<top>` being the nearest folder at or
+above the caller's that holds a `.git`, and refuses a `.git` that leads anywhere else.
+
+NAMED BOUNDARY, the driver race: the names of the filter and merge drivers are read in one git
+call and switched off in the next, and a process writing `.git/config` at the same time can add
+a driver in between. Measured: a writer flipping the config in a loop, 189 of 400 reads saw
+the driver and a marker filter ran 138 times. A coder `bash` command cannot be that writer: its
+jail has its own process namespace and dies with the command (`--unshare-pid`,
+`--die-with-parent`; the docker fallback is `--rm`). A process in a running sandbox environment
+can, because the environment mounts the project folder read-write for as long as it runs.
+Hooks, the fsmonitor, textconv, external diff and signing are pinned without a name and do not
+race; only a filter or a merge driver added in that window can run.
 
 NAMED BOUNDARY: `vaf git` (`vaf/cli/cmd/git.py`) and `vaf update` (`vaf/cli/cmd/update.py`)
 stay on `run_git`. A person starts them in their own repository or in VAF's own checkout, and
@@ -76,7 +90,7 @@ def run_git(args: List[str], cwd: str = ".", timeout: float = 60) -> tuple[int, 
         return -1, "", str(e)
 
 
-def resolve_commit(rev: str, cwd: str = ".") -> Optional[str]:
+def resolve_commit(rev: str, cwd: str = ".", *, linked_worktree: bool = False) -> Optional[str]:
     """The full id of the commit `rev` names, or None when it names none.
 
     A revision a caller hands in goes through here before it reaches any other git command
@@ -86,7 +100,8 @@ def resolve_commit(rev: str, cwd: str = ".") -> Optional[str]:
     rev = (rev or "").strip()
     if not rev or rev.startswith("-"):
         return None
-    proc = run_project_git(["rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"], cwd=cwd)
+    proc = run_project_git(["rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}"], cwd=cwd,
+                           linked_worktree=linked_worktree)
     out = (proc.stdout or "").strip()
     return out if proc.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", out) else None
 
@@ -111,9 +126,10 @@ PROJECT_GIT_CONFIG: Tuple[Tuple[str, str], ...] = (
 )
 
 # The environment beside them. GIT_ASKPASS is set EMPTY rather than removed: git reads it
-# before core.askPass and SSH_ASKPASS, and an empty one ends that search.
+# before core.askPass and SSH_ASKPASS, and an empty one ends that search. The system config
+# stays: the folder cannot write it, and Git for Windows keeps its LFS filter, autocrlf and
+# credential manager there.
 PROJECT_GIT_ENV: Tuple[Tuple[str, str], ...] = (
-    ("GIT_CONFIG_NOSYSTEM", "1"),
     ("GIT_TERMINAL_PROMPT", "0"),
     ("GIT_PAGER", "cat"),
     ("GIT_EDITOR", "true"),
@@ -147,7 +163,15 @@ _SUBCOMMAND_FLAGS: Dict[str, Tuple[str, ...]] = {
 # "=", so `filter.a=b.clean=` would set `filter.a` instead.
 _UNSAFE_DRIVER_NAME = re.compile(r"[=\x00-\x1f\x7f]")
 
+# Variables that would move the repository away from the folder the runner pins.
+_LAYOUT_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
+               "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES")
+
 _HOOKS_DIR: Optional[str] = None
+
+
+class ProjectGitRefused(ValueError):
+    """The folder's git layout leads somewhere the runner will not follow."""
 
 
 def _is_empty_dir(path: str) -> bool:
@@ -186,16 +210,94 @@ def project_git_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     """The whole environment (git on Windows needs PATH, SYSTEMROOT and the rest) with the
     project settings on top."""
     env = dict(os.environ if base is None else base)
+    for name in _LAYOUT_ENV:
+        env.pop(name, None)
     env.update(PROJECT_GIT_ENV)
     return env
 
 
-def _untrusted_drivers(cwd: str, env: Dict[str, str], timeout: float) -> Dict[str, List[str]]:
+def _top(cwd: str) -> Optional[str]:
+    """The nearest folder at or above `cwd` that holds a `.git` entry (file, folder or link)."""
+    d = os.path.realpath(cwd)
+    while True:
+        if os.path.lexists(os.path.join(d, ".git")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
+def _foreign_link(dotgit: str) -> str:
+    """What in `.git` leads into another repository, or "".
+
+    git follows `commondir` and `objects/info/alternates` to another git directory, and a
+    symbolic link anywhere it reads or writes (refs, objects, the index) takes the read or the
+    write to the link's target; a project VAF made has none of them."""
+    for rel in ("commondir", os.path.join("objects", "info", "alternates")):
+        if os.path.lexists(os.path.join(dotgit, rel)):
+            return f".git/{Path(rel).as_posix()} points at another repository"
+    for folder in (dotgit, os.path.join(dotgit, "objects")):
+        try:
+            with os.scandir(folder) as entries:
+                for entry in entries:
+                    if entry.is_symlink():
+                        rel = Path(os.path.relpath(entry.path, dotgit)).as_posix()
+                        return f".git/{rel} is a link"
+        except OSError:
+            continue
+    for root, dirs, files in os.walk(os.path.join(dotgit, "refs")):
+        for name in dirs + files:
+            if os.path.islink(os.path.join(root, name)):
+                rel = Path(os.path.relpath(os.path.join(root, name), dotgit)).as_posix()
+                return f".git/{rel} is a link"
+    return ""
+
+
+def project_repo_problem(cwd: str, *, linked_worktree: bool = False) -> str:
+    """Why `run_project_git` would refuse the repository at or above `cwd`, or "".
+
+    `linked_worktree=True` accepts a `.git` file and a shared git directory (`git worktree
+    add`), for a repository a person points VAF at themselves."""
+    top = _top(cwd)
+    if top is None:
+        return f"Not a git repository: {cwd}"
+    if linked_worktree:
+        return ""
+    dotgit = os.path.join(top, ".git")
+    if os.path.islink(dotgit) or not os.path.isdir(dotgit):
+        return (f"{Path(top).as_posix()}/.git is not a folder: a linked worktree or a link to "
+                f"another repository")
+    problem = _foreign_link(dotgit)
+    return f"{Path(top).as_posix()}: {problem}" if problem else ""
+
+
+def _layout_options(sub: str, cwd: str, linked_worktree: bool) -> List[str]:
+    """The options that pin git to the project's own repository. Raises ProjectGitRefused."""
+    if sub == "init":
+        # init creates the repository: there is none to pin yet, but a `.git` link would make
+        # it create the repository at the link's target.
+        if os.path.islink(os.path.join(cwd, ".git")):
+            raise ProjectGitRefused(f"{Path(os.path.abspath(cwd)).as_posix()}/.git is a link")
+        return []
+    problem = project_repo_problem(cwd, linked_worktree=linked_worktree)
+    if problem:
+        raise ProjectGitRefused(problem)
+    top = Path(_top(cwd) or cwd)
+    if linked_worktree:
+        return [f"--work-tree={top.as_posix()}"]
+    return [f"--git-dir={(top / '.git').as_posix()}", f"--work-tree={top.as_posix()}"]
+
+
+def _untrusted_drivers(cwd: str, env: Dict[str, str], timeout: float,
+                       layout: Sequence[str] = ()) -> Dict[str, List[str]]:
     """Driver names per section ("filter", "diff", "merge") that repository config defines.
 
-    A read-only `git config` call: reading config starts no program. Raises RuntimeError when
-    the names cannot be read, so the caller refuses instead of running unprotected."""
-    argv = [resolve_git(), "config", "--show-scope", "-z", "--get-regexp", r"^(filter|diff|merge)\."]
+    A read-only `git config` call, pinned to the same repository as the command: reading config
+    starts no program. Raises RuntimeError when the names cannot be read, so the caller refuses
+    instead of running unprotected."""
+    argv = [resolve_git(), *layout, "config", "--show-scope", "-z", "--get-regexp",
+            r"^(filter|diff|merge)\."]
     proc = subprocess.run(argv, **_popen_kwargs(cwd, env, timeout))
     # Exit 1 is "no such key"; anything else is an error worth refusing on.
     if proc.returncode not in (0, 1):
@@ -223,23 +325,26 @@ def _popen_kwargs(cwd: str, env: Dict[str, str], timeout: float) -> dict:
 
 
 def project_git_command(args: Sequence[str], cwd: str, *, env: Optional[Dict[str, str]] = None,
-                        timeout: float = 60) -> List[str]:
+                        timeout: float = 60, linked_worktree: bool = False) -> List[str]:
     """The full argv `run_project_git` starts for `args` in `cwd`.
 
-    Order: git, the caller's own leading `-c` pairs (an identity for a commit), then the pinned
-    settings, so a pinned value always comes last and wins, then the subcommand with its added
-    flags and the rest. Raises ValueError for a driver name that cannot be pinned on a command
-    line, RuntimeError when the names cannot be read."""
+    Order: git, the repository it may work on (`--git-dir`, `--work-tree`), the caller's own
+    leading `-c` pairs (an identity for a commit), then the pinned settings, so a pinned value
+    always comes last and wins, then the subcommand with its added flags and the rest. Raises
+    ValueError (ProjectGitRefused among them) for a layout the runner will not follow or a
+    driver name that cannot be pinned on a command line, RuntimeError when the names cannot be
+    read."""
     args = list(args)
     env = project_git_env() if env is None else env
     i = 0
     while i + 1 < len(args) and args[i] == "-c":
         i += 2
     caller_config, sub, rest = args[:i], args[i:i + 1], args[i + 1:]
+    layout = _layout_options(sub[0] if sub else "", cwd, linked_worktree)
     pinned: List[str] = ["-c", f"core.hooksPath={empty_hooks_dir()}"]
     for key, value in PROJECT_GIT_CONFIG:
         pinned += ["-c", f"{key}={value}"]
-    for section, names in _untrusted_drivers(cwd, env, timeout).items():
+    for section, names in _untrusted_drivers(cwd, env, timeout, layout).items():
         for name in names:
             if _UNSAFE_DRIVER_NAME.search(name):
                 raise ValueError(f"the repository defines a {section} driver whose name cannot "
@@ -247,18 +352,22 @@ def project_git_command(args: Sequence[str], cwd: str, *, env: Optional[Dict[str
             for var, value in _DRIVER_OVERRIDES.get(section, ()):
                 pinned += ["-c", f"{section}.{name}.{var}={value}"]
     added = list(_SUBCOMMAND_FLAGS.get(sub[0], ())) if sub else []
-    return [resolve_git(), *caller_config, *pinned, *sub, *added, *rest]
+    return [resolve_git(), *layout, *caller_config, *pinned, *sub, *added, *rest]
 
 
-def run_project_git(args: Sequence[str], cwd: str, *,
-                    timeout: float = 60) -> subprocess.CompletedProcess:
+def run_project_git(args: Sequence[str], cwd: str, *, timeout: float = 60,
+                    linked_worktree: bool = False) -> subprocess.CompletedProcess:
     """Run git in a folder whose `.git` someone else may have written, starting nothing but git.
 
     `args` is what follows `git`, optionally led by `-c key=value` pairs of the caller's own.
     Hooks, the fsmonitor, pagers, editors, askpass, credential helpers, signing, external diff
     and textconv, and the filter and merge drivers the repository's config names are all off;
-    diffs and logs get --no-ext-diff --no-textconv and commits --no-verify. Never raises: a
-    missing git, a timeout or a refusal comes back as returncode -1 with the reason in stderr.
+    diffs and logs get --no-ext-diff --no-textconv and commits --no-verify. git works on the
+    repository whose `.git` is at or nearest above `cwd`, and on its folder as the work tree,
+    whatever that config says; a `.git` that is a file or a link, or that leads into another
+    repository, is refused unless `linked_worktree=True` (then only the work tree is pinned).
+    Never raises: a missing git, a timeout or a refusal comes back as returncode -1 with the
+    reason in stderr.
     """
     argv: List[str] = ["git", *args]
     if not os.path.isdir(cwd):
@@ -266,7 +375,8 @@ def run_project_git(args: Sequence[str], cwd: str, *,
         return subprocess.CompletedProcess(argv, -1, "", f"Not a directory: {cwd}")
     try:
         env = project_git_env()
-        argv = project_git_command(args, cwd, env=env, timeout=timeout)
+        argv = project_git_command(args, cwd, env=env, timeout=timeout,
+                                   linked_worktree=linked_worktree)
         return subprocess.run(argv, **_popen_kwargs(cwd, env, timeout))
     except FileNotFoundError:
         return subprocess.CompletedProcess(argv, -1, "", "Git is not installed.")

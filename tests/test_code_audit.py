@@ -943,3 +943,21 @@ def test_ask_via_complete_tells_a_failure_from_an_empty_answer(monkeypatch):
         ca.ask_via_complete()([{"role": "user", "content": "x"}], 10)
     monkeypatch.setattr(completion, "complete", lambda messages, **kw: None)
     assert ca.ask_via_complete()([{"role": "user", "content": "x"}], 10) == ""
+
+
+def test_a_subfolder_is_audited_as_its_repository(repo):
+    """The runner pins the repository at the folder that holds .git, not the caller's folder.
+    MUTATION: pin --work-tree to cwd in the runner."""
+    _change(repo, "pkg/mod.py", "x = 1\n")
+    report = ca.code_audit(str(repo / "pkg"), scope="uncommitted", ask=None, remember=False)
+    assert Path(report.root) == repo.resolve()
+    assert "pkg/mod.py" in report.files_reviewed
+
+
+def test_the_linked_worktree_setting_reaches_the_review_threads():
+    """A thread starts with an empty context. MUTATION: pool.map without copy_context."""
+    token = ca._LINKED_WORKTREE.set(True)
+    try:
+        assert ca._parallel_map(lambda _x: ca._LINKED_WORKTREE.get(), [1, 2, 3], 3) == [True] * 3
+    finally:
+        ca._LINKED_WORKTREE.reset(token)

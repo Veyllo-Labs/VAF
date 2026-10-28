@@ -138,3 +138,16 @@ def test_verify_steps_zero_keeps_the_first_check_only(repo, model):
     _change(repo, "app.py", BUGGY)
     assert _run(repo, "--verify-steps", "0").exit_code == 1 and deep.deep == []
     assert _run(repo, "--verify-steps", "2").exit_code == 2 and len(deep.deep) == 3
+
+
+def test_a_linked_worktree_is_audited_only_with_the_flag(repo, model, tmp_path):
+    """A `.git` file can point anywhere, so a linked worktree is refused unless the person says
+    it is theirs. MUTATION: do not pass --linked-worktree on to code_audit."""
+    wt = tmp_path / "wt"
+    ca._git(str(repo), "worktree", "add", "-q", "-b", "side", str(wt))
+    _change(wt, "app.py", BUGGY)
+    refused = _run(wt, "--uncommitted")
+    assert refused.exit_code == 2 and "linked worktree" in refused.output, refused.output
+    result = _run(wt, "--uncommitted", "--linked-worktree")
+    assert result.exit_code == 1, result.output
+    assert "The loop skips the first item" in result.output

@@ -883,7 +883,8 @@ jail first, `vaf.jail_allows`). What reaches `ask` is redacted with VAF's creden
 patterns, and the reading stays inside the repository (no symlink out, no file git does not
 track, no guideline file git ignores), but the code itself is what a review is for. Its
 git calls go through `vaf.run_project_git` (below), so the repository's own hooks, filters
-and drivers do not run while it is read. Size
+and drivers do not run while it is read, and a linked worktree (`.git` is a file) is refused
+unless you pass `linked_worktree=True` for a repository the person chose. Size
 `batch_chars` to your model's window, pass `parallel` > 1 only for an API that serves
 concurrent requests, and give it a `should_stop` if a person can cancel. A repository can
 tune it with `.vaf/code-audit.json` (profile, path filters, path instructions, plain-language
@@ -922,12 +923,30 @@ textconv or signature check. Every filter, diff and merge driver the repository'
 names is switched off by name, so a merge that needed one becomes a conflict. `diff`, `log`
 and `show` get `--no-ext-diff --no-textconv`, `commit` gets `--no-verify`.
 
-**What you are responsible for.** A driver only the person's global config names (the
-filter `git lfs install` writes) keeps running, because the folder cannot write that file;
-a driver name the command line cannot carry (one with `=` in it) makes the call refuse
-rather than run unprotected. It decides which programs git starts, not which files it reads:
-which folder you point it at is your decision. For a repository the person owns and works in
-themselves, use plain git: there their hooks are their choice.
+It also pins where git works. The same config can move the work tree to any folder on the
+host (`core.worktree`), and a `.git` file, a `commondir`, `objects/info/alternates` or a
+symbolic link inside `.git` points the project at another repository, whose files a checkout
+would then write and whose branch a commit would move. The runner passes
+`--git-dir=<top>/.git --work-tree=<top>`, `<top>` being the nearest folder at or above `cwd`
+that holds a `.git` (a caller in a subfolder keeps working), and refuses any of those
+redirections, and a folder with no repository at all. `linked_worktree=True` accepts a
+`.git` file (a `git worktree add` checkout) and pins only the work tree: pass it only for a
+repository a person chose, never for one a model wrote. `vaf.core.git_runner.project_repo_problem(cwd)`
+gives the refusal's reason without running git.
+
+**What you are responsible for.** A driver only the person's global or system config names
+(the filter `git lfs install` writes) keeps running, because the folder cannot write those
+files; a driver name the command line cannot carry (one with `=` in it) makes the call refuse
+rather than run unprotected. Which folder you point it at is your decision. For a repository
+the person owns and works in themselves, use plain git: there their hooks are their choice.
+
+**Named boundary: a writer running at the same time.** The filter and merge driver names are
+read in one git call and switched off in the next, so a process that writes `.git/config` at
+that moment can add a driver in between. Measured with a writer flipping the config in a
+loop: 189 of 400 reads saw the driver, and a marker filter ran 138 times. Hooks, the
+fsmonitor, textconv, external diff and signing are pinned without a name and do not race.
+If something you run keeps writing the folder while you call git (a container with the folder
+mounted, a dev server), stop or pause it first.
 
 ---
 
@@ -2477,17 +2496,19 @@ Stable public surface (safe to build on):
   relative text and joined onto your root.
 - `vaf.code_audit(root, *, scope=, base=, paths=, include_untracked=, profile=, ask=,
   checks=, max_files=, remember=, batch_chars=, progress=, parallel=, should_stop=,
-  verify_steps=)` /
+  verify_steps=, linked_worktree=)` /
   `vaf.AuditReport` / `vaf.AuditFinding` - reviewing a code change with your model. The
   promise is the `ask(messages, max_tokens) -> str` shape, the completion contract
   (`status` is `complete` only when everything in scope was reviewed, and `exit_code()`
   never returns 0 otherwise) and the fields named in "Reviewing a code change"; the prompts,
   the budgets and the finding ids' hashing are not.
-- `vaf.run_project_git(args, cwd, *, timeout=60) -> subprocess.CompletedProcess` - git in
-  a folder a model writes, starting no program that folder's config or hooks name. The
-  promise is the call shape, that it never raises, that a leading `-c` of yours is kept and
-  that the repository's config does not choose the hooks or a filter; the exact list of
-  pinned settings is not. See "git in a folder a model writes" above.
+- `vaf.run_project_git(args, cwd, *, timeout=60, linked_worktree=False) ->
+  subprocess.CompletedProcess` - git in a folder a model writes, starting no program that
+  folder's config or hooks name, and working only on the repository at or above `cwd`. The
+  promise is the call shape, that it never raises, that a leading `-c` of yours is kept, that
+  the repository's config does not choose the hooks, a filter or the work tree, and that a
+  `.git` leading into another repository is refused unless `linked_worktree=True`; the exact
+  list of pinned settings is not. See "git in a folder a model writes" above.
 - `vaf.ToolCaller` - running a tool with the agent's own policy, gate, identity
   and bounds, without an agent. Its **documented arguments** (the table under
   "Running a tool yourself") and `execute(name, args) -> str` are the promise;

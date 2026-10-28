@@ -55,3 +55,27 @@ def test_a_leading_config_of_the_callers_own_is_kept(tmp_path):
 def test_it_never_raises(tmp_path):
     proc = vaf.run_project_git(["status"], cwd=str(tmp_path / "missing"))
     assert proc.returncode != 0 and proc.stderr
+
+
+def test_a_git_file_is_refused_unless_the_caller_accepts_a_linked_worktree(tmp_path):
+    r = _repo(tmp_path)
+    (r / "a.txt").write_text("a\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=r, check=True, capture_output=True)
+    subprocess.run(["git", "-c", "core.hooksPath=", "commit", "-qm", "a"], cwd=r, check=True,
+                   capture_output=True)
+    wt = tmp_path / "wt"
+    subprocess.run(["git", "worktree", "add", "-q", "-b", "side", str(wt)], cwd=r, check=True,
+                   capture_output=True)
+    assert vaf.run_project_git(["status"], cwd=str(wt)).returncode != 0
+    assert vaf.run_project_git(["status"], cwd=str(wt), linked_worktree=True).returncode == 0
+
+
+def test_the_work_tree_is_the_folder_that_holds_git(tmp_path):
+    r = _repo(tmp_path)
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    subprocess.run(["git", "config", "core.worktree", str(outside)], cwd=r, check=True,
+                   capture_output=True)
+    (r / "sub").mkdir()
+    top = vaf.run_project_git(["rev-parse", "--show-toplevel"], cwd=str(r / "sub")).stdout.strip()
+    assert Path(top) == r.resolve()

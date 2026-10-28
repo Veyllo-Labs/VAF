@@ -588,9 +588,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **git in a project folder the coding agent writes no longer runs programs that folder
   chooses.** The agent's shell can write the project's `.git`, and VAF's own git calls there
   (the final commit, history and rollback, the code review, the live diff, `/undo`) ran its
-  hooks, its fsmonitor, its filters, diff and merge drivers and gpg on your computer. They
-  now run with all of those switched off; a filter your own global git config sets up, such
-  as git-lfs, still runs, and `vaf git` and `vaf update` behave as before. Applications built
+  hooks, its fsmonitor, its filters, diff and merge drivers and gpg on your computer, and
+  its config could move git's work to any folder on your computer. They now run with all of
+  those switched off and only ever in the project's own folder and repository; a project whose
+  `.git` points somewhere else is refused. A filter your own git config sets up, such as
+  git-lfs, still runs, and `vaf git` and `vaf update` behave as before. `vaf audit` refuses a
+  linked worktree (`git worktree add`) unless you add `--linked-worktree`. Applications built
   on VAF get the same runner as `vaf.run_project_git`. Restart VAF after updating.
 
 ### Fixed

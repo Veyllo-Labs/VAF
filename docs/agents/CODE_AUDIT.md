@@ -216,12 +216,15 @@ vaf audit run [PATH] [--base REF] [--committed | --uncommitted | --files] [--pat
                      [--untracked/--no-untracked] [--profile chill|assertive]
                      [--format text|json|prompt] [--fail-on critical|major|minor|none]
                      [--max-files N] [--parallel N] [--no-llm] [--provider P] [--model M]
-vaf audit show [PATH]                    # the last audit of this repository
-vaf audit dismiss ID --reason "..." [--repo PATH]
+                     [--linked-worktree]
+vaf audit show [PATH] [--linked-worktree]                 # the last audit of this repository
+vaf audit dismiss ID --reason "..." [--repo PATH] [--linked-worktree]
 ```
 
 The configured model is used unless `--provider`/`--model` say otherwise. Progress lines go to
-stderr; stdout carries only the report, so `--format json` can be piped.
+stderr; stdout carries only the report, so `--format json` can be piped. A linked worktree
+(`git worktree add`, where `.git` is a file) is refused unless `--linked-worktree` says it is
+your own checkout: a `.git` file can point at any repository on the machine.
 
 ## Repository configuration: `.vaf/code-audit.json`
 
@@ -289,7 +292,11 @@ the next run.
   name (the runner reads the names first). The repository being reviewed may be a coding
   agent's project, whose `.git` the agent's shell writes. The price: a working-tree diff of a
   file such a filter converts compares the file as it is on disk. A filter only the person's
-  global config defines (git-lfs) still runs.
+  global or system config defines (git-lfs) still runs. git works on the repository at or
+  above the reviewed folder and on that folder as the work tree, whatever `core.worktree`
+  says, and a `.git` that leads into another repository is refused; `linked_worktree=True`
+  (`vaf audit --linked-worktree`) accepts a person's own linked worktree, and the main agent's
+  `code_audit` tool never passes it.
 - **Stop in the chat** ends the review before its next model call; a call already in flight
   finishes in the background (an in-process tool cannot be killed), and its answer is
   discarded.

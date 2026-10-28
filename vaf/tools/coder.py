@@ -2645,7 +2645,9 @@ class GitInitTool(BaseTool):
     def run(self, **kwargs) -> str:
         # base_dir will be passed from the CodingAgentTool context
         base_dir = kwargs.get('base_dir', '.')
-        if os.path.exists(os.path.join(base_dir, '.git')):
+        # lexists: a dangling .git link would otherwise make git init create the repository
+        # at its target (the runner refuses that too).
+        if os.path.lexists(os.path.join(base_dir, '.git')):
             return "✅ Git repository already initialized."
         from vaf.core.git_runner import run_project_git
         proc = run_project_git(["init"], cwd=base_dir)
@@ -3348,8 +3350,8 @@ class CodingAgentTool(BaseTool):
         if not os.path.isdir(base_dir):
             return
         git_dir = os.path.join(base_dir, '.git')
-        if os.path.exists(git_dir):
-            return  # Already a git repo
+        if os.path.lexists(git_dir):
+            return  # Already a git repo, or a .git link that git init must not follow
         
         from vaf.core.git_runner import run_project_git
         # Git not available or failed: continue without git (graceful degradation).

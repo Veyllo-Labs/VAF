@@ -435,10 +435,24 @@ the SubAgent window's diffs, `/undo`). Those calls go through
 `vaf.core.git_runner.run_project_git`, which pins with `-c` everything through which that
 config names a program: an empty VAF-owned `core.hooksPath`, no fsmonitor, pager, editor,
 askpass, credential helper or signing, no external diff or textconv, and every filter and merge
-driver the repository's config defines switched off by name. The full list is in
+driver the repository's config defines switched off by name. It also pins the repository
+and the work tree to the project itself (`--git-dir=<top>/.git --work-tree=<top>`), because
+`core.worktree` in that config moved the work tree to any host folder (a rollback wrote there,
+`add -A` pulled its files into the project, measured), and it refuses a `.git` that is a
+file or a link, or leads into another repository through `commondir`, alternates or a link
+inside it. The full list is in
 [CODER_ARCHITECTURE.md](../agents/CODER_ARCHITECTURE.md) ("Git in the project folder"). A
-driver the person's own global config defines (git-lfs) keeps running; `vaf git` and
-`vaf update` stay on plain git, because a person runs those in their own repositories.
+driver the person's own global or system config defines (git-lfs) keeps running; `vaf git`
+and `vaf update` stay on plain git, because a person runs those in their own repositories.
+
+Named boundary: the driver names are read in one git call and switched off in the next. A
+process writing `.git/config` in between can add a filter or merge driver that then runs;
+measured with a writer flipping the config in a loop, 189 of 400 reads saw the driver and a
+marker filter ran 138 times. The coder's `bash` cannot be that writer (its jail has its own
+process namespace and ends with the command, `--unshare-pid --die-with-parent`; the docker
+fallback is `--rm`), but a process in a running sandbox environment with the project mounted
+can. Hooks, the fsmonitor, textconv, external diff and signing are pinned without a name and
+do not race.
 
 **In a sandbox environment** (the coder bound with `coding_agent(environment=...)`, or one
 exists for its project folder) none of the above applies as written: `bash` runs in that

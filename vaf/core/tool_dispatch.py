@@ -990,6 +990,35 @@ def allowlist_permits(tool_name: str, allowed, *, tool=None) -> bool:
     return allowed is None or tool_name in allowed
 
 
+def caller_allowlist(user_scope_id: str | None, user_role: str | None = None):
+    """The account allowlist of this caller, on whichever side of the coder's process
+    boundary this runs. None = unrestricted.
+
+    In the coder's child process the parent has already resolved it and put it into
+    ``VAF_ALLOWED_TOOLS`` (tool names only; absent = unrestricted), because no resolver is
+    registered there; in any other process it comes from the registered resolver, after
+    the same exemptions as ``account_allows_tool``. A raising resolver raises through: the
+    caller owns its fail-closed answer."""
+    import os
+    env = os.environ.get("VAF_ALLOWED_TOOLS")
+    if env is not None:
+        return frozenset(x for x in env.split(",") if x)
+    if not user_scope_id or policy_admin_flag(user_role, user_scope_id):
+        return None
+    return resolve_account_allowlist(user_scope_id)
+
+
+def caller_allows_tool(tool_name: str, user_scope_id: str | None,
+                       user_role: str | None = None, *, tool=None) -> bool:
+    """``account_allows_tool`` for a check a TOOL makes about another tool it is about to
+    reach on the caller's behalf, wherever it runs: in the coder's child the answer is the
+    one that crossed as data (``caller_allowlist``). A caller without a scope and an admin
+    are exempt, as everywhere. Raises what the resolver raises."""
+    if not user_scope_id or policy_admin_flag(user_role, user_scope_id):
+        return True
+    return allowlist_permits(tool_name, caller_allowlist(user_scope_id, user_role), tool=tool)
+
+
 # The WORKFLOW twin of the tool allowlist: which saved workflow TEMPLATES may this
 # account start. Same registration shape, same contract, separate slot - a workflow id
 # is not a tool name, and mixing the two answer spaces in one resolver would make every

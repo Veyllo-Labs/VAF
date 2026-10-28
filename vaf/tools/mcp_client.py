@@ -24,13 +24,26 @@ account's turn created a file with `server_command="touch <file>"`, since the to
 refusal holds for every account, the admin's included, because the admin did not write the
 command either. Code of your own that has chosen a command calls `call_stdio` directly.
 
-Named boundaries: `mcp_call` is not `admin_only`, not opt-in per account and not a confirmation
-tool. What it reaches is what every account already has as the registered
-``mcp_<server>_<tool>`` tools, starting the processes discovery starts at every startup; a
-tool of such a server that asks for a confirmation on every call (`dangerous`) and a server that
-signs every account in are refused here and stay with their own tools, which carry the
-confirmation and the caller's identity. A `server_url` (http / sse) the model passes is still
-reached, under the instance destination policy and without any stored token.
+A call on a registered server is held to the rules its own ``mcp_<server>_<tool>`` tool
+carries, so this lane is no way around them:
+- the account allowlist is asked for THAT tool's name (`caller_allows_tool`, which in the
+  coder's child reads the answer that crossed as `VAF_ALLOWED_TOOLS`): a list that grants
+  `mcp_call` and not `mcp_<server>_delete_file` does not run the delete here;
+- `mcp_native_tools_enabled` off turns the registered servers off here too;
+- a tool at level `dangerous` (it asks on every call) and a server that signs every account in
+  (its tools run as the caller) are refused and stay with their own tools;
+- in a coding run only `read`-level tools are reached, and no `server_url`: the coder's tools
+  are for looking things up (vaf/core/coder_tools.py).
+
+Named boundaries: `mcp_call` itself is not `admin_only`, not opt-in per account and not a
+confirmation tool, because with the rules above it reaches nothing the account does not already
+have as the registered tools, and it starts only the processes discovery starts. A coding run
+is recognised by the agent type its child process is started with (`VAF_AGENT_TYPE`, also set
+by a workflow for an in-process coding step); a coder run inline in the application's process
+(`sub_agents_in_separate_terminals` off, or a terminal that could not be opened) carries no such
+mark and is held to the account's rules only. A `server_url` (http / sse) the model passes
+outside a coding run is still reached, under the instance destination policy and without any
+stored token.
 """
 
 import itertools
@@ -58,6 +71,8 @@ class MCPClientTool(BaseTool):
     
     name = "mcp_call"
     category    = "mcp"
+    # Who is calling: the account allowlist is asked for the registered tool this call reaches.
+    identity_kwargs = ("user_scope_id", "user_role")
     permission_level = "write"
     side_effect_class = "irreversible"
     description = ("Call a tool of an MCP (Model Context Protocol) server: one an administrator "
@@ -111,16 +126,22 @@ class MCPClientTool(BaseTool):
         server's exact command; `server_command` is the old name of the field), or on the remote
         server at `server_url` over `transport` (http / sse). Returns the tool's text."""
         server = str(kwargs.get("server") or kwargs.get("server_command") or "").strip()
-        tool_name = kwargs.get("tool_name", "")
+        # Stripped once, for every check AND the call: "echo " would otherwise miss the
+        # per-tool level of "echo" and still reach it.
+        tool_name = str(kwargs.get("tool_name") or "").strip()
         arguments = kwargs.get("arguments", {})
         transport = kwargs.get("transport", "stdio")
         server_url = kwargs.get("server_url", "")
+        scope, role = kwargs.get("user_scope_id"), kwargs.get("user_role")
 
         if not tool_name:
             return "Error: tool_name is required"
         try:
             if server:
-                return self._call_registered(server, tool_name, arguments)
+                return self._call_registered(server, tool_name, arguments, scope, role)
+            if _in_coding_run():
+                return ("Error: in a coding run, mcp_call reaches only the read-level tools of a "
+                        "registered MCP server; name one in `server`.")
             if transport in ("http", "sse"):
                 if not server_url:
                     return "Error: server_url is required for the http and sse transports"
@@ -128,34 +149,65 @@ class MCPClientTool(BaseTool):
             if server_url:
                 return "Error: a server_url needs the transport http or sse"
             if transport == "stdio":
-                return self._refuse_unregistered("")
+                return self._refuse_unregistered("", scope, role)
             return f"Error: Unsupported transport '{transport}'"
         except Exception as e:
             return f"Error calling MCP tool: {e}"
 
-    def _call_registered(self, server: str, tool_name: str, arguments: Dict[str, Any]) -> str:
+    def _call_registered(self, server: str, tool_name: str, arguments: Dict[str, Any],
+                         scope: Optional[str] = None, role: Optional[str] = None) -> str:
         """The model's call on a registered server, through the same path as that server's own
-        registered tools; refused where those tools carry a rule this lane cannot (module
-        docstring)."""
+        registered tools, and under the rules those tools carry (module docstring)."""
+        from vaf.core.config import Config
+        if not bool(Config.get("mcp_native_tools_enabled", True)):
+            return ("Error: MCP servers are switched off on this installation "
+                    "(mcp_native_tools_enabled).")
         from vaf.core import mcp_registry
         found = mcp_registry.registered_server(server)
         if found is None:
-            return self._refuse_unregistered(server)
+            return self._refuse_unregistered(server, scope, role)
         name, cfg = found
-        own_tool = mcp_registry.native_tool_name(name, str(tool_name))
+        own_tool = mcp_registry.native_tool_name(name, tool_name)
+        # The account allowlist names the server's own tools, so it is asked for that name:
+        # a list that grants mcp_call and not mcp_<server>_delete_file must not run it here.
+        from vaf.core.tool_dispatch import caller_allows_tool
+        try:
+            allowed = caller_allows_tool(own_tool, scope, role)
+        except Exception:
+            return (f"Error: the account allowlist could not be read, so {own_tool} is refused. "
+                    f"A broken guard must not quietly become no guard.")
+        if not allowed:
+            return (f"Error: the tool '{own_tool}' is not enabled for your account. An "
+                    f"administrator can enable it in user management.")
         from vaf.core.mcp_oauth import uses_sign_in
         if uses_sign_in(cfg):
             return (f"Error: the MCP server '{name}' signs every account in on its own. Call its "
                     f"tool as {own_tool}, which runs as you.")
-        if mcp_registry.tool_permission(cfg, str(tool_name)) == "dangerous":
+        level = mcp_registry.tool_permission(cfg, tool_name)
+        if _in_coding_run() and level != "read":
+            return (f"Error: in a coding run, mcp_call reaches only read-level MCP tools; "
+                    f"'{tool_name}' on the MCP server '{name}' is {level}.")
+        if level == "dangerous":
             return (f"Error: '{tool_name}' on the MCP server '{name}' asks for a confirmation on "
                     f"every call. Call it as {own_tool}.")
-        return mcp_registry.call_registered_tool(name, cfg, str(tool_name), arguments or {})
+        return mcp_registry.call_registered_tool(name, cfg, tool_name, arguments or {})
 
     @staticmethod
-    def _refuse_unregistered(server: str) -> str:
-        from vaf.core.mcp_registry import registered_server_names
+    def _refuse_unregistered(server: str, scope: Optional[str] = None,
+                             role: Optional[str] = None) -> str:
+        from vaf.core.mcp_registry import native_tool_prefix, registered_server_names
+        from vaf.core.tool_dispatch import caller_allowlist, policy_admin_flag
         names = registered_server_names()
+        if scope and not policy_admin_flag(role, scope):
+            # Only the servers this account has at least one tool of: a restricted account is
+            # not told about the others.
+            try:
+                allowed = caller_allowlist(scope, role)
+            except Exception:
+                allowed = frozenset()
+            if allowed is not None:
+                names = [n for n in names
+                         if any(t.startswith(native_tool_prefix(n)) for t in allowed)]
         shown = server if len(server) <= 80 else server[:77] + "..."
         what = f"'{shown}' is not one" if server else "name one in `server`"
         known = (f" Registered: {', '.join(names)}." if names
@@ -179,7 +231,8 @@ class MCPClientTool(BaseTool):
             return get_remote_pool().call_tool(transport, server_url, tool_name, arguments or {},
                                                headers=headers, auth=auth, egress=egress)
         except RemoteMcpError as exc:
-            return f"Error: MCP server at {server_url}: {exc}"
+            from vaf.core.mcp_remote import display_url
+            return f"Error: MCP server at {display_url(server_url)}: {exc}"
     
     def _ensure_server(self, server_command: str, env: Optional[Dict[str, str]] = None) -> Optional[subprocess.Popen]:
         """Spawn (if needed) and initialize the stdio MCP server, cached by command. Returns the
@@ -333,6 +386,14 @@ class MCPClientTool(BaseTool):
                     process.wait(timeout=5)
             except Exception:
                 pass
+
+
+def _in_coding_run() -> bool:
+    """Whether this call runs inside a coding agent's run: the agent type the sub-agent child
+    is started with (vaf/core/subagent_spawn.py) and a workflow sets for an in-process coding
+    step (vaf/workflows/engine.py). The coder may only LOOK things up through MCP
+    (vaf/core/coder_tools.py, "reading, never writing")."""
+    return (os.environ.get("VAF_AGENT_TYPE") or "").strip() == "coding_agent"
 
 
 # Process-wide shared MCP client. mcp_call, discovery, and dynamic MCP tools all go through this so

@@ -177,9 +177,14 @@ def registered_server_names() -> List[str]:
                   if isinstance(cfg, dict) and cfg.get("enabled", True) and _addressable(cfg))
 
 
+def native_tool_prefix(server_name: str) -> str:
+    """What every registered tool of one server starts with: ``mcp_<server>_``."""
+    return f"mcp_{_safe(server_name)}_"
+
+
 def native_tool_name(server_name: str, real_tool: str) -> str:
     """The name a server's tool is registered under: ``mcp_<server>_<tool>``."""
-    return f"mcp_{_safe(server_name)}_{_safe(real_tool)}"
+    return f"{native_tool_prefix(server_name)}{_safe(real_tool)}"
 
 
 def tool_permission(server_cfg: Dict[str, Any], real_tool: str) -> str:

@@ -166,7 +166,7 @@ KWARGS_BASELINE = {
     "list_trash":                ("chat", ["user_role", "user_scope_id"]),
     "list_workflows":            ("chat", []),
     "mark_mail_answered":        ("chat", ["user_scope_id", "username"]),
-    "mcp_call":                  ("chat", []),
+    "mcp_call":                  ("chat", ["user_role", "user_scope_id"]),
     "memory_save":               ("chat", ["user_scope_id"]),
     # Measured 2026-08-21 when the tool was added (the update sibling of memory_save;
     # same single identity key, remeasured rather than copied).

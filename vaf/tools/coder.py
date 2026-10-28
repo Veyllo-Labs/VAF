@@ -2859,15 +2859,8 @@ def _caller_allowed_tools(scope, role):
     the top, so the whole coder call fails closed as a unit instead of silently falling
     back to unrestricted.
     """
-    env = os.environ.get("VAF_ALLOWED_TOOLS")
-    if env is not None:
-        return frozenset(x for x in env.split(",") if x)
-    if not scope:
-        return None
-    from vaf.core.tool_dispatch import policy_admin_flag, resolve_account_allowlist
-    if policy_admin_flag(role, scope):
-        return None
-    return resolve_account_allowlist(scope)
+    from vaf.core.tool_dispatch import caller_allowlist
+    return caller_allowlist(scope, role)
 
 
 def _coder_funnel(tools, *, scope, role, session_id):

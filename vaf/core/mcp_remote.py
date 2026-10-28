@@ -379,6 +379,21 @@ _pool: Optional[RemotePool] = None
 _pool_lock = threading.Lock()
 
 
+def display_url(url: str) -> str:
+    """A server's URL as it may be shown in a message: scheme, host, port and path, without a
+    user name, password, query or fragment, where a token is often carried."""
+    from urllib.parse import urlsplit, urlunsplit
+    try:
+        parts = urlsplit(str(url or ""))
+        host = parts.hostname or ""
+        if ":" in host:
+            host = f"[{host}]"
+        netloc = f"{host}:{parts.port}" if parts.port else host
+        return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+    except ValueError:
+        return "(an unreadable URL)"
+
+
 def registered_egress(url: str):
     """The destination policy for a server an administrator registered: its own host may be
     on this machine or the LAN (a local MCP server is an ordinary setup), while a redirect

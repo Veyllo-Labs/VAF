@@ -126,7 +126,7 @@ _RESEARCH = {
     "memory_search",
     "list_tools",
     "search_tools",
-    "mcp_call",         # one name, however many MCP servers are connected
+    "mcp_call",         # registered MCP servers, their read-level tools only (mcp_client.py)
     "use_skill",
     "list_skills",
     "read_skill",

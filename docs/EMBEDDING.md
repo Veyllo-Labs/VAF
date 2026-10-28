@@ -1901,6 +1901,12 @@ for entry in room.transcript():
     print(entry["label"], vaf.describe_room_entry(entry))
 ```
 
+Everything an agent writes into a room is read by every member and kept. When your agent's
+reply is going into a room, run that turn under an allowed set (`set_allowed_tools`, see
+"Which tools this agent may use"): its prompt then carries none of your user's profile
+digest and details, machine paths, last message elsewhere or other chats, as for a turn that
+answers a customer. VAF's own room turns get the same prompt without a set.
+
 Three things the room does for you, so an embedder does not rebuild them:
 
 ```python

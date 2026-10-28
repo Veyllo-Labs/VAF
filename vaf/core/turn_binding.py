@@ -70,14 +70,15 @@ facade is a terminal lane by design. The export is one lazy `__getattr__` branch
 embedder serves several conversations from one engine.
 
 NAMED BOUNDARY: the CLI's own web mode. `vaf run --web` hosts the web server in the CLI
-process without the in-process runner, and the CLI loop takes the browser's queued chats
-itself with only `load_session_context`: no task identity, role or account check. It answers
-nobody else: a messenger or mail task, and any task a contact sent, is declined there
-(`_declined_queue_task` in vaf/cli/cmd/run.py), so no Front Office set is owed; and while a
-VAF service runs, that mode starts no server, and the service's runner serves the browser.
-Binding the browser's chats here would be a second copy of the queue lane's value
-computation; whether that mode hands its queue to the runner or binds through
-`_task_turn_binding` is a decision for that mode, measured first.
+process without the in-process runner, and the CLI loop takes the owner's queued browser
+chats itself with only `load_session_context`, on an agent bound to the machine owner. It
+answers nobody else: a messenger or mail task, any task a contact sent and another account's
+chat are declined there (`_declined_queue_task` in vaf/cli/cmd/run.py), so neither a Front
+Office set nor a per-task identity is owed; and while a VAF service runs, that mode starts no
+server, and the service's runner serves the browser. Serving other accounts there would need
+this binding, a second copy of the queue lane's value computation; whether that mode hands
+its queue to the runner or binds through `_task_turn_binding` is a decision for that mode,
+measured first.
 """
 from __future__ import annotations
 

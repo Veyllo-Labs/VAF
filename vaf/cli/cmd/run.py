@@ -951,8 +951,8 @@ def run_prompt(
 def _declined_queue_task(task):
     """The terminal note for a queued task this lane does not run, or None to run it.
 
-    `vaf run --web` takes the browser's chats and the web server's session commands from the
-    in-process queue. A task a channel lane queued (a messenger bridge, the mail answering
+    `vaf run --web` takes the owner's browser chats and the web server's session commands from
+    the in-process queue. A task a channel lane queued (a messenger bridge, the mail answering
     lane), and any task a contact sent, is answered on its channel by the queue runner alone:
     it holds the turn to the Front Office tool set, briefs the model on who is writing, pins
     the turn to the contact and delivers the reply. This loop has none of that, so it would
@@ -964,18 +964,51 @@ def _declined_queue_task(task):
     prints with markup."""
     source = str(getattr(task, "source", "") or "").strip().lower()
     metadata = getattr(task, "metadata", None) or {}
-    from_contact = bool(metadata.get("from_contact")) if isinstance(metadata, dict) else False
-    if source not in CHANNEL_TASK_SOURCES and not from_contact:
+    if not isinstance(metadata, dict):
+        metadata = {}
+    from_contact = bool(metadata.get("from_contact"))
+    if source in CHANNEL_TASK_SOURCES or from_contact:
+        if source == MAIL_CHANNEL:
+            where = "mail"
+        elif source in CHANNEL_TASK_SOURCES:
+            where = channel_label(source)
+        else:
+            where = "a contact"
+        return (f"Not run here: a task from {where}. This terminal does not answer messengers or "
+                "mail, and the task is not run later. To answer them, run VAF as a service: "
+                "vaf start (or vaf tray).")
+    # Everything else runs as a turn of this terminal's agent, which is bound to the machine
+    # owner (_make_cli_agent) and cannot be bound per task: an account's chat would run with
+    # the owner's identity and read the owner's other chats. So only the owner's own tasks
+    # run: the local admin's scope. Deliberately not is_admin_identity: a second admin has
+    # admin rights but is another person with chats of their own (config.is_local_admin_lane
+    # draws the same line). A task with no scope is nobody's and is declined. The session
+    # commands are not judged by an owner: LOAD_SESSION and RENAME_SESSION are queued without
+    # a scope, and they move only this terminal's own session pointer.
+    from vaf.core.config import is_local_admin_lane
+    from vaf.core.task_queue import is_system_command
+    scope = str(metadata.get("user_scope_id") or "").strip()
+    if is_system_command(task) or (scope and is_local_admin_lane(scope)):
         return None
-    if source == MAIL_CHANNEL:
-        where = "mail"
-    elif source in CHANNEL_TASK_SOURCES:
-        where = channel_label(source)
-    else:
-        where = "a contact"
-    return (f"Not run here: a task from {where}. This terminal does not answer messengers or "
-            "mail, and the task is not run later. To answer them, run VAF as a service: "
-            "vaf start (or vaf tray).")
+    return ("Not run here: a chat from another account. This terminal answers only its owner's "
+            "chats, and the task is not run later. To serve every account, run VAF as a "
+            "service: vaf start (or vaf tray).")
+
+
+#: Bidirectional embeddings, overrides and isolates: they reorder how a line reads.
+_BIDI_CONTROLS = frozenset("\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
+
+
+def _terminal_echo(text) -> str:
+    """Queued text as this terminal may print it: Rich markup escaped, so "[/]" or "[link=...]"
+    is printed as written instead of raising or styling, and control characters removed (all
+    but newline and tab, and the bidirectional controls), so no escape sequence the sender
+    wrote reaches the terminal (clearing the screen, setting the title, moving the cursor)."""
+    import unicodedata
+    from rich.markup import escape
+    kept = "".join(ch for ch in str(text or "")
+                   if ch in "\n\t" or (unicodedata.category(ch) != "Cc" and ch not in _BIDI_CONTROLS))
+    return escape(kept)
 
 
 def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None, web_enabled: bool = False):
@@ -1504,7 +1537,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                             current_session.id = task.session_id
                             session_mgr.save(current_session)
                             
-                        raw_input = task.input_text
+                        raw_input = str(task.input_text or "")
                         is_web_input = True
                         
                         # CRITICAL: Sync agent session ID with current session
@@ -1590,10 +1623,12 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                             except Exception as e:
                                 tui.error(f"Command processing error: {e}")
                                 continue
+                            finally:
+                                tq.task_done(task=task)
                         
                         # Normal Chat Input
                         user_input = raw_input
-                        tui.console.print(f"\n[bold green]Web UI Input:[/bold green] {user_input}")
+                        tui.console.print(f"\n[bold green]Web UI Input:[/bold green] {_terminal_echo(user_input)}")
                     else:
                         # 2. Wait for input with interrupt support
                         # We pass the queue to input_box to poll it internally? 
@@ -1651,7 +1686,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                     current_session.id = task.session_id
                                     session_mgr.save(current_session)
                                     
-                                raw_input = task.input_text
+                                raw_input = str(task.input_text or "")
                                 is_web_input = True
                                 
                                 # CRITICAL: Sync agent session ID with current session
@@ -1730,9 +1765,11 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                         tui.error(f"Command processing error: {e}")
                                         wake_word_detected_flag.clear()
                                         continue
+                                    finally:
+                                        tq.task_done(task=task)
                                 
                                 user_input = raw_input
-                                tui.console.print(f"\n[bold green]Web UI Input:[/bold green] {user_input}")
+                                tui.console.print(f"\n[bold green]Web UI Input:[/bold green] {_terminal_echo(user_input)}")
                                 # Clear flag so we don't trigger voice logic
                                 wake_word_detected_flag.clear()
                             # Else it was real voice (handled below)
@@ -1743,7 +1780,9 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                     tui.warning("Switching to standard input mode (no auto-complete/history)")
                     console_broken = True
                     # What follows is typed, also when the failure came after a queued task
-                    # was taken (that task is lost with the failed prompt).
+                    # was taken: that task is lost with the failed prompt, and released.
+                    if is_web_input:
+                        tq.task_done(task=task)
                     is_web_input = False
                     try:
                         user_input = input("Message: ")
@@ -1757,6 +1796,24 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                 get_speech_manager().stop()
             except Exception:
                 pass
+
+            # Text from the queue is a chat message and nothing else, so it is handled before
+            # anything below reads it. The microphone sentinel, the shortcuts, the slash
+            # commands and the @file expansion act on the operator's terminal and disk (the
+            # sentinel opens the microphone, quit ends this session, settings opens a menu
+            # here, /export writes a file, @<path> reads one into the turn), and the text was
+            # written in a browser. Typed input keeps all of them. An empty text (a frame that
+            # carried only files) is no turn. The task is done when its turn ends, however it
+            # ends, so its chat does not read as busy and its next message is not held back.
+            if is_web_input:
+                try:
+                    queued_text = user_input.strip()
+                    if queued_text:
+                        current_session.add_message("user", queued_text)
+                        _process_agent_message(agent, queued_text, tui, current_session)
+                finally:
+                    tq.task_done(task=task)
+                continue
 
             # Handle Wake Word Trigger (Auto-Exit from Input Box)
             if user_input == "__WAKE_WORD_TRIGGERED__":
@@ -1859,16 +1916,6 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                 try:
                     current_session = session_mgr.load(target_session_id)
                 except: pass
-
-            # Text from the queue is a chat message and nothing else. The shortcuts, the slash
-            # commands and the @file expansion below act on the operator's terminal and disk
-            # (quit ends this session, settings opens a menu here, /export writes a file,
-            # @<path> reads one into the turn), and the text was written in a browser, by
-            # whoever is signed in there. Typed input keeps all three.
-            if is_web_input:
-                current_session.add_message("user", user_input)
-                _process_agent_message(agent, user_input, tui, current_session)
-                continue
             
             # ═══════════════════════════════════════════════════════════════
             # KEYBOARD SHORTCUTS (single letters)

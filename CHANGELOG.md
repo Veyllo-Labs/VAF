@@ -627,9 +627,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   terminal (ending the session, opening the settings menu, restarting VAF, writing a file);
   `@<path>` read a file into the turn. That lane now declines messenger and mail tasks with a
   note in the terminal: they are answered by VAF running as a service (`vaf start` or
-  `vaf tray`). Text that arrives from the web UI is never a terminal command either. And when
-  VAF is already running, `vaf run --web` no longer starts a second server, which used to start
-  a second copy of the messenger bridges, the mail sync and the schedulers. Restart a running
+  `vaf tray`). It also answers only your own web chats now: a chat from another account on
+  your network ran there with your identity and could read your other chats, and is declined
+  the same way. Text that arrives from the web UI is never a terminal command either, not even
+  one that looks like markup or carries terminal control characters. And when VAF is already
+  running, `vaf run --web` no longer starts a second server, which used to start a second copy
+  of the messenger bridges, the mail sync and the schedulers. Restart a running
   `vaf run --web` session after updating.
 
 ### Fixed

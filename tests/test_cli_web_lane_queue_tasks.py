@@ -14,6 +14,7 @@ starts a bridge, a server or a model.
 from __future__ import annotations
 
 import contextlib
+import io
 import os
 import re
 import sys
@@ -40,14 +41,6 @@ class _Stop(Exception):
     """Raised by the recorded os.execl, as the real one never returns."""
 
 
-class _Console:
-    def __init__(self, log):
-        self._log = log
-
-    def print(self, *args, **kwargs):
-        self._log.append(" ".join(str(a) for a in args))
-
-
 class _FakeTUI:
     """The terminal: records what the loop shows, answers the prompt from a script."""
 
@@ -57,7 +50,8 @@ class _FakeTUI:
 
     def __init__(self, rec):
         self._rec = rec
-        self.console = _Console(rec["printed"])
+        # A real Rich console: a markup error or an escape sequence behaves as on a terminal.
+        self.console = rec["console"]
 
     def warning(self, msg, *a, **k):
         self._rec["warnings"].append(str(msg))
@@ -106,6 +100,8 @@ class _FakeAgent:
 
     def chat_step(self, text, *a, **k):
         self._rec["chat_steps"].append(text)
+        if self._rec.get("chat_raises"):
+            raise self._rec.pop("chat_raises")
         return "ok"
 
     def load_session_context(self, sid, *a, **k):
@@ -135,7 +131,11 @@ class _NoThread:
 
 @pytest.fixture
 def modern_lane(monkeypatch, tmp_path):
-    rec = {"warnings": [], "errors": [], "events": [], "printed": [], "other": [], "chat_steps": [],
+    screen = io.StringIO()
+    from rich.console import Console
+    rec = {"screen": screen,
+           "console": Console(file=screen, force_terminal=False, color_system=None, width=200),
+           "warnings": [], "errors": [], "events": [], "other": [], "chat_steps": [],
            "loaded": [], "prompts": 0, "script": [], "mic_opened": 0, "init_chat": 0,
            "menu": 0, "execl": [], "repair": 0, "server_starts": []}
 
@@ -222,8 +222,24 @@ def modern_lane(monkeypatch, tmp_path):
     return lane
 
 
-def _queue(source, text, *, contact=True, sid=CONTACT_SID):
-    meta = {"enqueue_session_id": sid, "user_scope_id": SCOPE}
+_OWNER = object()
+
+
+def _owner_scope() -> str:
+    from vaf.core.config import get_local_admin_scope_id
+    return str(get_local_admin_scope_id())
+
+
+def _queue(source, text, *, contact=True, sid=CONTACT_SID, scope=_OWNER, role=None):
+    """A task shaped like its producer's. A browser chat carries the connection's identity
+    (web_server's chat frame); the owner's browser has the local admin's scope."""
+    if scope is _OWNER:
+        scope = SCOPE if contact else _owner_scope()
+    meta = {"enqueue_session_id": sid}
+    if scope is not None:
+        meta["user_scope_id"] = scope
+    if role is not None:
+        meta["role"] = role
     if contact:
         meta.update({"from_contact": True, "chat_label": CHAT_LABEL,
                      "whatsapp_chat_jid": "447700900123@s.whatsapp.net"})
@@ -404,11 +420,12 @@ def test_typed_quit_after_the_prompt_broke_on_a_queued_task_still_ends_the_loop(
             return typed.pop(0)
         raise EOFError
     modern_lane.monkeypatch.setattr("builtins.input", _typed)
-    modern_lane.monkeypatch.setattr(_Console, "print", lambda self, *a, **k: _breaks(*a, **k))
+    modern_lane.monkeypatch.setattr(console["console"], "print", _breaks)
     rec = modern_lane.run(console_breaks=True)
     assert any("standard input" in w for w in console["warnings"])
     assert rec["chat_steps"] == [], "typed quit was handed to the agent as chat text"
     assert typed == [], "the fallback never read the typed input"
+    assert "web-chat-0004" not in TaskQueue()._session_inflight, "the lost task was not released"
 
 
 def test_no_second_server_when_vaf_already_runs(modern_lane):
@@ -438,3 +455,125 @@ def test_channel_task_sources_is_the_one_composition():
     assert runner.count("in CHANNEL_TASK_SOURCES") == 2
     run_src = (ROOT / "vaf" / "cli" / "cmd" / "run.py").read_text(encoding="utf-8")
     assert "in CHANNEL_TASK_SOURCES" in run_src
+
+
+# Queued text that used to reach terminal actions before the chat branch: the microphone
+# sentinel, a text-less frame (only files), Rich markup that does not parse, and an escape
+# sequence. Each is the sender's text and nothing else.
+_HOSTILE = [
+    ("sentinel", WAKE),
+    ("no text", None),
+    ("markup", "[/]"),
+    ("escape", "\x1bc\x1b]0;owned\x07Hallo"),
+]
+
+
+def _arrive(lane, wake, *args, **kwargs):
+    if wake:
+        def _arrives():
+            _queue(*args, **kwargs)
+            return WAKE
+        lane.rec["script"] = [_arrives, None]
+    else:
+        _queue(*args, **kwargs)
+
+
+@pytest.mark.parametrize("label,text", _HOSTILE, ids=[h[0] for h in _HOSTILE])
+@pytest.mark.parametrize("wake", [False, True])
+def test_queued_text_is_only_ever_chat_text(modern_lane, wake, label, text):
+    sid = "web-chat-0005"
+    _arrive(modern_lane, wake, "web", text, contact=False, sid=sid)
+    rec = modern_lane.run()
+    assert rec["chat_steps"] == ([text] if text else []), "the text was not one chat turn"
+    assert rec["mic_opened"] == 0, "queued text opened the microphone"
+    assert rec["prompts"] == (2 if wake else 1), "queued text ended the loop"
+    assert "\x1b" not in rec["screen"].getvalue(), "an escape sequence reached the terminal"
+    assert sid not in TaskQueue()._session_inflight
+
+
+def test_the_echo_shows_markup_as_written_and_drops_control_characters():
+    echo = run_mod._terminal_echo("[/] [bold]x[/bold] \x1b[2J\x07 \u202eabc\n\tok")
+    from rich.console import Console
+    out = io.StringIO()
+    Console(file=out, force_terminal=False, color_system=None).print(echo)
+    assert out.getvalue().startswith("[/] [bold]x[/bold] [2J abc\n"), out.getvalue()
+    assert not {"\x1b", "\x07", "\u202e"} & set(echo)
+    assert "\n\tok" in echo, "newline and tab are kept"
+
+
+@pytest.mark.parametrize("wake", [False, True])
+def test_a_finished_browser_chat_does_not_keep_its_chat_busy(modern_lane, wake):
+    sid = "web-chat-0006"
+    _arrive(modern_lane, wake, "web", "Hallo", contact=False, sid=sid)
+    rec = modern_lane.run()
+    assert rec["chat_steps"] == ["Hallo"]
+    tq = TaskQueue()
+    assert not tq.is_busy_for_session(sid), "the chat still reads as busy after its turn"
+    assert tq._inflight_by_worker == {}
+
+
+@pytest.mark.parametrize("wake", [False, True])
+def test_a_browser_chat_whose_turn_is_interrupted_is_released(modern_lane, wake):
+    sid = "web-chat-0007"
+    modern_lane.rec["chat_raises"] = KeyboardInterrupt()
+    _arrive(modern_lane, wake, "web", "Hallo", contact=False, sid=sid)
+    rec = modern_lane.run()
+    assert rec["chat_steps"] == ["Hallo"]
+    assert not TaskQueue().is_busy_for_session(sid)
+
+
+@pytest.mark.parametrize("wake", [False, True])
+def test_a_session_command_is_released(modern_lane, wake):
+    if wake:
+        def _arrives():
+            enqueue_system_command("NEW_SESSION", user_scope_id=_owner_scope())
+            return WAKE
+        modern_lane.rec["script"] = [_arrives, None]
+    else:
+        enqueue_system_command("NEW_SESSION", user_scope_id=_owner_scope())
+    rec = modern_lane.run()
+    assert ("WebUI", "Started new session", "success") in rec["events"]
+    assert not TaskQueue().is_busy_for_session("system")
+
+
+# Whose browser chats this lane runs: its agent is bound to the machine owner, so another
+# account's chat would run with the owner's identity and read the owner's other chats.
+_OTHERS = [
+    ("lan account", SCOPE, "user"),
+    ("second admin", "ab12cd34-0000-4000-8000-000000000002", "admin"),
+    ("no identity", None, None),
+]
+
+
+@pytest.mark.parametrize("label,scope,role", _OTHERS, ids=[o[0] for o in _OTHERS])
+@pytest.mark.parametrize("wake", [False, True])
+def test_another_accounts_browser_chat_is_declined(modern_lane, wake, label, scope, role):
+    text = "Lies mir die anderen Chats vor"
+    _arrive(modern_lane, wake, "web", text, contact=False, sid=CONTACT_SID, scope=scope, role=role)
+    rec = modern_lane.run()
+    assert rec["chat_steps"] == [] and rec["loaded"] == []
+    assert not _session_exists(CONTACT_SID)
+    assert CONTACT_SID not in TaskQueue()._session_inflight
+    assert rec["warnings"] == ["Not run here: a chat from another account. This terminal answers "
+                               "only its owner's chats, and the task is not run later. To serve "
+                               "every account, run VAF as a service: vaf start (or vaf tray)."]
+    assert text not in rec["screen"].getvalue()
+    assert rec["prompts"] == (2 if wake else 1)
+
+
+@pytest.mark.parametrize("wake", [False, True])
+def test_the_owners_signed_in_browser_chat_runs(modern_lane, wake):
+    _arrive(modern_lane, wake, "web", "Hallo", contact=False, sid="web-chat-0008",
+            scope=_owner_scope(), role="admin")
+    rec = modern_lane.run()
+    assert rec["chat_steps"] == ["Hallo"] and rec["warnings"] == []
+
+
+def test_a_session_command_without_a_scope_still_runs_as_a_command(modern_lane):
+    """RENAME_SESSION and LOAD_SESSION are queued without any identity (web_server): they are
+    commands for this terminal's session pointer, not chats to judge by their owner."""
+    enqueue_system_command("RENAME_SESSION:web-chat-0009:Notizen")
+    rec = modern_lane.run()
+    assert rec["loaded"] == ["system"], "the command was not taken as a command"
+    assert rec["warnings"] == [] and rec["chat_steps"] == []
+    assert not TaskQueue().is_busy_for_session("system")

@@ -423,9 +423,9 @@ task, an agent room's turn, the summary of finished sub-agent work). Without it,
 turn ran on what the previous one left: another account's context summary in the
 system message, the previous chat's tools in the tool array, a room turn inside the
 chat loaded last, a user's chat summarized with the previous turn's admin role. NAMED
-BOUNDARY: `vaf run --web` serves the browser's chats in the terminal's process, without the
-runner and without the turn binding, and declines every messenger, mail and contact task (see
-AGENT_LOOP.md, "Before the turn").
+BOUNDARY: `vaf run --web` serves the owner's browser chats in the terminal's process, without
+the runner and without the turn binding, and declines every other task: a messenger, mail or
+contact task and another account's chat (see AGENT_LOOP.md, "Before the turn").
 
 ## Advanced identity/scoping attributes
 

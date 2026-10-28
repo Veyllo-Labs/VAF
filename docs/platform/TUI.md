@@ -278,27 +278,6 @@ What it can change is decided by where a key is READ, not by how it looks:
   heartbeat is NOT part of that wiring and runs on every interactive lane: it
   is the only signal the tray has that a CLI session is alive, and without it
   the tray unloads the local model mid-session.)
-- What `vaf run --web` takes from its queue: the browser's chats and the web
-  server's session commands, nothing else. A task a messenger bridge or the
-  mail answering lane queued (`CHANNEL_TASK_SOURCES` in
-  `vaf/core/channel_ingress_policy.py`), and any task a contact sent
-  (`from_contact`), is declined with a note in the terminal and is gone (the
-  queue is in memory; the message stays in its chat's history). Only the
-  queue runner answers on a channel: it holds a contact's turn to the Front
-  Office tool set, briefs the model, pins the turn to the contact and
-  delivers the reply, and this lane would run the text as the owner's own
-  turn with every tool. The owner's own messenger tasks are declined too,
-  because the answer would never reach the messenger. Queued text is never
-  a shortcut, a command or an `@file` reference: those act on the operator's
-  terminal and disk, and only typed input reaches them. When a VAF service
-  already runs (`vaf.core.instance.find_service()`), the lane starts no
-  backend of its own: uvicorn runs the server's startup before it binds the
-  port, so a second server started a second set of bridges, the mail sync
-  and the schedulers before it failed on port 8001. The frontend step then
-  reuses the running frontend. NAMED BOUNDARY: a port 8001 held by something
-  that is not a found VAF service (another program, another account's VAF)
-  is not asked about; the lane starts its server, whose startup runs before
-  the bind fails. Guard: `tests/test_cli_web_lane_queue_tasks.py`.
   The transcript-replay half of that boundary is closed: a session switch
   clears the transcript and repaints the loaded conversation (newest
   `REPLAY_CAP` messages, an honest note names what was trimmed and points at
@@ -309,6 +288,48 @@ What it can change is decided by where a key is READ, not by how it looks:
   feed/done against a just-scheduled mount races on_mount and would leave
   the 100 ms interval running forever (the avatar-leak class). What still
   blocks the `__CMD__` session commands is only their producer wiring.
+- What `vaf run --web` takes from its queue: the owner's browser chats and
+  the web server's session commands, nothing else. Its agent is bound to the
+  machine owner (`_make_cli_agent`) and cannot be bound per task, so every
+  other task is declined with a note in the terminal that never quotes the
+  sender, and is gone (the queue is in memory; a message stays in its chat's
+  history). That covers a task a messenger bridge or the mail answering lane
+  queued (`CHANNEL_TASK_SOURCES` in `vaf/core/channel_ingress_policy.py`) and
+  any task a contact sent (`from_contact`): only the queue runner answers on
+  a channel, holding a contact's turn to the Front Office tool set, briefing
+  the model, pinning the turn to the contact and delivering the reply, and
+  this lane would run the text as the owner's own turn with every tool. The
+  owner's own messenger tasks are declined too, because the answer would
+  never reach the messenger. It also covers a chat from any account but the
+  owner's (the local admin's scope): a LAN account, a second admin, a task
+  with no scope. Such a chat would run with the owner's identity and read the
+  owner's other chats. A second admin is declined although
+  `is_admin_identity` calls them an admin, for the reason
+  `config.is_local_admin_lane` gives: admin rights do not make them the
+  owner. A declined account's browser gets no answer. The session commands
+  are not judged by an owner: `LOAD_SESSION` and `RENAME_SESSION` are queued
+  without a scope, and they move only this terminal's own session pointer.
+  Queued text is chat text and nothing else, handled before the input is
+  read for anything: never the microphone sentinel, a shortcut, a command or
+  an `@file` reference, all of which act on the operator's terminal and disk
+  and stay with typed input. A frame with no text (only files) is no turn.
+  Its terminal echo has Rich markup escaped and control characters removed
+  (`_terminal_echo`), so `[/]` cannot break the prompt into the fallback and
+  an escape sequence never reaches the terminal. Every task the loop takes
+  is marked done when its turn ends, however it ends, so its chat does not
+  read as busy (`TaskQueue.is_busy_for_session`).
+  When a VAF service already runs (`vaf.core.instance.find_service()`), the
+  lane starts no backend of its own: uvicorn runs the server's startup before
+  it binds the port, so a second server started a second set of bridges, the
+  mail sync and the schedulers before it failed on port 8001. The frontend
+  step then reuses the running frontend. NAMED BOUNDARY: `find_service()`
+  answers only for the tray's singleton port (8002), which `vaf run --web`
+  does not hold. So a second `vaf run --web` of the same account, and a tray
+  or `vaf start` started AFTER a `vaf run --web`, still run the server's
+  startup again, with a second set of messenger bridges, before the bind on
+  port 8001 fails; so does a `vaf run --web` while something that is not a
+  found VAF service (another program, another account's VAF) holds port
+  8001. Guard: `tests/test_cli_web_lane_queue_tasks.py`.
 - The in-process TaskQueue IS consumed now, once a second, and a fired timer
   or a finished background command arrives as an amber wake card (labelled by its
   wake kind) followed by a real turn. Two producers exist in this process: the

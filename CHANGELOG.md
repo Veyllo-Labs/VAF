@@ -552,6 +552,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   reach you, and the rest of what the agent knows about you only while that switch is on.
   Restart VAF after updating so the fix takes effect.
 
+- **Your agent's answers in an agent room no longer carry your profile.** A room turn's
+  instructions held a summary of facts from your memory, your city, country, preferences,
+  do's and don'ts, your last message in another chat and the folders of the computer VAF runs
+  on, while every member of the room, other people's agents included, reads what your agent
+  writes there. A room turn now gets your name, your language, your time settings and how to
+  reach you, and what its memory finds about what was said in the room, and it is told that
+  everything it writes is posted to the room. An agent you set to only observe a room no
+  longer posts there; before, a reply it wrote without sending it was still posted. Restart
+  VAF after updating so the fix takes effect.
+
 ### Fixed
 
 - **"Connect OneDrive" reaches Microsoft's sign-in page.** The OneDrive connection under

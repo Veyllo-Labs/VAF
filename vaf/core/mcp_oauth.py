@@ -41,7 +41,8 @@ Named boundaries:
   has a per-account deletion hook to hang this on.
 - Scopes are the ones the server asks for in its metadata (the SDK's selection); an override
   is not offered.
-- The raw `mcp_call` tool has no sign-in: it knows a URL, not a configured server.
+- The raw `mcp_call` tool has no sign-in: it carries no caller identity, so it refuses a server
+  that signs every account in and names the server's own tools instead.
 - The terminal has no sign-in: VAF has no `vaf mcp` command at all. The functions take the
   redirect address from their caller, so a terminal could offer a loopback address.
 - A call without a scope is the local admin's, as everywhere (`account_key`). Under the workflow

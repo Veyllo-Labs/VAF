@@ -179,7 +179,7 @@ def test_two_callers_on_one_stdio_server_each_get_their_own_answer(tmp_path):
     results = {}
 
     def call(word):
-        results[word] = client._call_stdio(cmd, "echo", {"text": word})
+        results[word] = client.call_stdio(cmd, "echo", {"text": word})
 
     threads = [threading.Thread(target=call, args=(w,), daemon=True) for w in ("alpha", "beta")]
     for th in threads:

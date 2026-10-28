@@ -134,58 +134,120 @@ def _safe(name: str) -> str:
     return s or "x"
 
 
+# ── Registered servers: the only ones a model may reach ──────────────────────────────────────────
+
+def _argv(command: str) -> List[str]:
+    """A stdio command as the client starts it (split on whitespace, vaf/tools/mcp_client.py), so
+    two spellings that start the same process compare equal."""
+    return str(command or "").split()
+
+
+def registered_server(server: str) -> Optional[tuple]:
+    """``(name, cfg)`` of the enabled, reachable server that `server` names, or None.
+
+    `server` is a server's name in the manifest or, for a local server, its exact command (the
+    same argv). This is the lookup behind the raw `mcp_call`, whose arguments the MODEL writes:
+    a command that is not one an administrator registered is never started, for any account, and
+    a server switched off in the manifest is not reached either."""
+    wanted = str(server or "").strip()
+    if not wanted:
+        return None
+    servers = (load_mcp_manifest() or {}).get("servers") or {}
+    if not isinstance(servers, dict):
+        return None
+    usable = [(name, cfg) for name, cfg in servers.items()
+              if isinstance(cfg, dict) and cfg.get("enabled", True) and _addressable(cfg)]
+    for name, cfg in usable:
+        if str(name) == wanted:
+            return str(name), cfg
+    argv = _argv(wanted)
+    for name, cfg in usable:
+        if str(cfg.get("transport", "stdio")) == "stdio" and _argv(cfg.get("command", "")) == argv:
+            return str(name), cfg
+    return None
+
+
+def registered_server_names() -> List[str]:
+    """The names `registered_server` answers, for a refusal that tells the model what exists.
+    Names only: a command or a URL can carry a path or a host the caller has no business with."""
+    servers = (load_mcp_manifest() or {}).get("servers") or {}
+    if not isinstance(servers, dict):
+        return []
+    return sorted(str(name) for name, cfg in servers.items()
+                  if isinstance(cfg, dict) and cfg.get("enabled", True) and _addressable(cfg))
+
+
+def native_tool_name(server_name: str, real_tool: str) -> str:
+    """The name a server's tool is registered under: ``mcp_<server>_<tool>``."""
+    return f"mcp_{_safe(server_name)}_{_safe(real_tool)}"
+
+
+def tool_permission(server_cfg: Dict[str, Any], real_tool: str) -> str:
+    """The permission level of one tool of a server: an optional per-tool override
+    (``tool_permissions[<tool>]``) wins, otherwise the server's level, default "write"."""
+    perms = server_cfg.get("tool_permissions") if isinstance(server_cfg.get("tool_permissions"), dict) else {}
+    permission = str(perms.get(real_tool) or server_cfg.get("permission_level", "write")).strip().lower()
+    return permission if permission in ("read", "write", "dangerous", "system") else "write"
+
+
+def call_registered_tool(server_name: str, server_cfg: Dict[str, Any], real_tool: str,
+                         arguments: Dict[str, Any], *, user_scope_id: Optional[str] = None) -> str:
+    """Call one tool of a registered server, as the registered ``mcp_<server>_<tool>`` tools and
+    the raw `mcp_call` both do: a local server through the shared client with its env from the
+    key ring, a remote one at its registered URL with its headers and its registered egress, and
+    a server that signs every account in as `user_scope_id`. Secrets are read here, at call
+    time, never captured. Never raises."""
+    from vaf.tools.mcp_client import get_mcp_client
+    client = get_mcp_client()
+    transport = str(server_cfg.get("transport", "stdio"))
+    try:
+        if transport == "stdio":
+            from vaf.core.mcp_secrets import effective_env
+            return client.call_stdio(str(server_cfg.get("command", "")), real_tool, arguments,
+                                     effective_env(server_name, server_cfg) or None)
+        if transport in REMOTE_TRANSPORTS:
+            server_url = str(server_cfg.get("url", ""))
+            auth = None
+            from vaf.core.mcp_oauth import uses_sign_in
+            if uses_sign_in(server_cfg):
+                from vaf.core.mcp_oauth import auth_for
+                from vaf.core.mcp_remote import McpSignInRequired
+                try:
+                    auth = auth_for(server_name, server_cfg, user_scope_id)
+                except McpSignInRequired as exc:
+                    return f"Error: {exc}"
+            from vaf.core.mcp_remote import registered_egress
+            return client.call_remote(transport, server_url, real_tool, arguments,
+                                      headers=server_headers(server_name, server_cfg), auth=auth,
+                                      egress=registered_egress(server_url))
+        return f"Error: Unsupported MCP transport '{transport}'"
+    except Exception as exc:
+        return f"Error calling MCP tool '{real_tool}': {exc}"
+
+
 # ── Dynamic tool factory ─────────────────────────────────────────────────────────────────────────
 
 def make_mcp_tool(server_name: str, server_cfg: Dict[str, Any], tool_meta: Dict[str, Any]):
     """Build a BaseTool subclass wrapping a single MCP tool. The LLM sees a normal native tool; run()
     delegates to the shared MCP client (warm process cache) with server + tool pre-bound."""
     from vaf.tools.base import BaseTool
-    from vaf.tools.mcp_client import get_mcp_client
 
     real_tool = str(tool_meta.get("name", "")).strip()
-    tool_name = f"mcp_{_safe(server_name)}_{_safe(real_tool)}"
+    tool_name = native_tool_name(server_name, real_tool)
     base_desc = str(tool_meta.get("description") or real_tool).strip()
     description = f"{base_desc} (via MCP server '{server_name}')"
     parameters = tool_meta.get("inputSchema")
     if not isinstance(parameters, dict):
         parameters = {"type": "object", "properties": {}}
-    # Permission: an optional per-tool override (server_cfg["tool_permissions"][<tool>]) wins,
-    # otherwise the per-server level, default "write".
-    _tool_perms = server_cfg.get("tool_permissions") if isinstance(server_cfg.get("tool_permissions"), dict) else {}
-    permission = str(_tool_perms.get(real_tool) or server_cfg.get("permission_level", "write")).strip().lower()
-    if permission not in ("read", "write", "dangerous", "system"):
-        permission = "write"
-    command = str(server_cfg.get("command", ""))
-    transport = str(server_cfg.get("transport", "stdio"))
-    server_url = str(server_cfg.get("url", ""))
+    permission = tool_permission(server_cfg, real_tool)
     from vaf.core.mcp_oauth import uses_sign_in
     per_account = uses_sign_in(server_cfg)
 
     def _run(self, **kwargs) -> str:
-        # Secrets are read at call time, from the ring, never captured in the tool.
-        client = get_mcp_client()
         # The dispatcher's identity key is VAF's, never an argument for the server.
         user_scope_id = kwargs.pop("user_scope_id", None) if per_account else None
-        try:
-            if transport == "stdio":
-                from vaf.core.mcp_secrets import effective_env
-                return client._call_stdio(command, real_tool, kwargs, effective_env(server_name, server_cfg) or None)
-            if transport in REMOTE_TRANSPORTS:
-                auth = None
-                if per_account:
-                    from vaf.core.mcp_oauth import auth_for
-                    from vaf.core.mcp_remote import McpSignInRequired
-                    try:
-                        auth = auth_for(server_name, server_cfg, user_scope_id)
-                    except McpSignInRequired as exc:
-                        return f"Error: {exc}"
-                from vaf.core.mcp_remote import registered_egress
-                return client.call_remote(transport, server_url, real_tool, kwargs,
-                                          headers=server_headers(server_name, server_cfg), auth=auth,
-                                          egress=registered_egress(server_url))
-            return f"Error: Unsupported MCP transport '{transport}'"
-        except Exception as exc:
-            return f"Error calling MCP tool '{real_tool}': {exc}"
+        return call_registered_tool(server_name, server_cfg, real_tool, kwargs,
+                                    user_scope_id=user_scope_id)
 
     attrs = {
         "name": tool_name,

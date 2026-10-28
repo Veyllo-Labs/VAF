@@ -544,32 +544,38 @@ def test_mcp_stdio_pump_answers_parse_errors_and_keeps_serving(peer):
         "the pump must survive garbage and keep serving"
 
 
-def test_vafs_own_mcp_client_drives_the_guest_bridge(peer, server, capsys):
+def test_vafs_own_mcp_client_drives_the_guest_bridge(peer, server, capsys, tmp_path, monkeypatch):
     """MUTATION: any drift from the subset VAF's client speaks - a wrong id
     echo, a reply to the initialized notification, multi-line JSON, a missing
     result.content - goes red here. VAF consuming its own bridge is the proof
-    that any MCP host can.
+    that any MCP host can. The bridge is registered first, as an administrator
+    would: `mcp_call` starts no command that is not.
     """
     if " " in sys.executable or " " in str(WIRE):
         pytest.skip("the MCP client splits its server command on spaces")
-    from vaf.tools.mcp_client import MCPClientTool
+    import vaf.core.mcp_registry as reg
+    from vaf.tools.mcp_client import MCPClientTool, get_mcp_client
 
     _join(peer, server, capsys)
     command = f"{sys.executable} {WIRE} mcp"
+    manifest = tmp_path / "mcp_servers.json"
+    manifest.write_text(json.dumps({"servers": {"room": {"command": command}}}), encoding="utf-8")
+    monkeypatch.setattr(reg, "get_mcp_manifest_path", lambda: manifest)
     tool = MCPClientTool()
     try:
         names = {t["name"] for t in tool.list_server_tools(command)}
         assert "a2a_say" in names and len(names) == 15, names
         before = len(server["state"]["submissions"])
-        answer = tool.run(server_command=command, tool_name="a2a_say",
+        answer = tool.run(server="room", tool_name="a2a_say",
                           arguments={"room": ROOM, "text": "vaf drives its bridge"})
         assert "committed" in answer, answer
         sent = server["state"]["submissions"][before:]
         assert {"kind": "say", "body": {"text": "vaf drives its bridge"}} in \
             [_content(p) for p in sent]
     finally:
-        for process in tool._server_processes.values():
-            process.terminate()
+        for client in (tool, get_mcp_client()):
+            for process in list(client._server_processes.values()):
+                process.terminate()
 
 
 def test_rooms_lists_the_seats_without_the_secrets(peer, server, capsys):

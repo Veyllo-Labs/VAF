@@ -15,6 +15,22 @@ The stdio loop is shared by every caller in the process (the raw `mcp_call`, dis
 registered `mcp_<server>_<tool>` tools), so one request at a time runs per server process, and
 every request carries its own id. Before, all calls used the same id and nothing serialised
 them: two chats calling the same server at once could each read the other's answer.
+
+The raw `mcp_call` starts only a server an administrator registered (`mcp_servers.json`,
+vaf/core/mcp_registry.py `registered_server`). Its arguments are the MODEL's, and it used to
+start whatever `server_command` said, on the host, as the user VAF runs as: measured, a regular
+account's turn created a file with `server_command="touch <file>"`, since the tool has no
+`admin_only`, a write-level tool asks nobody, and the coder's lane asks nobody at all. The
+refusal holds for every account, the admin's included, because the admin did not write the
+command either. Code of your own that has chosen a command calls `call_stdio` directly.
+
+Named boundaries: `mcp_call` is not `admin_only`, not opt-in per account and not a confirmation
+tool. What it reaches is what every account already has as the registered
+``mcp_<server>_<tool>`` tools, starting the processes discovery starts at every startup; a
+tool of such a server that asks for a confirmation on every call (`dangerous`) and a server that
+signs every account in are refused here and stay with their own tools, which carry the
+confirmation and the caller's identity. A `server_url` (http / sse) the model passes is still
+reached, under the instance destination policy and without any stored token.
 """
 
 import itertools
@@ -44,14 +60,19 @@ class MCPClientTool(BaseTool):
     category    = "mcp"
     permission_level = "write"
     side_effect_class = "irreversible"
-    description = "Call external tools via Model Context Protocol (MCP). Connects to MCP servers to access tools written in any language."
-    
+    description = ("Call a tool of an MCP (Model Context Protocol) server: one an administrator "
+                   "registered (Settings > Advanced > MCP), named in `server`, or a remote server "
+                   "without a login at `server_url`. An unregistered command is never started.")
+    # A model that learned the old parameter keeps working, as long as what it names is a
+    # registered server (`registered_server` also takes a local server's exact command).
+    input_aliases = {"server": ["server_command", "server_name"]}
+
     parameters = {
         "type": "object",
         "properties": {
-            "server_command": {
+            "server": {
                 "type": "string",
-                "description": "Command to start the MCP server (e.g., 'npx -y @modelcontextprotocol/server-filesystem' or path to executable)"
+                "description": "Name of a registered MCP server (its tools are also listed as mcp_<server>_<tool>)"
             },
             "tool_name": {
                 "type": "string",
@@ -64,12 +85,12 @@ class MCPClientTool(BaseTool):
             "transport": {
                 "type": "string",
                 "enum": ["stdio", "http", "sse"],
-                "description": "stdio (a local server started by server_command, the default), http (a remote server over Streamable HTTP at server_url) or sse (a remote server over the older SSE transport)",
+                "description": "Only with server_url: http (Streamable HTTP) or sse (the older SSE transport). A registered server uses its own transport.",
                 "default": "stdio"
             },
             "server_url": {
                 "type": "string",
-                "description": "Server URL (required for http/sse transport). A server that needs a login is registered in Settings instead, where its token is kept."
+                "description": "URL of a remote server that needs no login (http/sse). A server that needs one is registered in Settings instead, where its token is kept."
             }
         },
         "required": ["tool_name"]
@@ -86,40 +107,61 @@ class MCPClientTool(BaseTool):
         self._request_ids = itertools.count(1)
     
     def run(self, **kwargs) -> str:
-        """
-        Execute an MCP tool call.
-        
-        Args:
-            server_command: Command to start MCP server
-            tool_name: Name of tool to call
-            arguments: Tool arguments (dict)
-            transport: Transport method (stdio/http/sse)
-            server_url: Server URL (for http/sse)
-        
-        Returns:
-            Tool result as string
-        """
-        server_command = kwargs.get("server_command", "")
+        """Call `tool_name` with `arguments` on the registered server `server` (a name, or a local
+        server's exact command; `server_command` is the old name of the field), or on the remote
+        server at `server_url` over `transport` (http / sse). Returns the tool's text."""
+        server = str(kwargs.get("server") or kwargs.get("server_command") or "").strip()
         tool_name = kwargs.get("tool_name", "")
         arguments = kwargs.get("arguments", {})
         transport = kwargs.get("transport", "stdio")
         server_url = kwargs.get("server_url", "")
-        
+
         if not tool_name:
             return "Error: tool_name is required"
-        if transport == "stdio" and not server_command:
-            return "Error: server_command is required for the stdio transport"
-        if transport in ("http", "sse") and not server_url:
-            return "Error: server_url is required for the http and sse transports"
-
         try:
-            if transport == "stdio":
-                return self._call_stdio(server_command, tool_name, arguments)
+            if server:
+                return self._call_registered(server, tool_name, arguments)
             if transport in ("http", "sse"):
+                if not server_url:
+                    return "Error: server_url is required for the http and sse transports"
                 return self.call_remote(transport, server_url, tool_name, arguments)
+            if server_url:
+                return "Error: a server_url needs the transport http or sse"
+            if transport == "stdio":
+                return self._refuse_unregistered("")
             return f"Error: Unsupported transport '{transport}'"
         except Exception as e:
             return f"Error calling MCP tool: {e}"
+
+    def _call_registered(self, server: str, tool_name: str, arguments: Dict[str, Any]) -> str:
+        """The model's call on a registered server, through the same path as that server's own
+        registered tools; refused where those tools carry a rule this lane cannot (module
+        docstring)."""
+        from vaf.core import mcp_registry
+        found = mcp_registry.registered_server(server)
+        if found is None:
+            return self._refuse_unregistered(server)
+        name, cfg = found
+        own_tool = mcp_registry.native_tool_name(name, str(tool_name))
+        from vaf.core.mcp_oauth import uses_sign_in
+        if uses_sign_in(cfg):
+            return (f"Error: the MCP server '{name}' signs every account in on its own. Call its "
+                    f"tool as {own_tool}, which runs as you.")
+        if mcp_registry.tool_permission(cfg, str(tool_name)) == "dangerous":
+            return (f"Error: '{tool_name}' on the MCP server '{name}' asks for a confirmation on "
+                    f"every call. Call it as {own_tool}.")
+        return mcp_registry.call_registered_tool(name, cfg, str(tool_name), arguments or {})
+
+    @staticmethod
+    def _refuse_unregistered(server: str) -> str:
+        from vaf.core.mcp_registry import registered_server_names
+        names = registered_server_names()
+        shown = server if len(server) <= 80 else server[:77] + "..."
+        what = f"'{shown}' is not one" if server else "name one in `server`"
+        known = (f" Registered: {', '.join(names)}." if names
+                 else " None is registered; an administrator adds one under Settings > Advanced > MCP.")
+        return (f"Error: mcp_call reaches only an MCP server an administrator registered, never a "
+                f"command of its own; {what}.{known}")
 
     def _lock_for(self, server_command: str) -> threading.Lock:
         with self._locks_guard:
@@ -245,10 +287,12 @@ class MCPClientTool(BaseTool):
         except Exception:
             return []
 
-    def _call_stdio(self, server_command: str, tool_name: str, arguments: Dict[str, Any],
-                    env: Optional[Dict[str, str]] = None) -> str:
-        """Call an MCP tool via stdio transport (JSON-RPC over stdin/stdout) — the most common MCP
-        transport."""
+    def call_stdio(self, server_command: str, tool_name: str, arguments: Dict[str, Any],
+                   env: Optional[Dict[str, str]] = None) -> str:
+        """Call an MCP tool via stdio transport (JSON-RPC over stdin/stdout), starting
+        `server_command` if it is not running yet. For code that chose the command itself (the
+        registry runs a registered server's): a command from a model's arguments goes through
+        `run`, which starts only a registered one."""
         with self._lock_for(server_command):
             process = self._ensure_server(server_command, env)
             if process is None:

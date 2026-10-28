@@ -42,6 +42,11 @@ _LEGACY_MODES = ("permissive",)
 MAIL_CHANNEL = "email"
 MESSENGER_FRONT_OFFICE_CHANNELS = FRONT_OFFICE_MESSENGERS
 FRONT_OFFICE_CHANNELS = MESSENGER_FRONT_OFFICE_CHANNELS + (MAIL_CHANNEL,)
+# The `source` a channel lane tags its queue tasks with: every messenger with a bridge, and the
+# mail answering lane. Such a task is answered on its channel, and only the queue runner does
+# that (the reply delivery, the Front Office set and briefing, the contact's pin); a consumer
+# without those declines it (`vaf run --web`, vaf/cli/cmd/run.py).
+CHANNEL_TASK_SOURCES: Tuple[str, ...] = CHAT_CHANNELS + (MAIL_CHANNEL,)
 _POLICY_CHANNELS = _SUPPORTED_CHANNELS + (MAIL_CHANNEL,)
 MAIL_REPLY_MODES = ("draft", "send")
 _THROTTLE_MIN = 5

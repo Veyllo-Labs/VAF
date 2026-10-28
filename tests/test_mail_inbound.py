@@ -372,7 +372,7 @@ def test_the_runner_and_the_prompt_know_the_mail_lane():
     src = (REPO / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
     assert 'elif task_source == "email":' in src and "_deliver_email_reply(task, meta, final_text)" in src
     assert 'task_source_err == "email"' not in src, "an error is never mailed to a stranger"
-    assert 'disable_workflows = str(task_source).lower() in CHAT_CHANNELS + ("email",)' in src, \
+    assert 'disable_workflows = str(task_source).lower() in CHANNEL_TASK_SOURCES' in src, \
         "no workflows on a contact's mail, nor on any chat channel"
     assert '{"channel": "mail", "chat_id": str(tid).strip()}' in src
     from vaf.core import headless_runner as hr

@@ -643,7 +643,9 @@ means "not re-sent". `tests/test_channel_secrets.py` refuses any other module re
 credential field out of a config block. Everything that
 has to know "which channels are there" reads it: the chat sources the tool policy and
 host_bash's own guard recognise (`CHAT_CHANNELS`, `CHAT_SESSION_PREFIXES`), the ingress
-policy and its closed-by-default doors, the main messengers an owner can pick
+policy and its closed-by-default doors (and `CHANNEL_TASK_SOURCES` beside it, the queue
+sources of the channel lanes: the messengers plus mail, which only the queue runner answers),
+the main messengers an owner can pick
 (`MAIN_MESSENGERS`, the channels with a bridge), the send-tool sets of thinking mode, the
 automation dedup, the Front Office allow-list and the workflow engine's scope injection
 (`ALL_SEND_TOOLS`), the owner back-channel (`CHAT_SEND_TOOLS`), the labels, the inbox lanes

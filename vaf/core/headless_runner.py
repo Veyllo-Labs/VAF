@@ -20,6 +20,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:32")
 import requests
 from vaf.core.agent import Agent
 from vaf.core.channels import CHAT_CHANNELS, CHAT_SESSION_PREFIXES
+from vaf.core.channel_ingress_policy import CHANNEL_TASK_SOURCES
 from vaf.core.identity_binding import (Identity, identity_from_metadata,
                                        resolve_scope_identity)
 from vaf.core.task_queue import TaskQueue, is_system_command
@@ -582,7 +583,7 @@ def _apply_channel_history_window(agent, source: str) -> None:
     Keep only a small recent window for channel sessions (Telegram/WhatsApp/Discord)
     so stale long-tail chat history does not dominate tool decisions.
     """
-    if source not in CHAT_CHANNELS + ("email",):
+    if source not in CHANNEL_TASK_SOURCES:
         return
     try:
         raw_limit = Config.get("channel_history_window_messages", CHANNEL_HISTORY_WINDOW_MESSAGES)
@@ -2639,7 +2640,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # Do not run workflow matching for contact messages (WhatsApp/Telegram/Discord).
                     # Workflows are for the account owner in Web/CLI; contact chat should be normal LLM reply only.
                     task_source = getattr(task, "source", None) or ""
-                    disable_workflows = str(task_source).lower() in CHAT_CHANNELS + ("email",)
+                    disable_workflows = str(task_source).lower() in CHANNEL_TASK_SOURCES
 
                     # Keep WebUI sub-agents inside the WebUI panel (no host terminal popups)
                     # even after restarts where global env flags may be unset.

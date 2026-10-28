@@ -2060,7 +2060,11 @@ def get_session_workspace_dir(session_id: Optional[str] = None, create: bool = F
     The flat legacy root ``VAF_Projects/<folder>`` (folders from before the
     per-account level) is a second candidate for a chat without a recorded
     scope, and for a chat with one only when ``<folder>`` equals the id, so a
-    lossy name never reaches another chat's legacy folder.
+    lossy name never reaches another chat's legacy folder. NAMED BOUNDARY: a
+    legacy folder records no owner. A deleted chat's legacy folder that still
+    holds files stays, and an account that later starts a chat under exactly
+    that id (a server-shaped id it would have to know) reaches it. A fresh
+    installation has no legacy folders.
     """
     import re as _re
 

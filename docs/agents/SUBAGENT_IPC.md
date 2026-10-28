@@ -87,6 +87,8 @@ active **push**, modelled on the harness `<task-notification>`:
   (`_drain_turn_binding`, `vaf/core/turn_binding.py`); it used to run with the role and the
   source the last queued turn left on the shared agent. Each result's own side effects (its
   window update and its `subagent_output`) go to the chat its record names (`_result_chat`).
+  The result's own processing (`_process_subagent_result`) runs after the chat's load and
+  before the bind, which leaves only the role stale, and nothing in it reads the role.
   One drain pass takes the results of ONE chat and writes one summary turn for them; results
   of other chats are not consumed and stay pending for the next pass (a second later, or at
   the next push). Before, a pass took every chat's results and wrote all their texts into one
@@ -356,8 +358,11 @@ runner's drain (full side effects: SubAgent window, `subagent_output`, messenger
 a user chat turn no longer consumes them mid-reply. The drain's summary turn runs as the chat's
 owner with that chat's source; a result that names no chat stays pending (Result push above). Drain messenger summaries pass the SAME
 outbound sanitizer chain as normal headless replies (`_prepare_channel_outbound`: think-strip,
-tool-JSON strip, workflow-async strip, internal-phrase net, untagged-CoT prefix guard) and are
-based on `chat_step`'s reasoning-stripped return value, not the raw stream buffer; when
+tool-JSON strip, workflow-async strip, internal-phrase net, untagged-CoT prefix guard) and carry
+the summary the chat shows: the drain's stored copy of the streamed turn (`stored_turn_copy`),
+because `chat_step` returns a status, not the answer ([CORE_AGENT.md](../CORE_AGENT.md), Return
+contract); a reply a guard retracted is cleared from that copy as in the chat lane, and the
+stream, the stored copy and the messenger all address the chat the turn was bound to. When
 sanitization empties the summary, a deterministic localized fallback (head + result excerpt)
 is sent instead - never a noise placeholder, never a skipped send (the drain owns delivery).
 The WebUI/session lane is exempt from the new guard: the browser already streamed the

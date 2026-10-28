@@ -355,7 +355,7 @@ def _fake_agent(tools, *, thinking=False):
         _working_memory_note_gate=lambda tool_args: None,
         _proactive_reply_gate_decision=lambda name, tool, args: None,
         _ask_first_gate_decision=lambda name, tool: None,
-        _room_mode_gate_decision=lambda name, tool: None,
+        _room_mode_gate_decision=lambda name, tool, args=None: None,
         get_live_session_subagents=lambda: [],
         _extract_subagent_goal=lambda args: "",
         model_display_name="probe",

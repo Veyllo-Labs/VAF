@@ -23,7 +23,8 @@ from vaf.core.channels import CHAT_CHANNELS, CHAT_SESSION_PREFIXES
 from vaf.core.identity_binding import (Identity, identity_from_metadata,
                                        resolve_scope_identity)
 from vaf.core.task_queue import TaskQueue, is_system_command
-from vaf.core.turn_binding import TurnBinding, TurnRefused, bind_turn, end_turn
+from vaf.core.turn_binding import (TurnBinding, TurnRefused, bind_turn, end_turn,
+                                   room_turn_marker)
 from vaf.core.subagent_ipc import take_result_notification
 from vaf.core.session import (SessionManager, Session, TurnStatus, failed_turn_meta,
                               stored_turn_copy, turn_context_messages_since_last_user)
@@ -1228,12 +1229,7 @@ def _room_turn_binding(room_wake: dict, identity: Identity) -> TurnBinding:
         source="web",
         conversation=conversation_key(room_id, peer_id),
         room_id=room_id,
-        room_turn={"room_id": room_wake["room_id"],
-                   "mode": room_wake["mode"],
-                   "query": room_wake.get("query", ""),
-                   "from_user": room_wake.get("from_user", False),
-                   "from_user_only": room_wake.get("from_user_only", False),
-                   "from_authority": room_wake.get("from_authority", False)},
+        room_turn=room_turn_marker(room_wake),
         synthetic=True,
         excluded_tools=_editor_tool_exclusions(None, None),
     )

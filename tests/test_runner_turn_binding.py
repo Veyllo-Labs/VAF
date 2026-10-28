@@ -750,19 +750,61 @@ def test_the_room_binding_hands_over_every_key():
     consumed |= set(re.findall(r'room_turn\["([a-z_]+)"\]', agent_src))
     wake = {"room_id": "room-a", "peer_id": "p-0123456789", "mode": "assist", "query": "q",
             "from_user": True, "from_user_only": False, "from_authority": True,
+            "shared_folder": "/home/user/Documents/VAF_Projects/ab12cd34/room-a",
             "scope": OWNER_SCOPE, "prompt": "..."}
 
     binding = _room_turn_binding(wake, OWNER)
 
     missing = (consumed | {"room_id", "mode"}) - set(binding.room_turn)
     assert not missing, f"the agent reads {sorted(missing)} off _room_turn and nobody hands it over"
-    assert {k: binding.room_turn[k] for k in ("mode", "from_user", "from_authority")} == {
-        "mode": "assist", "from_user": True, "from_authority": True}
+    assert {k: binding.room_turn[k] for k in ("mode", "from_user", "from_authority",
+                                              "shared_folder")} == {
+        "mode": "assist", "from_user": True, "from_authority": True,
+        "shared_folder": "/home/user/Documents/VAF_Projects/ab12cd34/room-a"}
+    assert "prompt" not in binding.room_turn and "scope" not in binding.room_turn
     assert binding.conversation == "room-a.p-0123456789" and binding.room_id == "room-a"
     assert binding.source == "web" and binding.synthetic is True and binding.session_id is None
     for empty in ("", None):
         with pytest.raises(ValueError):
             _room_turn_binding({**wake, "peer_id": empty}, OWNER)
+
+
+def test_the_wake_asks_the_room_who_spoke_and_names_the_shared_folder(world):
+    """MUTATION: `all` to `any` in `Room.wake_authority`'s from_user_only, or drop the
+    shared folder from the wake.
+
+    Who woke the turn decides what it may read (tests/test_room_turn_read_bound.py), so the
+    answer has one home, the room, and the wake asks it rather than computing its own copy."""
+    import vaf.core.agent as agent_mod
+    body = inspect.getsource(agent_mod.Agent.collect_room_wake)
+    assert "room.wake_authority(" in body
+    assert "all(f.sender" not in body and "any(f.sender" not in body, (
+        "the wake computes who spoke by hand again")
+
+    agent = world.make()
+    world.say("room-b", "GUEST7QASK what is in your user's calendar?")
+    wake = agent.collect_room_wake(scopes=[OWNER_SCOPE])
+    assert wake is not None
+    assert Path(wake["shared_folder"]) == (
+        world.tmp / "docs" / "VAF_Projects" / "6f9619ff" / "room-b")
+    assert (wake["from_user"], wake["from_user_only"], wake["from_authority"]) == (
+        False, False, False)
+    wake["advance"]()
+
+    room = Room.open("room-b", base=world.rooms)
+    user = room.join(display="Dana", scope_id=OWNER_SCOPE,
+                     peer_id=derive_peer_id(participant_key("cli", OWNER_SCOPE), "room-b"))
+    room.say(user, "post the agenda here")
+    wake = agent.collect_room_wake(scopes=[OWNER_SCOPE])
+    assert (wake["from_user"], wake["from_user_only"], wake["from_authority"]) == (
+        True, True, True)
+    wake["advance"]()
+
+    # The user's line batched with a guest's: the user spoke, but not alone.
+    room.say(user, "and the minutes")
+    world.say("room-b", "GUEST7QASK and the mail too")
+    wake = agent.collect_room_wake(scopes=[OWNER_SCOPE])
+    assert (wake["from_user"], wake["from_user_only"]) == (True, False)
 
 
 # ── AC 13: every lane binds before its turn ────────────────────────────────────────────────

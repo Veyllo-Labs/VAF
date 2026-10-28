@@ -279,28 +279,31 @@ def test_a_room_turn_never_repaints_the_browser_panel(spy, _no_emit):
 
 
 def test_the_runner_hands_over_every_key_a_reader_consumes():
-    """MUTATION: read a new key off _room_turn without copying it in the runner.
+    """MUTATION: read a new key off _room_turn without adding it to ROOM_TURN_KEYS.
 
     Measured failure, one day old: the mode gate read room_turn.get("from_authority")
     while the runner copied four other keys and not that one. The gate fails CLOSED,
     so nothing crashed - the feature simply never fired, and the source-scanning
     tests were green because the wake computed the value and the gate read the name.
-    The hand-off between them was the untested step. This asserts the runner's dict
-    literal carries EVERY key any agent.py reader consumes, so the next reader added
-    without its copy fails here by name.
+    The hand-off between them was the untested step. This asserts the one list of
+    marker keys (`ROOM_TURN_KEYS`, vaf/core/turn_binding.py) carries EVERY key any
+    agent.py reader consumes, and that the runner and the room-triggered automation
+    both build the marker from it, so the next reader added without its key fails here
+    by name.
     """
-    runner_src = (ROOT / "vaf" / "core" / "headless_runner.py").read_text(encoding="utf-8")
-    # The room's turn binding carries the dict (_room_turn_binding, vaf/core/turn_binding.py).
-    literal = runner_src.split("room_turn={", 1)[1].split("}", 1)[0]
-    handed = set(re.findall(r'"([a-z_]+)":', literal))
+    from vaf.core.turn_binding import ROOM_TURN_KEYS
+    handed = set(ROOM_TURN_KEYS)
 
     consumed = set(re.findall(r'room_turn\.get\("([a-z_]+)"\)', AGENT_SRC))
     consumed |= set(re.findall(r'room_turn\["([a-z_]+)"\]', AGENT_SRC))
-    consumed.discard("room_id")  # present, just also indexed via variables elsewhere
-    missing = consumed - handed - {"mode"}
+    missing = consumed - handed
     assert not missing, (
-        f"agent.py reads {sorted(missing)} off _room_turn and the runner never "
+        f"agent.py reads {sorted(missing)} off _room_turn and the marker never "
         f"hands it over - the gate fails closed, so this is invisible at runtime")
     for key in ("room_id", "mode", "query", "from_user", "from_user_only",
-                "from_authority"):
-        assert key in handed, f"the runner stopped copying {key}"
+                "from_authority", "shared_folder"):
+        assert key in handed, f"the marker stopped carrying {key}"
+    for lane in ("headless_runner.py", "automation.py"):
+        src = (ROOT / "vaf" / "core" / lane).read_text(encoding="utf-8")
+        assert "room_turn=room_turn_marker(" in src, f"{lane} builds its room marker by hand"
+        assert "room_turn={" not in src, f"{lane} builds its room marker by hand"

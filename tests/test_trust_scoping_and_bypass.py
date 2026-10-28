@@ -183,7 +183,7 @@ def _python_exec_fallback(monkeypatch, *, scope, allowed_scope, account_tools=No
         _working_memory_note_gate=lambda tool_args: None,
         _proactive_reply_gate_decision=lambda n, t, a: None,
         _ask_first_gate_decision=lambda n, t: None,
-        _room_mode_gate_decision=lambda n, t: None,
+        _room_mode_gate_decision=lambda n, t, a=None: None,
         get_live_session_subagents=lambda: [], _extract_subagent_goal=lambda a: "",
         model_display_name="probe",
     ))

@@ -89,6 +89,7 @@ __all__ = [
     "TurnRefused",
     "bind_turn",
     "end_turn",
+    "room_turn_marker",
 ]
 
 _ENGINE, _STEP, _CHAT, _ACCOUNT, _BINDING = "engine", "step", "chat", "account", "binding"
@@ -146,6 +147,26 @@ AGENT_STATE: dict = {
     "_synthetic_drain_turn": _BINDING, "_excluded_tools": _BINDING,
     "_chat_project_dir": _BINDING, "_turn_decision_note": _BINDING,
 }
+
+
+#: The keys of an agent room's turn marker (`TurnBinding.room_turn`, read off `_room_turn`), with
+#: the value a lane that does not know one means. The closed value wherever it matters: not the
+#: user's words, no authority, no shared folder.
+ROOM_TURN_KEYS: dict = {
+    "room_id": "", "mode": "", "query": "", "from_user": False, "from_user_only": False,
+    "from_authority": False, "shared_folder": "",
+}
+
+
+def room_turn_marker(wake: Optional[dict]) -> dict:
+    """The ``room_turn`` marker for a turn a room started, from what the lane learned of it.
+
+    One list of keys for every lane that binds such a turn (the runner's room wake and an
+    automation a room message starts), because a key computed by a lane and not handed over
+    fails CLOSED in the gate that reads it, which is the quiet way for two lanes to drift.
+    Unknown keys in ``wake`` are left out; missing ones get the closed value."""
+    wake = wake or {}
+    return {key: wake.get(key, default) for key, default in ROOM_TURN_KEYS.items()}
 
 
 class TurnRefused(RuntimeError):

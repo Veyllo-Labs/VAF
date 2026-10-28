@@ -1520,6 +1520,35 @@ class Room:
         """Peers that lead this room, if any. A round has none by design."""
         return [peer for peer, role in self.roles().items() if role == "leader"]
 
+    def wake_authority(self, scope: Optional[str], senders: Iterable[str]) -> Dict[str, bool]:
+        """Whose words these are, for the agent of the account ``scope`` in this room.
+
+        ``senders`` are the room handles of what woke the agent (the frames' ``sender``).
+        The account's own person speaks under the handle its ``cli`` lane derives, which
+        nobody else can land on; the browser and the terminal act under it. Three answers:
+
+          from_user       at least one sender is that person
+          from_user_only  there is a sender and every sender is that person: the user's
+                          words alone, which open what a chat message would open
+          from_authority  there is a sender and every sender is that person or a leader
+                          of this room: the two a worker takes instructions from
+
+        A mix is never the stronger answer: a stranger's words batched with the user's
+        must not borrow the user's standing. One answer for every lane that asks - the
+        agent's room wake and an automation a room message starts - so the two cannot
+        disagree about who spoke. Never raises: on any error all three are False, the
+        closed answer.
+        """
+        try:
+            handles = [str(s) for s in senders]
+            user = derive_peer_id(participant_key("cli", scope), self.room_id)
+            authority = {user} | set(self.leaders())
+            return {"from_user": any(h == user for h in handles),
+                    "from_user_only": bool(handles) and all(h == user for h in handles),
+                    "from_authority": bool(handles) and all(h in authority for h in handles)}
+        except Exception:
+            return {"from_user": False, "from_user_only": False, "from_authority": False}
+
     def welcome(self, identity: Identity) -> Dict[str, Any]:
         """Everything a peer needs to work here, answered at the moment it joins.
 
@@ -2192,10 +2221,11 @@ class Room:
         and the room id is its folder name for the same reason a chat's session id
         is (both are shaped by their own id rules, safe as a path segment).
 
-        Members from OTHER tenants do not reach it today: their file jail ends at
-        their own projects root. Opening the folder across the tenant line is a
-        containment decision, not a path question, and it is deliberately not made
-        here. A guest with no tenant at all never had a jail exception to lose.
+        Members from OTHER tenants reach it only in a room shared across accounts, and
+        that containment decision is made in the file jail (`_shared_room_roots` in
+        vaf/tools/filesystem.py), not here. A guest with no tenant at all never had a
+        jail exception to lose. A room turn somebody other than the user woke reaches
+        this folder and nothing else (`Agent._room_file_scope`).
 
         Returns None when the room has no owner tenant to anchor the path under
         (a manifest without an owner is a legacy shape the loader tolerates).

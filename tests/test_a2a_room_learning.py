@@ -154,19 +154,30 @@ def test_a_room_turn_is_given_what_it_knows_and_learns_only_if_it_ran():
 
 
 def test_only_the_user_and_the_leader_carry_authority_in_a_room(rooms):
-    """MUTATION: make from_authority true when ANY frame comes from an authority.
+    """MUTATION: make from_authority true when ANY sender is an authority.
 
-    Same conservative shape the neighbouring `from_user_only` already has, and for the
-    same reason: a wake that MIXES a stranger's words with a leader's must not let the
-    stranger's ask ride on the leader's standing. `any` instead of `all` is the whole
-    difference, and a foreign agent that times its message alongside the leader's would
-    be the one to find it.
+    Same conservative shape `from_user_only` has, and for the same reason: a wake that
+    MIXES a stranger's words with a leader's must not let the stranger's ask ride on the
+    leader's standing. `any` instead of `all` is the whole difference, and a foreign agent
+    that times its message alongside the leader's would be the one to find it. Asked of
+    the room (`Room.wake_authority`), the one answer the wake and a room-triggered
+    automation share.
     """
-    src = AGENT_SRC.split("_authority = {user_peer}", 1)[1].split("return {", 1)[0]
-    assert "all(f.sender in _authority for f in frames)" in src, (
+    scope = "ab12cd34-0000-4000-8000-000000000001"
+    room = Room.create(kind="chain", owner_scope=scope, base=rooms, room_id="room-auth")
+    lead = room.join(display="Lead", scope_id=scope, peer_id="p-lead")
+    stranger = room.join(display="Codex", scope_id=None, peer_id="p-stranger")
+    user = derive_peer_id(participant_key("cli", scope), room.room_id)
+    assert room.leaders() == [lead.peer_id]
+
+    def ask(*senders):
+        return room.wake_authority(scope, list(senders))["from_authority"]
+
+    assert ask(user) and ask(lead.peer_id) and ask(user, lead.peer_id)
+    assert not ask(lead.peer_id, stranger.peer_id), (
         "one authorised frame in the wake authorises the whole wake")
-    assert "set(room.leaders())" in src, "the leader is not an authority"
-    assert "bool(frames) and" in src, "an EMPTY wake counts as authorised"
+    assert not ask(stranger.peer_id), "a stranger carries authority"
+    assert not ask(), "an EMPTY wake counts as authorised"
 
 
 def test_remembering_in_a_room_needs_authority_and_never_happens_in_observe():

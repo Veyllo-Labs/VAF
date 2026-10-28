@@ -211,8 +211,9 @@ def holds_outward_send(tool_name: str, args: Optional[Dict[str, Any]] = None, *,
     a timer the person set in the web UI fires later, on a clock, with that same source and
     nobody at the screen. The person asked for that message to go out at that time, so it goes
     out - the hold is for what the agent prepares while they are sitting there, not for the
-    work they scheduled. The runner marks such a turn; automations and workflows never reach
-    this function at all, because they carry no chat source.
+    work they scheduled. The runner marks such a turn; automations and workflows carry no chat
+    source, except a run a room message started, which is bound as a room turn and marked
+    unattended the same way.
     """
     if unattended:
         return False

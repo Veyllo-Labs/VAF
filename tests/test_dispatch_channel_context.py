@@ -112,7 +112,7 @@ def _run(tool_name, context):
         _working_memory_note_gate=lambda tool_args: None,
         _proactive_reply_gate_decision=lambda n, t, a: None,
         _ask_first_gate_decision=lambda n, t: None,
-        _room_mode_gate_decision=lambda n, t: None,
+        _room_mode_gate_decision=lambda n, t, a=None: None,
         get_live_session_subagents=lambda: [], _extract_subagent_goal=lambda a: "",
         model_display_name="probe",
     ))
@@ -184,7 +184,7 @@ def test_a_model_cannot_ask_for_the_bridge_back_on_a_channel():
         _working_memory_note_gate=lambda tool_args: None,
         _proactive_reply_gate_decision=lambda n, t, a: None,
         _ask_first_gate_decision=lambda n, t: None,
-        _room_mode_gate_decision=lambda n, t: None,
+        _room_mode_gate_decision=lambda n, t, a=None: None,
         get_live_session_subagents=lambda: [], _extract_subagent_goal=lambda a: "",
         model_display_name="probe",
     ))

@@ -39,6 +39,8 @@ class _Agent:
     _DELEGATION_TOOLS = _Real._DELEGATION_TOOLS
     _ROOM_TALK_TOOLS = _Real._ROOM_TALK_TOOLS
     _ROOM_AUTHORITY_TOOLS = _Real._ROOM_AUTHORITY_TOOLS
+    _ROOM_READ_TOOLS = _Real._ROOM_READ_TOOLS
+    _ROOM_SCOPED_TOOLS = _Real._ROOM_SCOPED_TOOLS
     _room_mode_gate_decision = _Real._room_mode_gate_decision
 
     def __init__(self, room_turn=None):
@@ -84,7 +86,9 @@ def test_without_a_room_turn_the_gate_is_silent():
     ("assist", "coding_agent", "read", True),
     ("assist", "room_send", "write", False),
     ("assist", "room_read", "read", False),
-    ("assist", "memory_search", "read", False),
+    # A reader of the user's own data, refused since a wake that is not the user's words
+    # alone reads only the room, the web and the shared folder (tests/test_room_turn_read_bound.py).
+    ("assist", "memory_search", "read", True),
     # autonomous: the user granted it for this room
     ("autonomous", "write_file", "write", False),
     ("autonomous", "coding_agent", "read", False),
@@ -97,7 +101,8 @@ def test_the_mode_matrix(mode, tool, perm, blocked):
     join will actually use.
     """
     agent = _Agent(room_turn={"room_id": "room-x", "mode": mode})
-    decision = agent._room_mode_gate_decision(tool, _Tool(perm))
+    # The room tools act on the room that woke the turn, named as such.
+    decision = agent._room_mode_gate_decision(tool, _Tool(perm), {"room_id": "room-x"})
     assert (decision is not None) is blocked, f"{mode}/{tool} should be blocked={blocked}"
     if blocked:
         assert "room-x" in decision, "the refusal names the room it came from"
@@ -508,6 +513,12 @@ def test_every_refusal_forbids_claiming_the_action_happened():
         )._room_mode_gate_decision("write_file", _Tool("write"))
         assert "did not run" in room_refusal.lower(), mode
         assert "report it as done" in room_refusal.lower(), mode
+    # And the refusal of a reader in a turn somebody other than the user woke.
+    read_refusal = _Agent(
+        room_turn={"room_id": "room-x", "mode": "autonomous"}
+    )._room_mode_gate_decision("read_mail", _Tool("read"))
+    assert "did not run" in read_refusal.lower()
+    assert "report it as done" in read_refusal.lower()
 
 
 # ── the fallback nobody reaches, pinned so nobody flips it ─────────────────
@@ -535,8 +546,12 @@ def test_a_room_turn_with_no_usable_mode_falls_back_to_assist(room_turn):
 
     assert agent._room_mode_gate_decision("write_file", _Tool("write")) is not None
     assert agent._room_mode_gate_decision("coding_agent", _Tool("read")) is not None
-    assert agent._room_mode_gate_decision("room_send", _Tool("write")) is None
-    assert agent._room_mode_gate_decision("memory_search", _Tool("read")) is None
+    assert agent._room_mode_gate_decision("room_send", _Tool("write"),
+                                          {"room_id": "room-x"}) is None
+    # A reader of the user's own data is refused here whatever the mode: the marker
+    # does not say the user woke the turn (tests/test_room_turn_read_bound.py).
+    assert agent._room_mode_gate_decision("memory_search", _Tool("read")) is not None
+    assert agent._room_mode_gate_decision("web_search", _Tool("read")) is None
 
 
 def test_a_damaged_member_record_still_reads_as_assist(tmp_path):

@@ -211,7 +211,13 @@ def user_jail(user_scope_id, user_role=None, *, mode="write"):
     those extra roots are the skills THIS user is allowed to see, decided by a separate
     authority (`get_visible_skill_ids_for_user`). It widened onto data the caller is
     separately entitled to, not onto someone else's. The MECHANISM is the forbidden one all
-    the same, and the next widening will not be that harmless."""
+    the same, and the next widening will not be that harmless.
+
+    What nesting keeps is the INTERSECTION of the two trees (`_intersect_roots`): an inner
+    root inside an outer one whole, and an outer root inside an inner one as the overlap -
+    never the inner parent itself. The second half is what lets a tool's own account jail
+    run inside a turn confined to one folder (`narrowed_jail`): without it the account's
+    project tree, being the folder's parent, was dropped and the tool reached nothing."""
     token = None
     if user_scope_id:
         info = compute_user_jail(user_scope_id, user_role, mode=mode)
@@ -232,19 +238,8 @@ def user_jail(user_scope_id, user_role=None, *, mode="write"):
                 # rules call a reason for deletion.
                 info = outer
             else:
-                # NOT an intersection, deliberately: an inner root is KEPT whole when it lies
-                # inside an outer one and DROPPED whole otherwise. An inner root that is a
-                # PARENT of an outer root is therefore discarded rather than trimmed to the
-                # overlap, and if that was the only root the tool is left with none, i.e.
-                # deny-all. That is the safe direction and it is the intended one - but it is
-                # a silent total refusal rather than access to the shared part, so it is
-                # written down here. Do not "fix" it by widening to the parent.
-                outer_roots = [os.path.abspath(str(r)) for r in (outer.get("allowed_roots") or [])]
-                info = {**info, "allowed_roots": [
-                    r for r in (info.get("allowed_roots") or [])
-                    if any(os.path.abspath(str(r)) == o
-                           or os.path.abspath(str(r)).startswith(o.rstrip("/") + os.sep)
-                           for o in outer_roots)]}
+                info = {**info, "allowed_roots": _intersect_roots(
+                    info.get("allowed_roots"), outer.get("allowed_roots"))}
         if not info.get("is_admin"):
             token = set_librarian_scope(info)
     try:
@@ -252,6 +247,65 @@ def user_jail(user_scope_id, user_role=None, *, mode="write"):
     finally:
         if token is not None:
             reset_librarian_scope(token)
+
+
+def _root_within(path, root) -> bool:
+    """Whether ``path`` is ``root`` or lies below it, both already ``abspath``-ed. Compared with
+    the host's separator, so a Windows root is not read as a prefix of a sibling folder."""
+    return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
+
+
+def _intersect_roots(inner_roots, outer_roots) -> list:
+    """The roots a jail nested inside another may reach: the intersection of the two trees.
+
+    An inner root inside an outer root is kept whole, and an OUTER root inside an inner root is
+    kept as the overlap: a turn confined to one room folder (`narrowed_jail`) and a tool whose
+    own jail is the account's whole project tree meet at that folder. Every other root is
+    dropped, so nesting can never reach a path the outer jail refused, and an outer jail with
+    no roots leaves none."""
+    outer = [os.path.abspath(str(r)) for r in (outer_roots or [])]
+    kept: list = []
+    for r in (inner_roots or []):
+        inner = os.path.abspath(str(r))
+        for o in outer:
+            if _root_within(inner, o):
+                overlap = r
+            elif _root_within(o, inner):
+                overlap = o
+            else:
+                continue
+            if all(os.path.abspath(str(k)) != os.path.abspath(str(overlap)) for k in kept):
+                kept.append(overlap)
+    return kept
+
+
+@_contextlib.contextmanager
+def narrowed_jail(roots):
+    """Confine every file tool in this context to ``roots``, beneath whatever jail is installed.
+
+    For a turn whose file tools must see one folder and nothing else, whoever the account is:
+    an admin is not jailed by `user_jail`, so the per-account jail cannot express it. The roots
+    are allowed and also named as shared roots, so a folder in another account's tree (a room
+    shared across accounts lives under the account that opened it) passes the cross-account
+    invariant in `_jail_info_allows`. Nested like `user_jail`: under an installed jail the
+    result is the intersection (`_intersect_roots`), and a tool that enters its own
+    `user_jail` inside this keeps only the overlap. Empty ``roots`` reaches nothing. Reset in a
+    ``finally``."""
+    roots = [Path(r) for r in (roots or []) if str(r or "").strip()]
+    outer = _librarian_scope_ctx.get(None)
+    if outer:
+        if outer.get("is_admin"):
+            allowed = list(roots)
+        else:
+            allowed = _intersect_roots(roots, outer.get("allowed_roots"))
+    else:
+        allowed = list(roots)
+    token = set_librarian_scope({"is_admin": False, "uid8": "", "allowed_roots": allowed,
+                                 "shared_roots": list(allowed)})
+    try:
+        yield
+    finally:
+        reset_librarian_scope(token)
 
 
 def jail_allows(path, *, user_scope_id, user_role=None, mode="read") -> bool:

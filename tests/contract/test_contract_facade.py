@@ -167,6 +167,21 @@ def test_a_room_can_be_opened_read_and_closed_through_the_facade_alone(tmp_path)
         room.say(me, "and again")
 
 
+def test_the_room_says_whose_words_woke_a_turn(tmp_path):
+    """The question an embedder asks before it lets a room-driven run read its user's data
+    (docs/EMBEDDING.md, Rooms and `RoomTriggerWatch`): the user's own handle derives from
+    the account's `cli` lane, and a mix is never the user's words alone."""
+    room = vaf.Room.create(kind="round", owner_scope="tenant-a", base=tmp_path)
+    user = vaf.derive_peer_id(vaf.participant_key("cli", "tenant-a"), room.room_id)
+
+    assert room.wake_authority("tenant-a", [user]) == {
+        "from_user": True, "from_user_only": True, "from_authority": True}
+    mixed = room.wake_authority("tenant-a", [user, "p-guest"])
+    assert mixed["from_user"] is True and mixed["from_user_only"] is False
+    assert room.wake_authority("tenant-a", []) == {
+        "from_user": False, "from_user_only": False, "from_authority": False}
+
+
 def test_the_lookup_and_the_handle_derivation_work_together(tmp_path):
     """MUTATION: drop derive_peer_id from the facade.
 

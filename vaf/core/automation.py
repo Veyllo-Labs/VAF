@@ -567,6 +567,44 @@ def _last_effective_completion_local_date(task: AutomationTask) -> Optional[date
     return _parse_last_run_local_date(task.last_run)
 
 
+def _room_trigger_binding(task, trigger: Dict[str, Any]):
+    """The turn binding of a prompt-lane run a room message started: a room turn of its own.
+
+    The prompt is the user's, but the words steering the run are whoever spoke in the room, so
+    the run is bounded the way the agent's own room turn is (`Agent._room_mode_gate_decision`):
+    the room's mode for the account's agent decides the writes, a trigger that is not the
+    user's words alone reads only the room, the web and the room's shared folder, and its
+    system prompt carries no profile (`Agent._answers_somebody_else`). Bound to the room's
+    conversation of its own, so its working memory is that room's. Unattended, as every
+    automation is: an outward send it was told to make is not held for a person. Who spoke is
+    the room's answer (`Room.wake_authority`), the one the wake uses. A room that cannot be
+    read binds the closed marker: `observe`, not the user's words, no shared folder."""
+    from vaf.core.a2a.room import Room, conversation_key, derive_peer_id, participant_key
+    from vaf.core.turn_binding import TurnBinding, room_turn_marker
+
+    scope = str(getattr(task, "user_scope_id", "") or "")
+    room_id = str((trigger or {}).get("room_id") or "").strip()
+    if not scope or not room_id:
+        raise ValueError("a room-triggered run needs its account and its room")
+    rows = [r for r in ((trigger or {}).get("frames") or []) if isinstance(r, dict)]
+    handle = derive_peer_id(participant_key("agent", scope), room_id)
+    marker: Dict[str, Any] = {
+        "room_id": room_id, "mode": "observe",
+        "query": " ".join(str(r.get("text") or "").strip() for r in rows)[:300].strip(),
+    }
+    try:
+        room = Room.open(room_id)
+        marker.update(room.wake_authority(scope, [str(r.get("from") or "") for r in rows]))
+        marker["mode"] = room.mode_of(handle)
+        marker["shared_folder"] = str(room.workspace_dir(create=False) or "")
+    except Exception:
+        marker = {k: marker[k] for k in ("room_id", "query")}
+        marker["mode"] = "observe"
+    return TurnBinding(identity=resolve_scope_identity(scope), source="web",
+                       conversation=conversation_key(room_id, handle), room_id=room_id,
+                       room_turn=room_turn_marker(marker), unattended=True)
+
+
 def _revoked_run_note(task) -> str:
     """What a run of an account whose access was taken away mid-run answers: logged, and
     nothing is delivered (vaf.core.revocation). One text for both lanes of run_task."""
@@ -1761,6 +1799,9 @@ vaf automation delete <id>   # Delete task
         # gets one honest timeout note instead (live 2026-07-13: the half stream was
         # wrapped into a junk HTML and pushed, then the zombie delivered again).
         prompt_timeout_unresolved = False
+        # The agent a room-triggered run bound as a room turn; its turn is ended below on
+        # every exit, so the room and conversation it set do not outlive the run.
+        _room_bound_agent = None
 
         try:
             # ... (Rest of the method logic) ...
@@ -1996,7 +2037,15 @@ vaf automation delete <id>   # Delete task
                 
                 agent = Agent(verbose=False, run_kind="automation")
                 agent.load_model()
-                agent.init_chat()
+                # A run a room message started is a room turn: bound before its prompt is
+                # built (`bind_turn` starts the conversation of its own), so the prompt, the
+                # tools and the working memory are the room turn's (_room_trigger_binding).
+                if trigger is not None:
+                    from vaf.core.turn_binding import bind_turn
+                    bind_turn(agent, _room_trigger_binding(task, trigger))
+                    _room_bound_agent = agent
+                else:
+                    agent.init_chat()
                 # RUNAWAY GUARD: a prompt-based automation fallback must NOT recursively spawn workflows or
                 # more automations — that is what flooded /api/subagent/stream and required a process kill.
                 # Strip the recursive spawners (ordinary content sub-agents like coding_agent stay and are
@@ -2012,7 +2061,9 @@ vaf automation delete <id>   # Delete task
                 # active web user; observed as an automation leaking into a LAN client's chat).
                 agent._background_run = True
                 # So calendar and create_automation tools use the correct user (same scope as this task).
-                bind_identity(agent, resolve_scope_identity(task.user_scope_id))
+                # A room-triggered run is already bound to it, with the room's markers.
+                if trigger is None:
+                    bind_identity(agent, resolve_scope_identity(task.user_scope_id))
 
                 # Tell the agent it is the same agent, just running an automation in the background.
                 if os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes"):
@@ -2310,6 +2361,12 @@ vaf automation delete <id>   # Delete task
             result = f"Error: {e}"
             UI.error(f"Automation failed: {e}")
         finally:
+            if _room_bound_agent is not None:
+                try:
+                    from vaf.core.turn_binding import end_turn
+                    end_turn(_room_bound_agent)
+                except Exception:
+                    pass
             # 🔓 RELEASE LOCK
             try:
                 from vaf.core.lock_manager import LockManager

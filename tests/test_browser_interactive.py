@@ -467,8 +467,7 @@ def test_the_takeover_hook_touches_no_jar(mgr, monkeypatch):
     The eviction (and its cookie EXPORT) is all this hook may do."""
     _no_ipc_tasks(monkeypatch)
     monkeypatch.setenv("VAF_BROWSER_SCRUB", "full")
-    wipes = []
-    monkeypatch.setattr(bi, "request_profile_wipe", lambda *a: wipes.append(a))
+    wipes = mgr._test_wipes
     mgr.start("scope-a", "sess-1", save=True)
     before = len(mgr._test_cookie_calls)
     wipes.clear()                    # the lease start did its own handover
@@ -516,20 +515,25 @@ def test_non_persistent_run_starts_clean_even_for_the_same_scope(mgr, monkeypatc
 def test_scope_changes_always_wipe_and_full_mode_deepens_same_scope_starts(mgr, monkeypatch):
     """A change of hands is ALWAYS the verified profile wipe (not a mode).
     VAF_BROWSER_SCRUB=full's one remaining meaning: a same-scope clean start
-    deepens from the quick scrub to a best-effort profile wipe too."""
+    deepens from the quick scrub to a profile wipe too (verified, but a failed
+    confirmation does not refuse the run)."""
     _no_ipc_tasks(monkeypatch)
-    soft_wipes = []
-    monkeypatch.setattr(bi, "request_profile_wipe", lambda *a: soft_wipes.append(a))
     mgr.start("scope-a", "sess-1")
     assert len(mgr._test_wipes) == 1             # unknown jar counts as a change
     mgr.stop("user", requester_scope="scope-a")
     mgr.hand_jar_to_run(user_scope_id="scope-b", persistent=True)
     assert len(mgr._test_wipes) == 2             # verified, mode-independent
     mgr.hand_jar_to_run(user_scope_id="scope-b", persistent=False)
-    assert len(mgr._test_wipes) == 2 and soft_wipes == []  # same scope: quick
+    assert len(mgr._test_wipes) == 2             # same scope: quick
     monkeypatch.setenv("VAF_BROWSER_SCRUB", "full")
     mgr.hand_jar_to_run(user_scope_id="scope-b", persistent=False)
-    assert len(soft_wipes) == 1                  # full deepens the clean start
+    assert len(mgr._test_wipes) == 3             # full deepens the clean start
+    ops = [op for op, _ in mgr._test_cookie_calls]
+    assert ops[-1] == "scrub"
+    # An unconfirmed wipe is logged, the quick scrub still runs, the run goes on.
+    monkeypatch.setattr(bi, "verified_profile_wipe", lambda name, cdp_base="": False)
+    mgr.hand_jar_to_run(user_scope_id="scope-b", persistent=False)
+    assert [op for op, _ in mgr._test_cookie_calls][-1] == "scrub"
 
 
 def test_takeover_hands_the_persons_page_to_the_runs_scope(mgr, monkeypatch):
@@ -667,26 +671,132 @@ def test_workspace_mirrors_in_at_lease_start_and_resets_on_scope_change(mgr, mon
     mgr.stop("user", requester_scope="scope-b")
 
 
-def test_a_full_scrub_of_the_same_scope_mirrors_the_workspace_again(mgr, monkeypatch):
+class _MirroredContainer:
+    """The browser container's Workspace folder and the wipe protocol around it.
+
+    `_wipe_exec` is the real verified wipe's docker seam: the marker is consumed
+    (and the folder deleted, as entrypoint.sh does strictly before it removes the
+    marker) only after `consume_after` polls; `on_poll` runs at a poll before
+    that, which is the window in which another sync can run. `sync` stands in for
+    `_sync_workspace_to_container`: it copies the host's files when the
+    signature differs from `prev`, and `in_flight` runs between its copy and
+    its return, the window in which a wipe can land under a sync."""
+
+    def __init__(self, monkeypatch, consume_after=3, consume=True):
+        self.files = set()
+        self.host = {"report.pdf"}
+        self.host_version = 1
+        self.polls = 0
+        self.consume_after = consume_after
+        self.consume = consume
+        self.on_poll = None
+        self.in_flight = None
+        self.marker = False
+        monkeypatch.setattr(bi, "verified_profile_wipe", bi._real_verified_profile_wipe)
+        monkeypatch.setattr(bi, "_wipe_exec", self.wipe_exec)
+        monkeypatch.setattr(bi, "_sync_workspace_to_container", self.sync)
+        monkeypatch.setattr(bi.time, "sleep", lambda s: None)
+
+    def wipe_exec(self, name, cmd, timeout=20):
+        if cmd.startswith("touch"):
+            self.marker, self.polls = True, 0
+            return 0
+        if cmd.startswith("pkill"):
+            return 0
+        if cmd.startswith("test ! -f"):
+            self.polls += 1
+            if self.consume and self.marker and self.polls >= self.consume_after:
+                self.files.clear()            # rm -rf ... Workspace, then the marker
+                self.marker = False
+            elif self.on_poll is not None:
+                hook, self.on_poll = self.on_poll, None
+                hook()
+            return 1 if self.marker else 0
+        if cmd.startswith("rm -f"):
+            # The supervisor got to the marker while it was being defused.
+            self.files.clear()
+            self.marker = False
+            return 0
+        return 0
+
+    def sync(self, name, scope, prev):
+        sig = ("sig", self.host_version)
+        if sig != prev:
+            self.files |= self.host
+        if self.in_flight is not None:
+            hook, self.in_flight = self.in_flight, None
+            hook()
+        return sig, sorted(self.host)
+
+
+def test_a_full_scrub_mirrors_the_workspace_again_after_the_wipe_is_confirmed(mgr, monkeypatch):
     """VAF_BROWSER_SCRUB=full wipes the profile on a same-scope clean start, and the
-    entrypoint's wipe deletes the mirrored Workspace folder with it. The mirror's
-    signature then describes files that are gone, so it is dropped and the next
-    sync copies again; a quick scrub leaves the folder and keeps the signature.
-    MUTATION: drop the reset next to request_profile_wipe (red)."""
+    wipe deletes the mirrored Workspace folder at Chromium's relaunch, seconds after
+    it is requested. A sync in that window (the run's own mirror right after the
+    handover, a janitor tick) copies the files and stores their signature, and the
+    wipe then deletes them: every later sync skipped them. The signature is dropped
+    once the wipe is CONFIRMED. MUTATION: drop it before the wipe, as at the request
+    (red); drop the reset altogether (red)."""
     _no_ipc_tasks(monkeypatch)
-    prevs = []
-    monkeypatch.setattr(bi, "_sync_workspace_to_container",
-                        lambda name, scope, prev: (prevs.append(prev) or (("sig",), [])))
-    monkeypatch.setattr(bi, "request_profile_wipe", lambda *a: None)
+    box = _MirroredContainer(monkeypatch)
+    mgr.hand_jar_to_run(user_scope_id="scope-a", persistent=True)    # takes the jar
+    mgr.sync_workspace("scope-a")
+    assert box.files == {"report.pdf"}
+    mgr.hand_jar_to_run(user_scope_id="scope-a", persistent=False)   # quick: no wipe
+    assert box.files == {"report.pdf"}
+
+    monkeypatch.setenv("VAF_BROWSER_SCRUB", "full")
+    box.on_poll = lambda: mgr.sync_workspace("scope-a")              # inside the window
+    mgr.hand_jar_to_run(user_scope_id="scope-a", persistent=False)
+    assert box.polls >= 3 and box.on_poll is None
+    assert box.files == set()                                         # the wipe ran
+    mgr.sync_workspace("scope-a")
+    assert box.files == {"report.pdf"}, "the mirror kept a signature for wiped files"
+
+
+def test_a_sync_in_flight_across_a_wipe_does_not_store_its_signature(mgr, monkeypatch):
+    """A sync copies outside the lock. One that read its signature before a wipe and
+    returns after it would store the signature of files the wipe deleted. It stores
+    nothing then, and the next sync copies again. MUTATION: store the signature
+    without the wipe-generation check (red)."""
+    _no_ipc_tasks(monkeypatch)
+    box = _MirroredContainer(monkeypatch)
     mgr.hand_jar_to_run(user_scope_id="scope-a", persistent=True)
     mgr.sync_workspace("scope-a")
-    mgr.hand_jar_to_run(user_scope_id="scope-a", persistent=False)   # quick
-    mgr.sync_workspace("scope-a")
-    assert prevs[-1] == ("sig",)
     monkeypatch.setenv("VAF_BROWSER_SCRUB", "full")
-    mgr.hand_jar_to_run(user_scope_id="scope-a", persistent=False)   # full: wipes
+    box.host_version = 2                                              # a new file arrives
+    box.in_flight = lambda: mgr.hand_jar_to_run(user_scope_id="scope-a", persistent=False)
+    mgr.sync_workspace("scope-a")                                     # copy, wipe, return
+    assert box.files == set()
     mgr.sync_workspace("scope-a")
-    assert prevs[-1] is None
+    assert box.files == {"report.pdf"}, "an in-flight sync stored a pre-wipe signature"
+
+
+def test_an_unconfirmed_full_scrub_still_lets_the_mirror_copy_again(mgr, monkeypatch):
+    """A clean start stays best-effort: a wipe that is not confirmed in time is logged
+    and the run goes on with the quick scrub. The supervisor may still have consumed
+    the marker while it was being defused, so the folder may be gone, and the
+    signature is dropped anyway. MUTATION: drop the signature only on a confirmed
+    wipe (red)."""
+    _no_ipc_tasks(monkeypatch)
+    box = _MirroredContainer(monkeypatch)
+    mgr.hand_jar_to_run(user_scope_id="scope-a", persistent=True)
+    mgr.sync_workspace("scope-a")
+    clock = [1000.0]
+
+    def tick():
+        clock[0] += 5.0
+        return clock[0]
+
+    monkeypatch.setattr(bi.time, "time", tick)
+    box.consume = False                                               # never confirmed
+    monkeypatch.setenv("VAF_BROWSER_SCRUB", "full")
+    before = len(mgr._test_cookie_calls)
+    mgr.hand_jar_to_run(user_scope_id="scope-a", persistent=False)
+    assert "scrub" in [op for op, _ in mgr._test_cookie_calls[before:]]
+    assert box.files == set()
+    mgr.sync_workspace("scope-a")
+    assert box.files == {"report.pdf"}
 
 
 def test_workspace_sync_off_mirrors_nothing(mgr, monkeypatch):

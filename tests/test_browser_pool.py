@@ -740,7 +740,7 @@ def test_a_dedicated_instance_is_never_scrubbed_as_a_stranger(registry, monkeypa
     passwords and downloads the per-user volume exists to keep."""
     monkeypatch.setenv("VAF_BROWSER_SCRUB", "full")
     wipes, ops = [], []
-    monkeypatch.setattr(bi, "request_profile_wipe", lambda *a: wipes.append(a))
+    monkeypatch.setattr(bi, "verified_profile_wipe", lambda *a, **k: wipes.append(a) or True)
     monkeypatch.setattr(bi, "_cookie_op", lambda base, op, cookies=None: ops.append(op))
     registry.instances["scope-a"] = _inst("scope-a", "vaf-browser-u-aaa")
     mgr = _quiet(bi._manager_for_instance(registry.instances["scope-a"]))

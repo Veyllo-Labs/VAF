@@ -768,7 +768,8 @@ partition:
   hands until the file, which the `webui` log names, is removed with VAF stopped.
 - **The same scope, and serialised handovers.** A non-persistent agent run of the SAME
   scope still gets a quick scrub (its documented promise is a clean start;
-  `VAF_BROWSER_SCRUB=full` deepens that to a best-effort profile wipe). Saved logins
+  `VAF_BROWSER_SCRUB=full` deepens that to the verified profile wipe, which here does not
+  refuse the run when it cannot be confirmed). Saved logins
   live in the same per-scope storage-state files as the agent's persistent sessions,
   above. Within a process, concurrent handovers are serialized by a dedicated mutex,
   so two starts can never interleave their wipe-and-restore sequences on the shared

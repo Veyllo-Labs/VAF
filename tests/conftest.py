@@ -402,7 +402,6 @@ def _no_command_in_a_real_container():
         "_purge_container_downloads": lambda name: None,
         "_sweep_container_downloads": lambda name, scope: [],
         "_tar_stream_to_container": lambda name, tar_path: 1,
-        "request_profile_wipe": lambda name="vaf-browser": None,
         "_wipe_exec": lambda name, cmd, timeout=20: 1,
     }
     saved = {name: getattr(bi, name) for name in stubs}

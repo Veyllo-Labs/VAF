@@ -1126,7 +1126,9 @@ the only place in the container that holds anything of the person's. Agent runs 
 the mirrored paths as browser-use's `available_file_paths` whitelist, so `upload_file`
 can attach exactly the owner's files and nothing else. On a scope change the mirror is
 purged unread together with the downloads folder, and the full profile scrub wipes it
-too; both drop the mirror's signature, so the next tick copies the files in again. On a
+too; both drop the mirror's signature once the wipe is confirmed (or known to have
+failed), never at the request, and a sync that was copying across the wipe stores no
+signature, so the next tick copies the files in again. On a
 personal browser the folder lives on the profile volume, so it survives a restart and a
 recreate onto a new image or new settings (the volume is remounted, never removed), and
 the signature stays valid. Pinned by `tests/test_browser_interactive.py`,
@@ -1178,7 +1180,7 @@ VAF_BROWSER_SCRUB=quick   # default; "full" deepens same-scope clean starts
 | Mode | Cleared on a same-scope clean start | Cost |
 |---|---|---|
 | `quick` (default) | Cookies, plus stored state (localStorage, IndexedDB, CacheStorage, service workers) of every origin the jar names. An origin that stored data without ever setting a cookie is missed - a same-user residual, accepted because the cross-user path is the full wipe above. | < 1 s |
-| `full` | The whole-profile wipe, same as a change of hands (best-effort here) | Chromium relaunch, ~3-5 s |
+| `full` | The whole-profile wipe, same as a change of hands and verified the same way; a wipe that is not confirmed is logged and the run goes on with the quick scrub, where a change of hands refuses | Chromium relaunch, ~3-5 s, waited for (at most 40 s) |
 
 The wipe needs the same docker access the stop watchdog already uses. The content
 blocker reinstalls itself into the fresh profile automatically.

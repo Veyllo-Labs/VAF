@@ -795,39 +795,6 @@ def scrub_mode() -> str:
     return "full" if os.environ.get("VAF_BROWSER_SCRUB", "").strip().lower() == "full" else "quick"
 
 
-def request_profile_wipe(container_name: str = "vaf-browser") -> None:
-    """Full-scrub half: wipe the container's Chromium profile between launches.
-
-    A `docker restart` does NOT do this - the container filesystem survives
-    restarts, so History, Login Data, autofill and downloads would all come
-    back. Instead the entrypoint's supervisor owns the wipe: this drops a
-    marker and kills Chromium, the supervisor relaunches it and start_chromium
-    deletes the profile and the downloads first when the marker is present.
-    The extension reinstalls itself into the fresh profile (external-
-    extensions provider, see the Dockerfile). Callers need no explicit wait:
-    every CDP consumer already polls through resolve_cdp_ws_url, which rides
-    out the relaunch. Same docker access and best-effort stance as the stop
-    watchdog's container restart in vaf/tools/browser_agent.py."""
-    try:
-        import subprocess
-        from vaf.core.service_stack import resolve_docker_exe
-        docker = resolve_docker_exe()
-        # As the container's own user, deliberately NOT -u root: with the
-        # hardened container (cap_drop ALL) even root lacks CAP_DAC_OVERRIDE
-        # and CAP_CHOWN, so a root exec cannot write into browser's home at
-        # all (measured live: the marker could not be set). The browser user
-        # owns the home, needs no chown, and may signal its own Chromium.
-        subprocess.run(
-            [docker, "exec", container_name, "sh", "-c",
-             "touch /home/browser/.scrub-profile"
-             " && pkill chromium"],
-            timeout=20, capture_output=True,
-        )
-        append_domain_log("webui", "[browser_interactive] full scrub: profile wipe requested")
-    except Exception as e:
-        append_domain_log("webui", f"[browser_interactive] full scrub failed (quick scrub still ran): {e}")
-
-
 def _wipe_exec(container_name: str, shell_cmd: str, *, timeout: float = 20) -> int:
     """One `docker exec` for the verified wipe, answering the returncode.
     Non-zero on any failure including a missing docker. The single seam the
@@ -851,9 +818,11 @@ def verified_profile_wipe(container_name: str = "vaf-browser",
                           deadline_s: float = 40.0) -> bool:
     """Wipe the container's Chromium profile and PROVE that it happened.
 
-    The cross-scope handover stands on this proof, so unlike the best-effort
-    request_profile_wipe above every step is checked, and the ORDER is the
-    security argument. pkill sends SIGTERM, so for a moment the OLD Chromium
+    The cross-scope handover stands on this proof, so every step is checked,
+    and the ORDER is the security argument. A same-scope clean start in full
+    scrub mode uses it too, for a different reason: the wipe deletes the
+    mirrored Workspace folder at the relaunch, seconds after the marker is
+    dropped, and only the confirmation says when the mirror may copy again. pkill sends SIGTERM, so for a moment the OLD Chromium
     still answers CDP - which is why CDP reachability proves nothing here. The
     marker does: the supervisor consumes it strictly AFTER `rm -rf` of the
     profile (entrypoint.sh start_chromium), and its loop-top `pkill -9` has
@@ -872,7 +841,7 @@ def verified_profile_wipe(container_name: str = "vaf-browser",
        measured at 3-5s, the deadline is generous).
     4. Only then wait for CDP as plain readiness.
     On failure, remove the marker best-effort so no delayed wipe lies in wait.
-    Module-level like request_profile_wipe so tests can stub it as bi.<name>.
+    Module-level so tests can stub it as bi.<name>.
     """
     marker = "/home/browser/.scrub-profile"
     if _wipe_exec(container_name, f"touch {marker}") != 0:
@@ -1037,6 +1006,11 @@ class InteractiveBrowserManager:
         # for whom. Reset on a scope change so the next holder gets a full
         # mirror of THEIR files rather than a stale signature match.
         self._ws_sig = None
+        # Counts the wipes of the Workspace folder (`_workspace_wiped`). A sync
+        # copies outside the lock, so one that read its signature before a wipe
+        # may finish after it; it stores its signature only if no wipe came in
+        # between, or the files it copied (and the wipe deleted) count as there.
+        self._ws_wipe_gen = 0
         self._janitor_alive = False
         # This process's entries in the shared browser's cross-process holder
         # record (vaf.core.browser_jar): the lease's and the in-process run's.
@@ -1415,12 +1389,20 @@ class InteractiveBrowserManager:
                 # would log out the very session it was handed.
                 try:
                     if scrub_mode() == "full":
-                        # The wipe deletes the mirrored Workspace folder too
-                        # (entrypoint), so the mirror's signature no longer
-                        # describes the container: the next sync copies again.
-                        with self._lock:
-                            self._ws_sig = None
-                        request_profile_wipe(self._container_name)
+                        # Verified, although a clean start stays best-effort: the
+                        # wipe deletes the mirrored Workspace folder at Chromium's
+                        # relaunch, seconds after the request, so the mirror's
+                        # signature may only be dropped once the deletion is
+                        # confirmed - a sync in between would copy the files,
+                        # store their signature, and lose them to the wipe. An
+                        # unconfirmed wipe may still have deleted them, so the
+                        # signature is dropped either way (one extra copy at most).
+                        try:
+                            if not verified_profile_wipe(self._container_name, self.cdp_base()):
+                                append_domain_log("webui", "[browser_interactive] full scrub: "
+                                                           "profile wipe not confirmed; quick scrub only")
+                        finally:
+                            self._workspace_wiped()
                     _cookie_op(self.cdp_base(), "scrub")
                 except Exception as e:
                     append_domain_log("webui", f"[browser_interactive] clean-start scrub failed: {e}")
@@ -1468,10 +1450,12 @@ class InteractiveBrowserManager:
                 raise BrowserHandoverError("profile wipe not confirmed")
             _cookie_op(self.cdp_base(), "clear_cookies")
             jar.set_owner(scope, instance)
+            self._workspace_wiped()
             with self._lock:
-                self._ws_sig = None
                 self._last_cookie_scope = scope
         except Exception as e:
+            # The purge above may already have emptied the folder.
+            self._workspace_wiped()
             append_domain_log(
                 "webui", f"[browser_interactive] {lane} cross-scope handover refused: {e}")
             try:
@@ -1530,11 +1514,22 @@ class InteractiveBrowserManager:
             return []
         with self._lock:
             prev = self._ws_sig
+            gen = self._ws_wipe_gen
         sig, paths = _sync_workspace_to_container(
             self._container_name, str(user_scope_id), prev)
         with self._lock:
-            self._ws_sig = sig
+            if self._ws_wipe_gen == gen:
+                self._ws_sig = sig
         return paths
+
+    def _workspace_wiped(self) -> None:
+        """The mirrored Workspace folder was deleted, or may have been: the next
+        sync copies everything again, and a sync still in flight from before
+        this point stores nothing (`_ws_wipe_gen`). Called AFTER the deletion
+        is confirmed (or known to have failed), never at the request."""
+        with self._lock:
+            self._ws_wipe_gen += 1
+            self._ws_sig = None
 
     def agent_stream_started(self, session_id: Optional[str]) -> None:
         """Grant the run's own chat window a watch-only live stream of the run.

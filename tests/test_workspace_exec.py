@@ -110,7 +110,10 @@ def test_real_vaf_core_write_is_blocked(tmp_path):
     target = os.path.join(VAF_ROOT, "vaf", "core", "agent.py")
     before = open(target).read()
     rc, out, err, mode = run_in_workspace(str(tmp_path), f"echo HACKED > {target}; echo done")
-    assert "No such file" in err or rc != 0
+    # The redirect's error is the shell's own wording, and /bin/sh differs by system: bash
+    # says "No such file or directory", dash (Debian, Ubuntu) "cannot create ...: Directory
+    # nonexistent". Either way the shell names the path it could not write.
+    assert target in err or rc != 0
     assert open(target).read() == before, "VAF core must be untouched"
 
 

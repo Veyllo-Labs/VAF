@@ -692,13 +692,14 @@ The persistent cookie/login store for the browser agent is keyed by user scope a
 
 ### Interactive browser (`vaf/core/browser_interactive.py`)
 
-**The default is a partition.** `browser_pool_max` (default 2, admin-only) gives each of
-that many user scopes a browser CONTAINER of their own, with its own profile volume and
-its own docker network - see the pool bullet at the end of this section. Everything in
-between describes the SHARED container, which is what the pool falls back to: for
-everyone beyond `browser_pool_max`, and whenever the pool cannot serve (free memory
-below `browser_pool_min_free_mb`, docker unreachable, the shared container missing as
-the image template, or `browser_pool_max` set to `0`). On that container the interactive
+**The default is a partition.** `browser_pool_max` (default `"auto"`, admin-only: as
+many as free memory holds at 2 GB each, at least 2 where memory allows, at most 16)
+gives each user scope the pool can serve a browser CONTAINER of their own, with its own
+profile volume and its own docker network - see the pool bullet at the end of this
+section. Everything in between describes the SHARED container, which is what the pool
+falls back to: for everyone beyond what the pool can serve, and whenever the pool
+cannot serve (free memory below `browser_pool_min_free_mb`, docker unreachable, the
+shared container missing as the image template, or `browser_pool_max` set to `0`). On that container the interactive
 browser and the agent drive the same Chromium, and the isolation is a lease, not a
 partition:
 
@@ -825,8 +826,9 @@ partition:
   previous owner (in its own process, and in every other process always), whose next
   lease saw no change of hands and purged nothing, so the probe's files sat in that
   person's file picker.
-- **The genuine partition is the per-user pool** (`browser_pool_max`, default 2,
-  admin-only, overridable by `VAF_BROWSER_POOL_MAX`; see the pool
+- **The genuine partition is the per-user pool** (`browser_pool_max`, default
+  `"auto"`, at least 2 where memory allows, admin-only, overridable by
+  `VAF_BROWSER_POOL_MAX`; see the pool
   section in [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md)): each user scope gets a
   browser container with its own profile volume AND its own docker network, so nothing
   is shared with anyone and users browse in PARALLEL; hand-over scrubbing then only
@@ -834,8 +836,8 @@ partition:
   instance is never scrubbed or profile-wiped. An instance keeps the settings of its
   `docker run` for life, so on adoption its proxy, timezone and Safe Browsing key are
   compared with the current ones and a drifted instance is recreated on its own volume
-  (a per-user browser created before a proxy was set kept browsing direct). Raising `browser_pool_max` raises the
-  number of people who are partitioned rather than scrubbed, which is why the residual
+  (a per-user browser created before a proxy was set kept browsing direct). More free memory under `"auto"`, or a
+  higher fixed `browser_pool_max`, raises the number of people who are partitioned rather than scrubbed, which is why the residual
   above is a property of the fallback and not of the product. With the pool active,
   every fallback onto the shared container is recorded as a `browser_pool_fallback`
   security event, and `browser_pool_strict` (admin-only) turns the fallback into a
@@ -968,7 +970,7 @@ The connection map (`/api/network/connections`) lists every connected device's a
 | Sub-agent watchdog (`/api/supervisor/status`, `/cancel`) | Non-admins see and can cancel only units of sessions owned by their scope; unscoped sessions admin-only; fail-closed ownership lookup; admins get all units with username attribution | Application |
 | Security dashboard (`/api/security/*`) | Admin-only by design (`require_admin`); aggregates cross-scope metrics server-side; full scope UUIDs never leave the backend | Application |
 | Browser sessions (cookies/logins) | Per-user `~/.vaf/browser_sessions/<scope>/` store keyed by user_scope_id, encrypted at rest | OS |
-| Live browser (interactive + agent) | Per-scope container, profile volume and docker network for the first `browser_pool_max` scopes (default 2, admin-only); beyond that a shared container with one lease at a time and a handover scrub, whose quick mode leaves profile files behind | Container / Application |
+| Live browser (interactive + agent) | Per-scope container, profile volume and docker network for every scope the pool can serve (`browser_pool_max`, default `"auto"`: at least 2 where memory allows, at most 16, admin-only); beyond that a shared container with one lease at a time and a handover scrub, whose quick mode leaves profile files behind | Container / Application |
 | WhatsApp | Separate subprocess per user | Process |
 | Telegram | Whitelist-based routing | Application |
 | Email | Per-user encrypted credentials + scope-based config lookup chain | Application |

@@ -11,6 +11,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Changed
+
+- **The per-user browser pool now sizes itself by free memory** (`browser_pool_max: "auto"`,
+  the new default): a personal browser starts for each person who needs one as long as the
+  machine can hold its full 2 GB cap above the free-memory floor, never fewer than the former
+  two, at most 16. A fixed number still works as before, and a stored `2` becomes `"auto"`
+  once. Update and Repair and `vaf repair --check` show how many run and how many more fit,
+  and a strict refusal now says whether the count or the memory was the limit.
+
+### Fixed
+
+- Two people opening a personal browser at the same moment can no longer both pass a pool
+  check that only one of them fits through.
+
 ### Security
 
 - **The web build uses postcss-selector-parser 6.1.5.** Version 6.1.4, which Tailwind CSS

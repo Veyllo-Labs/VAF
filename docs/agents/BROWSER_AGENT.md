@@ -707,9 +707,11 @@ use. Three conditions frame it, and they are boundaries of the design, not bugs:
    authentication (see Network isolation below): anyone who can run a process on the
    machine can drive the logged-in browser. Sensitive accounts belong on machines
    whose local users are all trusted.
-2. **Multi-user deployments should set `browser_pool_strict`** (and size
-   `browser_pool_max` to the user count), so no two users' sessions can ever meet on
-   the shared fallback - the refusal is then a visible busy, never silent sharing.
+2. **Multi-user deployments should set `browser_pool_strict`** (and make sure the
+   pool can serve the user count: under `"auto"` that is a matter of free memory, and
+   Update and Repair shows the room left; a fixed `browser_pool_max` is the number
+   itself), so no two users' sessions can ever meet on the shared fallback - the
+   refusal is then a visible busy, never silent sharing.
 3. **Interactive use stays local; agent runs do not.** A `browser_agent` run over a
    logged-in session sends page text (and, with vision, screenshots) to the
    configured LLM provider - that is how the agent works. Type sensitive sessions by
@@ -850,13 +852,14 @@ The practical limits are:
 
 ### Per-user browser pool (parallel use)
 
-**On by default.** Up to two people at a time get a browser container of their own;
-everyone beyond that shares the fallback container described above. Four config keys
-govern it, all admin-only:
+**On by default, and sized by free memory.** Everyone who opens a browser gets a
+container of their own as long as the machine can hold it (never fewer than two people
+at a time, at most 16); everyone beyond that shares the fallback container described
+above. Four config keys govern it, all admin-only:
 
 | Config key | Default | What it decides |
 |---|---|---|
-| `browser_pool_max` | `2` | How many per-user browsers may run at once. `0` switches the pool off. |
+| `browser_pool_max` | `"auto"` | `"auto"` sizes the pool by free memory (see [Automatic or fixed](#automatic-or-fixed)); an integer N lets at most N per-user browsers run at once; `0` switches the pool off. |
 | `browser_pool_min_free_mb` | `2500` | Free-memory floor; below it no NEW instance is started. |
 | `browser_pool_idle_seconds` | `900` | When an unused instance is stopped to give its RAM back (data kept). |
 | `browser_pool_strict` | `False` | Strict mode: no dedicated instance means BUSY, never the shared fallback. |
@@ -892,30 +895,84 @@ resolution that ends on the shared container (capacity, memory floor, docker tro
 is recorded as a `browser_pool_fallback` security event. With `browser_pool_strict`
 on, the same situation refuses instead: the interactive browser answers busy, an
 agent run returns a clear "no dedicated browser available" error, and `render_check`
-reports the refusal - no lane quietly shares. A pool set to `0` is exempt on both
-counts: sharing IS the configuration then. For a company where two users' sessions
-must never meet (online banking, bookkeeping), strict mode plus a `browser_pool_max`
-sized to the user count is the intended setup.
+reports the refusal - no lane quietly shares. The refusal names the real limit: at
+capacity, raise `browser_pool_max` or set it to `"auto"`; on low memory, a higher
+count would change nothing, so it says that a browser frees up when an unused one is
+closed. A pool set to `0` is exempt on both counts: sharing IS the configuration then.
+For a company where two users' sessions must never meet (online banking,
+bookkeeping), strict mode plus a pool that can serve the user count is the intended
+setup.
 
-#### Raising the number of parallel browsers
+#### Automatic or fixed
 
-Budget about **2 GB of RAM per concurrently active user** - that is the container's own
-memory cap - and leave the free-memory floor beneath what the machine still has free.
-A 32 GB machine comfortably carries 4 to 6; a 8 GB machine should stay at 2.
+**Automatic (`"auto"`, the default).** A browser beyond the first two starts only while
+the free memory above the floor holds the 2 GB cap of every running browser plus the
+new one, `MemAvailable - browser_pool_min_free_mb >= (running + 1) * 2048 MB`, and never
+more than 16 run at once. 2 GB is each instance's memory cap (`--memory`), not what it
+uses: measured with `docker stats`, a personal browser holds about 0.3 GB idle and
+0.6 GB after use. The cap is reserved anyway, because a browser may grow to it, and on
+a machine without swap an overcommitted pool hands the host's out-of-memory killer the
+VAF server or the database. Auto never serves fewer than the former fixed default:
+while free memory is above the floor, two start whatever the reservation says. What
+that gives with the whole stack running (the 8 GB row measured, the others estimated):
+
+| Machine | Free with the stack | Auto starts | Left if every one grows to its 2 GB cap |
+|---|---|---|---|
+| 4 GB VPS | about 2.7 GB | 1 (once it runs, the floor stops a second) | about 0.65 GB, as before |
+| 8 GB VM | 6.9 GB (measured) | 2 | 2.8 GB |
+| 16 GB | about 12 GB | 3 to 4 | over 3.8 GB |
+| 64 GB | about 30 GB | 10 to 11 | over 7.4 GB |
+
+The reservation is conservative on purpose: a running browser's current use is
+already missing from the free memory and is counted again at its full cap, so an
+8 GB machine stays at 2. To pack more browsers onto a machine than that, set a fixed
+number.
+
+**Fixed (an integer).** At most that many at once, exactly as before auto existed: the
+only memory check is the floor, so a new instance starts while at least
+`browser_pool_min_free_mb` is free, and nothing is reserved for the ones already
+running. A fixed number above what the machine can hold at their caps is the
+operator's own trade of density against the risk above.
+
+**Admission is serialized.** The check and a count of starts still under way sit under
+one lock in the VAF process, and a start counts until its `docker run` (or `docker
+start`) has returned, so two people opening a browser at the same moment cannot both
+pass a check only one of them fits through. Named boundaries:
+
+- **Across processes** (the web server plus a `vaf run` session) the window is one
+  `docker run`; the floor is the margin for it.
+- **macOS and Windows** give no reading of the Docker VM's free memory, so auto serves
+  exactly two there. An admin who wants more sets an integer.
+- **The per-scope networks are finite.** Every scope ever served keeps its own
+  `vaf-browser-net-*` network, and Docker's default address pools allow about 31
+  bridge networks in total, shared with the compose stack and the sandbox
+  environments. Auto does not change how many scopes get one (that is distinct users,
+  not concurrency); when creating one fails, the visible fallback follows.
+- **Sandbox environments do not see the browser reservation.** They compete for the
+  same free memory with a floor of their own.
+
+The scale-down is the idle reaper: an instance nobody has used for
+`browser_pool_idle_seconds` is stopped (never removed), and its memory is room again.
+Update and Repair (the "Personal browsers" node) and `vaf repair --check` (the
+`vaf-browser-u-*` line) show how many run and how many more fit right now.
 
 Three ways to change it, in the order most people will use them:
 
-1. **Settings > Advanced > Browser pool** (admin only). Set "Parallel browsers" to the
-   number you want and save. It takes effect for the next browser that is opened; no
-   restart, and browsers already running are left alone.
+1. **Settings > Advanced > Browser pool** (admin only). "Size automatically by free
+   memory" is on by default; switch it off to set "Parallel browsers" to a fixed
+   number, and save. It takes effect for the next browser that is opened; no restart,
+   and browsers already running are left alone.
 2. **`~/.vaf/config.json`** - the same keys, if you would rather edit the file:
    ```json
    {
-     "browser_pool_max": 4,
+     "browser_pool_max": "auto",
      "browser_pool_min_free_mb": 2500,
      "browser_pool_idle_seconds": 900
    }
    ```
+   `"browser_pool_max": 4` instead fixes the count at four. An install that stored the
+   old default `2` is moved to `"auto"` once, by the config migration to version 4;
+   any other stored count stays.
    Save while VAF is stopped, or use the Settings UI, which writes the file safely under
    a lock.
 3. **Environment variables**, for a deployment that pins the value outside the config
@@ -923,16 +980,19 @@ Three ways to change it, in the order most people will use them:
    admin sets in the UI:
    ```bash
    # System environment of the process that starts VAF (see below)
-   VAF_BROWSER_POOL_MAX=4
+   VAF_BROWSER_POOL_MAX=4        # or auto
    VAF_BROWSER_POOL_MIN_FREE_MB=2500
    VAF_BROWSER_POOL_IDLE_S=900
    ```
 
-**If raising the number appears to do nothing**, the free-memory floor is the usual
-reason: an instance is only created while at least `browser_pool_min_free_mb` is free,
-and otherwise the caller quietly falls back to the shared browser. The decision is
-logged - look for `[browser_pool] at capacity` or `[browser_pool] low memory` in the
-`webui` domain log. To switch the pool off entirely, set `browser_pool_max` to `0`.
+**If the pool appears to serve fewer people than expected**, memory is the usual
+reason: under auto a browser beyond the first two needs its 2 GB reservation above the
+floor, and under a fixed number an instance is only created while at least
+`browser_pool_min_free_mb` is free; otherwise the caller falls back to the shared
+browser. The decision is logged - look for `[browser_pool] at capacity` or
+`[browser_pool] low memory` in the `webui` domain log (under auto the memory line ends
+in `2048 MB reserved per browser`), and every fallback is a `browser_pool_fallback`
+security event. To switch the pool off entirely, set `browser_pool_max` to `0`.
 
 #### Where these settings go
 
@@ -965,7 +1025,8 @@ all. The filtering DNS resolvers compose gives the shared container are passed t
 instance too, so the DNS hardening applies there as well.
 
 The pool only ever ADDS isolation: whenever it cannot serve - switched off
-(`browser_pool_max` at `0`), at capacity, free memory below the floor, docker
+(`browser_pool_max` at `0`), at capacity, free memory below the floor (under auto:
+too little for another 2 GB reservation beyond the first two), docker
 unreachable, the shared container missing as the image template, or no user scope on
 the call - the caller falls back to the shared container and its handover scrub. That
 fallback is also where the named residual of the quick scrub still applies, so a
@@ -980,9 +1041,10 @@ under way stops its own container instead of registering it after the quit looke
 container name comes from the user scope, so a `vaf run` session can use the same one. NAMED
 BOUNDARY: an instance orphaned by a crash runs until its scope uses the browser again and it
 idles out; a
-stopped instance keeps its port mapping, so endpoints stay stable. Budget roughly
-1-2 GB RAM per concurrently active user. Needs the same docker CLI access the stop
-watchdog already uses.
+stopped instance keeps its port mapping, so endpoints stay stable. A personal browser
+holds about 0.3 GB idle and 0.6 GB after use (measured) and may grow to its 2 GB cap,
+which is what auto reserves for it. Needs the same docker CLI access the stop watchdog
+already uses.
 
 Named boundary: a spawned `browser_agent` child resolves the caller's instance
 itself (the parent created it before the spawn), but the interactive lane's
@@ -1402,7 +1464,7 @@ its own user is routed to it.
 | **Session persistence** | Available via `persistent=true` + `session` parameter. Default mode still clears state between calls. |
 | **CAPTCHA** | No solver integrated. Sites with aggressive bot detection may block the agent. |
 | **Local LLMs** | Models below ~30B parameters struggle with structured JSON output required by browser-use. |
-| **Shared browser beyond the pool** | Each of the first `browser_pool_max` users (default 2) gets their own browser container and runs in parallel (see [Per-user browser pool](#per-user-browser-pool-parallel-use)). Everyone beyond that shares one Chromium process, serialised by a queue (see [Concurrency](#concurrency--multi-user)). Raising the pool size raises the number of people who never meet there. |
+| **Shared browser beyond the pool** | Every user the pool can serve gets their own browser container and runs in parallel (default `"auto"`: as many as free memory holds at 2 GB each, at least 2, at most 16; see [Per-user browser pool](#per-user-browser-pool-parallel-use)). Everyone beyond that shares one Chromium process, serialised by a queue (see [Concurrency](#concurrency--multi-user)). More memory, or a higher fixed `browser_pool_max`, raises the number of people who never meet there. |
 | **Live view frame rate** | Chat runs stream the browser live (KasmVNC, watch-only). The screenshot lanes (workflow tile, spawned child) stay at ~1 frame/1.5 s - sufficient for monitoring. |
 
 ---

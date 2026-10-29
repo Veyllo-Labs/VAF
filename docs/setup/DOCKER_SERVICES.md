@@ -472,6 +472,21 @@ services (`vaf repair --check`, the TUI, and `sandbox` in `vaf top`), and the di
 it as a Sandbox node below the containers, green while one runs and grey otherwise. It is
 never one of the issues and never fails a check.
 
+And one **browser_pool** row, `browser_pool: {state, mode, running, ceiling, room, free_mb,
+reason}` (`derive_browser_pool_status`, from `browser_pool.pool_status()`): the per-user
+browsers, counted and nobody named. `mode` is `auto`, `fixed` or `off`; `room` is how many
+more may start right now, computed by the same rule the next admission uses
+(`admission_room`), so the row and the decision cannot disagree; the reason spells it out,
+for example "Automatic: 2 running, room for 0 more (6.7 GB free, 2.4 GB kept free, 2 GB
+reserved per browser)." `state` is `ok` while one runs, `idle` when none runs, `off` when
+`browser_pool_max` is `0`, and `unknown` when docker is not reachable. Like the sandbox it
+sits next to `services` and not among them: the pool starts one browser per person on
+demand and the idle reaper stops it, and a full pool sends people to the shared browser,
+the designed fallback. So it is never one of the issues and never fails a check (not in
+`stack_problems`, so not in `vaf health` either). The terminal prints it as
+`vaf-browser-u-*` after the sandbox line (`vaf repair --check`, the TUI, and `browser_pool`
+in `vaf top`), and the dialog draws it as a Personal browsers node below the Sandbox node.
+
 **Still starting is not broken.** Right after a start a database does not answer
 yet, so a status that called that "does not answer" would send someone to a
 repair button for something that needs a few more seconds. A container counts as

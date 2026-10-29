@@ -46,9 +46,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   workflow, background step and thinking run failed with an error from the new provider.
   VAF now ignores such a value (also for the browser, vision, voice and failover models),
   uses the provider's own model and prints one warning; Settings > AI & Model > Sub-Agents
-  marks the ignored value. Changing the sub-agent or failover backup provider now resets its
-  model, as the other provider pickers already did, and "Same as main chat" now really
-  clears a saved tool and workflow model.
+  marks the ignored value. Changing the sub-agent, Thinker or failover backup provider now
+  resets its model (before, the old model was kept on save), and "Same as main chat" now
+  really clears a saved tool and workflow model. If `openai` points at a gateway that serves other
+  vendors' models (LiteLLM and similar), only the name set as its model is accepted as an
+  explicit model; another `claude-` or `gemini-` name there is now replaced with a warning.
 - Two people opening a personal browser at the same moment can no longer both pass a pool
   check that only one of them fits through, and when Docker does not list the running
   personal browsers the pool starts no new one instead of counting them as none.

@@ -541,7 +541,10 @@ class ExecuteWorkflowTool(BaseTool):
             _prev_wf_terminal = os.environ.get("VAF_IN_WORKFLOW_TERMINAL")
             _prev_tool_model = os.environ.get("VAF_TOOL_MODEL")
             from vaf.core.config import subagent_model_for as _sa_model_for
-            _subagent_model = _sa_model_for()
+            # The calling agent's own config (an embedder's Agent(config=...) carries
+            # its provider there), else the installation's.
+            _agent_cfg = getattr(_agent, "config", None)
+            _subagent_model = _sa_model_for(config=_agent_cfg if isinstance(_agent_cfg, dict) else None)
             _exec_result = [None]
             _exec_error  = [None]
             _wf_log(wf_run_id, "ENGINE_START")

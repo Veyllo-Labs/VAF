@@ -355,25 +355,39 @@ def model_fits_provider(provider: str, model: str, config: Optional[dict] = None
 
     1. blank: no.
     2. ``local``: a local model name (``is_local_model_id``), or any id the model
-       catalog does not give to an API provider (a vLLM Hugging Face repo id).
+       catalog does not LIST for an API provider (a vLLM Hugging Face repo id, a
+       name like deepseek-r1-distill-qwen). Families do not count here: a local
+       model is often named after the one it was distilled from.
     3. a provider without a registry entry: yes, it decides itself.
     4. a local model name: no.
-    5. the catalog knows: an id it lists, or of a family it lists
-       (``model_catalog.model_owner``), belongs to that provider; a bare id is
-       never OpenRouter's and a ``vendor/model`` id never anyone else's.
-    6. an id the catalog cannot place belongs to whichever ``api_model_<p>`` in
+    5. the catalog says yes (``model_catalog.catalog_fit``): an id it lists, or
+       of a family it lists (``model_catalog.model_owner``), for this provider.
+    6. this provider's own ``api_model_<p>`` in ``config`` holds it: yes. That
+       value is sent whenever no model is named, so a gateway behind an
+       OpenAI-compatible provider that serves another vendor's names (a
+       LiteLLM-style ``api_model_openai = claude-...``) keeps its model.
+    7. the catalog says no: no. A bare id is never OpenRouter's and a
+       ``vendor/model`` id never anyone else's.
+    8. an id the catalog cannot place belongs to whichever ``api_model_<p>`` in
        ``config`` holds it: a custom id set for one provider (a gateway behind
        ``veyllo_base_url``) does not fit another. Held by none: yes. An id
        nobody can place is the choice of whoever set it, and the provider's own
        answer is the only authority on it.
 
     ``config`` is anything with a ``get(key, default)``: a config dict, or the
-    ``Config`` class for the installation's.
+    ``Config`` class for the installation's. It is read only from step 6 on,
+    so an id the catalog places on this provider costs no config read.
 
-    Named boundary: not on the ``vaf`` facade. The guarantee is enforced inside
-    ``APIBackendManager``, so an embedder calls nothing; a settings screen that
-    wants to mark a stored value asks this function (one caller outside the
-    core today, the web settings route ``GET /api/config/model-fit``).
+    Named boundaries:
+
+    - Not on the ``vaf`` facade. The guarantee is enforced inside
+      ``APIBackendManager``, so an embedder calls nothing; a settings screen that
+      wants to mark a stored value asks this function (one caller outside the
+      core today, the admin settings route ``GET /api/config/model-fit``).
+    - A gateway's other names: an explicit model of another vendor's family on
+      such a gateway (a tool model ``gemini-...`` while ``api_model_openai``
+      says ``claude-...``) is treated as foreign and dropped with a warning.
+      Only the provider's own ``api_model_<p>`` vouches for a name.
     """
     m = str(model or "").strip()
     if not m:
@@ -383,16 +397,20 @@ def model_fits_provider(provider: str, model: str, config: Optional[dict] = None
 
     if p == "local":
         return is_local_model_id(m) or (
-            model_owner(m) is None and not _api_model_holders(m, config))
+            model_owner(m, by_family=False) is None and not _api_model_holders(m, config))
     if p not in PROVIDER_SPECS:
         return True
     if is_local_model_id(m):
         return False
     verdict = catalog_fit(p, m)
-    if verdict is not None:
-        return verdict
+    if verdict is True:
+        return True
     held = _api_model_holders(m, config)
-    return not held or p in held
+    if p in held:
+        return True
+    if verdict is False:
+        return False
+    return not held
 
 
 # (source, provider, model) already reported by this process.

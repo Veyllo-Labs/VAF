@@ -111,6 +111,10 @@ class ProviderCatalog:
     # any other provider serving a model it does not make, the vendor's discount
     # is not evidence of its own, so cached tokens pay its own rate (none: full).
     passes_vendor_cache_rates: bool = False
+    # Families this provider owns beyond those of its listed ids, as full-match
+    # patterns over the family name (model_owner): a naming scheme of which the
+    # table lists one member or none.
+    family_patterns: Tuple[str, ...] = ()
 
 
 _OPENAI = ProviderCatalog(
@@ -120,6 +124,8 @@ _OPENAI = ProviderCatalog(
     # Fallback only: every entry carries its own cached rate. The write premium is
     # the 30-minute rate, 1.25x on every model that lists one.
     cache_read_multiplier=0.10, cache_write_multiplier=1.25,
+    # The o-series (o1, o3, o4-mini, ...) is numbered, and only o3 is listed.
+    family_patterns=(r"o\d+",),
     models=(
         ModelEntry("gpt-5.6-terra", 2.00, 12.00, 0.20, 272_000, 4.00, 18.00,
                    vision=True, offered=True),
@@ -473,20 +479,30 @@ _VENDOR_SLASH = frozenset(
 )
 
 
-def model_owner(model_id: str) -> Optional[str]:
+def model_owner(model_id: str, by_family: bool = True) -> Optional[str]:
     """The provider a model id belongs to by this catalog, or ``None`` when it
     cannot tell (an id of no listed family, a ``vendor/model`` id it does not
-    list, a local model name). A snapshot date and ``models/`` are ignored."""
+    list, a local model name). A snapshot date and ``models/`` are ignored.
+    ``by_family=False`` answers for listed ids only: a local model is often
+    named after the family it was distilled from (deepseek-r1-distill-qwen)."""
     name = _bare_id(model_id)
     if not name:
         return None
     for cand in (name, _SNAPSHOT_SUFFIX.sub("", name)):
         if cand in _OWNER_EXACT:
             return _OWNER_EXACT[cand]
-    if "/" in name:
+    if "/" in name or not by_family:
         return None
     m = _FAMILY.match(name)
-    return _OWNER_FAMILY.get(m.group(1)) if m else None
+    if not m:
+        return None
+    fam = m.group(1)
+    if fam in _OWNER_FAMILY:
+        return _OWNER_FAMILY[fam]
+    for prov in CATALOG.values():
+        if any(re.fullmatch(pat, fam) for pat in prov.family_patterns):
+            return prov.name
+    return None
 
 
 def catalog_fit(provider: str, model_id: str) -> Optional[bool]:

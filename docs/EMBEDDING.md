@@ -415,8 +415,12 @@ and one warning is printed per process. You call nothing for this; the backend d
 it on every request. For your own settings screen,
 `vaf.core.provider_registry.model_fits_provider(provider, model, config)` answers the
 same question: an id the model catalog lists or whose family it lists belongs to that
-provider, and an id it cannot place belongs to the `api_model_<provider>` in `config`
-that holds it, or fits anywhere when none does (a custom gateway's own name).
+provider, the provider's own `api_model_<provider>` in `config` always fits it, and an
+id the catalog cannot place belongs to the `api_model_<provider>` that holds it, or fits
+anywhere when none does (a custom gateway's own name). One boundary to know if you
+point `openai` at a gateway that serves other vendors' models (LiteLLM and similar):
+only the name in `api_model_openai` is vouched for, so another `claude-*` or `gemini-*`
+name used as an explicit model there is treated as foreign and replaced.
 
 **Where a key lives when VAF stores one.** Keys set through the product go into the
 same envelope-encrypted store as mail, GitHub and cloud credentials - not into

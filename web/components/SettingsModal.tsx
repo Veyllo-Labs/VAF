@@ -711,9 +711,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         ? String(localConfig.subagent_provider)
         : String(localConfig.provider || 'local');
     const toolModel = String(localConfig.subagent_model || '');
-    const [toolModelFits, setToolModelFits] = useState(true);
+    // null while the current selection has not been answered: a failed or pending lookup
+    // must not leave the previous selection's verdict on the new one.
+    const [toolModelFits, setToolModelFits] = useState<boolean | null>(null);
     useEffect(() => {
-        if (!toolModel) { setToolModelFits(true); return; }
+        setToolModelFits(null);
+        if (!toolModel) return;
         let live = true;
         const base = apiBase || (typeof window !== 'undefined' ? document.location.origin : '');
         fetch(`${base}/api/config/model-fit?provider=${encodeURIComponent(toolModelProvider)}&model=${encodeURIComponent(toolModel)}`, { credentials: 'include' })
@@ -3601,7 +3604,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                               ];
                                         // A stored model of another provider: the runtime ignores it, so the
                                         // picker says so instead of the generic "(Current)" entry.
-                                        const ignored = !!toolModel && !toolModelFits;
+                                        const ignored = !!toolModel && toolModelFits === false;
                                         const spLabel = p ? p.label : (isLocal ? 'Local' : sp);
                                         return (
                                             <div className="mt-3">
@@ -3616,7 +3619,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     ]}
                                                 />
                                                 {ignored && (
-                                                    <p className="text-xs text-amber-600 mt-2">{tAdvanced('toolModelIgnored', { model: toolModel, provider: spLabel })}</p>
+                                                    <p className="text-xs text-amber-700 mt-2">{tAdvanced('toolModelIgnored', { model: toolModel, provider: spLabel, same: tAdvanced('sameAsMainChat') })}</p>
                                                 )}
                                             </div>
                                         );
@@ -3647,7 +3650,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         value={localConfig.thinking_provider || 'inherit'}
                                         onChange={(v: string) => {
                                             handleChange('thinking_provider', v);
-                                            handleChange('thinking_model', undefined);
+                                            // '' and not undefined: the save merges, so an absent key
+                                            // keeps the previous provider's model.
+                                            handleChange('thinking_model', '');
                                         }}
                                         options={[
                                             { value: 'inherit', label: tAdvanced('sameAsMain') },
@@ -3683,8 +3688,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             <div className="mt-3" key={tp}>
                                                 <Select
                                                     label={tAdvanced('thinkerModel')}
-                                                    value={localConfig.thinking_model ?? defaultModel}
-                                                    onChange={(v: string) => handleChange('thinking_model', v || undefined)}
+                                                    value={localConfig.thinking_model || defaultModel}
+                                                    onChange={(v: string) => handleChange('thinking_model', v || '')}
                                                     options={options}
                                                 />
                                                 <p className="text-xs text-gray-500 mt-1">{tAdvanced('thinkerModelDesc')}</p>

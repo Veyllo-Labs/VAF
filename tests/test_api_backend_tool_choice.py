@@ -172,16 +172,69 @@ def test_the_pro_context_never_sends_a_tool_model_of_another_provider(monkeypatc
     and DeepSeek answered 400 "you passed veyllo-chat" on every call.
     MUTATION: read `self.config.get("subagent_model")` raw again in the
     deepseek-auto block."""
+    from vaf.core.config import Config
+
     for var in _PRO_ENV:
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("VAF_BACKGROUND_PRO", "1")
+    live = {"provider": "deepseek", "subagent_model": "veyllo-chat"}
+    monkeypatch.setattr(Config, "load", classmethod(lambda cls: dict(live)))
     m = _mgr("deepseek")
-    m.config = {"provider": "deepseek", "subagent_model": "veyllo-chat"}
     assert _drive(m, "auto", model="deepseek-auto")["model"] == "deepseek-v4-pro"
     # A DeepSeek tool model is still honoured.
+    live["subagent_model"] = "deepseek-flash"
+    assert _drive(_mgr("deepseek"), "auto", model="deepseek-auto")["model"] == "deepseek-flash"
+
+
+def test_the_pro_context_reads_the_tool_model_live(monkeypatch, _quiet_notes):
+    """A long-lived product manager holds the config of its creation; a tool
+    model changed in Settings since applies at once, like api_model_deepseek
+    one line above it. MUTATION: pass `self.config` to subagent_model_for."""
+    from vaf.core.config import Config
+
+    for var in _PRO_ENV:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("VAF_BACKGROUND_PRO", "1")
+    monkeypatch.setattr(Config, "load", classmethod(
+        lambda cls: {"provider": "deepseek", "subagent_model": "deepseek-flash"}))
     m = _mgr("deepseek")
-    m.config = {"provider": "deepseek", "subagent_model": "deepseek-flash"}
+    m.config = {"provider": "deepseek", "subagent_model": ""}   # the creation snapshot
     assert _drive(m, "auto", model="deepseek-auto")["model"] == "deepseek-flash"
+
+
+def test_a_placed_model_costs_no_config_read(monkeypatch, _quiet_notes):
+    """Before the fit check an explicit model read no config; one the catalog
+    places on the provider still reads none. MUTATION: load the config eagerly
+    in `_chat_single`."""
+    from vaf.core.config import Config
+
+    import sys
+
+    for var in _PRO_ENV:
+        monkeypatch.delenv(var, raising=False)
+    loads = []
+
+    def _load(cls):
+        # Only the reads the model lookup makes: from _chat_single itself or from its
+        # read-on-first-use wrapper. Other lanes of the call (failover, accounting)
+        # have their own config reads, which this check does not add.
+        caller = sys._getframe(1).f_code
+        if caller.co_filename.endswith("api_backend.py") and caller.co_name in ("_chat_single", "get"):
+            loads.append(1)
+        return {}
+
+    monkeypatch.setattr(Config, "load", classmethod(_load))
+
+    def _product_mgr():
+        m = _mgr("openai")
+        m.config = {"failover_level": "off"}   # the snapshot a product manager holds
+        return m
+
+    assert _drive(_product_mgr(), "auto", model="gpt-5.6-sol")["model"] == "gpt-5.6-sol"
+    assert loads == []
+    # A foreign one is looked up (the warning's log line reads the config too).
+    _drive(_product_mgr(), "auto", model="veyllo-chat")
+    assert loads
 
 
 def test_an_explicit_model_of_another_provider_falls_back_to_the_configured_one(monkeypatch, _quiet_notes):

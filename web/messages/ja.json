@@ -1594,7 +1594,7 @@
       "sameAsMain": "メインのモデルと同じ",
       "toolWorkflowModel": "ツールとワークフローのモデル",
       "sameAsMainChat": "メインのチャットと同じ",
-      "toolModelIgnored": "{model}は{provider}のモデルではないため無視されます。ツールとワークフローの手順は、「メインのチャットと同じ」を選んだときと同じように動きます。",
+      "toolModelIgnored": "{model}は{provider}のモデルではないため無視されます。ツールとワークフローの手順は、「{same}」を選んだときと同じように動きます。{provider}のモデルか「{same}」を選んでください。",
       "toolModelIgnoredOption": "{model}（無視されます）",
       "subAgentTimeout": "サブエージェントのタイムアウト",
       "subAgentTimeoutDesc": "サブエージェント呼び出しの最長実行時間です。",

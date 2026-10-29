@@ -135,6 +135,20 @@ def openai_tools_need_effort_none(model: str) -> bool:
     return any(fam in m for fam in _TOOLS_NEED_EFFORT_NONE_SEED) or m in _tools_need_effort_none_learned
 
 
+class _ConfigOnFirstUse:
+    """A config mapping read on its first ``get``: the model check reads the
+    configuration only for an id the catalog cannot place on its own."""
+
+    def __init__(self, load):
+        self._load = load
+        self._cfg = None
+
+    def get(self, key, default=None):
+        if self._cfg is None:
+            self._cfg = self._load() or {}
+        return self._cfg.get(key, default)
+
+
 def note_openai_tools_effort_refusal(model: str, error_text: str) -> bool:
     """Record a "function tools need reasoning_effort=none" refusal for this model.
 
@@ -1743,8 +1757,10 @@ class APIBackendManager:
         default_models = {p: m["default"] for p, m in Config.PROVIDER_MODELS.items()}
         default_models["local"] = "llama3"
         # Embedded: the programmatic config (no Settings UI there). Product: read fresh
-        # from disk so a model changed in Settings mid-session applies at once.
-        live_config = self.config if getattr(self, "_embedded", False) else Config.load()
+        # from disk so a model changed in Settings mid-session applies at once, but only
+        # when something below asks: a call whose model the catalog already places on this
+        # provider reads nothing, as before the fit check existed.
+        live_config = self.config if getattr(self, "_embedded", False) else _ConfigOnFirstUse(Config.load)
         # An explicit model that is not one of this provider's models never reaches it: a
         # forwarded local name ("auto", a GGUF file; some sub-agents and tools forward the
         # local "model" key verbatim) or another provider's id (a lane model left over from
@@ -1761,14 +1777,12 @@ class APIBackendManager:
             model = live_config.get(f"api_model_{self.provider_name}", default_models.get(self.provider_name, Config.get_default_model("openai")))
 
         # DeepSeek Auto mode: flash for main chat, pro model for tools/workflows/compaction.
-        # Also resolves when VAF_TOOL_MODEL is set to "deepseek-auto" (e.g. subagent_model config).
         if self.provider_name == "deepseek" and str(model or "").lower() == "deepseek-auto":
             _pro_context = (
                 os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "").strip() in ("1", "true", "yes")
                 or os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes")
                 or os.environ.get("VAF_COMPACTION_IN_PROGRESS", "").strip() in ("1", "true", "yes")
                 or os.environ.get("VAF_BACKGROUND_PRO", "").strip() in ("1", "true", "yes")
-                or os.environ.get("VAF_TOOL_MODEL", "").strip().lower() == "deepseek-auto"
             )
             # Targets come from the model catalog's alias table.
             from vaf.core.model_catalog import alias_target
@@ -1777,7 +1791,7 @@ class APIBackendManager:
                 # Named boundary: which calls count as a pro context (VAF_BACKGROUND_PRO is
                 # process-global, so a thinking run moves the main chat too) is decided above
                 # and is not this check's to change.
-                model = subagent_model_for("deepseek", self.config) or alias_target(
+                model = subagent_model_for("deepseek", live_config) or alias_target(
                     "deepseek", "deepseek-auto", pro=True)
             else:
                 model = alias_target("deepseek", "deepseek-auto", pro=False)

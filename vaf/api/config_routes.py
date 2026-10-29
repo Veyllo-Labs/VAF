@@ -94,6 +94,7 @@ async def get_model_fit(
     request: Request,
     provider: str = "",
     model: str = "",
+    _admin: Dict[str, Any] = Depends(require_admin),
 ) -> Dict[str, Any]:
     """Whether `model` is one of `provider`'s models, for a settings screen that
     marks a stored value the runtime will ignore.
@@ -101,8 +102,11 @@ async def get_model_fit(
     Computed by `provider_registry.model_fits_provider`, the predicate the API
     backend applies to every call, so the hint and the runtime cannot disagree
     and the browser keeps no copy of the rule. Read-only; it writes nothing.
+
+    Admin-only: the answer depends on the installation's `api_model_<provider>`
+    values, so it would let any account test a guess against them, and the
+    settings it serves are an admin's to change.
     """
-    get_current_user_or_local_admin(request)
     from vaf.core.provider_registry import model_fits_provider
 
     fits = model_fits_provider(provider, model, config=Config.load()) if model else True

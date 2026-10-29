@@ -1172,11 +1172,12 @@ class BrowserAgentTool(BaseTool):
         # The try opens right after the gate: whatever follows, the finally ends
         # the run (and its count) exactly once.
         try:
-            # Session id crosses the thread boundary AS AN ARGUMENT: the run below
-            # executes on a fresh thread with a fresh contextvar context, where
-            # get_current_session_id() answers None - which silently disarmed the
-            # stop monitor for every chat browser run (measured live: ten Stop
-            # presses, none seen) and broadcast the live frames unscoped.
+            # Session id crosses the thread boundary AS AN ARGUMENT, resolved once here.
+            # The run's loop thread now runs in a copy of this context, but the stop
+            # watchdog is a plain thread and the run's executor work starts empty, and a
+            # None session id silently disarms every stop lane (measured live when the
+            # loop thread still started empty: ten Stop presses, none seen, and the live
+            # frames broadcast unscoped). One value resolved here reaches all of them.
             try:
                 from vaf.core.subagent_ipc import get_current_session_id
                 _session_id = get_current_session_id()
@@ -1265,10 +1266,10 @@ class BrowserAgentTool(BaseTool):
         from browser_use.browser.profile import BrowserProfile
 
         # ── Session ID FIRST (stop-check + WebUI broadcast) ──────────────────
-        # Handed over by run() as an argument, because this coroutine executes
-        # on a fresh thread whose contextvar context is empty - resolving here
-        # answered None live, which disarmed every stop lane below. The
-        # contextvar fallback stays for direct callers on the original thread.
+        # Handed over by run() as an argument: the stop watchdog below is a plain
+        # thread (an empty context) and needs the value itself. This coroutine's
+        # loop thread runs in a copy of the caller's context, so the contextvar
+        # fallback answers the caller's session for a direct caller as well.
         _session_id = session_id
         if not _session_id:
             try:

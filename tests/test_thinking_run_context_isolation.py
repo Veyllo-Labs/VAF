@@ -635,6 +635,33 @@ def test_the_attachment_transfer_keeps_the_run_context(iso):
     assert seen == [(True, "thinking")]
 
 
+def test_a_transfer_that_fails_itself_runs_exactly_once(iso):
+    """The tool is irreversible: a transfer that stored some documents and then raised a
+    RuntimeError of its own (the database layer, the memory guard) must not be started again,
+    with or without a running loop. MUTATION: find out whether a loop runs by catching the
+    RuntimeError of `asyncio.run(...)` again (the transfer then runs twice outside a loop)."""
+    from vaf.tools import learn_attached_knowledge as la
+
+    starts = []
+
+    async def _transfer():
+        starts.append(1)  # stands for the documents stored before the failure
+        raise RuntimeError("memory guard tripped")
+
+    out = la._drive_transfer(_transfer)
+    assert starts == [1]
+    assert out == "Error: Failed to transfer attachment knowledge: memory guard tripped"
+
+    starts.clear()
+
+    async def _outer():
+        return la._drive_transfer(_transfer)
+
+    out = asyncio.run(_outer())
+    assert starts == [1]
+    assert out == "Error: Failed to transfer attachment knowledge: memory guard tripped"
+
+
 def test_the_attachment_rag_calls_keep_the_run_context(iso, monkeypatch):
     """Both lanes of `attachment_rag._run_async`: the persistent vector runner (a job runs in
     the context it was submitted from) and the per-call worker inside a running loop.

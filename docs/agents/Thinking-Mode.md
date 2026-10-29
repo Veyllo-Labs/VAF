@@ -470,7 +470,7 @@ The agent has **the same tools as the normal agent**, with these exceptions:
 
 | Tool | Status | Reason |
 |------|--------|--------|
-| `ask_user` | **Thinking Mode, automations and chats** | In a background run, the single, tracked channel to contact the user (clean `message`; no chain-of-thought leak); records a request. In a chat it asks the person in front of it and ends the turn ([AGENT_LOOP.md](AGENT_LOOP.md)) |
+| `ask_user` | **Thinking Mode, automations and chats** (an agent whose run kind is `thinking`, `automation` or `chat`) | In a background run, the single, tracked channel to contact the user (clean `message`; no chain-of-thought leak); records a request. In a chat it asks the person in front of it and ends the turn ([AGENT_LOOP.md](AGENT_LOOP.md)) |
 | `thinking_done` | **Only in Thinking Mode**, and **always present** | Signals end of the run; optional `message`/`proposed_action`/`source_note_id` deliver a final question as a fallback for `ask_user` (same tracked path). Pinned into every thinking turn regardless of what the tool router selected - see [Loop protection](#loop-protection-api-cost-safety) |
 | `thinking_note_add` | **Every agent** | Saves persistent notes for the next run; a chat turn can leave one too (e.g. "user confirmed X, do not ask again"). The note goes to the caller's own scope (injected, never read from the environment) |
 | `save_thinking_suggestion` | **Only in Thinking Mode** | Proposes user-profile updates for review in Settings |
@@ -673,7 +673,7 @@ Debug log: `logs/vaf_think_YYYY-MM-DD.log` (human-readable, all users in one fil
 | Forced-resolution node | `vaf/core/thinking_mode.py` · `vaf/core/agent.py` | `_build_forced_item_prompt()` + outer loop; `chat_step(force_tool_choice="required")` - compels a decisive tool call per open item |
 | Progress-gate | `vaf/core/thinking_mode.py` | `_turn_used_progress_tool()` + outer loop - backstop one-tool decision after N gather/analyse-only turns |
 | Read-tool cap | `vaf/core/agent.py` | `_thinking_read_cap_step()` - per-step anti-churn incl. `web_search`; blocks ALL gather on a forced node (`_thinking_force_progress`) |
-| `ask_user` tool | `vaf/tools/ask_user.py` | `AskUserTool` - tracked user contact + request creation (Thinking Mode only) |
+| `ask_user` tool | `vaf/tools/ask_user.py` | `AskUserTool` - in a thinking run or an automation a tracked user contact + request creation; in a chat a question to the person in front of it. Registered by run kind in `_load_tools()` (`thinking`, `automation`, `chat`), never on an agent without one |
 | Shared delivery | `vaf/core/thinking_mode.py` | `deliver_tracked_message()`, `run_has_open_request()`, `deliver_thinking_done_fallback()` - one path for `ask_user` + the `thinking_done` fallback (also called from the agent's thinking_done dispatch) |
 | Transcript record | `vaf/core/session.py` · `vaf/core/messaging_connections.py` | `SessionManager.append_background_message()` - the one way a background lane writes into a chat (question, nudge, escalation, automation result); `send_to_main_messenger(kind=...)` mirrors a messenger delivery into the channel session through it |
 | Who counts as a reply | `vaf/core/agent.py` | `_turn_is_from_the_user()` - the one test both latches read; a room wake, a timer, an automation and a background run's own prompt fail it (their markers live in `_turn_is_from_a_person()`), and so does a turn under an allowed set (`set_allowed_tools`, every Front Office turn) |

@@ -144,7 +144,7 @@ Once the agent calls `browser_agent`, the following happens:
 
 ### Stopping a run
 
-For a normal chat turn the browser runs **in-process** (the killable child-process mode is only used inside workflows, opted in via `VAF_SPAWN_BROWSER_SUBAGENT`). Pressing **Stop** in the WebUI sets a per-session stop flag (`TaskQueue.request_stop`). Two lanes watch that flag; both need the session id, which `run()` resolves on the calling thread and hands into the browser thread as an argument - the run executes on a fresh thread whose contextvar context would answer `None`, and a `None` session id silently disarms every stop lane (a live incident shipped exactly that: ten Stop presses, none seen).
+For a normal chat turn the browser runs **in-process** (the killable child-process mode is only used inside workflows, opted in via `VAF_SPAWN_BROWSER_SUBAGENT`). Pressing **Stop** in the WebUI sets a per-session stop flag (`TaskQueue.request_stop`). Two lanes watch that flag; both need the session id, which `run()` resolves on the calling thread and hands into the browser thread as an argument. The browser's own loop thread now runs in a copy of the caller's context (`run_coroutine_on_new_loop`), so the session would be readable there too; the argument stays because the stop watchdog (Lane 2) is a plain thread with an empty context and receives the id from it, and a `None` session id silently disarms every stop lane. That is the live incident from the time the loop thread itself still started with an empty context: ten Stop presses, none seen.
 
 **Lane 1 - the in-loop `_stop_monitor`** (a coroutine, polls every 0.5 s), for the healthy case:
 

@@ -39,30 +39,35 @@ def _split_by_pages(content: str) -> List[Tuple[int, str]]:
 
 
 def _drive_transfer(make_transfer) -> "int | str":
-    """Run the transfer coroutine ``make_transfer()`` from sync code: the number of memories
-    created, or the error text for the caller.
+    """Run the transfer coroutine ``make_transfer()`` from sync code, exactly once: the number
+    of memories created, or the error text for the caller.
 
-    Inside a running loop it gets a loop of its own on a worker in this call's context
-    (``run_on_worker``), so the transfer's model calls keep the caller's lane, account and
-    background run; a bare thread started with none of them.
+    Whether a loop already runs is asked BEFORE the transfer starts. Catching the RuntimeError
+    of ``asyncio.run`` to find out would also catch one the transfer raised itself (the
+    database layer, the memory guard) after it had stored some documents, and run it a second
+    time: duplicate memories from an irreversible tool. Inside a running loop the transfer
+    gets a loop of its own on a worker in this call's context (``run_on_worker``), so its
+    model calls keep the caller's lane, account and background run.
     """
     import asyncio
-    first = make_transfer()
+    import concurrent.futures as _cf
     try:
-        return int(asyncio.run(first) or 0)
+        asyncio.get_running_loop()
+        in_loop = True
     except RuntimeError:
-        first.close()  # refused by a running loop, never started: no "never awaited" warning
-        import concurrent.futures as _cf
+        in_loop = False
+    try:
+        if not in_loop:
+            return int(asyncio.run(make_transfer()) or 0)
         from vaf.core.bounded_run import run_on_worker
         try:
             return int(run_on_worker(lambda: asyncio.run(make_transfer()), timeout=30,
                                      label="learn-attached") or 0)
         except _cf.TimeoutError:
             return "Error: Timed out while transferring attachment knowledge."
-        except Exception as e:
-            return f"Error: Failed to transfer attachment knowledge: {e}"
     except Exception as e:
         return f"Error: Failed to transfer attachment knowledge: {e}"
+
 
 class LearnAttachedKnowledgeTool(BaseTool):
     name = "learn_attached_knowledge"

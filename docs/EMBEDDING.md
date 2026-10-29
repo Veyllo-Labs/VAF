@@ -2419,10 +2419,11 @@ inference server for the main loop is not a supported setup, because the address
 is written out instead of read from `Config.get_llama_server_url` in 42 lines of
 13 files (`git grep -E "(127\.0\.0\.1|localhost):8080" -- 'vaf/*.py'` at the
 commit before the vLLM engine, comments included); moving them onto that one
-address is the step that would open it. A server VAF did not start on the local
-port is reused when it already serves the configured model (the loopback port is
-trusted as the local server, for llama.cpp as for vLLM), refused when it serves
-another one, and never stopped by VAF. See [PROVIDER_MODES.md](llm/PROVIDER_MODES.md) for
+address is the step that would open it. Under vLLM, a server VAF did not start on
+the local port is reused when it already serves the configured model (the loopback
+port is trusted as the local server), refused when it serves another one, and never
+stopped by VAF. The llama engine's `Agent.load_model` reuses any healthy server it
+finds on the port, whatever model it holds. See [PROVIDER_MODES.md](llm/PROVIDER_MODES.md) for
 the details.
 
 ---

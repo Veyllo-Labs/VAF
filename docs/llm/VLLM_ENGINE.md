@@ -215,10 +215,12 @@ and quick starts.
   before this engine, comments included), so every consumer talks to whatever answers on
   the local port. What the start does with a server VAF did not start: it is **reused**
   when it already serves the configured model, **refused** (no launch) when it serves
-  another one, also a vLLM, and **never stopped** by VAF. The reuse is parity with the
-  llama engine, which reuses any healthy server on the port that holds the wanted model:
-  the loopback port is trusted as the local server, the same trust the 42 call sites place
-  in it. `local_api_url` stays the lane for the API-backend consumers.
+  another one, also a vLLM, and **never stopped** by VAF. The loopback port is trusted
+  as the local server, the same trust the 42 call sites place in it. The llama engine
+  trusts it more: its `start_server` reuses a healthy server that holds the wanted model,
+  and `Agent.load_model` reuses any healthy server on the port without asking which model
+  it holds. Under vLLM `load_model` always goes through the start, so the model check
+  above applies. `local_api_url` stays the lane for the API-backend consumers.
 - **The prompt cache is shared across accounts:** vLLM's automatic prefix cache, like
   llama.cpp's prompt cache and slots, reuses the KV cache of a prefix whoever sent it. No
   text of another account is ever returned from it, but the time to the first token can

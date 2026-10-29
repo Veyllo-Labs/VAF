@@ -56,9 +56,11 @@ Named boundaries, each deliberate:
   comments included), so every consumer talks to whatever answers on the local port.
   What the start does with such a server: it is REUSED when it already serves the
   configured model, REFUSED (no launch) when it serves another one, and never stopped by
-  VAF. The reuse is parity with the llama engine, which reuses any healthy server on the
-  port that holds the wanted model: the loopback port is trusted as the local server, the
-  same trust those 42 call sites already place in it. ``local_api_url`` stays the lane for
+  VAF. That is the vLLM start; the loopback port is trusted as the local server, the same
+  trust those 42 call sites already place in it. The llama engine trusts it more:
+  ``ServerManager.start_server`` reuses a healthy server that holds the wanted model, and
+  ``Agent.load_model`` reuses any healthy server it finds on the port without asking which
+  model it holds (unchanged here; under vLLM ``load_model`` always goes through the start). ``local_api_url`` stays the lane for
   the API-backend consumers.
 - **Local vision under vLLM**: the projector lane is llama.cpp's; under vLLM images reach
   the model only through an API ``vision_provider``.

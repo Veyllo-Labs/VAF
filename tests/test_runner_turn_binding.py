@@ -1033,3 +1033,45 @@ def test_binding_attributes_have_one_writer():
     shrunk = {f: (found.get(f, 0), n) for f, n in ALLOWED_DIRECT_WRITERS.items()
               if found.get(f, 0) < n}
     assert not shrunk, f"lower the baseline so it cannot creep back (found, allowed): {shrunk}"
+
+
+def _command(command, scope):
+    from vaf.core.task_queue import SYSTEM_COMMAND_PREFIX, AgentTask, SYSTEM_SESSION_ID
+    meta = {"task_class": "background", "system_command": True}
+    if scope is not None:
+        meta["user_scope_id"] = scope
+    return AgentTask(session_id=SYSTEM_SESSION_ID, input_text=SYSTEM_COMMAND_PREFIX + command,
+                     source="web", metadata=meta, task_class="background")
+
+
+_COMMANDS = ["NEW_SESSION", f"LOAD_SESSION:{BOB_SESSION}", f"RENAME_SESSION:{BOB_SESSION}:Neu",
+             "RELOAD_CONFIG"]
+
+
+@pytest.mark.parametrize("command", _COMMANDS, ids=[c.split(":")[0] for c in _COMMANDS])
+@pytest.mark.parametrize("exists", [True, False], ids=["a system chat exists", "none exists"])
+def test_a_command_writes_no_chat_and_owns_none(world, monkeypatch, command, exists):
+    """A system command's session is the shared command id. The session commands carry the
+    sending account's scope, and a web client can name a chat `system`: stamped from a command,
+    the first account to switch a chat would own that chat and read it. MUTATION: drop the
+    `not is_system_command(task)` guard on the runner's metadata stamping - red."""
+    from pathlib import Path
+
+    import vaf.core.agent as agent_mod
+    from vaf.core.session import Session, SessionManager, session_access_allowed
+    monkeypatch.setattr(agent_mod, "reload_all_api_backends", lambda **k: False)
+    _seed(BOB_SESSION, scope=BOB_SCOPE)
+    mgr = SessionManager()
+    if exists:
+        s = Session(id="system", name="system")
+        s.add_message(role="user", content="OWNER7QHIST")
+        mgr.save(s, sync_state=False)
+    root = Path(mgr.storage_dir)
+    before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    _run_loop(monkeypatch, world.make(), [_command(command, BOB_SCOPE)], None, _Provider())
+    after = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    assert {p.relative_to(root).as_posix() for p in after if before.get(p) != after[p]} == set(), \
+        "a system command wrote a chat file"
+    allowed, _ = session_access_allowed(SessionManager(), "system", user_scope_id=BOB_SCOPE,
+                                        is_admin=False)
+    assert allowed is False, "the command made its sender the owner of the system chat"

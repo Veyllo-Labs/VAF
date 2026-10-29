@@ -313,7 +313,10 @@ What it can change is decided by where a key is READ, not by how it looks:
   turn then runs in that chat as the owner. Another account's command is
   declined with a note that names neither the chat nor its id; that browser
   opens its chat as before. `RELOAD_CONFIG` re-reads the global config, moves
-  no session and runs whoever queued it. For the queue's fairness and the
+  no session and runs whoever queued it. Every command is handled before
+  anything is loaded for its task: its session is the shared command id, no
+  chat, and loaded like a chat it left this terminal on a chat named
+  `system`, created that chat, and the next typed turn was saved there. For the queue's fairness and the
   revocation's stop every system command stays nobody's turn
   (`TaskQueue._task_scope`).
   A turn VAF starts by itself, `enqueue_wake_turn`'s fired timer, a

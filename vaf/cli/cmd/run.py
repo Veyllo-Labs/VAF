@@ -1555,26 +1555,11 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                             is_web_input = False
                             tui.warning(_declined_note)
                             continue
-                        agent.load_session_context(task.session_id)
-
-                        # Sync current_session with task session
-                        try:
-                            current_session = session_mgr.load(task.session_id)
-                        except:
-                            # Create session if not found (fallback)
-                            current_session = session_mgr.new()
-                            current_session.id = task.session_id
-                            session_mgr.save(current_session)
-                            
+                        # A command first, before anything is loaded for the task: its session
+                        # is the shared command id, no chat. Loaded and synced like a chat, it
+                        # left this terminal on a chat named `system`, created it when missing,
+                        # and the next typed turn was saved there.
                         raw_input = str(task.input_text or "")
-                        
-                        # CRITICAL: Sync agent session ID with current session
-                        # This ensures WebSocket updates go to the correct session
-                        if hasattr(agent, '_session_id') and agent._session_id != current_session.id:
-                            agent._unregister_session()
-                            agent._session_id = current_session.id
-                            agent._register_session()
-                        
                         # Handle System Commands from Web UI
                         if is_system_command(task):
                             try:
@@ -1656,6 +1641,24 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                 tq.task_done(task=task)
                                 is_web_input = False
                         
+                        agent.load_session_context(task.session_id)
+
+                        # Sync current_session with task session
+                        try:
+                            current_session = session_mgr.load(task.session_id)
+                        except:
+                            # Create session if not found (fallback)
+                            current_session = session_mgr.new()
+                            current_session.id = task.session_id
+                            session_mgr.save(current_session)
+
+                        # CRITICAL: Sync agent session ID with current session
+                        # This ensures WebSocket updates go to the correct session
+                        if hasattr(agent, '_session_id') and agent._session_id != current_session.id:
+                            agent._unregister_session()
+                            agent._session_id = current_session.id
+                            agent._register_session()
+
                         # Normal Chat Input
                         user_input = raw_input
                         tui.console.print(f"\n[bold green]Web UI Input:[/bold green] {_terminal_echo(user_input)}")
@@ -1708,25 +1711,11 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                     tui.warning(_declined_note)
                                     wake_word_detected_flag.clear()
                                     continue
-                                agent.load_session_context(task.session_id)
-
-                                # Sync current_session with task session
-                                try:
-                                    current_session = session_mgr.load(task.session_id)
-                                except:
-                                    # Create session if not found (fallback)
-                                    current_session = session_mgr.new()
-                                    current_session.id = task.session_id
-                                    session_mgr.save(current_session)
-                                    
+                                # A command first, before anything is loaded for the task: its session
+                                # is the shared command id, no chat. Loaded and synced like a chat, it
+                                # left this terminal on a chat named `system`, created it when missing,
+                                # and the next typed turn was saved there.
                                 raw_input = str(task.input_text or "")
-                                
-                                # CRITICAL: Sync agent session ID with current session
-                                if hasattr(agent, '_session_id') and agent._session_id != current_session.id:
-                                    agent._unregister_session()
-                                    agent._session_id = current_session.id
-                                    agent._register_session()
-                                
                                 # Handle System Commands (Copy logic from above)
                                 if is_system_command(task):
                                     try:
@@ -1802,6 +1791,23 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                         tq.task_done(task=task)
                                         is_web_input = False
                                 
+                                agent.load_session_context(task.session_id)
+
+                                # Sync current_session with task session
+                                try:
+                                    current_session = session_mgr.load(task.session_id)
+                                except:
+                                    # Create session if not found (fallback)
+                                    current_session = session_mgr.new()
+                                    current_session.id = task.session_id
+                                    session_mgr.save(current_session)
+
+                                # CRITICAL: Sync agent session ID with current session
+                                if hasattr(agent, '_session_id') and agent._session_id != current_session.id:
+                                    agent._unregister_session()
+                                    agent._session_id = current_session.id
+                                    agent._register_session()
+
                                 user_input = raw_input
                                 tui.console.print(f"\n[bold green]Web UI Input:[/bold green] {_terminal_echo(user_input)}")
                                 # Clear flag so we don't trigger voice logic

@@ -581,7 +581,7 @@ def test_the_owners_signed_in_browser_chat_runs(modern_lane, wake):
 def test_the_owners_rename_still_runs_as_a_command(modern_lane):
     enqueue_system_command("RENAME_SESSION:web-chat-0009:Notizen", user_scope_id=_owner_scope())
     rec = modern_lane.run()
-    assert rec["loaded"] == ["system"], "the command was not taken as a command"
+    assert rec["loaded"] == [], "the command loaded a session into this terminal's agent"
     assert rec["warnings"] == [] and rec["chat_steps"] == []
     assert not TaskQueue().is_busy_for_session("system")
 
@@ -837,3 +837,53 @@ def test_a_declined_task_whose_note_fails_is_released_once(modern_lane, wake):
     rec = modern_lane.run(console_breaks=True)
     assert rec["chat_steps"] == []
     assert released == [sid], f"released {released}, expected exactly once"
+
+
+
+def _chats_holding(text):
+    from vaf.core.session import SessionManager
+    mgr = SessionManager()
+    found = []
+    for path in Path(mgr.storage_dir).glob("*.json"):
+        try:
+            s = mgr.load(path.stem)
+        except Exception:
+            continue
+        if any(text in str(m.content) for m in s.messages):
+            found.append(s.id)
+    return found
+
+
+_OWN_COMMANDS = [
+    ("reload", "RELOAD_CONFIG", None),
+    ("rename", "RENAME_SESSION:web-chat-0009:Notizen", _OWNER),
+    ("new", "NEW_SESSION", _OWNER),
+]
+
+
+@pytest.mark.parametrize("label,command,scope", _OWN_COMMANDS, ids=[c[0] for c in _OWN_COMMANDS])
+@pytest.mark.parametrize("wake", [False, True])
+def test_a_command_leaves_this_terminal_on_its_own_chat(modern_lane, wake, label, command, scope):
+    """A command is handled before anything is loaded for its task: its session is the shared
+    command id, no chat. Loaded like a chat it left the terminal on a chat named `system`,
+    created it, and the owner's next typed turn was saved there; any account's settings save
+    queues RELOAD_CONFIG. MUTATION: move the session load back above the command branch - red."""
+    typed = "OWNER-TYPED-LINE-0001"
+    owner = _owner_scope() if scope is _OWNER else None
+    if wake:
+        def _arrives():
+            enqueue_system_command(command, user_scope_id=owner)
+            return WAKE
+        modern_lane.rec["script"] = [_arrives, typed, None]
+    else:
+        enqueue_system_command(command, user_scope_id=owner)
+        modern_lane.rec["script"] = [typed, None]
+    import vaf.core.agent as agent_mod
+    modern_lane.monkeypatch.setattr(agent_mod, "reload_all_api_backends", lambda **k: False)
+    rec = modern_lane.run()
+    assert rec["chat_steps"] == [typed]
+    assert "system" not in rec["loaded"], "the command was loaded as a chat"
+    assert not _session_exists("system"), "the command created a chat named system"
+    holders = _chats_holding(typed)
+    assert len(holders) == 1 and holders[0] != "system", holders
+    assert not TaskQueue().is_busy_for_session("system")

@@ -630,9 +630,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `vaf tray`). It also answers only your own web chats now: a chat from another account on
   your network ran there with your identity and could read your other chats, and is declined
   the same way, and so is another account opening, starting or renaming a chat in its browser,
-  which used to switch your terminal into that account's chat. Text that arrives from the web
-  UI is never a terminal command either, not even one that looks like markup or carries
-  terminal control characters. A fired timer and the report of a finished background command
+  which used to switch your terminal into that account's chat. Saving the settings or renaming
+  a chat in the browser no longer moves the terminal into an empty chat named `system`, where
+  your next typed message was saved. Text that arrives from the web UI is never a terminal
+  command either, not even one that looks like markup or carries terminal control characters.
+  A fired timer and the report of a finished background command
   or of a sent draft are no longer run there as if you had typed them: the lane declines them
   with a note, so in the prompt interface (`vaf run --web`, or `tui_mode: modern`) a timer or a
   background command does not wake the chat any more; the full-screen app and VAF as a service

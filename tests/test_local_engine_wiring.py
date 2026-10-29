@@ -25,7 +25,13 @@ MUTATIONS, each turns the named test red:
 - drop the engine branch in `voice_agent._resolve_backend` -> test_voice_local_rides_vllm_model;
 - return ok when vLLM is not installed -> test_health_engine_check_states;
 - drop `vllm_model` from ENGINE_KEYS, or the engine filter in the tray hook ->
-  test_tray_restart_keys_cover_engine_keys / test_the_tray_restarts_only_for_the_running_engine.
+  test_tray_restart_keys_cover_engine_keys / test_the_tray_restarts_only_for_the_running_engine;
+- poll only the network keys again -> test_the_tray_poll_hands_an_engine_switch_on;
+- take the identity from the GGUF setting under vLLM -> test_agent_identity_follows_the_engine;
+- let a local voice lane with an API main provider resolve under vLLM ->
+  test_voice_local_with_an_api_main_is_refused_under_vllm;
+- "restart" an unmanaged vLLM serving another model -> test_an_unmanaged_server_on_the_port_is_refused;
+- skip the VRAM settle in the handover -> test_handover_llama_to_vllm_order.
 """
 import json
 from pathlib import Path
@@ -182,8 +188,11 @@ def test_handover_llama_to_vllm_order(monkeypatch, tmp_path, values):
             events.append("llama-exit")
         return False
     monkeypatch.setattr(backend.ServerManager, "_looks_like_llama_server", looks_like_llama)
+    monkeypatch.setattr(backend.time, "sleep", lambda sec: events.append(("settle", sec))
+                        if sec == backend._VRAM_SETTLE_SECONDS else None)
     assert _manager(tmp_path).start_server("/m.gguf") is True
-    assert events == ["stop-llama", "llama-exit", ("spawn-vllm", REPO, 32768, 8080)]
+    assert events == ["stop-llama", "llama-exit", ("settle", 1.5),
+                      ("spawn-vllm", REPO, 32768, 8080)], "the GPU memory was read before it settled"
 
 
 def test_handover_vllm_to_llama_order(monkeypatch, tmp_path, values):
@@ -586,3 +595,91 @@ def test_the_coder_reads_vllms_reasoning_field_only_locally():
     assert "reasoning_text(_vr_msg, local=not _is_api_mode)" in source
     assert "reasoning_text(delta, local=not _is_api_mode)" in source
     assert "delta.get('reasoning_content', '')" not in source
+
+
+
+# ── round 1 ────────────────────────────────────────────────────────────────────────
+
+def test_agent_identity_follows_the_engine(values):
+    """A Gemma GGUF setting must not turn Gemma handling on for the Qwen vLLM serves."""
+    from vaf.core.agent import Agent
+    agent = Agent.__new__(Agent)
+    agent.filename = "gemma-4-E4B-it-Q8_0.gguf"
+    agent._apply_local_model_identity()
+    assert agent.model_mode == "gemma4" and agent.is_gemma_local is True
+    values["local_engine"] = "vllm"
+    agent._apply_local_model_identity()
+    assert agent.model_mode is None and agent.is_gemma_local is False
+    assert agent.model_display_name == "Qwen"
+
+
+def test_load_model_under_vllm_sets_the_identity(monkeypatch, values):
+    from vaf.core.agent import Agent
+    values["local_engine"] = "vllm"
+    monkeypatch.setattr(backend.ServerManager, "ensure_model_present", lambda self, name=None: "/hf")
+    monkeypatch.setattr(backend.ServerManager, "start_server", lambda self, path, **kw: True)
+    agent = Agent.__new__(Agent)
+    agent.provider = "local"
+    agent.config = {"n_ctx": 32768}
+    agent.filename = "gemma-4-E4B-it-Q8_0.gguf"
+    agent.model_mode, agent.is_gemma_local = "gemma4", True       # as construction left it
+    agent.load_model()
+    assert agent.model_mode is None and agent.is_gemma_local is False
+
+
+def test_voice_local_with_an_api_main_is_refused_under_vllm(monkeypatch, values):
+    """Nothing starts vLLM for a call while the chat runs on an API: the lane says it has no
+    model instead of reporting one that is not there."""
+    from vaf.core import voice_agent
+    values.update({"local_engine": "vllm", "voice_agent_provider": "local", "provider": "openai"})
+    assert voice_agent._resolve_backend() == (None, None)
+
+    def no_probe(*a, **k):
+        raise AssertionError("probed a server for an unsupported lane")
+    monkeypatch.setattr(requests, "get", no_probe)
+    assert voice_agent.available() is False
+    values["provider"] = "local"
+    assert voice_agent._resolve_backend() == ("local", None)
+
+
+def test_an_unmanaged_server_on_the_port_is_refused(monkeypatch, tmp_path, values):
+    """A vLLM VAF did not start, serving another model: not VAF's to stop, and a launch
+    would only die at bind."""
+    events = []
+    _vllm_branch(monkeypatch, values, events)
+    monkeypatch.setattr(vs, "running_pid", lambda: None)
+    monkeypatch.setattr(vs, "health_status", lambda port=8080, timeout=1.0: 200)
+    monkeypatch.setattr(vs, "served_model", lambda port=8080: "someone/other-model")
+    monkeypatch.setattr(vs, "stop", lambda wait=15.0: events.append("stop-vllm") or "")
+    errors = []
+    monkeypatch.setattr(backend.UI, "error", staticmethod(lambda text, *a, **k: errors.append(text)))
+    assert _manager(tmp_path).start_server("/m.gguf") is False
+    assert events == [] and "someone/other-model" in errors[-1]
+    monkeypatch.setattr(vs, "served_model", lambda port=8080: REPO)
+    assert _manager(tmp_path).start_server("/m.gguf") is True, "the configured model is reused"
+    assert events == []
+
+
+def test_the_tray_poll_hands_an_engine_switch_on(monkeypatch, values):
+    """`vaf engine vllm` in a terminal writes the key; the running tray's poll hands it on."""
+    import vaf.tray as tray
+    from vaf.core.config import Config
+    seen = []
+
+    class _Stop(BaseException):
+        pass
+    sleeps = []
+
+    def sleep(sec):
+        sleeps.append(sec)
+        if len(sleeps) > 1:
+            raise _Stop()
+    monkeypatch.setattr(tray.time, "sleep", sleep)
+    monkeypatch.setattr(tray, "on_config_changed", lambda k, new, old: seen.append((k, new, old)))
+    values["local_engine"] = "llama"
+    tray._seed_network_config()
+    values["local_engine"] = "vllm"
+    monkeypatch.setattr(Config, "load", staticmethod(lambda: dict(values)))
+    with pytest.raises(_Stop):
+        tray._config_file_poll_loop()
+    assert ("local_engine", "vllm", "llama") in seen

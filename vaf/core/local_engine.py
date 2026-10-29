@@ -42,15 +42,19 @@ https://docs.vllm.ai/en/latest/getting_started/installation/ lists the platforms
 
 Named boundaries, each deliberate:
 
-- **Not on the facade.** An embedder chooses the engine through the agent's config
-  (``local_engine``, ``vllm_model`` next to ``provider``, ``model``, ``n_ctx``) and
-  ``Agent.load_model`` honours it, so no new ``vaf.`` symbol is needed. Installing the
-  engine is a rule about what an installation carries, like ``inference_profile``; the
-  only readers outside the core are ``vaf engine``, ``vaf health`` and the product.
+- **Not on the facade, and not per agent.** The engine is the installation's, like
+  ``inference_profile``: it is read from the installation's config (``vaf engine`` writes
+  it), because the one local server on 127.0.0.1:8080 is the machine's and two agents
+  cannot run it on two engines at once. An embedder's ``Agent(config=...)`` override of
+  ``local_engine`` therefore does not switch it (the server start reads the installation's
+  config); ``vaf engine`` does. No new ``vaf.`` symbol is needed for that; the only readers
+  outside the core are ``vaf engine``, ``vaf health`` and the product.
 - **A foreign server for the main loop** (an Ollama or vLLM that VAF did not start) is not
-  supported: 42 places in 13 files talk to ``127.0.0.1:8080`` directly instead of through
-  ``Config.get_llama_server_url`` (measured), so the main loop always talks to the server
-  VAF manages. ``local_api_url`` stays the lane for the API-backend consumers.
+  supported: the address is written out instead of read from
+  ``Config.get_llama_server_url`` in 42 lines of 13 files (``git grep -E
+  "(127\.0\.0\.1|localhost):8080" -- 'vaf/*.py'`` at the commit before this engine,
+  comments included), so the main loop always talks to the server VAF manages.
+  ``local_api_url`` stays the lane for the API-backend consumers.
 - **Local vision under vLLM**: the projector lane is llama.cpp's; under vLLM images reach
   the model only through an API ``vision_provider``.
 - **Concurrency**: vLLM batches concurrent requests, but the local worker clamp

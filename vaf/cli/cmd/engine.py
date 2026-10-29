@@ -62,13 +62,20 @@ def _show() -> None:
         UI.warning(sentence)
 
 
-def _stop_llama() -> None:
-    """The llama server, which holds the GPU memory vLLM is measured against and needs."""
+def _stop_llama() -> bool:
+    """Stop the llama server, which holds the GPU memory vLLM is measured against and needs,
+    and wait until that memory is released (the same handover the vLLM start runs). True when
+    one was running and is stopped now; exit 1 when it does not stop."""
     from vaf.core.backend import ServerManager
     mgr = ServerManager(skip_cleanup=True)
-    if mgr._llama_pid() is not None:
-        UI.info("Stopping the llama server (vLLM needs its GPU memory)...")
-        mgr._stop_llama(force_external=True)
+    if mgr._llama_pid() is None:
+        return False
+    UI.info("Stopping the llama server (vLLM needs its GPU memory)...")
+    reason = mgr.hand_over_from_llama()
+    if reason:
+        UI.error(reason + " The local engine is unchanged.")
+        raise typer.Exit(1)
+    return True
 
 
 def _uninstall() -> None:
@@ -136,14 +143,16 @@ def _to_vllm(model: Optional[str], yes: bool) -> None:
         UI.error(f"The model {repo} could not be downloaded; the local engine is unchanged.")
         raise typer.Exit(1)
 
-    _stop_llama()
+    stopped_llama = _stop_llama()
     result = vs.plan_fit(model_dir, _n_ctx())
     if result.note:
         UI.warning(result.note)
     if not result.ok:
         UI.error(result.reason)
-        UI.error("The local engine stays llama.cpp; a smaller model (--model) or a smaller "
-                 "n_ctx may fit.")
+        UI.error(f"The local engine stays {le.current()}; a smaller model (--model) or a "
+                 "smaller n_ctx may fit."
+                 + (" The llama server was stopped for the measurement; it starts again with "
+                    "the next use of the local model." if stopped_llama else ""))
         raise typer.Exit(1)
     UI.info(f"{repo}: {result.reason}")
     if model is not None:

@@ -548,6 +548,18 @@ def _wait_port_free(port: int, tries: int = 20) -> None:
         time.sleep(0.5)
 
 
+# CUDA frees a killed server's VRAM asynchronously, after its port is already free: a
+# free-memory reading taken at once still counts the old model (measured on a model swap:
+# the n_ctx cap fell into the KV-to-CPU fallback). Both handovers settle this long.
+_VRAM_SETTLE_SECONDS = 1.5
+
+
+def _settle_after_stop(port: int) -> None:
+    """After a server was stopped: the port free, then the GPU memory released."""
+    _wait_port_free(port)
+    time.sleep(_VRAM_SETTLE_SECONDS)
+
+
 def _server_ready_budget() -> float:
     """Seconds to wait for llama-server to reach /health == 200 (weights loaded, context
     allocated). A cold multi-GB GGUF on a slow disk or CPU-only box can need minutes, so
@@ -1317,8 +1329,7 @@ class ServerManager:
             #     free VRAM too early panics the n_ctx cap into the
             #     KV-to-CPU fallback ("only ~4096 ctx fits"). Settle after
             #     the port frees.
-            _wait_port_free(port)
-            time.sleep(1.5)
+            _settle_after_stop(port)
         
         # ═══════════════════════════════════════════════════════════════════
         # N_PARALLEL: DRIVEN BY MODEL SIZE (GB), NOT BY TOKENS
@@ -1797,6 +1808,24 @@ class ServerManager:
             return None
         return pid if self._looks_like_llama_server(pid) else None
 
+    def hand_over_from_llama(self, port=8080, wait: float = 15.0) -> str:
+        """Stop the llama server this installation runs (its pid file, its identity checked)
+        and wait until it is gone, the port is free and its GPU memory is released. Returns
+        "" (also when none ran) or why it is still there. The vLLM start and `vaf engine
+        vllm` (before its fit check reads the free memory) both use it."""
+        llama_pid = self._llama_pid()
+        if llama_pid is None:
+            return ""
+        UI.event("Server", "Stopping llama-server: the local engine is vLLM", style="dim")
+        self._stop_llama(force_external=True)
+        deadline = time.monotonic() + wait
+        while self._looks_like_llama_server(llama_pid):
+            if time.monotonic() >= deadline:
+                return f"llama-server (PID {llama_pid}) did not stop."
+            time.sleep(0.1)
+        _settle_after_stop(port)
+        return ""
+
     def _start_vllm_locked(self, n_ctx=32768, port=8080):
         """The vLLM branch of a start (local_engine = vllm), under the start lock.
 
@@ -1814,17 +1843,10 @@ class ServerManager:
                      "to install it, or `vaf engine llama` to go back to llama.cpp.")
             return False
 
-        llama_pid = self._llama_pid()
-        if llama_pid is not None:
-            UI.event("Server", "Stopping llama-server: the local engine is vLLM", style="dim")
-            self._stop_llama(force_external=True)
-            deadline = time.monotonic() + 15.0
-            while self._looks_like_llama_server(llama_pid):
-                if time.monotonic() >= deadline:
-                    UI.error(f"llama-server (PID {llama_pid}) did not stop; vLLM is not started.")
-                    return False
-                time.sleep(0.1)
-            _wait_port_free(port)
+        reason = self.hand_over_from_llama(port)
+        if reason:
+            UI.error(reason + " vLLM is not started.")
+            return False
 
         repo = local_engine.resolve_vllm_model()
         vllm_pid = vllm_server.running_pid()
@@ -1834,9 +1856,13 @@ class ServerManager:
             if served == repo:
                 UI.event("Server", f"Reusing vLLM on :{port} ({repo})...", style="dim")
                 return True
-            if served is None and vllm_pid is None:
-                UI.error(f"Port {port} is held by a server VAF did not start; vLLM is not "
-                         "started.")
+            if vllm_pid is None:
+                # Not the managed server (no pid file names a managed vLLM): something else
+                # answers on the port, also a vLLM serving another model. Stopping it is
+                # not VAF's to do, and a launch would only die at bind.
+                UI.error(f"Port {port} is held by a server VAF did not start"
+                         + (f" (it serves {served})" if served else "")
+                         + "; vLLM is not started.")
                 return False
             UI.event("Server", f"vLLM on :{port} serves {served} - restarting with {repo}",
                      style="dim")

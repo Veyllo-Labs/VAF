@@ -186,3 +186,31 @@ def test_the_command_is_registered():
     from pathlib import Path
     source = (Path(__file__).resolve().parents[1] / "vaf" / "main.py").read_bytes().decode("utf-8")
     assert 'app.command(name="engine"' in source and "engine_cmd.engine_cmd" in source
+
+
+def test_a_failed_fit_says_the_llama_server_was_stopped(config, monkeypatch):
+    """The llama server was stopped for the measurement; the user learns it comes back."""
+    _supported(monkeypatch)
+    _fake_install(monkeypatch, [], fits=False)
+    monkeypatch.setattr(engine_mod, "_stop_llama", lambda: True)
+    result = _invoke("vllm", "--yes")
+    assert result.exit_code == 1
+    assert "stopped" in result.output and "next use" in result.output
+
+
+def test_the_fit_check_waits_for_the_released_gpu_memory(monkeypatch):
+    """`vaf engine vllm` measures after the same handover the vLLM start runs (stopped, gone,
+    port free, memory settled), not right after the kill."""
+    from vaf.core.backend import ServerManager
+    calls = []
+    monkeypatch.setattr(ServerManager, "_llama_pid", lambda self: 4242)
+    monkeypatch.setattr(ServerManager, "hand_over_from_llama",
+                        lambda self, port=8080, wait=15.0: calls.append(port) or "")
+    assert engine_mod._stop_llama() is True and calls == [8080]
+    monkeypatch.setattr(ServerManager, "hand_over_from_llama",
+                        lambda self, port=8080, wait=15.0: "llama-server (PID 4242) did not stop.")
+    with pytest.raises(typer.Exit) as stopped:
+        engine_mod._stop_llama()
+    assert stopped.value.exit_code == 1
+    monkeypatch.setattr(ServerManager, "_llama_pid", lambda self: None)
+    assert engine_mod._stop_llama() is False

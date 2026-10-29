@@ -46,12 +46,19 @@ that silently left a message out. The context window the agent reports under vLL
 `max_model_len` the server was launched with (from `/v1/models`).
 
 The main loop's payload carries `repetition_penalty` under vLLM (vLLM's name for the knob
-llama.cpp calls `repeat_penalty`; vLLM ignores the unknown field).
+llama.cpp calls `repeat_penalty`; vLLM ignores the unknown field). The agent's model identity
+(its display name, and the Gemma message handling and tool-call parsing that
+`Agent._apply_local_model_identity` turns on) follows the vLLM model under vLLM, not the GGUF
+setting, which names a model that is not running.
 
 **One server at a time.** Starting one engine stops the other first and waits until its
 process is gone: a llama server (its pid file, its identity verified) is stopped and the
-port polled free before vLLM is spawned; a managed vLLM is stopped (its whole process
-group) before llama-server is spawned. vLLM binds the port before it sets up the engine and
+port polled free, and 1.5 s given to CUDA to release the old model's memory, before vLLM is
+spawned (`ServerManager.hand_over_from_llama`, which `vaf engine vllm` runs before its fit
+check too); a managed vLLM is stopped (its whole process group) before llama-server is
+spawned. Two VAF processes cannot both spawn one: the check and the spawn run under a file
+lock (`bin/vllm/start.lock`), and a launch that dies because the port is taken is reported
+as that, without the KV-cache retry. vLLM binds the port before it sets up the engine and
 its GPU memory, so a second server on the same port fails at bind, before it loads weights.
 A start that finds the managed vLLM alive but not yet answering `/health` (it loads for
 minutes) WAITS for it within `server_ready_timeout` instead of spawning a second one; one
@@ -100,9 +107,13 @@ card reports 12282 MiB as well as 12288.
 The model is downloaded with `huggingface_hub.snapshot_download` into the standard Hugging
 Face cache, which vLLM reads itself; it lies outside the checkout, so a multi-GB
 safetensors set can never be staged by git. Only `*.json`, `*.safetensors`, `tokenizer*`,
-`*.model`, `*.txt` and `*.jinja` are fetched, never a Python file. A start reads the cache
-with `local_files_only` and never reaches Hugging Face (`HF_HUB_OFFLINE=1` for the server).
-Gated models (a Hugging Face token) are not supported.
+`*.model`, `*.txt` and `*.jinja` are fetched, and code files (`*.py`, `*.pyc`, shared
+libraries, scripts) are excluded even where a pattern would match them, so no Python file of
+the repo is fetched. A start reads the cache with `local_files_only` and never reaches
+Hugging Face (`HF_HUB_OFFLINE=1` for the server). A sharded model counts as downloaded only
+when every shard its `model.safetensors.index.json` names is on disk, so an interrupted
+download is resumed instead of sized and launched from part of the model. Gated models (a
+Hugging Face token) are not supported.
 
 ## Parsers
 
@@ -150,9 +161,13 @@ about 6079 MiB with fp8 KV and fits in the 7988 MiB share; with 16-bit KV it nee
 
 ## Privacy and execution
 
-The server's environment is VAF's whole environment plus `VLLM_NO_USAGE_STATS=1` and
+The server's environment is VAF's environment plus `VLLM_NO_USAGE_STATS=1` and
 `DO_NOT_TRACK=1` (vLLM sends usage statistics by default), `HF_HUB_OFFLINE=1` and
-`VLLM_SKIP_MODEL_NAME_VALIDATION=1`. `--trust-remote-code` is never passed: it would execute
+`VLLM_SKIP_MODEL_NAME_VALIDATION=1`. Every other `VLLM_` variable of VAF's environment is left
+out (development endpoints, runtime LoRA loading, plugins imported at start are launch
+decisions like flags), and `VLLM_SERVER_DEV_MODE` and `VLLM_ALLOW_RUNTIME_LORA_UPDATING` are
+pinned to `0`. A stop signals a process only when its command line carries the managed
+`vllm` executable followed by `serve`. `--trust-remote-code` is never passed: it would execute
 code from the model repo. There is no free-form extra-arguments setting: a launch argument
 is an execution decision. Every `vllm_` key and `local_engine` are admin-only.
 
@@ -184,31 +199,45 @@ and quick starts.
 ## Voice and vision
 
 - **Voice:** `voice_agent_provider = "local"` rides the running vLLM model; the dedicated
-  voice GGUF is not loaded (a swap would be a multi-minute vLLM restart). A local voice
-  lane with an API main provider is not supported under vLLM in this version and is named
-  by `vaf engine`.
+  voice GGUF (`voice_agent_model`) is not loaded (a swap would be a multi-minute vLLM
+  restart). A local voice lane with an API main provider is not supported under vLLM in
+  this version: nothing would start vLLM for the call, so the lane reports no model
+  (`voice_agent._resolve_backend` answers none) and `vaf engine` names the setting.
 - **Vision (named boundary):** the projector lane (`vision_provider = local`) is
   llama.cpp's. Under vLLM `/v1/models` carries no image capability, so images degrade to the
   existing "analysis unavailable" path; an API `vision_provider` keeps working.
 
 ## Named boundaries
 
-- **A foreign server for the main loop** (an Ollama or vLLM that VAF did not start): 42
-  places in 13 files talk to `127.0.0.1:8080` directly instead of through
-  `Config.get_llama_server_url`, so the main loop always talks to the server VAF manages.
-  `local_api_url` stays the lane for the API-backend consumers.
+- **A foreign server for the main loop** (an Ollama or vLLM that VAF did not start): the
+  address is written out instead of read from `Config.get_llama_server_url` in 42 lines of
+  13 files (`git grep -E "(127\.0\.0\.1|localhost):8080" -- 'vaf/*.py'` at the commit
+  before this engine, comments included), so the main loop always talks to the server VAF
+  manages. A server VAF did not start that answers on the port is refused, not stopped,
+  also when it is a vLLM serving another model. `local_api_url` stays the lane for the
+  API-backend consumers.
+- **The prompt cache is shared across accounts:** vLLM's automatic prefix cache, like
+  llama.cpp's prompt cache and slots, reuses the KV cache of a prefix whoever sent it. No
+  text of another account is ever returned from it, but the time to the first token can
+  tell whether a prefix was sent before (a timing side channel). VAF sends no per-account
+  `cache_salt`; the local server serves one installation, which is reached over the local
+  or VPN network only ([USER_ISOLATION.md](../security/USER_ISOLATION.md), section 3).
 - **Concurrency:** vLLM batches concurrent requests, but `max_parallel_local_workers` and
   every `provider != "local"` gate stay until that is measured.
-- **The pickers:** the web Settings, the first-run wizard and the full-screen TUI model
-  picker still list GGUFs. Under vLLM a GGUF picked there writes `model`, which only the
-  llama engine reads, and the tray does not restart vLLM for it. The classic settings
-  menu names the active engine and the `vaf engine vllm --model` command.
+- **The pickers:** three model pickers do not know the engine yet and still list GGUFs: the
+  web Settings (AI & Model), the first-run wizard and the full-screen TUI. Under vLLM a GGUF
+  picked there writes `model`, which only the llama engine reads, and the tray does not
+  restart vLLM for it. One picker knows it: the terminal's classic settings menu
+  (`vaf/cli/cmd/settings.py`) shows the vLLM model and the `vaf engine vllm --model` command
+  instead of a GGUF list.
 - **Start time and idle unload:** a vLLM start takes minutes, not seconds. The desktop tray
   unloads the local model when nobody uses it, so the first message after idle waits for a
   full start; `server_persistence_enabled` keeps it loaded.
-- **Not on the facade:** an embedder chooses the engine through the agent's config
-  (`local_engine`, `vllm_model`); installing it is a rule about what an installation
-  carries, like `inference_profile`.
+- **Not on the facade, and not per agent:** the engine is the installation's, like
+  `inference_profile`: the server start reads it from the installation's config, which
+  `vaf engine` writes, because the one local server on the port is the machine's and two
+  agents cannot run it on two engines at once. An `Agent(config={"local_engine": ...})`
+  override does not switch it.
 
 ## Switching
 

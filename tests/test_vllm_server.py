@@ -13,7 +13,15 @@ MUTATIONS, each turns the named test red:
   or launch with start_new_session=False -> test_start_argv_and_env;
 - stop with `os.kill(pid, SIGTERM)` instead of the process-group stop ->
   test_stop_kills_group_and_removes_pid;
-- drop the command-line check in `_looks_like_vllm_server` -> test_stop_ignores_foreign_pid;
+- drop the command-line check in `_looks_like_vllm_server`, or go back to a substring test on
+  the environment's path -> test_stop_ignores_foreign_pid;
+- pass inherited VLLM_ variables on, or drop a pinned switch -> test_child_env_drops_inherited_vllm_switches;
+- go back to "one *.safetensors is enough" -> test_local_snapshot_needs_every_shard;
+- drop the code-file exclusion -> test_no_code_file_of_the_repo_is_fetched;
+- remove a pid file that names another pid, or spawn without the start lock check ->
+  test_a_failed_start_keeps_another_servers_pid_file / test_a_server_started_meanwhile_is_not_spawned_twice;
+- retry with auto after a bind failure -> test_a_taken_port_is_no_kv_failure;
+- drop the fallback to the own child in `stop` -> test_stop_reaches_its_own_child_without_a_pid_file;
 - drop the fp8 step (KV cache always 16-bit), or raise OVERHEAD_BYTES so the 4B no longer fits
   at fp8 -> test_fit_measured_case;
 - drop the clamp to max_position_embeddings -> test_fit_clamps_to_max_position;
@@ -121,7 +129,7 @@ def test_start_argv_and_env(config, monkeypatch, home):
                  "HF_HUB_OFFLINE"):
         assert env.get(name) == "1", name
     assert env.get("VAF_TEST_MARK") == "kept" and env.get("PATH") == os.environ.get("PATH"), \
-        "the child gets the whole environment"
+        "the child gets VAF's environment"
     assert vs.pid_file().read_bytes().decode() == str(_Proc._next - 1)
 
 
@@ -210,7 +218,7 @@ import subprocess, sys, time
 middle = ("import subprocess, sys; "
           "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)']); "
           "open(sys.argv[1], 'w').write(str(p.pid))")
-subprocess.run([sys.executable, "-c", middle, sys.argv[1]])
+subprocess.run([sys.executable, "-c", middle, sys.argv[2]])
 time.sleep(120)
 """
 
@@ -230,7 +238,8 @@ def test_stop_kills_group_and_removes_pid(home):
     fake_exe.parent.mkdir(parents=True)
     fake_exe.write_text(_LEADER, encoding="utf-8")
     grandchild_file = home / "grandchild.pid"
-    leader = subprocess.Popen([sys.executable, str(fake_exe), str(grandchild_file)],
+    # The command line of the real server: <venv>/bin/vllm serve ... (run by its interpreter).
+    leader = subprocess.Popen([sys.executable, str(fake_exe), "serve", str(grandchild_file)],
                               start_new_session=True)
     grandchild = None
     try:
@@ -375,3 +384,164 @@ def test_installed_version_reads_metadata_only(home):
     (site / "METADATA").write_bytes(b"Metadata-Version: 2.1\r\nName: vllm\r\nVersion: 0.31.0\r\n")
     assert vs.installed_version() == "0.31.0"
     assert Path(vs.venv_dir()).is_dir()
+
+
+# ── round 1: identity, environment, model completeness, races ──────────────────────
+
+@POSIX_ONLY
+def test_stop_ignores_a_process_that_only_names_the_environment(home):
+    """A command line that mentions a path inside the environment is not the server: only the
+    managed vllm executable followed by `serve` is."""
+    pytest.importorskip("psutil")
+    looker = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)",
+                               str(vs.venv_dir()), str(vs.vllm_exe()), "status"])
+    try:
+        time.sleep(0.2)
+        vs.pid_file().parent.mkdir(parents=True, exist_ok=True)
+        vs.pid_file().write_text(str(looker.pid))
+        assert vs.running_pid() is None
+        assert vs.stop(wait=0.5) == ""
+        time.sleep(0.3)
+        assert looker.poll() is None, "a process that only names the environment was signalled"
+    finally:
+        looker.kill()
+        looker.wait(5)
+
+
+def test_child_env_drops_inherited_vllm_switches():
+    env = vs.child_env({"PATH": "/usr/bin", "CUDA_VISIBLE_DEVICES": "0",
+                        "VLLM_SERVER_DEV_MODE": "1", "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "True",
+                        "VLLM_PLUGINS": "evil", "vllm_attention_backend": "X",
+                        "VLLM_NO_USAGE_STATS": "0"})
+    assert env["PATH"] == "/usr/bin" and env["CUDA_VISIBLE_DEVICES"] == "0"
+    assert env["VLLM_SERVER_DEV_MODE"] == "0" and env["VLLM_ALLOW_RUNTIME_LORA_UPDATING"] == "0"
+    assert "VLLM_PLUGINS" not in env and "vllm_attention_backend" not in env
+    assert env["VLLM_NO_USAGE_STATS"] == "1"
+    assert {k for k in env if k.upper().startswith("VLLM_")} == {
+        "VLLM_SERVER_DEV_MODE", "VLLM_ALLOW_RUNTIME_LORA_UPDATING",
+        "VLLM_SKIP_MODEL_NAME_VALIDATION", "VLLM_NO_USAGE_STATS"}
+
+
+def test_local_snapshot_needs_every_shard(monkeypatch, tmp_path):
+    import huggingface_hub
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    (snap / "config.json").write_text("{}", encoding="utf-8")
+    (snap / "model-00001-of-00002.safetensors").write_bytes(b"x")
+    (snap / "model.safetensors.index.json").write_text(json.dumps({"weight_map": {
+        "a": "model-00001-of-00002.safetensors", "b": "model-00002-of-00002.safetensors"}}),
+        encoding="utf-8")
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", lambda repo, **kw: str(snap))
+    assert vs.local_snapshot("Qwen/Qwen3-8B-AWQ") == "", "half a sharded model counted as there"
+    (snap / "model-00002-of-00002.safetensors").write_bytes(b"x")
+    assert vs.local_snapshot("Qwen/Qwen3-8B-AWQ") == str(snap)
+    (snap / "model.safetensors.index.json").write_text("not json", encoding="utf-8")
+    assert vs.local_snapshot("Qwen/Qwen3-8B-AWQ") == ""
+
+
+def test_no_code_file_of_the_repo_is_fetched():
+    """Filtered the way huggingface_hub filters a snapshot."""
+    from huggingface_hub.utils import filter_repo_objects
+    names = ["config.json", "model.safetensors", "tokenizer.json", "tokenizer_config.json",
+             "tokenizer.model", "merges.txt", "chat_template.jinja", "tokenizer.py",
+             "tokenization_qwen.py", "modeling_qwen.py", "tokenizer_fast.pyc", "kernels.so",
+             "pytorch_model.bin"]
+    kept = set(filter_repo_objects(names, allow_patterns=vs.MODEL_PATTERNS,
+                                   ignore_patterns=vs.CODE_PATTERNS))
+    assert kept == {"config.json", "model.safetensors", "tokenizer.json",
+                    "tokenizer_config.json", "tokenizer.model", "merges.txt",
+                    "chat_template.jinja"}
+
+
+def test_the_download_passes_the_code_exclusion(config, monkeypatch, home):
+    import huggingface_hub
+    calls = []
+
+    def snapshot_download(repo_id, **kw):
+        calls.append(kw)
+        if kw.get("local_files_only"):
+            raise FileNotFoundError("not cached")
+        d = home / "hf" / "s"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "model.safetensors").write_bytes(b"x")
+        return str(d)
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+    assert vs.ensure_model("Qwen/Qwen3-4B-AWQ")
+    assert calls and all(c.get("ignore_patterns") == vs.CODE_PATTERNS for c in calls)
+
+
+def test_a_failed_start_keeps_another_servers_pid_file(config, monkeypatch, home):
+    """Our launch died; meanwhile another process recorded its own server. Its record stays."""
+    _ready_to_launch(monkeypatch, home, free_mb=20000, total_mb=24576)
+    from vaf.core.platform import Platform
+    monkeypatch.setattr(Platform, "terminate_process_group", staticmethod(lambda pgid, grace=1.0: None))
+    monkeypatch.setattr(vs, "health_status", lambda port=8080, timeout=1.0: None)
+
+    def popen(argv, **kw):
+        proc = _Proc(dies=True)
+        return proc
+
+    real_wait = vs._wait_ready
+
+    def wait_ready(proc, port):
+        vs.pid_file().write_text("424242")       # another process's server, recorded now
+        return real_wait(proc, port)
+    monkeypatch.setattr(vs, "_wait_ready", wait_ready)
+    monkeypatch.setattr(vs, "_kv_fp8_failed", True)       # one attempt only
+    assert vs.start("Qwen/Qwen3-4B-AWQ", 32768, popen=popen) is False
+    assert vs.pid_file().read_text() == "424242"
+
+
+def test_a_server_started_meanwhile_is_not_spawned_twice(config, monkeypatch, home):
+    _ready_to_launch(monkeypatch, home)
+    vs.pid_file().parent.mkdir(parents=True, exist_ok=True)
+    vs.pid_file().write_text("777")
+    monkeypatch.setattr(vs, "running_pid", lambda: 777)
+    monkeypatch.setattr(vs, "health_status", lambda port=8080, timeout=1.0: 200)
+    spawned = []
+
+    def popen(*a, **kw):
+        # Recorded, not raised: start() turns a launch exception into a refusal.
+        spawned.append(a)
+        return _Proc()
+    assert vs.start("Qwen/Qwen3-4B-AWQ", 32768, popen=popen) is False
+    assert spawned == [], "a second server was spawned"
+    assert vs.pid_file().read_text() == "777"
+
+
+def test_a_taken_port_is_no_kv_failure(config, monkeypatch, home):
+    _ready_to_launch(monkeypatch, home, free_mb=20000, total_mb=24576)
+    from vaf.core.platform import Platform
+    monkeypatch.setattr(Platform, "terminate_process_group", staticmethod(lambda pgid, grace=1.0: None))
+    monkeypatch.setattr(vs, "health_status", lambda port=8080, timeout=1.0: None)
+    spawned, errors = [], []
+    monkeypatch.setattr("vaf.cli.ui.UI.error", staticmethod(lambda t, *a, **k: errors.append(t)))
+
+    def popen(argv, stdout=None, **kw):
+        spawned.append(argv[argv.index("--kv-cache-dtype") + 1])
+        stdout.write("OSError: [Errno 98] Address already in use\n")
+        stdout.flush()
+        return _Proc(dies=True)
+    assert vs.start("Qwen/Qwen3-4B-AWQ", 32768, popen=popen) is False
+    assert spawned == ["fp8"], "a bind failure was retried as a KV-cache failure"
+    assert vs._kv_fp8_failed is False
+    assert errors and "port" in errors[-1]
+
+
+@POSIX_ONLY
+def test_stop_reaches_its_own_child_without_a_pid_file(home):
+    pytest.importorskip("psutil")
+    fake_exe = vs.vllm_exe()
+    fake_exe.parent.mkdir(parents=True)
+    fake_exe.write_text("import time; time.sleep(60)\n", encoding="utf-8")
+    child = subprocess.Popen([sys.executable, str(fake_exe), "serve"], start_new_session=True)
+    try:
+        vs._child = child
+        assert not vs.pid_file().exists()
+        assert vs.stop(wait=1.0) == ""
+        assert child.wait(5) is not None
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(5)
+        vs._child = None

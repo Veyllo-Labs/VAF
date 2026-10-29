@@ -1459,7 +1459,14 @@ class Agent:
         self.model_display_name = "VQ-1"
         self.is_gemma_local = False
         self.model_mode = None
-        fname = getattr(self, "filename", "").lower()
+        # Under the vLLM engine the weights are the configured Hugging Face repo, and the
+        # GGUF setting names a model that is not running: the message conversion and the
+        # tool-call parser must follow what vLLM serves (a Gemma GGUF setting must not
+        # turn on Gemma handling for a Qwen served by vLLM).
+        if local_engine.current() == local_engine.VLLM:
+            fname = local_engine.resolve_vllm_model().rsplit("/", 1)[-1].lower()
+        else:
+            fname = getattr(self, "filename", "").lower()
         if "gemma" in fname:
             self.model_display_name = "Gemma"
             self.is_gemma_local = True
@@ -5618,6 +5625,7 @@ class Agent:
         either way; a start that did not succeed is retried by the chat's reconnect."""
         from vaf.cli.ui import UI
         n_ctx = max(self.config.get("n_ctx", 32768), 32768)
+        self._apply_local_model_identity()
         self.server = ServerManager(skip_cleanup=True)
         model_dir = "" if skip_download_check else self.server.ensure_model_present()
         started = self.server.start_server(model_dir, n_gpu_layers=self.config.get("gpu_layers", 99),

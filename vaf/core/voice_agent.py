@@ -593,7 +593,9 @@ def _resolve_backend():
       ("local", None) - time-share the one llama server with the main agent.
     - voice_agent_provider "local": a DEDICATED local voice GGUF. Returns
       ("local", <model ref>) - the one server swaps to the voice model for
-      the call (voice_model.py); model truthy = dedicated.
+      the call (voice_model.py); model truthy = dedicated. Under the vLLM engine
+      ("local", None) with a local main provider (the call rides the running vLLM
+      model), and (None, None) with an API main provider (not supported there).
     - voice_agent_provider "<api id>": the call runs on that API regardless
       of the main provider (key required).
     """
@@ -604,6 +606,12 @@ def _resolve_backend():
         if local_engine.is_vllm():
             # Under the vLLM engine the call rides the running vLLM model: a swap to a
             # voice GGUF would be a multi-minute vLLM restart (and a GGUF vLLM does not run).
+            # That model is the main agent's; with an API main provider nothing starts vLLM
+            # for a call (the call start would report a model that is not there), so the
+            # combination is refused here and named by local_engine.conflicts().
+            main = (Config.get("provider", "local") or "local").strip().lower()
+            if main != "local":
+                return None, None
             return "local", None
         from vaf.core import voice_model
         return "local", voice_model.voice_model_ref()

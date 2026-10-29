@@ -13,7 +13,9 @@ WHEN (handover, reuse, waiting for a server that is loading); this module does t
   documentation (PyTorch's CUDA 12.9 index as the extra index), its kernels fetched, and a
   probe that PyTorch in it sees the GPU. vLLM is never imported into VAF's process.
 - **Model** (``ensure_model``): a Hugging Face repo in safetensors form, in the standard
-  Hugging Face cache, which vLLM reads itself; never Python files from the repo.
+  Hugging Face cache, which vLLM reads itself; no code file of the repo is fetched
+  (``CODE_PATTERNS`` are ignored), and a sharded download counts only when every shard of
+  its index is there.
 - **Fit** (``fit``): weights + KV cache for the context + an overhead, against the memory
   share vLLM gets, before the launch, so a model that cannot fit is refused with numbers
   instead of a crash a minute later.
@@ -57,8 +59,11 @@ UTILIZATION_RANGE = (0.50, 0.92)
 # VAF's own request (system prompt and routed tools) needs this much context.
 MIN_CONTEXT = 32768
 
-# The files of a model repo the engine needs; no Python file (remote code never runs).
+# The files of a model repo the engine needs. No Python file, ever: "tokenizer*" alone
+# would also match a tokenizer.py, so code files are excluded explicitly (remote code never
+# runs, and it is not even fetched).
 MODEL_PATTERNS = ["*.json", "*.safetensors", "tokenizer*", "*.model", "*.txt", "*.jinja"]
+CODE_PATTERNS = ["*.py", "*.pyc", "*.pyo", "*.so", "*.dll", "*.dylib", "*.sh", "*.exe"]
 
 # The child of THIS process, so stop() can reap it (a killed child that is never waited for
 # stays a zombie for the life of a long-running parent).
@@ -234,11 +239,31 @@ def local_snapshot(repo_id: str) -> str:
         return ""
     try:
         from huggingface_hub import snapshot_download
-        path = snapshot_download(repo_id, allow_patterns=MODEL_PATTERNS, local_files_only=True)
+        path = snapshot_download(repo_id, allow_patterns=MODEL_PATTERNS,
+                                 ignore_patterns=CODE_PATTERNS, local_files_only=True)
     except Exception:
         return ""
     path = str(path or "")
-    return path if path and any(Path(path).glob("*.safetensors")) else ""
+    return path if path and weights_complete(path) else ""
+
+
+def weights_complete(model_dir: str) -> bool:
+    """True when the weights in ``model_dir`` are all there. A sharded model names every
+    shard in ``model.safetensors.index.json``; an interrupted download leaves the index and
+    the first shards, and counting that as downloaded would size the fit check from part of
+    the model and let vLLM fail at load. Offline: only the files on disk are read."""
+    root = Path(model_dir)
+    if not any(root.glob("*.safetensors")):
+        return False
+    index = root / "model.safetensors.index.json"
+    if not index.is_file():
+        return True
+    try:
+        weight_map = json.loads(index.read_bytes().decode("utf-8"))["weight_map"]
+        shards = {str(name) for name in weight_map.values()}
+    except Exception:
+        return False
+    return bool(shards) and all((root / name).is_file() for name in shards)
 
 
 def ensure_model(repo_id: str) -> str:
@@ -272,6 +297,7 @@ def ensure_model(repo_id: str) -> str:
         MODEL_DOWNLOAD.start(repo_id, repo_id.rsplit("/", 1)[-1])
         try:
             path = snapshot_download(repo_id, allow_patterns=MODEL_PATTERNS,
+                                     ignore_patterns=CODE_PATTERNS,
                                      tqdm_class=make_state_tqdm(inference_profile.download_guard()))
         except Exception as e:      # noqa: BLE001 - reported, and the caller sees ""
             _ui().error(f"Download of {repo_id} failed: {e}")
@@ -279,8 +305,9 @@ def ensure_model(repo_id: str) -> str:
         finally:
             MODEL_DOWNLOAD.finish()
     path = str(path or "")
-    if not any(Path(path).glob("*.safetensors")):
-        _ui().error(f"{repo_id} has no safetensors weights; the vLLM engine cannot run it.")
+    if not weights_complete(path):
+        _ui().error(f"{repo_id} has no complete set of safetensors weights; the vLLM engine "
+                    "cannot run it.")
         return ""
     return path
 
@@ -434,9 +461,20 @@ def build_command(model_dir: str, repo_id: str, port: int, result: FitResult,
     return argv
 
 
+# Switches that would open the server beyond chat completions; pinned off even though no
+# VLLM_ variable is passed on (belt and braces against a later change to that rule).
+_PINNED_OFF = ("VLLM_SERVER_DEV_MODE", "VLLM_ALLOW_RUNTIME_LORA_UPDATING")
+
+
 def child_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
-    """The server's environment: the whole environment of VAF plus the four switches."""
-    env = dict(os.environ if base is None else base)
+    """The server's environment: VAF's environment without any VLLM_ variable of its own,
+    plus the switches below. A VLLM_ variable is a launch decision like a command-line flag
+    (development endpoints, runtime LoRA loading, plugins that are imported at start), and
+    there is no free-form way to pass those on either."""
+    env = {k: v for k, v in (os.environ if base is None else base).items()
+           if not k.upper().startswith("VLLM_")}
+    for name in _PINNED_OFF:
+        env[name] = "0"
     env["VLLM_SKIP_MODEL_NAME_VALIDATION"] = "1"
     env["VLLM_NO_USAGE_STATS"] = "1"
     env["DO_NOT_TRACK"] = "1"
@@ -447,8 +485,10 @@ def child_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
 
 
 def _looks_like_vllm_server(pid: int) -> bool:
-    """True only when ``pid`` runs out of the managed environment. Fails closed: a stale pid
-    file can name any process after a reboot, and this guards a SIGKILL."""
+    """True only when ``pid`` is the managed server: its command line carries the managed
+    ``vllm`` executable as one argument, followed by ``serve``. Fails closed: a stale pid file
+    can name any process after a reboot, and this guards a SIGKILL to a whole process group,
+    so a process that merely mentions a path inside the environment does not qualify."""
     try:
         if pid <= 0 or pid == os.getpid():
             return False
@@ -456,10 +496,11 @@ def _looks_like_vllm_server(pid: int) -> bool:
         proc = psutil.Process(pid)
         if proc.status() == psutil.STATUS_ZOMBIE:
             return False
-        cmdline = " ".join(proc.cmdline() or [])
+        argv = [str(a) for a in (proc.cmdline() or [])]
     except Exception:
         return False
-    return str(venv_dir()) in cmdline
+    exe = str(vllm_exe())
+    return any(arg == exe and argv[i + 1:i + 2] == ["serve"] for i, arg in enumerate(argv))
 
 
 def _read_pid() -> Optional[int]:
@@ -469,7 +510,11 @@ def _read_pid() -> Optional[int]:
         return None
 
 
-def _remove_pid() -> None:
+def _remove_pid(only: Optional[int] = None) -> None:
+    """Remove the pid file; with ``only``, only while it still names that pid (another
+    process may have started a server and written its own pid since)."""
+    if only is not None and _read_pid() != only:
+        return
     try:
         pid_file().unlink()
     except OSError:
@@ -519,11 +564,15 @@ def stop(wait: float = 15.0) -> str:
     "" when it stopped or none ran, else why it is still running."""
     global _child
     pid = _read_pid()
+    if pid is not None and not _looks_like_vllm_server(pid):
+        _remove_pid(only=pid)       # a stale record, nothing to signal
+        pid = None
     if pid is None:
-        return ""
-    if not _looks_like_vllm_server(pid):
-        _remove_pid()
-        return ""
+        # Without a usable pid file, the server this process started is still ours to stop.
+        child = _child
+        if child is None or child.poll() is not None or not _looks_like_vllm_server(child.pid):
+            return ""
+        pid = child.pid
     from vaf.core.platform import Platform
     _ui().event("Server", f"Stopping vLLM (PID {pid})...", style="dim")
     try:
@@ -543,8 +592,21 @@ def stop(wait: float = 15.0) -> str:
         if time.monotonic() >= deadline:
             return f"vLLM (PID {pid}) did not stop."
         time.sleep(0.1)
-    _remove_pid()
+    _remove_pid(only=pid)
     return ""
+
+
+def _start_lock():
+    """Held for the check-spawn-record step of a start, across processes: two VAF processes
+    (the tray and a terminal) must not both find no server and both spawn one."""
+    from filelock import FileLock
+    root = venv_dir().parent
+    root.mkdir(parents=True, exist_ok=True)
+    return FileLock(str(root / "start.lock"))
+
+
+_BIND_FAILURE = re.compile(r"address already in use|errno 98|only one usage of each socket",
+                           re.IGNORECASE)
 
 
 def _open_log(previous_kept: bool):
@@ -616,21 +678,31 @@ def start(repo_id: str, n_ctx: int, port: int = 8080,
             return False
         UI.event("Server", f"Starting vLLM on :{port} ({repo_id}, context {result.max_model_len}, "
                            f"KV {dtype}, GPU share {result.utilization:.2f})...", style="dim")
-        try:
-            proc = popen(argv, stdout=out, stderr=out, env=child_env(),
-                         start_new_session=(os.name != "nt"))
-        except Exception as e:      # noqa: BLE001 - reported
-            if log_handle is not None:
-                log_handle.close()
-            UI.error(f"vLLM could not be launched: {e}")
-            return False
-        with _lock:
-            _child = proc
-        try:
-            pid_file().parent.mkdir(parents=True, exist_ok=True)
-            pid_file().write_bytes(str(proc.pid).encode("utf-8"))
-        except OSError:
-            pass
+        with _start_lock():
+            # Another process may have spawned the server since the caller looked: its pid
+            # file must not be overwritten, and a second server would only die at bind.
+            other = running_pid()
+            if other is not None:
+                if log_handle is not None:
+                    log_handle.close()
+                UI.event("Server", f"vLLM (PID {other}) was started by another VAF process; "
+                                   "the next use waits for it.", style="dim")
+                return False
+            try:
+                proc = popen(argv, stdout=out, stderr=out, env=child_env(),
+                             start_new_session=(os.name != "nt"))
+            except Exception as e:      # noqa: BLE001 - reported
+                if log_handle is not None:
+                    log_handle.close()
+                UI.error(f"vLLM could not be launched: {e}")
+                return False
+            with _lock:
+                _child = proc
+            try:
+                pid_file().parent.mkdir(parents=True, exist_ok=True)
+                pid_file().write_bytes(str(proc.pid).encode("utf-8"))
+            except OSError:
+                pass
         outcome = _wait_ready(proc, port)
         if log_handle is not None:
             try:
@@ -655,7 +727,12 @@ def start(repo_id: str, n_ctx: int, port: int = 8080,
             Platform.terminate_process_group(proc.pid)
         except Exception:
             pass
-        _remove_pid()
+        _remove_pid(only=proc.pid)
+        if _BIND_FAILURE.search(_read_log_tail(log_file_path, chars=20000)):
+            # The port, not the KV cache: a retry would die the same way.
+            UI.error(f"vLLM could not bind 127.0.0.1:{port}: another program holds the port. "
+                     "vLLM is not started.")
+            return False
         if attempt < len(dtypes):
             UI.event("Server", "vLLM died with the fp8 KV cache - retrying with the model's own "
                                "KV dtype...", style="yellow")

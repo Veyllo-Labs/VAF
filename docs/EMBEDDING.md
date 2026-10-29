@@ -77,10 +77,12 @@ first use and readies the local backend - depending on the platform either
 **one** llama server on `127.0.0.1:8080` (started or reused; the same
 single-server rule as the full product) or an in-process llama-cpp load that
 opens no port. Expect a multi-GB download and significant RAM/VRAM use; for a
-quick first test, an API provider is the fastest path. On a machine where the
-VAF-managed vLLM is installed (`vaf engine vllm`), `config={"provider": "local",
-"local_engine": "vllm"}` runs the same agent on vLLM, on the same port, with a
-Hugging Face model (`vllm_model`); see [VLLM_ENGINE.md](llm/VLLM_ENGINE.md).
+quick first test, an API provider is the fastest path. Which engine runs that
+one server is the installation's choice, not the agent's: after `vaf engine vllm`
+the same `config={"provider": "local"}` agent runs on a VAF-managed vLLM, on the
+same port, with a Hugging Face model (`vllm_model`). An agent's own
+`config={"local_engine": ...}` does not switch it, because the server is shared by
+every agent on the machine; see [VLLM_ENGINE.md](llm/VLLM_ENGINE.md).
 
 ### Streaming
 
@@ -2404,18 +2406,19 @@ usable from an embedded engine too, documented in their own pages:
 ### A note on custom OpenAI-compatible endpoints
 
 With `provider="local"` the main agent manages its own local server on
-`127.0.0.1:8080`, on one of two engines chosen by the config key
-`local_engine`: llama.cpp with a GGUF (`"llama"`, the default) or a VAF-managed
-vLLM with a Hugging Face model (`"vllm"`; installed with `vaf engine vllm`, see
+`127.0.0.1:8080`, on one of two engines chosen by the installation's config key
+`local_engine` (written by `vaf engine`): llama.cpp with a GGUF (`"llama"`, the
+default) or a VAF-managed vLLM with a Hugging Face model (`"vllm"`, see
 [VLLM_ENGINE.md](llm/VLLM_ENGINE.md)). The API-backend consumers (browser agent,
 local vision, cloud-to-local failover) follow it through the same address.
 
 The config key `local_api_url` points those *API-backend consumers* at any
 other OpenAI-compatible server (an Ollama, vLLM or LM Studio that VAF does not
 manage). It does **not** redirect the main chat loop. Named boundary: a foreign
-inference server for the main loop is not supported, because 42 places in 13
-files reach `127.0.0.1:8080` directly instead of through
-`Config.get_llama_server_url` (measured); moving them onto that one address is
+inference server for the main loop is not supported, because the address is
+written out instead of read from `Config.get_llama_server_url` in 42 lines of 13
+files (`git grep -E "(127\.0\.0\.1|localhost):8080" -- 'vaf/*.py'` at the commit
+before the vLLM engine, comments included); moving them onto that one address is
 the step that would open it. See [PROVIDER_MODES.md](llm/PROVIDER_MODES.md) for
 the details.
 

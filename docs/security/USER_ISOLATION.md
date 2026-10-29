@@ -240,6 +240,18 @@ Without this, User A could receive cached search results or graph data that was 
 
 The graph key carries no chat dimension: a chat namespace is part of the owner's graph, so emptying one (`DELETE /api/memory/chat/{chat_key}`) invalidates the graph cache the same way a single delete does, and the node is gone on the next fetch.
 
+### The local model server's prompt cache (named boundary)
+
+The one local model server is shared by every account of the installation, and so is its
+prompt cache: llama.cpp keeps a prompt cache (`--cache-ram`) and per-slot KV state, and the
+vLLM engine an automatic prefix cache ([VLLM_ENGINE.md](../llm/VLLM_ENGINE.md)). A request
+whose prompt starts like an earlier one reuses that prefix's KV cache, whoever sent it. No
+text of another account is returned from it; what can leak is timing: a prefix seen before
+answers its first token sooner. VAF sends no per-account cache key (vLLM's `cache_salt`;
+llama.cpp has none) and keeps the server on 127.0.0.1, reached by the accounts of one
+installation over the local or VPN network only. An API provider's prompt cache is that
+provider's.
+
 ## 4. Database-Level Security (PostgreSQL RLS)
 
 PostgreSQL Row-Level Security (RLS) is enabled and forced on the `memories` table.
@@ -976,6 +988,7 @@ The connection map (`/api/network/connections`) lists every connected device's a
 | Email | Per-user encrypted credentials + scope-based config lookup chain | Application |
 | Calendar (Google/Microsoft) | Same OAuth and `user_scope_id` as Email; no separate credentials | Application |
 | Automations | Per-user task storage and scoped RAG access; max 3 users per time slot (global cap) | Application |
+| Local model server | One server per installation; its prompt/prefix cache is shared across accounts (timing only, no content; named boundary, section 3) | Application |
 | Automation planner (notes/todos) | Per-user `automation_planner/<scope>/notes.json`, `todos.json` | Application |
 | Thinking workspace | Per-user `workspaces/<scope_key>/` with boundary-checked file access and handoff approvals | Application |
 | Word suggestions in the chat input | One corpus per account (`vaf/cli/autosuggest.py`, `autosuggest_for`): the machine owner keeps `~/.vaf/autosuggest.json`, the file the terminal lanes use, every other account `~/.vaf/autosuggest/<scope>.json`; a web connection learns into and is suggested from its own account's corpus only, and a connection with no account gets neither. Before, one process-wide corpus learned every account's messages and answered every connection, so one person's typed words (a name, a password) could be offered to another. Encrypted at rest, owner-only | Application |

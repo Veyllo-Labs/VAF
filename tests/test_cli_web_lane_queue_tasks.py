@@ -97,21 +97,31 @@ class _FakeAgent:
         self.config = {}
         self._session_id = "cli-start"
         self.last_turn = types.SimpleNamespace(failed=False, failure="")
+        # The claim and the history, as Agent.load_session_context keeps them: a load of the
+        # chat the agent already claims returns early and keeps what it holds.
+        self.current_session_id = None
+        self.history = []
 
     def chat_step(self, text, *a, **k):
         self._rec["chat_steps"].append(text)
+        self._rec["turn_history"].append(list(self.history))
         if self._rec.get("chat_raises"):
             raise self._rec.pop("chat_raises")
         return "ok"
 
-    def load_session_context(self, sid, *a, **k):
+    def load_session_context(self, sid, *a, force=False, **k):
         self._rec["loaded"].append(sid)
+        if not force and self.current_session_id == sid:
+            return
+        self.current_session_id = sid
+        self.history = [{"role": "system", "content": f"history of {sid}"}]
 
     def get_token_usage(self):
         return (0, 0)
 
     def init_chat(self, *a, **k):
         self._rec["init_chat"] += 1
+        self.history = []
 
     def __getattr__(self, name):
         if name.startswith("__"):
@@ -136,6 +146,7 @@ def modern_lane(monkeypatch, tmp_path):
     rec = {"screen": screen,
            "console": Console(file=screen, force_terminal=False, color_system=None, width=200),
            "warnings": [], "errors": [], "events": [], "other": [], "chat_steps": [],
+           "turn_history": [],
            "loaded": [], "prompts": 0, "script": [], "mic_opened": 0, "init_chat": 0,
            "menu": 0, "execl": [], "repair": 0, "server_starts": []}
 
@@ -887,3 +898,46 @@ def test_a_command_leaves_this_terminal_on_its_own_chat(modern_lane, wake, label
     holders = _chats_holding(typed)
     assert len(holders) == 1 and holders[0] != "system", holders
     assert not TaskQueue().is_busy_for_session("system")
+
+
+
+@pytest.mark.parametrize("command", ["LOAD_SESSION", "NEW_SESSION"])
+@pytest.mark.parametrize("wake", [False, True])
+def test_a_chat_switch_leaves_the_agent_claiming_the_chat_it_holds(modern_lane, wake, command):
+    """The owner chats in A (one tab), switches to B or starts a new chat (another tab), then
+    chats in A again. The switch must leave the agent claiming the chat whose history it holds:
+    a load of the chat the agent already claims returns early, so a claim left on A with B's
+    history (or none) ran A's next turn on it. MUTATION: init_chat (plus a hand copy of the
+    messages) instead of load_session_context in either branch - red."""
+    from vaf.core.session import SessionManager
+    owner = _owner_scope()
+    mgr = SessionManager()
+    chats = {}
+    for name in ("A", "B"):
+        s = mgr.new(name=f"Chat {name}", user_scope_id=owner)
+        s.add_message("user", f"LINE-OF-{name}")
+        mgr.save(s)
+        chats[name] = s.id
+    target = f"LOAD_SESSION:{chats['B']}" if command == "LOAD_SESSION" else "NEW_SESSION"
+    steps = [
+        lambda: _queue("web", "erste Frage", contact=False, sid=chats["A"], scope=owner),
+        lambda: enqueue_system_command(target, user_scope_id=owner),
+        lambda: _queue("web", "zweite Frage", contact=False, sid=chats["A"], scope=owner),
+    ]
+    if wake:
+        def _arrives(step):
+            def _do():
+                step()
+                return WAKE
+            return _do
+        modern_lane.rec["script"] = [_arrives(s) for s in steps] + [None]
+    else:
+        def _feed(tui, agent):
+            if steps:
+                steps.pop(0)()
+            return []
+        modern_lane.monkeypatch.setattr(run_mod, "_check_subagent_results", _feed)
+    rec = modern_lane.run()
+    assert rec["chat_steps"] == ["erste Frage", "zweite Frage"]
+    expected = [{"role": "system", "content": f"history of {chats['A']}"}]
+    assert rec["turn_history"][1] == expected, "A's second turn ran on another chat's history"

@@ -1772,7 +1772,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                 # Never from a system command: its session is the shared command id, which names
                 # no chat of the account that queued it, and a web client can name a chat
                 # `system` (the ownership gate admits an id with no record). Stamped from a
-                # command, the first account to switch or rename a chat would own that chat.
+                # command, the first account to start, switch or rename a chat would own that chat.
                 if _bound and not is_system_command(task):
                     # Persist user to session metadata so load_session_context gets it on next load
                     # Also persist telegram_chat_id for sessions from Telegram (needed when subagent completes later)

@@ -1573,7 +1573,11 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                     current_session = session_mgr.new()
                                     session_mgr.save(current_session) # Save immediately so ID is valid
                                     set_current_session_id(current_session.id)
-                                    agent.init_chat()
+                                    # Loaded, never init_chat: the agent must claim the chat whose history it
+                                    # holds. A load of the chat it already claims returns early, so a claim
+                                    # left on the previous chat ran that chat's next turn (another tab) on
+                                    # this one's history.
+                                    agent.load_session_context(current_session.id)
                                     tui.event("WebUI", "Started new session", style="success")
                                     continue # Loop back to prompt
                                     
@@ -1582,12 +1586,9 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                     try:
                                         current_session = session_mgr.load(sid)
                                         set_current_session_id(current_session.id)
-                                        # Restore agent history
-                                        agent.init_chat()
-                                        # Session.messages holds Message objects, not dicts.
-                                        for msg in current_session.messages:
-                                            if msg.role in ["user", "assistant"]:
-                                                agent.history.append({"role": msg.role, "content": msg.content})
+                                        # The agent rebuilds the chat's history from the store, as the runner's
+                                        # command does (headless_runner._handle_command).
+                                        agent.load_session_context(current_session.id)
                                         tui.event("WebUI", f"Switched to session: {current_session.name}", style="success")
                                     except Exception as e:
                                         tui.error(f"Failed to switch session: {e}")
@@ -1729,7 +1730,8 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                             current_session = session_mgr.new()
                                             session_mgr.save(current_session)
                                             set_current_session_id(current_session.id)
-                                            agent.init_chat()
+                                            # Loaded, never init_chat, as in the poll above.
+                                            agent.load_session_context(current_session.id)
                                             tui.event("WebUI", "Started new session", style="success")
                                             wake_word_detected_flag.clear()
                                             continue
@@ -1739,11 +1741,7 @@ def _run_modern(message: str, verbose: bool, theme: str, session_id: str = None,
                                             try:
                                                 current_session = session_mgr.load(sid)
                                                 set_current_session_id(current_session.id)
-                                                agent.init_chat()
-                                                # Session.messages holds Message objects, not dicts.
-                                                for msg in current_session.messages:
-                                                    if msg.role in ["user", "assistant"]:
-                                                        agent.history.append({"role": msg.role, "content": msg.content})
+                                                agent.load_session_context(current_session.id)
                                                 tui.event("WebUI", f"Switched to session: {current_session.name}", style="success")
                                             except Exception as e:
                                                 tui.error(f"Failed to switch session: {e}")

@@ -857,9 +857,12 @@ partition:
   takes the handover mutex, for up to 30 s. A transfer still running after that is
   answered `busy` with the reason `transfer_running`: nothing was wiped or refused for
   safety, so no `browser_handover_failed` event is written, and the person can try
-  again. The release waits up to 330 s (above the mirror's 300 s extraction timeout); a
-  transfer still running after that keeps the entry, and the transfer itself gives it
-  up when it ends, so the browser stays busy rather than changing hands under a
+  again. While transfers run, a release hands its entry to the last of them in the
+  same lock step that finds them, before it waits, and only that transfer gives the
+  entry up, once, when it ends; a start that gave up its 30 s wait and claimed the same
+  entry therefore cannot release it on its way out. The release itself waits up to
+  330 s (above the mirror's 300 s extraction timeout) for that to happen and then
+  returns either way, so the browser stays busy rather than changing hands under a
   transfer. Claiming an entry and recording it as the lease's own, and checking that
   an entry was not claimed again and releasing it, are each one step under a
   process-local mutex, so a release never takes the entry a new lease has just been

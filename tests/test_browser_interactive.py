@@ -2558,3 +2558,39 @@ def test_the_window_names_a_running_transfer_in_every_language():
     for locale in ("en", "de", "tr", "zh", "ja", "ko", "th"):
         catalog = json.loads((root / "web" / "messages" / f"{locale}.json").read_bytes())
         assert catalog["main"].get("browserTransferRunning", "").strip(), locale
+
+
+def test_a_refused_start_never_releases_an_entry_whose_release_is_waiting(mgr, monkeypatch):
+    """The two waits as they really relate: a change of hands gives up after
+    HANDOVER_WAIT_S, well before a release stops waiting (TRANSFER_DRAIN_S). A start
+    of this process that gives up in that window claims the entry A's release is
+    still waiting with (one lease entry per process) and is refused; on its way
+    out it must not give that entry up, or another process purges and wipes under
+    A's transfer. The entry is marked as held back BEFORE the release waits, and
+    only the last transfer gives it up. MUTATION: mark it only after the wait (red)."""
+    _no_ipc_tasks(monkeypatch)
+    box = _SharedContainer(monkeypatch)
+    monkeypatch.setattr(mgr, "HANDOVER_WAIT_S", 0.1)
+    monkeypatch.setattr(mgr, "TRANSFER_DRAIN_S", 2.0)
+    assert mgr.start("scope-a", "sess-a", save=False)["status"] == "active"
+    mgr._lease.stream_connections = 1
+    box.slow_sync_for = "scope-a"
+    janitor = _one_janitor_tick(mgr, monkeypatch)
+    assert box.entered.wait(5)
+    closer = threading.Thread(target=lambda: mgr.stop("user", requester_scope="scope-a"))
+    closer.start()
+    closer.join(0.2)
+    assert closer.is_alive(), "A's release did not wait for the transfer"
+    refused = mgr.start("scope-b", "sess-b", save=False)        # gives up after 0.1 s
+    assert (refused["status"], refused["reason"]) == ("busy", "transfer_running"), refused
+    assert closer.is_alive(), "the test ran past A's release wait"
+    token, _other = _claim_as_another_process("scope-c")
+    assert token is None, "the refused start released the entry A's release waits with"
+    box.release.set()
+    closer.join(10)
+    janitor.join(10)
+    token, other = _claim_as_another_process("scope-c")
+    assert token is not None, other                              # released once, at the end
+    from vaf.core import browser_jar
+    browser_jar.record_for("vaf-browser").release(token)
+    assert mgr._release_when_drained == []

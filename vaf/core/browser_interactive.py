@@ -1638,20 +1638,30 @@ class InteractiveBrowserManager:
     def _release_after_transfers(self, token: Optional[str]) -> None:
         """Give up a holder entry once no file transfer is in flight: the entry is
         what keeps a holder of ANOTHER process out. The caller has already cleared
-        `_xfer_scope`, so no new transfer can start. A transfer that outlives
-        TRANSFER_DRAIN_S keeps the entry: the last transfer releases it when it
-        ends (`_held_transfer`), so the browser stays held, never handed over,
-        while files are still moving."""
+        `_xfer_scope`, so no new transfer can start.
+
+        With transfers running, the entry is handed to the last of them
+        (`_release_when_drained`, given up by `_transfer_done`) in the same lock
+        step that finds them, BEFORE any waiting: a change of hands in this
+        process gives up its own wait (HANDOVER_WAIT_S) long before this one, and
+        on its way out it releases what it claimed unless that entry is held back
+        (`_release_unless_reclaimed`). Marked only after this wait, the entry was
+        released under the running transfer. The last transfer is then the only
+        one that releases it, exactly once; the wait below only keeps the caller
+        until that has happened (an admin's eviction checks for transfers right
+        after it), bounded by TRANSFER_DRAIN_S."""
         if not token:
             return
+        with self._lock:
+            held_back = self._xfers > 0
+            if held_back:
+                self._release_when_drained.append(token)
+        if not held_back:
+            self._release_unless_reclaimed(token)
+            return
         if not self._transfers_drained(self.TRANSFER_DRAIN_S):
-            with self._lock:
-                if self._xfers > 0:
-                    self._release_when_drained.append(token)
-                    append_domain_log("webui", "[browser_interactive] a file transfer is still "
-                                               "running; the browser is released when it ends")
-                    return
-        self._release_unless_reclaimed(token)
+            append_domain_log("webui", "[browser_interactive] a file transfer is still "
+                                       "running; the browser is released when it ends")
 
     def _release_unless_reclaimed(self, token: Optional[str], *, pending_ok: bool = False) -> None:
         """Release an entry unless a holder of this process has claimed it again in

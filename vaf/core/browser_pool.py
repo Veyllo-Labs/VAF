@@ -738,7 +738,14 @@ class BrowserPool:
             for line in (r.stdout or "").splitlines():
                 line = line.strip()
                 if line.startswith("127.0.0.1:"):
-                    return line.rsplit(":", 1)[1]
+                    port = line.rsplit(":", 1)[1]
+                    # The port becomes the host part of a base URL that the stream
+                    # proxy sends the VNC credential to, so only a plain decimal
+                    # port is taken: "127.0.0.1:@host" would name another host.
+                    # Anything else fails closed (no instance, shared fallback).
+                    if port.isascii() and port.isdigit() and 1 <= int(port) <= 65535:
+                        return port
+                    return None
             return None
 
         cdp, vnc = host_port("9222/tcp"), host_port("6901/tcp")

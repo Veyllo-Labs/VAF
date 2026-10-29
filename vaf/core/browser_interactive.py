@@ -1415,6 +1415,11 @@ class InteractiveBrowserManager:
                 # would log out the very session it was handed.
                 try:
                     if scrub_mode() == "full":
+                        # The wipe deletes the mirrored Workspace folder too
+                        # (entrypoint), so the mirror's signature no longer
+                        # describes the container: the next sync copies again.
+                        with self._lock:
+                            self._ws_sig = None
                         request_profile_wipe(self._container_name)
                     _cookie_op(self.cdp_base(), "scrub")
                 except Exception as e:

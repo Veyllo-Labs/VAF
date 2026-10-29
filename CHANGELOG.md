@@ -40,6 +40,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   ports every time it starts, and VAF kept dialling the old ones, so the browser answered
   "unavailable" after about 30 seconds until VAF was restarted. The agent's browser runs and
   page checks on that browser reach the new ports too.
+- With `VAF_BROWSER_SCRUB=full`, the files mirrored into the browser for uploads come
+  back after a same-account clean start. The profile wipe deleted them, and the mirror
+  kept treating them as already copied.
 
 ### Security
 

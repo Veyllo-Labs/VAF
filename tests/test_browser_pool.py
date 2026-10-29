@@ -953,6 +953,29 @@ def test_a_cached_instance_restarted_behind_the_pool_is_re_read(pool, monkeypatc
     assert not any(c[0] in ("run", "start", "rm") for c in pool._test_docker.calls[n:])
 
 
+@pytest.mark.parametrize("answer", ["127.0.0.1:@evil.example", "127.0.0.1:0",
+                                    "127.0.0.1:70000", "127.0.0.1:49222/x", "127.0.0.1:"])
+def test_only_a_decimal_port_becomes_an_endpoint(pool, monkeypatch, answer):
+    """The published port becomes the host part of the base URL the stream proxy
+    sends the VNC credential to. "127.0.0.1:@evil.example" would make that host
+    evil.example, so anything but a decimal port 1..65535 fails closed: no
+    instance, the shared fallback. MUTATION: take the text after the last colon
+    unchecked (red)."""
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "2")
+    fake = pool._test_docker
+    real = fake.__call__
+
+    def docker(args, timeout=60):
+        if args[0] == "port" and args[2] == "6901/tcp":
+            fake.calls.append(list(args))
+            return _done(0, answer)
+        return real(args, timeout)
+
+    monkeypatch.setattr("vaf.core.containers.docker", docker)
+    assert pool.resolve("scope-a") is None
+    assert pool._read_endpoints("scope-a", "vaf-browser-u-x") is None
+
+
 @pytest.fixture
 def live_health_pool(monkeypatch):
     """Same wiring as `pool`, minus the `_wait_healthy` stub.
@@ -1294,3 +1317,28 @@ def test_a_pooled_container_is_created_with_the_stream_credential(pool, monkeypa
     assert pool.resolve("scope-a") is not None
     run_call = next(c for c in pool._test_docker.calls if c[0] == "run")
     assert "VAF_BROWSER_VNC_SECRET=pool-secret" in run_call
+
+
+def test_the_workspace_mirror_lives_on_the_profile_volume(pool, monkeypatch):
+    """A recreated instance (outdated image, changed settings) keeps its manager and
+    the manager keeps its workspace-mirror signature. That is only right because the
+    mirrored folder lives on the named profile volume, which the recreate remounts
+    and never removes; a mirror folder moved off the volume would have to reset the
+    signature on a new container. MUTATION: move the mirror folder off /home/browser,
+    or remove the volume on recreate (red)."""
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "2")
+    name = pool.resolve("scope-a").container_name
+    # The shared browser was rebuilt: the instance is recreated, not adopted.
+    monkeypatch.setattr("vaf.core.containers.docker",
+                        _inspecting(pool, current=_NEW_ID, have=_OLD_ID, env=_created_env(pool)))
+    assert pool.resolve("scope-a") is not None
+    calls = pool._test_docker.calls
+    runs = [c for c in calls if c[0] == "run"]
+    assert len(runs) == 2
+    mounts = [next(a for a in c if a.startswith("vaf-browser-profile-")) for c in runs]
+    assert mounts[0] == mounts[1]                      # the same volume, remounted
+    target = mounts[0].split(":", 1)[1]
+    assert bi._WS_CONTAINER_DIR.startswith(target.rstrip("/") + "/")
+    # Removed as a container only: no -v/--volumes, no volume rm.
+    assert [c for c in calls if c[0] == "rm"] == [["rm", "-f", name]]
+    assert not any(c[0] == "volume" for c in calls)

@@ -1126,7 +1126,11 @@ the only place in the container that holds anything of the person's. Agent runs 
 the mirrored paths as browser-use's `available_file_paths` whitelist, so `upload_file`
 can attach exactly the owner's files and nothing else. On a scope change the mirror is
 purged unread together with the downloads folder, and the full profile scrub wipes it
-too. Pinned by `tests/test_browser_interactive.py` and the entrypoint guard.
+too; both drop the mirror's signature, so the next tick copies the files in again. On a
+personal browser the folder lives on the profile volume, so it survives a restart and a
+recreate onto a new image or new settings (the volume is remounted, never removed), and
+the signature stays valid. Pinned by `tests/test_browser_interactive.py`,
+`tests/test_browser_pool.py` and the entrypoint guard.
 
 ### Handover scrub depth
 

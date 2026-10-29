@@ -667,6 +667,28 @@ def test_workspace_mirrors_in_at_lease_start_and_resets_on_scope_change(mgr, mon
     mgr.stop("user", requester_scope="scope-b")
 
 
+def test_a_full_scrub_of_the_same_scope_mirrors_the_workspace_again(mgr, monkeypatch):
+    """VAF_BROWSER_SCRUB=full wipes the profile on a same-scope clean start, and the
+    entrypoint's wipe deletes the mirrored Workspace folder with it. The mirror's
+    signature then describes files that are gone, so it is dropped and the next
+    sync copies again; a quick scrub leaves the folder and keeps the signature.
+    MUTATION: drop the reset next to request_profile_wipe (red)."""
+    _no_ipc_tasks(monkeypatch)
+    prevs = []
+    monkeypatch.setattr(bi, "_sync_workspace_to_container",
+                        lambda name, scope, prev: (prevs.append(prev) or (("sig",), [])))
+    monkeypatch.setattr(bi, "request_profile_wipe", lambda *a: None)
+    mgr.hand_jar_to_run(user_scope_id="scope-a", persistent=True)
+    mgr.sync_workspace("scope-a")
+    mgr.hand_jar_to_run(user_scope_id="scope-a", persistent=False)   # quick
+    mgr.sync_workspace("scope-a")
+    assert prevs[-1] == ("sig",)
+    monkeypatch.setenv("VAF_BROWSER_SCRUB", "full")
+    mgr.hand_jar_to_run(user_scope_id="scope-a", persistent=False)   # full: wipes
+    mgr.sync_workspace("scope-a")
+    assert prevs[-1] is None
+
+
 def test_workspace_sync_off_mirrors_nothing(mgr, monkeypatch):
     _no_ipc_tasks(monkeypatch)
     monkeypatch.setenv("VAF_BROWSER_WORKSPACE_SYNC", "off")

@@ -839,6 +839,22 @@ partition:
   previous owner (in its own process, and in every other process always), whose next
   lease saw no change of hands and purged nothing, so the probe's files sat in that
   person's file picker.
+  Files move in or out of the shared container only while the scope they belong to
+  holds it. A janitor tick's sweep and mirror and a run's mirror (which runs in an
+  executor thread a Stop does not wait for) each register under the manager's lock,
+  and only for the scope that holds the browser at that moment. A lease's stop and a
+  run's end then wait for the registered transfers before they give up their holder
+  entry, the entry that keeps every other process out. A change of hands in the same
+  process (which that entry does not keep out) waits for them before its purge and
+  wipe, and refuses when they outlive the wait, as a failed wipe does. So a previous
+  holder's files cannot land in the next holder's browser after the purge, and the
+  next holder's downloads cannot be delivered to the previous one. The wait is bounded
+  (330 s, above the mirror's 300 s extraction timeout); a transfer still running after
+  that keeps the entry, and the transfer itself releases it when it ends, so the
+  browser stays busy rather than changing hands under a transfer. Before, the janitor
+  read the lease and then copied outside every lock: with a slow mirror (the pinning
+  tests in `tests/test_browser_interactive.py`), a person who closed the browser had
+  their files land in the next person's file picker after the next person's wipe.
 - **The genuine partition is the per-user pool** (`browser_pool_max`, default
   `"auto"`, at least 2 where memory allows, admin-only, overridable by
   `VAF_BROWSER_POOL_MAX`; see the pool

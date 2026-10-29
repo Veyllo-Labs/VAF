@@ -1098,7 +1098,11 @@ is deleted - the folder is a hand-off point, not storage.
 
 Ownership follows the jar: downloads go to whoever holds (or last held) the browser,
 and a scope CHANGE purges the folder unread - a previous holder's undelivered files
-must never ride into the next person's workspace. `off` is enforced in the browser
+must never ride into the next person's workspace. A sweep or a mirror runs only while
+its scope holds the browser, and a holder's release (and, in the same process, the next
+holder's handover) waits until they are done, so neither can straddle a change of hands
+(see the shared-browser passage of [USER_ISOLATION.md](../security/USER_ISOLATION.md)).
+`off` is enforced in the browser
 itself (`Browser.setDownloadBehavior deny` at every handover), not in our chrome.
 Pinned by `tests/test_browser_interactive.py`.
 

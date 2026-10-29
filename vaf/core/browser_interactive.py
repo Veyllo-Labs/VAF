@@ -918,6 +918,10 @@ class InteractiveBrowserManager:
     # generous: reading without touching anything is normal browsing, so
     # "activity" is an open stream connection, not input.
     GRACE_S = 120.0
+    # How long a holder's release waits for its file transfers before it leaves
+    # the release to the last of them. Above the mirror's tar extraction (300 s)
+    # and one download copy (120 s), each of which its subprocess timeout ends.
+    TRANSFER_DRAIN_S = 330.0
     # How often an open stream socket that carries no traffic asks whether its
     # grant still stands. Only the close of a QUIET socket waits for this: the
     # relay checks the grant on every message it passes, so no byte crosses after
@@ -1011,6 +1015,24 @@ class InteractiveBrowserManager:
         # may finish after it; it stores its signature only if no wipe came in
         # between, or the files it copied (and the wipe deleted) count as there.
         self._ws_wipe_gen = 0
+        # File transfers between the container and a holder's files (the
+        # workspace mirror in, the download sweep out) run outside every lock and
+        # can take minutes. `_xfer_scope` names the scope whose files may move
+        # right now: set when a holder holds this browser (a lease installed, a
+        # run's handover done), cleared when it lets go. A transfer registers
+        # under the lock only for that scope (`_held_transfer`), and a holder's
+        # release waits for the registered ones before it gives up its entry in
+        # the cross-process record (`_release_after_transfers`). That entry is
+        # what keeps every other holder, in any process, out of the shared
+        # browser, so no other holder's handover can purge, wipe and browse
+        # while a previous holder's files are still moving. A dedicated
+        # instance has one scope for life, so its transfers are always its own.
+        self._xfer_scope: Optional[str] = dedicated_scope
+        self._xfers = 0
+        self._xfers_idle = threading.Condition(self._lock)
+        # Entries whose release outlived TRANSFER_DRAIN_S: the last transfer
+        # releases them when it ends, never earlier.
+        self._release_when_drained: List[str] = []
         self._janitor_alive = False
         # This process's entries in the shared browser's cross-process holder
         # record (vaf.core.browser_jar): the lease's and the in-process run's.
@@ -1300,6 +1322,9 @@ class InteractiveBrowserManager:
                                                "waited for the shared browser; claim released")
                     raise BrowserHandoverError("the run ended while it waited for the browser")
             self._hand_jar_locked(scope, persistent=persistent, continuing=continuing)
+            with self._lock:
+                if self._run_generation == generation:
+                    self._xfer_scope = scope
 
     @contextlib.contextmanager
     def hold_for_probe(self, user_scope_id: Optional[str] = None):
@@ -1444,6 +1469,12 @@ class InteractiveBrowserManager:
         from vaf.core import browser_jar
         jar = browser_jar.record_for(self._container_name)
         try:
+            # A holder of THIS process is not kept out by the record (it only
+            # refuses other processes), so the handover itself waits for the
+            # previous holder's file transfers: purging and wiping under one
+            # would let its files land in the new holder's browser afterwards.
+            if not self._transfers_drained(self.TRANSFER_DRAIN_S):
+                raise BrowserHandoverError("the previous holder's file transfer is still running")
             jar.set_owner(None, instance)
             _purge_container_downloads(self._container_name)
             if not verified_profile_wipe(self._container_name, self.cdp_base()):
@@ -1531,6 +1562,68 @@ class InteractiveBrowserManager:
             self._ws_wipe_gen += 1
             self._ws_sig = None
 
+    def _held_transfer(self, scope: Optional[str], transfer, refused):
+        """Run one file transfer for `scope` only while that scope holds this
+        browser; answer `refused` without running it otherwise. Registered under
+        the lock in the same step as the check, so a holder's release either sees
+        it (and waits for it) or it sees the release (and does not start)."""
+        with self._lock:
+            if not scope or self._xfer_scope != scope:
+                return refused
+            self._xfers += 1
+        try:
+            return transfer()
+        finally:
+            pending: List[str] = []
+            with self._lock:
+                self._xfers -= 1
+                if self._xfers == 0:
+                    self._xfers_idle.notify_all()
+                    pending, self._release_when_drained = self._release_when_drained, []
+            for token in pending:
+                self._release_unless_reclaimed(token)
+
+    def _transfers_drained(self, timeout: float) -> bool:
+        """Wait until no file transfer is in flight; False when `timeout` ran out
+        first. The caller holds no lock (the wait releases this manager's)."""
+        with self._lock:
+            deadline = time.monotonic() + timeout
+            while self._xfers > 0:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return False
+                self._xfers_idle.wait(left)
+            return True
+
+    def _release_after_transfers(self, token: Optional[str]) -> None:
+        """Give up a holder entry once no file transfer is in flight: the entry is
+        what keeps a holder of ANOTHER process out. The caller has already cleared
+        `_xfer_scope`, so no new transfer can start. A transfer that outlives
+        TRANSFER_DRAIN_S keeps the entry: the last transfer releases it when it
+        ends (`_held_transfer`), so the browser stays held, never handed over,
+        while files are still moving."""
+        if not token:
+            return
+        if not self._transfers_drained(self.TRANSFER_DRAIN_S):
+            with self._lock:
+                if self._xfers > 0:
+                    self._release_when_drained.append(token)
+                    append_domain_log("webui", "[browser_interactive] a file transfer is still "
+                                               "running; the browser is released when it ends")
+                    return
+        self._release_unless_reclaimed(token)
+
+    def _release_unless_reclaimed(self, token: str) -> None:
+        """Release an entry unless a holder of this process has claimed it again in
+        the meantime: a lease claim of the same process answers with the existing
+        entry's token, so a new lease that started while the old one was still
+        releasing holds that very token, and releasing it would leave the new
+        lease without its entry - open to a holder of another process."""
+        with self._lock:
+            if token in (self._lease_token, self._run_token):
+                return
+        self._release_shared(token)
+
     def agent_stream_started(self, session_id: Optional[str]) -> None:
         """Grant the run's own chat window a watch-only live stream of the run.
 
@@ -1588,6 +1681,8 @@ class InteractiveBrowserManager:
             run_token = None
             if notify:
                 run_token, self._run_token = self._run_token, None
+                if self._dedicated_scope is None:
+                    self._xfer_scope = None
                 # The run is over: a handover of it still under way in an executor
                 # thread (stopped while it waited) must not take the browser now.
                 self._run_generation += 1
@@ -1611,7 +1706,9 @@ class InteractiveBrowserManager:
         # A run downloads too (the agent saves a PDF for the person): drain to
         # the run's OWN scope - the jar owner at this moment is that run's.
         self.sweep_downloads(run_scope)
-        self._release_shared(run_token)
+        # After the run's own mirror, which a stopped run may have left running in
+        # an executor thread.
+        self._release_after_transfers(run_token)
         # Tell the window that owned the interactive view the browser is free
         # again. When an interactive lease was evicted FOR this run, the stop
         # event says resumable: the holder's window re-enters the interactive
@@ -1835,6 +1932,7 @@ class InteractiveBrowserManager:
                 # Resetting here rather than only on the last disconnect makes it hold no
                 # matter how the window was closed.
                 lease.pixels_seen = 0
+                self._xfer_scope = user_scope_id
                 self._ensure_janitor()
                 payload = self._payload("active", lease=lease)
         if refused_for_run or refused_revoked:
@@ -1860,6 +1958,8 @@ class InteractiveBrowserManager:
                 return {"status": "busy", "reason": "not_owner",
                         "saving": False, "streamPath": ""}
             self._lease = None
+            if self._dedicated_scope is None:
+                self._xfer_scope = None
             sid = lease.session_id
             lease_token, self._lease_token = self._lease_token, None
 
@@ -1881,8 +1981,9 @@ class InteractiveBrowserManager:
         # leaves WITH them - on takeover too, so the run that follows never
         # finds another scope's files in the hand-off folder.
         self.sweep_downloads(lease.user_scope_id)
-        # Released last: the export above still reads the person's own jar.
-        self._release_shared(lease_token)
+        # Released last: the export above still reads the person's own jar, and a
+        # transfer the janitor started for this person must end first.
+        self._release_after_transfers(lease_token)
 
         payload = {"status": "stopped", "reason": reason,
                    "saving": lease.save_enabled, "streamPath": ""}
@@ -2092,8 +2193,11 @@ class InteractiveBrowserManager:
                 # mirror stays fresh the same way - a file that just landed in
                 # the workspace becomes uploadable within a tick, and an
                 # unchanged workspace costs a directory walk, nothing more.
-                self.sweep_downloads(lease.user_scope_id)
-                self.sync_workspace(lease.user_scope_id)
+                # Both only while this person still holds the browser: the lease
+                # was read above, and it may have ended since.
+                scope = lease.user_scope_id
+                self._held_transfer(scope, lambda: self.sweep_downloads(scope), [])
+                self._held_transfer(scope, lambda: self.sync_workspace(scope), [])
                 if tick % self._LIVENESS_EVERY_TICKS == 0:
                     try:
                         import urllib.request as _req
@@ -2491,8 +2595,11 @@ def sync_workspace_for_run(user_scope_id: Optional[str] = None,
     browser and return their container paths - the upload whitelist the agent
     hands to browser-use. Never raises."""
     try:
-        return _manager_for_run(container_name).sync_workspace(
-            resolve_browser_scope(user_scope_id))
+        mgr = _manager_for_run(container_name)
+        scope = resolve_browser_scope(user_scope_id)
+        # Only while the run holds the browser: its executor thread can outlive
+        # a stopped run, and the run's end waits for it before letting go.
+        return mgr._held_transfer(scope, lambda: mgr.sync_workspace(scope), [])
     except Exception:
         return []
 

@@ -799,6 +799,274 @@ def test_an_unconfirmed_full_scrub_still_lets_the_mirror_copy_again(mgr, monkeyp
     assert box.files == {"report.pdf"}
 
 
+class _SharedContainer:
+    """The shared browser's two transfer folders, with a slow mirror and a hook.
+
+    `workspace` holds (owner scope, file) pairs, `downloads` the files waiting in
+    the container's Downloads, `delivered` what the sweep handed to each scope.
+    The handover's purge empties both folders. A mirror for `slow_sync_for` signals
+    `entered` and then waits for `release` before its files land, which is a tar
+    stream still running; `sweep_hook` runs once at the start of a sweep."""
+
+    def __init__(self, monkeypatch):
+        self.workspace = set()
+        self.downloads = []
+        self.delivered = {}
+        self.slow_sync_for = None
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.sweep_hook = None
+        monkeypatch.setattr(bi, "_purge_container_downloads", self.purge)
+        monkeypatch.setattr(bi, "_sync_workspace_to_container", self.sync)
+        monkeypatch.setattr(bi, "_sweep_container_downloads", self.sweep)
+
+    def purge(self, name):
+        self.workspace.clear()
+        self.downloads.clear()
+
+    def sync(self, name, scope, prev):
+        if scope == self.slow_sync_for:
+            self.slow_sync_for = None
+            self.entered.set()
+            self.release.wait(10)
+        self.workspace.add((scope, f"{scope}.pdf"))
+        return ("sig", scope), [f"/home/browser/Workspace/{scope}.pdf"]
+
+    def sweep(self, name, scope):
+        if self.sweep_hook is not None:
+            hook, self.sweep_hook = self.sweep_hook, None
+            hook()
+        got, self.downloads = list(self.downloads), []
+        self.delivered.setdefault(scope, []).extend(got)
+        return got
+
+    def foreign_files_for(self, holder):
+        return {(s, f) for s, f in self.workspace if s != holder}
+
+
+class _JanitorDone(Exception):
+    pass
+
+
+def _one_janitor_tick(mgr, monkeypatch):
+    """Run the real janitor loop for exactly one tick in its own thread: its first
+    sleep returns at once, the next one ends the loop. Other threads sleep as usual."""
+    real_sleep = time.sleep
+    state = {"thread": None, "calls": 0}
+
+    def sleep(s):
+        if threading.current_thread() is not state["thread"]:
+            return real_sleep(s)
+        state["calls"] += 1
+        if state["calls"] > 1:
+            raise _JanitorDone()
+
+    monkeypatch.setattr(bi.time, "sleep", sleep)
+
+    def run():
+        try:
+            mgr._janitor_loop()
+        except _JanitorDone:
+            pass
+
+    t = threading.Thread(target=run, daemon=True)
+    state["thread"] = t
+    t.start()
+    return t
+
+
+def _start_b_once_a_lets_go(mgr, first):
+    if first["status"] != "active":
+        first = mgr.start("scope-b", "sess-b")
+    assert first["status"] == "active", first
+    assert mgr._lease.user_scope_id == "scope-b"
+
+
+def _in_thread(fn):
+    """Run fn in a thread; answers (thread, result dict) - result["value"] once done."""
+    result = {}
+    t = threading.Thread(target=lambda: result.__setitem__("value", fn()))
+    t.start()
+    return t, result
+
+
+def _claim_as_another_process(scope):
+    """A claim on the shared browser's holder record, as a second VAF process
+    makes it (the record tells processes apart by pid and start time)."""
+    import os
+    from vaf.core import browser_jar
+    other = os.getppid()
+    real = browser_jar._own_identity
+    browser_jar._own_identity = lambda: (other, float(browser_jar._process_started(other) or 0.0))
+    try:
+        return browser_jar.record_for("vaf-browser").claim(browser_jar.KIND_LEASE, scope)
+    finally:
+        browser_jar._own_identity = real
+
+
+def test_a_janitor_mirror_in_flight_never_lands_in_the_next_holders_browser(mgr, monkeypatch):
+    """The janitor read A's lease, and its mirror of A's files is still streaming
+    into the shared browser when A closes and B opens. B's handover purges and
+    wipes; A's files must not land after that, inside B's file picker. A's release
+    waits for the transfer before it gives up its holder entry, so B is busy until
+    then and its purge comes after the last of A's files. MUTATION: release the
+    entry without waiting (red); run the janitor's mirror unguarded (red)."""
+    _no_ipc_tasks(monkeypatch)
+    box = _SharedContainer(monkeypatch)
+    assert mgr.start("scope-a", "sess-a")["status"] == "active"
+    mgr._lease.stream_connections = 1            # a window is watching
+    box.workspace.clear()
+    box.slow_sync_for = "scope-a"
+    janitor = _one_janitor_tick(mgr, monkeypatch)
+    assert box.entered.wait(5)
+    closer = threading.Thread(target=lambda: mgr.stop("user", requester_scope="scope-a"))
+    closer.start()
+    closer.join(0.5)
+    opener, b_start = _in_thread(lambda: mgr.start("scope-b", "sess-b"))
+    opener.join(0.5)
+    box.release.set()
+    for t in (closer, janitor, opener):
+        t.join(5)
+    _start_b_once_a_lets_go(mgr, b_start["value"])
+    assert box.foreign_files_for("scope-b") == set(), box.workspace
+    # B's lease claimed the entry A was still releasing (one lease entry per
+    # process); A's late release must not have taken it from B.
+    token, _other = _claim_as_another_process("scope-c")
+    assert token is None, "B holds the browser without an entry in the holder record"
+
+
+def test_a_holder_that_let_go_moves_no_more_files(mgr, monkeypatch):
+    """Files move only for the scope that holds the browser now: after a lease's
+    stop and after a run's end, a transfer for that scope does not even start.
+    MUTATION: keep the scope after the stop (red); after the run's end (red)."""
+    _no_ipc_tasks(monkeypatch)
+    _SharedContainer(monkeypatch)
+    assert mgr.start("scope-a", "sess-a")["status"] == "active"
+    assert mgr._held_transfer("scope-a", lambda: "ran", "refused") == "ran"
+    assert mgr._held_transfer("scope-b", lambda: "ran", "refused") == "refused"
+    mgr.stop("user", requester_scope="scope-a")
+    assert mgr._held_transfer("scope-a", lambda: "ran", "refused") == "refused"
+    mgr.stop_for_agent_run()
+    mgr.hand_jar_to_run(user_scope_id="scope-a", persistent=True)
+    assert mgr._held_transfer("scope-a", lambda: "ran", "refused") == "ran"
+    mgr.agent_run_ended()
+    assert mgr._held_transfer("scope-a", lambda: "ran", "refused") == "refused"
+
+
+def test_another_process_cannot_take_the_browser_while_a_transfer_runs(mgr, monkeypatch):
+    """The holder record keeps a holder of ANOTHER process out, and only while the
+    entry stands. A's release must not give it up while the janitor is still
+    moving A's files, or a second VAF process (a coder child's page check, a
+    spawned run, the terminal app) purges and wipes under the transfer. MUTATION:
+    release the entry without waiting for the transfer (red)."""
+    _no_ipc_tasks(monkeypatch)
+    box = _SharedContainer(monkeypatch)
+    assert mgr.start("scope-a", "sess-a")["status"] == "active"
+    mgr._lease.stream_connections = 1
+    box.slow_sync_for = "scope-a"
+    janitor = _one_janitor_tick(mgr, monkeypatch)
+    assert box.entered.wait(5)
+    closer = threading.Thread(target=lambda: mgr.stop("user", requester_scope="scope-a"))
+    closer.start()
+    closer.join(0.5)
+    token, other = _claim_as_another_process("scope-b")
+    assert token is None and other["kind"] == "lease", "another process got the browser mid-transfer"
+    box.release.set()
+    closer.join(5)
+    janitor.join(5)
+    token, other = _claim_as_another_process("scope-b")
+    assert token is not None, other
+    from vaf.core import browser_jar
+    browser_jar.record_for("vaf-browser").release(token)
+
+
+def test_the_janitor_never_drains_the_next_holders_downloads_to_the_last_one(mgr, monkeypatch):
+    """The mirror image: the janitor read A's lease, and by the time its sweep lists
+    the Downloads folder, A has closed and B has opened and downloaded a file. That
+    file is B's and must never be delivered into A's workspace. The sweep runs only
+    while A holds the browser, and A's release waits for it. MUTATION: run the
+    janitor's sweep unguarded (red)."""
+    _no_ipc_tasks(monkeypatch)
+    box = _SharedContainer(monkeypatch)
+    assert mgr.start("scope-a", "sess-a")["status"] == "active"
+    mgr._lease.stream_connections = 1
+    switched = {}
+
+    def a_leaves_b_downloads():
+        def switch():
+            mgr.stop("user", requester_scope="scope-a")
+            switched["b"] = mgr.start("scope-b", "sess-b")
+            if switched["b"]["status"] == "active":
+                box.downloads.append("b-statement.pdf")
+        t = threading.Thread(target=switch)
+        switched["thread"] = t
+        t.start()
+        t.join(0.5)
+
+    box.sweep_hook = a_leaves_b_downloads
+    janitor = _one_janitor_tick(mgr, monkeypatch)
+    janitor.join(5)
+    switched["thread"].join(5)
+    _start_b_once_a_lets_go(mgr, switched["b"])
+    assert "b-statement.pdf" not in box.delivered.get("scope-a", []), box.delivered
+
+
+def test_a_stopped_runs_mirror_never_lands_in_the_next_holders_browser(mgr, monkeypatch):
+    """The run lane: the run mirrors its owner's files from an executor thread, which
+    a Stop does not wait for. The run's end must not give up its holder entry while
+    that mirror is still streaming, or the next holder's handover purges and wipes
+    under it. MUTATION: run `sync_workspace_for_run` unguarded (red)."""
+    _no_ipc_tasks(monkeypatch)
+    monkeypatch.setattr(bi, "_manager", mgr)
+    box = _SharedContainer(monkeypatch)
+    mgr.stop_for_agent_run()
+    mgr.hand_jar_to_run(user_scope_id="scope-a", persistent=True)
+    box.workspace.clear()
+    box.slow_sync_for = "scope-a"
+    mirror = threading.Thread(target=lambda: bi.sync_workspace_for_run(user_scope_id="scope-a"))
+    mirror.start()
+    assert box.entered.wait(5)
+    ender = threading.Thread(target=mgr.agent_run_ended)
+    ender.start()
+    ender.join(0.5)
+    opener, b_start = _in_thread(lambda: mgr.start("scope-b", "sess-b"))
+    opener.join(0.5)
+    box.release.set()
+    for t in (ender, mirror, opener):
+        t.join(5)
+    _start_b_once_a_lets_go(mgr, b_start["value"])
+    assert box.foreign_files_for("scope-b") == set(), box.workspace
+
+
+def test_a_transfer_that_outlives_the_wait_keeps_the_browser_held(mgr, monkeypatch):
+    """The release waits a bounded time. A transfer still running after that keeps
+    the holder entry: the release returns, the browser stays busy for everyone
+    else, and the last transfer gives the entry up when it ends. MUTATION: release
+    the entry when the wait runs out (red)."""
+    _no_ipc_tasks(monkeypatch)
+    box = _SharedContainer(monkeypatch)
+    monkeypatch.setattr(mgr, "TRANSFER_DRAIN_S", 0.2)
+    assert mgr.start("scope-a", "sess-a")["status"] == "active"
+    mgr._lease.stream_connections = 1
+    box.workspace.clear()
+    box.slow_sync_for = "scope-a"
+    janitor = _one_janitor_tick(mgr, monkeypatch)
+    assert box.entered.wait(5)
+    mgr.stop("user", requester_scope="scope-a")  # returns after the bounded wait
+    token, _other = _claim_as_another_process("scope-b")
+    assert token is None, "the entry was given up while the transfer still ran"
+    # In this process the handover itself waits, and refuses when the wait runs out.
+    assert mgr.start("scope-b", "sess-b")["status"] != "active"
+    box.release.set()
+    janitor.join(5)
+    token, other = _claim_as_another_process("scope-b")
+    assert token is not None, other                # released by the transfer's end
+    from vaf.core import browser_jar
+    browser_jar.record_for("vaf-browser").release(token)
+    assert mgr.start("scope-b", "sess-b")["status"] == "active"
+    assert box.foreign_files_for("scope-b") == set(), box.workspace
+
+
 def test_workspace_sync_off_mirrors_nothing(mgr, monkeypatch):
     _no_ipc_tasks(monkeypatch)
     monkeypatch.setenv("VAF_BROWSER_WORKSPACE_SYNC", "off")

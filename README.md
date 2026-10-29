@@ -104,24 +104,7 @@ Choose **[2] Server** for home servers, NAS devices, or any headless machine tha
 ```
 After the first login, set the chat provider under Settings -> AI & Model. [On a rented server (VPS)](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/SERVER_MODE.md#on-a-rented-server-vps) covers the rest: a VPN instead of an open port, backups off the machine, and a health monitor.
 
----
-
-## Keep VAF off the public internet
-
-VAF is an agent. It holds your API keys and account credentials, reads your mail and
-messages, keeps your files and memory, and can run commands and send messages in your name.
-Its login page is the only thing between all of that and whoever can reach it, and a login
-page on the public internet is found by scanners within hours and attacked without pause.
-One reused password, one phished code or one future bug is then enough. Putting an agent's
-login page on the internet is close to negligent, so VAF is built not to be reachable from
-there: it answers only this machine, your local network and the VPN networks you admit, and
-refuses every public address before it shows any page.
-
-To use VAF away from home or the office, connect through a VPN: WireGuard, the VPN built into
-many routers, or a mesh VPN such as Tailscale or NetBird. Do not forward VAF's port on your
-router, do not publish it through a tunnel service (Cloudflare Tunnel, Tailscale Funnel,
-ngrok and the like), and on a rented server keep the port closed in the provider's firewall.
-See [Server mode](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/SERVER_MODE.md#over-a-vpn).
+Before any other device reaches VAF, read [Security](#security): VAF belongs behind your local network or a VPN, never on the public internet.
 
 ---
 
@@ -453,6 +436,38 @@ Both are auto-discovered at startup, no registration needed.
 | Install | `install.bat` | `install.sh` | `install.sh` |
 
 Linux headless mode requires no display server. See [docs/setup/LINUX_SETUP.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/LINUX_SETUP.md) for details.
+
+---
+
+## Security
+
+### Keep VAF off the public internet
+
+VAF is an agent. It holds your API keys and account credentials, reads your mail and
+messages, keeps your files and memory, and can run commands and send messages in your name.
+Its login page is the only thing between all of that and whoever can reach it, and a login
+page on the public internet is found by scanners within hours and attacked without pause.
+One reused password, one phished code or one future bug is then enough. Putting an agent's
+login page on the internet is close to negligent, so VAF is built not to be reachable from
+there: it answers only this machine, your local network and the VPN networks you admit, and
+refuses every public address before it shows any page.
+
+To use VAF away from home or the office, connect through a VPN: WireGuard, the VPN built into
+many routers, or a mesh VPN such as Tailscale or NetBird. Do not forward VAF's port on your
+router, do not publish it through a tunnel service (Cloudflare Tunnel, Tailscale Funnel,
+ngrok and the like), and on a rented server keep the port closed in the provider's firewall.
+See [Server mode](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/SERVER_MODE.md#over-a-vpn).
+
+### Where the protections are described
+
+| Topic | Doc |
+|---|---|
+| Network access, login, 2FA, sessions, tokens for programs, certificates | [docs/setup/NETWORK_FEATURES.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/NETWORK_FEATURES.md) |
+| Accounts kept apart on one machine | [docs/security/USER_ISOLATION.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/security/USER_ISOLATION.md) |
+| Sandboxing of commands and code | [docs/security/SANDBOXING.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/security/SANDBOXING.md) |
+| Encryption at rest | [docs/security/ENCRYPTION_AT_REST.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/security/ENCRYPTION_AT_REST.md) |
+| Security log and dashboard | [docs/security/SECURITY_DASHBOARD.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/security/SECURITY_DASHBOARD.md) |
+| Backups and restore | [docs/setup/BACKUP_RESTORE.md](https://github.com/Veyllo-Labs/VAF/blob/main/docs/setup/BACKUP_RESTORE.md) |
 
 ---
 

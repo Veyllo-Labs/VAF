@@ -51,6 +51,16 @@ MODEL_ID_KEYS = tuple(f"api_model_{_p}" for _p in _model_catalog.CATALOG) + (
     "voice_agent_model",
     "failover_backup_model",
 )
+# The provider each lane's model id is meant for: the lane's own provider key,
+# where "" or "inherit" means the main `provider`.
+MODEL_PROVIDER_KEYS = {
+    "subagent_model": "subagent_provider",
+    "thinking_model": "thinking_provider",
+    "vision_model": "vision_provider",
+    "browser_agent_model": "browser_agent_provider",
+    "voice_agent_model": "voice_agent_provider",
+    "failover_backup_model": "failover_backup_provider",
+}
 
 
 class Config:
@@ -980,8 +990,12 @@ class Config:
             # Saved model ids the provider has retired move to their successor
             # (vaf/core/model_catalog.py): a retired name answers 404 or is served
             # by another model, and the user never sees why. Exact ids only, and a
-            # deprecated model moves on its shutdown day, not before.
-            cls._migrate_retired_models(result)
+            # deprecated model moves on its shutdown day, not before. Isolated: a
+            # failure here must skip the migration, not turn this load into DEFAULTS.
+            try:
+                cls._migrate_retired_models(result)
+            except Exception:
+                pass
             # Hard lock for hosting mode (server appliance deployments):
             # when enabled, Local Network Hosting cannot be disabled via UI/API saves.
             if bool(result.get("local_network_force_enabled", False)):
@@ -1000,6 +1014,21 @@ class Config:
         except Exception:
             return cls.DEFAULTS.copy()
 
+    @staticmethod
+    def _model_key_provider(key: str, result: dict) -> str:
+        """The provider a model-id key is saved for."""
+        if key.startswith("api_model_"):
+            return key[len("api_model_"):]
+        lane = str(result.get(MODEL_PROVIDER_KEYS.get(key, "")) or "").strip().lower()
+        if lane in ("", "inherit"):
+            lane = str(result.get("provider") or "").strip().lower()
+        return lane
+
+    # (key, old, new) rewrites already logged by this process: a config that
+    # cannot be written back is migrated again on every load, and the log
+    # should say so once, not on every Config.get.
+    _migration_logged: set = set()
+
     @classmethod
     def _migrate_retired_models(cls, result: dict) -> None:
         """Rewrite retired model ids in ``result`` and, where the raw file still
@@ -1009,27 +1038,35 @@ class Config:
             saved = result.get(key)
             if not isinstance(saved, str):
                 continue
-            target = _model_catalog.migration_target(saved)
+            target = _model_catalog.migration_target(
+                saved, provider=cls._model_key_provider(key, result))
             if target and target != saved:
                 result[key] = target
                 moved[key] = (saved, target)
         if not moved:
             return
         try:
-            with open(cls.CONFIG_FILE, "r") as _f:
-                _raw = json.load(_f)
-            changed = False
-            for key, (old, new) in moved.items():
-                if _raw.get(key) == old:
-                    _raw[key] = new
-                    changed = True
-            if changed:
-                cls._write_config_file(_raw)
+            # The same lock every other read-modify-write of the file takes
+            # (reentrant, so a load() inside save()/set() nests): without it a
+            # concurrent save between the read and the write would be undone.
+            with cls._locked():
+                with open(cls.CONFIG_FILE, "r") as _f:
+                    _raw = json.load(_f)
+                changed = False
+                for key, (old, new) in moved.items():
+                    if _raw.get(key) == old:
+                        _raw[key] = new
+                        changed = True
+                if changed:
+                    cls._write_config_file(_raw)
         except Exception:
             pass
         try:
             from vaf.core.log_helper import append_domain_log
             for key, (old, new) in moved.items():
+                if (key, old, new) in cls._migration_logged:
+                    continue
+                cls._migration_logged.add((key, old, new))
                 append_domain_log("backend", f"[MODEL_MIGRATION] {key}: {old} -> {new} (retired by the provider)")
         except Exception:
             pass

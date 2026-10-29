@@ -6686,7 +6686,7 @@ Task {task_idx + 1}: {current_task}
                 if _llm_api_key:
                     _req_headers["Authorization"] = f"Bearer {_llm_api_key}"
                 # DeepSeek API does not support tool_choice="required" or specific function
-                # forcing — only "auto" and "none". Both deepseek-v4-flash and deepseek-v4-pro
+                # forcing, only "auto" and "none". Both deepseek-flash and deepseek-v4-pro
                 # are internally reasoning models and reject "required" with a 400 error.
                 # Workaround: when we would normally force a tool call (no TODOs yet), inject
                 # an explicit system instruction instead so the model still calls set_todos first.

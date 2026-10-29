@@ -1802,7 +1802,7 @@ class APIBackendManager:
 
         # DeepSeek tool_choice restriction (UNIVERSAL — applies to every caller routed through this
         # manager: main agent streaming/non-stream/fallback, thinking-mode forced nodes, sub-agents).
-        # DeepSeek (both deepseek-v4-flash and deepseek-v4-pro, internally reasoning models) reject
+        # DeepSeek (both deepseek-flash and deepseek-v4-pro, internally reasoning models) reject
         # tool_choice="required" and specific function-forcing dicts with HTTP 400 ("does not support
         # this tool_choice"); only "auto"/"none" are accepted. Downgrade any forcing form to "auto" so
         # forced-tool callers degrade gracefully — those callers already carry a prompt-level imperative

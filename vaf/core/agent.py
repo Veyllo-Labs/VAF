@@ -57,6 +57,25 @@ from vaf.tools.filesystem import ListFilesTool, ReadFileTool, WriteFileTool, Mov
 import atexit
 import signal
 
+def _vision_switch_hint(provider: str) -> str:
+    """What the "switch the primary provider to ..." sentence names when the
+    current model cannot see an attached image. Named from the model catalog,
+    so it never offers a retired model; it completes that sentence, so it is a
+    choice of models, not a sentence of its own."""
+    from vaf.core.model_catalog import offered_vision_models
+
+    def _ids(p: str) -> str:
+        m = [f"`{i}`" for i in offered_vision_models(p)]
+        return ", ".join(m[:-1]) + " or " + m[-1] if len(m) > 1 else "".join(m)
+
+    if provider == "deepseek":
+        # VAF sends no images to DeepSeek, so the choice is another provider.
+        return f"Anthropic ({_ids('anthropic')}) or OpenAI ({_ids('openai')})"
+    if offered_vision_models(provider):
+        return _ids(provider)
+    return "a vision-capable model"
+
+
 def _emit_to_web_ui() -> bool:
     """False when running a background pass (thinking mode or a scheduled automation) – do not push
     tool/log/status updates into any live chat session. Automations deliver only their final result
@@ -15343,23 +15362,7 @@ class Agent:
                         # No vision fallback configured or it failed: inform user.
                         names = [img.get("name", "image") for img in imgs]
                         img_list = ", ".join(f"`{n}`" for n in names)
-                        # Named from the model catalog, so the hint never offers a retired model.
-                        from vaf.core.model_catalog import offered_vision_models as _ovm
-
-                        def _ids(_p):
-                            _m = [f"`{_i}`" for _i in _ovm(_p)]
-                            return ", ".join(_m[:-1]) + " or " + _m[-1] if len(_m) > 1 else "".join(_m)
-
-                        if _provider == "deepseek":
-                            _vision_hint = (
-                                "a different provider: VAF sends no images to DeepSeek. Switch to "
-                                f"Anthropic ({_ids('anthropic')}) or OpenAI ({_ids('openai')}), "
-                                "or configure a Vision Model in Settings → AI & Model."
-                            )
-                        elif _ovm(_provider):
-                            _vision_hint = _ids(_provider)
-                        else:
-                            _vision_hint = "a vision-capable model, or configure a Vision Model in Settings → AI & Model"
+                        _vision_hint = _vision_switch_hint(_provider)
                         system_note = (
                             f"[SYSTEM NOTE: The user attached {len(imgs)} image(s) ({img_list}) "
                             f"but the current model ({_model or _provider}) does not support vision. "

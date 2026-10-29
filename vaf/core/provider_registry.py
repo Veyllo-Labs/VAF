@@ -24,6 +24,7 @@ vaf/core/model_catalog.py (models, prices, default; Config.PROVIDER_MODELS is
 derived from it), then follow the checklist the sync test enforces
 (coder endpoint reachable, web UI lists, PROVIDER_MODES.md catalog row).
 """
+import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -249,6 +250,12 @@ def is_veyllo_chat_model(model_id: str) -> bool:
     return not any(marker in mid for marker in _VEYLLO_NON_CHAT_MARKERS)
 
 
+_OPENAI_VISION = re.compile(
+    r"gpt-4o|gpt-4\.1|gpt-4\.5|gpt-4-turbo|gpt-4-vision|gpt-[56]|(?:^|/)o[134](?:-|$)"
+)
+_CLAUDE_VISION = re.compile(r"claude-(?:3|(?:sonnet|opus|haiku|fable|mythos)-\d)")
+
+
 def model_supports_vision(provider: str, model: str, probe_local: bool = True) -> bool:
     """Whether (provider, model) accepts image input.
 
@@ -272,15 +279,13 @@ def model_supports_vision(provider: str, model: str, probe_local: bool = True) -
             return hit[1].vision
     if provider in ("anthropic", "google", "veyllo"):
         return True
-    # Family fragments, not model lists: every current OpenAI and Anthropic
-    # model takes image input, and the catalog above answers for named ones.
+    # Family patterns for ids the catalog does not name. Only the families that
+    # take image input: plain gpt-4 (gpt-4-0613), gpt-3.5 and claude-2 are text.
     if provider == "openai":
-        return any(k in model for k in ("gpt-4", "gpt-5", "gpt-6", "o1", "o3", "o4"))
+        return bool(_OPENAI_VISION.search(model))
     if provider == "openrouter":
-        return any(
-            k in model
-            for k in ("gpt-4", "gpt-5", "gpt-6", "claude", "gemini", "vision", "vl", "llava",
-                      "pixtral")
+        return bool(_OPENAI_VISION.search(model) or _CLAUDE_VISION.search(model)) or any(
+            k in model for k in ("gemini", "vision", "vl", "llava", "pixtral")
         )
     if provider == "local":
         # Honest capability: with vision_provider=local the llama server is

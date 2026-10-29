@@ -107,6 +107,10 @@ class ProviderCatalog:
     aliases: Dict[str, Dict[str, str]] = field(default_factory=dict)
     # Retired ids that are not entries (no price is known for them any more).
     migrations: Dict[str, str] = field(default_factory=dict)
+    # A reseller that bills each vendor's model at that vendor's cache rates. For
+    # any other provider serving a model it does not make, the vendor's discount
+    # is not evidence of its own, so cached tokens pay its own rate (none: full).
+    passes_vendor_cache_rates: bool = False
 
 
 _OPENAI = ProviderCatalog(
@@ -251,6 +255,9 @@ _OPENROUTER = ProviderCatalog(
     default="anthropic/claude-sonnet-4.6",
     source_url="https://openrouter.ai/api/v1/models",
     checked_on="2026-10-29",
+    # Its models list publishes input_cache_read per model, equal to the vendor's
+    # (claude-sonnet-4.6 0.30, gpt-5.6-terra 0.20, gemini-2.5-flash 0.03).
+    passes_vendor_cache_rates=True,
     # Dotted ids (claude-sonnet-4.6), unlike Anthropic's dashed ones. An entry
     # without a price resolves through the vendor's entry after normalization;
     # OpenRouter's per-token prices equal the vendor's for these, or fall below.
@@ -374,22 +381,29 @@ def _today() -> _dt.date:
     return _dt.date.today()
 
 
-def migration_target(model_id: str, today: Optional[_dt.date] = None) -> Optional[str]:
+def migration_target(model_id: str, today: Optional[_dt.date] = None,
+                     provider: Optional[str] = None) -> Optional[str]:
     """The id a saved config value should move to, or ``None``.
 
     Exact match only, so a local GGUF name or an id this table does not know is
-    never touched. A retired name in a provider's ``migrations`` moves at once;
-    an entry moves on and after its ``shutdown_on`` day, not before, so a model
-    that still answers stays the user's choice until the provider turns it off.
+    never touched. With ``provider``, only that provider's names move: an id
+    saved for one provider is not another provider's retired model, even when
+    the strings match. A retired name in a provider's ``migrations`` moves at
+    once; an entry moves on and after its ``shutdown_on`` day, not before, so a
+    model that still answers stays the user's choice until the provider turns
+    it off.
     """
     name = str(model_id or "").strip()
     if not name:
         return None
+    wanted = str(provider).strip().lower() if provider is not None else None
     for prov in CATALOG.values():
+        if wanted is not None and prov.name != wanted:
+            continue
         if name in prov.migrations:
             return prov.migrations[name]
     hit = _INDEX.get(name)
-    if hit is None:
+    if hit is None or (wanted is not None and hit[0] != wanted):
         return None
     entry = hit[1]
     if not entry.shutdown_on or not entry.replaced_by:

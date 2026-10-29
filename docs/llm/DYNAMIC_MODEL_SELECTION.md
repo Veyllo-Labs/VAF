@@ -85,9 +85,15 @@ New model released? Just enter the ID:
 Select Model:
   > Enter custom model ID
 
-Enter custom model ID: gpt-6-luna
-✓ Model set to: gpt-6-luna
+Enter custom model ID: gpt-5.5
+✓ Model set to: gpt-5.5
 ```
+
+A custom id has to be one VAF can drive. A listing can show models whose request shape
+VAF does not handle yet: the `gpt-6` family is listed by OpenAI and priced in the usage
+comparison, but VAF does not detect it as a reasoning model and would send it
+`max_tokens` and `temperature`, which the gpt-5 reasoning family refuses; whether gpt-6
+accepts them is unproven, so it is not offered until it is.
 
 ### Current Model Indicator
 
@@ -219,8 +225,8 @@ No need to update VAF when providers release new models. Models are fetched dire
 
 Released today? Available today:
 ```
-# A model the catalog does not offer yet? Just:
-Settings → API Model → Enter custom model ID: gpt-6-luna
+# A model the catalog does not offer, but VAF can drive? Just:
+Settings → API Model → Enter custom model ID: gpt-5.5
 ```
 
 ### Discover Models You Didn't Know Existed

@@ -172,6 +172,23 @@ def test_ids_resolve_through_prefix_snapshot_and_dotted_version():
     assert estimate_cost("google", "models/gemini-2.5-flash", 1000, 0).cost_known
 
 
+def test_a_vendors_cache_discount_applies_only_where_the_vendor_rate_is_billed():
+    """OpenRouter publishes each vendor's cache rate as its own; a provider that
+    merely serves another vendor's model has published nothing, so cached
+    tokens pay its full input rate. MUTATION: apply the vendor's rates for
+    every calling provider (the Veyllo case gets OpenAI's 0.1x)."""
+    via_or = estimate_cost("openrouter", "anthropic/claude-sonnet-4.6", 100_000, 0,
+                           cache=cache_usage(100_000, 0, in_input=True))
+    assert via_or.usd == pytest.approx(0.30 / 10)
+    elsewhere = estimate_cost("veyllo", "gpt-5.6-terra", 100_000, 0,
+                              cache=cache_usage(100_000, 0, in_input=True))
+    assert elsewhere.usd == pytest.approx(2.00 / 10)
+    assert elsewhere.cache_saved == 0.0
+    direct = estimate_cost("openai", "gpt-5.6-terra", 100_000, 0,
+                           cache=cache_usage(100_000, 0, in_input=True))
+    assert direct.usd == pytest.approx(0.20 / 10)
+
+
 def test_an_openrouter_rate_above_the_vendor_rate_is_billed_as_openrouter_publishes_it():
     """OpenRouter serves deepseek-v4-pro through third-party hosts at an input
     price above DeepSeek's own; the vendor entry would under-count it."""
@@ -228,8 +245,10 @@ def _vision_entries():
 @pytest.mark.parametrize("provider,model", list(_vision_entries()))
 def test_every_vision_entry_is_vision_capable(provider, model):
     """The substring rules knew gpt-4o and claude-3 only, so the new OpenAI
-    default and the OpenRouter default read as blind. MUTATION: remove the
-    catalog lookup from model_supports_vision."""
+    default and the OpenRouter default read as blind. This pins every catalog
+    flag against the predicate; the family patterns happen to cover the same
+    ids, so the catalog lookup itself is pinned by the precedence test below.
+    MUTATION: set vision_capable=False on the OpenAI ProviderSpec."""
     from vaf.core.provider_registry import model_supports_vision
 
     assert model_supports_vision(provider, model, probe_local=False) is True
@@ -246,6 +265,31 @@ def test_the_catalog_entry_decides_before_the_family_rule(monkeypatch):
     monkeypatch.setitem(mc._INDEX, entry.id, ("openai", entry))
     assert model_supports_vision("openai", "gpt-5-text-only", probe_local=False) is False
     assert model_supports_vision("openai", "gpt-5-something-new", probe_local=False) is True
+
+
+@pytest.mark.parametrize("provider,model,expected", [
+    ("openai", "gpt-4", False),                  # text only
+    ("openai", "gpt-4-0613", False),
+    ("openai", "gpt-3.5-turbo", False),
+    ("openai", "gpt-4o-audio-preview", True),    # the gpt-4o family, as before
+    ("openai", "gpt-4.5-preview", True),
+    ("openai", "gpt-5.5", True),
+    ("openai", "o4-mini", True),
+    ("openrouter", "anthropic/claude-2", False),
+    ("openrouter", "anthropic/claude-instant-1", False),
+    ("openrouter", "openai/gpt-4", False),
+    ("openrouter", "anthropic/claude-3.5-sonnet", True),
+    ("openrouter", "anthropic/claude-sonnet-4.5", True),
+    ("openrouter", "openai/o3-pro", True),
+    ("openrouter", "meta-llama/llama-3.1-405b-instruct", False),
+])
+def test_family_patterns_for_ids_the_catalog_does_not_name(provider, model, expected):
+    """Only the families that take images. MUTATION: widen the OpenAI pattern
+    back to a plain "gpt-4" fragment, or the OpenRouter one to "claude"."""
+    from vaf.core.provider_registry import model_supports_vision
+
+    assert mc.find_model(model) is None, "the catalog names it; this test is for the patterns"
+    assert model_supports_vision(provider, model, probe_local=False) is expected
 
 
 def test_openrouter_vision_default_and_deepseek():
@@ -288,10 +332,12 @@ def test_config_load_moves_retired_ids_and_persists_them(monkeypatch, tmp_path):
     """MUTATION: drop subagent_model from Config's model-id key list."""
     gguf = "unsloth/gemma-4-E4B-it-GGUF/gemma-4-E4B-it-Q4_K_M.gguf"
     saved = {
+        "provider": "deepseek",            # subagent and thinking lanes inherit it
         "api_model_deepseek": "deepseek-v4-flash",
         "api_model_openai": "gpt-4-turbo",
         "subagent_model": "deepseek-chat",
         "thinking_model": "deepseek-v4-flash",
+        "vision_provider": "openai",
         "vision_model": "gpt-4o",
         "voice_agent_model": gguf,
     }
@@ -303,6 +349,88 @@ def test_config_load_moves_retired_ids_and_persists_them(monkeypatch, tmp_path):
         assert got["thinking_model"] == "deepseek-flash"
         assert got["vision_model"] == "gpt-4o"      # still answers until its shutdown day
         assert got["voice_agent_model"] == gguf      # a local model is never touched
+
+
+def test_config_load_moves_only_ids_of_the_keys_own_provider(monkeypatch, tmp_path):
+    """An id saved for one provider is not another provider's retired model,
+    even when the strings match. MUTATION: drop the provider argument from the
+    migration_target call in Config._migrate_retired_models."""
+    saved = {
+        "provider": "deepseek",
+        "api_model_openai": "deepseek-chat",     # an OpenAI key, not DeepSeek's name
+        "subagent_provider": "openai",
+        "subagent_model": "deepseek-v4-flash",   # the lane is OpenAI's
+        "thinking_model": "deepseek-chat",       # inherits deepseek: moves
+    }
+    loaded, raw = _load_with(monkeypatch, tmp_path, saved, dt.date(2027, 6, 1))
+    for got in (loaded, raw):
+        assert got["api_model_openai"] == "deepseek-chat"
+        assert got["subagent_model"] == "deepseek-v4-flash"
+        assert got["thinking_model"] == "deepseek-flash"
+    assert mc.migration_target("deepseek-chat", provider="openai") is None
+    assert mc.migration_target("deepseek-chat", provider="deepseek") == "deepseek-flash"
+    assert mc.migration_target("gpt-4-turbo", provider="deepseek") is None
+
+
+def test_the_write_back_holds_the_config_lock(monkeypatch, tmp_path):
+    """config.json is written by several processes; a save between the read and
+    the write would be undone without the lock. MUTATION: drop the
+    `with cls._locked():` around the write-back."""
+    import contextlib
+
+    state = {"held": False, "written_under_lock": None}
+
+    @contextlib.contextmanager
+    def _fake_lock(cls=None):
+        state["held"] = True
+        try:
+            yield
+        finally:
+            state["held"] = False
+
+    real_write = Config._write_config_file.__func__
+
+    def _write(cls, data):
+        state["written_under_lock"] = state["held"]
+        return real_write(cls, data)
+
+    monkeypatch.setattr(Config, "_locked", classmethod(lambda cls: _fake_lock()))
+    monkeypatch.setattr(Config, "_write_config_file", classmethod(_write))
+    _load_with(monkeypatch, tmp_path, {"api_model_deepseek": "deepseek-chat"}, dt.date(2027, 6, 1))
+    assert state["written_under_lock"] is True
+
+
+def test_an_unwritable_config_logs_its_migration_once(monkeypatch, tmp_path):
+    """Config.load runs on every Config.get; a migration that cannot be written
+    back repeats each time and must not fill the log. MUTATION: drop the
+    already-logged check."""
+    logged = []
+
+    def _fail(cls, data):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(Config, "_migration_logged", set())
+    monkeypatch.setattr(Config, "_write_config_file", classmethod(_fail))
+    _load_with(monkeypatch, tmp_path, {"api_model_deepseek": "deepseek-chat"}, dt.date(2027, 6, 1))
+    monkeypatch.setattr("vaf.core.log_helper.append_domain_log", lambda *a, **k: logged.append(a))
+    for _ in range(3):
+        assert Config.load()["api_model_deepseek"] == "deepseek-flash"
+    assert logged == []
+
+
+def test_a_failing_migration_does_not_turn_the_load_into_defaults(monkeypatch, tmp_path):
+    """Config.load answers DEFAULTS on any exception, which would drop every
+    saved setting for the call. MUTATION: remove the try around the
+    _migrate_retired_models call in Config.load."""
+    def _boom(cls, result):
+        raise RuntimeError("broken migration")
+
+    monkeypatch.setattr(Config, "_migrate_retired_models", classmethod(_boom))
+    loaded, _raw = _load_with(monkeypatch, tmp_path,
+                              {"api_model_openai": "gpt-5.6-sol", "temperature": 0.3},
+                              dt.date(2027, 6, 1))
+    assert loaded["api_model_openai"] == "gpt-5.6-sol"
+    assert loaded["temperature"] == 0.3
 
 
 def test_config_load_moves_a_deprecated_id_on_its_shutdown_day(monkeypatch, tmp_path):
@@ -427,3 +555,19 @@ def test_the_guard_sees_what_it_is_meant_to_see():
     assert _violations_in(ast.parse('X = ("gpt-4o", 2.50, 10.00)'), ids)
     # A behavior gate on a family prefix is not a list of models.
     assert not _violations_in(ast.parse('X = ("gemini-2.5", "gemini-3")'), ids)
+
+
+# ── The vision hint completes its sentence ───────────────────────────────────
+
+def test_the_vision_hint_completes_the_switch_sentence():
+    """The hint lands in "or switch the primary provider to {hint}." A whole
+    sentence of its own there read as "switch ... to a different provider: VAF
+    sends no images ... Switch to ...". MUTATION: put the sentence back."""
+    from vaf.core.agent import _vision_switch_hint
+
+    ds = _vision_switch_hint("deepseek")
+    assert ds.startswith("Anthropic (`claude-sonnet-4-6`")
+    assert " or OpenAI (`gpt-5.6-terra`" in ds
+    for hint in (ds, _vision_switch_hint("openai"), _vision_switch_hint("nope")):
+        assert "Settings" not in hint and "Switch" not in hint and not hint.endswith(".")
+    assert _vision_switch_hint("openai") == "`gpt-5.6-terra`, `gpt-5.6-luna` or `gpt-5.6-sol`"

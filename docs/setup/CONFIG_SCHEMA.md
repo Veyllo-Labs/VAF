@@ -78,8 +78,10 @@ when the config loads, and written back: at once for an id already shut down
 (`gpt-4-turbo`, `deepseek-v4-flash`, `deepseek-chat`), on the shutdown day for one
 that still answers (`gpt-4o` moves to `gpt-5.6-terra` on 2027-01-14). This covers
 every `api_model_*` key plus `subagent_model`, `thinking_model`, `vision_model`,
-`browser_agent_model`, `voice_agent_model` and `failover_backup_model`; a local
-model name is never touched.
+`browser_agent_model`, `voice_agent_model` and `failover_backup_model`, and only for
+an id of the provider the key is saved for (`api_model_<provider>`, or the lane's own
+`*_provider` key, where `""` or `"inherit"` means the main `provider`); a local model
+name is never touched.
 
 Minimal API-provider embedding example:
 

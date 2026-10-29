@@ -350,17 +350,23 @@ def estimate_cost(provider: str, model: str, input_tokens: int,
         # A model this table cannot price gets no discount either. Same reasoning
         # as UNKNOWN_PRICE above: an unrecognised model must not be able to run
         # cheap under a cap, and a discount is a way of running cheap.
-        # The cache rates are the model's vendor's, also when the call went
-        # through another provider (OpenRouter passes Anthropic's rates through).
+        # The cache rates are the model's vendor's when the vendor is the one
+        # billing, or a reseller that publishes the vendor's rates as its own
+        # (OpenRouter). Any other provider serving the model is priced at its
+        # own rates, and without published ones a cached token pays full input.
         vendor = _model_catalog.provider_catalog(hit[0]) if hit else None
+        caller = _model_catalog.provider_catalog(prov)
+        vendor_rates = vendor is not None and (
+            vendor.name == prov or (caller is not None and caller.passes_vendor_cache_rates))
         spec = PROVIDER_PRICING.get(prov) or {}
-        if vendor is not None:
+        if vendor_rates:
             spec = {k: v for k, v in (("cache_read_multiplier", vendor.cache_read_multiplier),
                                       ("cache_write_multiplier", vendor.cache_write_multiplier))
                     if v is not None}
         mread = float(spec.get("cache_read_multiplier", 1.0)) if known else 1.0
         mwrite = float(spec.get("cache_write_multiplier", 1.0)) if known else 1.0
-        if known and entry is not None and entry.cached_input is not None and entry.input:
+        if (known and vendor_rates and entry is not None and entry.cached_input is not None
+                and entry.input):
             mread = float(entry.cached_input) / float(entry.input)
         # Long-context tier: the provider bills the WHOLE call at the higher rate
         # once the prompt passes the threshold, and the prompt is the one

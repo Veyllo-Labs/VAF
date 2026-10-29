@@ -74,14 +74,16 @@ def container_state(name: str) -> Optional[str]:
     return r.stdout.strip() or None
 
 
-def count_running(name_prefix: str) -> int:
+def count_running(name_prefix: str) -> Optional[int]:
     """How many running containers carry this name prefix. Counted at docker, not in
-    memory, so containers another VAF process started count too. 0 when docker does
-    not answer. Docker's name filter matches anywhere in the name, so the prefix is
-    checked again here: `old-vaf-browser-u-...` is not one of ours."""
+    memory, so containers another VAF process started count too. None when docker does
+    not answer: an unreadable count is not zero, and a caller that limits how many may
+    run has to refuse on it rather than admit past the limit. Docker's name filter
+    matches anywhere in the name, so the prefix is checked again here:
+    `old-vaf-browser-u-...` is not one of ours."""
     r = docker(["ps", "--filter", f"name={name_prefix}", "--format", "{{.Names}}"], timeout=20)
     if r.returncode != 0:
-        return 0
+        return None
     return len([ln for ln in (r.stdout or "").splitlines() if ln.strip().startswith(name_prefix)])
 
 

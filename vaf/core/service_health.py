@@ -521,6 +521,11 @@ def derive_browser_pool_status(summary: Optional[Dict[str, Any]],
     if mode == "off":
         return {**base, "state": "off", "running": 0, "room": 0,
                 "reason": "Off (browser_pool_max is 0): everyone uses the shared browser."}
+    if summary.get("running") is None:
+        # docker did not list them: the pool refuses new ones until it does.
+        return {**base, "state": "unknown", "running": None, "room": 0,
+                "reason": "Docker did not list the personal browsers; none is started "
+                          "until it does."}
     counts = f"{running} running, room for {room} more"
     if mode == "auto":
         if free is None:

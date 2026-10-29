@@ -418,6 +418,10 @@ def test_the_browser_pool_row_reads_each_state():
     assert off["state"] == "off" and "browser_pool_max is 0" in off["reason"]
     unknown = sh.derive_browser_pool_status(None)
     assert unknown["state"] == "unknown" and unknown["running"] is None
+    # Docker did not list the running ones: unknown, and no room is claimed.
+    uncounted = sh.derive_browser_pool_status(_pool_summary(running=None, room=0))
+    assert uncounted["state"] == "unknown" and uncounted["room"] == 0
+    assert "did not list" in uncounted["reason"]
 
 
 def test_the_browser_pool_row_is_beside_the_services_and_never_a_problem():

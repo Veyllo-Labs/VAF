@@ -522,10 +522,53 @@ def test_refusal_hint_names_the_real_limit(pool, monkeypatch):
     assert "raise browser_pool_max" in bp.refusal_hint(str(capacity.value))
     assert "raise browser_pool_max" not in bp.refusal_hint("instance did not become healthy")
 
+    # Auto without a memory reading (macOS, Windows) stops at two and is auto already:
+    # its hint asks for a number. MUTATION: drop that branch - red.
+    monkeypatch.delenv("VAF_BROWSER_POOL_MAX")
+    monkeypatch.setattr("vaf.core.containers.mem_available_mb", lambda: None)
+    assert pool.resolve("scope-c") is not None
+    with pytest.raises(bp.PoolExhausted) as blind:
+        pool.resolve("scope-d")
+    assert "cannot be read" in str(blind.value)
+    blind_hint = bp.refusal_hint(str(blind.value))
+    assert "set browser_pool_max to a number" in blind_hint
+    assert "set it to auto" not in blind_hint
+
     src = (Path(bp.__file__).resolve().parents[1] / "tools" / "browser_agent.py"
            ).read_text(encoding="utf-8")
     assert "refusal_hint(str(e))" in src
     assert "raise browser_pool_max" not in src
+
+
+def test_an_unreadable_count_refuses_instead_of_counting_zero(pool, monkeypatch):
+    """`docker ps` failing used to read as nobody running, so the admission saw only
+    the starts still under way and admitted past the ceiling and past the reservation
+    (sixteen running plus a failing `ps` admitted more). Without the count neither can
+    be checked: the pool refuses, visibly, and the status row says no room and does
+    not claim a number. MUTATION: read an unreadable count as 0 in `_admit` - red; in
+    `pool_status` - red."""
+    monkeypatch.setattr(bp, "_pool", pool)
+    monkeypatch.setattr("vaf.core.containers.mem_available_mb", lambda: 10_000_000)
+    assert all(i is not None for i in _resolve_scopes(pool, 16))
+    fake = pool._test_docker
+
+    def ps_fails(args, timeout=60):
+        if args[0] == "ps":
+            fake.calls.append(list(args))
+            return _done(1, "", "Cannot connect to the Docker daemon")
+        return fake(args, timeout=timeout)
+
+    monkeypatch.setattr("vaf.core.containers.docker", ps_fails)
+    runs = len([c for c in fake.calls if c[0] == "run"])
+    assert pool.resolve("scope-new") is None
+    assert len([c for c in fake.calls if c[0] == "run"]) == runs, "admitted without a count"
+    assert _fallback_details(pool) == [bp._UNCOUNTED]
+    assert bp.refusal_hint(bp._UNCOUNTED) == "Try again in a moment."
+    status = bp.pool_status()
+    assert status["running"] is None and status["room"] == 0
+    from vaf.core import service_health as sh
+    row = sh.derive_browser_pool_status(status)
+    assert row["state"] == "unknown" and row["room"] == 0
 
 
 def test_memory_cap_is_the_reservation(pool, monkeypatch):

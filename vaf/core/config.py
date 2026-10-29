@@ -716,9 +716,9 @@ class Config:
         # profile volume, own docker network), so two users browse in parallel
         # instead of time-sharing one Chromium behind a lease and a scrub.
         # "auto" sizes the pool by free memory (each instance reserves its 2 GB
-        # cap above the floor, never fewer than 2, at most 16); an integer fixes
-        # the count; 0 turns the pool off and sends everyone back to the shared
-        # container. The matching VAF_BROWSER_POOL_* environment variables
+        # cap above the floor, two while memory is above the floor, at most 16);
+        # an integer fixes the count; 0 turns the pool off and sends everyone
+        # back to the shared container. The matching VAF_BROWSER_POOL_* environment variables
         # override these, so a deployment can pin them without writing the
         # config file.
         "browser_pool_max": "auto",                                # Concurrently running per-user browsers ("auto", N, or 0 = off)

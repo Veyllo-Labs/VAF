@@ -93,8 +93,9 @@ def test_container_state_and_running_count(monkeypatch):
     assert containers.container_state("a") == "running"
     assert containers.container_state("b") is None
     assert containers.count_running("vaf-x-") == 2
+    # Unreadable is not zero: a caller that limits how many may run must refuse on it.
     answers[("ps",)] = _done(1, "", "daemon down")
-    assert containers.count_running("vaf-x-") == 0
+    assert containers.count_running("vaf-x-") is None
 
 
 @pytest.mark.parametrize("exists, create_rc, reinspect_rc, expected", [

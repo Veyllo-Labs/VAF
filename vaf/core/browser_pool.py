@@ -35,6 +35,15 @@ of them fits through. Named boundaries:
 - macOS and Windows give no reading of the Docker VM's free memory
   (`containers.mem_available_mb` is None), so auto serves exactly the baseline
   there; an admin who wants more sets an integer;
+- auto trusts `MemAvailable` from /proc/meminfo. Inside a memory-limited container
+  whose meminfo is not limit-aware (an LXC VPS without lxcfs) that is the parent
+  host's memory, which can admit up to AUTO_CEILING against a limit far below it;
+  on such a host set an integer. The cgroup's own `memory.max - memory.current` is
+  not used instead: `memory.current` counts reclaimable page cache, so on a busy
+  container it under-reads and could refuse even the baseline that used to start
+  (not measured on such a host);
+- an unreadable running count (`docker ps` failing) refuses: the ceiling and the
+  reservation cannot be checked without it;
 - the pool is not on the public facade: its callers are VAF's own tools and
   server (measured: no embedder or harness caller reaches it from outside
   `vaf`), and it runs the product's own Docker image.
@@ -207,11 +216,20 @@ def _limit_reason(mode: str, ceiling: int, running: int,
     return f"low memory ({free_mb} MB free, floor {floor_mb} MB)"
 
 
+# The reason when docker does not list the running instances.
+_UNCOUNTED = "running browsers could not be counted (docker ps failed)"
+
+
 def refusal_hint(reason: str) -> str:
     """What a person refused under strict mode can do about it, by the reason
     `PoolExhausted` carries. A memory refusal never says "raise browser_pool_max":
-    a higher count does nothing when memory is what refused."""
+    a higher count does nothing when memory is what refused. Auto without a memory
+    reading is already auto, so that refusal asks for a number instead."""
     text = str(reason or "").strip().lower()
+    if text.startswith("at capacity") and "cannot be read" in text:
+        return ("Try again when a personal browser is free, or ask an admin to set "
+                "browser_pool_max to a number: this machine gives no memory reading, "
+                "so auto stops at two.")
     if text.startswith("at capacity"):
         return ("Try again when a personal browser is free, or ask an admin to raise "
                 "browser_pool_max or set it to auto.")
@@ -587,12 +605,18 @@ class BrowserPool:
         mode, ceiling = _pool_setting()
         floor = _min_free_mb()
         with self._admit_lock:
-            running = containers.count_running(_NAME_PREFIX) + self._pending
-            free = containers.mem_available_mb()
-            if admission_room(mode, ceiling, running, free, floor) >= 1:
-                self._pending += 1
-                return True
-        reason = _limit_reason(mode, ceiling, running, free, floor)
+            counted = containers.count_running(_NAME_PREFIX)
+            if counted is None:
+                # Fail closed: without the count neither the ceiling nor the
+                # reservation can be checked, and reading it as 0 admitted past both.
+                reason = _UNCOUNTED
+            else:
+                running = counted + self._pending
+                free = containers.mem_available_mb()
+                if admission_room(mode, ceiling, running, free, floor) >= 1:
+                    self._pending += 1
+                    return True
+                reason = _limit_reason(mode, ceiling, running, free, floor)
         append_domain_log("webui", f"[browser_pool] {reason}; using shared browser")
         self._fallback_reason = reason
         return False
@@ -929,6 +953,10 @@ def pool_status() -> dict:
     pending = pool._pending if pool is not None else 0
     running = containers.count_running(_NAME_PREFIX)
     free = containers.mem_available_mb()
+    if running is None:
+        # The admission refuses on an unreadable count, so the row says no room.
+        out.update(running=None, free_mb=free, room=0)
+        return out
     out.update(running=running, free_mb=free,
                room=admission_room(mode, ceiling, running + pending, free, floor))
     return out

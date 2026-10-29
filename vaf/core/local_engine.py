@@ -50,11 +50,16 @@ Named boundaries, each deliberate:
   config); ``vaf engine`` does. No new ``vaf.`` symbol is needed for that; the only readers
   outside the core are ``vaf engine``, ``vaf health`` and the product.
 - **A foreign server for the main loop** (an Ollama or vLLM that VAF did not start) is not
-  supported: the address is written out instead of read from
+  a supported setup: the address is written out instead of read from
   ``Config.get_llama_server_url`` in 42 lines of 13 files (``git grep -E
   "(127\.0\.0\.1|localhost):8080" -- 'vaf/*.py'`` at the commit before this engine,
-  comments included), so the main loop always talks to the server VAF manages.
-  ``local_api_url`` stays the lane for the API-backend consumers.
+  comments included), so every consumer talks to whatever answers on the local port.
+  What the start does with such a server: it is REUSED when it already serves the
+  configured model, REFUSED (no launch) when it serves another one, and never stopped by
+  VAF. The reuse is parity with the llama engine, which reuses any healthy server on the
+  port that holds the wanted model: the loopback port is trusted as the local server, the
+  same trust those 42 call sites already place in it. ``local_api_url`` stays the lane for
+  the API-backend consumers.
 - **Local vision under vLLM**: the projector lane is llama.cpp's; under vLLM images reach
   the model only through an API ``vision_provider``.
 - **Concurrency**: vLLM batches concurrent requests, but the local worker clamp

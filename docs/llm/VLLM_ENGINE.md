@@ -212,10 +212,13 @@ and quick starts.
 - **A foreign server for the main loop** (an Ollama or vLLM that VAF did not start): the
   address is written out instead of read from `Config.get_llama_server_url` in 42 lines of
   13 files (`git grep -E "(127\.0\.0\.1|localhost):8080" -- 'vaf/*.py'` at the commit
-  before this engine, comments included), so the main loop always talks to the server VAF
-  manages. A server VAF did not start that answers on the port is refused, not stopped,
-  also when it is a vLLM serving another model. `local_api_url` stays the lane for the
-  API-backend consumers.
+  before this engine, comments included), so every consumer talks to whatever answers on
+  the local port. What the start does with a server VAF did not start: it is **reused**
+  when it already serves the configured model, **refused** (no launch) when it serves
+  another one, also a vLLM, and **never stopped** by VAF. The reuse is parity with the
+  llama engine, which reuses any healthy server on the port that holds the wanted model:
+  the loopback port is trusted as the local server, the same trust the 42 call sites place
+  in it. `local_api_url` stays the lane for the API-backend consumers.
 - **The prompt cache is shared across accounts:** vLLM's automatic prefix cache, like
   llama.cpp's prompt cache and slots, reuses the KV cache of a prefix whoever sent it. No
   text of another account is ever returned from it, but the time to the first token can

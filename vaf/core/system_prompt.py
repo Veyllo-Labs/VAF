@@ -6,7 +6,7 @@ VAF System Prompt Manager
 Handles dynamic system prompt building based on context and active modules.
 
 The SystemPromptManager provides:
-- Core identity prompt (model-specific or generic, based on filename)
+- Core identity prompt (the persona; the model-specific parts read the agent's model_mode)
 - Modular prompt sections that activate based on user intent
 - Tool documentation injection
 - Dynamic context adjustment per conversation turn

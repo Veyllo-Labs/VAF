@@ -30,7 +30,8 @@ MUTATIONS, each turns the named test red:
 - take the identity from the GGUF setting under vLLM -> test_agent_identity_follows_the_engine;
 - let a local voice lane with an API main provider resolve under vLLM ->
   test_voice_local_with_an_api_main_is_refused_under_vllm;
-- "restart" an unmanaged vLLM serving another model -> test_an_unmanaged_server_on_the_port_is_refused;
+- "restart" an unmanaged vLLM serving another model, or stop reusing one that serves the
+  configured model -> test_an_unmanaged_server_is_reused_for_the_configured_model_refused_otherwise;
 - skip the VRAM settle in the handover -> test_handover_llama_to_vllm_order.
 """
 import json
@@ -642,9 +643,11 @@ def test_voice_local_with_an_api_main_is_refused_under_vllm(monkeypatch, values)
     assert voice_agent._resolve_backend() == ("local", None)
 
 
-def test_an_unmanaged_server_on_the_port_is_refused(monkeypatch, tmp_path, values):
-    """A vLLM VAF did not start, serving another model: not VAF's to stop, and a launch
-    would only die at bind."""
+def test_an_unmanaged_server_is_reused_for_the_configured_model_refused_otherwise(
+        monkeypatch, tmp_path, values):
+    """A server VAF did not start: serving another model it is refused (not VAF's to stop,
+    and a launch would only die at bind); serving the configured model it is reused, as the
+    llama engine reuses a healthy server holding the wanted model. Never stopped."""
     events = []
     _vllm_branch(monkeypatch, values, events)
     monkeypatch.setattr(vs, "running_pid", lambda: None)
@@ -657,7 +660,7 @@ def test_an_unmanaged_server_on_the_port_is_refused(monkeypatch, tmp_path, value
     assert events == [] and "someone/other-model" in errors[-1]
     monkeypatch.setattr(vs, "served_model", lambda port=8080: REPO)
     assert _manager(tmp_path).start_server("/m.gguf") is True, "the configured model is reused"
-    assert events == []
+    assert events == [], "a server VAF did not start was stopped or replaced"
 
 
 def test_the_tray_poll_hands_an_engine_switch_on(monkeypatch, values):
@@ -683,3 +686,32 @@ def test_the_tray_poll_hands_an_engine_switch_on(monkeypatch, values):
     with pytest.raises(_Stop):
         tray._config_file_poll_loop()
     assert ("local_engine", "vllm", "llama") in seen
+
+
+# ── round 2 ────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("engine", ["llama", "vllm"])
+def test_every_prompt_build_names_the_running_model(monkeypatch, tmp_path, engine):
+    """Both prompt builds (the chat's first and the per-turn rebuild) name the model that
+    runs: the vLLM repo under vLLM, never the GGUF setting, which names a model that is not
+    running there."""
+    from vaf.core.config import Config
+    from vaf.core.system_prompt import SystemPromptManager
+    real = Config.get
+    overrides = {"local_engine": engine, "vllm_model": REPO}
+    monkeypatch.setattr(Config, "get", staticmethod(
+        lambda key, default=None: overrides[key] if key in overrides else real(key, default)))
+    agent = _local_agent(monkeypatch, tmp_path)
+    named = []
+    real_build = SystemPromptManager.build_prompt
+
+    def build_prompt(self, filename=None, *args, **kw):
+        named.append(filename)
+        return real_build(self, filename, *args, **kw)
+    monkeypatch.setattr(SystemPromptManager, "build_prompt", build_prompt)
+    agent.init_chat()
+    first = len(named)
+    _turn(monkeypatch, agent, [{"content": "Hallo zurueck."}])
+    assert first >= 1 and len(named) > first, f"a prompt build was not reached: {named}"
+    wanted = REPO if engine == "vllm" else agent.filename
+    assert named and all(n == wanted for n in named), named

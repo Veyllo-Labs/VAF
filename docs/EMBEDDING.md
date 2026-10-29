@@ -2415,11 +2415,14 @@ local vision, cloud-to-local failover) follow it through the same address.
 The config key `local_api_url` points those *API-backend consumers* at any
 other OpenAI-compatible server (an Ollama, vLLM or LM Studio that VAF does not
 manage). It does **not** redirect the main chat loop. Named boundary: a foreign
-inference server for the main loop is not supported, because the address is
-written out instead of read from `Config.get_llama_server_url` in 42 lines of 13
-files (`git grep -E "(127\.0\.0\.1|localhost):8080" -- 'vaf/*.py'` at the commit
-before the vLLM engine, comments included); moving them onto that one address is
-the step that would open it. See [PROVIDER_MODES.md](llm/PROVIDER_MODES.md) for
+inference server for the main loop is not a supported setup, because the address
+is written out instead of read from `Config.get_llama_server_url` in 42 lines of
+13 files (`git grep -E "(127\.0\.0\.1|localhost):8080" -- 'vaf/*.py'` at the
+commit before the vLLM engine, comments included); moving them onto that one
+address is the step that would open it. A server VAF did not start on the local
+port is reused when it already serves the configured model (the loopback port is
+trusted as the local server, for llama.cpp as for vLLM), refused when it serves
+another one, and never stopped by VAF. See [PROVIDER_MODES.md](llm/PROVIDER_MODES.md) for
 the details.
 
 ---

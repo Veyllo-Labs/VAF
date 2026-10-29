@@ -1299,6 +1299,17 @@ _SSH_ROUTE_RE = re.compile(r"\b(?:ssh|sftp|scp|vps|putty)\b|\b\d{1,3}(?:\.\d{1,3
 _FTP_ROUTE_RE = re.compile(r"\b(?:ftps?|webspace|web space|filezilla)\b")
 
 
+
+def _active_local_model_name(agent) -> str:
+    """The local model that actually runs: the configured Hugging Face repo under the vLLM
+    engine, the agent's GGUF file name under llama.cpp. The GGUF setting names a model that is
+    not running under vLLM, so everything that names "the model" reads this. A module
+    function, not only a method, so the identity helper keeps working on the duck-typed
+    agents its callers pass."""
+    if local_engine.current() == local_engine.VLLM:
+        return local_engine.resolve_vllm_model()
+    return getattr(agent, "filename", "") or ""
+
 class Agent:
     """The VAF engine: one instance = one conversation over one LLM backend.
 
@@ -1447,6 +1458,10 @@ class Agent:
 
             return True
 
+    def _active_model_name(self) -> str:
+        """The local model that actually runs (see `_active_local_model_name`)."""
+        return _active_local_model_name(self)
+
     def _apply_local_model_identity(self) -> None:
         """Recompute what the LOCAL model file implies about this agent.
 
@@ -1463,10 +1478,7 @@ class Agent:
         # GGUF setting names a model that is not running: the message conversion and the
         # tool-call parser must follow what vLLM serves (a Gemma GGUF setting must not
         # turn on Gemma handling for a Qwen served by vLLM).
-        if local_engine.current() == local_engine.VLLM:
-            fname = local_engine.resolve_vllm_model().rsplit("/", 1)[-1].lower()
-        else:
-            fname = getattr(self, "filename", "").lower()
+        fname = _active_local_model_name(self).rsplit("/", 1)[-1].lower()
         if "gemma" in fname:
             self.model_display_name = "Gemma"
             self.is_gemma_local = True
@@ -5715,9 +5727,11 @@ class Agent:
         self.prompt_manager = SystemPromptManager(list(self.tools.values()), model_name=self.model_display_name, agent_instance=self, max_tokens=n_ctx)
                 
         # Build initial prompt (Core + Base Rules)
-        # We pass self.filename to determine identity (VQ-1 vs Generic), and current user for User identity block
+        # The running model (the vLLM repo under vLLM, else the GGUF) and the current user for
+        # the User identity block. build_prompt reads the model's identity from the agent
+        # (model_mode, set by _apply_local_model_identity), not from this argument.
         system_prompt = self.prompt_manager.build_prompt(
-            self.filename,
+            self._active_model_name(),
             username=getattr(self, "_current_username", None),
             user_scope_id=getattr(self, "_current_user_scope_id", None),
             current_source=getattr(self, "_current_chat_source", None),
@@ -10289,7 +10303,7 @@ class Agent:
             
             # Rebuild system prompt (includes User identity so e.g. "Hey" -> model knows "that's Alice")
             new_prompt = self.prompt_manager.build_prompt(
-                self.filename,
+                self._active_model_name(),
                 username=getattr(self, "_current_username", None),
                 user_scope_id=getattr(self, "_current_user_scope_id", None),
                 current_source=getattr(self, "_current_chat_source", None),

@@ -669,11 +669,7 @@ def start(repo_id: str, n_ctx: int, port: int = 8080,
                         "quantized KV cache that needs less memory."))
             return False
         argv = build_command(model_dir, repo_id, port, result, tool, reasoning)
-        log_file_path, log_handle = _open_log(previous_kept=(attempt == 1))
-        out = log_handle if log_handle is not None else subprocess.DEVNULL
         if not inference_profile.local_inference_allowed():
-            if log_handle is not None:
-                log_handle.close()
             UI.event("Backend", inference_profile.refuse("the local server"), style="dim")
             return False
         UI.event("Server", f"Starting vLLM on :{port} ({repo_id}, context {result.max_model_len}, "
@@ -683,11 +679,14 @@ def start(repo_id: str, n_ctx: int, port: int = 8080,
             # file must not be overwritten, and a second server would only die at bind.
             other = running_pid()
             if other is not None:
-                if log_handle is not None:
-                    log_handle.close()
                 UI.event("Server", f"vLLM (PID {other}) was started by another VAF process; "
                                    "the next use waits for it.", style="dim")
                 return False
+            # Opened only now, under the lock and for a launch that happens: opening rotates
+            # the log, and a refused start that rotated it would move the running server's
+            # log aside and leave its starter an empty one to read a bind failure from.
+            log_file_path, log_handle = _open_log(previous_kept=(attempt == 1))
+            out = log_handle if log_handle is not None else subprocess.DEVNULL
             try:
                 proc = popen(argv, stdout=out, stderr=out, env=child_env(),
                              start_new_session=(os.name != "nt"))

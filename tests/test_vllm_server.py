@@ -545,3 +545,21 @@ def test_stop_reaches_its_own_child_without_a_pid_file(home):
             child.kill()
             child.wait(5)
         vs._child = None
+
+
+def test_a_refused_start_leaves_the_running_servers_log_alone(config, monkeypatch, home):
+    """Opening the log rotates it. A start refused because another process's server runs (or
+    because the profile is api) must not move that server's log aside: its starter reads the
+    log for a bind failure. MUTATION: open the log before the lock and the check - red."""
+    _ready_to_launch(monkeypatch, home)
+    log = vs.log_path()
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("INFO: the other process's server is loading\n", encoding="utf-8")
+    monkeypatch.setattr(vs, "running_pid", lambda: 777)
+    assert vs.start("Qwen/Qwen3-4B-AWQ", 32768, popen=lambda *a, **k: _Proc()) is False
+    assert log.read_text(encoding="utf-8") == "INFO: the other process's server is loading\n"
+    assert not log.with_name("vllm_server.prev.log").exists()
+    config["inference_profile"] = "api"
+    assert vs.start("Qwen/Qwen3-4B-AWQ", 32768, popen=lambda *a, **k: _Proc()) is False
+    assert log.read_text(encoding="utf-8") == "INFO: the other process's server is loading\n"
+    assert not log.with_name("vllm_server.prev.log").exists()

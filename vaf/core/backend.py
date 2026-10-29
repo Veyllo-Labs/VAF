@@ -1832,8 +1832,11 @@ class ServerManager:
         Order, each step before the next: refuse when vLLM is not installed (the install is
         the user's decision, never a side effect of a start); hand the port over (a llama
         server is stopped and its process gone); reuse a vLLM that serves the configured
-        model; WAIT for a vLLM that is still loading (alive, /health not 200 yet) instead of
-        spawning a second one; only then launch.
+        model, the managed one or one VAF did not start (the loopback port is trusted as the
+        local server, as the llama reuse trusts it); refuse a server VAF did not start that
+        serves another model (VAF never stops it); WAIT for the managed vLLM while it is
+        still loading (alive, /health not 200 yet) instead of spawning a second one; only
+        then launch.
         """
         from vaf.core import inference_profile, local_engine, vllm_server
 
@@ -1857,9 +1860,9 @@ class ServerManager:
                 UI.event("Server", f"Reusing vLLM on :{port} ({repo})...", style="dim")
                 return True
             if vllm_pid is None:
-                # Not the managed server (no pid file names a managed vLLM): something else
-                # answers on the port, also a vLLM serving another model. Stopping it is
-                # not VAF's to do, and a launch would only die at bind.
+                # Not the managed server (no pid file names a managed vLLM) and not the
+                # configured model (that case was reused just above): stopping it is not
+                # VAF's to do, and a launch would only die at bind.
                 UI.error(f"Port {port} is held by a server VAF did not start"
                          + (f" (it serves {served})" if served else "")
                          + "; vLLM is not started.")

@@ -5396,14 +5396,25 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 </Section>
                                 <Section title={tAdvanced('browserPool')}>
                                     <p className="text-xs text-gray-500 mb-4">{tAdvanced('browserPoolIntro')}</p>
-                                    <Input
-                                        label={tAdvanced('browserPoolMax')}
-                                        value={localConfig.browser_pool_max ?? 2}
-                                        onChange={(v: string) => handleChange('browser_pool_max', Math.max(0, Math.min(16, parseInt(v) || 0)))}
-                                        type="number"
+                                    <Switch
+                                        label={tAdvanced('browserPoolAuto')}
+                                        description={tAdvanced('browserPoolAutoDesc')}
+                                        checked={browserPoolIsAuto(localConfig.browser_pool_max ?? 'auto')}
+                                        onChange={(v: boolean) => handleChange('browser_pool_max', v ? 'auto' : 2)}
                                     />
-                                    <p className="text-xs text-gray-500 mt-1">{tAdvanced('browserPoolMaxDesc')}</p>
                                     <div className="h-4" />
+                                    {!browserPoolIsAuto(localConfig.browser_pool_max ?? 'auto') && (
+                                        <>
+                                            <Input
+                                                label={tAdvanced('browserPoolMax')}
+                                                value={localConfig.browser_pool_max}
+                                                onChange={(v: string) => handleChange('browser_pool_max', Math.max(0, Math.min(16, parseInt(v) || 0)))}
+                                                type="number"
+                                            />
+                                            <p className="text-xs text-gray-500 mt-1">{tAdvanced('browserPoolMaxDesc')}</p>
+                                            <div className="h-4" />
+                                        </>
+                                    )}
                                     <Input
                                         label={tAdvanced('browserPoolMinFree')}
                                         value={localConfig.browser_pool_min_free_mb ?? 2500}
@@ -8485,6 +8496,13 @@ interface InputProps {
     // field but must not cost it a row of its own - nine API-key fields each carrying a
     // status line below the box turns the panel into a list of three-line blocks.
     labelExtra?: React.ReactNode;
+}
+
+// browser_pool_max is "auto" or a count. The server reads anything that is not an
+// integer as auto (vaf/core/browser_pool.py _pool_setting), so the switch does too.
+function browserPoolIsAuto(value: unknown): boolean {
+    if (typeof value === 'number') return false;
+    return !/^\s*-?\d+\s*$/.test(String(value ?? ''));
 }
 
 const Input = ({ label, value, onChange, type = "text", placeholder, disabled, link, labelExtra }: InputProps) => (

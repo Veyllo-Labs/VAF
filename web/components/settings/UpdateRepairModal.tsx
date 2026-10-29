@@ -48,6 +48,20 @@ export interface SandboxRow {
     reason?: string;
 }
 
+/** The per-user browser pool (vaf/core/service_health.py derive_browser_pool_status).
+ *  Not a compose service either: the pool starts one browser per person on demand and
+ *  stops it when idle, and a full pool sends people to the shared browser, so this row
+ *  is never an issue to repair. */
+export interface BrowserPoolRow {
+    state: 'ok' | 'idle' | 'off' | 'unknown' | string;
+    mode?: 'auto' | 'fixed' | 'off' | string | null;
+    running?: number | null;
+    ceiling?: number | null;
+    room?: number | null;
+    free_mb?: number | null;
+    reason?: string;
+}
+
 interface ServicesSnapshot {
     docker: { available: boolean; reason?: string; detail?: string };
     stack_root?: string | null;
@@ -57,6 +71,7 @@ interface ServicesSnapshot {
     host?: { ip_forward?: number | null; forwarding_ok?: boolean | null; reason?: string };
     services: ServiceRow[];
     sandbox?: SandboxRow | null;
+    browser_pool?: BrowserPoolRow | null;
     /** Something is inside its own start window: repairing it now would only
      *  restart a container that is already on its way up. */
     starting?: boolean;
@@ -582,6 +597,7 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
     // exactly the state while the server is restarting during an update.
     const rows = useMemo(() => services?.services ?? [], [services]);
     const sandbox = services?.sandbox ?? null;
+    const browserPool = services?.browser_pool ?? null;
     const issues = useMemo(() => rows.filter((s) => s.state !== 'off' && healthOf(s) !== 'ok'), [rows]);
     issuesRef.current = issues;
     // The host's forwarding switch is a finding of its own, above the containers:
@@ -644,7 +660,10 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
             return;
         }
         const ROW = 96;
-        const height = (rows.length - (sandbox ? 0 : 1)) * ROW;
+        // The hub sits at the middle of the column on the right: the services, then
+        // the sandbox and the personal browsers when the snapshot carries them.
+        const sideNodes = (sandbox ? 1 : 0) + (browserPool ? 1 : 0);
+        const height = (rows.length + sideNodes - 1) * ROW;
         const hub = {
             id: 'vaf',
             type: 'input',
@@ -741,7 +760,42 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                 ),
             },
         }] : [];
-        setNodes([hub, ...serviceNodes, ...sandboxNodes] as any);
+        // The personal browsers below the sandbox, drawn the same way: green while one
+        // runs, grey otherwise, never an issue (a full pool shares the fallback browser).
+        const poolHealth: Health = browserPool?.state === 'ok' ? 'ok' : 'idle';
+        const poolNodes = browserPool ? [{
+            id: 'browser-pool',
+            type: 'output',
+            position: { x: 380, y: (rows.length + (sandbox ? 1 : 0)) * ROW },
+            targetPosition: Position.Left,
+            draggable: false,
+            style: { border: 'none', background: 'transparent', width: 'auto' },
+            data: {
+                label: (
+                    <div
+                        className="px-3 py-2 rounded-xl bg-white border border-gray-200 shadow-sm min-w-[210px] text-left"
+                        style={{ borderLeft: `4px solid ${COLOR[poolHealth]}` }}
+                    >
+                        <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full shrink-0" style={{ background: COLOR[poolHealth] }} />
+                            <span className="text-sm font-medium text-gray-800 truncate">{tM('browserPoolNode')}</span>
+                            <span className="text-[10px] text-gray-400 font-mono">vaf-browser-u-*</span>
+                        </div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">
+                            {browserPool.state === 'off'
+                                ? tM('browserPoolOff')
+                                : browserPool.state === 'unknown' || browserPool.running == null
+                                    ? tM('statusUnknown')
+                                    : tM('browserPoolCounts', {
+                                        running: Number(browserPool.running ?? 0),
+                                        room: Math.max(0, Number(browserPool.room ?? 0)),
+                                    })}
+                        </div>
+                    </div>
+                ),
+            },
+        }] : [];
+        setNodes([hub, ...serviceNodes, ...sandboxNodes, ...poolNodes] as any);
         const targets = new Set(repairTargets ?? []);
         setEdges([...rows.map((svc) => {
             const h = healthOf(svc);
@@ -775,8 +829,18 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                 opacity: 0.6,
                 ...(sandboxHealth === 'ok' ? {} : { strokeDasharray: '4 4' }),
             },
+        }] : []), ...(browserPool ? [{
+            id: 'e-browser-pool',
+            source: 'vaf',
+            target: 'browser-pool',
+            style: {
+                stroke: COLOR[poolHealth],
+                strokeWidth: 1.5,
+                opacity: 0.6,
+                ...(poolHealth === 'ok' ? {} : { strokeDasharray: '4 4' }),
+            },
         }] : [])] as any);
-    }, [rows, sandbox, repairBusy, repairTargets, repairFinished, repairButton, version, statusLabel, tM, setNodes, setEdges]);
+    }, [rows, sandbox, browserPool, repairBusy, repairTargets, repairFinished, repairButton, version, statusLabel, tM, setNodes, setEdges]);
 
     // ─── render ──────────────────────────────────────────────────────────────
 

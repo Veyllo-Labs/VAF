@@ -407,6 +407,17 @@ Two consequences worth knowing before you rely on it:
   through a child's environment is a different decision from passing a scope id,
   and VAF does not make it for you.
 
+**A model id is only ever sent to its own provider.** An explicit model that is not
+one of the configured provider's models (a local name such as `auto`, or another
+provider's id, for example a lane model saved before you switched `provider`) is
+never sent to it: the request uses `api_model_<provider>` (else the catalog default)
+and one warning is printed per process. You call nothing for this; the backend does
+it on every request. For your own settings screen,
+`vaf.core.provider_registry.model_fits_provider(provider, model, config)` answers the
+same question: an id the model catalog lists or whose family it lists belongs to that
+provider, and an id it cannot place belongs to the `api_model_<provider>` in `config`
+that holds it, or fits anywhere when none does (a custom gateway's own name).
+
 **Where a key lives when VAF stores one.** Keys set through the product go into the
 same envelope-encrypted store as mail, GitHub and cloud credentials - not into
 `config.json`, which now holds no key material at all. The key that opens that

@@ -540,8 +540,8 @@ class ExecuteWorkflowTool(BaseTool):
             _orig_stderr = sys.stderr
             _prev_wf_terminal = os.environ.get("VAF_IN_WORKFLOW_TERMINAL")
             _prev_tool_model = os.environ.get("VAF_TOOL_MODEL")
-            from vaf.core.config import Config as _CfgWE
-            _subagent_model = _CfgWE.get("subagent_model", "")
+            from vaf.core.config import subagent_model_for as _sa_model_for
+            _subagent_model = _sa_model_for()
             _exec_result = [None]
             _exec_error  = [None]
             _wf_log(wf_run_id, "ENGINE_START")
@@ -559,7 +559,7 @@ class ExecuteWorkflowTool(BaseTool):
                 sys.stderr = MirroredStdout(sys.stderr, _mirror_send,
                                             interactive=False, on_activity=_touch)
                 os.environ["VAF_IN_WORKFLOW_TERMINAL"] = "1"
-                if _subagent_model and _subagent_model.lower() != "deepseek-auto":
+                if _subagent_model:
                     os.environ["VAF_TOOL_MODEL"] = _subagent_model
                 _exec_result[0] = engine.execute(
                     steps,

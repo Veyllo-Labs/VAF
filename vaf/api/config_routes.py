@@ -89,6 +89,26 @@ async def get_context_effort(
     return resolve_context_effort(cfg)
 
 
+@router.get("/config/model-fit")
+async def get_model_fit(
+    request: Request,
+    provider: str = "",
+    model: str = "",
+) -> Dict[str, Any]:
+    """Whether `model` is one of `provider`'s models, for a settings screen that
+    marks a stored value the runtime will ignore.
+
+    Computed by `provider_registry.model_fits_provider`, the predicate the API
+    backend applies to every call, so the hint and the runtime cannot disagree
+    and the browser keeps no copy of the rule. Read-only; it writes nothing.
+    """
+    get_current_user_or_local_admin(request)
+    from vaf.core.provider_registry import model_fits_provider
+
+    fits = model_fits_provider(provider, model, config=Config.load()) if model else True
+    return {"provider": provider, "model": model, "fits": fits}
+
+
 @router.get("/usage")
 async def get_usage(
     request: Request,

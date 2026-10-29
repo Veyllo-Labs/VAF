@@ -706,8 +706,8 @@ class AgentWorkflowBuilderTool(BaseTool):
         # otherwise flood `workflow_output_stream` with noise that isn't workflow progress.
         _prev_wf_terminal = os.environ.get("VAF_IN_WORKFLOW_TERMINAL")
         _prev_tool_model = os.environ.get("VAF_TOOL_MODEL")
-        from vaf.core.config import Config as _CfgWF
-        _subagent_model = _CfgWF.get("subagent_model", "")
+        from vaf.core.config import subagent_model_for as _sa_model_for
+        _subagent_model = _sa_model_for()
         result = None
         _wf_exc = None
         try:
@@ -718,7 +718,7 @@ class AgentWorkflowBuilderTool(BaseTool):
                                         _send_wf_line if session_id else None,
                                         interactive=False)
             os.environ["VAF_IN_WORKFLOW_TERMINAL"] = "1"
-            if _subagent_model and _subagent_model.lower() != "deepseek-auto":
+            if _subagent_model:
                 os.environ["VAF_TOOL_MODEL"] = _subagent_model
             result = engine.execute(
                 steps, variables=variables, check_stop=_check_stop,

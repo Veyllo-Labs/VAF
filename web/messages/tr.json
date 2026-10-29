@@ -1594,6 +1594,8 @@
       "sameAsMain": "Ana modelle aynı",
       "toolWorkflowModel": "Araç / iş akışı modeli",
       "sameAsMainChat": "Ana sohbetle aynı",
+      "toolModelIgnored": "\"{model}\" bir {provider} modeli değil ve yok sayılıyor: araç ve iş akışı adımları \"Ana sohbetle aynı\" seçilmiş gibi çalışır.",
+      "toolModelIgnoredOption": "{model} (yok sayılıyor)",
       "subAgentTimeout": "Alt ajan zaman aşımı",
       "subAgentTimeoutDesc": "Alt ajan çağrıları için en uzun çalışma süresi.",
       "timeoutMinutes": "Zaman aşımı (dakika)",

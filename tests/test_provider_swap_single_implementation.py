@@ -171,6 +171,24 @@ def test_an_explicit_api_model_wins_over_the_default(live_config):
     assert ag.model_display_name == "chosen-model"
 
 
+def test_a_tool_model_of_another_provider_is_not_shown_as_the_model(live_config, monkeypatch):
+    """A workflow's VAF_TOOL_MODEL left from the previous provider is not this
+    provider's model, so it does not become the name the prompt carries.
+    MUTATION: read VAF_TOOL_MODEL raw again in reload_api_backend."""
+    live_config["provider"] = "deepseek"
+    live_config["api_model_deepseek"] = "deepseek-flash"
+    monkeypatch.setenv("VAF_TOOL_MODEL", "veyllo-chat")
+    ag = _agent()
+
+    Agent.reload_api_backend(ag, force=True)
+    assert ag.model_display_name == "deepseek-flash"
+
+    monkeypatch.setenv("VAF_TOOL_MODEL", "deepseek-v4-pro")
+    ag = _agent()
+    Agent.reload_api_backend(ag, force=True)
+    assert ag.model_display_name == "deepseek-v4-pro"
+
+
 # ── Guards the copies did not have at all ────────────────────────────────────
 
 def test_a_subagent_pinned_to_a_provider_is_never_overridden(live_config, monkeypatch):

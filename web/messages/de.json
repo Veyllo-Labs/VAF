@@ -1594,6 +1594,8 @@
       "sameAsMain": "Wie Hauptmodell",
       "toolWorkflowModel": "Tool-/Workflow-Modell",
       "sameAsMainChat": "Wie Haupt-Chat",
+      "toolModelIgnored": "„{model}“ ist kein Modell von {provider} und wird ignoriert: Werkzeug- und Workflow-Schritte laufen so, als wäre „Wie Haupt-Chat“ gewählt.",
+      "toolModelIgnoredOption": "{model} (wird ignoriert)",
       "subAgentTimeout": "Sub-Agenten-Timeout",
       "subAgentTimeoutDesc": "Maximale Laufzeit für Sub-Agenten-Aufrufe.",
       "timeoutMinutes": "Timeout (Minuten)",

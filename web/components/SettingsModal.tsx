@@ -703,6 +703,26 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             .catch(() => {});
     }, [apiBase, effortProvider, effortModel]);
 
+    // Does the stored tool / workflow model belong to the provider it runs on? Asked of
+    // the backend (GET /api/config/model-fit, the predicate every API call passes), so
+    // the hint and the runtime cannot disagree. Re-asked when the provider or the model
+    // changes, including before it is saved.
+    const toolModelProvider = (localConfig.subagent_provider && localConfig.subagent_provider !== 'inherit')
+        ? String(localConfig.subagent_provider)
+        : String(localConfig.provider || 'local');
+    const toolModel = String(localConfig.subagent_model || '');
+    const [toolModelFits, setToolModelFits] = useState(true);
+    useEffect(() => {
+        if (!toolModel) { setToolModelFits(true); return; }
+        let live = true;
+        const base = apiBase || (typeof window !== 'undefined' ? document.location.origin : '');
+        fetch(`${base}/api/config/model-fit?provider=${encodeURIComponent(toolModelProvider)}&model=${encodeURIComponent(toolModel)}`, { credentials: 'include' })
+            .then(r => (r.ok ? r.json() : null))
+            .then(d => { if (live && d && typeof d.fits === 'boolean') setToolModelFits(d.fits); })
+            .catch(() => {});
+        return () => { live = false; };
+    }, [apiBase, toolModelProvider, toolModel]);
+
     // One fetch, two callers: opening the tab and the refresh button. The button
     // exists because the ledger keeps being written while this dialog is open -
     // a figure read five minutes ago is not the figure now.
@@ -3547,7 +3567,12 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         <Select
                                             label={tAdvanced('subAgentProvider')}
                                             value={localConfig.subagent_provider || 'inherit'}
-                                            onChange={(v: string) => handleChange('subagent_provider', v)}
+                                            onChange={(v: string) => {
+                                                handleChange('subagent_provider', v);
+                                                // The model list changes under the value. '' and not
+                                                // undefined: the save merges, so an absent key keeps the old one.
+                                                handleChange('subagent_model', '');
+                                            }}
                                             options={[
                                                 { value: 'inherit', label: tAdvanced('sameAsMain') },
                                                 { value: 'veyllo', label: 'Veyllo' },
@@ -3563,9 +3588,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     {(() => {
                                         // Effective provider for tool/workflow calls: the sub-agent provider when set,
                                         // otherwise the main provider. Mirrors the Thinker model picker below.
-                                        const sp = (localConfig.subagent_provider && localConfig.subagent_provider !== 'inherit')
-                                            ? localConfig.subagent_provider
-                                            : (localConfig.provider || 'local');
+                                        const sp = toolModelProvider;
                                         const isLocal = sp === 'local';
                                         const p = PROVIDERS.find(pr => pr.id === sp);
                                         const def = !isLocal && p ? (localConfig[`api_model_${p.id}`] || p.defaultModel) : '';
@@ -3576,17 +3599,25 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 ...(def ? [{ value: def, label: list.includes(def) ? def : `${def} (Default)` }] : []),
                                                 ...list.filter(m => m !== def).map(m => ({ value: m, label: m })),
                                               ];
+                                        // A stored model of another provider: the runtime ignores it, so the
+                                        // picker says so instead of the generic "(Current)" entry.
+                                        const ignored = !!toolModel && !toolModelFits;
+                                        const spLabel = p ? p.label : (isLocal ? 'Local' : sp);
                                         return (
                                             <div className="mt-3">
                                                 <Select
                                                     label={tAdvanced('toolWorkflowModel')}
-                                                    value={localConfig.subagent_model || ''}
-                                                    onChange={(v: string) => handleChange('subagent_model', v || undefined)}
+                                                    value={toolModel}
+                                                    onChange={(v: string) => handleChange('subagent_model', v || '')}
                                                     options={[
                                                         { value: '', label: tAdvanced('sameAsMainChat') },
-                                                        ...modelOpts,
+                                                        ...(ignored ? [{ value: toolModel, label: tAdvanced('toolModelIgnoredOption', { model: toolModel }) }] : []),
+                                                        ...modelOpts.filter(o => !ignored || o.value !== toolModel),
                                                     ]}
                                                 />
+                                                {ignored && (
+                                                    <p className="text-xs text-amber-600 mt-2">{tAdvanced('toolModelIgnored', { model: toolModel, provider: spLabel })}</p>
+                                                )}
                                             </div>
                                         );
                                     })()}
@@ -5134,7 +5165,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         <Select
                                                             label={tAdvanced('failoverBackupProvider')}
                                                             value={bp}
-                                                            onChange={(v: string) => handleChange('failover_backup_provider', v)}
+                                                            onChange={(v: string) => {
+                                                                handleChange('failover_backup_provider', v);
+                                                                handleChange('failover_backup_model', '');
+                                                            }}
                                                             options={[{ value: '', label: tAdvanced('failoverNone') }, ...PROVIDERS.filter(p => p.id !== primaryProvider).map(p => ({ value: p.id, label: p.label }))]}
                                                         />
                                                         {bp && (

@@ -705,9 +705,19 @@ def _build_vaf_bridge(session_id: Optional[str] = None) -> VAFLLMBridge:
     browser lane's own provider/model taking precedence when configured.
     """
     from vaf.core.config import Config
+    from vaf.core.provider_registry import model_fits_provider, note_foreign_model
     config = Config.load()
     lane_provider, lane_model = _resolve_browser_lane()
     provider = lane_provider or config.get("provider", "local")
+
+    # A lane model of another provider (browser_agent_model alone rides the MAIN
+    # provider, which may have been switched since) is dropped for that provider's
+    # own chain. A local name stays: the provider's chain below replaces it.
+    if lane_model and provider != "local" and not model_fits_provider(provider, lane_model, config):
+        from vaf.core.provider_registry import is_local_model_id
+        if not is_local_model_id(lane_model):
+            note_foreign_model(provider, lane_model, "browser_agent_model")
+        lane_model = None
 
     if lane_model:
         model = lane_model
@@ -718,14 +728,9 @@ def _build_vaf_bridge(session_id: Optional[str] = None) -> VAFLLMBridge:
         if not model:
             model = config.get("model", "llama3")
 
-    # Guard: never pass a local GGUF filename to a cloud API provider
-    if provider != "local" and (
-        model.endswith(".gguf")
-        or "vq-1" in model.lower()
-        or "instruct-q" in model.lower()
-        or model.lower().startswith("veyllo/")
-    ):
-        from vaf.core.config import Config
+    # Never pass a model that is not this provider's (a local GGUF name in `model`)
+    # to a cloud API provider: the same predicate the API backend applies.
+    if provider != "local" and not model_fits_provider(provider, model, config):
         model = Config.get_default_model(provider) or Config.get_default_model("openai")
 
     return VAFLLMBridge(model=model, provider_name=provider, session_id=session_id)

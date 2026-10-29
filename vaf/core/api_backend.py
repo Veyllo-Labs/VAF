@@ -14,9 +14,10 @@ import re
 import time
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, Generator, List, Union
-from vaf.core.config import Config
+from vaf.core.config import Config, subagent_model_for
 from vaf.core.cost import blank_request_usage, cache_usage, cache_usage_from_openai
 from vaf.core.local_engine import reasoning_text
+from vaf.core.provider_registry import is_local_model_id, model_fits_provider, note_foreign_model
 from vaf.cli.ui import UI
 
 # Configure logging
@@ -1741,37 +1742,23 @@ class APIBackendManager:
         # Determine model — defaults derive from Config.PROVIDER_MODELS (single source).
         default_models = {p: m["default"] for p, m in Config.PROVIDER_MODELS.items()}
         default_models["local"] = "llama3"
-        # A forwarded local/blank model id must never reach a cloud provider. The local model default
-        # is "auto" (config.py), and some sub-agents/tools forward the local "model" key verbatim; for
-        # non-local providers normalise "auto"/blank to "unset" so it resolves to api_model_{provider}
-        # below (incl. DeepSeek's deepseek-auto routing) instead of shipping "auto" -> HTTP 400
-        # "model does not exist". The GGUF guardrail below only catches local *file* ids, not "auto".
-        if model and self.provider_name != "local" and str(model).strip().lower() in ("", "auto"):
+        # Embedded: the programmatic config (no Settings UI there). Product: read fresh
+        # from disk so a model changed in Settings mid-session applies at once.
+        live_config = self.config if getattr(self, "_embedded", False) else Config.load()
+        # An explicit model that is not one of this provider's models never reaches it: a
+        # forwarded local name ("auto", a GGUF file; some sub-agents and tools forward the
+        # local "model" key verbatim) or another provider's id (a lane model left over from
+        # before a provider switch). Each answered 400 on every call. It is treated as no
+        # model, so the provider's own api_model_<provider> applies below, DeepSeek's
+        # deepseek-auto routing included. Local names are dropped silently, as they always
+        # were; another provider's id is reported once per process.
+        if model and self.provider_name != "local" and not model_fits_provider(
+                self.provider_name, model, config=live_config):
+            if str(model).strip() and not is_local_model_id(model):
+                note_foreign_model(self.provider_name, str(model), "the requested model")
             model = None
         if not model:
-            if getattr(self, "_embedded", False):
-                # Embedded: honour api_model from the programmatic config (no Settings UI here)
-                model = self.config.get(f"api_model_{self.provider_name}", default_models.get(self.provider_name, Config.get_default_model("openai")))
-            else:
-                # Product: read fresh from disk so mid-session model changes (via Settings) take effect immediately
-                live_config = Config.load()
-                model = live_config.get(f"api_model_{self.provider_name}", default_models.get(self.provider_name, Config.get_default_model("openai")))
-        # Guardrail: when using API providers, a stale local GGUF model value can be passed
-        # (e.g. "Veyllo/VQ-1_Instruct-q4_k_m"), which causes provider errors and long retry loops.
-        # In that case, force provider-specific model from config/default.
-        elif self.provider_name != "local":
-            model_s = str(model).strip().lower()
-            looks_like_local_model = (
-                model_s.endswith(".gguf")
-                or "vq-1" in model_s
-                or "instruct-q" in model_s
-                or model_s.startswith("veyllo/")
-            )
-            if looks_like_local_model:
-                model = self.config.get(
-                    f"api_model_{self.provider_name}",
-                    default_models.get(self.provider_name, Config.get_default_model("openai")),
-                )
+            model = live_config.get(f"api_model_{self.provider_name}", default_models.get(self.provider_name, Config.get_default_model("openai")))
 
         # DeepSeek Auto mode: flash for main chat, pro model for tools/workflows/compaction.
         # Also resolves when VAF_TOOL_MODEL is set to "deepseek-auto" (e.g. subagent_model config).
@@ -1786,9 +1773,11 @@ class APIBackendManager:
             # Targets come from the model catalog's alias table.
             from vaf.core.model_catalog import alias_target
             if _pro_context:
-                # Use explicit subagent_model if configured, but never "deepseek-auto" (would recurse)
-                _sa = self.config.get("subagent_model", "").strip()
-                model = (_sa if _sa and _sa.lower() != "deepseek-auto" else None) or alias_target(
+                # The tool / workflow model when it is a DeepSeek model, else the pro target.
+                # Named boundary: which calls count as a pro context (VAF_BACKGROUND_PRO is
+                # process-global, so a thinking run moves the main chat too) is decided above
+                # and is not this check's to change.
+                model = subagent_model_for("deepseek", self.config) or alias_target(
                     "deepseek", "deepseek-auto", pro=True)
             else:
                 model = alias_target("deepseek", "deepseek-auto", pro=False)

@@ -41,6 +41,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- A model left over from another provider is no longer sent. After switching the main
+  provider, the tool and workflow model could still name the old provider's model, and every
+  workflow, background step and thinking run failed with an error from the new provider.
+  VAF now ignores such a value (also for the browser, vision, voice and failover models),
+  uses the provider's own model and prints one warning; Settings > AI & Model > Sub-Agents
+  marks the ignored value. Changing the sub-agent or failover backup provider now resets its
+  model, as the other provider pickers already did, and "Same as main chat" now really
+  clears a saved tool and workflow model.
 - Two people opening a personal browser at the same moment can no longer both pass a pool
   check that only one of them fits through, and when Docker does not list the running
   personal browsers the pool starts no new one instead of counting them as none.

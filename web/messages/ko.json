@@ -1594,6 +1594,8 @@
       "sameAsMain": "주 모델과 같게",
       "toolWorkflowModel": "도구와 워크플로 모델",
       "sameAsMainChat": "메인 대화와 같게",
+      "toolModelIgnored": "{model}은(는) {provider} 모델이 아니라서 무시돼요. 도구와 워크플로 단계는 “메인 대화와 같게”를 고른 것처럼 실행돼요.",
+      "toolModelIgnoredOption": "{model} (무시됨)",
       "subAgentTimeout": "하위 에이전트 제한 시간",
       "subAgentTimeoutDesc": "하위 에이전트 호출의 최대 실행 시간이에요.",
       "timeoutMinutes": "제한 시간(분)",

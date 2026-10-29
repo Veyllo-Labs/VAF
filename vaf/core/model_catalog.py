@@ -429,3 +429,77 @@ def all_model_ids() -> List[str]:
         ids.extend(prov.aliases)
         ids.extend(prov.migrations)
     return ids
+
+
+# ── Which provider a model id belongs to ─────────────────────────────────────
+#
+# Derived from the table above, so a model added there is owned at once. An id
+# the catalog lists belongs to its provider. An id it does not list belongs to the
+# provider whose listed ids share its FAMILY, the leading name before the first
+# "-" or "." ("gpt" in gpt-5.6-terra, "o3", "claude", "deepseek", "gemini",
+# "veyllo"), so a release newer than this table (gpt-7, deepseek-v5) is still
+# recognised. A family two providers share is nobody's. "vendor/model" ids are
+# never resolved by family: the vendor names the maker, not the provider serving
+# the call (OpenRouter serves anthropic/..., a local vLLM serves Qwen/...).
+
+_FAMILY = re.compile(r"^([a-z]+\d*)(?:[-.]|$)")
+
+
+def _bare_id(model_id: str) -> str:
+    """Lowercased, trimmed, without Google's ``models/`` resource prefix."""
+    name = str(model_id or "").strip().lower()
+    return name[len("models/"):] if name.startswith("models/") else name
+
+
+def _owner_tables() -> Tuple[Dict[str, str], Dict[str, str]]:
+    exact: Dict[str, str] = {}
+    families: Dict[str, set] = {}
+    for prov in CATALOG.values():
+        for mid in [e.id for e in prov.models] + list(prov.aliases) + list(prov.migrations):
+            name = mid.lower()
+            exact[name] = prov.name
+            m = _FAMILY.match(name)
+            if m and "/" not in name:
+                families.setdefault(m.group(1), set()).add(prov.name)
+    return exact, {fam: next(iter(p)) for fam, p in families.items() if len(p) == 1}
+
+
+_OWNER_EXACT, _OWNER_FAMILY = _owner_tables()
+
+# Providers whose every id is "vendor/model" (OpenRouter): they serve no bare id,
+# and nobody else serves a slashed one.
+_VENDOR_SLASH = frozenset(
+    p.name for p in CATALOG.values() if p.models and all("/" in e.id for e in p.models)
+)
+
+
+def model_owner(model_id: str) -> Optional[str]:
+    """The provider a model id belongs to by this catalog, or ``None`` when it
+    cannot tell (an id of no listed family, a ``vendor/model`` id it does not
+    list, a local model name). A snapshot date and ``models/`` are ignored."""
+    name = _bare_id(model_id)
+    if not name:
+        return None
+    for cand in (name, _SNAPSHOT_SUFFIX.sub("", name)):
+        if cand in _OWNER_EXACT:
+            return _OWNER_EXACT[cand]
+    if "/" in name:
+        return None
+    m = _FAMILY.match(name)
+    return _OWNER_FAMILY.get(m.group(1)) if m else None
+
+
+def catalog_fit(provider: str, model_id: str) -> Optional[bool]:
+    """Whether the catalog says ``model_id`` is one of ``provider``'s models:
+    ``True``/``False`` when it knows, ``None`` when it does not (a provider it
+    has no table for, or an id no provider claims and whose shape fits)."""
+    prov = provider_catalog(provider)
+    name = _bare_id(model_id)
+    if prov is None or not name:
+        return None
+    owner = model_owner(name)
+    if owner is not None:
+        return owner == prov.name
+    if (prov.name in _VENDOR_SLASH) != ("/" in name):
+        return False
+    return None

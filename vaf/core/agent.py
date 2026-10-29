@@ -1468,7 +1468,8 @@ class Agent:
                 api_model = self.config.get(f"api_model_{new_provider}")
                 if not api_model:
                     api_model = Config.get_default_model(new_provider) or new_provider
-                _tool_model_env = os.environ.get("VAF_TOOL_MODEL", "").strip()
+                from vaf.core.config import tool_model_for
+                _tool_model_env = tool_model_for(new_provider)
                 if _tool_model_env:
                     api_model = _tool_model_env
                 self.model_display_name = api_model
@@ -1742,8 +1743,10 @@ class Agent:
             if not api_model:
                 # Single source: Config.PROVIDER_MODELS (vaf/core/config.py)
                 api_model = Config.get_default_model(self.provider) or self.provider
-            # Hybrid mode: use VAF_TOOL_MODEL when set (e.g. pro model for sub-agents in workflows)
-            _tool_model_env = os.environ.get("VAF_TOOL_MODEL", "").strip()
+            # Hybrid mode: use VAF_TOOL_MODEL when set (e.g. pro model for sub-agents in
+            # workflows) and one of this provider's models.
+            from vaf.core.config import tool_model_for
+            _tool_model_env = tool_model_for(self.provider)
             if _tool_model_env:
                 api_model = _tool_model_env
             self.model_display_name = api_model

@@ -78,7 +78,7 @@ Each provider has default models, but you can customize:
 }
 ```
 
-**Guardrail for mixed local/API setups:** If an API provider is active but a local GGUF-style model value is still present (for example `gemma-4-E2B-it-Q8_0.gguf` or `"auto"`), VAF automatically falls back to the provider-specific `api_model_<provider>` value. This prevents API requests from failing with provider-side "model not found" errors.
+**Guardrail for models of another provider:** A request never sends a model that is not one of the active provider's models. That covers a local value still present while an API provider is active (for example `gemma-4-E2B-it-Q8_0.gguf` or `"auto"`) and a model of another provider, such as a tool / workflow model (`subagent_model`) or a browser lane model left over after the main provider was switched from Veyllo to DeepSeek. VAF falls back to the provider-specific `api_model_<provider>` value instead of failing every call with a provider-side "model not found" error, and prints one warning per process for another provider's model. The decision is `provider_registry.model_fits_provider(provider, model)`, built on the model catalog; a custom id the catalog does not know stays usable for the provider whose `api_model_<provider>` holds it, or anywhere when no key holds it. See [PROVIDER_MODES.md](PROVIDER_MODES.md), row "All API".
 
 ### Single source of truth for provider models
 

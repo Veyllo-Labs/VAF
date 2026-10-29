@@ -652,16 +652,17 @@ def coder_api_providers() -> dict:
     }
 
 
-def _coder_deepseek_auto_model(in_workflow: bool, subagent_model: str) -> str:
+def _coder_deepseek_auto_model(in_workflow: bool, subagent_model: Optional[str]) -> str:
     """The concrete model behind ``deepseek-auto`` for a coder run (the API rejects
-    the alias itself). A workflow run takes an explicit ``subagent_model``, else
+    the alias itself). A workflow run takes the tool / workflow model
+    (``config.subagent_model_for("deepseek")``: a DeepSeek model or None), else
     the alias's pro target; any other run takes its fast target. The targets come
     from the model catalog; the condition is the coder's own and is narrower than
     the backend's (which also counts automations and compaction)."""
     from vaf.core.model_catalog import alias_target
 
     sa = str(subagent_model or "").strip()
-    if in_workflow and sa and sa.lower() != "deepseek-auto":
+    if in_workflow and sa:
         return sa
     return alias_target("deepseek", "deepseek-auto", pro=in_workflow)
 
@@ -3630,7 +3631,7 @@ Thumbs.db
         # ═══════════════════════════════════════════════════════════════════
         # CHECK IF RUNNING IN SEPARATE TERMINAL MODE
         # ═══════════════════════════════════════════════════════════════════
-        from vaf.core.config import Config, subagent_provider_override
+        from vaf.core.config import Config, subagent_model_for, subagent_provider_override
         from vaf.core.platform import Platform
         from vaf.cli.ui import UI
         
@@ -3827,7 +3828,7 @@ Thumbs.db
             if _provider == "deepseek" and str(_llm_model).lower() == "deepseek-auto":
                 _llm_model = _coder_deepseek_auto_model(
                     os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "").strip() in ("1", "true", "yes"),
-                    Config.get("subagent_model", "") or "",
+                    subagent_model_for("deepseek"),
                 )
             # Full URLs — base already ends with /v1 so just append the path segment
             _llm_chat_url = f"{_api_base}/chat/completions"

@@ -141,7 +141,88 @@ def test_coder_resolves_deepseek_auto_through_the_same_catalog_targets():
 
     assert _coder_deepseek_auto_model(False, "") == "deepseek-flash"
     assert _coder_deepseek_auto_model(True, "") == "deepseek-v4-pro"
-    assert _coder_deepseek_auto_model(True, "deepseek-auto") == "deepseek-v4-pro"
+    # The caller hands over config.subagent_model_for("deepseek"): None for the
+    # alias itself or a model of another provider.
+    assert _coder_deepseek_auto_model(True, None) == "deepseek-v4-pro"
     assert _coder_deepseek_auto_model(True, "deepseek-flash") == "deepseek-flash"
     # Outside a workflow the configured sub-agent model is not the coder's to take.
     assert _coder_deepseek_auto_model(False, "deepseek-v4-pro") == "deepseek-flash"
+
+
+# ── A model of another provider never reaches this one ────────────────────────
+
+_PRO_ENV = ("VAF_IN_WORKFLOW_TERMINAL", "VAF_IN_AUTOMATION", "VAF_COMPACTION_IN_PROGRESS",
+            "VAF_TOOL_MODEL", "VAF_BACKGROUND_PRO")
+
+
+@pytest.fixture
+def _quiet_notes(monkeypatch):
+    """A process that has reported nothing yet; what it would print is recorded."""
+    import vaf.core.provider_registry as pr
+    import vaf.cli.ui as ui_mod
+    monkeypatch.setattr(pr, "_foreign_noted", set())
+    events = []
+    monkeypatch.setattr(ui_mod.UI, "event", staticmethod(lambda *a, **kw: events.append(a)))
+    return events
+
+
+def test_the_pro_context_never_sends_a_tool_model_of_another_provider(monkeypatch, _quiet_notes):
+    """The incident: main provider switched from Veyllo to DeepSeek, the tool /
+    workflow model still `veyllo-chat`, a thinking run set VAF_BACKGROUND_PRO,
+    and DeepSeek answered 400 "you passed veyllo-chat" on every call.
+    MUTATION: read `self.config.get("subagent_model")` raw again in the
+    deepseek-auto block."""
+    for var in _PRO_ENV:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("VAF_BACKGROUND_PRO", "1")
+    m = _mgr("deepseek")
+    m.config = {"provider": "deepseek", "subagent_model": "veyllo-chat"}
+    assert _drive(m, "auto", model="deepseek-auto")["model"] == "deepseek-v4-pro"
+    # A DeepSeek tool model is still honoured.
+    m = _mgr("deepseek")
+    m.config = {"provider": "deepseek", "subagent_model": "deepseek-flash"}
+    assert _drive(m, "auto", model="deepseek-auto")["model"] == "deepseek-flash"
+
+
+def test_an_explicit_model_of_another_provider_falls_back_to_the_configured_one(monkeypatch, _quiet_notes):
+    """MUTATION: delete the fit check in `_chat_single`."""
+    from vaf.core.config import Config
+
+    for var in _PRO_ENV:
+        monkeypatch.delenv(var, raising=False)
+    live = {"api_model_openai": "gpt-5.6-luna"}
+    monkeypatch.setattr(Config, "load", classmethod(lambda cls: dict(live)))
+    assert _drive(_mgr("openai"), "auto", model="veyllo-chat")["model"] == "gpt-5.6-luna"
+    assert _drive(_mgr("openai"), "auto", model="veyllo-chat")["model"] == "gpt-5.6-luna"
+    assert len(_quiet_notes) == 1                        # said once, not per call
+    assert "veyllo-chat" in _quiet_notes[0][1]
+    # Nothing configured: the catalog default.
+    live.clear()
+    assert _drive(_mgr("openai"), "auto", model="veyllo-chat")["model"] == \
+        Config.PROVIDER_MODELS["openai"]["default"]
+    # A fitting explicit model passes as it was.
+    assert _drive(_mgr("openai"), "auto", model="gpt-5.6-sol")["model"] == "gpt-5.6-sol"
+
+
+def test_local_names_fall_back_silently_as_before(monkeypatch, _quiet_notes):
+    from vaf.core.config import Config
+
+    for var in _PRO_ENV:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(Config, "load", classmethod(lambda cls: {"api_model_openai": "gpt-5.6-luna"}))
+    for local in ("Veyllo/VQ-1_Instruct-q4_k_m", "auto", "Qwen3.5-4B-UD-Q8_K_XL.gguf"):
+        assert _drive(_mgr("openai"), "auto", model=local)["model"] == "gpt-5.6-luna", local
+    assert _quiet_notes == []
+
+
+def test_an_embedded_manager_falls_back_to_its_own_config(monkeypatch, _quiet_notes):
+    """Embedded: the programmatic config, never the machine's file."""
+    from vaf.core.config import Config
+
+    for var in _PRO_ENV:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(Config, "load", classmethod(lambda cls: {"api_model_openai": "machine-model"}))
+    m = _mgr("openai")
+    m._embedded = True
+    m.config = {"api_model_openai": "gpt-5.6-terra"}
+    assert _drive(m, "auto", model="claude-sonnet-4-6")["model"] == "gpt-5.6-terra"

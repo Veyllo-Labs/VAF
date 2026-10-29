@@ -1594,6 +1594,8 @@
       "sameAsMain": "与主模型相同",
       "toolWorkflowModel": "工具 / 工作流模型",
       "sameAsMainChat": "与主对话相同",
+      "toolModelIgnored": "{model} 不是 {provider} 的模型，已被忽略：工具和工作流步骤会像选择了“与主对话相同”一样运行。",
+      "toolModelIgnoredOption": "{model}（已忽略）",
       "subAgentTimeout": "子智能体超时",
       "subAgentTimeoutDesc": "子智能体调用的最长运行时间。",
       "timeoutMinutes": "超时（分钟）",

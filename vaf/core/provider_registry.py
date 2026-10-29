@@ -23,8 +23,13 @@ Adding a provider: add the ProviderSpec here AND its ProviderCatalog in
 vaf/core/model_catalog.py (models, prices, default; Config.PROVIDER_MODELS is
 derived from it), then follow the checklist the sync test enforces
 (coder endpoint reachable, web UI lists, PROVIDER_MODES.md catalog row).
+Which model ids belong to it follows from its catalog entries
+(model_fits_provider): its ids must not start with another provider's family
+name, and tests/test_model_fits_provider.py checks that every listed id fits
+its own provider and no other.
 """
 import re
+import threading
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -311,6 +316,128 @@ def model_supports_vision(provider: str, model: str, probe_local: bool = True) -
             pass
         return True
     return True  # unknown: let the model decide
+
+
+def is_local_model_id(model: str) -> bool:
+    """Whether a model id names a LOCAL model: the local default ``auto``, a GGUF
+    file or repo (``gguf`` anywhere, so ``unsloth/Qwen3.5-4B-GGUF`` too), or the
+    VQ-1 family (``Veyllo/VQ-1_Instruct-q4_k_m``). No API provider serves one."""
+    m = str(model or "").strip().lower()
+    return (m == "auto" or "gguf" in m or "vq-1" in m or "instruct-q" in m
+            or m.startswith("veyllo/"))
+
+
+def _api_model_holders(model: str, config) -> List[str]:
+    """The API providers whose ``api_model_<provider>`` in ``config`` is ``model``."""
+    if not config:
+        return []
+    want = str(model or "").strip().lower()
+    out = []
+    for name in api_provider_names():
+        try:
+            held = str(config.get(f"api_model_{name}") or "").strip().lower()
+        except Exception:
+            held = ""
+        if held and held == want:
+            out.append(name)
+    return out
+
+
+def model_fits_provider(provider: str, model: str, config: Optional[dict] = None) -> bool:
+    """Whether ``model`` is one of ``provider``'s models, so it may be sent to it.
+
+    A model id saved for one provider and read on another (a lane model left
+    over after the main provider was switched) used to be sent as it was, and
+    the provider answered 400 on every call. This is the one place that decides
+    it; ``APIBackendManager`` asks it for every explicit model on every API call.
+
+    Decided in this order:
+
+    1. blank: no.
+    2. ``local``: a local model name (``is_local_model_id``), or any id the model
+       catalog does not give to an API provider (a vLLM Hugging Face repo id).
+    3. a provider without a registry entry: yes, it decides itself.
+    4. a local model name: no.
+    5. the catalog knows: an id it lists, or of a family it lists
+       (``model_catalog.model_owner``), belongs to that provider; a bare id is
+       never OpenRouter's and a ``vendor/model`` id never anyone else's.
+    6. an id the catalog cannot place belongs to whichever ``api_model_<p>`` in
+       ``config`` holds it: a custom id set for one provider (a gateway behind
+       ``veyllo_base_url``) does not fit another. Held by none: yes. An id
+       nobody can place is the choice of whoever set it, and the provider's own
+       answer is the only authority on it.
+
+    ``config`` is anything with a ``get(key, default)``: a config dict, or the
+    ``Config`` class for the installation's.
+
+    Named boundary: not on the ``vaf`` facade. The guarantee is enforced inside
+    ``APIBackendManager``, so an embedder calls nothing; a settings screen that
+    wants to mark a stored value asks this function (one caller outside the
+    core today, the web settings route ``GET /api/config/model-fit``).
+    """
+    m = str(model or "").strip()
+    if not m:
+        return False
+    p = str(provider or "").strip().lower()
+    from vaf.core.model_catalog import catalog_fit, model_owner
+
+    if p == "local":
+        return is_local_model_id(m) or (
+            model_owner(m) is None and not _api_model_holders(m, config))
+    if p not in PROVIDER_SPECS:
+        return True
+    if is_local_model_id(m):
+        return False
+    verdict = catalog_fit(p, m)
+    if verdict is not None:
+        return verdict
+    held = _api_model_holders(m, config)
+    return not held or p in held
+
+
+# (source, provider, model) already reported by this process.
+_foreign_noted: set = set()
+_foreign_lock = threading.Lock()
+
+# Where a person changes the value a source names, for the warning line.
+_FOREIGN_FIX = {
+    "subagent_model": "Change it in Settings > AI & Model > Sub-Agents > Tool / Workflow model.",
+}
+
+
+def note_foreign_model(provider: str, model: str, source: str) -> bool:
+    """Report once per process that ``model`` (read from ``source``) is not a
+    ``provider`` model and is ignored. Returns True on the first sighting only.
+
+    One terminal line and one backend log line: the value is dropped on every
+    call, and a line per call would bury the terminal the way the 400s did."""
+    key = (str(source), str(provider or "").lower(), str(model or ""))
+    with _foreign_lock:
+        if key in _foreign_noted:
+            return False
+        _foreign_noted.add(key)
+    spec = get_spec(provider)
+    from vaf.core.model_catalog import provider_catalog
+
+    cat = provider_catalog(provider)
+    label = cat.label if cat else (spec.label if spec else str(provider))
+    msg = (f"{source} '{model}' is not a {label} model and is ignored; "
+           f"{label}'s own model is used instead.")
+    if source in _FOREIGN_FIX:
+        msg += " " + _FOREIGN_FIX[source]
+    try:
+        from vaf.cli.ui import UI
+
+        UI.event("Backend", msg, style="warning")
+    except Exception:
+        pass
+    try:
+        from vaf.core.log_helper import append_domain_log
+
+        append_domain_log("backend", f"[FOREIGN_MODEL] {msg}")
+    except Exception:
+        pass
+    return True
 
 
 def default_vision_model(provider: str) -> Optional[str]:

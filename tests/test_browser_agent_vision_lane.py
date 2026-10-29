@@ -123,6 +123,37 @@ def test_bridge_uses_the_lane(monkeypatch):
     assert bridge.provider == "google" and bridge.model == "gemini-2.5-pro"
 
 
+def test_a_lane_model_of_another_provider_rides_the_main_providers_own_model(monkeypatch):
+    """`browser_agent_model` alone rides the MAIN provider; after a switch of the
+    main provider it names the old provider's model, which the new one refuses.
+    MUTATION: delete the lane-model fit check in `_build_vaf_bridge`."""
+    import vaf.core.provider_registry as pr
+    import vaf.cli.ui as ui_mod
+    monkeypatch.setattr(pr, "_foreign_noted", set())
+    events = []
+    monkeypatch.setattr(ui_mod.UI, "event", staticmethod(lambda *a, **kw: events.append(a)))
+    monkeypatch.setattr(ba, "_resolve_browser_lane", lambda: ("", "gpt-5.6-terra"))
+    from vaf.core.config import Config
+    monkeypatch.setattr(Config, "load", classmethod(
+        lambda cls: {"provider": "deepseek", "api_model_deepseek": "deepseek-v4-pro", "model": "auto"}))
+    bridge = ba._build_vaf_bridge()
+    # The provider's configured model, not merely its catalog default.
+    assert bridge.provider == "deepseek" and bridge.model == "deepseek-v4-pro"
+    assert len(events) == 1 and "browser_agent_model" in events[0][1]
+    # A lane model of the main provider is still the lane's.
+    monkeypatch.setattr(ba, "_resolve_browser_lane", lambda: ("", "deepseek-flash"))
+    assert ba._build_vaf_bridge().model == "deepseek-flash"
+
+
+def test_the_bridge_never_hands_an_api_provider_a_local_name(monkeypatch):
+    """The `model` fallback is the LOCAL key ("auto" by default), which the old
+    hand copy of the guard let through."""
+    monkeypatch.setattr(ba, "_resolve_browser_lane", lambda: ("", None))
+    from vaf.core.config import Config
+    monkeypatch.setattr(Config, "load", classmethod(lambda cls: {"provider": "openai", "model": "auto"}))
+    assert ba._build_vaf_bridge().model == Config.get_default_model("openai")
+
+
 def test_bridge_without_lane_keeps_the_main_provider(monkeypatch):
     monkeypatch.setattr(ba, "_resolve_browser_lane", lambda: ("", None))
     from vaf.core.config import Config

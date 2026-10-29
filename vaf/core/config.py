@@ -2026,7 +2026,7 @@ def scope_id_for_username(username: str) -> Optional[str]:
     return None
 
 
-def subagent_provider_override() -> Optional[str]:
+def subagent_provider_override(config: Optional[dict] = None) -> Optional[str]:
     """The provider a sub-agent must run on, or None when it inherits the main one.
 
     TWO KEYS, ONE DECISION, and that is the whole reason this exists.
@@ -2044,16 +2044,69 @@ def subagent_provider_override() -> Optional[str]:
     the NAME, reported success, and changed nothing for any of the six.
 
     Returns the override or None; never the string "inherit", which is a stored
-    sentinel and not a provider anyone can run on.
+    sentinel and not a provider anyone can run on. ``config`` reads that mapping
+    (a manager's snapshot, an embedder's dict) instead of the installation's.
     """
     try:
-        if not Config.get("subagent_use_separate_provider", False):
+        _get = config.get if config is not None else Config.get
+        if not _get("subagent_use_separate_provider", False):
             return None
-        name = str(Config.get("subagent_provider", "inherit") or "inherit").strip()
+        name = str(_get("subagent_provider", "inherit") or "inherit").strip()
         return name if name and name != "inherit" else None
     except Exception:
         # A sub-agent that cannot read the config inherits; it must not fail to spawn.
         return None
+
+
+def subagent_model_for(provider: Optional[str] = None,
+                       config: Optional[dict] = None) -> Optional[str]:
+    """The tool / workflow model (``subagent_model``) to use on ``provider``, or
+    None for "the provider's own model".
+
+    The ONLY reader of the key. Four places used to read it by hand, each with
+    its own ``!= "deepseek-auto"`` test and none asking which provider the call
+    goes to, so after a switch of the main provider a model of the OLD provider
+    was sent to the new one and every workflow step answered 400.
+
+    None when the value is empty; when it is ``deepseek-auto`` (the alias routes
+    through DeepSeek's own auto mode, which as a tool model means "same as main
+    chat"); and when it is not one of ``provider``'s models
+    (``provider_registry.model_fits_provider``). ``provider=None`` means the
+    sub-agent lane: ``subagent_provider_override()`` or the main ``provider``.
+    The ignored value is reported once per process, but only when it was
+    meant for ``provider``: with a separate sub-agent provider, the main
+    provider not taking the lane's model is the expected case.
+    """
+    from vaf.core.provider_registry import model_fits_provider, note_foreign_model
+
+    _get = config.get if config is not None else Config.get
+    try:
+        value = str(_get("subagent_model", "") or "").strip()
+        lane = subagent_provider_override(config) or str(_get("provider", "local") or "local")
+    except Exception:
+        return None
+    if not value or value.lower() == "deepseek-auto":
+        return None
+    target = str(provider or lane).strip().lower()
+    if model_fits_provider(target, value, config=config if config is not None else Config):
+        return value
+    if target == lane.strip().lower():
+        note_foreign_model(target, value, "subagent_model")
+    return None
+
+
+def tool_model_for(provider: str) -> Optional[str]:
+    """``VAF_TOOL_MODEL`` (the tool model a workflow run exports) when it is one
+    of ``provider``'s models, else None. Silent: the source value was already
+    reported by ``subagent_model_for``, and an in-process reader on the main
+    provider that does not take a separate sub-agent lane's model is the
+    expected case."""
+    from vaf.core.provider_registry import model_fits_provider
+
+    value = os.environ.get("VAF_TOOL_MODEL", "").strip()
+    if value and model_fits_provider(provider, value, config=Config):
+        return value
+    return None
 
 
 def set_subagent_provider(name: Optional[str]) -> None:

@@ -1638,7 +1638,7 @@
       "thinkerProviderDesc": "思考エンジンは手が空いているときにバックグラウンドで動き、やることを確認し、自動化を提案し、リマインドを出します。必要に応じて的を絞った質問もします。安いモデルにすれば、メインのチャットに影響を与えずに費用を抑えられます。",
       "thinkerModel": "思考エンジンのモデル（任意）",
       "thinkerModelDesc": "空欄にすると、そのプロバイダーのデフォルトのモデルを使います。",
-      "thinkerModelPlaceholder": "例: deepseek-chat、またはモデルID",
+      "thinkerModelPlaceholder": "例: deepseek-flash、またはモデルID",
       "channelTools": "メッセージのチャンネルでも同じツールを使う",
       "channelToolsDesc": "Telegram、WhatsApp、Discordのエージェントに、メインエージェントと同じツールを、呼び出しごとの確認なしで使わせます。デフォルトはオンで、チャンネルの許可リストとユーザーごとの管理者権限で守られます。チャンネル以外のツールに限定したい場合はオフにしてください。",
       "system": "システム",

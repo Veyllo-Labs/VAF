@@ -30,6 +30,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   fixed two would have served, at most 16. A fixed number still works as before, and a stored `2` becomes `"auto"`
   once. Update and Repair and `vaf repair --check` show how many run and how many more fit,
   and a strict refusal now says whether the count or the memory was the limit.
+- **API models and prices refreshed (as of 2026-10-29).** One catalog now feeds the model
+  lists in Settings and the usage cost estimate, so every model you can pick has a price.
+  The OpenAI default moves from `gpt-4o` (shut down by OpenAI on 14 January 2027) to
+  `gpt-5.6-terra`, the DeepSeek default to `deepseek-flash`; saved models that a provider
+  has retired are switched to their successor on start, and `gpt-4o` keeps working until
+  its shutdown day. The estimate now uses each model's own cache discount and the higher
+  price for very long prompts, and prices OpenRouter's Claude models instead of treating
+  them as unknown. `vaf usage show` prints the date the prices were checked.
 
 ### Fixed
 

@@ -533,7 +533,7 @@ def run(self, **kwargs) -> str:
 ### What `query_llm()` does internally
 
 1. **Provider detection** - reads the active provider (`openai`, `anthropic`, `google`, `local`, …).
-2. **Model resolution** - selects the correct model ID for that provider (e.g. `gpt-4o` vs `claude-sonnet-4-6`).
+2. **Model resolution** - selects the correct model ID for that provider (e.g. `gpt-5.6-terra` vs `claude-sonnet-4-6`).
 3. **API backend** - if `use_api_backend=True`, streams the response and returns the full text.
 4. **Self-healing** - on HTTP 400/404, retries with a fallback model automatically.
 5. **Local server fallback** - if no API key is configured, hits the local OpenAI-compatible endpoint.

@@ -3,7 +3,7 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """APIBackendManager.chat_completion tool_choice gating tests.
 
-Pins the UNIVERSAL DeepSeek tool_choice downgrade: DeepSeek (deepseek-v4-flash and
+Pins the UNIVERSAL DeepSeek tool_choice downgrade: DeepSeek (deepseek-flash and
 deepseek-v4-pro, both internally reasoning models) reject tool_choice="required" and
 specific function-forcing dicts with HTTP 400; the manager downgrades any forcing form
 to "auto" before calling the provider, while leaving "auto"/"none" and non-DeepSeek
@@ -42,7 +42,7 @@ def _mgr(provider_name="deepseek"):
 _TOOLS = [{"type": "function", "function": {"name": "t", "parameters": {}}}]
 
 
-def _drive(m, tool_choice, model="deepseek-v4-flash", tools=_TOOLS):
+def _drive(m, tool_choice, model="deepseek-flash", tools=_TOOLS):
     list(m.chat_completion([{"role": "user", "content": "hi"}],
                            model=model, tools=tools, tool_choice=tool_choice))
     return m.provider.received
@@ -113,4 +113,35 @@ def test_deepseek_auto_resolves_to_flash_without_pro_context(monkeypatch):
         monkeypatch.delenv(var, raising=False)
     m = _mgr("deepseek")
     received = _drive(m, "auto", model="deepseek-auto")
-    assert received["model"] == "deepseek-v4-flash"
+    assert received["model"] == "deepseek-flash"
+
+
+def test_deepseek_auto_in_an_automation_resolves_to_the_catalog_pro_target(monkeypatch):
+    """The alias targets come from the model catalog. MUTATION: put a
+    "deepseek-v4-flash" literal back into either branch of the backend and the
+    flash case above or this one goes red."""
+    from vaf.core.model_catalog import alias_target
+
+    for var in ("VAF_IN_WORKFLOW_TERMINAL", "VAF_COMPACTION_IN_PROGRESS",
+                "VAF_TOOL_MODEL", "VAF_BACKGROUND_PRO"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("VAF_IN_AUTOMATION", "1")
+    received = _drive(_mgr("deepseek"), "auto", model="deepseek-auto")
+    assert received["model"] == alias_target("deepseek", "deepseek-auto", pro=True) == "deepseek-v4-pro"
+    monkeypatch.delenv("VAF_IN_AUTOMATION")
+    received = _drive(_mgr("deepseek"), "auto", model="deepseek-auto")
+    assert received["model"] == alias_target("deepseek", "deepseek-auto", pro=False) == "deepseek-flash"
+
+
+def test_coder_resolves_deepseek_auto_through_the_same_catalog_targets():
+    """The coder keeps its own, narrower condition (a workflow run only), but the
+    targets are the catalog's. MUTATION: restore the "deepseek-v4-flash" literal
+    in coder.py's resolver."""
+    from vaf.tools.coder import _coder_deepseek_auto_model
+
+    assert _coder_deepseek_auto_model(False, "") == "deepseek-flash"
+    assert _coder_deepseek_auto_model(True, "") == "deepseek-v4-pro"
+    assert _coder_deepseek_auto_model(True, "deepseek-auto") == "deepseek-v4-pro"
+    assert _coder_deepseek_auto_model(True, "deepseek-flash") == "deepseek-flash"
+    # Outside a workflow the configured sub-agent model is not the coder's to take.
+    assert _coder_deepseek_auto_model(False, "deepseek-v4-pro") == "deepseek-flash"

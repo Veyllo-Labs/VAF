@@ -1638,7 +1638,7 @@
       "thinkerProviderDesc": "생각 엔진은 손이 빌 때 백그라운드에서 돌아요. 할 일을 살피고, 자동화를 제안하고, 알림을 주고, 필요하면 콕 집어 물어봐요. 더 싼 모델을 쓰면 메인 대화에 영향을 주지 않고 비용을 줄일 수 있어요.",
       "thinkerModel": "생각 엔진 모델(선택 사항)",
       "thinkerModelDesc": "비워 두면 그 공급자의 기본 모델을 써요.",
-      "thinkerModelPlaceholder": "예: deepseek-chat 또는 모델 ID",
+      "thinkerModelPlaceholder": "예: deepseek-flash 또는 모델 ID",
       "channelTools": "메시지 채널에서도 같은 도구 쓰기",
       "channelToolsDesc": "Telegram, WhatsApp, Discord의 에이전트가 메인 에이전트와 같은 도구를 호출마다 확인받지 않고 쓰게 해요. 기본은 켜짐이고, 채널 허용 목록과 사용자별 관리자 권한으로 보호돼요. 채널 밖 도구로만 제한하려면 꺼 주세요.",
       "system": "시스템",

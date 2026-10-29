@@ -15343,14 +15343,23 @@ class Agent:
                         # No vision fallback configured or it failed: inform user.
                         names = [img.get("name", "image") for img in imgs]
                         img_list = ", ".join(f"`{n}`" for n in names)
-                        _vision_models = {
-                            "deepseek": "a different provider — DeepSeek's API does not support image input. Switch to Anthropic (`claude-sonnet-4-6`) or OpenAI (`gpt-4o`), or configure a Vision Model in Settings → AI & Model.",
-                            "openai":   "`gpt-4o` or `gpt-4-turbo`",
-                            "anthropic": "`claude-sonnet-4-6` or newer",
-                            "google":   "`gemini-2.5-flash` or `gemini-2.5-pro`",
-                            "openrouter": "a vision model such as `openai/gpt-4o`",
-                        }
-                        _vision_hint = _vision_models.get(_provider, "a vision-capable model, or configure a Vision Model in Settings → AI & Model")
+                        # Named from the model catalog, so the hint never offers a retired model.
+                        from vaf.core.model_catalog import offered_vision_models as _ovm
+
+                        def _ids(_p):
+                            _m = [f"`{_i}`" for _i in _ovm(_p)]
+                            return ", ".join(_m[:-1]) + " or " + _m[-1] if len(_m) > 1 else "".join(_m)
+
+                        if _provider == "deepseek":
+                            _vision_hint = (
+                                "a different provider: VAF sends no images to DeepSeek. Switch to "
+                                f"Anthropic ({_ids('anthropic')}) or OpenAI ({_ids('openai')}), "
+                                "or configure a Vision Model in Settings → AI & Model."
+                            )
+                        elif _ovm(_provider):
+                            _vision_hint = _ids(_provider)
+                        else:
+                            _vision_hint = "a vision-capable model, or configure a Vision Model in Settings → AI & Model"
                         system_note = (
                             f"[SYSTEM NOTE: The user attached {len(imgs)} image(s) ({img_list}) "
                             f"but the current model ({_model or _provider}) does not support vision. "

@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
 
+from vaf.core import model_catalog as _model_catalog
 from vaf.core.channels import CHAT_CHANNELS as _CHAT_CHANNELS
 
 # Single source of truth for legacy local-admin scope (before bootstrap sets real admin UUID)
@@ -31,42 +32,25 @@ NETWORK_ADMISSION_KEYS = (
 )
 
 
-# ── Single source of truth for per-provider API models ────────────────────────
+# ── Per-provider API models: derived from vaf/core/model_catalog.py ──────────
 # `default` = used when the user hasn't picked a model; `fallback` = the static
 # dropdown list shown when no live model fetch has happened (no key / offline /
 # rate-limited). The live list (provider /v1/models) still takes precedence in the
-# UI. Change a model HERE ONCE — every Python call site and the web UI read this
-# (UI via GET /api/provider-models). `local` is intentionally absent (GGUF models
-# are discovered from disk, not a fixed list).
-PROVIDER_MODELS: dict[str, dict] = {
-    "openai": {
-        "default": "gpt-4o",
-        "fallback": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
-    },
-    "anthropic": {
-        "default": "claude-sonnet-4-6",
-        "fallback": ["claude-sonnet-4-6", "claude-opus-4-8", "claude-haiku-4-5"],
-    },
-    "deepseek": {
-        "default": "deepseek-v4-flash",
-        "fallback": ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-auto"],
-    },
-    "google": {
-        "default": "gemini-2.5-flash",
-        "fallback": ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"],
-    },
-    "openrouter": {
-        # OpenRouter uses DOTTED ids (claude-sonnet-4.6), unlike Anthropic's dashed ids.
-        "default": "anthropic/claude-sonnet-4.6",
-        "fallback": ["anthropic/claude-sonnet-4.6", "openai/gpt-4o", "google/gemini-2.5-flash"],
-    },
-    # First-party Veyllo API (OpenAI-compatible). `veyllo-chat` is multimodal — it handles both
-    # text chat and image input, so the same provider/model serves chat and vision.
-    "veyllo": {
-        "default": "veyllo-chat",
-        "fallback": ["veyllo-chat"],
-    },
-}
+# UI. The catalog is the one place a model or a price changes: this view, the
+# web UI (GET /api/provider-models) and the spend estimate (cost.py) all read it.
+# `local` is intentionally absent (GGUF models are discovered from disk).
+PROVIDER_MODELS: dict[str, dict] = _model_catalog.provider_models()
+
+# Config keys that hold an API model id. A saved id the provider has retired is
+# moved to its successor on load (model_catalog.migration_target).
+MODEL_ID_KEYS = tuple(f"api_model_{_p}" for _p in _model_catalog.CATALOG) + (
+    "subagent_model",
+    "thinking_model",
+    "vision_model",
+    "browser_agent_model",
+    "voice_agent_model",
+    "failover_backup_model",
+)
 
 
 class Config:
@@ -144,7 +128,7 @@ class Config:
         "api_model_veyllo": PROVIDER_MODELS["veyllo"]["default"],
         "api_model_openai": PROVIDER_MODELS["openai"]["default"],
         "api_model_anthropic": PROVIDER_MODELS["anthropic"]["default"],
-        "api_model_deepseek": PROVIDER_MODELS["deepseek"]["default"],  # deepseek-chat deprecated 2026-07-24
+        "api_model_deepseek": PROVIDER_MODELS["deepseek"]["default"],
         "api_model_google": PROVIDER_MODELS["google"]["default"],
         "api_model_openrouter": PROVIDER_MODELS["openrouter"]["default"],
 
@@ -154,7 +138,7 @@ class Config:
         "vision_provider": "",   # "veyllo"/"google"/"openai"/"anthropic"/"openrouter", or "local":
                                  # the llama server is launched with the model's mmproj projector
                                  # (backend.resolve_mmproj_for) and sees images itself.
-        "vision_model": "",      # e.g. "gemini-2.5-flash", "gpt-4o" — leave empty for provider default
+        "vision_model": "",      # e.g. "gemini-2.5-flash", "gpt-5.6-terra"; empty = provider default
         # Local vision projector ref "owner/repo/file.gguf"; empty = derived from the
         # model's known repo (mmproj-F16.gguf). Admin-only: it is a server LAUNCH argument.
         "vision_local_mmproj": "",
@@ -993,29 +977,11 @@ class Config:
             for key in ("speech_tts_docker_url", "speech_tts_docker_url_de", "speech_tts_docker_url_en", "speech_tts_docker_url_fr", "speech_stt_docker_url"):
                 if key in cls.DEFAULTS and not (result.get(key) or "").strip():
                     result[key] = cls.DEFAULTS[key]
-            # Migrate deprecated DeepSeek model names to current equivalents.
-            # Old names (deepseek-chat, deepseek-coder, deepseek-reasoner) were valid
-            # before 2025 but are now replaced by deepseek-v4-flash / deepseek-v4-pro.
-            # deepseek-reasoner also causes 400 errors because it doesn't support tool_choice.
-            _DS_MIGRATIONS = {
-                "deepseek-chat":     "deepseek-v4-flash",
-                "deepseek-coder":    "deepseek-v4-flash",
-                "deepseek-reasoner": "deepseek-v4-flash",
-                "deepseek-r1":       "deepseek-v4-flash",
-            }
-            _ds_saved = result.get("api_model_deepseek", "")
-            if _ds_saved in _DS_MIGRATIONS:
-                result["api_model_deepseek"] = _DS_MIGRATIONS[_ds_saved]
-                # Persist the fix so the stale value never comes back
-                try:
-                    import json as _json
-                    with open(cls.CONFIG_FILE, "r") as _f:
-                        _raw = _json.load(_f)
-                    if _raw.get("api_model_deepseek") == _ds_saved:
-                        _raw["api_model_deepseek"] = _DS_MIGRATIONS[_ds_saved]
-                        cls._write_config_file(_raw)
-                except Exception:
-                    pass
+            # Saved model ids the provider has retired move to their successor
+            # (vaf/core/model_catalog.py): a retired name answers 404 or is served
+            # by another model, and the user never sees why. Exact ids only, and a
+            # deprecated model moves on its shutdown day, not before.
+            cls._migrate_retired_models(result)
             # Hard lock for hosting mode (server appliance deployments):
             # when enabled, Local Network Hosting cannot be disabled via UI/API saves.
             if bool(result.get("local_network_force_enabled", False)):
@@ -1033,6 +999,40 @@ class Config:
             return result
         except Exception:
             return cls.DEFAULTS.copy()
+
+    @classmethod
+    def _migrate_retired_models(cls, result: dict) -> None:
+        """Rewrite retired model ids in ``result`` and, where the raw file still
+        holds the old value, on disk, so the stale id never comes back."""
+        moved = {}
+        for key in MODEL_ID_KEYS:
+            saved = result.get(key)
+            if not isinstance(saved, str):
+                continue
+            target = _model_catalog.migration_target(saved)
+            if target and target != saved:
+                result[key] = target
+                moved[key] = (saved, target)
+        if not moved:
+            return
+        try:
+            with open(cls.CONFIG_FILE, "r") as _f:
+                _raw = json.load(_f)
+            changed = False
+            for key, (old, new) in moved.items():
+                if _raw.get(key) == old:
+                    _raw[key] = new
+                    changed = True
+            if changed:
+                cls._write_config_file(_raw)
+        except Exception:
+            pass
+        try:
+            from vaf.core.log_helper import append_domain_log
+            for key, (old, new) in moved.items():
+                append_domain_log("backend", f"[MODEL_MIGRATION] {key}: {old} -> {new} (retired by the provider)")
+        except Exception:
+            pass
 
     # Keys that should never be overwritten when saving from frontend
     # These are auto-generated secrets that would break auth if lost

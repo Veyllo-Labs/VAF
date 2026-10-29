@@ -1638,7 +1638,7 @@
       "thinkerProviderDesc": "Der Thinker läuft im Hintergrund, wenn du inaktiv bist: prüft Todos, Automations-Vorschläge, Erinnerungen und kann dich gezielt fragen. Ein günstigeres Modell spart Kosten, ohne den Haupt-Chat zu beeinflussen.",
       "thinkerModel": "Thinker-Modell (optional)",
       "thinkerModelDesc": "Leer = Standard des gewählten Providers.",
-      "thinkerModelPlaceholder": "z. B. deepseek-chat oder Modell-ID",
+      "thinkerModelPlaceholder": "z. B. deepseek-flash oder Modell-ID",
       "channelTools": "Gleiche Tools in Messaging-Kanälen",
       "channelToolsDesc": "Erlaubt dem Telegram-, WhatsApp- und Discord-Agenten dieselben Tools wie dem Haupt-Agenten, ohne Pro-Aufruf-Bestätigung. Standardmäßig an; geschützt durch deine Kanal-Whitelist und die Admin-Rechte pro Nutzer. Zum Einschränken auf Nicht-Kanal-Tools ausschalten.",
       "system": "System",

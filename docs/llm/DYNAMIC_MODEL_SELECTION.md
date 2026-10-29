@@ -36,7 +36,7 @@ Enter GOOGLE API key: [your key]
 Select GOOGLE model (12 available):
   > gemini-2.5-pro
     gemini-2.5-flash
-    gemini-3.5-flash
+    gemini-3.8-flash
     gemini-2.5-flash-lite
     gemini-3-flash-preview
     gemini-2.5-flash-lite
@@ -71,7 +71,7 @@ Models are fetched **directly from the API** when you configure a provider:
 ```python
 # Example: OpenAI
 GET https://api.openai.com/v1/models
-→ Returns: gpt-4o, gpt-4o-mini, gpt-4-turbo, ...
+→ Returns: gpt-5.6-terra, gpt-5.6-luna, gpt-6-luna, ...
 
 # Example: Google
 GET https://generativelanguage.googleapis.com/v1beta/models?key=...
@@ -85,8 +85,8 @@ New model released? Just enter the ID:
 Select Model:
   > Enter custom model ID
 
-Enter custom model ID: gpt-4o-2025-01-15
-✓ Model set to: gpt-4o-2025-01-15
+Enter custom model ID: gpt-6-luna
+✓ Model set to: gpt-6-luna
 ```
 
 ### Current Model Indicator
@@ -96,19 +96,17 @@ Your current model is marked:
 Select Model:
   ✓ gemini-2.5-pro (current)
     gemini-2.5-flash
-    gemini-3.5-flash
+    gemini-3.8-flash
     ...
 ```
 
 ### Fallback to Static Lists
 
-If API fetch fails (network issue, rate limit), VAF falls back to a curated static list:
-
-```python
-# Fallback lists (automatically used if dynamic fetch fails)
-"openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", ...]
-"google": ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"]
-```
+If API fetch fails (network issue, rate limit), VAF falls back to the static list of
+the model catalog, `vaf/core/model_catalog.py`: each provider's offered models, the
+default first (served as `Config.PROVIDER_MODELS` and `GET /api/provider-models`). It
+holds current models only; a model its provider has deprecated is not offered, and a
+saved config naming one moves to the catalog's successor on the shutdown day.
 
 ## Implementation Details
 
@@ -166,12 +164,12 @@ vaf run → Settings → AI Provider → OpenAI
 Enter API key: sk-proj...
 
 # Models fetched dynamically:
-- gpt-4o (latest)
-- gpt-4o-mini
-- gpt-4-turbo-2024-04-09
-- gpt-4-turbo-preview
-- gpt-3.5-turbo
-- gpt-3.5-turbo-16k
+- gpt-6-luna
+- gpt-6-sol
+- gpt-5.6-terra
+- gpt-5.6-luna
+- gpt-5.6-sol
+- gpt-4.1
 ```
 
 ### Example 2: Google with All Gemini Variants
@@ -183,7 +181,7 @@ Enter API key: AIza...
 
 # Models fetched from Google API:
 - gemini-2.5-pro
-- gemini-3.5-flash
+- gemini-3.8-flash
 - gemini-3.1-flash-lite
 - gemini-2.5-flash
 - gemini-2.5-flash-lite
@@ -202,8 +200,8 @@ Enter API key: sk-or-...
 # 30+ models fetched:
 - anthropic/claude-sonnet-4.6
 - anthropic/claude-opus-4.8
-- openai/gpt-4o
-- openai/gpt-4-turbo
+- openai/gpt-5.6-terra
+- openai/gpt-5.6-luna
 - google/gemini-2.5-flash
 - meta-llama/llama-3.1-405b-instruct
 - mistralai/mistral-large
@@ -221,8 +219,8 @@ No need to update VAF when providers release new models. Models are fetched dire
 
 Released today? Available today:
 ```
-# GPT-4.5 released? Just:
-Settings → API Model → Enter custom model ID: gpt-4.5
+# A model the catalog does not offer yet? Just:
+Settings → API Model → Enter custom model ID: gpt-6-luna
 ```
 
 ### Discover Models You Didn't Know Existed
@@ -258,7 +256,7 @@ Some providers (notably DeepSeek) do not support image input. VAF lets you confi
 ### How it works
 
 1. User sends a message with an image attached.
-2. If the primary provider supports vision (Veyllo with `veyllo-chat`, Anthropic, Google, OpenAI with `gpt-4o`, etc.) → image is processed normally.
+2. If the primary provider supports vision (Veyllo with `veyllo-chat`, Anthropic, Google, OpenAI with `gpt-5.6-terra`, etc.) → image is processed normally.
 3. If the primary provider **does not** support vision (e.g. DeepSeek) and a `vision_provider` is configured:
    - VAF makes a short auxiliary call to the vision provider to analyse the image.
    - The description is injected into the message as `[Vision (provider/model): ...]`.
@@ -269,10 +267,10 @@ Some providers (notably DeepSeek) do not support image input. VAF lets you confi
 
 | Provider | Vision support | Recommended model |
 |----------|---------------|-------------------|
-| OpenAI | Yes | `gpt-4o` |
-| Anthropic | Yes, all Claude 3+ | `claude-sonnet-4-6` |
+| OpenAI | Yes | `gpt-5.6-terra` |
+| Anthropic | Yes, every current Claude model | `claude-sonnet-4-6` |
 | Google | Yes, all Gemini | `gemini-2.5-flash` |
-| OpenRouter | Yes, varies | `openai/gpt-4o` |
+| OpenRouter | Yes, varies | `anthropic/claude-sonnet-4.6` (the OpenRouter default) |
 | DeepSeek | No | - |
 | Local | Yes, via `vision_provider = local` (llama server + mmproj projector) | loaded GGUF |
 

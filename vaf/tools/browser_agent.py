@@ -726,7 +726,7 @@ def _build_vaf_bridge(session_id: Optional[str] = None) -> VAFLLMBridge:
         or model.lower().startswith("veyllo/")
     ):
         from vaf.core.config import Config
-        model = Config.get_default_model(provider) or "gpt-4o"
+        model = Config.get_default_model(provider) or Config.get_default_model("openai")
 
     return VAFLLMBridge(model=model, provider_name=provider, session_id=session_id)
 

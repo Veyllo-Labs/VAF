@@ -349,9 +349,9 @@ browser-use requires the LLM to produce structured JSON on every reasoning step.
 
 | Provider | Recommended model |
 |---|---|
-| OpenAI | `gpt-4o` or `gpt-4o-mini` |
+| OpenAI | `gpt-5.6-terra` or `gpt-5.6-luna` |
 | Anthropic | `claude-sonnet-4-6` or newer |
-| DeepSeek | `deepseek-v4-flash` |
+| DeepSeek | `deepseek-flash` |
 | Local (Ollama) | `llama3.1:70b` or `qwen2.5:32b` minimum |
 
 **Local models below ~30B parameters** frequently produce malformed JSON for complex browser tasks and will cause step failures. For production use, an API provider or a large local model is strongly recommended.

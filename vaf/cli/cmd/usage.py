@@ -30,7 +30,7 @@ def _fmt(currencies: dict, legacy: float) -> str:
 @app.command("show")
 def show(days: int = typer.Option(30, "--days", "-d", help="Period to report on")) -> None:
     """Print totals, per account and per provider, for the last N days."""
-    from vaf.core.cost import usage_totals
+    from vaf.core.cost import PRICES_AS_OF, usage_totals
 
     data = usage_totals(days=days)
     totals = data.get("totals") or {}
@@ -39,6 +39,8 @@ def show(days: int = typer.Option(30, "--days", "-d", help="Period to report on"
         f"Requests: {totals.get('calls', 0):,}\n"
         f"Estimated cost: {_fmt(totals.get('currencies') or {}, float(totals.get('usd') or 0))}",
         title=f"Usage, last {data.get('days', days)} days", style="highlight")
+    # A price without its date is a claim about today that was checked on some other day.
+    UI.console.print(f"[dim]Estimated from list prices as of {PRICES_AS_OF}.[/dim]")
 
     if totals.get("estimated_tokens"):
         UI.event("Usage", f"{totals['estimated_tokens']:,} of those tokens are estimated "

@@ -1638,7 +1638,7 @@
       "thinkerProviderDesc": "Düşünür, sen boştayken arka planda çalışır: yapılacakları denetler, otomasyon önerileri ve hatırlatmalar üretir ve sana hedefli sorular sorabilir. Daha ucuz bir model, ana sohbeti etkilemeden masrafı düşürür.",
       "thinkerModel": "Düşünür modeli (isteğe bağlı)",
       "thinkerModelDesc": "Sağlayıcı varsayılanı için boş bırak.",
-      "thinkerModelPlaceholder": "örn. deepseek-chat ya da model kimliği",
+      "thinkerModelPlaceholder": "örn. deepseek-flash ya da model kimliği",
       "channelTools": "Mesajlaşma kanallarında aynı araçlar",
       "channelToolsDesc": "Telegram, WhatsApp ve Discord ajanının, çağrı başına onay olmadan ana ajanla aynı araçları kullanmasına izin verir. Varsayılan olarak açıktır; kanal izin listen ve kullanıcı başına yönetici yetkileriyle korunur. Kanal ajanlarını kanal dışı araçlarla sınırlamak için kapat.",
       "system": "Sistem",

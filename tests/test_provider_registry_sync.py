@@ -7,9 +7,10 @@ vaf/core/provider_registry.py is the single source of truth (WHO/WHERE). This
 test fails when any known copy drifts:
   - Config.PROVIDER_MODELS (names AND order),
   - the coder endpoint map and the model-discovery lane (by construction),
-  - the web Settings UI's TypeScript fallbacks (PROVIDER_META,
-    FALLBACK_PROVIDER_MODELS, dynamicProviders) - parsed as text, which is
-    crude but exactly what drift detection needs,
+  - the model catalog (vaf/core/model_catalog.py, same order),
+  - the web Settings UI's TypeScript lists (PROVIDER_META, dynamicProviders)
+    - parsed as text, which is crude but exactly what drift detection needs -
+    and the absence of a TypeScript copy of the model lists,
   - the vision predicate consumers (agent.py / browser_agent.py must delegate
     to the registry instead of keeping private copies; two of the historic
     three copies did not know veyllo).
@@ -39,6 +40,16 @@ def test_registry_matches_config_provider_models_order():
     registry_order = [n for n in PROVIDER_SPECS if n != "local"]
     assert registry_order == list(Config.PROVIDER_MODELS), (
         "PROVIDER_SPECS (minus local) and Config.PROVIDER_MODELS must list the "
+        "same providers in the same order"
+    )
+
+
+def test_registry_matches_model_catalog_order():
+    from vaf.core.model_catalog import CATALOG
+
+    registry_order = [n for n in PROVIDER_SPECS if n != "local"]
+    assert registry_order == list(CATALOG), (
+        "PROVIDER_SPECS (minus local) and model_catalog.CATALOG must list the "
         "same providers in the same order"
     )
 
@@ -85,15 +96,20 @@ def test_web_settings_provider_meta_covers_registry():
         )
 
 
-def test_web_settings_fallback_models_cover_registry():
-    block = _extract_block(
-        _settings_modal_text(), "const FALLBACK_PROVIDER_MODELS", "};"
+def test_web_settings_keeps_no_copy_of_the_model_lists():
+    """The dropdown lists come only from GET /api/provider-models (the model
+    catalog). A TypeScript copy went stale the day a default moved: it still
+    offered gpt-4-turbo after OpenAI shut it down. MUTATION: re-add a
+    FALLBACK_PROVIDER_MODELS constant, or any quoted chat-catalog id."""
+    from vaf.core.model_catalog import all_model_ids
+
+    text = _settings_modal_text()
+    assert "FALLBACK_PROVIDER_MODELS" not in text
+    leaked = sorted(
+        mid for mid in set(all_model_ids())
+        if re.search(rf"""['"`]{re.escape(mid)}['"`]""", text)
     )
-    for name in api_provider_names():
-        assert re.search(rf"\b{re.escape(name)}\s*:", block), (
-            f"web FALLBACK_PROVIDER_MODELS is missing provider {name!r} "
-            "(SettingsModal.tsx)"
-        )
+    assert not leaked, f"SettingsModal.tsx quotes catalog model ids: {leaked}"
 
 
 def test_web_settings_dynamic_providers_cover_registry():

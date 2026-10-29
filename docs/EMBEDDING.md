@@ -380,7 +380,7 @@ keys (full reference in [CONFIG_SCHEMA.md](setup/CONFIG_SCHEMA.md)):
 Agent(config={
     "provider": "openai",
     "api_key_openai": os.environ["OPENAI_API_KEY"],
-    "api_model_openai": "gpt-4o",
+    "api_model_openai": "gpt-5.6-terra",
 })
 ```
 
@@ -484,7 +484,7 @@ from vaf import Agent, is_error_reply
 agent = Agent(config={
     "provider": "openai",
     "api_key_openai": os.environ["OPENAI_API_KEY"],   # read it, never inline it
-    "api_model_openai": "gpt-4o-mini",
+    "api_model_openai": "gpt-5.6-luna",
 })
 
 try:

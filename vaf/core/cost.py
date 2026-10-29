@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional, Tuple
 
+from vaf.core import model_catalog as _model_catalog
 from vaf.core.platform import Platform
 
 SPEND_FORMAT = "spend-1-9c14f7"
@@ -168,106 +169,35 @@ def cache_usage_from_openai(usage) -> dict:
     except Exception:
         return cache_usage()
 
-# USD per 1M tokens (input, output). Public list prices, rounded up rather than
-# down - this table decides when a cap trips, so erring low would be the
-# expensive direction.
+# Prices per 1M tokens, from ONE table: vaf/core/model_catalog.py, which also
+# feeds the model dropdowns, so a model a user can pick always has a price.
+# These three names are views of it with the shapes their readers expect:
+# PROVIDER_PRICING for the comparison panel (current models, panel order),
+# PRICES for the estimate (every priced id, retired ones included, so a ledger
+# that names one is not repriced at the unknown-model rate).
 #
-# PROVIDER_PRICING is the source, PRICES is the flat index derived from it, so a
-# price can never be right in the comparison panel and stale in the estimate.
-# List prices, with ONE discount applied: a prompt token the provider itself
-# reported as served from its cache is priced at that provider's published
-# cached-input rate (the multipliers below), because that is what the invoice
-# says and the figure feeds a spend cap. No batch or off-peak discount and no
-# long-context surcharge - a comparison built from each provider's best case
-# would flatter whichever one has the most discount programmes, and unlike a
-# cache hit those are not reported per call. DeepSeek is quoted at PEAK
-# (off-peak is half), OpenAI at short-context.
+# List prices, rounded up rather than down - this table decides when a cap
+# trips, so erring low would be the expensive direction. Where a provider runs
+# a dated promotion the catalog carries the regular rate. The estimate applies
+# what each call reports and the provider bills per call: the model's own
+# cache-read rate (the fraction differs by model generation, so it is per entry,
+# with the provider multiplier only as the fallback), the cache-write premium,
+# and the long-context tier when the whole prompt of the call is above the
+# model's threshold. No batch, flex, priority or off-peak price: VAF sends none
+# of those requests. DeepSeek is quoted at PEAK (off-peak is half).
 #
 # CURRENCY IS NOT CONVERTED. Veyllo publishes EUR, everyone else USD, and this
 # module does not carry an exchange rate it would have to keep current - so the
 # unit is reported per provider and the reader converts, rather than being shown
 # a rate that was true on the day it was typed.
 #
-# When these prices were last checked against the providers' own pricing pages.
-# Shown wherever a price is, because a list price without a date is a claim
-# about today that was true on some other day: providers reprice, and a stale
-# figure presented as current is worse than no comparison. Update this stamp in
-# the SAME change as any price below - the guard test pins the shape, not the
-# value, so nothing stops a price moving while the date stands still except
-# this sentence and the reviewer reading it.
-PRICES_AS_OF = "2026-08-17"
-
-# A cached input token is billed at a FRACTION of the input price, and a cache
-# write at a premium. Both enter as multipliers on the input price rather than as
-# a fourth number per model, because every provider publishes the cached rate as
-# a fraction that holds across its whole catalogue: a fraction survives a
-# repricing of the base rate, which is exactly what the stamp above is about,
-# while a per-model absolute rate would double this table and go stale twice as
-# fast. It also keeps the three-tuple unpack below untouched.
-#
-# Rounded UP where the published figure is not a round fraction, in this file's
-# existing polarity: DeepSeek's own pages put a cache hit at 0.014 against 0.44
-# and 0.044 against 1.32, i.e. 0.032 and 0.033, carried here as 0.04.
-#
-# Anthropic's write multiplier is the FIVE-MINUTE rate, which is the only one
-# this product can produce: the adapter sends an ephemeral cache_control with no
-# ttl. An hour-long write is 2.0 and needs its own entry the day a ttl is sent.
-#
-# A provider with no entry is priced at the full input rate for cached tokens.
-PROVIDER_PRICING = {
-    # Veyllo first: it is this product's own API, and the panel keeps that order.
-    # No cache_*_multiplier: Veyllo publishes no cached-input rate, so a cached
-    # token is priced at the full input rate here. That is an upper bound, which
-    # is the safe direction for a figure a spend cap reads.
-    "veyllo": {"label": "Veyllo", "currency": "EUR", "models": [
-        ("veyllo-chat", 0.90, 1.90),
-        ("veyllo-vision", 3.45, 20.70),
-    ]},
-    "anthropic": {"label": "Anthropic", "currency": "USD",
-                  "cache_read_multiplier": 0.10, "cache_write_multiplier": 1.25, "models": [
-        ("claude-haiku-4-5", 1.00, 5.00),
-        ("claude-sonnet-5", 2.00, 10.00),
-        ("claude-sonnet-4-6", 3.00, 15.00),
-        ("claude-opus-5", 5.00, 25.00),
-        ("claude-opus-4-8", 5.00, 25.00),
-        ("claude-fable-5", 10.00, 50.00),
-        ("claude-mythos-5", 10.00, 50.00),
-    ]},
-    "openai": {"label": "OpenAI", "currency": "USD",
-               "cache_read_multiplier": 0.10, "cache_write_multiplier": 1.25, "models": [
-        ("gpt-5.6-luna", 0.20, 1.20),
-        ("gpt-5.6-terra", 2.00, 12.00),
-        ("gpt-5.6-sol", 5.00, 30.00),
-    ]},
-    "google": {"label": "Google", "currency": "USD",
-               "cache_read_multiplier": 0.25, "cache_write_multiplier": 1.00, "models": [
-        ("gemini-3.5-flash-lite", 0.10, 0.40),
-        ("gemini-3.7-flash", 1.50, 7.50),
-        ("gemini-3.5-flash", 1.50, 9.00),
-        ("gemini-3.1-pro", 2.00, 12.00),
-    ]},
-    "deepseek": {"label": "DeepSeek", "currency": "USD",
-                 "cache_read_multiplier": 0.04, "cache_write_multiplier": 1.00, "models": [
-        ("deepseek-v4-flash", 0.44, 1.32),
-        ("deepseek-v4-pro", 1.32, 3.96),
-    ]},
-}
-# USD per 1M tokens (input, output), flattened from the catalog above plus the
-# older model names that still appear in existing ledgers and configs - dropping
-# those would silently reprice history at the unknown-model rate.
-PRICES = {model: (pin, pout)
-          for spec in PROVIDER_PRICING.values()
-          for model, pin, pout in spec["models"]}
-PRICES.update({
-    "gpt-4o": (2.50, 10.00),
-    "gpt-4o-mini": (0.15, 0.60),
-    "gpt-4.1": (2.00, 8.00),
-    "gpt-4.1-mini": (0.40, 1.60),
-    "o3": (2.00, 8.00),
-    "claude-opus-4-1": (15.00, 75.00),
-    "gemini-2.5-flash": (0.30, 2.50),
-    "gemini-2.5-pro": (1.25, 10.00),
-})
+# PRICES_AS_OF is the day the catalog was checked against the providers' own
+# pages. Shown wherever a price is, because a list price without a date is a
+# claim about today that was true on some other day. It moves with any price,
+# in the catalog, in the same change.
+PRICES_AS_OF = _model_catalog.CATALOG_AS_OF
+PROVIDER_PRICING = _model_catalog.provider_pricing()
+PRICES = _model_catalog.flat_prices()
 # What an unrecognised model costs. Deliberately at the expensive end of the
 # table: an unknown model must not be able to run cheap under a cap.
 UNKNOWN_PRICE = (15.00, 75.00)
@@ -407,18 +337,39 @@ def estimate_cost(provider: str, model: str, input_tokens: int,
                                 cache_prompt_tokens=_prompt if measured else 0)
         name = str(model or "").strip()
         price = PRICES.get(name)
-        if price is None:
-            # Try the bare name behind a vendor prefix ("anthropic/claude-...").
-            price = PRICES.get(name.rsplit("/", 1)[-1])
+        # The catalog entry behind the id, through the spellings providers put
+        # around it: a vendor prefix, a snapshot date, OpenRouter's dotted Claude
+        # versions. It carries the per-model cache rate and the long tier.
+        hit = _model_catalog.find_model(name, priced=True)
+        entry = hit[1] if hit else None
+        if price is None and entry is not None:
+            price = (entry.input, entry.output)
         known = price is not None
         pin, pout = price or UNKNOWN_PRICE
         _out = max(0, int(output_tokens))
         # A model this table cannot price gets no discount either. Same reasoning
         # as UNKNOWN_PRICE above: an unrecognised model must not be able to run
         # cheap under a cap, and a discount is a way of running cheap.
+        # The cache rates are the model's vendor's, also when the call went
+        # through another provider (OpenRouter passes Anthropic's rates through).
+        vendor = _model_catalog.provider_catalog(hit[0]) if hit else None
         spec = PROVIDER_PRICING.get(prov) or {}
+        if vendor is not None:
+            spec = {k: v for k, v in (("cache_read_multiplier", vendor.cache_read_multiplier),
+                                      ("cache_write_multiplier", vendor.cache_write_multiplier))
+                    if v is not None}
         mread = float(spec.get("cache_read_multiplier", 1.0)) if known else 1.0
         mwrite = float(spec.get("cache_write_multiplier", 1.0)) if known else 1.0
+        if known and entry is not None and entry.cached_input is not None and entry.input:
+            mread = float(entry.cached_input) / float(entry.input)
+        # Long-context tier: the provider bills the WHOLE call at the higher rate
+        # once the prompt passes the threshold, and the prompt is the one
+        # _cache_split measured (Anthropic's cached span included, which its
+        # input_tokens leaves out). The cached rate scales with the base rate.
+        if (known and entry is not None and entry.long_context_from
+                and _prompt > entry.long_context_from
+                and entry.long_input is not None and entry.long_output is not None):
+            pin, pout = entry.long_input, entry.long_output
         usd = (_full * pin + _read * pin * mread + _write * pin * mwrite
                + _out * pout) / 1_000_000
         saved = (_read * pin * (1.0 - mread)) / 1_000_000

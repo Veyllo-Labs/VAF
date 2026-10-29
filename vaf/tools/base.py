@@ -458,11 +458,8 @@ class BaseTool(ABC):
         
         # 0. Validate Model
         if not model:
-            # Fallback: Try to get default based on provider
-            if provider == "openai": model = "gpt-4o"
-            elif provider == "anthropic": model = "claude-sonnet-4-6"
-            elif provider == "google": model = "gemini-2.5-flash"
-            
+            # Fallback: the provider's default from the model catalog (empty for local).
+            model = Config.get_default_model(provider)
             if not model:
                 print(f"[WARN] Tool {self.name}: No model configured. Skipping LLM query.")
                 return None

@@ -8,8 +8,8 @@ are their endpoints" reads from here: the API-backend factory, the coder's
 raw-HTTP endpoint map, live model discovery (sync and async copies), the
 vision-capability predicate (previously three manually-synced copies that had
 already diverged), and the CLI settings menus. The web Settings UI keeps its
-TypeScript fallback copies for rendering, guarded against this module by
-tests/test_provider_registry_sync.py.
+TypeScript provider labels for rendering, guarded against this module by
+tests/test_provider_registry_sync.py; its model lists come from the backend.
 
 Deliberately import-light (dataclasses + typing only at module level; Config
 is imported lazily inside functions) so any module - including small tools -
@@ -19,8 +19,9 @@ synthetic-id downgrade, Anthropic/Google message conversion) intentionally
 stays as gated code branches per PROVIDER_MODES.md's additive-and-gated
 principle: this registry is the WHO/WHERE, not the HOW.
 
-Adding a provider: add the ProviderSpec here AND a row in
-Config.PROVIDER_MODELS, then follow the checklist the sync test enforces
+Adding a provider: add the ProviderSpec here AND its ProviderCatalog in
+vaf/core/model_catalog.py (models, prices, default; Config.PROVIDER_MODELS is
+derived from it), then follow the checklist the sync test enforces
 (coder endpoint reachable, web UI lists, PROVIDER_MODES.md catalog row).
 """
 from dataclasses import dataclass
@@ -134,7 +135,6 @@ PROVIDER_SPECS: Dict[str, ProviderSpec] = {
             coder_base_url="https://openrouter.ai/api/v1",
             models_url="https://openrouter.ai/api/v1/models",
             vision_capable=True,
-            vision_default_model="openai/gpt-4o",
         ),
         ProviderSpec(
             name="veyllo",
@@ -262,13 +262,25 @@ def model_supports_vision(provider: str, model: str, probe_local: bool = True) -
     spec = get_spec(provider)
     if spec is not None and not spec.vision_capable:
         return False
+    if provider != "local":
+        # A model the catalog knows answers from its entry; the substring rules
+        # below are for ids it does not know (live listings, newer releases).
+        from vaf.core.model_catalog import find_model
+
+        hit = find_model(model)
+        if hit is not None:
+            return hit[1].vision
     if provider in ("anthropic", "google", "veyllo"):
         return True
+    # Family fragments, not model lists: every current OpenAI and Anthropic
+    # model takes image input, and the catalog above answers for named ones.
     if provider == "openai":
-        return any(k in model for k in ("gpt-4o", "gpt-4-turbo", "gpt-4-vision", "o1", "o3"))
+        return any(k in model for k in ("gpt-4", "gpt-5", "gpt-6", "o1", "o3", "o4"))
     if provider == "openrouter":
         return any(
-            k in model for k in ("gpt-4o", "claude-3", "gemini", "vision", "vl", "llava", "pixtral")
+            k in model
+            for k in ("gpt-4", "gpt-5", "gpt-6", "claude", "gemini", "vision", "vl", "llava",
+                      "pixtral")
         )
     if provider == "local":
         # Honest capability: with vision_provider=local the llama server is

@@ -61,16 +61,25 @@ need; everything else has a sensible default.
 | `auto_start_local_server` | `True` | Start the local engine's server (llama.cpp or vLLM) automatically. Set `False` when using only an API provider. |
 | `router_max_tools` | `12` | Max tools the router and the per-turn riders hand the model per turn; `list_tools` and `search_tools` come on top of it (suggested 1–100, not clamped). Lower = faster inference. |
 
-Default API models (from `Config.PROVIDER_MODELS`):
+Default API models (from `Config.PROVIDER_MODELS`, derived from the model catalog
+`vaf/core/model_catalog.py`; CI-guarded by `tests/test_model_catalog.py`):
 
 | Provider | `api_model_*` default |
 |----------|-----------------------|
 | veyllo | `veyllo-chat` |
-| openai | `gpt-4o` |
+| openai | `gpt-5.6-terra` |
 | anthropic | `claude-sonnet-4-6` |
-| deepseek | `deepseek-v4-flash` |
+| deepseek | `deepseek-flash` |
 | google | `gemini-2.5-flash` |
 | openrouter | `anthropic/claude-sonnet-4.6` |
+
+A saved model id that its provider has retired is moved to the catalog's successor
+when the config loads, and written back: at once for an id already shut down
+(`gpt-4-turbo`, `deepseek-v4-flash`, `deepseek-chat`), on the shutdown day for one
+that still answers (`gpt-4o` moves to `gpt-5.6-terra` on 2027-01-14). This covers
+every `api_model_*` key plus `subagent_model`, `thinking_model`, `vision_model`,
+`browser_agent_model`, `voice_agent_model` and `failover_backup_model`; a local
+model name is never touched.
 
 Minimal API-provider embedding example:
 
@@ -79,7 +88,7 @@ from vaf import Agent
 agent = Agent(config={
     "provider": "openai",
     "api_key_openai": "sk-...",      # raw key
-    "api_model_openai": "gpt-4o-mini",
+    "api_model_openai": "gpt-5.6-luna",
 })
 print(agent.run("In one sentence, what is Python?"))
 ```

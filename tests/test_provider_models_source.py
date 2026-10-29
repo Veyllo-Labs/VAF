@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""Single-source-of-truth for per-provider models (Config.PROVIDER_MODELS).
+"""Single-source-of-truth for per-provider models (Config.PROVIDER_MODELS, derived
+from vaf/core/model_catalog.py).
 
 Pins that every consumer derives from the one definition: config DEFAULTS, the
 api_backend default/fallback lookups, and the /api/provider-models endpoint all
@@ -52,9 +53,14 @@ def test_no_retired_models_in_source():
         info["default"] + " " + " ".join(info["fallback"])
         for info in PROVIDER_MODELS.values()
     )
+    # A second net under the catalog's own legacy flags (tests/test_model_catalog.py):
+    # ids that providers retired, typed out by hand so a flag flipped back by
+    # mistake still trips here.
     for retired in ("claude-3-5-sonnet-20241022", "claude-3-opus-20240229",
-                    "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"):
-        assert retired not in flat, f"retired model {retired} leaked into PROVIDER_MODELS"
+                    "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash",
+                    "gpt-4-turbo", "gpt-4o", "gpt-4o-mini", "deepseek-v4-flash",
+                    "deepseek-chat", "gemini-3.5-flash", "gemini-3.7-flash"):
+        assert retired not in flat.split(), f"retired model {retired} leaked into PROVIDER_MODELS"
 
 
 def test_provider_models_endpoint_returns_source():
@@ -63,3 +69,4 @@ def test_provider_models_endpoint_returns_source():
     result = asyncio.run(get_provider_models())
     assert result == Config.PROVIDER_MODELS
     assert result["google"]["default"] == "gemini-2.5-flash"
+    assert result["openai"]["default"] == "gpt-5.6-terra"

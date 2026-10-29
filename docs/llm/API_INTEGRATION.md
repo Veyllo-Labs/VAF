@@ -70,9 +70,9 @@ Each provider has default models, but you can customize:
 {
   "provider": "openai",
   "api_model_veyllo": "veyllo-chat",
-  "api_model_openai": "gpt-4o",
+  "api_model_openai": "gpt-5.6-terra",
   "api_model_anthropic": "claude-sonnet-4-6",
-  "api_model_deepseek": "deepseek-v4-flash",
+  "api_model_deepseek": "deepseek-flash",
   "api_model_google": "gemini-2.5-flash",
   "api_model_openrouter": "anthropic/claude-sonnet-4.6"
 }
@@ -82,7 +82,7 @@ Each provider has default models, but you can customize:
 
 ### Single source of truth for provider models
 
-The per-provider default model and the static fallback list shown in the dropdown live in one place: `PROVIDER_MODELS` in `vaf/core/config.py`. To change a default or a fallback, edit that dict only - every Python call site reads it (`Config.get_default_model()` / `Config.get_fallback_models()`, `APIBackendManager`, the agent, the browser agent), and the web UI reads it through `GET /api/provider-models`.
+The per-provider default model, the static fallback list shown in the dropdown and the price of every model live in one place: the model catalog `vaf/core/model_catalog.py` (as of 2026-10-29). `PROVIDER_MODELS` in `vaf/core/config.py` is derived from it. To change a default, a fallback or a price, edit the catalog only - every Python call site reads it (`Config.get_default_model()` / `Config.get_fallback_models()`, `APIBackendManager`, the agent, the browser agent, the tools' `query_llm`, the spend estimate in `cost.py`), and the web UI reads it through `GET /api/provider-models` and `GET /api/usage/prices`. A deprecated model leaves the dropdown at once and stays priced; a saved config that names it moves to the catalog's successor on the provider's shutdown day (see [PROVIDER_MODES.md](PROVIDER_MODES.md), row "All API (model catalog and prices)").
 
 The dropdown is otherwise populated dynamically: when you enter an API key, VAF fetches the provider's live model list (`/v1/models`) and the live list takes precedence. The static fallback is used only when no key is set or the fetch fails (offline, rate limit). `local` is not in `PROVIDER_MODELS` - GGUF models are discovered from disk, not a fixed list.
 
@@ -189,11 +189,13 @@ All API providers support **streaming responses** for real-time output.
 
 Providers that support multimodal (image) input:
 
-- **OpenAI** (`gpt-4o`, `gpt-4-turbo`, `gpt-4o-mini`) - `image_url` with data URIs
-- **Anthropic** (`claude-sonnet-4*`, `claude-opus-4*`, `claude-haiku-4*`, `claude-3*`) - converted to `source.base64` format
-- **Google** (`gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3.5-flash`, etc.) - converted to `Part.from_bytes` (inline_data) parts
+Which model takes images is the `vision` flag of its catalog entry (`vaf/core/model_catalog.py`); ids the catalog does not know fall back to family rules in `provider_registry.model_supports_vision`.
+
+- **OpenAI** (the `gpt-5.6` and `gpt-6` families, and the `gpt-4o`/`gpt-4.1` generation until its shutdown) - `image_url` with data URIs
+- **Anthropic** (every current Claude model) - converted to `source.base64` format
+- **Google** (Gemini 2.5 and 3.x) - converted to `Part.from_bytes` (inline_data) parts
 - **OpenRouter** - provider-dependent (model must support vision)
-- **DeepSeek** - the commercial API (`api.deepseek.com/v1`) does **not** support image input. The API schema only accepts `type: text` content blocks and returns a 400 error if image data is sent. Use Anthropic or OpenAI for vision tasks.
+- **DeepSeek** - VAF sends no images to DeepSeek. DeepSeek's pricing page now lists image input for `deepseek-flash`, but the image wire format has not been probed against VAF's requests, so the provider stays marked text-only (`vision_capable=False`). Use Anthropic or OpenAI for vision tasks.
 - **Local** (`vision_provider = "local"`): VAF's own llama-server is launched with the model's mmproj projector and sees images itself, no cloud. The projector is resolved by `backend.resolve_mmproj_for` (explicit `vision_local_mmproj` ref, else `mmproj-F16.gguf` from the model's known repo); vision activates on the next model (re)start. With an external OpenAI-compatible server (`local_api_url`, e.g. Ollama) the loaded model must support vision itself (e.g. `llava`).
 
 **How it works (default `vision_mode = "description_tool"`):** the main reasoning model is **text-only** - raw image bytes never enter its context. Vision is a separate, on-demand service.
@@ -295,10 +297,16 @@ ls -l ~/.vaf/config.json   # expect -rw------- (600)
 
 ### OpenAI
 
-**Models:**
-- `gpt-4o` - Multimodal (recommended, default)
-- `gpt-4-turbo` - Fast, large context
-- `gpt-3.5-turbo` - Cheaper, faster
+**Models** (the catalog's offered list):
+- `gpt-5.6-terra` - Multimodal (recommended, default)
+- `gpt-5.6-luna` - Cheaper, faster
+- `gpt-5.6-sol` - Most capable of the family
+
+`gpt-4o`, `gpt-4o-mini`, `gpt-4.1` and `gpt-4.1-mini` are deprecated (OpenAI shuts them
+down on 2027-01-14) and no longer offered; a saved one keeps working until that day and
+then moves to `gpt-5.6-terra` (`gpt-5.6-luna` for the mini models). `gpt-4-turbo` was shut
+down on 2026-10-23 and moves to `gpt-5.6-sol`. The `gpt-6` family is priced in the usage
+comparison but not offered yet: VAF's request shape for it is unproven.
 
 Reasoning models (`o1`/`o3`/`o4` series, `gpt-5`) are supported. VAF detects them and
 adjusts the request automatically: it sends `max_completion_tokens` instead of `max_tokens`
@@ -351,22 +359,30 @@ that reject sampling params (Opus 4.7/4.8, Fable) - otherwise the request would 
 ### DeepSeek
 
 **Models:**
-- `deepseek-v4-flash` - General purpose, fast, supports function calling (default)
+- `deepseek-flash` - General purpose, fast, supports function calling (default; served by DeepSeek-V4.1-Flash)
 - `deepseek-v4-pro` - More capable, supports function calling
-- `deepseek-chat` - Legacy alias for V3; deprecated 2026-07-24
-- `deepseek-reasoner` - Legacy R1 alias; deprecated 2026-07-24; no function calling
+- `deepseek-auto` - VAF routing alias: `deepseek-flash` for chat, `deepseek-v4-pro` for workflows, automations and compaction
+
+Retired names move to `deepseek-flash` when the config loads: `deepseek-v4-flash`
+(retired by DeepSeek on 2026-09-10), `deepseek-chat`, `deepseek-coder`,
+`deepseek-reasoner` (which also had no function calling) and `deepseek-r1`.
 
 **Get API Key:** https://platform.deepseek.com/
 
-**Note:** The commercial API (`api.deepseek.com/v1`) is text-only - image input is not supported for any model. Use Anthropic or OpenAI for vision tasks.
+**Note:** VAF sends no images to DeepSeek (see Vision / Image Input above). Use Anthropic or OpenAI for vision tasks.
 
 ### Google AI Studio
 
 **Models:**
 - `gemini-2.5-flash` - Best price-performance, 1M context (recommended, default)
-- `gemini-3.5-flash` - Most intelligent flash, strong for agentic/coding
-- `gemini-2.5-pro` - Most advanced, deep reasoning
+- `gemini-2.5-pro` - Deep reasoning
 - `gemini-2.5-flash-lite` - Fastest, most budget-friendly
+- `gemini-3.8-flash` - Google's current flash model
+- `gemini-3.5-flash-lite` - Google's current budget model
+
+Google limits the 2.5 models to projects that used them before and points new projects
+at 3.5 Flash-Lite or 3.8 Flash. `gemini-3.5-flash` and `gemini-3.7-flash` are routed by
+Google to `gemini-3.6-flash` and `gemini-3.8-flash`; a saved one moves there on load.
 
 VAF uses the native **google-genai** SDK (the deprecated `google-generativeai` package
 is no longer used). Tool use, streaming, vision, and thinking are supported. One optional
@@ -387,8 +403,8 @@ shut down - use the 2.5/3.x models above.
 
 **Popular Models** (OpenRouter uses dotted ids, e.g. `claude-sonnet-4.6`):
 - `anthropic/claude-sonnet-4.6`
-- `openai/gpt-4o`
 - `google/gemini-2.5-flash`
+- `anthropic/claude-haiku-4.5`
 - `meta-llama/llama-3.1-405b-instruct`
 
 Note: OpenRouter normalizes parameters (e.g. `max_tokens`) across all models, so VAF's

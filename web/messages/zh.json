@@ -1638,7 +1638,7 @@
       "thinkerProviderDesc": "你闲着的时候，思考器在后台运行：检查待办、提出自动化建议、发出提醒，也可以有针对性地问你几句。用便宜一点的模型可以省钱，又不影响主对话。",
       "thinkerModel": "思考器模型（可选）",
       "thinkerModelDesc": "留空即使用该服务商的默认模型。",
-      "thinkerModelPlaceholder": "例如 deepseek-chat 或模型 ID",
+      "thinkerModelPlaceholder": "例如 deepseek-flash 或模型 ID",
       "channelTools": "消息渠道里使用同样的工具",
       "channelToolsDesc": "允许 Telegram、WhatsApp 和 Discord 上的智能体使用与主智能体相同的工具，且不必逐次确认。默认开启；由你的渠道白名单和每位用户的管理员权限来兜底。想把渠道智能体限制在非渠道工具上，就关掉它。",
       "system": "系统",

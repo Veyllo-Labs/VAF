@@ -652,6 +652,20 @@ def coder_api_providers() -> dict:
     }
 
 
+def _coder_deepseek_auto_model(in_workflow: bool, subagent_model: str) -> str:
+    """The concrete model behind ``deepseek-auto`` for a coder run (the API rejects
+    the alias itself). A workflow run takes an explicit ``subagent_model``, else
+    the alias's pro target; any other run takes its fast target. The targets come
+    from the model catalog; the condition is the coder's own and is narrower than
+    the backend's (which also counts automations and compaction)."""
+    from vaf.core.model_catalog import alias_target
+
+    sa = str(subagent_model or "").strip()
+    if in_workflow and sa and sa.lower() != "deepseek-auto":
+        return sa
+    return alias_target("deepseek", "deepseek-auto", pro=in_workflow)
+
+
 def _todo_item_text(item):
     """Coerce a single set_todos item to a plain task-description string.
 
@@ -3811,14 +3825,10 @@ Thumbs.db
             _llm_model = Config.get(f"api_model_{_provider}", _llm_default_model) or _llm_default_model
             # Resolve deepseek-auto → concrete model name (API rejects "deepseek-auto" directly)
             if _provider == "deepseek" and str(_llm_model).lower() == "deepseek-auto":
-                _in_wf = os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "").strip() in ("1", "true", "yes")
-                _sa = Config.get("subagent_model", "").strip()
-                if _in_wf and _sa and _sa.lower() != "deepseek-auto":
-                    _llm_model = _sa
-                elif _in_wf:
-                    _llm_model = "deepseek-v4-pro"
-                else:
-                    _llm_model = "deepseek-v4-flash"
+                _llm_model = _coder_deepseek_auto_model(
+                    os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "").strip() in ("1", "true", "yes"),
+                    Config.get("subagent_model", "") or "",
+                )
             # Full URLs — base already ends with /v1 so just append the path segment
             _llm_chat_url = f"{_api_base}/chat/completions"
             _llm_models_url = f"{_api_base}/models"

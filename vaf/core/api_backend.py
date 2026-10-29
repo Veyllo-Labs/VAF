@@ -1751,11 +1751,11 @@ class APIBackendManager:
         if not model:
             if getattr(self, "_embedded", False):
                 # Embedded: honour api_model from the programmatic config (no Settings UI here)
-                model = self.config.get(f"api_model_{self.provider_name}", default_models.get(self.provider_name, "gpt-4o"))
+                model = self.config.get(f"api_model_{self.provider_name}", default_models.get(self.provider_name, Config.get_default_model("openai")))
             else:
                 # Product: read fresh from disk so mid-session model changes (via Settings) take effect immediately
                 live_config = Config.load()
-                model = live_config.get(f"api_model_{self.provider_name}", default_models.get(self.provider_name, "gpt-4o"))
+                model = live_config.get(f"api_model_{self.provider_name}", default_models.get(self.provider_name, Config.get_default_model("openai")))
         # Guardrail: when using API providers, a stale local GGUF model value can be passed
         # (e.g. "Veyllo/VQ-1_Instruct-q4_k_m"), which causes provider errors and long retry loops.
         # In that case, force provider-specific model from config/default.
@@ -1770,7 +1770,7 @@ class APIBackendManager:
             if looks_like_local_model:
                 model = self.config.get(
                     f"api_model_{self.provider_name}",
-                    default_models.get(self.provider_name, "gpt-4o"),
+                    default_models.get(self.provider_name, Config.get_default_model("openai")),
                 )
 
         # DeepSeek Auto mode: flash for main chat, pro model for tools/workflows/compaction.
@@ -1783,12 +1783,15 @@ class APIBackendManager:
                 or os.environ.get("VAF_BACKGROUND_PRO", "").strip() in ("1", "true", "yes")
                 or os.environ.get("VAF_TOOL_MODEL", "").strip().lower() == "deepseek-auto"
             )
+            # Targets come from the model catalog's alias table.
+            from vaf.core.model_catalog import alias_target
             if _pro_context:
                 # Use explicit subagent_model if configured, but never "deepseek-auto" (would recurse)
                 _sa = self.config.get("subagent_model", "").strip()
-                model = (_sa if _sa and _sa.lower() != "deepseek-auto" else None) or "deepseek-v4-pro"
+                model = (_sa if _sa and _sa.lower() != "deepseek-auto" else None) or alias_target(
+                    "deepseek", "deepseek-auto", pro=True)
             else:
-                model = "deepseek-v4-flash"
+                model = alias_target("deepseek", "deepseek-auto", pro=False)
 
         # DeepSeek Reasoner/R1: no function calling support; API returns 400 if tools passed
         if self.provider_name == "deepseek" and model:

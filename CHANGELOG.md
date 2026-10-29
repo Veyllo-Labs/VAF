@@ -36,6 +36,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - Two people opening a personal browser at the same moment can no longer both pass a pool
   check that only one of them fits through, and when Docker does not list the running
   personal browsers the pool starts no new one instead of counting them as none.
+- A personal browser that was stopped after being unused opens again. Docker gives it new
+  ports every time it starts, and VAF kept dialling the old ones, so the browser answered
+  "unavailable" after about 30 seconds until VAF was restarted. The agent's browser runs and
+  page checks on that browser reach the new ports too.
 
 ### Security
 

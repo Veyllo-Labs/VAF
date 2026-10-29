@@ -835,6 +835,125 @@ def test_reaper_asks_the_registry_about_activity(registry):
 
 
 @pytest.fixture
+def wired_pool(pool, monkeypatch, tmp_path):
+    """The real pool on the fake docker, wired to the real manager registry.
+
+    The CDP probe answers only on the ports the fake docker currently publishes,
+    which is what a real container does after a start: the old ports lead
+    nowhere."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("VAF_USER_SCOPE_ID", raising=False)
+    monkeypatch.delenv("VAF_IN_SUBAGENT_TERMINAL", raising=False)
+    monkeypatch.delenv("VAF_BROWSER_SCRUB", raising=False)
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "2")
+    fake = pool._test_docker
+
+    def cdp_probe(base):
+        if base.rsplit(":", 1)[1] != fake.next_ports["9222/tcp"]:
+            raise ConnectionRefusedError(base)
+        return "ws://stub"
+
+    monkeypatch.setattr(bi, "resolve_cdp_ws_url", cdp_probe)
+    monkeypatch.setattr(bi, "park_browser_idle", lambda base: None)
+    monkeypatch.setattr(bi, "_cookie_op", lambda *a, **k: None)
+    monkeypatch.setattr(bi, "_manager", None)
+    monkeypatch.setattr(bi, "_pool_managers", {})
+    monkeypatch.setattr(bp, "get_browser_pool", lambda: pool)
+    import vaf.core.subagent_ipc as ipc_mod
+
+    class _FakeIPC:
+        def get_active_tasks(self, session_id=None):
+            return []
+        def get_pending_tasks(self, session_id=None):
+            return []
+
+    monkeypatch.setattr(ipc_mod, "get_ipc", lambda: _FakeIPC())
+    return pool
+
+
+def _reap_and_republish(pool, monkeypatch):
+    """The idle reaper stops every instance; the next `docker start` publishes
+    the container on new host ports, as Docker does for `127.0.0.1::<port>`."""
+    for inst in list(pool._instances.values()):
+        inst.last_used = 0.0
+    monkeypatch.setattr(bp.time, "sleep", lambda s: None)
+    pool._reaper_loop()
+    assert all(s == "exited" for s in pool._test_docker.containers.values())
+    pool._test_docker.next_ports = {"9222/tcp": "49333", "6901/tcp": "46902"}
+
+
+def test_a_reaped_instance_reopens_on_its_new_ports_without_a_restart(wired_pool, monkeypatch):
+    """The person's browser opens again after the idle reaper stopped it, and the
+    stream proxy dials the container's NEW stream port. The manager is cached per
+    container name and used to keep the ports of its first start, so every reopen
+    answered browser_unavailable until VAF restarted. The manager itself (and with
+    it the dedicated scope) stays the same object. MUTATION: drop the endpoint
+    refresh in `_manager_for_instance` (red)."""
+    mgr = _quiet(bi.get_manager_for_scope("scope-a"))
+    assert mgr.start("scope-a", "sess-a")["status"] == "active"
+    mgr.stop("user")
+    _reap_and_republish(wired_pool, monkeypatch)
+
+    again = bi.get_manager_for_scope("scope-a")
+    assert again is mgr
+    r = mgr.start("scope-a", "sess-a")
+    assert r["status"] == "active", r          # was: error, browser_unavailable
+    assert mgr.cdp_base() == "http://127.0.0.1:49333"
+    ticket = r["streamPath"].split("/t/")[1].split("/")[0]
+    # The VNC proxy builds its target from the ticket's manager at connect time.
+    assert bi.get_manager_by_ticket(ticket).vnc_base() == "http://127.0.0.1:46902"
+    assert mgr._dedicated_scope == "scope-a"
+
+
+def test_the_agent_and_render_lanes_follow_the_new_ports_too(wired_pool, monkeypatch):
+    """A browser_agent run and a render_check on a reaped-and-restarted instance
+    reach its new ports through the manager as well: the run's hooks (jar
+    handover, watch stream) address the manager by container name, and the page
+    check probes through it. MUTATION: drop the endpoint refresh in
+    `_manager_for_instance` (red)."""
+    import vaf.core.browser_render as br
+    mgr = _quiet(bi.get_manager_for_scope("scope-a"))
+    _reap_and_republish(wired_pool, monkeypatch)
+
+    # The agent lane: resolve, then register, exactly as BrowserAgentTool.run does.
+    inst = wired_pool.resolve("scope-a")
+    assert inst.cdp_base == "http://127.0.0.1:49333"
+    bi.register_run_browser(inst)
+    run_mgr = bi._manager_for_run(inst.container_name)
+    assert run_mgr is mgr
+    assert (run_mgr.cdp_base(), run_mgr.vnc_base()) == (
+        "http://127.0.0.1:49333", "http://127.0.0.1:46902")
+
+    # The render lane after one more stop and start.
+    _reap_and_republish(wired_pool, monkeypatch)
+    wired_pool._test_docker.next_ports = {"9222/tcp": "49444", "6901/tcp": "46903"}
+    cdp, render_mgr = br._endpoint_for("scope-a")
+    assert render_mgr is mgr
+    assert cdp == render_mgr.cdp_base() == "http://127.0.0.1:49444"
+
+
+def test_a_cached_instance_restarted_behind_the_pool_is_re_read(pool, monkeypatch):
+    """Another VAF process (or `docker restart`) can restart a running instance this
+    pool has cached, and Docker publishes it on new ports. The cached ports are
+    checked against the container on every resolve: unchanged, the cached instance
+    is handed out as it is; changed, the instance is re-read and re-probed before
+    it is handed out. MUTATION: return the cached instance without the check (red)."""
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "2")
+    first = pool.resolve("scope-a")
+    assert pool.resolve("scope-a") is first
+    probed = []
+    monkeypatch.setattr(pool, "_wait_healthy", lambda inst: probed.append(inst.cdp_base) or True)
+    pool._test_docker.next_ports = {"9222/tcp": "49555", "6901/tcp": "46904"}
+    n = len(pool._test_docker.calls)
+    moved = pool.resolve("scope-a")
+    assert (moved.cdp_base, moved.vnc_base) == ("http://127.0.0.1:49555", "http://127.0.0.1:46904")
+    assert probed == ["http://127.0.0.1:49555"]
+    assert pool.peek("scope-a") is moved
+    # Adopted as it runs: nothing is started, created or removed for it.
+    assert not any(c[0] in ("run", "start", "rm") for c in pool._test_docker.calls[n:])
+
+
+@pytest.fixture
 def live_health_pool(monkeypatch):
     """Same wiring as `pool`, minus the `_wait_healthy` stub.
 

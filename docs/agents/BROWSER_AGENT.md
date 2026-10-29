@@ -1049,8 +1049,14 @@ under way stops its own container instead of registering it after the quit looke
 `vaf-browser-u-*` by name, and not one another VAF process is connected to right now: the
 container name comes from the user scope, so a `vaf run` session can use the same one. NAMED
 BOUNDARY: an instance orphaned by a crash runs until its scope uses the browser again and it
-idles out; a
-stopped instance keeps its port mapping, so endpoints stay stable. A personal browser
+idles out. The endpoints are NOT stable across a stop: the ports are published without
+a host port, so Docker assigns new ones at every `docker start` (measured: 32775/32774
+before an idle stop, 32777/32776 after it). They are read from the container after
+every start, every resolve checks the cached ones against the container before it hands
+an instance out (another VAF process or a `docker restart` can restart it behind this
+pool's back), and the instance's browser manager takes them from that resolve each time,
+so the interactive window, the agent's handover and watch stream and `render_check` all
+reach the current ports without a restart of VAF. A personal browser
 holds about 0.3 GB idle and 0.6 GB after use (measured) and may grow to its 2 GB cap,
 which is what auto reserves for it. Needs the same docker CLI access the stop watchdog
 already uses.

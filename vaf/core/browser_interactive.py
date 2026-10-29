@@ -2214,6 +2214,16 @@ def get_interactive_manager() -> InteractiveBrowserManager:
 
 
 def _manager_for_instance(inst) -> InteractiveBrowserManager:
+    """The manager of one pooled instance, created once per container name.
+
+    The manager outlives the instance's start: the idle reaper stops the
+    container and the next use starts it again, and Docker publishes it on NEW
+    host ports at every start (the pool publishes without a fixed host port).
+    The endpoints are therefore taken from the instance on EVERY call, which is
+    what each caller has just resolved from the running container; everything
+    else the manager carries (lease, grants, runs, the dedicated scope) belongs
+    to the container and stays. A manager that kept its first endpoints answered
+    `browser_unavailable` for that person until VAF restarted (measured)."""
     with _manager_lock:
         mgr = _pool_managers.get(inst.container_name)
         if mgr is None:
@@ -2224,6 +2234,9 @@ def _manager_for_instance(inst) -> InteractiveBrowserManager:
                 dedicated_scope=inst.user_scope_id,
             )
             _pool_managers[inst.container_name] = mgr
+        else:
+            mgr._cdp_base_url = inst.cdp_base
+            mgr._vnc_base_url = inst.vnc_base
         return mgr
 
 

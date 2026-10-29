@@ -547,14 +547,29 @@ class BrowserPool:
             inst = None
 
         if inst is not None and state == "running":
-            inst.last_used = time.time()
-            self._ensure_reaper()
-            return inst
+            # The cached endpoints are only as good as the container's current
+            # start: the ports are published without a host port, so Docker picks
+            # new ones at every `docker start`. Something other than this pool can
+            # restart it (another VAF process waking it after its own idle stop,
+            # `docker restart`, a daemon restart), so the cache is checked against
+            # the container, not trusted. Unchanged ports keep the fast path; any
+            # other answer goes through the adoption below, which re-reads and
+            # re-probes the instance before it is handed out again.
+            current = self._read_endpoints(scope, name)
+            if current is not None and (current.cdp_base, current.vnc_base) == (inst.cdp_base, inst.vnc_base):
+                inst.last_used = time.time()
+                self._ensure_reaper()
+                return inst
+            with self._lock:
+                if self._instances.get(scope) is inst:
+                    self._instances.pop(scope, None)
+            inst = None
 
         if state == "running" or state == "exited":
             # Adopt a container from an earlier VAF process (or restart an
-            # idle-stopped one). Published ports were fixed at creation and
-            # survive stop/start, so re-reading them is enough.
+            # idle-stopped one). The published ports are NOT stable: they carry no
+            # host port, so Docker assigns new ephemeral ones at every start, and
+            # they are read here, after the start, every time.
             if state == "exited":
                 if not self._admit():
                     return None

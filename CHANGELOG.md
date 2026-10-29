@@ -11,6 +11,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+
+- **Local models can now run on vLLM as well as llama.cpp.** `vaf engine vllm` checks your
+  hardware, installs a pinned vLLM into its own environment (it asks first; at least 1.8 GB to
+  download), downloads a model (`Qwen3-4B-AWQ` or `Qwen3-8B-AWQ` by GPU memory, or any
+  Hugging Face repo with `--model`), checks that it fits and switches the local engine;
+  `vaf engine llama` switches back, `vaf engine` shows what this machine can run. It needs Linux
+  with an NVIDIA GPU of compute capability 7.5 or newer; on AMD, Intel, Apple Silicon and
+  Windows `vaf engine` says why not yet and llama.cpp keeps running. llama.cpp stays the
+  default. `vaf health` shows an `engine` row while vLLM is the engine.
+
 ### Changed
 
 - **The per-user browser pool now sizes itself by free memory** (`browser_pool_max: "auto"`,

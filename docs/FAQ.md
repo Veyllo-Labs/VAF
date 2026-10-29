@@ -53,9 +53,13 @@ including what `debug_logs_enabled` does and does not silence, is in
 [DEBUGGING.md](DEBUGGING.md).
 
 **Can I run the main agent on Ollama/vLLM/LM Studio?**
-Not today. The `local_api_url` key redirects only the API-backend consumers
-(browser agent, local vision, cloud-to-local failover); the main chat loop in
-local mode always manages its own llama server. See
+On vLLM, yes: `vaf engine vllm` checks the hardware, installs a pinned vLLM that
+VAF manages, downloads a model and switches the local engine (Linux with an
+NVIDIA GPU of compute capability 7.5 or newer; other platforms get a verdict
+that says why not yet). See [VLLM_ENGINE.md](llm/VLLM_ENGINE.md). A server VAF
+does not manage (your own Ollama, vLLM or LM Studio) is not supported for the
+main chat loop; the `local_api_url` key redirects only the API-backend
+consumers (browser agent, local vision, cloud-to-local failover). See
 [EMBEDDING.md](EMBEDDING.md) and [PROVIDER_MODES.md](llm/PROVIDER_MODES.md).
 
 **How do I integrate VAF from a non-Python application?**
@@ -79,11 +83,13 @@ external tools too. See [EMBEDDING.md](EMBEDDING.md) and
 [vaf/tools/README.md](../vaf/tools/README.md).
 
 **Can I add my own LLM provider?**
-Not without forking today: the provider factory is a fixed set. The supported
-escape hatch is `local_api_url` for the API-backend consumer lanes. A
-provider registry is a known, deliberately deferred seam (see the closing
-notes in [ARCHITECTURE.md](ARCHITECTURE.md)); if it lands, it will be
-announced in [CHANGELOG.md](../CHANGELOG.md).
+Not without forking today. The provider set lives in one registry,
+`vaf/core/provider_registry.py`, but there is no public way to register a
+provider of your own into it. The supported escape hatch is `local_api_url`
+for the API-backend consumer lanes. A public registration is a known,
+deliberately deferred seam (see the closing notes in
+[ARCHITECTURE.md](ARCHITECTURE.md)); if it lands, it will be announced in
+[CHANGELOG.md](../CHANGELOG.md).
 
 **Can I swap the memory backend?**
 No - long-term memory is PostgreSQL + pgvector. The memory stack is optional

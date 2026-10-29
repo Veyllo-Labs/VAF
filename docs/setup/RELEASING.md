@@ -126,6 +126,12 @@ waiting for a stable `X.Y.Z`.
    cross-checks them against llama.cpp's provenance attestation; `--download`
    additionally hashes every asset locally), start VAF once so the pinned build
    installs and runs, then commit the manifest with the release.
+   The vLLM engine is pinned the same way, by version (`PIN` in
+   `vaf/core/vllm_server.py`): bumping it is a release decision too. Edit `PIN`, run
+   `vaf engine vllm` once on a supported machine (Linux, NVIDIA, compute capability
+   7.5 or newer), check that the first start comes up and a tool call works, and
+   record the measured download and installed size in
+   [VLLM_ENGINE.md](../llm/VLLM_ENGINE.md).
 3. In `CHANGELOG.md`, move the relevant `[Unreleased]` notes into a new
    `## [X.Y.Z] - YYYY-MM-DD` section.
 4. Commit (on request) and push to `main`.

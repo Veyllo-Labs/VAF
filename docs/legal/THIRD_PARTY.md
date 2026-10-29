@@ -299,6 +299,14 @@ weights carry their own license independent of the code that loads them.
 | tinyproxy (in that image; runs the registries proxy) | Debian package | GPL-2.0-or-later | Copyright tinyproxy contributors - https://tinyproxy.github.io |
 | chromium-headless-shell (in that image; takes screenshots) | Debian package | BSD-3-Clause (plus the licences of Chromium's bundled components) | The Chromium Authors - https://www.chromium.org |
 
+| vLLM (the optional second local engine) | installed only on request (`vaf engine vllm`) from PyPI into its own environment `bin/vllm/venv`, version-pinned in `vaf/core/vllm_server.py`; never shipped with VAF | Apache-2.0 | The vLLM project - https://github.com/vllm-project/vllm |
+| PyTorch and its NVIDIA CUDA libraries (vLLM's dependencies) | pulled into the same environment by pip as vLLM's dependency tree | PyTorch: BSD-3-Clause; the NVIDIA wheels under NVIDIA's own licence terms, named in their PyPI packages | https://pytorch.org |
+| Qwen3-4B-AWQ and Qwen3-8B-AWQ model weights (the vLLM engine's `auto` default) | downloaded at first use into the user's Hugging Face cache by `vaf/core/vllm_server.py` | Apache-2.0 | Alibaba Cloud, Qwen team - https://huggingface.co/Qwen/Qwen3-4B-AWQ, https://huggingface.co/Qwen/Qwen3-8B-AWQ |
+
+The vLLM environment is like the sandbox image in that VAF never distributes it: the user's
+own pip installs it on the user's own machine, and VAF runs it as a separate program
+(a subprocess on the local port, no code linkage).
+
 The sandbox environment image is built on the user's own machine and never distributed by VAF: tinyproxy is GPL-2.0-or-later and runs there as a separate program next to the other packages (an aggregate, no code linkage), the same position as KasmVNC in the browser image. Publishing a prebuilt image would mean shipping the licence texts and the corresponding source with it.
 
 The three speech-to-text rows are MIT and the Smart Turn v3 weights are BSD-2-Clause,

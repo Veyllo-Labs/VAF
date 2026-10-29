@@ -564,7 +564,7 @@ The repair answers for the containers. Whether the installation works is a wider
 and two failures leave every container healthy while VAF stops working: the disk filling up
 (the database stops writing, a backup cannot be written) and the server's agent loop dying
 (the page loads, every request but the chat is answered, and no chat gets an answer again).
-`vaf/core/health.py` asks all three, and whether the scheduled backups run:
+`vaf/core/health.py` asks all three, whether the scheduled backups run and, under vLLM, the local engine:
 
 | Check | What it reads | Down when | Degraded when |
 |---|---|---|---|
@@ -572,6 +572,7 @@ and two failures leave every container healthy while VAF stops working: the disk
 | `disk` | free space on the fullest disk among the data folders, the backup folder and Docker's root directory (named in `docker info`, when it is a path on this machine) | less than 1 GB free | less than 5 GB free |
 | `backup` | the scheduled backups (`backup_schedule.backup_check`) | never | the last scheduled run failed, or the newest backup is older than its interval and a day |
 | `agent` | the agent loops of the server process (`headless_runner.worker_status`) | none is left | some have stopped |
+| `engine` | only while vLLM is the local engine (`local_engine = vllm`): the platform verdict, the managed install, the model, whether its server runs ([VLLM_ENGINE.md](../llm/VLLM_ENGINE.md)) | never | vLLM cannot run on this machine, or it is not installed |
 
 The verdict is the worst check. `vaf health` asks the running VAF, because the agent loop
 can only be seen inside it; when nothing answers, "VAF is not running" is the first finding

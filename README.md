@@ -298,6 +298,7 @@ vaf tray             # Desktop app; in a terminal it shows the dashboard
 vaf server on|off|status
 vaf server provision # Re-run server-mode setup (certs, firewall, checks)
 vaf profile [local|api] # Local models or API providers only; no argument shows the current one
+vaf engine [llama|vllm]  # The local engine: llama.cpp (GGUF) or a VAF-managed vLLM; no argument shows what runs here
 
 vaf update           # Update to the latest release
 vaf update check     # Check if a newer release is available

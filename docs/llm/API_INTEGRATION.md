@@ -114,7 +114,8 @@ Example use cases:
 
 ## Server Auto-Start
 
-When using API providers, you may want to disable automatic llama-server startup:
+When using API providers, you may want to disable the automatic start of the local engine's
+server (llama-server, or the managed vLLM under `local_engine = vllm`):
 
 ```json
 {

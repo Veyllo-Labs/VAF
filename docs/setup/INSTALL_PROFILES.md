@@ -105,7 +105,10 @@ each, not by checks spread over the code:
   (`inference_profile.download_guard` in each lane's progress hook), and a caller that was
   waiting on the download lock reads the profile again before it starts.
 - `ServerManager.start_server`, the one start of the local server, refuses, also for the
-  voice lane, which otherwise asks past the provider gate. A start that was waiting for a
+  voice lane, which otherwise asks past the provider gate, and for both local engines
+  (llama.cpp and the managed vLLM, [VLLM_ENGINE.md](../llm/VLLM_ENGINE.md)). The vLLM install
+  (`vaf engine vllm`, `vllm_server.install`) and its model download (`vllm_server.ensure_model`)
+  refuse as well, so under `api` neither engine installs or runs. A start that was waiting for a
   server still loading its model ends when the profile changes, instead of waiting out the
   readiness budget.
 - `Agent.load_model` loads no local model; a chat turn that has no provider says so in the
@@ -114,8 +117,9 @@ each, not by checks spread over the code:
   profile (`turn_refusal_reason` in `headless_runner.py`). An agent that loaded a local
   model before the profile was switched does not run its next turn on it, nor a one-shot
   completion (`Agent.complete`, the shared `completion.complete`). The switch stops the
-  llama server, from whichever process started it (`backend.stop_local_server`, which
-  checks that the pid in its pid file really is a llama server): the desktop tray unloads
+  local server, llama.cpp or vLLM, from whichever process started it
+  (`backend.stop_local_server`, which checks that the pid in its pid file really is a llama
+  server, and for vLLM that its command line names the managed environment): the desktop tray unloads
   it too, but only the tray runs that watchdog, so under `vaf server` and the macOS app
   nothing else did. A model loaded inside the process (the llama-cpp library lane, which
   the installer's Python 3.12 venv on Linux takes) and the tokenizer cached for counting

@@ -34,6 +34,7 @@ Docs are grouped into category folders. Full index by category:
 ### llm/ - models, providers, backend
 - [API_INTEGRATION.md](llm/API_INTEGRATION.md) - API providers and keys.
 - [PROVIDER_MODES.md](llm/PROVIDER_MODES.md) - Catalog of provider/model-specific behavior (DeepSeek, Gemma local mode) and the additive/gated principle.
+- [VLLM_ENGINE.md](llm/VLLM_ENGINE.md) - The second local engine: VAF-managed vLLM next to llama.cpp, its install, model, fit check, platform verdicts and named boundaries.
 - [DYNAMIC_MODEL_SELECTION.md](llm/DYNAMIC_MODEL_SELECTION.md) - Live model discovery per API provider.
 - [MODEL_AND_PROVIDER_SWITCHING.md](llm/MODEL_AND_PROVIDER_SWITCHING.md) - Switching local ↔ API at runtime.
 - [LAZY_LOAD_RAM_ANALYSIS.md](llm/LAZY_LOAD_RAM_ANALYSIS.md) - Model lazy-load and RAM analysis.

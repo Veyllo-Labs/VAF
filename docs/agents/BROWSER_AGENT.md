@@ -853,9 +853,10 @@ The practical limits are:
 ### Per-user browser pool (parallel use)
 
 **On by default, and sized by free memory.** Everyone who opens a browser gets a
-container of their own as long as the machine can hold it (never fewer than two people
-at a time, at most 16); everyone beyond that shares the fallback container described
-above. Four config keys govern it, all admin-only:
+container of their own as long as the machine can hold it (two people at a time
+whenever free memory is above the floor, more where the memory holds them, at most 16;
+on a small machine the floor can stop the second, see the table below); everyone beyond
+that shares the fallback container described above. Four config keys govern it, all admin-only:
 
 | Config key | Default | What it decides |
 |---|---|---|
@@ -943,6 +944,13 @@ pass a check only one of them fits through. Named boundaries:
   `docker run`; the floor is the margin for it.
 - **macOS and Windows** give no reading of the Docker VM's free memory, so auto serves
   exactly two there. An admin who wants more sets an integer.
+- **Auto trusts `MemAvailable`** from `/proc/meminfo`. Inside a memory-limited
+  container whose meminfo is not limit-aware (an LXC VPS without lxcfs) that is the
+  parent host's memory, and auto would size the pool against memory the container may
+  not use. On a memory-limited container host, set a number.
+- **An unreadable count refuses.** When `docker ps` fails, the pool cannot check the
+  ceiling or the reservation, so no new personal browser starts until it answers
+  again (the fallback is the shared browser), and the status row reads unknown.
 - **The per-scope networks are finite.** Every scope ever served keeps its own
   `vaf-browser-net-*` network, and Docker's default address pools allow about 31
   bridge networks in total, shared with the compose stack and the sandbox
@@ -1028,9 +1036,10 @@ The pool only ever ADDS isolation: whenever it cannot serve - switched off
 (`browser_pool_max` at `0`), at capacity, free memory below the floor (under auto:
 too little for another 2 GB reservation beyond the first two), docker
 unreachable, the shared container missing as the image template, or no user scope on
-the call - the caller falls back to the shared container and its handover scrub. That
-fallback is also where the named residual of the quick scrub still applies, so a
-machine that runs the pool at capacity is not uniformly partitioned; see
+the call - the caller falls back to the shared container and its verified handover
+wipe. That fallback is also where the shared container's named residuals apply (one
+jar for parallel runs within a process, a second installation keeping its own owner
+record), so a machine that runs the pool at capacity is not uniformly partitioned; see
 [USER_ISOLATION.md](../security/USER_ISOLATION.md). An idle instance is stopped (never
 removed: the container and its profile volume stay) and wakes on the next use, and VAF's
 quit stops the instances its pool started or adopted (`stop_known_instances`), including
@@ -1464,7 +1473,7 @@ its own user is routed to it.
 | **Session persistence** | Available via `persistent=true` + `session` parameter. Default mode still clears state between calls. |
 | **CAPTCHA** | No solver integrated. Sites with aggressive bot detection may block the agent. |
 | **Local LLMs** | Models below ~30B parameters struggle with structured JSON output required by browser-use. |
-| **Shared browser beyond the pool** | Every user the pool can serve gets their own browser container and runs in parallel (default `"auto"`: as many as free memory holds at 2 GB each, at least 2, at most 16; see [Per-user browser pool](#per-user-browser-pool-parallel-use)). Everyone beyond that shares one Chromium process, serialised by a queue (see [Concurrency](#concurrency--multi-user)). More memory, or a higher fixed `browser_pool_max`, raises the number of people who never meet there. |
+| **Shared browser beyond the pool** | Every user the pool can serve gets their own browser container and runs in parallel (default `"auto"`: as many as free memory holds at 2 GB each, two whenever free memory is above the floor, at most 16; see [Per-user browser pool](#per-user-browser-pool-parallel-use)). Everyone beyond that shares one Chromium process, serialised by a queue (see [Concurrency](#concurrency--multi-user)). More memory, or a higher fixed `browser_pool_max`, raises the number of people who never meet there. |
 | **Live view frame rate** | Chat runs stream the browser live (KasmVNC, watch-only). The screenshot lanes (workflow tile, spawned child) stay at ~1 frame/1.5 s - sufficient for monitoring. |
 
 ---

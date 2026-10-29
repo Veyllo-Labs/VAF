@@ -446,7 +446,7 @@ Strings live in the top-level `inbox` block and `nav.inbox`; design and rules in
   agent always wins the browser it is given and evicts an interactive session at run
   start - the person's OWN session, because each user scope browses in its own instance
   while the per-user pool serves it (`browser_pool_max`, default `"auto"`: sized by free
-  memory, at least 2, at most 16; Settings > Advanced > Browser pool has the "Size
+  memory, 2 whenever free memory is above the floor, at most 16; Settings > Advanced > Browser pool has the "Size
   automatically by free memory" switch, and a fixed number when it is off).
   Details and the lease/ticket model:
   [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md#interactive-browser-driving-the-sandbox-by-hand).

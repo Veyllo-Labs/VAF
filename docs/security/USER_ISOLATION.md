@@ -970,7 +970,7 @@ The connection map (`/api/network/connections`) lists every connected device's a
 | Sub-agent watchdog (`/api/supervisor/status`, `/cancel`) | Non-admins see and can cancel only units of sessions owned by their scope; unscoped sessions admin-only; fail-closed ownership lookup; admins get all units with username attribution | Application |
 | Security dashboard (`/api/security/*`) | Admin-only by design (`require_admin`); aggregates cross-scope metrics server-side; full scope UUIDs never leave the backend | Application |
 | Browser sessions (cookies/logins) | Per-user `~/.vaf/browser_sessions/<scope>/` store keyed by user_scope_id, encrypted at rest | OS |
-| Live browser (interactive + agent) | Per-scope container, profile volume and docker network for every scope the pool can serve (`browser_pool_max`, default `"auto"`: at least 2 where memory allows, at most 16, admin-only); beyond that a shared container with one lease at a time and a handover scrub, whose quick mode leaves profile files behind | Container / Application |
+| Live browser (interactive + agent) | Per-scope container, profile volume and docker network for every scope the pool can serve (`browser_pool_max`, default `"auto"`: at least 2 where memory allows, at most 16, admin-only); beyond that a shared container with one lease at a time and a verified, fail-closed profile wipe on every handover to another scope | Container / Application |
 | WhatsApp | Separate subprocess per user | Process |
 | Telegram | Whitelist-based routing | Application |
 | Email | Per-user encrypted credentials + scope-based config lookup chain | Application |

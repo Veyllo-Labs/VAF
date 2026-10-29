@@ -479,7 +479,8 @@ more may start right now, computed by the same rule the next admission uses
 (`admission_room`), so the row and the decision cannot disagree; the reason spells it out,
 for example "Automatic: 2 running, room for 0 more (6.7 GB free, 2.4 GB kept free, 2 GB
 reserved per browser)." `state` is `ok` while one runs, `idle` when none runs, `off` when
-`browser_pool_max` is `0`, and `unknown` when docker is not reachable. Like the sandbox it
+`browser_pool_max` is `0`, and `unknown` when docker is not reachable or does not list the
+running browsers (the pool then starts none until it does). Like the sandbox it
 sits next to `services` and not among them: the pool starts one browser per person on
 demand and the idle reaper stops it, and a full pool sends people to the shared browser,
 the designed fallback. So it is never one of the issues and never fails a check (not in

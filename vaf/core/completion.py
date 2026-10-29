@@ -233,7 +233,8 @@ def _local_complete(messages, model, max_tokens, temperature, timeout,
         # answer and pass allow_reasoning_fallback=False.
         if not allow_reasoning_fallback:
             return None
-        reasoning = (msg.get("reasoning_content") or "").strip()
+        from vaf.core.local_engine import reasoning_text
+        reasoning = reasoning_text(msg).strip()
         try:
             from vaf.core.log_helper import append_domain_log
             append_domain_log(

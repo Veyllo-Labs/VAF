@@ -98,6 +98,7 @@ import signal
 import platform
 import webbrowser
 from vaf.core.config import Config, NETWORK_ADMISSION_KEYS, NETWORK_RESTART_KEYS
+from vaf.core import local_engine
 from vaf.core.log_helper import get_dated_log_path
 from vaf.core.backend import ServerManager
 from vaf.core.tray_context import TrayContext
@@ -1368,20 +1369,26 @@ def quit_app(icon=None, item=None):
 
 def on_config_changed(key, value, old_value=None):
     """Handle dynamic config changes."""
-    # Model, context size, or GPU layers changed → restart llama-server with new values
-    if key in ["model", "n_ctx", "gpu_layers"]:
+    if key in local_engine.ENGINE_KEYS:
+        # Seen here already: the file poll must not report the same change a second time
+        # (a second restart is a second vLLM load).
+        _last_network_config[key] = value
+    # The engine, its model, the context size or the GPU layers changed -> restart the local
+    # engine with the new values. Only for a key the RUNNING engine reads (a GGUF choice
+    # means nothing to vLLM, a vllm_ key nothing to llama.cpp): a restart costs a model load.
+    if key in local_engine.RESTART_KEYS and local_engine.restarts_running_engine(key):
         def _restart_llama():
             time.sleep(1)  # let config save finish
             from vaf.core.config import Config
             provider = Config.get("provider", "local")
             if provider != "local":
-                return  # cloud providers don't use llama-server
+                return  # cloud providers don't use the local engine
             n_ctx = Config.get("n_ctx", 8192)
             gpu_layers = Config.get("gpu_layers", 99)
             # -1 = AUTO: keep it -1 so the backend omits -ngl and llama.cpp auto-fits layers to VRAM
             # (offload overflow to CPU) instead of forcing all layers and aborting when it won't fit.
             model = Config.get("model")
-            msg = f"Config changed ({key}={value}). Restarting llama-server"
+            msg = f"Config changed ({key}={value}). Restarting the local engine ({local_engine.current()})"
             if key == "model":
                 msg += f" with model {model}"
             msg += f" (n_ctx={n_ctx}, gpu_layers={gpu_layers})..."
@@ -1457,11 +1464,14 @@ def on_config_changed(key, value, old_value=None):
 
 # Last known network config (read from file by poll thread) so CLI changes in another process are picked up
 _last_network_config = {}
+# Watched by the same poll: `vaf engine` in a terminal switches the engine, and the tray is
+# what restarts the server for it.
+_POLLED_KEYS = (*NETWORK_RESTART_KEYS, *NETWORK_ADMISSION_KEYS, *local_engine.ENGINE_KEYS)
 
 def _seed_network_config():
     """Remember the network settings as they are at start, so the poll reports only changes."""
     cfg = Config.load()
-    for key in (*NETWORK_RESTART_KEYS, *NETWORK_ADMISSION_KEYS):
+    for key in _POLLED_KEYS:
         _last_network_config[key] = cfg.get(key, Config.DEFAULTS.get(key))
 
 
@@ -1472,7 +1482,7 @@ def _config_file_poll_loop():
         time.sleep(25)
         try:
             cfg = Config.load()
-            for key in (*NETWORK_RESTART_KEYS, *NETWORK_ADMISSION_KEYS):
+            for key in _POLLED_KEYS:
                 new_val = cfg.get(key, Config.DEFAULTS.get(key))
                 old_val = _last_network_config.get(key)
                 if new_val != old_val:

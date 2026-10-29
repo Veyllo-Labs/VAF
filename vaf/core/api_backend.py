@@ -16,6 +16,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, Generator, List, Union
 from vaf.core.config import Config
 from vaf.core.cost import blank_request_usage, cache_usage, cache_usage_from_openai
+from vaf.core.local_engine import reasoning_text
 from vaf.cli.ui import UI
 
 # Configure logging
@@ -507,7 +508,9 @@ class OpenAIProvider(BaseAIProvider):
                 for chunk in response:
                     if len(chunk.choices) > 0:
                         delta = chunk.choices[0].delta
-                        reasoning_chunk = getattr(delta, "reasoning_content", None) or ""
+                        # reasoning (vLLM's name) only from the local server: OpenRouter
+                        # has a reasoning field of its own (vaf/core/local_engine.py).
+                        reasoning_chunk = reasoning_text(delta, local=self.provider_name == "local")
                         content_chunk = delta.content or ""
                         
                         # Method 1: reasoning_content (DeepSeek Reasoner/R1, extended thinking models)
@@ -546,7 +549,7 @@ class OpenAIProvider(BaseAIProvider):
             else:
                 response = self._create_with_retry(kwargs)
                 msg = response.choices[0].message
-                reasoning = getattr(msg, "reasoning_content", None) or ""
+                reasoning = reasoning_text(msg, local=self.provider_name == "local")
                 content = msg.content or ""
                 
                 # DeepSeek Reasoner: answer often in reasoning_content only

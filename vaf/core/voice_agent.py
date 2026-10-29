@@ -600,6 +600,11 @@ def _resolve_backend():
     from vaf.core.config import Config
     override = (Config.get("voice_agent_provider", "") or "").strip().lower()
     if override == "local":
+        from vaf.core import local_engine
+        if local_engine.is_vllm():
+            # Under the vLLM engine the call rides the running vLLM model: a swap to a
+            # voice GGUF would be a multi-minute vLLM restart (and a GGUF vLLM does not run).
+            return "local", None
         from vaf.core import voice_model
         return "local", voice_model.voice_model_ref()
     if override:
@@ -691,7 +696,8 @@ def _local_chat(messages) -> Optional[str]:
         choice = (r.json().get("choices") or [{}])[0]
         msg = choice.get("message") or {}
         content = msg.get("content") or ""
-        reasoning = msg.get("reasoning_content") or ""
+        from vaf.core.local_engine import reasoning_text
+        reasoning = reasoning_text(msg)
         if choice.get("finish_reason") == "length":
             _log.info("voice_agent: local reply truncated by max_tokens "
                       "(content=%d reasoning=%d chars)", len(content), len(reasoning))

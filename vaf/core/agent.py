@@ -25,6 +25,7 @@ from pathlib import Path
 
 from vaf.core.config import Config
 from vaf.core.backend import ServerManager
+from vaf.core import local_engine
 from vaf.core.platform import Platform
 from vaf.core.channels import ALL_SEND_TOOLS, CHANNEL_SEND_TOOLS, CHAT_SEND_TOOLS
 from vaf.core.log_helper import append_domain_log, get_dated_log_path, log_timeline_event
@@ -5346,6 +5347,12 @@ class Agent:
         if not inference_profile.local_inference_allowed():
             UI.event("Backend", inference_profile.refuse("the local model"), style="warning")
             return
+
+        # The vLLM engine (vaf/core/local_engine.py): no GGUF, and always the server path -
+        # vLLM is a server, the in-process library is llama.cpp's.
+        if local_engine.current() == local_engine.VLLM:
+            self._load_vllm_engine(skip_download_check)
+            return
         
         if not skip_download_check:
             self.ensure_model_exists()
@@ -5603,6 +5610,23 @@ class Agent:
         if self.llm is not None and not inference_profile.local_inference_allowed():
             self.llm = None
             UI.event("Backend", inference_profile.refuse("the local model"), style="warning")
+
+    def _load_vllm_engine(self, skip_download_check: bool = False) -> None:
+        """load_model under local_engine = vllm: the model is downloaded (unless the caller
+        skips that), the ONE server started or reused through start_server, which hands the
+        port over and waits for a vLLM that is still loading. The chat uses the server path
+        either way; a start that did not succeed is retried by the chat's reconnect."""
+        from vaf.cli.ui import UI
+        n_ctx = max(self.config.get("n_ctx", 32768), 32768)
+        self.server = ServerManager(skip_cleanup=True)
+        model_dir = "" if skip_download_check else self.server.ensure_model_present()
+        started = self.server.start_server(model_dir, n_gpu_layers=self.config.get("gpu_layers", 99),
+                                           n_ctx=n_ctx)
+        self.use_server = True
+        if started:
+            UI.event("Info", "Using HTTP Backend (vLLM)", style="dim")
+        else:
+            UI.event("System", "vLLM is not ready; the chat retries the start.", style="warning")
 
     def ensure_model_exists(self):
         """Make sure the model GGUF is on disk (download if missing) via the shared, locked, self-healing
@@ -6686,6 +6710,7 @@ class Agent:
         # Server Mode: Use server /tokenize API for precise count (no local model load).
         # If server is not ready or tokenize fails, fall back to estimation.
         if self.use_server:
+            engine = local_engine.current()
             try:
                 total = 0
                 for msg in self.history:
@@ -6694,29 +6719,23 @@ class Agent:
                     for text in (content, role):
                         if not text:
                             continue
-                        r = requests.post(
-                            "http://127.0.0.1:8080/tokenize",
-                            json={"content": text},
-                            timeout=5
-                        )
-                        if r.status_code == 200:
-                            data = r.json()
-                            total += len(data.get("tokens", []))
+                        count = local_engine.local_token_count(text, timeout=5, engine=engine)
+                        if count is None:
+                            # The server cannot count (not up yet, another /tokenize
+                            # contract): an estimate, never a sum that silently left
+                            # this message out.
+                            raise LookupError("tokenize unavailable")
+                        total += count
                     total += 5
                 if hasattr(self, "TOOLS") and self.TOOLS:
-                    try:
-                        schema_str = json.dumps(self.TOOLS)
-                        r = requests.post(
-                            "http://127.0.0.1:8080/tokenize",
-                            json={"content": schema_str},
-                            timeout=5
-                        )
-                        if r.status_code == 200:
-                            total += len(r.json().get("tokens", []))
-                    except Exception:
-                        total += len(self.tools) * 200
+                    count = local_engine.local_token_count(json.dumps(self.TOOLS), timeout=5,
+                                                           engine=engine)
+                    total += count if count is not None else len(self.tools) * 200
                 total += 100
-                return total, self.config.get("n_ctx", 8192)
+                # Under vLLM the window is what the server was launched with (clamped to
+                # the model's maximum), which can be less than n_ctx.
+                return total, (local_engine.local_context_window()
+                               or self.config.get("n_ctx", 8192))
             except Exception:
                 pass
             return self._estimate_token_usage()
@@ -7360,6 +7379,7 @@ class Agent:
             
             # Setup tokenizer for breakdown if available
             tokenizer = None
+            _engine = local_engine.current()
             if not self.api_backend: # Only use local tokenizer for local/server modes
                 if self.use_server:
                     pass # We will use the /tokenize API per block
@@ -7373,11 +7393,9 @@ class Agent:
                 # Precise token count for this message
                 msg_tokens = 0
                 if self.use_server:
-                    try:
-                        r = requests.post("http://127.0.0.1:8080/tokenize", json={"content": content + role}, timeout=2)
-                        if r.status_code == 200:
-                            msg_tokens = len(r.json().get("tokens", [])) + 5
-                    except: pass
+                    _count = local_engine.local_token_count(content + role, timeout=2, engine=_engine)
+                    if _count is not None:
+                        msg_tokens = _count + 5
                 
                 if msg_tokens == 0 and tokenizer:
                     try:
@@ -7403,9 +7421,8 @@ class Agent:
                 try:
                     schema_str = json.dumps(self.TOOLS)
                     if self.use_server:
-                        r = requests.post("http://127.0.0.1:8080/tokenize", json={"content": schema_str}, timeout=2)
-                        if r.status_code == 200:
-                            tools_tokens = len(r.json().get("tokens", []))
+                        tools_tokens = local_engine.local_token_count(schema_str, timeout=2,
+                                                                      engine=_engine) or 0
                     if tools_tokens == 0 and tokenizer:
                         tools_tokens = len(tokenizer.tokenize(schema_str.encode("utf-8")))
                     if tools_tokens == 0:
@@ -11012,6 +11029,10 @@ class Agent:
                              "top_k": int(Config.get("top_k", 40) or 40),
                              "max_tokens": int(Config.get("max_generation_tokens", 10000) or 10000),
                         }
+                        # vLLM ignores repeat_penalty (an unknown field); its own name for the
+                        # same knob is repetition_penalty.
+                        if local_engine.current() == local_engine.VLLM:
+                            payload["repetition_penalty"] = payload["repeat_penalty"]
                         
                         # Remove keys if None (some APIs don't like null tools)
                         if current_tools is None:
@@ -11317,7 +11338,8 @@ class Agent:
                                 # Process Content & Reasoning
                                 # Note: Server may return null instead of empty string
                                 content_chunk = delta.get('content') or ''
-                                reasoning_chunk = delta.get('reasoning_content') or ''
+                                # reasoning_content (llama.cpp) or reasoning (vLLM)
+                                reasoning_chunk = local_engine.reasoning_text(delta)
 
                                 # Method 1: Explicit reasoning_content field (DeepSeek R1, etc.)
                                 if reasoning_chunk:
@@ -11452,7 +11474,7 @@ class Agent:
                                     if 'arguments' in fn: streaming_tools[idx]['arguments'] += fn['arguments']
 
                         content_chunk = delta.get('content') or ''
-                        reasoning_chunk = delta.get('reasoning_content') or ''
+                        reasoning_chunk = local_engine.reasoning_text(delta)
 
                         # Method 1: Explicit reasoning_content (VQ1 / reasoning models via library)
                         if reasoning_chunk:

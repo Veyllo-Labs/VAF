@@ -26,7 +26,9 @@ the code:
 
 - ``backend.ensure_model_available``, the one download entry for a model;
 - ``ServerManager.start_server``, the one start of the local server (also when the voice
-  lane bypasses the provider gate);
+  lane bypasses the provider gate), for both local engines (llama.cpp and the managed vLLM,
+  vaf/core/local_engine.py); the vLLM install and its model download refuse as well
+  (``vllm_server.install``, ``vllm_server.ensure_model``);
 - ``Agent.load_model``, the one local backend entry of an agent;
 - ``service_stack.needed_services``, the one list of the services to run, read by the
   stack start, the status, the repair and the installers;
@@ -36,8 +38,9 @@ the code:
 - the failover chain, whose local link is left out (``APIBackendManager``);
 - a running agent and a running server: ``Agent.chat_step`` and ``Agent.complete`` (with
   the shared ``completion.complete``) refuse a local backend that was loaded before a
-  switch; the switch stops the llama server (``backend.stop_local_server``: the desktop
-  tray unloads it too, but only the tray runs that watchdog) and releases an in-process
+  switch; the switch stops the local server, llama.cpp or vLLM
+  (``backend.stop_local_server``: the desktop tray unloads it too, but only the tray runs
+  that watchdog) and releases an in-process
   model (``agent.release_disallowed_local_backends``).
 
 A setting that names a local lane while the profile is ``api`` is not refused when it is
@@ -215,7 +218,8 @@ def _release_in_process_models() -> None:
 
 
 def _stop_local_server() -> str:
-    """The llama server, from whichever process started it (``backend.stop_local_server``).
+    """The local model server, llama.cpp or vLLM, from whichever process started it
+    (``backend.stop_local_server``).
     Returns why it is still running, or "". Never raises: the profile is already written."""
     try:
         from vaf.core.backend import stop_local_server

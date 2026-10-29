@@ -11,6 +11,7 @@ Supports:
 - Apple Silicon (Metal)
 """
 import os
+import re
 import sys
 import platform
 import shutil
@@ -30,12 +31,16 @@ def _get_subprocess_kwargs() -> dict:
 class GPUInfo:
     """Information about a detected GPU."""
     def __init__(self, vendor: str, model: str = "", vram_mb: int = 0, 
-                 driver_available: bool = False, compute_available: bool = False):
+                 driver_available: bool = False, compute_available: bool = False,
+                 compute_capability: str = ""):
         self.vendor = vendor  # "nvidia", "amd", "intel", "apple"
         self.model = model
         self.vram_mb = vram_mb
         self.driver_available = driver_available
         self.compute_available = compute_available  # CUDA/ROCm/SYCL available
+        # NVIDIA compute capability as nvidia-smi prints it ("8.6"); "" when unknown or
+        # not an NVIDIA GPU. vLLM's CUDA build needs 7.5 or newer (vaf/core/local_engine.py).
+        self.compute_capability = compute_capability
     
     def __repr__(self):
         return f"GPUInfo(vendor={self.vendor}, model={self.model}, vram={self.vram_mb}MB, compute={self.compute_available})"
@@ -47,13 +52,24 @@ def detect_nvidia_gpu() -> Optional[GPUInfo]:
         return None
     
     try:
+        # compute_cap is asked for too (vLLM's hardware verdict needs it). A driver too old to
+        # know the field refuses the whole query, so the two-field query it always answered
+        # runs again without it: detection must never lose the GPU over the extra column.
         result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+            ["nvidia-smi", "--query-gpu=name,memory.total,compute_cap", "--format=csv,noheader,nounits"],
             capture_output=True,
             text=True,
             timeout=5,
             **_get_subprocess_kwargs()
         )
+        if result.returncode != 0:
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                **_get_subprocess_kwargs()
+            )
         
         if result.returncode != 0:
             return None
@@ -73,6 +89,10 @@ def detect_nvidia_gpu() -> Optional[GPUInfo]:
             except ValueError:
                 vram_mb = 0
             
+            compute_capability = parts[2].strip() if len(parts) >= 3 else ""
+            if not re.fullmatch(r"\d+\.\d+", compute_capability):
+                compute_capability = ""     # "[N/A]" or anything else that is no version
+            
             # Check if CUDA is actually available (not just driver)
             cuda_available = _check_cuda_available()
             
@@ -81,13 +101,31 @@ def detect_nvidia_gpu() -> Optional[GPUInfo]:
                 model=model,
                 vram_mb=vram_mb,
                 driver_available=True,
-                compute_available=cuda_available
+                compute_available=cuda_available,
+                compute_capability=compute_capability,
             )
     except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
         pass
     
     return None
 
+
+
+def nvidia_free_vram_mb() -> int:
+    """Free memory of the first NVIDIA GPU in MiB, from nvidia-smi; 0 when it cannot be read.
+
+    The one reader of the free figure: the llama server sizes its context with it, the vLLM
+    engine its memory share and its fit check."""
+    try:
+        _r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if _r.returncode == 0:
+            return int(_r.stdout.strip().splitlines()[0])
+    except Exception:
+        pass
+    return 0
 
 def _check_cuda_available() -> bool:
     """Check if CUDA runtime is actually available (not just driver)."""

@@ -234,8 +234,16 @@ class Config:
         # "subagent_" prefix in GLOBAL_CONFIG_KEY_PREFIXES.
         "subagent_concurrent_chat_enabled": True,
         
-        # Auto-start local llama-server (disable if only using APIs)
+        # Auto-start the local engine's server (disable if only using APIs)
         "auto_start_local_server": True,
+        # The engine of provider "local" (vaf/core/local_engine.py): "llama" = llama.cpp with a
+        # GGUF, "vllm" = the VAF-managed vLLM (installed with `vaf engine vllm`). Every vllm_
+        # key is a launch argument of that server, so all of them are admin-only.
+        "local_engine": "llama",
+        "vllm_model": "auto",                  # Hugging Face repo id; auto = by VRAM (Qwen3-4B-AWQ / Qwen3-8B-AWQ)
+        "vllm_tool_call_parser": "",           # --tool-call-parser; empty = from the model family
+        "vllm_reasoning_parser": "",           # --reasoning-parser; empty = from the model family, "none" = off
+        "vllm_gpu_memory_utilization": 0,      # GPU memory share for vLLM; 0 = computed from free VRAM at launch
 
         # Tool Router cap — max number of tools passed to the agent per turn.
         # list_tools and search_tools are always included on top of this limit.
@@ -1073,12 +1081,16 @@ class Config:
         # Backups: where every backup of the instance lands and who it is encrypted to. A
         # per-user write would send the encrypted copy of everyone's data where they choose.
         "backup_",
+        # The vLLM engine: every key is a launch argument of the one local model server.
+        "vllm_",
     )
     GLOBAL_CONFIG_KEYS = frozenset([
         "provider", "model", "n_ctx", "gpu_layers", "n_parallel", "llama_cache_ram",
         # What the installation runs itself: switching it starts or stops containers and
         # decides whether models are downloaded, for every account at once.
         "inference_profile",
+        # Which engine runs the local model: a server launch for every account at once.
+        "local_engine",
         "auto_start_local_server", "tray_autostart", "web_ui_enabled", "server_persistence_enabled",
         "debug_logs_enabled", "server_idle_timeout", "telegram_idle_timeout", "telegram_debounce_seconds",
         "redis_url", "redis_enabled", "use_docker",

@@ -187,6 +187,7 @@ STORES: Tuple[Store, ...] = (
     _s("vaf", "locks", RUNTIME, "vaf/core/lock_manager.py"),
     _s("vaf", "service.pid", RUNTIME, "vaf/cli/cmd/service.py"),
     _s("vaf", "server.pid", RUNTIME, "vaf/core/backend.py"),
+    _s("vaf", "vllm.pid", RUNTIME, "vaf/core/vllm_server.py"),
     _s("vaf", "web_port", RUNTIME, "vaf/core/frontend_manager.py"),
     _s("vaf", "sandbox_env_image.lock", RUNTIME, "vaf/core/environment_image.py"),
     _s("vaf", "browser_jar", RUNTIME, "vaf/core/browser_jar.py",

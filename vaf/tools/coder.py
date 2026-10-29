@@ -48,6 +48,7 @@ from vaf.core.persistence import PersistenceManager, ProjectState, Task, coerce_
 # Project directory safety lives in core (vaf/core/workspace_guard.py): the session store,
 # the web server and the headless runner ask the same question.
 from vaf.core.workspace_guard import is_unsafe_project_dir  # noqa: E402
+from vaf.core.local_engine import reasoning_text  # noqa: E402
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -5680,7 +5681,9 @@ Task {task_idx + 1}: {current_task}
             _vr_data = _vr_resp.json()
             _record_coder_usage(_vr_data)
             _vr_msg = (_vr_data.get("choices") or [{}])[0].get("message") or {}
-            return _vr_msg.get("content") or _vr_msg.get("reasoning_content") or ""
+            # reasoning (vLLM's name) only from the local server; an API provider's own
+            # reasoning field (OpenRouter) is not this one.
+            return _vr_msg.get("content") or reasoning_text(_vr_msg, local=not _is_api_mode)
 
         def _maybe_start_final_retry() -> bool:
             """One last retry round for failed tasks before the run ends.
@@ -7098,7 +7101,8 @@ Task {task_idx + 1}: {current_task}
                         # separately. Reasoning is wrapped in <think>...</think> in collected_content
                         # so clean_history can later extract it as reasoning_content for DeepSeek
                         # passback. Without this, mixing reasoning into content causes a 400 error.
-                        _reasoning_chunk = delta.get('reasoning_content', '') or delta.get('thought', '') or ''
+                        _reasoning_chunk = (reasoning_text(delta, local=not _is_api_mode)
+                                            or delta.get('thought', '') or '')
                         _content_chunk = delta.get('content', '') or ''
 
                         if _reasoning_chunk:

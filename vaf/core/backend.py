@@ -84,6 +84,13 @@ def _loaded_model_matches(model_path: str, port: int = 8080) -> bool:
     """True when the server on `port` holds exactly `model_path`'s file.
     Unknown (probe failed / no id) counts as MATCH so legacy behavior
     (reuse any healthy server) is preserved when the id is unreadable."""
+    from vaf.core import local_engine
+    if local_engine.is_vllm():
+        # Under vLLM the server holds a Hugging Face repo, never a GGUF: what must match is
+        # the configured vLLM model (a GGUF path from a caller is not what runs).
+        from vaf.core import vllm_server
+        served = vllm_server.served_model(port)
+        return served is None or served == local_engine.resolve_vllm_model()
     loaded = get_loaded_model_id(port)
     if not loaded:
         return True
@@ -161,7 +168,23 @@ def ensure_local_model(model_path: str, reason: str = "", skip_provider_gate: bo
     GGUF (start_server is model-aware). Used by the voice lane (dedicated
     voice model) and by the main lane's swap-back check. Serialized by a
     module lock so voice and main cannot fight over the swap.
+
+    Under the vLLM engine the GGUF in `model_path` is not what runs: this makes
+    the ONE server hold the configured vLLM model instead (a fast reuse when it
+    already does).
     """
+    from vaf.core import local_engine
+    if local_engine.is_vllm():
+        with _ENSURE_LOCAL_LOCK:
+            try:
+                from vaf.core.config import Config
+                n_ctx = max(int(Config.get("n_ctx", 32768) or 32768), 32768)
+                mgr = ServerManager(skip_cleanup=True)
+                return bool(mgr.start_server(model_path or "", n_ctx=n_ctx,
+                                             skip_provider_gate=skip_provider_gate))
+            except Exception as e:
+                UI.event("Server", f"Local model start failed: {e}", style="yellow")
+                return False
     if not model_path or not os.path.exists(model_path):
         return False
     with _ENSURE_LOCAL_LOCK:
@@ -187,12 +210,21 @@ def ensure_local_model(model_path: str, reason: str = "", skip_provider_gate: bo
 
 
 def stop_local_server(wait: float = 3.0) -> str:
-    """Stop the ONE llama server from any process: the one its pid file names, and only when
-    that pid really is a llama server (a stale file after a reboot can name anyone). For a
-    switch to the ``api`` inference profile, which may come from a terminal: the desktop
-    tray's watchdog unloads the server too, but nothing else did - under ``vaf server`` (no
-    display) and the macOS app the model stayed loaded, up to 17.9 GB. Returns "" when it
-    stopped or none ran, else why it is still running."""
+    """Stop the ONE local model server from any process, whichever engine runs it: the
+    managed vLLM (vllm_server.stop: its process group, verified by its command line) and the
+    llama server its pid file names, the latter only when that pid really is a llama server
+    (a stale file after a reboot can name anyone). For a switch to the ``api`` inference
+    profile, which may come from a terminal: the desktop tray's watchdog unloads the server
+    too, but nothing else did - under ``vaf server`` (no display) and the macOS app the model
+    stayed loaded, up to 17.9 GB. Returns "" when it stopped or none ran, else why it is
+    still running."""
+    from vaf.core import vllm_server
+    vllm_error = vllm_server.stop() if vllm_server.running_pid() is not None else ""
+    llama_error = _stop_llama_server(wait)
+    return " ".join(e for e in (vllm_error, llama_error) if e)
+
+
+def _stop_llama_server(wait: float) -> str:
     mgr = ServerManager(skip_cleanup=True)
     try:
         with open(mgr.pid_file, "r", encoding="utf-8") as f:
@@ -499,6 +531,23 @@ def local_server_multimodal(port: int = 8080) -> bool:
         return False
 
 
+def _wait_port_free(port: int, tries: int = 20) -> None:
+    """Wait (up to tries x 0.5 s) until nothing accepts on the port. The port stays bound
+    briefly after a killed server's HTTP health is gone, and a new server spawned into that
+    window exits with "address already in use"; a real socket connect sees it, /health
+    does not."""
+    import socket as _sock
+    for _ in range(tries):
+        try:
+            with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as _s:
+                _s.settimeout(0.3)
+                if _s.connect_ex(("127.0.0.1", port)) != 0:
+                    break  # nothing accepting: port is free
+        except Exception:
+            break
+        time.sleep(0.5)
+
+
 def _server_ready_budget() -> float:
     """Seconds to wait for llama-server to reach /health == 200 (weights loaded, context
     allocated). A cold multi-GB GGUF on a slow disk or CPU-only box can need minutes, so
@@ -567,6 +616,9 @@ class ServerManager:
         # Attention). Skips the doomed first attempt on later restarts (idle unload /
         # config change) so each reload does not re-pay a full model load + crash.
         self._kv_vquant_unsupported = False
+        # This manager spawned the managed vLLM: a plain stop_server() stops it, as it stops
+        # a llama-server this manager spawned.
+        self._vllm_started = False
         
         # PID file for tracking server process (survives crashes)
         self.pid_file = os.path.join(os.path.expanduser("~"), ".vaf", "server.pid")
@@ -621,7 +673,17 @@ class ServerManager:
         """Resolve + download (locked, self-healing) the configured model and return its local path.
         The tray/server auto-start uses this instead of get_model_path(), which only builds a path and
         would otherwise launch llama-server against a non-existent file. Thin wrapper around the shared
-        module-level ``ensure_model_available`` so every load path uses one implementation."""
+        module-level ``ensure_model_available`` so every load path uses one implementation.
+
+        Under the vLLM engine the model is the configured Hugging Face repo (vllm_model), not
+        a GGUF: its directory in the Hugging Face cache comes back, downloaded when missing,
+        and "" while vLLM is not installed (no multi-GB model for an engine that cannot run)."""
+        from vaf.core import local_engine
+        if local_engine.is_vllm():
+            from vaf.core import vllm_server
+            if not vllm_server.is_installed():
+                return ""
+            return vllm_server.ensure_model(local_engine.resolve_vllm_model())
         return ensure_model_available(model_name, Path(self.base_dir) / "models")
 
     def __del__(self):
@@ -688,6 +750,16 @@ class ServerManager:
     
     def _cleanup_orphan_server(self):
         """Kill any orphaned server process from a previous crash."""
+        # A vLLM pid file that names no managed vLLM (crash, reboot) is only a stale record.
+        # A LIVE vLLM is never killed here: it answers nothing for the minutes it loads, so
+        # silence is no sign of an orphan; the start path waits for it and stops it when it
+        # does not come up within the ready budget.
+        try:
+            from vaf.core import vllm_server
+            if vllm_server.pid_file().exists() and vllm_server.running_pid() is None:
+                vllm_server.pid_file().unlink()
+        except Exception:
+            pass
         if not os.path.exists(self.pid_file):
             return
         
@@ -1107,6 +1179,21 @@ class ServerManager:
             UI.event("Backend", inference_profile.refuse("the local server"), style="dim")
             return False
 
+        # The engine of provider local (vaf/core/local_engine.py). Under vLLM the GGUF in
+        # model_path is not used and llama-server is never installed or spawned.
+        from vaf.core import local_engine, vllm_server
+        if local_engine.current() == local_engine.VLLM:
+            return self._start_vllm_locked(n_ctx=n_ctx, port=port)
+        # The handover the other way: a vLLM holding the port (the engine was switched back)
+        # is stopped, and gone, before llama-server is spawned.
+        if vllm_server.running_pid() is not None:
+            UI.event("Server", "Stopping vLLM: the local engine is llama.cpp", style="dim")
+            reason = vllm_server.stop()
+            if reason:
+                UI.error(reason)
+                return False
+            _wait_port_free(port)
+
         if not self.ensure_server_exists():
             return False
 
@@ -1230,16 +1317,7 @@ class ServerManager:
             #     free VRAM too early panics the n_ctx cap into the
             #     KV-to-CPU fallback ("only ~4096 ctx fits"). Settle after
             #     the port frees.
-            import socket as _sock
-            for _ in range(20):
-                try:
-                    with _sock.socket(_sock.AF_INET, _sock.SOCK_STREAM) as _s:
-                        _s.settimeout(0.3)
-                        if _s.connect_ex(("127.0.0.1", port)) != 0:
-                            break  # nothing accepting: port is free
-                except Exception:
-                    break
-                time.sleep(0.5)
+            _wait_port_free(port)
             time.sleep(1.5)
         
         # ═══════════════════════════════════════════════════════════════════
@@ -1285,15 +1363,8 @@ class ServerManager:
         if gpu and gpu.vram_mb > 0:
             _free_mb = 0
             if getattr(gpu, "vendor", "") == "nvidia":
-                try:
-                    _r = subprocess.run(
-                        ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
-                        capture_output=True, text=True, timeout=5,
-                    )
-                    if _r.returncode == 0:
-                        _free_mb = int(_r.stdout.strip().splitlines()[0])
-                except Exception:
-                    _free_mb = 0
+                from vaf.core.gpu_detection import nvidia_free_vram_mb
+                _free_mb = nvidia_free_vram_mb()
             if _free_mb <= 0:
                 # Non-NVIDIA (or probe failed): use the reported figure directly. For
                 # Apple Silicon vram_mb is already a conservative unified-memory
@@ -1717,7 +1788,100 @@ class ServerManager:
             UI.error(f"Failed to launch server: {e}")
             return False
 
-    def stop_server(self, force_external=False):
+    def _llama_pid(self):
+        """The pid its pid file names when that process really is a llama server, else None."""
+        try:
+            with open(self.pid_file, "r", encoding="utf-8") as f:
+                pid = int(f.read().strip())
+        except (OSError, ValueError):
+            return None
+        return pid if self._looks_like_llama_server(pid) else None
+
+    def _start_vllm_locked(self, n_ctx=32768, port=8080):
+        """The vLLM branch of a start (local_engine = vllm), under the start lock.
+
+        Order, each step before the next: refuse when vLLM is not installed (the install is
+        the user's decision, never a side effect of a start); hand the port over (a llama
+        server is stopped and its process gone); reuse a vLLM that serves the configured
+        model; WAIT for a vLLM that is still loading (alive, /health not 200 yet) instead of
+        spawning a second one; only then launch.
+        """
+        from vaf.core import inference_profile, local_engine, vllm_server
+
+        n_ctx = max(int(n_ctx or 0), vllm_server.MIN_CONTEXT)
+        if not vllm_server.is_installed():
+            UI.error("The local engine is vLLM, but vLLM is not installed. Run `vaf engine vllm` "
+                     "to install it, or `vaf engine llama` to go back to llama.cpp.")
+            return False
+
+        llama_pid = self._llama_pid()
+        if llama_pid is not None:
+            UI.event("Server", "Stopping llama-server: the local engine is vLLM", style="dim")
+            self._stop_llama(force_external=True)
+            deadline = time.monotonic() + 15.0
+            while self._looks_like_llama_server(llama_pid):
+                if time.monotonic() >= deadline:
+                    UI.error(f"llama-server (PID {llama_pid}) did not stop; vLLM is not started.")
+                    return False
+                time.sleep(0.1)
+            _wait_port_free(port)
+
+        repo = local_engine.resolve_vllm_model()
+        vllm_pid = vllm_server.running_pid()
+        status = vllm_server.health_status(port)
+        if status == 200:
+            served = vllm_server.served_model(port)
+            if served == repo:
+                UI.event("Server", f"Reusing vLLM on :{port} ({repo})...", style="dim")
+                return True
+            if served is None and vllm_pid is None:
+                UI.error(f"Port {port} is held by a server VAF did not start; vLLM is not "
+                         "started.")
+                return False
+            UI.event("Server", f"vLLM on :{port} serves {served} - restarting with {repo}",
+                     style="dim")
+            reason = vllm_server.stop()
+            if reason:
+                UI.error(reason)
+                return False
+        elif vllm_pid is not None:
+            # Loading: the engine is set up for minutes before /health answers. A second
+            # start (the tray, a chat's reconnect, another process) waits for this one.
+            UI.event("Server", f"vLLM (PID {vllm_pid}) is still loading, waiting...", style="dim")
+            deadline = time.monotonic() + _server_ready_budget()
+            while time.monotonic() < deadline:
+                if not inference_profile.local_inference_allowed():
+                    UI.event("Backend", inference_profile.refuse("the local server"), style="dim")
+                    return False
+                if vllm_server.running_pid() is None:
+                    break               # it died: launch below
+                if vllm_server.health_status(port) == 200:
+                    if vllm_server.served_model(port) == repo:
+                        return True
+                    break               # up, but with another model: restart below
+                time.sleep(1.0)
+            else:
+                UI.event("Server", "vLLM did not come up within the ready budget - stopping it",
+                         style="yellow")
+            reason = vllm_server.stop()
+            if reason:
+                UI.error(reason)
+                return False
+
+        started = vllm_server.start(repo, n_ctx, port=port)
+        if started:
+            self._vllm_started = True
+        return started
+
+    def _stop_llama(self, force_external=False):
+        """The llama server only (the handover to vLLM must not stop the server it hands to)."""
+        self.stop_server(force_external=force_external, include_vllm=False)
+
+    def stop_server(self, force_external=False, include_vllm=True):
+        """Stop the local model server. ``force_external`` also stops a server another
+        process started (its pid file) - for llama.cpp and for the managed vLLM alike, so
+        every unload, Tray Quit and the switch to the api profile release the GPU whichever
+        engine runs. Without it, only what this manager started is stopped."""
         # WICHTIG: Prüfe zuerst PID-Datei, falls self.process nicht gesetzt ist
         # (z.B. wenn Server von anderem Prozess gestartet wurde)
         pid_to_kill = None
@@ -1796,3 +1960,11 @@ class ServerManager:
         
         # Always remove PID file on clean stop
         self._remove_pid()
+
+        if include_vllm and (force_external or getattr(self, "_vllm_started", False)):
+            from vaf.core import vllm_server
+            if vllm_server.running_pid() is not None:
+                reason = vllm_server.stop()
+                if reason:
+                    UI.event("Server", reason, style="yellow")
+            self._vllm_started = False

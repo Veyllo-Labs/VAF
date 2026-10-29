@@ -2,7 +2,7 @@
 
 Authoritative reference for VAF's configuration keys. The single source of truth is the
 `DEFAULTS` dict in [vaf/core/config.py](../../vaf/core/config.py); this page organizes those
-keys by area. Defaults shown here match `Config.DEFAULTS` (379 keys).
+keys by area. Defaults shown here match `Config.DEFAULTS` (384 keys).
 
 ## How configuration is set
 
@@ -55,10 +55,10 @@ need; everything else has a sensible default.
 | `model` | `"auto"` | Local GGUF model. `"auto"` = VRAM-adaptive default, or set `"repo/file.gguf"`. Ignored for API providers. |
 | `api_key_<provider>` | `""` | API key for the chosen provider (e.g. `api_key_openai`). Raw when set programmatically; kept in the encrypted store, not in this file (see the note above). |
 | `api_model_<provider>` | per provider (see below) | Model name for the API provider (e.g. `api_model_openai`). |
-| `n_ctx` | `32768` | Context window in tokens. Values below 32768 are clamped up to it. |
+| `n_ctx` | `32768` | Context window in tokens. Values below 32768 are clamped up to it. Also the vLLM engine's `--max-model-len`, clamped to the model's maximum ([VLLM_ENGINE.md](../llm/VLLM_ENGINE.md)). |
 | `temperature` | `0.7` | Sampling temperature (API + local). |
 | `gpu_layers` | `-1` | Local model GPU offload layers. `-1` = all; `0` = CPU only. |
-| `auto_start_local_server` | `True` | Start the local llama-server automatically. Set `False` when using only an API provider. |
+| `auto_start_local_server` | `True` | Start the local engine's server (llama.cpp or vLLM) automatically. Set `False` when using only an API provider. |
 | `router_max_tools` | `12` | Max tools the router and the per-turn riders hand the model per turn; `list_tools` and `search_tools` come on top of it (suggested 1–100, not clamped). Lower = faster inference. |
 
 Default API models (from `Config.PROVIDER_MODELS`):
@@ -113,7 +113,7 @@ print(agent.run("In one sentence, what is Python?"))
 | `anthropic_prompt_cache` | `True` | Anthropic only: send the system prompt as a `cache_control: ephemeral` block so the stable prefix is cached across multi-turn / tool loops (cost saver). Read with an inline default, not part of `DEFAULTS`. Admin-only by an explicit entry, because it decides what every request on the instance sends and therefore what everyone's input tokens cost. See [API_INTEGRATION.md](../llm/API_INTEGRATION.md). |
 | `anthropic_thinking` | `True` | Anthropic only: adaptive (extended) thinking on supported models (reasoning streams wrapped in `<think>` tags); ignored on models without thinking support. Read with an inline default, not part of `DEFAULTS`. Admin-only by an explicit entry: thinking tokens are billed, so this is instance spend. |
 | `google_thinking` | `True` | Google only: surface model reasoning on thinking-capable Gemini models, wrapped in `<think>` tags like DeepSeek. Read with an inline default, not part of `DEFAULTS`. Admin-only by an explicit entry, for the same reason as `anthropic_thinking`. |
-| `local_api_url` | `""` | OpenAI-compatible endpoint for the API-backend consumers of provider `local` (browser agent, local vision, cloud-to-local failover), e.g. an Ollama/vLLM URL. Empty = VAF's own llama-server. Does NOT redirect the main chat loop (see [EMBEDDING.md](../EMBEDDING.md)). Read with an inline default, not part of `DEFAULTS`. Admin-only by an explicit entry: it decides where those lanes send their prompts, which is an egress decision, not a preference. |
+| `local_api_url` | `""` | OpenAI-compatible endpoint for the API-backend consumers of provider `local` (browser agent, local vision, cloud-to-local failover), e.g. an Ollama or vLLM URL of a server VAF does not manage. Empty = VAF's own local server (llama.cpp or the managed vLLM, `local_engine`). Does NOT redirect the main chat loop (see [EMBEDDING.md](../EMBEDDING.md)). Read with an inline default, not part of `DEFAULTS`. Admin-only by an explicit entry: it decides where those lanes send their prompts, which is an egress decision, not a preference. |
 | `subagent_provider` | `"inherit"` | Provider for sub-agents; `inherit` = same as main. Half of a PAIR: read it with `config.subagent_provider_override()` and write it with `config.set_subagent_provider()`, never alone. Set without the gate below it is silently inert. |
 | `subagent_use_separate_provider` | `False` | The gate on `subagent_provider`. Written by `set_subagent_provider()`; nothing else should touch it. |
 | `subagent_model` | `""` | Model for tools/workflows (hybrid mode); empty = same as main chat. |
@@ -154,6 +154,19 @@ These are sent only on the local path; cloud APIs ignore them.
 | `parallel_main_workers` | `1` | Concurrent main-agent workers (admin-only). `1` = serialized (default). When > 1, the effective count is clamped per provider (see the two keys below) and turns from different SESSIONS run concurrently while turns within one session stay serialized. The queue keys on the session id, not the user, so one person's web and messaging sessions can run at the same time. Pair with `queue_policy: weighted_fair` for lane fairness. |
 | `max_parallel_api_workers` | `5` | Effective worker cap for API providers (admin-only). |
 | `max_parallel_local_workers` | `2` | Effective worker cap for `provider=local` (admin-only); also clamped to the llama-server `--parallel` slots (`n_parallel`) to avoid VRAM exhaustion. |
+
+## Local engine (llama.cpp or vLLM)
+
+Which engine runs the local model; switched with `vaf engine`. See
+[VLLM_ENGINE.md](../llm/VLLM_ENGINE.md).
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `local_engine` | `"llama"` | Engine for `provider = local`: `llama` (llama.cpp with a GGUF from `models/`) or `vllm` (the VAF-managed vLLM with a Hugging Face model, installed with `vaf engine vllm`). Compared after trimming and ignoring case; anything else means `llama`. Admin-only. |
+| `vllm_model` | `"auto"` | Hugging Face repo id (`owner/name`) the vLLM engine runs; `auto` = by the GPU's total memory (`Qwen/Qwen3-4B-AWQ` below 11.5 GB, `Qwen/Qwen3-8B-AWQ` from there up). Admin-only (`vllm_` prefix). |
+| `vllm_tool_call_parser` | `""` | vLLM `--tool-call-parser`; empty = derived from the model family (Qwen and Hermes `hermes`, Mistral `mistral`, gpt-oss `openai`). A family VAF does not know needs it set, or the start is refused. Admin-only. |
+| `vllm_reasoning_parser` | `""` | vLLM `--reasoning-parser`; empty = derived from the model family (Qwen3 `qwen3`, QwQ `deepseek_r1`), `none` = off. Admin-only. |
+| `vllm_gpu_memory_utilization` | `0` | Share of the GPU's memory vLLM may take (0 to 1); `0` = computed at each launch from the free memory, (free - 512 MiB) / total within 0.50..0.92. Admin-only. |
 
 ## Tool router & agent guardrails
 

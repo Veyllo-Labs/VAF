@@ -23,7 +23,10 @@ Checks, each ``{name, status, reason}``:
   when the last scheduled run failed or the newest backup is older than the schedule allows,
   never down (a missing backup stops nothing);
 - ``agent``: the agent loops of this process (`headless_runner.worker_status`), only in the
-  process that runs them.
+  process that runs them;
+- ``engine``: the managed vLLM (vaf/core/local_engine.py), only when it is the local engine:
+  degraded when this machine cannot run it or it is not installed, ok otherwise, also when
+  its server is idle (the desktop unloads the local model when nobody uses it).
 
 The whole is the worst of them: ``ok``; ``degraded`` (VAF works, a part of it does not);
 ``down`` (chats or data are not safe: a required service is unusable, the disk is nearly
@@ -173,6 +176,24 @@ def agent_check(workers: Optional[Dict[str, int]]) -> Optional[Dict[str, str]]:
     return _check("agent", OK, f"{alive} agent loop{'s' if alive != 1 else ''} running.")
 
 
+def engine_check() -> Optional[Dict[str, str]]:
+    """The vLLM engine; None (no row) while llama.cpp is the local engine."""
+    from vaf.core import local_engine
+    if not local_engine.is_vllm():
+        return None
+    from vaf.core import vllm_server
+    verdict = local_engine.support()
+    if not verdict.supported:
+        return _check("engine", DEGRADED, f"vLLM is the local engine, but: {verdict.reason}")
+    version = vllm_server.installed_version()
+    if version is None:
+        return _check("engine", DEGRADED, "vLLM is the local engine but is not installed: run "
+                                          "`vaf engine vllm`.")
+    state = "server running" if vllm_server.running_pid() is not None else "server idle"
+    return _check("engine", OK, f"vLLM {version} installed, model "
+                                f"{local_engine.resolve_vllm_model()}, {state}.")
+
+
 def _worker_status() -> Optional[Dict[str, int]]:
     import sys
     runner = sys.modules.get("vaf.core.headless_runner")
@@ -187,7 +208,9 @@ def _backup_check() -> Dict[str, str]:
 def collect_health(status_probe: Optional[Callable[[], Dict[str, Any]]] = None,
                    worker_probe: Callable[[], Optional[Dict[str, int]]] = _worker_status,
                    usage: Callable[[str], Any] = shutil.disk_usage,
-                   backup_probe: Callable[[], Dict[str, str]] = _backup_check) -> Dict[str, Any]:
+                   backup_probe: Callable[[], Dict[str, str]] = _backup_check,
+                   engine_probe: Callable[[], Optional[Dict[str, str]]] = engine_check,
+                   ) -> Dict[str, Any]:
     """Every check and the verdict: {status, checks, checked_at}. Never raises: a check that
     cannot run says so as its own result."""
     checks: List[Dict[str, str]] = []
@@ -214,6 +237,12 @@ def collect_health(status_probe: Optional[Callable[[], Dict[str, Any]]] = None,
             checks.append(agent)
     except Exception as e:
         checks.append(_check("agent", DEGRADED, f"The agent loops could not be read: {e}"))
+    try:
+        engine = engine_probe()
+        if engine is not None:
+            checks.append(engine)
+    except Exception as e:
+        checks.append(_check("engine", DEGRADED, f"The local engine could not be read: {e}"))
     return {"status": worst(c["status"] for c in checks), "checks": checks,
             "checked_at": datetime.now(timezone.utc).isoformat()}
 

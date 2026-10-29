@@ -777,6 +777,14 @@ class BrowserHandoverError(RuntimeError):
     BaseException would ride past the run's error handling)."""
 
 
+class BrowserTransferRunning(BrowserHandoverError):
+    """The previous holder's file transfer (a download sweep, the workspace
+    mirror, or the tail of its stop) is still running, so the shared browser was
+    not handed over yet. Not a failed wipe: nothing was tried, the browser is
+    busy for a moment. A BrowserHandoverError so every lane refuses on it, and
+    each lane answers it as busy."""
+
+
 class BrowserHeldElsewhere(BrowserHandoverError):
     """The shared browser is held by another VAF process (a lease, a run, or a
     probe that outlasted the wait), so this run was refused before it took the
@@ -922,6 +930,9 @@ class InteractiveBrowserManager:
     # the release to the last of them. Above the mirror's tar extraction (300 s)
     # and one download copy (120 s), each of which its subprocess timeout ends.
     TRANSFER_DRAIN_S = 330.0
+    # How long a change of hands waits for the previous holder's transfers,
+    # before it takes the handover mutex, until it answers busy instead.
+    HANDOVER_WAIT_S = 30.0
     # How often an open stream socket that carries no traffic asks whether its
     # grant still stands. Only the close of a QUIET socket waits for this: the
     # relay checks the grant on every message it passes, so no byte crosses after
@@ -1033,6 +1044,12 @@ class InteractiveBrowserManager:
         # Entries whose release outlived TRANSFER_DRAIN_S: the last transfer
         # releases them when it ends, never earlier.
         self._release_when_drained: List[str] = []
+        # A lease claim of this process answers with the existing lease entry's
+        # token, so claiming it and installing it as `_lease_token` must be one
+        # step against a release that checks whether that token was claimed
+        # again (`_release_unless_reclaimed`). Taken before `_lock`, never
+        # inside it.
+        self._claim_mutex = threading.Lock()
         self._janitor_alive = False
         # This process's entries in the shared browser's cross-process holder
         # record (vaf.core.browser_jar): the lease's and the in-process run's.
@@ -1293,6 +1310,7 @@ class InteractiveBrowserManager:
         scope = resolve_browser_scope(user_scope_id)
         with self._lock:
             generation = self._run_generation if run_generation is None else run_generation
+        self._wait_for_previous_holder(scope)
         with self._handover_mutex:
             with self._lock:
                 claimed = self._run_token is not None
@@ -1468,13 +1486,15 @@ class InteractiveBrowserManager:
         the other processes would keep trusting the old owner."""
         from vaf.core import browser_jar
         jar = browser_jar.record_for(self._container_name)
+        # A holder of THIS process is not kept out by the record (it only refuses
+        # other processes), so the handover checks for the previous holder's file
+        # transfers: purging and wiping under one would let its files land in the
+        # new holder's browser afterwards. The waiting happened before the
+        # handover mutex (`_wait_for_previous_holder`); here it is only checked,
+        # and a transfer still running is busy, not a failed handover.
+        if not self._transfers_drained(0.0):
+            raise BrowserTransferRunning("the previous holder's file transfer is still running")
         try:
-            # A holder of THIS process is not kept out by the record (it only
-            # refuses other processes), so the handover itself waits for the
-            # previous holder's file transfers: purging and wiping under one
-            # would let its files land in the new holder's browser afterwards.
-            if not self._transfers_drained(self.TRANSFER_DRAIN_S):
-                raise BrowserHandoverError("the previous holder's file transfer is still running")
             jar.set_owner(None, instance)
             _purge_container_downloads(self._container_name)
             if not verified_profile_wipe(self._container_name, self.cdp_base()):
@@ -1505,7 +1525,7 @@ class InteractiveBrowserManager:
     # past this budget it answers busy rather than hang the window or the run.
     PROBE_WAIT_S = 60.0
 
-    def _claim_shared(self, kind: str, scope: str, *, wait_s: float) -> tuple:
+    def _claim_shared(self, kind: str, scope: str, *, wait_s: float, install=None) -> tuple:
         """Record this process as a holder of the shared browser: (token, None),
         or (None, the live holder of another process that is in the way). A probe
         of another process is waited out for up to wait_s; any other holder, or a
@@ -1515,7 +1535,10 @@ class InteractiveBrowserManager:
         deadline = time.time() + max(0.0, wait_s)
         while True:
             try:
-                token, other = jar.claim(kind, scope)
+                with self._claim_mutex:
+                    token, other = jar.claim(kind, scope)
+                    if token is not None and install is not None:
+                        install(token)
             except browser_jar.JarRecordUnavailable as e:
                 append_domain_log("webui", f"[browser_interactive] holder record unavailable: {e}")
                 return None, {"kind": "unknown"}
@@ -1574,14 +1597,31 @@ class InteractiveBrowserManager:
         try:
             return transfer()
         finally:
-            pending: List[str] = []
-            with self._lock:
-                self._xfers -= 1
-                if self._xfers == 0:
-                    self._xfers_idle.notify_all()
-                    pending, self._release_when_drained = self._release_when_drained, []
-            for token in pending:
-                self._release_unless_reclaimed(token)
+            self._transfer_done()
+
+    def _transfer_done(self) -> None:
+        """Count one transfer out (registered by `_held_transfer`, or by a release's
+        own tail in the lock step that cleared its holder): wake whoever waits for
+        the transfers, and give up the entries whose release they held back."""
+        pending: List[str] = []
+        with self._lock:
+            self._xfers -= 1
+            if self._xfers == 0:
+                self._xfers_idle.notify_all()
+                pending, self._release_when_drained = self._release_when_drained, []
+        for token in pending:
+            self._release_unless_reclaimed(token, pending_ok=True)
+
+    def _wait_for_previous_holder(self, scope: Optional[str]) -> None:
+        """Before a change of hands takes the handover mutex: wait (bounded) for the
+        transfers of a holder that just let go, so the handover itself does not
+        sit on the mutex while they finish. Only when this browser is not this
+        scope's already; the check under the mutex (`_take_jar`) decides."""
+        with self._lock:
+            lease = self._lease
+            own = lease is not None and lease.user_scope_id == scope
+        if not own:
+            self._transfers_drained(self.HANDOVER_WAIT_S)
 
     def _transfers_drained(self, timeout: float) -> bool:
         """Wait until no file transfer is in flight; False when `timeout` ran out
@@ -1613,16 +1653,24 @@ class InteractiveBrowserManager:
                     return
         self._release_unless_reclaimed(token)
 
-    def _release_unless_reclaimed(self, token: str) -> None:
+    def _release_unless_reclaimed(self, token: Optional[str], *, pending_ok: bool = False) -> None:
         """Release an entry unless a holder of this process has claimed it again in
         the meantime: a lease claim of the same process answers with the existing
         entry's token, so a new lease that started while the old one was still
         releasing holds that very token, and releasing it would leave the new
-        lease without its entry - open to a holder of another process."""
-        with self._lock:
-            if token in (self._lease_token, self._run_token):
-                return
-        self._release_shared(token)
+        lease without its entry - open to a holder of another process. One step
+        with the claim (`_claim_mutex`). An entry whose release a running transfer
+        holds back is left to that transfer (`pending_ok` is the transfer's own
+        release of it)."""
+        if not token:
+            return
+        with self._claim_mutex:
+            with self._lock:
+                if token in (self._lease_token, self._run_token):
+                    return
+                if not pending_ok and token in self._release_when_drained:
+                    return
+            self._release_shared(token)
 
     def agent_stream_started(self, session_id: Optional[str]) -> None:
         """Grant the run's own chat window a watch-only live stream of the run.
@@ -1703,9 +1751,14 @@ class InteractiveBrowserManager:
             elif notify:
                 self._giveback_deferred = True
             run_scope = self._last_cookie_scope
+            # The sweep below counts as a transfer from this lock step on.
+            self._xfers += 1
         # A run downloads too (the agent saves a PDF for the person): drain to
         # the run's OWN scope - the jar owner at this moment is that run's.
-        self.sweep_downloads(run_scope)
+        try:
+            self.sweep_downloads(run_scope)
+        finally:
+            self._transfer_done()
         # After the run's own mirror, which a stopped run may have left running in
         # an executor thread.
         self._release_after_transfers(run_token)
@@ -1766,6 +1819,7 @@ class InteractiveBrowserManager:
                     return self._agent_payload(stream)
             return self._payload("agent_active", reason="agent_run")
 
+        self._wait_for_previous_holder(user_scope_id)
         # One handover at a time: the busy check, the wipe and the cookie
         # restore below must read as one atomic story, or two interleaving
         # start() calls can each restore their own cookies into the shared jar
@@ -1809,7 +1863,12 @@ class InteractiveBrowserManager:
             # this process is (the handover mutex); a run or a lease there
             # refuses, as one here does.
             from vaf.core.browser_jar import KIND_LEASE, KIND_RUN
-            token, other = self._claim_shared(KIND_LEASE, user_scope_id, wait_s=self.PROBE_WAIT_S)
+            def install(token: str) -> None:
+                with self._lock:
+                    self._lease_token = token
+
+            token, other = self._claim_shared(KIND_LEASE, user_scope_id,
+                                              wait_s=self.PROBE_WAIT_S, install=install)
             if token is None:
                 kind = (other or {}).get("kind")
                 if kind == KIND_RUN:
@@ -1818,8 +1877,6 @@ class InteractiveBrowserManager:
                     return self._payload("error", reason="handover_failed")
                 return {"status": "busy", "reason": "in_use",
                         "saving": False, "streamPath": ""}
-            with self._lock:
-                self._lease_token = token
 
             # Jar handover, before the person starts browsing. A scope CHANGE is
             # a VERIFIED profile wipe, fail-closed: the previous holder's
@@ -1834,17 +1891,23 @@ class InteractiveBrowserManager:
             if not holds:
                 try:
                     self._take_jar(user_scope_id, "interactive", instance)
-                except BrowserHandoverError:
+                except BrowserHandoverError as e:
                     # Released unless a lease of this process is still installed,
                     # decided now under the lock (as at the install below): a lease
                     # seen before the claim proves nothing, since a run's eviction
-                    # in between leaves a fresh entry with no lease behind it.
+                    # in between leaves a fresh entry with no lease behind it. Never
+                    # an entry a running transfer holds back: that is the previous
+                    # holder's, claimed again, and it keeps other processes out
+                    # until the transfer ends.
                     with self._lock:
                         stale = self._lease is None
                         if stale:
                             self._lease_token = None
                     if stale:
-                        self._release_shared(token)
+                        self._release_unless_reclaimed(token)
+                    if isinstance(e, BrowserTransferRunning):
+                        return {"status": "busy", "reason": "transfer_running",
+                                "saving": False, "streamPath": ""}
                     return self._payload("error", reason="handover_failed")
 
         # The lenient half: the jar is verifiably the new holder's now, so a
@@ -1938,7 +2001,7 @@ class InteractiveBrowserManager:
         if refused_for_run or refused_revoked:
             # The record entry this start claimed goes back with it; the run's
             # own handover finds this start's scope as the owner and wipes.
-            self._release_shared(stale_token)
+            self._release_unless_reclaimed(stale_token)
             if refused_revoked:
                 return dict(_REVOKED_REFUSAL)
             return self._payload("agent_active", reason="agent_run")
@@ -1960,27 +2023,34 @@ class InteractiveBrowserManager:
             self._lease = None
             if self._dedicated_scope is None:
                 self._xfer_scope = None
+            # The tail below (cookie export, parking, download sweep) still works
+            # on this person's browser: it counts as a transfer from this lock
+            # step on, so a change of hands, in this process too, waits for it.
+            self._xfers += 1
             sid = lease.session_id
             lease_token, self._lease_token = self._lease_token, None
 
-        if lease.save_enabled:
-            try:
-                cookies = _cookie_op(self.cdp_base(), "get")
-                if cookies is not None:
-                    _export_storage_cookies(
-                        browser_storage_state_path(lease.user_scope_id, lease.session_name),
-                        cookies)
-            except Exception as e:
-                append_domain_log("webui", f"[browser_interactive] cookie export failed: {e}")
-        # Same idle rule as after an agent run: never leave an animating page
-        # burning CPU with nobody watching. Skipped on agent takeover - the
-        # agent is about to drive the very tabs parking would close.
-        if reason != "agent_takeover":
-            park_browser_idle(self.cdp_base())
-        # Whatever the person downloaded and the janitor has not drained yet
-        # leaves WITH them - on takeover too, so the run that follows never
-        # finds another scope's files in the hand-off folder.
-        self.sweep_downloads(lease.user_scope_id)
+        try:
+            if lease.save_enabled:
+                try:
+                    cookies = _cookie_op(self.cdp_base(), "get")
+                    if cookies is not None:
+                        _export_storage_cookies(
+                            browser_storage_state_path(lease.user_scope_id, lease.session_name),
+                            cookies)
+                except Exception as e:
+                    append_domain_log("webui", f"[browser_interactive] cookie export failed: {e}")
+            # Same idle rule as after an agent run: never leave an animating page
+            # burning CPU with nobody watching. Skipped on agent takeover - the
+            # agent is about to drive the very tabs parking would close.
+            if reason != "agent_takeover":
+                park_browser_idle(self.cdp_base())
+            # Whatever the person downloaded and the janitor has not drained yet
+            # leaves WITH them - on takeover too, so the run that follows never
+            # finds another scope's files in the hand-off folder.
+            self.sweep_downloads(lease.user_scope_id)
+        finally:
+            self._transfer_done()
         # Released last: the export above still reads the person's own jar, and a
         # transfer the janitor started for this person must end first.
         self._release_after_transfers(lease_token)

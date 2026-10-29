@@ -199,6 +199,7 @@
     "browserStarting": "Browser wird gestartet…",
     "browserInControl": "Interaktiver Browser - du steuerst",
     "browserConnecting": "Verbindung zum Browser wird aufgebaut…",
+    "browserTransferRunning": "Der Browser schließt noch die Dateiübertragung der vorherigen Person ab. Versuch es gleich noch einmal.",
     "browserStatusStarting": "startet",
     "browserStatusConnecting": "verbindet",
     "browserStatusConnected": "verbunden",

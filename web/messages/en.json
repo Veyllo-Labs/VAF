@@ -199,6 +199,7 @@
     "browserStarting": "Starting the browser…",
     "browserInControl": "Interactive browser - you are in control",
     "browserConnecting": "Connecting to the browser…",
+    "browserTransferRunning": "The browser is still finishing the previous person's file transfer. Try again in a moment.",
     "browserStatusStarting": "starting",
     "browserStatusConnecting": "connecting",
     "browserStatusConnected": "connected",

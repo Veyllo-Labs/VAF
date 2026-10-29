@@ -199,6 +199,7 @@
     "browserStarting": "正在启动浏览器…",
     "browserInControl": "交互式浏览器 - 由你操作",
     "browserConnecting": "正在连接浏览器…",
+    "browserTransferRunning": "浏览器仍在完成上一位用户的文件传输。请稍后再试。",
     "browserStatusStarting": "启动中",
     "browserStatusConnecting": "连接中",
     "browserStatusConnected": "已连接",

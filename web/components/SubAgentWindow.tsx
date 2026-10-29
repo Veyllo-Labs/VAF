@@ -2967,7 +2967,9 @@ export default function SubAgentWindow({
                                                 {interactive.status === 'busy'
                                                     ? (interactive.reason === 'pool_exhausted'
                                                         ? 'No dedicated browser is free right now (strict pool). Try again in a moment.'
-                                                        : 'Another user is driving the browser right now.')
+                                                        : interactive.reason === 'transfer_running'
+                                                            ? tMain('browserTransferRunning')
+                                                            : 'Another user is driving the browser right now.')
                                                     : interactive.reason === 'handover_failed'
                                                         ? 'The browser could not be cleaned for a user change, so it was not handed over. Try again in a moment.'
                                                         : 'The browser container is not reachable. Start the Docker stack and try again.'}

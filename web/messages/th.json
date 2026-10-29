@@ -199,6 +199,7 @@
     "browserStarting": "กำลังเปิดเบราว์เซอร์…",
     "browserInControl": "เบราว์เซอร์แบบโต้ตอบ - คุณเป็นผู้ควบคุม",
     "browserConnecting": "กำลังเชื่อมต่อกับเบราว์เซอร์…",
+    "browserTransferRunning": "เบราว์เซอร์ยังส่งไฟล์ของผู้ใช้ก่อนหน้าไม่เสร็จ โปรดลองอีกครั้งในอีกสักครู่",
     "browserStatusStarting": "กำลังเริ่ม",
     "browserStatusConnecting": "กำลังเชื่อมต่อ",
     "browserStatusConnected": "เชื่อมต่อแล้ว",

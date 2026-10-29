@@ -108,7 +108,8 @@ def render_page(target: str, user_scope_id: Optional[str] = None,
     Never raises. BLOCKING (CDP, load wait): call from a worker thread.
     Answer keys: ok, busy, error, requested, url, rewritten, title, text,
     console, page_errors, failed_requests, screenshot_b64."""
-    from vaf.core.browser_interactive import BrowserHandoverError, resolve_browser_scope
+    from vaf.core.browser_interactive import (
+        BrowserHandoverError, BrowserTransferRunning, resolve_browser_scope)
 
     out = {"ok": False, "busy": False, "error": "", "requested": target,
            "url": "", "rewritten": False, "title": "", "text": "",
@@ -149,6 +150,11 @@ def render_page(target: str, user_scope_id: Optional[str] = None,
                     manager.sync_workspace(scope)
                     url = f"file:///home/browser/Workspace/{rel}"
                 result = _render_via_cdp(cdp_base, url, wait_ms=wait_ms, max_text=max_text)
+        except BrowserTransferRunning:
+            out["busy"] = True
+            out["error"] = ("The browser is still finishing the previous user's file "
+                            "transfer. Try again in a moment.")
+            return out
         except BrowserHandoverError:
             out["error"] = ("The browser could not be handed over safely: the previous "
                             "user's browser data could not be wiped, so nothing was "

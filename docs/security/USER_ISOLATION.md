@@ -839,22 +839,44 @@ partition:
   previous owner (in its own process, and in every other process always), whose next
   lease saw no change of hands and purged nothing, so the probe's files sat in that
   person's file picker.
-  Files move in or out of the shared container only while the scope they belong to
-  holds it. A janitor tick's sweep and mirror and a run's mirror (which runs in an
-  executor thread a Stop does not wait for) each register under the manager's lock,
-  and only for the scope that holds the browser at that moment. A lease's stop and a
-  run's end then wait for the registered transfers before they give up their holder
-  entry, the entry that keeps every other process out. A change of hands in the same
-  process (which that entry does not keep out) waits for them before its purge and
-  wipe, and refuses when they outlive the wait, as a failed wipe does. So a previous
-  holder's files cannot land in the next holder's browser after the purge, and the
-  next holder's downloads cannot be delivered to the previous one. The wait is bounded
-  (330 s, above the mirror's 300 s extraction timeout); a transfer still running after
-  that keeps the entry, and the transfer itself releases it when it ends, so the
-  browser stays busy rather than changing hands under a transfer. Before, the janitor
-  read the lease and then copied outside every lock: with a slow mirror (the pinning
-  tests in `tests/test_browser_interactive.py`), a person who closed the browser had
-  their files land in the next person's file picker after the next person's wipe.
+  Nothing of one holder's moves in or out of the shared container once the next
+  holder's handover has begun. Two kinds of work count as transfers:
+  - the transfers a holder starts while it holds the browser: a janitor tick's
+    download sweep and workspace mirror, and a run's mirror (which runs in an executor
+    thread a Stop does not wait for). Each registers under the manager's lock, and only
+    for the scope that holds the browser at that moment;
+  - the work a holder does on its way out: a lease's stop exports its cookies, parks
+    the pages and drains its downloads; a run's end drains the run's downloads. This
+    tail is registered in the same lock step that ends the lease or the run, before
+    anyone else can see the browser free.
+
+  A lease's stop and a run's end give up their entry in the holder record (the entry
+  that keeps every other process out) only after the registered transfers have ended.
+  A change of hands in the same process, which that entry does not keep out (a lease
+  claim of the same process answers with the existing entry), waits for them before it
+  takes the handover mutex, for up to 30 s. A transfer still running after that is
+  answered `busy` with the reason `transfer_running`: nothing was wiped or refused for
+  safety, so no `browser_handover_failed` event is written, and the person can try
+  again. The release waits up to 330 s (above the mirror's 300 s extraction timeout); a
+  transfer still running after that keeps the entry, and the transfer itself gives it
+  up when it ends, so the browser stays busy rather than changing hands under a
+  transfer. Claiming an entry and recording it as the lease's own, and checking that
+  an entry was not claimed again and releasing it, are each one step under a
+  process-local mutex, so a release never takes the entry a new lease has just been
+  handed.
+
+  So a previous holder's files cannot land in the next holder's browser after the
+  purge, the next holder's downloads cannot be delivered to the previous one, and the
+  previous holder's cookie export cannot read the next holder's restored cookies.
+  Before, the janitor read the lease and then copied outside every lock, and the stop
+  ran its tail after it had cleared the lease: with a slow mirror, a slow sweep and a
+  slow cookie read (the pinning tests in `tests/test_browser_interactive.py`), a
+  person's files landed in the next person's file picker, the next person's download
+  was delivered to the previous person, and the previous person's storage file kept
+  the next person's session cookie.
+  Named boundary: an admin who evicts another person's lease ends it inside the handover
+  mutex, so that start waits there for the evicted person's transfers (at most the
+  330 s above).
 - **The genuine partition is the per-user pool** (`browser_pool_max`, default
   `"auto"`, at least 2 where memory allows, admin-only, overridable by
   `VAF_BROWSER_POOL_MAX`; see the pool

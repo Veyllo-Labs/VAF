@@ -199,6 +199,7 @@
     "browserStarting": "Tarayıcı başlatılıyor…",
     "browserInControl": "Etkileşimli tarayıcı - kontrol sende",
     "browserConnecting": "Tarayıcıya bağlanılıyor…",
+    "browserTransferRunning": "Tarayıcı önceki kişinin dosya aktarımını hâlâ tamamlıyor. Birazdan tekrar dene.",
     "browserStatusStarting": "başlatılıyor",
     "browserStatusConnecting": "bağlanıyor",
     "browserStatusConnected": "bağlandı",

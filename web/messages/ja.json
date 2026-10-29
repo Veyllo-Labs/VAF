@@ -199,6 +199,7 @@
     "browserStarting": "ブラウザーを起動中…",
     "browserInControl": "インタラクティブブラウザー - 操作できます",
     "browserConnecting": "ブラウザーに接続しています…",
+    "browserTransferRunning": "ブラウザーは前のユーザーのファイル転送をまだ終えていません。少し待ってからもう一度お試しください。",
     "browserStatusStarting": "起動中",
     "browserStatusConnecting": "接続中",
     "browserStatusConnected": "接続済み",

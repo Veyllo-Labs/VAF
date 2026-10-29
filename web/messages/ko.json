@@ -199,6 +199,7 @@
     "browserStarting": "브라우저 시작 중…",
     "browserInControl": "대화형 브라우저 - 지금 직접 조작하고 있어요",
     "browserConnecting": "브라우저에 연결하는 중…",
+    "browserTransferRunning": "브라우저가 아직 이전 사용자의 파일 전송을 마무리하고 있어요. 잠시 후 다시 시도해 주세요.",
     "browserStatusStarting": "시작 중",
     "browserStatusConnecting": "연결 중",
     "browserStatusConnected": "연결됨",

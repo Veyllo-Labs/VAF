@@ -46,12 +46,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
-- **Files in the shared browser no longer cross from one account to the next.** When the
-  shared browser changed hands while a file transfer was still running, a person's
-  workspace files could appear in the next person's file picker, and a download could
-  reach the wrong account. Files now move only while their owner holds the browser, and
-  the next person gets it once the transfer has ended. Personal browsers were not
-  affected.
+- **Files and logins in the shared browser no longer cross from one account to the
+  next.** When the shared browser changed hands while a file transfer or the previous
+  person's sign-off was still running, that person's workspace files could appear in the
+  next person's file picker, a download could reach the wrong account, and the previous
+  person's saved logins could take in the next person's. The next person now gets the
+  browser only once the previous person's transfers and sign-off have finished; while
+  they run, the browser window says so and asks to try again in a moment. Personal
+  browsers were not affected.
 - **The web build uses postcss-selector-parser 6.1.5.** Version 6.1.4, which Tailwind CSS
   pulls in, parsed a long flat selector such as `.a.a.a...` in quadratic time, so one crafted
   selector could hold a CPU core for seconds. VAF parses only its own stylesheets with it, at

@@ -998,11 +998,11 @@ def test_a_refresh_start_overtaken_by_a_run_leaves_no_entry(box, monkeypatch, pa
     evicted, holding = threading.Event(), threading.Event()
     real_claim = web._claim_shared
 
-    def slow_claim(kind, scope, *, wait_s):
+    def slow_claim(kind, scope, *, wait_s, **kw):
         if kind == bj.KIND_LEASE and not holding.is_set():
             holding.set()
             evicted.wait(5)
-        return real_claim(kind, scope, wait_s=wait_s)
+        return real_claim(kind, scope, wait_s=wait_s, **kw)
 
     monkeypatch.setattr(web, "_claim_shared", slow_claim)
     if path == "handover refused":

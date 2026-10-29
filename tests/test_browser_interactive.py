@@ -802,23 +802,44 @@ def test_an_unconfirmed_full_scrub_still_lets_the_mirror_copy_again(mgr, monkeyp
 class _SharedContainer:
     """The shared browser's two transfer folders, with a slow mirror and a hook.
 
-    `workspace` holds (owner scope, file) pairs, `downloads` the files waiting in
-    the container's Downloads, `delivered` what the sweep handed to each scope.
-    The handover's purge empties both folders. A mirror for `slow_sync_for` signals
-    `entered` and then waits for `release` before its files land, which is a tar
-    stream still running; `sweep_hook` runs once at the start of a sweep."""
+    `workspace` holds (owner scope, file) pairs, `downloads` the (owner scope,
+    file) pairs waiting in the container's Downloads, `delivered` what the sweep
+    handed to each scope. The handover's purge empties both folders. A mirror for
+    `slow_sync_for` signals `entered` and then waits for `release` before its files
+    land, which is a tar stream still running; `sweep_hook` runs once at the start
+    of a sweep. A sweep for `slow_sweep_for` lists the folder, then waits, then
+    copies out and deletes whatever now sits under the listed NAMES, as the real
+    sweep's `find` and its later `docker cp` and `rm` do. `jar` is the browser's
+    cookie jar; a `get` while `slow_get` is set reads it only after `release`."""
 
     def __init__(self, monkeypatch):
         self.workspace = set()
         self.downloads = []
         self.delivered = {}
         self.slow_sync_for = None
+        self.slow_sweep_for = None
+        self.slow_get = False
+        self.jar = []
         self.entered = threading.Event()
         self.release = threading.Event()
         self.sweep_hook = None
         monkeypatch.setattr(bi, "_purge_container_downloads", self.purge)
         monkeypatch.setattr(bi, "_sync_workspace_to_container", self.sync)
         monkeypatch.setattr(bi, "_sweep_container_downloads", self.sweep)
+        monkeypatch.setattr(bi, "_cookie_op", self.cookie_op)
+
+    def cookie_op(self, base, op, cookies=None):
+        if op == "get":
+            if self.slow_get:
+                self.slow_get = False
+                self.entered.set()
+                self.release.wait(10)
+            return [dict(c) for c in self.jar]
+        if op == "set":
+            self.jar = [dict(c) for c in (cookies or [])]
+        elif op in ("clear_cookies", "scrub"):
+            self.jar = []
+        return None
 
     def purge(self, name):
         self.workspace.clear()
@@ -836,9 +857,15 @@ class _SharedContainer:
         if self.sweep_hook is not None:
             hook, self.sweep_hook = self.sweep_hook, None
             hook()
-        got, self.downloads = list(self.downloads), []
+        listed = [n for _o, n in self.downloads]
+        if scope == self.slow_sweep_for:
+            self.slow_sweep_for = None
+            self.entered.set()
+            self.release.wait(10)
+        got = [d for d in self.downloads if d[1] in listed]
+        self.downloads = [d for d in self.downloads if d[1] not in listed]
         self.delivered.setdefault(scope, []).extend(got)
-        return got
+        return [n for _o, n in got]
 
     def foreign_files_for(self, holder):
         return {(s, f) for s, f in self.workspace if s != holder}
@@ -997,7 +1024,7 @@ def test_the_janitor_never_drains_the_next_holders_downloads_to_the_last_one(mgr
             mgr.stop("user", requester_scope="scope-a")
             switched["b"] = mgr.start("scope-b", "sess-b")
             if switched["b"]["status"] == "active":
-                box.downloads.append("b-statement.pdf")
+                box.downloads.append(("scope-b", "b-statement.pdf"))
         t = threading.Thread(target=switch)
         switched["thread"] = t
         t.start()
@@ -1008,7 +1035,7 @@ def test_the_janitor_never_drains_the_next_holders_downloads_to_the_last_one(mgr
     janitor.join(5)
     switched["thread"].join(5)
     _start_b_once_a_lets_go(mgr, switched["b"])
-    assert "b-statement.pdf" not in box.delivered.get("scope-a", []), box.delivered
+    assert ("scope-b", "b-statement.pdf") not in box.delivered.get("scope-a", []), box.delivered
 
 
 def test_a_stopped_runs_mirror_never_lands_in_the_next_holders_browser(mgr, monkeypatch):
@@ -1046,6 +1073,7 @@ def test_a_transfer_that_outlives_the_wait_keeps_the_browser_held(mgr, monkeypat
     _no_ipc_tasks(monkeypatch)
     box = _SharedContainer(monkeypatch)
     monkeypatch.setattr(mgr, "TRANSFER_DRAIN_S", 0.2)
+    monkeypatch.setattr(mgr, "HANDOVER_WAIT_S", 0.2)
     assert mgr.start("scope-a", "sess-a")["status"] == "active"
     mgr._lease.stream_connections = 1
     box.workspace.clear()
@@ -1055,8 +1083,18 @@ def test_a_transfer_that_outlives_the_wait_keeps_the_browser_held(mgr, monkeypat
     mgr.stop("user", requester_scope="scope-a")  # returns after the bounded wait
     token, _other = _claim_as_another_process("scope-b")
     assert token is None, "the entry was given up while the transfer still ran"
-    # In this process the handover itself waits, and refuses when the wait runs out.
-    assert mgr.start("scope-b", "sess-b")["status"] != "active"
+    # In this process the handover waits, and answers busy when the wait runs out:
+    # nothing was wiped or refused for safety, so no security event either.
+    events = []
+    import vaf.core.security_events as sev
+    monkeypatch.setattr(sev, "log_security_event", lambda kind, **kw: events.append(kind))
+    refused = mgr.start("scope-b", "sess-b")
+    assert (refused["status"], refused["reason"]) == ("busy", "transfer_running"), refused
+    assert events == []
+    # That refused start claimed the entry A's release is holding back (one lease
+    # entry per process) and must not give it up on its way out.
+    token, _other = _claim_as_another_process("scope-b")
+    assert token is None, "a refused start released the entry a running transfer holds"
     box.release.set()
     janitor.join(5)
     token, other = _claim_as_another_process("scope-b")
@@ -1065,6 +1103,149 @@ def test_a_transfer_that_outlives_the_wait_keeps_the_browser_held(mgr, monkeypat
     browser_jar.record_for("vaf-browser").release(token)
     assert mgr.start("scope-b", "sess-b")["status"] == "active"
     assert box.foreign_files_for("scope-b") == set(), box.workspace
+
+
+@pytest.mark.parametrize("holder", ["lease", "run"])
+def test_a_holders_own_sweep_never_takes_the_next_holders_same_named_download(mgr, monkeypatch,
+                                                                               holder):
+    """A lease's stop and a run's end drain A's downloads on the way out: the sweep
+    lists the folder, then copies each listed name out and deletes it. If B gets the
+    browser in between (a start in this process needs no entry of its own) and
+    downloads a file of the same name, A's sweep would deliver B's file to A and
+    delete B's copy. That tail counts as a transfer, so B's handover waits for it.
+    MUTATION: do not count the stop's tail (red: lease); the run end's (red: run)."""
+    _no_ipc_tasks(monkeypatch)
+    box = _SharedContainer(monkeypatch)
+    if holder == "lease":
+        assert mgr.start("scope-a", "sess-a", save=False)["status"] == "active"
+        let_go = lambda: mgr.stop("user", requester_scope="scope-a")   # noqa: E731
+    else:
+        mgr.stop_for_agent_run()
+        mgr.hand_jar_to_run(user_scope_id="scope-a", persistent=True)
+        let_go = mgr.agent_run_ended
+    box.downloads.append(("scope-a", "invoice.pdf"))
+    box.slow_sweep_for = "scope-a"
+    closer = threading.Thread(target=let_go)
+    closer.start()
+    assert box.entered.wait(5)
+    opener, b_start = _in_thread(lambda: mgr.start("scope-b", "sess-b", save=False))
+    opener.join(0.5)
+    if not opener.is_alive() and b_start["value"]["status"] == "active":
+        box.downloads.append(("scope-b", "invoice.pdf"))   # B downloads its own
+    box.release.set()
+    for t in (closer, opener):
+        t.join(10)
+    _start_b_once_a_lets_go(mgr, b_start["value"])
+    if ("scope-b", "invoice.pdf") not in box.downloads:
+        box.downloads.append(("scope-b", "invoice.pdf"))
+    assert all(owner == "scope-a" for owner, _n in box.delivered.get("scope-a", [])), box.delivered
+    assert ("scope-b", "invoice.pdf") in box.downloads
+
+
+def test_a_stops_cookie_export_never_saves_the_next_holders_cookies(mgr, monkeypatch):
+    """A's stop exports A's cookies to A's storage file. If B's handover clears the
+    jar and restores B's cookies before that export reads the jar, A's file stores
+    B's logins. A's stop tail counts as a transfer, so B's handover waits for it -
+    before the handover mutex, so B's own start gets the browser once A is done
+    instead of a busy answer. MUTATION: do not count the stop's tail (red); do not
+    wait before the mutex (red: B is answered busy)."""
+    _no_ipc_tasks(monkeypatch)
+    box = _SharedContainer(monkeypatch)
+    secret = {"name": "session", "value": "B-SECRET", "domain": "bank.example", "path": "/",
+              "expires": 2000000000.0, "httpOnly": True, "secure": True, "sameSite": "Lax"}
+    bi._export_storage_cookies(bi.browser_storage_state_path("scope-b", "default"), [secret])
+    assert mgr.start("scope-a", "sess-a")["status"] == "active"
+    box.jar = [dict(secret, value="A-OWN", domain="shop.example")]
+    box.slow_get = True
+    closer = threading.Thread(target=lambda: mgr.stop("user", requester_scope="scope-a"))
+    closer.start()
+    assert box.entered.wait(5)
+    opener, b_start = _in_thread(lambda: mgr.start("scope-b", "sess-b"))
+    opener.join(0.5)
+    box.release.set()
+    for t in (closer, opener):
+        t.join(10)
+    assert b_start["value"]["status"] == "active", b_start["value"]
+    _start_b_once_a_lets_go(mgr, b_start["value"])
+    saved = bi._load_storage_cookies(bi.browser_storage_state_path("scope-a", "default"))
+    assert [c["value"] for c in saved] == ["A-OWN"], saved
+
+
+def test_a_release_and_a_claim_of_the_same_entry_never_cross(mgr, monkeypatch):
+    """A lease claim of this process answers with the existing entry's token. A's
+    release checks that no lease of this process has claimed it again and then
+    gives it up; a claim landing between that check and the release took the token
+    and lost its entry with A's release, leaving B's lease open to another process.
+    The check and the release are one step with the claim. MUTATION: drop the claim
+    mutex around the check and the release (red)."""
+    _no_ipc_tasks(monkeypatch)
+    _SharedContainer(monkeypatch)
+    assert mgr.start("scope-a", "sess-a", save=False)["status"] == "active"
+    real_release = mgr._release_shared
+    in_release, go_on = threading.Event(), threading.Event()
+
+    def paused_release(token):
+        if not in_release.is_set():
+            in_release.set()
+            go_on.wait(5)
+        return real_release(token)
+
+    monkeypatch.setattr(mgr, "_release_shared", paused_release)
+    closer = threading.Thread(target=lambda: mgr.stop("user", requester_scope="scope-a"))
+    closer.start()
+    assert in_release.wait(5)
+    opener, b_start = _in_thread(lambda: mgr.start("scope-b", "sess-b", save=False))
+    opener.join(0.5)
+    go_on.set()
+    for t in (closer, opener):
+        t.join(10)
+    _start_b_once_a_lets_go(mgr, b_start["value"])
+    token, _other = _claim_as_another_process("scope-c")
+    assert token is None, "B holds the browser without an entry in the holder record"
+
+
+def test_a_claim_and_its_install_are_one_step_against_a_release(mgr, monkeypatch):
+    """The other half: B's claim answers with A's entry (still in the record), and
+    A's release must not look at `_lease_token` between that answer and B's
+    install of it, or it sees no lease holding the entry and gives it up under B.
+    The claim and the install are one step under the claim mutex. MUTATION: install
+    the token after the claim step (red)."""
+    _no_ipc_tasks(monkeypatch)
+    _SharedContainer(monkeypatch)
+    from vaf.core import browser_jar
+    assert mgr.start("scope-a", "sess-a", save=False)["status"] == "active"
+    a_at_release, a_go = threading.Event(), threading.Event()
+    b_claimed, b_go = threading.Event(), threading.Event()
+    real_release = mgr._release_unless_reclaimed
+    real_claim = browser_jar.JarRecord.claim
+
+    def a_release(token, **kw):
+        a_at_release.set()
+        a_go.wait(5)
+        return real_release(token, **kw)
+
+    def b_claim(self, kind, scope):
+        out = real_claim(self, kind, scope)
+        if scope == "scope-b":
+            b_claimed.set()
+            b_go.wait(5)
+        return out
+
+    monkeypatch.setattr(mgr, "_release_unless_reclaimed", a_release)
+    monkeypatch.setattr(browser_jar.JarRecord, "claim", b_claim)
+    closer = threading.Thread(target=lambda: mgr.stop("user", requester_scope="scope-a"))
+    closer.start()
+    assert a_at_release.wait(5)                     # A's tail is done, its release next
+    opener, b_start = _in_thread(lambda: mgr.start("scope-b", "sess-b", save=False))
+    assert b_claimed.wait(5)                        # B holds A's entry, not yet installed
+    a_go.set()                                      # A's release looks now
+    closer.join(0.5)
+    b_go.set()
+    for t in (closer, opener):
+        t.join(10)
+    _start_b_once_a_lets_go(mgr, b_start["value"])
+    token, _other = _claim_as_another_process("scope-c")
+    assert token is None, "B holds the browser without an entry in the holder record"
 
 
 def test_workspace_sync_off_mirrors_nothing(mgr, monkeypatch):
@@ -2360,3 +2541,20 @@ def test_a_refused_handover_mints_no_watch_grant(real_run, mgr, monkeypatch):
     out = real_run.run(task="read the page", user_scope_id="scope-b")
     assert "could not be cleaned" in out, out
     assert grants == []
+
+
+def test_the_window_names_a_running_transfer_in_every_language():
+    """A start refused while the previous holder's files are still moving answers
+    busy/transfer_running, and the window says exactly that, in every locale, not
+    "another user is driving" and not the failed-wipe text. MUTATION: drop the
+    window's transfer_running branch (red); drop the key from a locale (red)."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    src = (root / "vaf" / "core" / "browser_interactive.py").read_text(encoding="utf-8")
+    assert '"reason": "transfer_running"' in src
+    window = (root / "web" / "components" / "SubAgentWindow.tsx").read_text(encoding="utf-8")
+    assert "interactive.reason === 'transfer_running'" in window
+    assert "tMain('browserTransferRunning')" in window
+    for locale in ("en", "de", "tr", "zh", "ja", "ko", "th"):
+        catalog = json.loads((root / "web" / "messages" / f"{locale}.json").read_bytes())
+        assert catalog["main"].get("browserTransferRunning", "").strip(), locale

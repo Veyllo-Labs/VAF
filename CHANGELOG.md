@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a34] - 2026-10-29
+
 ### Added
 
 - **`Agent.set_allowed_tools(names)`** fixes which tools an agent offers and runs, for every

@@ -31,6 +31,38 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a34',
+    date: '2026-10-29',
+    sections: [
+      {
+        kind: 'new',
+        items: [
+          'Run VAF on a small server: the installer asks for a profile, and "Lean (API)" leaves out the local models and speech containers.',
+          'Encrypted backups of everything VAF keeps, by hand or on a daily or weekly schedule, and a restore that shows in the security log.',
+          'A health check for monitors: "vaf health" and /api/health report services, disk, backups and the agent.',
+          'Settings, Account: change your password, see every signed-in device and end any of them.',
+        ],
+      },
+      {
+        kind: 'improved',
+        items: [
+          'Sign-ins are hardened: 2FA for every account, 12-character passwords, the session in a cookie no script can read, and guessing is slowed down and reported.',
+          'The HTTPS port admits only your local network and your VPN, and your own certificate is never replaced.',
+          'On a server with several accounts, each turn runs with its own account and conversation, and agent rooms see nothing private of yours.',
+        ],
+      },
+      {
+        kind: 'fixed',
+        items: [
+          'Contacts on Telegram, WhatsApp and mail are answered as contacts: with their tools only, without your profile, and never in your place.',
+          'A finished sub-agent sends its real summary to your messenger.',
+          '"Connect OneDrive" reaches Microsoft\'s sign-in page again.',
+          'Your own browser is no longer recreated at every start.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a33',
     date: '2026-10-11',
     sections: [

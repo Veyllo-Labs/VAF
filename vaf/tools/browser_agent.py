@@ -1092,15 +1092,16 @@ class BrowserAgentTool(BaseTool):
         # failure answers None, the shared browser - except strict mode, whose
         # PoolExhausted is the refusal itself: sharing is what it forbids.
         import os as _os
-        from vaf.core.browser_pool import PoolExhausted, get_browser_pool
+        from vaf.core.browser_pool import PoolExhausted, get_browser_pool, refusal_hint
         from vaf.core.browser_interactive import resolve_browser_scope
         try:
             _endpoint = get_browser_pool().resolve(
                 resolve_browser_scope(kwargs.get("user_scope_id")))
         except PoolExhausted as e:
+            # The hint follows the reason: raising the count does nothing when
+            # memory is what refused.
             return ("Error (browser_agent): no dedicated browser available "
-                    f"(strict pool: {e}). Try again when an instance is free, "
-                    "or ask an admin to raise browser_pool_max.")
+                    f"(strict pool: {e}). {refusal_hint(str(e))}")
         _cdp_base = (_endpoint.cdp_base if _endpoint
                      else _os.environ.get("VAF_BROWSER_CDP_URL", "http://localhost:9222"))
         _container = _endpoint.container_name if _endpoint else "vaf-browser"

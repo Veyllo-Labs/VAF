@@ -553,10 +553,10 @@ def _browser_pool_off():
     whole suite.
 
     The other isolation fixtures redirect where the suite WRITES; this one is about
-    what it STARTS. `browser_pool_max` defaults to 2, and any test that reaches a
-    browser resolution path with a docker daemon present will therefore create a
-    real container, a docker network and a profile volume on the developer's
-    machine - none of which a tmp_path can catch and none of which a test removes.
+    what it STARTS. `browser_pool_max` defaults to "auto" (at least two browsers), and
+    any test that reaches a browser resolution path with a docker daemon present will
+    therefore create a real container, a docker network and a profile volume on the
+    developer's machine - none of which a tmp_path can catch and none of which a test removes.
     It is not hypothetical: the default was flipped from 0 to 2 and
     `test_render_page_never_raises` immediately started `vaf-browser-u-<hash>` and
     rendered the live internet through it, which is also why it stopped failing the

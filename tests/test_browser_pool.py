@@ -5,8 +5,9 @@
 
 The docker CLI sits behind one seam (`vaf.core.containers.docker`) and the config
 behind another (`browser_pool._config_get`); these tests pin the DECISIONS:
-two people get a browser of their own by default while an explicit 0 still
-switches the pool off entirely, the environment overrides the config key,
+by default ("auto") the pool sizes itself by free memory and never serves fewer
+than two, an integer keeps a fixed count, an explicit 0 still switches the pool
+off entirely, admissions cannot overshoot under concurrency, the environment overrides the config key,
 capacity and the memory floor refuse politely (shared fallback, never an
 error), instances are adopted across VAF restarts, container names carry a
 scope HASH rather than the scope, and the manager registry hands out one
@@ -253,6 +254,43 @@ def test_each_instance_gets_a_network_of_its_own(pool, monkeypatch):
     assert a.container_name != b.container_name
 
 
+def test_a_browser_auto_adds_is_partitioned_like_the_first_two(pool, monkeypatch):
+    """The instances auto starts beyond the former two get exactly what the first two
+    get: a scope-hash name, a network and a profile volume of their own, the full
+    hardening and the memory cap. And the idle reaper still only stops one, never
+    removes it."""
+    monkeypatch.setattr(bp, "_seccomp_profile_path", lambda: "/repo/docker/browser/chromium-seccomp.json")
+    got = _resolve_scopes(pool, 3)
+    assert all(i is not None for i in got)
+    runs = [c for c in pool._test_docker.calls if c[0] == "run"]
+    assert len(runs) == 3
+    nets = [c[c.index("--network") + 1] for c in runs]
+    vols = [next(a for a in c if a.endswith(":/home/browser")) for c in runs]
+    assert len(set(nets)) == 3 and all(n.startswith("vaf-browser-net-") for n in nets)
+    assert len(set(vols)) == 3 and all(v.startswith("vaf-browser-profile-") for v in vols)
+    for i, (inst, run) in enumerate(zip(got, runs)):
+        assert inst.container_name == "vaf-browser-u-" + containers.scope_hash(f"scope-{i}")
+        joined = " ".join(run)
+        for flag in ("--cap-drop ALL", "--cap-add SYS_CHROOT",
+                     "--security-opt no-new-privileges:true",
+                     "--security-opt seccomp=/repo/docker/browser/chromium-seccomp.json",
+                     "--dns 1.1.1.2", "--dns 1.0.0.2", "127.0.0.1::9222", "127.0.0.1::6901",
+                     f"--memory {bp.INSTANCE_MEMORY_MB}m"):
+            assert flag in joined, (i, flag)
+
+    # The reaper: every instance idle for longer than the timeout is stopped, nothing more.
+    for inst in got:
+        inst.last_used = 0.0
+    monkeypatch.setattr(bp.time, "sleep", lambda s: None)
+    # Nobody holds a lease or runs an agent on any of them.
+    monkeypatch.setattr(bp.BrowserPool, "_instance_busy", staticmethod(lambda inst: False))
+    before = len(pool._test_docker.calls)
+    pool._reaper_loop()
+    verbs = [c[0] for c in pool._test_docker.calls[before:]]
+    assert verbs == ["stop", "stop", "stop"], verbs
+
+
+
 def test_capacity_gate_answers_shared_fallback(pool, monkeypatch):
     monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "1")
     assert pool.resolve("scope-a") is not None
@@ -265,6 +303,239 @@ def test_memory_floor_refuses_new_instances(pool, monkeypatch):
     monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "4")
     monkeypatch.setattr("vaf.core.containers.mem_available_mb", lambda: 800)
     assert pool.resolve("scope-a") is None
+
+
+# -- auto: the pool sizes itself by free memory -------------------------------------
+
+def _resolve_scopes(pool, n):
+    return [pool.resolve(f"scope-{i}") for i in range(n)]
+
+
+def _fallback_details(pool):
+    return [kw["detail"] for kind, kw in pool._test_events if kind == "browser_pool_fallback"]
+
+
+def test_auto_is_the_default_and_the_env_spellings(pool, monkeypatch):
+    """Nothing configured means auto, in the module and in Config.DEFAULTS alike, and
+    the operator's variable reads every spelling an admin will type. An integer stays
+    a fixed count and 0 stays off. MUTATION: DEFAULT_POOL_MAX = 2 - red; parse "auto"
+    as a fixed count - red."""
+    from vaf.core.config import Config
+    assert bp.pool_mode() == "auto" and bp.pool_max() == bp.AUTO_CEILING
+    assert Config.DEFAULTS["browser_pool_max"] == "auto" == bp.DEFAULT_POOL_MAX
+    for raw, mode, ceiling in (("0", "off", 0), ("4", "fixed", 4), ("auto", "auto", 16),
+                               (" AUTO ", "auto", 16), ("x", "auto", 16), ("-3", "off", 0)):
+        monkeypatch.setenv("VAF_BROWSER_POOL_MAX", raw)
+        assert (bp.pool_mode(), bp.pool_max()) == (mode, ceiling), raw
+    monkeypatch.delenv("VAF_BROWSER_POOL_MAX")
+    for value, mode, ceiling in ((0, "off", 0), (3, "fixed", 3), ("auto", "auto", 16),
+                                 ("5", "fixed", 5), (None, "auto", 16)):
+        monkeypatch.setattr(bp, "_config_get",
+                            lambda key, v=value: v if key == "browser_pool_max" else None)
+        assert (bp.pool_mode(), bp.pool_max()) == (mode, ceiling), value
+
+
+def test_auto_reserves_the_cap_of_every_running_browser(pool, monkeypatch):
+    """Room for exactly five caps above the floor starts five, and the sixth person
+    shares the fallback browser with a visible event that names memory as the limit.
+    The fake memory stays constant while browsers start, so only the reservation for
+    the RUNNING ones can stop the sixth. MUTATION: drop `running` from the
+    reservation term - red (it would start sixteen)."""
+    monkeypatch.setattr("vaf.core.containers.mem_available_mb",
+                        lambda: bp.DEFAULT_MIN_FREE_MB + 5 * bp.INSTANCE_MEMORY_MB)
+    got = _resolve_scopes(pool, 6)
+    assert all(i is not None for i in got[:5]), got
+    assert got[5] is None
+    assert len({i.container_name for i in got[:5]}) == 5
+    details = _fallback_details(pool)
+    assert len(details) == 1 and details[0].startswith("low memory"), details
+    assert f"{bp.INSTANCE_MEMORY_MB} MB reserved per browser" in details[0]
+
+
+@pytest.mark.parametrize("free", [2600, None])
+def test_auto_never_serves_fewer_than_the_former_default(pool, monkeypatch, free):
+    """Just above the floor the reservation admits nobody, and auto still serves the two
+    the fixed default served. Without a memory reading (macOS, Windows) auto is exactly
+    those two. MUTATION: remove the baseline branch - red (none start at 2600 MB);
+    treat a missing reading as unlimited memory - red (the third starts)."""
+    monkeypatch.setattr("vaf.core.containers.mem_available_mb", lambda: free)
+    got = _resolve_scopes(pool, 3)
+    assert got[0] is not None and got[1] is not None
+    assert got[2] is None
+
+
+def test_auto_stops_at_the_ceiling(pool, monkeypatch):
+    """Even with memory for a hundred, auto runs at most sixteen at once.
+    MUTATION: remove the AUTO_CEILING clamp - red."""
+    monkeypatch.setattr("vaf.core.containers.mem_available_mb", lambda: 10_000_000)
+    got = _resolve_scopes(pool, 17)
+    assert all(i is not None for i in got[:16])
+    assert got[16] is None
+    assert _fallback_details(pool) == ["at capacity (16/16)"]
+
+
+def test_fixed_mode_keeps_the_floor_only_rule(pool, monkeypatch):
+    """A fixed count means what it always meant: at most N while free memory is above
+    the floor, no reservation. It is the documented way to pack more browsers onto a
+    machine than auto would. MUTATION: apply the reservation in fixed mode - red."""
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "4")
+    monkeypatch.setattr("vaf.core.containers.mem_available_mb", lambda: 2600)
+    got = _resolve_scopes(pool, 5)
+    assert all(i is not None for i in got[:4])
+    assert got[4] is None
+    assert _fallback_details(pool) == ["at capacity (4/4)"]
+
+
+def test_concurrent_admissions_do_not_overshoot(pool, monkeypatch):
+    """Two people open a browser at the same moment with room for one. The admission
+    check and the pending count sit under one lock, and the admitted start counts
+    until its `docker run` has returned (docker lists the container only from then
+    on). The fakes make both races real: the first memory reading (inside the check,
+    after the count) waits briefly for a second one, so without the lock both checks
+    see the same count; and the first `docker run` blocks until the other resolve has
+    decided, so without the pending count the second check sees nothing running.
+    MUTATION: drop the `_pending` increment - red; take the check out of
+    `_admit_lock` - red."""
+    import threading
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "1")
+    fake = pool._test_docker
+    guard = threading.Lock()
+    seen = {"mem": 0, "run": 0}
+    second_reading = threading.Event()
+    release = threading.Event()
+
+    def nth(kind):
+        with guard:
+            seen[kind] = seen.get(kind, 0) + 1
+            return seen[kind]
+
+    def reading():
+        if nth("mem") == 1:
+            second_reading.wait(0.5)
+        else:
+            second_reading.set()
+        return 16000
+
+    def racing(args, timeout=60):
+        if args[0] == "run" and nth("run") == 1:
+            release.wait(3)
+        return fake(args, timeout=timeout)
+
+    monkeypatch.setattr("vaf.core.containers.mem_available_mb", reading)
+    monkeypatch.setattr("vaf.core.containers.docker", racing)
+    results = {}
+    done = threading.Event()
+
+    def resolve(scope):
+        results[scope] = pool.resolve(scope)
+        done.set()
+
+    threads = [threading.Thread(target=resolve, args=(s,), daemon=True)
+               for s in ("scope-a", "scope-b")]
+    for t in threads:
+        t.start()
+    done.wait(3)          # the refused one answers while the admitted one is in docker run
+    release.set()
+    for t in threads:
+        t.join(10)
+    assert len([c for c in fake.calls if c[0] == "run"]) == 1, fake.calls
+    assert sorted(v is None for v in results.values()) == [False, True]
+    assert pool._pending == 0
+
+
+def test_status_room_is_the_admission_decision(pool, monkeypatch):
+    """The status row and the admission read one rule: for the same inputs the room
+    the row reports is `admission_room`, and the next admission says yes exactly when
+    that room is at least one. A start still under way counts. With the pool off the
+    status asks docker nothing. MUTATION: compute `room` in pool_status with its own
+    formula, off by one - red."""
+    monkeypatch.setattr(bp, "_pool", pool)
+    free = {"mb": 0}
+    monkeypatch.setattr("vaf.core.containers.mem_available_mb", lambda: free["mb"])
+    for mb in (None, 1000, 2600, 2500 + 2 * 2048, 2500 + 3 * 2048 - 1, 2500 + 9 * 2048):
+        free["mb"] = mb
+        for pending in (0, 1):
+            pool._pending = pending
+            status = bp.pool_status()
+            running = status["running"]
+            want = bp.admission_room("auto", bp.AUTO_CEILING, running + pending, mb,
+                                     bp.DEFAULT_MIN_FREE_MB)
+            assert status["room"] == want, (mb, pending, status)
+            assert status["mode"] == "auto" and status["free_mb"] == mb
+            assert status["reserve_mb"] == bp.INSTANCE_MEMORY_MB
+            admitted = pool._admit()
+            if admitted:
+                pool._release()
+            assert admitted == (status["room"] >= 1), (mb, pending, status)
+    pool._pending = 0
+    # One instance running: it is counted, and it lowers the room.
+    free["mb"] = 2500 + 3 * 2048
+    assert pool.resolve("scope-a") is not None
+    status = bp.pool_status()
+    assert status["running"] == 1 and status["room"] == 2
+    assert "scope-a" not in json.dumps(status)
+
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "0")
+    pool._test_docker.calls.clear()
+    off = bp.pool_status()
+    assert off["mode"] == "off" and off["room"] == 0 and off["running"] == 0
+    assert pool._test_docker.calls == []
+
+
+def test_admission_room_rules():
+    """The pure rule, table by table: fixed is floor-only, auto is the larger of the
+    baseline and the reservation, clamped to the ceiling, and off admits nothing."""
+    r = bp.admission_room
+    assert r("off", 0, 0, 99999, 2500) == 0
+    assert r("fixed", 4, 1, 2600, 2500) == 3
+    assert r("fixed", 4, 1, 2400, 2500) == 0
+    assert r("fixed", 4, 1, None, 2500) == 3
+    assert r("auto", 16, 0, 2600, 2500) == 2              # the baseline
+    assert r("auto", 16, 0, 2400, 2500) == 0              # below the floor: nothing
+    assert r("auto", 16, 0, None, 2500) == 2              # no reading: the baseline
+    assert r("auto", 16, 2, None, 2500) == 0
+    assert r("auto", 16, 1, 2500 + 4 * 2048, 2500) == 3   # four caps, one taken
+    assert r("auto", 16, 0, 10_000_000, 2500) == 16       # the ceiling
+    assert r("auto", 1, 0, 2600, 2500) == 1               # a ceiling below the baseline
+
+
+def test_refusal_hint_names_the_real_limit(pool, monkeypatch):
+    """A strict refusal tells the person what would help. When memory refused, a
+    higher count does nothing, so that hint must never say "raise browser_pool_max".
+    Checked against the reasons the pool actually produces, and the agent's refusal
+    is built from the hint. MUTATION: return the capacity hint for every reason - red."""
+    from pathlib import Path
+    monkeypatch.setenv("VAF_BROWSER_POOL_STRICT", "1")
+    monkeypatch.setattr("vaf.core.containers.mem_available_mb", lambda: 2000)
+    with pytest.raises(bp.PoolExhausted) as memory:
+        pool.resolve("scope-a")
+    assert str(memory.value).startswith("low memory")
+    hint = bp.refusal_hint(str(memory.value))
+    assert "raise browser_pool_max" not in hint and "browser_pool_idle_seconds" in hint
+
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "1")
+    monkeypatch.setattr("vaf.core.containers.mem_available_mb", lambda: 16000)
+    assert pool.resolve("scope-a") is not None
+    with pytest.raises(bp.PoolExhausted) as capacity:
+        pool.resolve("scope-b")
+    assert str(capacity.value).startswith("at capacity")
+    assert "raise browser_pool_max" in bp.refusal_hint(str(capacity.value))
+    assert "raise browser_pool_max" not in bp.refusal_hint("instance did not become healthy")
+
+    src = (Path(bp.__file__).resolve().parents[1] / "tools" / "browser_agent.py"
+           ).read_text(encoding="utf-8")
+    assert "refusal_hint(str(e))" in src
+    assert "raise browser_pool_max" not in src
+
+
+def test_memory_cap_is_the_reservation(pool, monkeypatch):
+    """The reservation is only honest while it IS the container's memory cap: one
+    constant feeds both. MUTATION: write a literal for `--memory` that differs from
+    INSTANCE_MEMORY_MB - red."""
+    assert pool.resolve("scope-a") is not None
+    run_call = next(c for c in pool._test_docker.calls if c[0] == "run")
+    assert run_call[run_call.index("--memory") + 1] == f"{bp.INSTANCE_MEMORY_MB}m"
+    assert bp.admission_room("auto", 16, 0, 2500 + 3 * bp.INSTANCE_MEMORY_MB, 2500) == 3
 
 
 def test_exited_instance_is_adopted_and_restarted(pool, monkeypatch):

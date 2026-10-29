@@ -11,14 +11,33 @@ The shared vaf-browser container is what remains for everyone the pool cannot
 serve; there one Chromium is time-shared (one lease at a time, a scrub on
 every change of hands), which is isolation by lease rather than by partition.
 
-`browser_pool_max` decides how many instances may run at once, default 2,
-because an instance costs a full container (~1-2 GB RAM) and two is the
-smallest number at which a second person is not sharing a browser. Raising it
-is an operator decision about RAM: see the pool section in
-docs/agents/BROWSER_AGENT.md. A free-memory floor refuses new instances before
-the machine starts swapping, and 0 turns the pool off entirely. All three
-knobs are config keys with a VAF_BROWSER_POOL_* environment override, so a
-deployment can pin them without writing the config file.
+`browser_pool_max` decides how many instances may run at once. Its default,
+"auto", sizes the pool by free memory: a browser beyond the first two starts
+only while the machine can hold the full memory cap of every running browser
+plus the new one above the free-memory floor,
+`free - floor >= (running + 1) * INSTANCE_MEMORY_MB`, at most AUTO_CEILING.
+The cap (2 GB) is reserved, not the working set: measured, an instance holds
+about 0.3 GB idle and 0.6 GB after use, but it may grow to its cap, and on a
+swapless machine an overcommitted pool hands the host's OOM killer the VAF
+server or the database. Auto never serves fewer than AUTO_BASELINE (the former
+fixed default): below the reservation, two still start while free memory is
+above the floor. An integer keeps the fixed meaning (at most N, behind the
+floor only), and 0 turns the pool off entirely. All the knobs are config keys
+with a VAF_BROWSER_POOL_* environment override, so a deployment can pin them
+without writing the config file. The scale-down is the idle reaper below.
+
+Admission is serialized in this process (`_admit_lock` plus a pending count
+held until the `docker run` or `docker start` has returned), so two people
+opening a browser at the same moment cannot both pass a check that only one
+of them fits through. Named boundaries:
+- across processes (the web server plus a `vaf run` session) the window is one
+  `docker run`; the floor is the margin for it;
+- macOS and Windows give no reading of the Docker VM's free memory
+  (`containers.mem_available_mb` is None), so auto serves exactly the baseline
+  there; an admin who wants more sets an integer;
+- the pool is not on the public facade: its callers are VAF's own tools and
+  server (measured: no embedder or harness caller reaches it from outside
+  `vaf`), and it runs the product's own Docker image.
 
 Whenever the pool cannot serve - switched off, at capacity, low memory, docker
 unreachable, image unknown - the caller falls back to the shared container and
@@ -57,10 +76,23 @@ _NETWORK_PREFIX = "vaf-browser-net-"
 # The defaults live here as well as in Config.DEFAULTS: an embedder that
 # builds on vaf.core without a config file still gets a working pool. A guard
 # test pins the two copies together so they cannot drift.
-DEFAULT_POOL_MAX = 2
+DEFAULT_POOL_MAX = "auto"
 DEFAULT_MIN_FREE_MB = 2500
 DEFAULT_IDLE_S = 900.0
 DEFAULT_POOL_STRICT = False
+
+# Every instance's memory cap (`docker run --memory`) and, under auto, what each
+# running or starting instance reserves: one number, so the reservation can never
+# describe a container other than the one that is started.
+INSTANCE_MEMORY_MB = 2048
+# Auto serves at least this many whenever free memory is above the floor (or
+# cannot be read): the former fixed default, so no machine gets fewer.
+AUTO_BASELINE = 2
+# Auto never runs more than this many at once. It bounds a misread memory value
+# and the per-scope networks, and it is the clamp the Settings input applies.
+AUTO_CEILING = 16
+
+POOL_MODES = ("off", "fixed", "auto")
 
 
 class PoolExhausted(RuntimeError):
@@ -94,13 +126,99 @@ def _setting(env_var: str, config_key: str):
     return _config_get(config_key)
 
 
-def pool_max() -> int:
-    """How many per-user instances may RUN at once. 0 disables the pool."""
+def _pool_setting() -> tuple:
+    """(mode, ceiling) from `browser_pool_max`: "auto" (any case, any surrounding
+    whitespace), unset or unreadable is auto up to AUTO_CEILING; an integer (or an
+    integer string) N > 0 is fixed at N; 0 or a negative number is off.
+
+    Unreadable falls to auto, the default, the way an unreadable value always fell
+    to the default here. A bool is read as the integer it is, as before."""
     try:
         raw = _setting("VAF_BROWSER_POOL_MAX", "browser_pool_max")
-        return DEFAULT_POOL_MAX if raw is None else max(0, int(raw))
     except Exception:
-        return DEFAULT_POOL_MAX
+        raw = None
+    if raw is None:
+        return "auto", AUTO_CEILING
+    try:
+        if isinstance(raw, (int, float)):
+            n = int(raw)
+        else:
+            text = str(raw).strip()
+            if text.lower() == "auto":
+                return "auto", AUTO_CEILING
+            n = int(text)
+    except Exception:
+        return "auto", AUTO_CEILING
+    if n <= 0:
+        return "off", 0
+    return "fixed", n
+
+
+def pool_mode() -> str:
+    """"off", "fixed" or "auto" (see `_pool_setting`)."""
+    return _pool_setting()[0]
+
+
+def pool_max() -> int:
+    """The ceiling in effect: how many per-user instances may RUN at once at most
+    (N when fixed, AUTO_CEILING under auto). 0 disables the pool."""
+    return _pool_setting()[1]
+
+
+def admission_room(mode: str, ceiling: int, running: int,
+                   free_mb: Optional[int], floor_mb: int,
+                   reserve_mb: int = INSTANCE_MEMORY_MB) -> int:
+    """Pure: how many more instances may start now. The one rule both the
+    admission and the status row read; `running` includes the ones still starting.
+
+    fixed: up to the ceiling, while free memory is above the floor (or cannot be
+    read). auto: whichever admits more of two rules, clamped to the ceiling - the
+    former default (AUTO_BASELINE under the same floor-only condition), or the
+    reservation (`free - floor` holds the cap of every running instance and of
+    each new one). Without a memory reading the reservation admits nothing, so
+    auto is exactly the baseline there."""
+    running = max(0, int(running))
+    if mode not in ("fixed", "auto") or ceiling <= 0:
+        return 0
+    above_floor = free_mb is None or free_mb >= floor_mb
+    if mode == "fixed":
+        return max(0, ceiling - running) if above_floor else 0
+    baseline = max(0, min(AUTO_BASELINE, ceiling) - running) if above_floor else 0
+    reserved = 0
+    if free_mb is not None and reserve_mb > 0:
+        reserved = max(0, (free_mb - floor_mb) // reserve_mb - running)
+    return max(0, min(max(baseline, reserved), ceiling - running))
+
+
+def _limit_reason(mode: str, ceiling: int, running: int,
+                  free_mb: Optional[int], floor_mb: int) -> str:
+    """Why `admission_room` is 0, as the fallback reason, the log line and the
+    security event's detail all name it: `at capacity (r/c)` when the count binds,
+    `low memory (...)` when memory does."""
+    if running >= ceiling:
+        return f"at capacity ({running}/{ceiling})"
+    if mode == "auto" and free_mb is None:
+        # No memory reading: the baseline is the count that binds.
+        return (f"at capacity ({running}/{min(AUTO_BASELINE, ceiling)}, "
+                f"free memory cannot be read here)")
+    if mode == "auto":
+        return (f"low memory ({free_mb} MB free, floor {floor_mb} MB, "
+                f"{INSTANCE_MEMORY_MB} MB reserved per browser)")
+    return f"low memory ({free_mb} MB free, floor {floor_mb} MB)"
+
+
+def refusal_hint(reason: str) -> str:
+    """What a person refused under strict mode can do about it, by the reason
+    `PoolExhausted` carries. A memory refusal never says "raise browser_pool_max":
+    a higher count does nothing when memory is what refused."""
+    text = str(reason or "").strip().lower()
+    if text.startswith("at capacity"):
+        return ("Try again when a personal browser is free, or ask an admin to raise "
+                "browser_pool_max or set it to auto.")
+    if text.startswith("low memory"):
+        return ("This machine has no memory for another personal browser; one frees up "
+                "when an unused one is closed (after browser_pool_idle_seconds).")
+    return "Try again in a moment."
 
 
 def _min_free_mb() -> int:
@@ -251,6 +369,12 @@ class BrowserPool:
         # Set by stop_known_instances: no new allocation, and one already under way
         # stops its own container instead of handing it out after the snapshot.
         self._closing = False
+        # Admission: the check and the pending count move together under this lock,
+        # and an admitted start counts as running until its docker call has returned
+        # (docker lists it only from then on). Without it two resolves for different
+        # scopes both saw room for one and both started.
+        self._admit_lock = threading.Lock()
+        self._pending = 0
 
     # -- template ----------------------------------------------------------
     def _resolve_template(self) -> Optional[tuple]:
@@ -414,9 +538,12 @@ class BrowserPool:
             # idle-stopped one). Published ports were fixed at creation and
             # survive stop/start, so re-reading them is enough.
             if state == "exited":
-                if not self._may_start_another():
+                if not self._admit():
                     return None
-                r = containers.docker(["start", name])
+                try:
+                    r = containers.docker(["start", name])
+                finally:
+                    self._release()
                 if r.returncode != 0:
                     append_domain_log("webui", f"[browser_pool] docker start failed: "
                                                f"{(r.stderr or '').strip()[:200]}; using shared browser")
@@ -426,9 +553,12 @@ class BrowserPool:
                 return None
             inst = self._read_endpoints(scope, name)
         elif state is None:
-            if not self._may_start_another():
+            if not self._admit():
                 return None
-            inst = self._create(scope, name)
+            try:
+                inst = self._create(scope, name)
+            finally:
+                self._release()
         else:
             append_domain_log("webui", f"[browser_pool] instance in state {state!r}; "
                                        "using shared browser")
@@ -449,20 +579,27 @@ class BrowserPool:
         self._ensure_reaper()
         return inst
 
-    def _may_start_another(self) -> bool:
-        limit = pool_max()
-        running = containers.count_running(_NAME_PREFIX)
-        if running >= limit:
-            append_domain_log("webui", f"[browser_pool] at capacity ({running}/{limit}); using shared browser")
-            self._fallback_reason = f"at capacity ({running}/{limit})"
-            return False
-        free = containers.mem_available_mb()
-        if free is not None and free < _min_free_mb():
-            append_domain_log("webui", f"[browser_pool] low memory ({free} MB free, floor "
-                                       f"{_min_free_mb()} MB); using shared browser")
-            self._fallback_reason = f"low memory ({free} MB free)"
-            return False
-        return True
+    def _admit(self) -> bool:
+        """May one more instance start now? On yes the start is counted as pending
+        until `_release`, which the caller runs in a `finally` around its docker
+        call. The decision is `admission_room(...) >= 1`, the same rule the status
+        row reports."""
+        mode, ceiling = _pool_setting()
+        floor = _min_free_mb()
+        with self._admit_lock:
+            running = containers.count_running(_NAME_PREFIX) + self._pending
+            free = containers.mem_available_mb()
+            if admission_room(mode, ceiling, running, free, floor) >= 1:
+                self._pending += 1
+                return True
+        reason = _limit_reason(mode, ceiling, running, free, floor)
+        append_domain_log("webui", f"[browser_pool] {reason}; using shared browser")
+        self._fallback_reason = reason
+        return False
+
+    def _release(self) -> None:
+        with self._admit_lock:
+            self._pending = max(0, self._pending - 1)
 
     def _create(self, scope: str, name: str) -> Optional[BrowserInstance]:
         template = self._resolve_template()
@@ -493,7 +630,7 @@ class BrowserPool:
         args = [
             "run", "-d", "--name", name,
             "--restart", "no", "--init",
-            "--shm-size", "1g", "--memory", "2g",
+            "--shm-size", "1g", "--memory", f"{INSTANCE_MEMORY_MB}m",
             "--network", network,
             # The shared container gets these from compose; a pooled instance is
             # created by us, so the filtering resolvers have to be passed here or
@@ -770,6 +907,31 @@ def stop_known_instances(timeout_s: float = 20.0) -> int:
     for t in workers:
         t.join(timeout=max(0.0, deadline - time.monotonic()))
     return len(names)
+
+
+def pool_status() -> dict:
+    """The pool at a glance: {mode, ceiling, running, free_mb, floor_mb, reserve_mb,
+    room, strict}. Counts only, never a scope or a container name. `room` is
+    `admission_room` over the same inputs the next admission reads (starts still
+    under way in this process count as running), so the row and the decision
+    cannot disagree. With the pool off nothing asks docker.
+
+    BLOCKING (one `docker ps`): run off the event loop."""
+    mode, ceiling = _pool_setting()
+    floor = _min_free_mb()
+    out = {"mode": mode, "ceiling": ceiling, "running": 0, "free_mb": None,
+           "floor_mb": floor, "reserve_mb": INSTANCE_MEMORY_MB, "room": 0,
+           "strict": pool_strict()}
+    if mode == "off":
+        return out
+    with _pool_lock:
+        pool = _pool
+    pending = pool._pending if pool is not None else 0
+    running = containers.count_running(_NAME_PREFIX)
+    free = containers.mem_available_mb()
+    out.update(running=running, free_mb=free,
+               room=admission_room(mode, ceiling, running + pending, free, floor))
+    return out
 
 
 def get_browser_pool() -> BrowserPool:

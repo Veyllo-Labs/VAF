@@ -477,6 +477,65 @@ def derive_sandbox_status(summary: Optional[Dict[str, Any]],
             "running": running, "image_built": built, "reason": text}
 
 
+def probe_browser_pool() -> Optional[Dict[str, Any]]:
+    """The per-user browser pool at a glance (`browser_pool.pool_status`), or None
+    when it cannot be read."""
+    try:
+        from vaf.core.browser_pool import pool_status
+        return pool_status()
+    except Exception:
+        return None
+
+
+def _gb(mb: Any) -> str:
+    """Megabytes as the row's reason says them: one decimal, trailing .0 dropped."""
+    text = f"{float(mb) / 1024:.1f}"
+    return (text[:-2] if text.endswith(".0") else text) + " GB"
+
+
+def derive_browser_pool_status(summary: Optional[Dict[str, Any]],
+                               reason: str = "") -> Dict[str, Any]:
+    """Pure: the snapshot's browser pool row.
+
+    The personal browsers are no compose service: the pool starts one per person on
+    demand and the idle reaper stops it, so they are reported NEXT TO the services,
+    like the sandbox. None running is the normal state, and a full pool is no fault
+    either (people share the fallback browser, the designed lane), so this row is
+    never a problem of the stack. States: ok (at least one runs), idle (none runs),
+    off (`browser_pool_max` is 0), unknown (not readable; `reason` says why when the
+    caller knows better)."""
+    row = {"key": "browser_pool", "name": "vaf-browser-u-*"}
+    if summary is None:
+        return {**row, "state": "unknown", "mode": None, "running": None, "ceiling": None,
+                "room": None, "free_mb": None,
+                "reason": reason or "The personal browsers could not be read."}
+    mode = str(summary.get("mode") or "")
+    ceiling = int(summary.get("ceiling") or 0)
+    running = max(0, int(summary.get("running") or 0))
+    room = max(0, int(summary.get("room") or 0))
+    free = summary.get("free_mb")
+    floor = int(summary.get("floor_mb") or 0)
+    reserve = int(summary.get("reserve_mb") or 0)
+    base = {**row, "mode": mode, "running": running, "ceiling": ceiling, "room": room,
+            "free_mb": free}
+    if mode == "off":
+        return {**base, "state": "off", "running": 0, "room": 0,
+                "reason": "Off (browser_pool_max is 0): everyone uses the shared browser."}
+    counts = f"{running} running, room for {room} more"
+    if mode == "auto":
+        if free is None:
+            detail = "free memory cannot be read here, so at most the first two"
+        else:
+            detail = (f"{_gb(free)} free, {_gb(floor)} kept free, "
+                      f"{_gb(reserve)} reserved per browser")
+        text = f"Automatic: {counts} ({detail})."
+    else:
+        detail = f"at most {ceiling}" + ("" if free is None
+                                         else f", {_gb(free)} free, {_gb(floor)} kept free")
+        text = f"Fixed: {counts} ({detail})."
+    return {**base, "state": "ok" if running else "idle", "reason": text}
+
+
 def collect_service_status(
     daemon_probe: Callable[[], Dict[str, Any]] = diagnose_docker_daemon,
     inspect_probe: Callable[[Sequence[str]], List[Dict[str, Any]]] = inspect_containers,
@@ -485,10 +544,12 @@ def collect_service_status(
     host_probe: Callable[[], Optional[Dict[str, Any]]] = probe_host_forwarding,
     sandbox_probe: Callable[[], Optional[Dict[str, Any]]] = probe_sandbox,
     start_probe: Optional[Callable[[], bool]] = None,
+    browser_pool_probe: Callable[[], Optional[Dict[str, Any]]] = probe_browser_pool,
 ) -> Dict[str, Any]:
-    """Every service's state in one snapshot, plus the host's forwarding switch and
-    the sandbox environments (`derive_sandbox_status`: not a service, so not a row
-    of `services`).
+    """Every service's state in one snapshot, plus the host's forwarding switch, the
+    sandbox environments (`derive_sandbox_status`) and the per-user browser pool
+    (`derive_browser_pool_status`). Neither of the last two is a service, so neither
+    is a row of `services`.
 
     With the daemon down nothing else is attempted: no inspect, no probes. That
     keeps the worst case at one `docker info` (10s) instead of a timeout per service,
@@ -505,6 +566,8 @@ def collect_service_status(
     if not daemon.get("ok"):
         sandbox = derive_sandbox_status(
             None, "Docker is not reachable, so the sandbox environments' state is unknown.")
+        browser_pool = derive_browser_pool_status(
+            None, "Docker is not reachable, so the personal browsers' state is unknown.")
         for spec in SERVICES:
             if spec.service_key not in needed:
                 services.append(derive_service_status(spec, None, None, None, needed=False))
@@ -526,6 +589,7 @@ def collect_service_status(
             })
     else:
         sandbox = derive_sandbox_status(sandbox_probe())
+        browser_pool = derive_browser_pool_status(browser_pool_probe())
         try:
             stack_starting = bool((start_probe or start_in_progress)())
         except Exception:
@@ -563,6 +627,7 @@ def collect_service_status(
         "host": host,
         "services": services,
         "sandbox": sandbox,
+        "browser_pool": browser_pool,
         "starting": bool(starting),
         "starting_seconds_left": max([int(s.get("starting_seconds_left") or 0)
                                       for s in starting], default=0),

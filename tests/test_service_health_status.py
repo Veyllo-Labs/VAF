@@ -390,6 +390,88 @@ def test_a_daemon_that_is_down_asks_no_sandbox_question():
     assert status["sandbox"]["state"] == "unknown" and "not reachable" in status["sandbox"]["reason"]
 
 
+# -- the per-user browser pool: next to the services, never among them, never a problem ----
+
+def _pool_summary(**kw):
+    base = {"mode": "auto", "ceiling": 16, "running": 0, "free_mb": 11468, "floor_mb": 2560,
+            "reserve_mb": 2048, "room": 0, "strict": False}
+    return {**base, **kw}
+
+
+def test_the_browser_pool_row_reads_each_state():
+    """Off, idle, ok and unknown, with a reason that says how many run, how many more
+    fit and why. None running is grey, never a fault. MUTATION: call the row ok without
+    a running browser - red."""
+    ok = sh.derive_browser_pool_status(_pool_summary(running=3, room=2))
+    assert ok["state"] == "ok" and ok["key"] == "browser_pool" and ok["name"] == "vaf-browser-u-*"
+    assert (ok["running"], ok["room"], ok["ceiling"], ok["mode"]) == (3, 2, 16, "auto")
+    assert ok["reason"] == ("Automatic: 3 running, room for 2 more "
+                            "(11.2 GB free, 2.5 GB kept free, 2 GB reserved per browser).")
+    idle = sh.derive_browser_pool_status(_pool_summary(room=4))
+    assert idle["state"] == "idle" and idle["reason"].startswith("Automatic: 0 running, room for 4 more")
+    blind = sh.derive_browser_pool_status(_pool_summary(free_mb=None, room=2))
+    assert "free memory cannot be read here" in blind["reason"]
+    fixed = sh.derive_browser_pool_status(_pool_summary(mode="fixed", ceiling=4, running=1, room=3))
+    assert fixed["state"] == "ok"
+    assert fixed["reason"] == "Fixed: 1 running, room for 3 more (at most 4, 11.2 GB free, 2.5 GB kept free)."
+    off = sh.derive_browser_pool_status(_pool_summary(mode="off", ceiling=0))
+    assert off["state"] == "off" and "browser_pool_max is 0" in off["reason"]
+    unknown = sh.derive_browser_pool_status(None)
+    assert unknown["state"] == "unknown" and unknown["running"] is None
+
+
+def test_the_browser_pool_row_is_beside_the_services_and_never_a_problem():
+    """A full pool is the designed fallback (people share the shared browser), and an
+    unreadable pool is no service down: the row is carried next to `services` and
+    `stack_problems` never lists it. MUTATION: drop the pool probe from the collection
+    - red; add the row to stack_problems - red."""
+    for summary in (_pool_summary(running=16, room=0), None):
+        status = sh.collect_service_status(
+            daemon_probe=lambda: {"ok": True, "reason": "ok", "detail": ""},
+            inspect_probe=lambda names: [],
+            port_reader=lambda spec: spec.default_port or None,
+            service_probe=lambda spec, port: None,
+            host_probe=lambda: None,
+            sandbox_probe=lambda: None,
+            start_probe=lambda: False,
+            browser_pool_probe=lambda s=summary: s,
+        )
+        row = status["browser_pool"]
+        assert row["state"] == ("ok" if summary else "unknown")
+        assert "browser_pool" not in {s["service_key"] for s in status["services"]}
+        names = {p["name"] for p in sh.stack_problems(status)}
+        assert "vaf-browser-u-*" not in names and "browser_pool" not in names
+        with_stack = dict(status, stack_root="/repo")
+        assert "vaf-browser-u-*" not in {p["name"] for p in sh.stack_problems(with_stack)}
+
+
+def test_a_daemon_that_is_down_asks_no_browser_pool_question():
+    asked = []
+    status = sh.collect_service_status(
+        daemon_probe=lambda: {"ok": False, "reason": "not_running", "detail": ""},
+        inspect_probe=lambda names: [],
+        port_reader=lambda spec: None,
+        service_probe=lambda spec, port: None,
+        host_probe=lambda: None,
+        sandbox_probe=lambda: None,
+        browser_pool_probe=lambda: asked.append(1),
+    )
+    assert asked == []
+    row = status["browser_pool"]
+    assert row["state"] == "unknown" and "not reachable" in row["reason"]
+
+
+def test_the_default_pool_probe_asks_docker_nothing_while_the_pool_is_off(monkeypatch):
+    """The suite runs with the pool off; the probe then reads the config only."""
+    from vaf.core import containers
+    monkeypatch.setenv("VAF_BROWSER_POOL_MAX", "0")
+    monkeypatch.setattr(containers, "docker",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("docker asked")))
+    summary = sh.probe_browser_pool()
+    assert summary["mode"] == "off" and summary["room"] == 0
+    assert sh.derive_browser_pool_status(summary)["state"] == "off"
+
+
 # -- a stack start under way: on its way up, not broken -----------------------------------
 
 def test_a_container_the_start_has_not_reached_yet_is_starting_not_stopped():

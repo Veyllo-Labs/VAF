@@ -19,7 +19,7 @@ Rules for a migration function ``fn(config: dict) -> dict``:
 """
 from typing import Callable, List, Tuple
 
-CONFIG_FORMAT_VERSION = 3
+CONFIG_FORMAT_VERSION = 4
 
 
 def _v2_lift_lexical_scan_cap(cfg: dict) -> dict:
@@ -53,10 +53,27 @@ def _v3_network_sessions_last_a_month(cfg: dict) -> dict:
     return cfg
 
 
+def _v4_browser_pool_auto(cfg: dict) -> dict:
+    """Turn browser_pool_max from the old fixed default 2 into "auto".
+
+    The pool now sizes itself by free memory and never serves fewer than two, so a
+    stored 2 loses nothing. Full-config saves wrote the old default out explicitly
+    (the same reason as v2), so the DEFAULTS change alone never reaches an existing
+    install. Only the exact integer 2 is rewritten; 0 (off) and any other count stay.
+    Rollback-safe: an older VAF reads "auto" as unparseable and falls back to its own
+    default, 2. Idempotent: after the rewrite the value is not 2.
+    """
+    value = cfg.get("browser_pool_max")
+    if value == 2 and not isinstance(value, bool):
+        cfg["browser_pool_max"] = "auto"
+    return cfg
+
+
 # Applied in order to any config whose stored version is below the target.
 CONFIG_MIGRATIONS: List[Tuple[int, Callable[[dict], dict]]] = [
     (2, _v2_lift_lexical_scan_cap),
     (3, _v3_network_sessions_last_a_month),
+    (4, _v4_browser_pool_auto),
 ]
 
 

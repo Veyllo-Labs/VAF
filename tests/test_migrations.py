@@ -65,9 +65,9 @@ def test_v3_lifts_only_the_old_token_default():
     something when a session can outlive a day: the old 24-hour default becomes 30 days.
     Full-config saves wrote 24 out explicitly, so only a value migration reaches existing
     installs. MUTATION: rewrite 48 too; leave the version at 2 - red."""
-    assert mig.CONFIG_FORMAT_VERSION == 3
+    assert mig.CONFIG_FORMAT_VERSION >= 3
     out, applied = mig.run_config_migrations({"local_network_jwt_expiry_hours": 24}, 2)
-    assert out["local_network_jwt_expiry_hours"] == 720 and applied == [3]
+    assert out["local_network_jwt_expiry_hours"] == 720 and applied[0] == 3
     out, _ = mig.run_config_migrations({"local_network_jwt_expiry_hours": 48}, 2)
     assert out["local_network_jwt_expiry_hours"] == 48
     out, _ = mig.run_config_migrations({}, 2)
@@ -83,7 +83,39 @@ def test_a_stored_day_long_lifetime_becomes_a_month_on_load(tmp_path, monkeypatc
     monkeypatch.setattr(Config, "CONFIG_FILE", cfg_file)
     assert Config.get("local_network_jwt_expiry_hours") == 720
     raw = json.loads(cfg_file.read_text())
-    assert raw["local_network_jwt_expiry_hours"] == 720 and raw["config_format_version"] == 3
+    assert raw["local_network_jwt_expiry_hours"] == 720
+    assert raw["config_format_version"] == mig.CONFIG_FORMAT_VERSION
+
+
+def test_v4_turns_only_the_old_default_into_auto():
+    """The browser pool now sizes itself by free memory and never serves fewer than two,
+    so the old fixed default 2 becomes "auto". Full-config saves wrote 2 out explicitly,
+    so only a value migration reaches existing installs. Off (0), any other count and
+    auto itself stay; a bool True (which equals 1, not 2) is no count to rewrite either.
+    MUTATION: rewrite any integer - red; leave the version at 3 - red."""
+    assert mig.CONFIG_FORMAT_VERSION == 4
+    out, applied = mig.run_config_migrations({"browser_pool_max": 2}, 3)
+    assert out["browser_pool_max"] == "auto" and applied == [4]
+    for kept in (0, 3, 1, "auto", True):
+        out, _ = mig.run_config_migrations({"browser_pool_max": kept}, 3)
+        assert out["browser_pool_max"] == kept, kept
+    out, _ = mig.run_config_migrations({}, 3)
+    assert "browser_pool_max" not in out
+    # Idempotent: a second pass over the migrated value changes nothing.
+    again, _ = mig.run_config_migrations({"browser_pool_max": "auto"}, 3)
+    assert again["browser_pool_max"] == "auto"
+
+
+def test_a_stored_two_becomes_auto_on_load(tmp_path, monkeypatch):
+    """A v3 file that holds the old default is upgraded on the first load and the
+    sparse file keeps it: "auto" and version 4, no defaults written."""
+    cfg_file = tmp_path / "config.json"
+    cfg_file.write_text(json.dumps({"config_format_version": 3, "browser_pool_max": 2}))
+    monkeypatch.setattr(Config, "CONFIG_FILE", cfg_file)
+    assert Config.get("browser_pool_max") == "auto"
+    raw = json.loads(cfg_file.read_text())
+    assert raw["browser_pool_max"] == "auto" and raw["config_format_version"] == 4
+    assert "model" not in raw
 
 
 def test_the_session_keys_are_registered():

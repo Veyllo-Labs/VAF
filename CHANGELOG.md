@@ -11,6 +11,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Security
+
+- **The web build uses postcss-selector-parser 6.1.5.** Version 6.1.4, which Tailwind CSS
+  pulls in, parsed a long flat selector such as `.a.a.a...` in quadratic time, so one crafted
+  selector could hold a CPU core for seconds. VAF parses only its own stylesheets with it, at
+  build time, so no request reached it; the update closes the Dependabot alert.
+
 ## [0.1.0a34] - 2026-10-29
 
 ### Added

@@ -34,13 +34,19 @@ responsive regardless. Long pure-Python tools should therefore check the stop fl
 and return early - see "Cooperative cancel" below.
 
 A caller that wants an exception instead of a sentinel - a model call with a fallback of its
-own (the tool router, the validation call, the failover's first chunk, `complete()`) - uses
-`call_with_deadline(fn, *args, timeout)`: one daemon worker, `concurrent.futures.TimeoutError`
+own (the tool router, the validation call, the failover's first chunk, `complete()`, the
+document agent's `generate_text`, the research agent's searches and sections) - uses
+`run_on_worker(fn, *args, timeout=None)`, or `call_with_deadline(fn, *args, timeout)`, which
+calls inline when there is no timeout: one daemon worker, `concurrent.futures.TimeoutError`
 when the time is up (the worker is abandoned, not joined), the callable's own exception
-otherwise. Like `run_bounded` it runs the call in a copy of the caller's context, so the call
-keeps its session, cost lane, account and background run (a bare `ThreadPoolExecutor` worker
-starts with an empty context: measured, a thinking run's router and validation calls were
-booked as lane `main` of the machine owner and routed like a chat).
+otherwise. `run_coroutine_on_new_loop(coro)` drives a coroutine on a loop of its own on such
+a worker (for sync code that may sit inside a running loop). Like `run_bounded` they run the
+call in a copy of the caller's context, so the call keeps its session, cost lane, account and
+background run. A bare `threading.Thread` or `ThreadPoolExecutor` worker starts with an empty
+context: measured, a thinking run's router and validation calls were booked as lane `main` of
+the machine owner and routed like a chat. In the code a run's model calls are made from, every
+raw thread, pool and executor start that is left is listed with its reason in
+`tests/test_thinking_run_context_isolation.py`.
 
 Several independent calls that may hang, such as the DNS lookups behind the host a room
 invitation names, go through `run_bounded_all(calls, *, timeout, pool, in_flight=None)` instead:

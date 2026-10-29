@@ -118,6 +118,23 @@ def _extract_urls(web_search_output: str) -> List[str]:
     return out
 
 
+def _bounded_web_search(web_tool, timeout_sec: int, debug_lg=None, **kwargs):
+    """``web_tool.run(**kwargs)``, waited for at most ``timeout_sec``; None on a timeout.
+
+    On a worker in this call's context (``run_on_worker``): the search's page analysis is a
+    model call and keeps the caller's lane, account and background run.
+    """
+    from vaf.core.bounded_run import run_on_worker
+    try:
+        return run_on_worker(lambda: web_tool.run(**kwargs), timeout=timeout_sec,
+                             label="research-search")
+    except concurrent.futures.TimeoutError:
+        if debug_lg:
+            debug_lg.event("web_search_timeout", timeout_sec=timeout_sec,
+                           kwargs_keys=list(kwargs.keys()))
+        return None
+
+
 def _truncate(s: str, max_chars: int) -> str:
     s = s or ""
     if len(s) <= max_chars:
@@ -895,26 +912,8 @@ class ResearchAgentTool(BaseTool):
 
         def _web_search_with_timeout(web_tool, timeout_sec: int = 0, **kwargs):
             """Run web search with a hard timeout to prevent indefinite hangs."""
-            if timeout_sec <= 0:
-                timeout_sec = _WEB_SEARCH_TIMEOUT
-            holder: Dict[str, Any] = {"result": None, "error": None}
-
-            def _worker():
-                try:
-                    holder["result"] = web_tool.run(**kwargs)
-                except Exception as exc:
-                    holder["error"] = exc
-
-            t = threading.Thread(target=_worker, daemon=True)
-            t.start()
-            t.join(timeout=timeout_sec)
-            if t.is_alive():
-                if _debug_lg:
-                    _debug_lg.event("web_search_timeout", timeout_sec=timeout_sec, kwargs_keys=list(kwargs.keys()))
-                return None
-            if holder["error"] is not None:
-                raise holder["error"]
-            return holder["result"]
+            return _bounded_web_search(web_tool, timeout_sec if timeout_sec > 0 else _WEB_SEARCH_TIMEOUT,
+                                       _debug_lg, **kwargs)
 
         def _run_research_loop() -> str:
             nonlocal _debug_lg
@@ -1807,30 +1806,32 @@ class ResearchAgentTool(BaseTool):
         lock = threading.Lock()
 
         def _search_one(query: str) -> List[Dict]:
-            holder: Dict[str, Any] = {"result": None}
-
-            def _worker():
-                try:
-                    holder["result"] = web.run(
+            from vaf.core.bounded_run import run_on_worker
+            raw = None
+            try:
+                raw = run_on_worker(
+                    lambda: web.run(
                         query=query,
                         max_results=max_results_per,
                         deep=deep,
                         open_in_browser=False,
                         return_raw=True,
-                    )
-                except Exception as exc:
-                    with lock:
-                        self._last_search_errors.append(str(exc)[:160])
-
-            t = threading.Thread(target=_worker, daemon=True)
-            t.start()
-            t.join(timeout=timeout_sec)
-            raw = holder["result"]
+                    ),
+                    timeout=timeout_sec, label="research-search")
+            except concurrent.futures.TimeoutError:
+                pass
+            except Exception as exc:
+                with lock:
+                    self._last_search_errors.append(str(exc)[:160])
             return raw if isinstance(raw, list) else []
 
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(queries), 4)) as executor:
-                futures = {executor.submit(_search_one, q): q for q in queries}
+                # Each query in a copy of this call's context: a pool worker starts with an
+                # empty one, and the search's page analysis is a model call of this run.
+                import contextvars
+                futures = {executor.submit(contextvars.copy_context().run, _search_one, q): q
+                           for q in queries}
                 for fut in concurrent.futures.as_completed(futures, timeout=60):
                     try:
                         results = fut.result()
@@ -2199,32 +2200,26 @@ class ResearchAgentTool(BaseTool):
             if timeout_sec < 10:
                 timeout_sec = 10
 
-            holder: Dict[str, Any] = {"content": "", "error": None}
+            def _ask():
+                return self.query_llm(
+                    messages=section_messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    # Long-form output: chain-of-thought must NEVER be returned
+                    # as the section text. If generation gets cut off mid-
+                    # reasoning, we get an empty result and the retry/
+                    # placeholder path handles it.
+                    allow_reasoning_fallback=False,
+                )
 
-            def _worker() -> None:
-                try:
-                    holder["content"] = self.query_llm(
-                        messages=section_messages,
-                        max_tokens=max_tokens,
-                        temperature=temperature,
-                        # Long-form output: chain-of-thought must NEVER be returned
-                        # as the section text. If generation gets cut off mid-
-                        # reasoning, we get an empty result and the retry/
-                        # placeholder path handles it.
-                        allow_reasoning_fallback=False,
-                    )
-                except Exception as e:
-                    holder["error"] = e
-
-            t = threading.Thread(target=_worker, daemon=True)
-            t.start()
-            t.join(timeout=timeout_sec)
-
-            if t.is_alive():
+            # On a worker in this call's context: the section call keeps the run's lane,
+            # account and background run.
+            from vaf.core.bounded_run import run_on_worker
+            try:
+                content = run_on_worker(_ask, timeout=timeout_sec, label="research-section")
+            except Exception:  # the timeout included: the retry/placeholder path takes over
                 return ""
-            if holder.get("error") is not None:
-                return ""
-            return str(holder.get("content") or "").strip()
+            return str(content or "").strip()
 
         try:
             # Generous budget (coder philosophy, max_tokens=32768 there): reasoning

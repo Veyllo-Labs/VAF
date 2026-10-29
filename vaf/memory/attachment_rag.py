@@ -11,6 +11,7 @@ by using a dedicated metadata source and strict session+user scoping.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import hashlib
 import os
 from queue import Empty, Queue
@@ -799,8 +800,12 @@ def _vector_runner_main() -> None:
             coro_factory = job["coro_factory"]
 
             try:
-                coro = coro_factory()
-                result = loop.run_until_complete(asyncio.wait_for(coro, timeout=timeout_sec))
+                # In the context the job was submitted from: the runner thread is shared and
+                # long-lived, so it has no context of its own worth using, and a section summary
+                # is a model call that belongs to the submitter's lane, account and background run.
+                job_ctx = job.get("context") or contextvars.copy_context()
+                result = job_ctx.run(lambda: loop.run_until_complete(
+                    asyncio.wait_for(coro_factory(), timeout=timeout_sec)))
                 result_box["result"] = result
             except Exception as e:
                 result_box["error"] = e
@@ -1468,6 +1473,7 @@ def _run_async(coro_factory):
         result_box: Dict[str, Any] = {}
         job = {
             "type": "run",
+            "context": contextvars.copy_context(),
             "coro_factory": coro_factory,
             "timeout_sec": timeout_sec,
             "done_evt": done_evt,
@@ -1504,28 +1510,19 @@ def _run_async(coro_factory):
         _trip_memory_killer("run_async.post")
         return result
 
-    result_box = [None]
-    error_box = [None]
-
-    def _thread_runner():
-        try:
-            result_box[0] = asyncio.run(_with_timeout())
-        except Exception as e:
-            error_box[0] = e
-
-    t = threading.Thread(target=_thread_runner, daemon=True, name="attachment-rag-call")
-    t.start()
-    t.join(timeout=timeout_sec + 2)
-    if t.is_alive():
+    # A loop is running here: one short-lived worker with a loop of its own, in this call's
+    # context (run_on_worker), so a section summary keeps the caller's lane, account and
+    # background run.
+    import concurrent.futures as _cf
+    from vaf.core.bounded_run import run_on_worker
+    try:
+        result = run_on_worker(lambda: asyncio.run(_with_timeout()), timeout=timeout_sec + 2,
+                               label="attachment-rag-call")
+    except (_cf.TimeoutError, asyncio.TimeoutError):
         raise TimeoutError(f"Attachment RAG operation timed out after {timeout_sec}s")
-    if error_box[0] is not None:
-        err = error_box[0]
-        if isinstance(err, asyncio.TimeoutError):
-            raise TimeoutError(f"Attachment RAG operation timed out after {timeout_sec}s")
-        raise err
 
     _trip_memory_killer("run_async.post")
-    return result_box[0]
+    return result
 
 
 def index_session_attachments_sync(

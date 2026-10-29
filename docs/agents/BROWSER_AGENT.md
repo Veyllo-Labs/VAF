@@ -113,7 +113,7 @@ Once the agent calls `browser_agent`, the following happens:
 ```
 1. BrowserAgentTool.run() is called (synchronous, VAF tool contract)
    │
-2. _run_async_in_new_loop() spawns a new thread + event loop
+2. _run_async_in_new_loop() spawns a new thread + event loop (in the caller's context)
    │
 3. BrowserSession connects to Chromium via CDP (ws://localhost:9222)
    │

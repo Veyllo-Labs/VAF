@@ -1,8 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-import asyncio
-import threading
 from typing import Optional, List
 from uuid import UUID
 
@@ -13,27 +11,10 @@ from vaf.tools.base import BaseTool
 _TASK_OVERWRITE_CONFIRM: dict = {}
 
 
-def _run_async_in_new_loop(coro):
-    """Run a coroutine in a new thread with its own event loop. Avoids 'attached to a different loop' when called from sync/other loop."""
-    result = [None]
-    exception = [None]
-
-    def _thread_run():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result[0] = loop.run_until_complete(coro)
-        except Exception as e:
-            exception[0] = e
-        finally:
-            loop.close()
-
-    t = threading.Thread(target=_thread_run)
-    t.start()
-    t.join()
-    if exception[0]:
-        raise exception[0]
-    return result[0]
+# A fresh loop on a worker in the caller's context (vaf.core.bounded_run): avoids "attached to
+# a different loop" when called from sync code or another loop, and the coroutine's model calls
+# keep the caller's lane, account and background run (a bare thread starts with none of them).
+from vaf.core.bounded_run import run_coroutine_on_new_loop as _run_async_in_new_loop  # noqa: E402
 from vaf.core.main_persistence import MainPersistenceManager
 
 

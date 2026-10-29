@@ -1361,13 +1361,16 @@ def get_current_conversation_id() -> Optional[str]:
 # Which BACKGROUND RUN this context's work belongs to, when one does. A thinking pass runs on a
 # daemon thread of the process that serves every chat, and it used to announce itself in
 # os.environ for its whole duration: six flags (thinking mode, its scope, its run id, the pro
-# routing flag, and VAF_PROVIDER / VAF_MODEL_OVERRIDE for the thinker's settings). Measured with the real run on a thread: while it
-# was active, another account's chat turn in the same process resolved DeepSeek Auto to the pro
-# model, lost its status and context-bar emits, could not change its own goal, and an agent built
-# meanwhile took the thinker's provider; a second run that ended first stripped the first run of
-# its flags. Declared here, per context, the run holds on its own thread and in the workers that
-# copy the context (`run_bounded`, `call_with_deadline`, `DaemonPool`, `asyncio.to_thread`), and
-# nowhere else. A bare `threading.Thread` starts with an empty context and sees no run.
+# routing flag, and VAF_PROVIDER / VAF_MODEL_OVERRIDE for the thinker's settings). Measured
+# with the real run on a thread: while it was active, another account's chat turn in the same
+# process resolved DeepSeek Auto to the pro model, lost its status and context-bar emits, could
+# not change its own goal, and an agent built meanwhile took the thinker's provider; a second
+# run that ended first stripped the first run of its flags. Declared here, per context, the run
+# holds on its own thread and in the workers that copy the context (`run_bounded`,
+# `run_on_worker` and its two wrappers in vaf/core/bounded_run.py, `DaemonPool`,
+# `asyncio.to_thread`), and nowhere else. A bare `threading.Thread` starts with an empty
+# context and sees no run (guarded for the model-call code by
+# tests/test_thinking_run_context_isolation.py).
 #
 # The cost lane (`vaf.core.cost.usage_context`) is not this answer: it is the innermost
 # accounting label, and `complete()` replaces it with its caller for each call

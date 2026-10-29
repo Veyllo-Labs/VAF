@@ -651,10 +651,16 @@ def start_background_learn(spec: LearnJobSpec, *, user_scope_id,
             return False
 
         def _run() -> None:
+            # A plain thread on purpose: the learn outlives the request that started it and
+            # belongs to no turn or background run, so it takes nothing from that context. Its
+            # model calls are booked to the account it learns for; without the label they
+            # went to the machine owner (a thread starts with no account).
+            from vaf.core.cost import usage_context
             try:
-                outcome = _learn_batches(
-                    spec, generate_fn=_child_generate_fn(), user_scope_id=user_scope_id,
-                    session_id=None, cancel_cb=cancel.is_set)
+                with usage_context(scope=user_scope_id):
+                    outcome = _learn_batches(
+                        spec, generate_fn=_child_generate_fn(), user_scope_id=user_scope_id,
+                        session_id=None, cancel_cb=cancel.is_set)
             except Exception as e:  # _learn_batches never raises; belt and braces for the thread
                 outcome = LearnOutcome(status="failed", doc_tag=spec.doc_tag,
                                        doc_title=spec.document_title or "", error=str(e))

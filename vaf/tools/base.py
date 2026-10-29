@@ -554,24 +554,21 @@ class BaseTool(ABC):
         if (Config.get("provider", "local") or "local").strip().lower() == "local":
             return self._stream_local_completion(messages, max_tokens, temperature,
                                                  max(15, idle_timeout), on_progress)
-        import threading
-        holder = {"content": ""}
+        from vaf.core.bounded_run import run_on_worker
 
-        def _worker():
-            try:
-                holder["content"] = self.query_llm(
-                    messages=messages, max_tokens=max_tokens, temperature=temperature,
-                    allow_reasoning_fallback=False,
-                ) or ""
-            except Exception:
-                holder["content"] = ""
+        def _ask():
+            return self.query_llm(
+                messages=messages, max_tokens=max_tokens, temperature=temperature,
+                allow_reasoning_fallback=False,
+            ) or ""
 
-        t = threading.Thread(target=_worker, daemon=True)
-        t.start()
-        t.join(timeout=max(10, api_timeout))
-        if t.is_alive():
+        # On a worker in this call's context: the call keeps its lane, account and
+        # background run (a bare thread starts with none of them).
+        try:
+            content = run_on_worker(_ask, timeout=max(10, api_timeout), label="generate-text")
+        except Exception:  # the timeout included: the caller runs its own fallback
             return ""
-        return str(holder.get("content") or "").strip()
+        return str(content or "").strip()
 
     @staticmethod
     def sanitize_model_text(raw: str) -> str:

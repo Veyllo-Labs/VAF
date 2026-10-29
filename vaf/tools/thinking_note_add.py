@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
-Thinking-note-add tool: only available on an agent whose run kind is "thinking".
+Thinking-note-add tool: registered on every agent. A thinking run saves notes for its next
+run; a chat turn saves one for the next thinking run (e.g. "user confirmed X, don't ask again").
 
 The agent calls this to persist a note for its next thinking run —
 e.g. "User confirmed Yasin birthday automation is handled, do not ask again"
@@ -16,7 +17,7 @@ from vaf.tools.base import BaseTool
 
 
 class ThinkingNoteAddTool(BaseTool):
-    """Persist a note for your next thinking run (Thinking Mode only)."""
+    """Persist a note for the next thinking run (from a thinking run or a chat turn)."""
 
     name = "thinking_note_add"
     category    = "automations"

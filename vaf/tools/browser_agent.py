@@ -275,38 +275,12 @@ def _build_browser_controller():
 
 
 # ── 1. Async-to-sync bridge ───────────────────────────────────────────────────
-# Copied verbatim from vaf/tools/context_tools.py so there is no cross-tool
-# import dependency. Creates a fresh OS thread + event loop to avoid
-# "Event loop is closed" / "attached to a different loop" errors when called
-# from VAF's synchronous tool-dispatch path.
-
-def _run_async_in_new_loop(coro):
-    """Run a coroutine in a new thread with its own event loop."""
-    result = [None]
-    exception = [None]
-
-    def _thread_run():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result[0] = loop.run_until_complete(coro)
-        except BaseException as e:
-            # BaseException, not Exception: a stop cancels the whole run task,
-            # and CancelledError would otherwise die silently inside this
-            # thread - the caller would see result None instead of the stop.
-            exception[0] = e
-        finally:
-            loop.close()
-
-    # In a copy of the caller's context: the run's model calls keep its lane, account and
-    # background run, which a bare thread (an empty context) would drop.
-    import contextvars
-    t = threading.Thread(target=contextvars.copy_context().run, args=(_thread_run,))
-    t.start()
-    t.join()
-    if exception[0]:
-        raise exception[0]
-    return result[0]
+# A fresh OS thread + event loop avoids "Event loop is closed" / "attached to a
+# different loop" errors when called from VAF's synchronous tool-dispatch path.
+# The shared helper (vaf.core.bounded_run) runs it in the caller's context, so the
+# run's model calls keep its lane, account and background run, and a stop's
+# CancelledError (a BaseException) reaches the caller instead of dying in the thread.
+from vaf.core.bounded_run import run_coroutine_on_new_loop as _run_async_in_new_loop  # noqa: E402
 
 
 # ── 1b. Encrypted session store, decrypt-to-temp ─────────────────────────────

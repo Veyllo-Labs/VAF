@@ -22,7 +22,9 @@ unkillable work belongs in a child process (run it out of process so it can be k
 
 `run_bounded_all()` bounds several independent calls at once and keeps the answers that
 arrived in time; `DaemonPool` is the executor for calls that may hang, with a thread cap
-that holds across all its callers.
+that holds across all its callers. `run_on_worker()` (with `call_with_deadline()` and
+`run_coroutine_on_new_loop()`) puts one call on a thread of its own in the caller's context
+and raises instead of answering a sentinel.
 """
 from __future__ import annotations
 
@@ -204,27 +206,28 @@ def run_bounded(
             )
 
 
-def call_with_deadline(fn: Callable[..., Any], *args: Any, timeout: Optional[float],
-                       label: str = "call") -> Any:
-    """``fn(*args)`` on a daemon worker, waited for at most ``timeout`` seconds.
+def run_on_worker(fn: Callable[..., Any], *args: Any, timeout: Optional[float] = None,
+                  label: str = "call") -> Any:
+    """``fn(*args)`` on a fresh daemon thread, in a copy of the caller's context.
 
-    For callers that want an exception rather than ``run_bounded``'s sentinel text: a model
-    call with a fallback of its own (the tool router, the validation call, the failover's
-    first token, ``complete()``). Raises ``concurrent.futures.TimeoutError`` when the time is
-    up, without waiting for the worker (it is abandoned and finishes on its own, like
-    ``run_bounded``'s), and re-raises ``fn``'s own exception with its type. ``timeout`` None
-    or not above zero calls ``fn`` inline.
+    THE way to put a model call (or anything that reads the caller's session, lane, account
+    or background run) on a thread of its own. A ``threading.Thread`` or a pool worker
+    starts with an EMPTY context (Python before 3.14), so the call loses all of it:
+    measured, a call made under a thinking run's declaration and lane arrived as lane
+    ``main``, with no run and no account - DeepSeek Auto answered it with the chat model and
+    the ledger booked it to the machine owner's main chat. Ten sites hand-rolled "a thread
+    or one pool worker, start, join(timeout)" around a model call, and two modules carried a
+    copy of one "coroutine on a new thread" helper (`run_coroutine_on_new_loop` now; a third
+    copy had no caller and is gone); they all come here. The raw starts left in the model-call code are listed, each with its
+    reason, in tests/test_thinking_run_context_isolation.py.
 
-    The call runs in a copy of the caller's context. Four sites used to hand-roll "one
-    ThreadPoolExecutor worker, submit, result(timeout), shutdown(wait=False)", and a pool
-    worker starts with an EMPTY context: measured, a call made under a thinking run's
-    declaration and lane arrived as lane ``main``, with no run and no account, so the router
-    and the checks of one account's background run were booked to the machine owner and
-    routed like a chat. A daemon thread rather than a pool: a pool's workers are joined at
-    interpreter exit (see ``DaemonPool``), and a pool per call leaves its worker behind.
+    Waits at most ``timeout`` seconds (None: until ``fn`` returns) and then raises
+    ``concurrent.futures.TimeoutError`` without waiting for the worker, which is abandoned
+    and finishes on its own, like ``run_bounded``'s. Re-raises ``fn``'s own exception with
+    its type, a BaseException too (a stop's CancelledError reaches the caller). A daemon
+    thread rather than a pool: a pool's workers are joined at interpreter exit (see
+    ``DaemonPool``), and a pool per call leaves its worker behind.
     """
-    if timeout is None or timeout <= 0:
-        return fn(*args)
     future: Future = Future()
     ctx = contextvars.copy_context()
 
@@ -238,8 +241,45 @@ def call_with_deadline(fn: Callable[..., Any], *args: Any, timeout: Optional[flo
         else:
             future.set_result(result)
 
-    threading.Thread(target=_work, name=f"vaf-deadline-{label}", daemon=True).start()
+    threading.Thread(target=_work, name=f"vaf-worker-{label}", daemon=True).start()
     return future.result(timeout=timeout)
+
+
+def call_with_deadline(fn: Callable[..., Any], *args: Any, timeout: Optional[float],
+                       label: str = "call") -> Any:
+    """``fn(*args)`` waited for at most ``timeout`` seconds, on ``run_on_worker``.
+
+    For callers that want an exception rather than ``run_bounded``'s sentinel text: a model
+    call with a fallback of its own (the tool router, the validation call, the failover's
+    first token, ``complete()``). ``timeout`` None or not above zero calls ``fn`` inline,
+    on the caller's own thread, where nothing has to be carried over.
+    """
+    if timeout is None or timeout <= 0:
+        return fn(*args)
+    return run_on_worker(fn, *args, timeout=timeout, label=label)
+
+
+def run_coroutine_on_new_loop(coro: Any, *, label: str = "loop") -> Any:
+    """Run ``coro`` to completion on an event loop of its own, on ``run_on_worker``.
+
+    For sync code that has to drive a coroutine while it may itself sit inside a running
+    loop (a tool called from the async runner): a fresh loop on a fresh thread avoids
+    "attached to a different loop" and "event loop is already running". The loop is closed
+    without waiting for executor work it started, as the hand copies this replaces
+    did. Its tasks see the caller's context, so the coroutine's model calls keep the
+    caller's lane, account and background run.
+    """
+    import asyncio
+
+    def _drive() -> Any:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    return run_on_worker(_drive, label=label)
 
 
 class DaemonPool(Executor):

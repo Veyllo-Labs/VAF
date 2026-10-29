@@ -37,6 +37,33 @@ def _split_by_pages(content: str) -> List[Tuple[int, str]]:
     return pages
 
 
+
+def _drive_transfer(make_transfer) -> "int | str":
+    """Run the transfer coroutine ``make_transfer()`` from sync code: the number of memories
+    created, or the error text for the caller.
+
+    Inside a running loop it gets a loop of its own on a worker in this call's context
+    (``run_on_worker``), so the transfer's model calls keep the caller's lane, account and
+    background run; a bare thread started with none of them.
+    """
+    import asyncio
+    first = make_transfer()
+    try:
+        return int(asyncio.run(first) or 0)
+    except RuntimeError:
+        first.close()  # refused by a running loop, never started: no "never awaited" warning
+        import concurrent.futures as _cf
+        from vaf.core.bounded_run import run_on_worker
+        try:
+            return int(run_on_worker(lambda: asyncio.run(make_transfer()), timeout=30,
+                                     label="learn-attached") or 0)
+        except _cf.TimeoutError:
+            return "Error: Timed out while transferring attachment knowledge."
+        except Exception as e:
+            return f"Error: Failed to transfer attachment knowledge: {e}"
+    except Exception as e:
+        return f"Error: Failed to transfer attachment knowledge: {e}"
+
 class LearnAttachedKnowledgeTool(BaseTool):
     name = "learn_attached_knowledge"
     category    = "memory"
@@ -170,7 +197,6 @@ class LearnAttachedKnowledgeTool(BaseTool):
 
         from vaf.memory.database import get_db
         from vaf.tools.learn_document import ingest_document_knowledge
-        import asyncio
 
         async def _transfer() -> int:
             created = 0
@@ -197,26 +223,9 @@ class LearnAttachedKnowledgeTool(BaseTool):
             _emit_cursor("end")
             return created
 
-        try:
-            created_count = asyncio.run(_transfer())
-        except RuntimeError:
-            import threading
-            out = {"count": 0, "error": None}
-            def _runner():
-                try:
-                    out["count"] = asyncio.run(_transfer())
-                except Exception as e:
-                    out["error"] = e
-            t = threading.Thread(target=_runner, daemon=True)
-            t.start()
-            t.join(timeout=30)
-            if t.is_alive():
-                return "Error: Timed out while transferring attachment knowledge."
-            if out["error"] is not None:
-                return f"Error: Failed to transfer attachment knowledge: {out['error']}"
-            created_count = int(out["count"])
-        except Exception as e:
-            return f"Error: Failed to transfer attachment knowledge: {e}"
+        created_count = _drive_transfer(_transfer)
+        if isinstance(created_count, str):
+            return created_count
 
         prefix = ("\n".join(_delegated_msgs) + "\n") if _delegated_msgs else ""
         if created_count <= 0:

@@ -35,31 +35,6 @@ def _normalize_doc_tag(title: str) -> str:
     return f"doc-{s}" if s else "doc-untitled"
 
 
-def _run_async_in_new_loop(coro):
-    """Run a coroutine in a new thread with its own event loop."""
-    import asyncio
-    import threading
-    result = [None]
-    exception = [None]
-
-    def _thread_run():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result[0] = loop.run_until_complete(coro)
-        except Exception as e:
-            exception[0] = e
-        finally:
-            loop.close()
-
-    t = threading.Thread(target=_thread_run)
-    t.start()
-    t.join()
-    if exception[0]:
-        raise exception[0]
-    return result[0]
-
-
 # ── Section-based contextual ingestion (shared by learn_document + learn_attached_knowledge) ──
 # Best-practice RAG: clean markdown -> structure-aware sections -> one focused LLM call per FULL
 # section that produces a self-explanatory "context" (which becomes the Memory title, i.e. the
@@ -389,12 +364,12 @@ class LearnDocumentTool(BaseTool):
         #     calls `is_safe_path` itself. Holding the jail across it is what makes the second
         #     asker get the same answer as the first.
         #   - here nothing re-asks: `path.read_text()` and `extract_pdf_markdown` consult no
-        #     policy, and the ingestion runs via `_run_async_in_new_loop`, i.e. in a bare
-        #     `threading.Thread`. Contextvars do not cross into a new thread, so a `with` around
-        #     the whole body would NOT have covered the ingestion while looking exactly as if it
-        #     did. A guard that appears to cover and provably does not is worse than a narrow
-        #     one, so the decision is made here, up front, and the resolved path is what the
-        #     rest of the function uses.
+        #     policy, and the ingestion (`learn_job._learn_batches`: inline, one asyncio.run on
+        #     this call's own worker and context; otherwise a learn child process) reads no
+        #     file through `is_safe_path`. Inline the jail reaches it with the rest of the
+        #     context, and there is nothing there for it to answer. So the decision is made
+        #     here, up front, and the resolved path is what the rest of the function uses: a
+        #     guard is only as wide as the one place that asks it.
         from vaf.tools.filesystem import is_safe_path
 
         # Jail already installed via the file_access declaration; this is the decision only.

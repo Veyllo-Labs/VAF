@@ -564,6 +564,150 @@ def test_the_tool_router_keeps_the_run_context(iso, monkeypatch, tmp_path):
     assert backend.seen and backend.seen[0][:2] == (True, "thinking")
 
 
+def _probe():
+    return (in_thinking_run(), cost.current_lane())
+
+
+def test_generate_text_keeps_the_run_context(iso):
+    """The document agent's in-process calls (`BaseTool.generate_text`). MUTATION: run
+    `query_llm` on a bare `threading.Thread` again."""
+    import types
+
+    from vaf.tools.base import BaseTool
+
+    iso["settings"]["provider"] = "deepseek"
+    seen = []
+    ns = types.SimpleNamespace(query_llm=lambda **kw: seen.append(_probe()) or "text")
+    out = _in_run(lambda: BaseTool.generate_text(ns, [{"role": "user", "content": "x"}],
+                                                 max_tokens=5))
+    assert out == "text"
+    assert seen == [(True, "thinking")]
+
+
+def test_the_research_searches_keep_the_run_context(iso):
+    """The single bounded search and the parallel fan-out (pool + per-query worker).
+    MUTATION: a bare thread in `_bounded_web_search` or `_search_one`, or
+    `executor.submit(_search_one, q)` without the context copy."""
+    import types
+
+    from vaf.tools import research_agent as ra
+
+    seen = []
+    web = types.SimpleNamespace(run=lambda **kw: seen.append(_probe()) or [
+        {"href": f"https://example.org/{kw.get('query')}"}])
+    assert _in_run(lambda: ra._bounded_web_search(web, 5, None, query="a")) == [
+        {"href": "https://example.org/a"}]
+    tool = ra.ResearchAgentTool.__new__(ra.ResearchAgentTool)
+    merged = _in_run(lambda: tool._search_parallel(web, ["b", "c"], 3, False, 5))
+    assert sorted(r["href"] for r in merged) == ["https://example.org/b", "https://example.org/c"]
+    assert seen == [(True, "thinking")] * 3
+
+
+def test_the_research_section_call_keeps_the_run_context(iso):
+    """MUTATION: run the section's `query_llm` on a bare `threading.Thread` again."""
+    from vaf.tools import research_agent as ra
+
+    iso["settings"]["provider"] = "deepseek"
+    seen = []
+    tool = ra.ResearchAgentTool.__new__(ra.ResearchAgentTool)
+    tool.query_llm = lambda **kw: seen.append(_probe()) or "<h2>T</h2><p>Body text here.</p>"
+    results = "A search result long enough to count as one, about the topic at hand. " * 3
+    _in_run(lambda: tool._summarize_section_html(topic="t", title="T", web_results=results,
+                                                 sources=[], lang="en", min_words_target=150))
+    assert seen and seen[0] == (True, "thinking")
+
+
+def test_the_attachment_transfer_keeps_the_run_context(iso):
+    """Inside a running loop the transfer gets a loop of its own on a worker. MUTATION: a bare
+    `threading.Thread` in `_drive_transfer` again."""
+    from vaf.tools import learn_attached_knowledge as la
+
+    seen = []
+
+    async def _transfer():
+        seen.append(_probe())
+        return 2
+
+    async def _outer():
+        return la._drive_transfer(_transfer)
+
+    assert _in_run(lambda: asyncio.run(_outer())) == 2
+    assert seen == [(True, "thinking")]
+
+
+def test_the_attachment_rag_calls_keep_the_run_context(iso, monkeypatch):
+    """Both lanes of `attachment_rag._run_async`: the persistent vector runner (a job runs in
+    the context it was submitted from) and the per-call worker inside a running loop.
+    MUTATION: drop `job_ctx.run` in the runner, or a bare thread for the per-call worker."""
+    import vaf.memory.attachment_rag as ar
+
+    monkeypatch.setattr(ar, "_trip_memory_killer", lambda origin: False)
+    seen = []
+
+    async def _job():
+        seen.append(_probe())
+        return "ok"
+
+    monkeypatch.setattr(ar, "_safe_mode_enabled", lambda: False)
+    assert _in_run(lambda: ar._run_async(_job)) == "ok"
+    monkeypatch.setattr(ar, "_safe_mode_enabled", lambda: True)
+
+    async def _outer():
+        return ar._run_async(_job)
+
+    assert _in_run(lambda: asyncio.run(_outer())) == "ok"
+    assert seen == [(True, "thinking"), (True, "thinking")]
+
+
+def test_the_loop_bridges_are_the_one_helper():
+    """Three byte-near copies of "a coroutine on a new thread and loop" were one helper's
+    worth (the learn_document copy had no caller left and is gone). MUTATION: put a hand copy
+    back in either module."""
+    from vaf.core.bounded_run import run_coroutine_on_new_loop
+    from vaf.tools import browser_agent, context_tools, learn_document
+
+    for module in (browser_agent, context_tools):
+        assert module._run_async_in_new_loop is run_coroutine_on_new_loop, module.__name__
+    assert not hasattr(learn_document, "_run_async_in_new_loop")
+
+
+def test_the_loop_bridge_keeps_the_context_and_hands_back_a_stop():
+    """MUTATION: drop the context copy in `run_on_worker`, or catch only Exception."""
+    from vaf.core.bounded_run import run_coroutine_on_new_loop
+
+    async def _ok():
+        return _probe()
+
+    async def _stopped():
+        raise asyncio.CancelledError()
+
+    assert _in_run(lambda: run_coroutine_on_new_loop(_ok())) == (True, "thinking")
+    # Bounded, so a stop that never reaches the caller fails the test instead of hanging it.
+    with pytest.raises(asyncio.CancelledError):
+        call_with_deadline(run_coroutine_on_new_loop, _stopped(), timeout=10)
+
+
+def test_a_route_started_learn_books_to_its_own_account(iso, monkeypatch):
+    """It runs on a plain thread on purpose (it outlives the request); its calls are booked to
+    the account it learns for. MUTATION: drop the `usage_context(scope=...)` in `_run`."""
+    from vaf.tools import learn_job as lj
+
+    seen = []
+    done = threading.Event()
+    monkeypatch.setattr(lj, "_child_generate_fn", lambda: (lambda prompt: ""))
+
+    def _learn(spec, **kw):
+        seen.append((cost._SCOPE.get(), in_thinking_run()))
+        return lj.LearnOutcome(status="complete", doc_tag=spec.doc_tag, doc_title="")
+
+    monkeypatch.setattr(lj, "_learn_batches", _learn)
+    assert _in_run(lambda: lj.start_background_learn(
+        lj.LearnJobSpec(path="notes.md", doc_tag="doc-f024"), user_scope_id=SCOPE_B,
+        on_done=lambda outcome: done.set()))
+    assert done.wait(10)
+    assert seen == [(SCOPE_B, False)]
+
+
 # ── 6. call_with_deadline ─────────────────────────────────────────────────────
 
 _PROBE: "contextvars.ContextVar[str]" = contextvars.ContextVar("f024_probe", default="unset")
@@ -583,6 +727,17 @@ def test_call_with_deadline_does_not_wait_for_a_hung_worker():
     with pytest.raises(concurrent.futures.TimeoutError):
         call_with_deadline(time.sleep, 5, timeout=0.2)
     assert time.monotonic() - t0 < 1.5
+
+
+def test_the_worker_is_a_daemon_thread():
+    """An abandoned worker must not hold up the exit of the process (a pool's workers are
+    joined at exit). MUTATION: `daemon=False` in `run_on_worker`."""
+    from vaf.core.bounded_run import run_on_worker
+
+    with pytest.raises(concurrent.futures.TimeoutError):
+        run_on_worker(time.sleep, 3, timeout=0.2, label="f024-daemon")
+    workers = [t for t in threading.enumerate() if t.name == "vaf-worker-f024-daemon"]
+    assert workers and all(t.daemon for t in workers)
 
 
 def test_call_with_deadline_re_raises_the_callable_error():
@@ -626,7 +781,89 @@ def test_no_process_writes_the_background_run_into_its_own_environment():
     assert hits == []
 
 
-def test_model_calls_on_helper_threads_go_through_the_context_copying_helper():
-    """MUTATION: add a `ThreadPoolExecutor(` back to agent.py, api_backend.py or completion.py."""
-    for rel in ("vaf/core/agent.py", "vaf/core/api_backend.py", "vaf/core/completion.py"):
-        assert "ThreadPoolExecutor(" not in _src(rel), rel
+# Every raw thread, pool and executor start left in the code a thinking run's model calls are
+# made from. Each one starts with an EMPTY context, so it is either free of model calls and of
+# the run's identity, or it carries the context itself; the reason says which. A model call on
+# a thread of its own goes through `vaf.core.bounded_run.run_on_worker` (or its wrappers
+# `call_with_deadline` / `run_coroutine_on_new_loop`) and does not appear here.
+_THREAD_START_ALLOWLIST = {
+    ("vaf/core/thinking_mode.py", "_resolve_username_for_scope", "Thread"):
+        (1, "username lookup in the account store; no model call"),
+    ("vaf/core/thinking_mode.py", "_registered_scope_ids", "Thread"):
+        (1, "account id lookup; no model call"),
+    ("vaf/core/thinking_mode.py", "maybe_start_thinking_for_user", "Thread"):
+        (1, "starts a run whose target runs the pass in a context of its own; an empty start is the point"),
+    ("vaf/core/thinking_mode.py", "start_thinking_mode_background", "Thread"):
+        (1, "the thinking loop for the life of the process; each run declares its own context"),
+    ("vaf/tools/automation.py", "AutomationTool.run", "Thread"):
+        (1, "starts an independent automation run in a terminal of its own; it must not inherit "
+            "the creator's session, turn or background run"),
+    ("vaf/tools/browser_agent.py", "BrowserAgentTool._run_browser", "Thread"):
+        (1, "stop watchdog: polls the stop flag; no model call"),
+    ("vaf/tools/browser_agent.py", "BrowserAgentTool._run_browser", "run_in_executor"):
+        (5, "browser handover, workspace mirror, CDP resolution and idle parking; no model call"),
+    ("vaf/tools/coder.py", "CodingAgentTool.run", "Thread"):
+        (1, "terminal animation; no model call"),
+    ("vaf/tools/learn_job.py", "start_background_learn", "Thread"):
+        (1, "a learn started by a route, outliving the request and belonging to no turn or run; "
+            "it books under its own account (usage_context in _run)"),
+    ("vaf/tools/research_agent.py", "ResearchAgentTool.run._run_research_loop", "Thread"):
+        (1, "opens the finished report in a browser; no model call"),
+    ("vaf/tools/research_agent.py", "ResearchAgentTool.run", "Thread"):
+        (1, "TUI refresher; no model call"),
+    ("vaf/tools/research_agent.py", "ResearchAgentTool._search_parallel", "ThreadPoolExecutor"):
+        (1, "each query is submitted through contextvars.copy_context().run"),
+    ("vaf/tools/workflow_executor.py", "ExecuteWorkflowTool.run", "Thread"):
+        (2, "IPC heartbeat and step watchdog; no model call"),
+    ("vaf/memory/attachment_rag.py", "_ensure_vector_runner", "Thread"):
+        (1, "the persistent vector runner; each job runs in the context it was submitted from"),
+    ("vaf/memory/database.py", "check_db_connection_sync", "ThreadPoolExecutor"):
+        (1, "database connection probe; no model call"),
+    ("vaf/memory/embeddings.py", "EmbeddingService.embed", "run_in_executor"):
+        (1, "local embedding compute; no backend model call, nothing booked"),
+    ("vaf/memory/embeddings.py", "EmbeddingService.embed_batch", "run_in_executor"):
+        (1, "local embedding compute; no backend model call, nothing booked"),
+    ("vaf/memory/rag.py", "run_session_compaction_sync._schedule_profile_refresh", "Thread"):
+        (1, "memory search and profile cache write; no model call, the scope is passed explicitly"),
+    ("vaf/memory/rag.py", "run_session_compaction_sync", "Thread"):
+        (1, "compaction ingest: embeddings and database writes; no model call"),
+    ("vaf/memory/rag.py", "run_memory_search_sync", "Thread"):
+        (1, "memory search: embeddings and database reads; its UI push names the scope explicitly"),
+    ("vaf/memory/reembed.py", "ensure_embedding_model_current", "Thread"):
+        (1, "startup hook: counts rows and spawns the re-embed process; no model call"),
+}
+
+
+def _thread_starts() -> dict:
+    """(file, enclosing qualname, construct) -> count, read from the code with `ast`."""
+    import ast
+    from collections import Counter
+
+    files = [REPO / "vaf" / "core" / n for n in
+             ("agent.py", "api_backend.py", "completion.py", "thinking_mode.py")]
+    files += sorted((REPO / "vaf" / "tools").glob("*.py")) + sorted((REPO / "vaf" / "memory").glob("*.py"))
+    found: Counter = Counter()
+
+    def _walk(node, stack, rel):
+        for child in ast.iter_child_nodes(node):
+            inner = stack + [child.name] if isinstance(
+                child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) else stack
+            if isinstance(child, ast.Call):
+                fn = child.func
+                name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
+                if name in ("Thread", "ThreadPoolExecutor", "run_in_executor"):
+                    found[(rel, ".".join(stack) or "<module>", name)] += 1
+            _walk(child, inner, rel)
+
+    for path in files:
+        _walk(ast.parse(path.read_text(encoding="utf-8")), [], path.relative_to(REPO).as_posix())
+    return dict(found)
+
+
+def test_every_raw_thread_start_on_the_model_call_path_is_accounted_for():
+    """A new thread, pool or executor start in this code starts with an empty context, and a
+    model call on it loses the run, its lane and its account. MUTATION: start a model call on
+    a bare `threading.Thread` again (`BaseTool.generate_text`, a research worker, the
+    attachment call thread), or delete an allowlisted start without removing its entry."""
+    allowed = {key: count for key, (count, reason) in _THREAD_START_ALLOWLIST.items() if reason}
+    assert _thread_starts() == allowed

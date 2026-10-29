@@ -176,32 +176,32 @@ def test_the_static_rules_apply_without_an_identity_too(home, ingested):
 
 # ── why the guard is narrower here than in the viewer ────────────────────────
 
-def test_the_jail_does_not_reach_the_ingestion_thread():
-    """The measured fact the narrow `with` block rests on.
+def test_the_inline_ingestion_runs_in_the_callers_context():
+    """The inline ingestion is `learn_job._learn_batches`: one `asyncio.run` on the tool call's
+    own worker, so it runs in the caller's context (its lane, account and background run, and
+    the jail with them). Nothing in the ingestion asks the jail (no file is read there through
+    `is_safe_path`), which is why the decision in `run()` is made once, up front, rather than
+    by widening the `with` block.
 
-    In `document_viewer` the jail wraps the whole body, because `_open_in_viewer` re-asks
-    through `LibrarianTool._read_file`, which calls `is_safe_path` itself - so holding the
-    jail is what makes the second asker agree with the first. Here nothing re-asks, and the
-    ingestion runs through `_run_async_in_new_loop`, which is a bare `threading.Thread`.
-    Contextvars do not cross into a new thread.
-
-    So widening the block to "cover" the ingestion would cover nothing while looking exactly
-    as though it did. That is the failure mode this test exists to keep visible: if this ever
-    goes red, contextvar propagation changed and the comment in `run()` needs revisiting -
-    not silently trusting.
+    MUTATION: drive `_learn_batches_async` on a bare `threading.Thread` and the jail is gone
+    inside the ingestion.
     """
+    import vaf.tools.learn_job as lj
     from vaf.tools.filesystem import _librarian_scope_ctx, user_jail
-    from vaf.tools.learn_document import _run_async_in_new_loop
 
-    async def _probe():
+    async def _probe(spec, **kw):
         return _librarian_scope_ctx.get(None)
 
-    with user_jail(SCOPE, "user", mode="read"):
-        here = _librarian_scope_ctx.get(None)
-        in_ingestion = _run_async_in_new_loop(_probe())
+    original = lj._learn_batches_async
+    lj._learn_batches_async = _probe
+    try:
+        with user_jail(SCOPE, "user", mode="read"):
+            here = _librarian_scope_ctx.get(None)
+            in_ingestion = lj._learn_batches(lj.LearnJobSpec(path="notes.md"),
+                                             generate_fn=lambda p: "", user_scope_id=SCOPE,
+                                             session_id=None)
+    finally:
+        lj._learn_batches_async = original
 
     assert here, "the jail was not installed even in the calling thread"
-    assert in_ingestion is None, (
-        "the jail now reaches the ingestion thread; the reasoning for keeping the `with` block "
-        "narrow in run() was measured against the opposite and must be re-read"
-    )
+    assert in_ingestion == here, "the ingestion did not run in the caller's context"

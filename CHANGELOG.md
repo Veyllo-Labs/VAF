@@ -73,8 +73,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   used it too. Two background runs at once also took the pro model away from each other.
   The run now keeps all of this to itself; its own calls, and the sub-agents it starts,
   still use the pro model and the Thinker settings. Model calls VAF makes on helper threads
-  (tool choice, checks, timeouts) are now recorded under the right person and lane in the
-  usage records instead of the admin's main chat. Settings > Thinker model takes effect
+  (tool choice, checks, timeouts, the document and research agents when they run inside the
+  chat, attachment learning) are now recorded under the right person and lane in the usage
+  records instead of the admin's main chat, and so is a document learned for the Front
+  Office. Settings > Thinker model takes effect
   only for a local Thinker; for an API Thinker the provider's own model is used, as before.
 - **Files and logins in the shared browser no longer cross from one account to the
   next.** When the shared browser changed hands while a file transfer or the previous

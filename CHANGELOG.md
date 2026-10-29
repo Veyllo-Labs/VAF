@@ -41,6 +41,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- Learning the knowledge in a chat's attachments no longer stores it twice when the
+  transfer fails partway with an internal error. The failure is now reported, and the
+  memories stored before it stay stored once.
 - A model left over from another provider is no longer sent. After switching the main
   provider, the tool and workflow model could still name the old provider's model, and every
   workflow, background step and thinking run failed with an error from the new provider.

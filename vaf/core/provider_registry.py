@@ -250,8 +250,12 @@ def is_veyllo_chat_model(model_id: str) -> bool:
     return not any(marker in mid for marker in _VEYLLO_NON_CHAT_MARKERS)
 
 
+# The o-series takes images except the variants OpenAI's model pages list as
+# text-only input: o1-mini, o1-preview and o3-mini (OpenRouter's o3-mini-high
+# is o3-mini at high effort).
 _OPENAI_VISION = re.compile(
-    r"gpt-4o|gpt-4\.1|gpt-4\.5|gpt-4-turbo|gpt-4-vision|gpt-[56]|(?:^|/)o[134](?:-|$)"
+    r"gpt-4o|gpt-4\.1|gpt-4\.5|gpt-4-turbo|gpt-4-vision|gpt-[56]"
+    r"|(?:^|/)(?!o1-mini|o1-preview|o3-mini)o[134](?:-|$)"
 )
 _CLAUDE_VISION = re.compile(r"claude-(?:3|(?:sonnet|opus|haiku|fable|mythos)-\d)")
 

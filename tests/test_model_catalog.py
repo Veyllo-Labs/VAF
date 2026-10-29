@@ -275,6 +275,14 @@ def test_the_catalog_entry_decides_before_the_family_rule(monkeypatch):
     ("openai", "gpt-4.5-preview", True),
     ("openai", "gpt-5.5", True),
     ("openai", "o4-mini", True),
+    ("openai", "o3-mini", False),                # text only on OpenAI's model page
+    ("openai", "o3-mini-2025-01-31", False),
+    ("openai", "o1-mini", False),
+    ("openai", "o1-preview", False),
+    ("openai", "o1", True),
+    ("openai", "o3-pro", True),
+    ("openrouter", "openai/o3-mini-high", False),
+    ("openrouter", "openai/o4-mini-high", True),
     ("openrouter", "anthropic/claude-2", False),
     ("openrouter", "anthropic/claude-instant-1", False),
     ("openrouter", "openai/gpt-4", False),
@@ -284,8 +292,10 @@ def test_the_catalog_entry_decides_before_the_family_rule(monkeypatch):
     ("openrouter", "meta-llama/llama-3.1-405b-instruct", False),
 ])
 def test_family_patterns_for_ids_the_catalog_does_not_name(provider, model, expected):
-    """Only the families that take images. MUTATION: widen the OpenAI pattern
-    back to a plain "gpt-4" fragment, or the OpenRouter one to "claude"."""
+    """Only the families that take images, checked against OpenAI's model pages
+    (o1-mini, o1-preview and o3-mini list text input only). MUTATION: widen the
+    OpenAI pattern back to a plain "gpt-4" fragment, the OpenRouter one to
+    "claude", or drop the o-series exclusion."""
     from vaf.core.provider_registry import model_supports_vision
 
     assert mc.find_model(model) is None, "the catalog names it; this test is for the patterns"
@@ -398,6 +408,30 @@ def test_the_write_back_holds_the_config_lock(monkeypatch, tmp_path):
     monkeypatch.setattr(Config, "_write_config_file", classmethod(_write))
     _load_with(monkeypatch, tmp_path, {"api_model_deepseek": "deepseek-chat"}, dt.date(2027, 6, 1))
     assert state["written_under_lock"] is True
+
+
+def test_the_write_back_decides_again_on_what_is_on_disk(monkeypatch, tmp_path):
+    """Another process can move the lane to another provider between the first
+    read and the lock; the write-back must not apply a decision made for the
+    old provider. MUTATION: write the target computed from the first read."""
+    import contextlib
+
+    path = tmp_path / "config.json"
+
+    @contextlib.contextmanager
+    def _lock_after_a_concurrent_save():
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw["subagent_provider"] = "openai"        # the other process's save
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        yield
+
+    monkeypatch.setattr(Config, "_locked", classmethod(lambda cls: _lock_after_a_concurrent_save()))
+    loaded, raw = _load_with(monkeypatch, tmp_path,
+                             {"provider": "deepseek", "subagent_model": "deepseek-chat"},
+                             dt.date(2027, 6, 1))
+    assert loaded["subagent_model"] == "deepseek-flash"   # this read's decision
+    assert raw["subagent_provider"] == "openai"
+    assert raw["subagent_model"] == "deepseek-chat"       # not written for the OpenAI lane
 
 
 def test_an_unwritable_config_logs_its_migration_once(monkeypatch, tmp_path):
@@ -557,17 +591,24 @@ def test_the_guard_sees_what_it_is_meant_to_see():
     assert not _violations_in(ast.parse('X = ("gemini-2.5", "gemini-3")'), ids)
 
 
-# ── The vision hint completes its sentence ───────────────────────────────────
+# ── The vision sentence names the setting that has to change ─────────────────
 
-def test_the_vision_hint_completes_the_switch_sentence():
-    """The hint lands in "or switch the primary provider to {hint}." A whole
-    sentence of its own there read as "switch ... to a different provider: VAF
-    sends no images ... Switch to ...". MUTATION: put the sentence back."""
-    from vaf.core.agent import _vision_switch_hint
+def test_the_vision_sentence_names_the_setting_that_has_to_change():
+    """A model is not a provider: "switch the primary provider to `gpt-5.6-terra`"
+    names the wrong setting. Where the provider takes images the model has to
+    change; DeepSeek's provider has to. MUTATION: say "primary provider" in the
+    branch for a provider that has vision models."""
+    from vaf.core.agent import _vision_switch_sentence
 
-    ds = _vision_switch_hint("deepseek")
-    assert ds.startswith("Anthropic (`claude-sonnet-4-6`")
-    assert " or OpenAI (`gpt-5.6-terra`" in ds
-    for hint in (ds, _vision_switch_hint("openai"), _vision_switch_hint("nope")):
-        assert "Settings" not in hint and "Switch" not in hint and not hint.endswith(".")
-    assert _vision_switch_hint("openai") == "`gpt-5.6-terra`, `gpt-5.6-luna` or `gpt-5.6-sol`"
+    lead = "To use vision, go to Settings → AI & Model and configure a Vision Model"
+    assert _vision_switch_sentence("deepseek") == (
+        f"{lead}, or switch the primary provider to Anthropic (model `claude-sonnet-4-6`, "
+        "`claude-opus-4-8` or `claude-haiku-4-5`) or OpenAI (model `gpt-5.6-terra`, "
+        "`gpt-5.6-luna` or `gpt-5.6-sol`).")
+    assert _vision_switch_sentence("openai") == (
+        f"{lead}, or switch the model in the same place to `gpt-5.6-terra`, "
+        "`gpt-5.6-luna` or `gpt-5.6-sol`.")
+    assert _vision_switch_sentence("veyllo") == (
+        f"{lead}, or switch the model in the same place to `veyllo-chat`.")
+    assert _vision_switch_sentence("local") == (
+        f"{lead}, or switch the primary provider to one that accepts images.")

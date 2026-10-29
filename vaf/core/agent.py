@@ -57,23 +57,27 @@ from vaf.tools.filesystem import ListFilesTool, ReadFileTool, WriteFileTool, Mov
 import atexit
 import signal
 
-def _vision_switch_hint(provider: str) -> str:
-    """What the "switch the primary provider to ..." sentence names when the
-    current model cannot see an attached image. Named from the model catalog,
-    so it never offers a retired model; it completes that sentence, so it is a
-    choice of models, not a sentence of its own."""
+def _vision_switch_sentence(provider: str) -> str:
+    """The sentence that tells the user what to change when the current model
+    cannot see an attached image. A model and a provider are different
+    settings, so the sentence names the one that has to change: another
+    provider where this one takes no images through VAF, otherwise another
+    model of the same provider. Models come from the model catalog, so a
+    retired one is never offered."""
     from vaf.core.model_catalog import offered_vision_models
 
     def _ids(p: str) -> str:
         m = [f"`{i}`" for i in offered_vision_models(p)]
         return ", ".join(m[:-1]) + " or " + m[-1] if len(m) > 1 else "".join(m)
 
+    lead = "To use vision, go to Settings → AI & Model and configure a Vision Model"
     if provider == "deepseek":
-        # VAF sends no images to DeepSeek, so the choice is another provider.
-        return f"Anthropic ({_ids('anthropic')}) or OpenAI ({_ids('openai')})"
+        # VAF sends no images to DeepSeek, so the provider has to change.
+        return (f"{lead}, or switch the primary provider to Anthropic (model {_ids('anthropic')}) "
+                f"or OpenAI (model {_ids('openai')}).")
     if offered_vision_models(provider):
-        return _ids(provider)
-    return "a vision-capable model"
+        return f"{lead}, or switch the model in the same place to {_ids(provider)}."
+    return f"{lead}, or switch the primary provider to one that accepts images."
 
 
 def _emit_to_web_ui() -> bool:
@@ -15362,14 +15366,12 @@ class Agent:
                         # No vision fallback configured or it failed: inform user.
                         names = [img.get("name", "image") for img in imgs]
                         img_list = ", ".join(f"`{n}`" for n in names)
-                        _vision_hint = _vision_switch_hint(_provider)
                         system_note = (
                             f"[SYSTEM NOTE: The user attached {len(imgs)} image(s) ({img_list}) "
                             f"but the current model ({_model or _provider}) does not support vision. "
                             f"The image data has been stripped and cannot be recovered. "
                             f"Please tell the user: this model cannot see images. "
-                            f"To use vision, go to Settings → AI & Model and configure a Vision Model, "
-                            f"or switch the primary provider to {_vision_hint}. "
+                            f"{_vision_switch_sentence(_provider)} "
                             f"Do NOT attempt to guess the image content or use list_files/find_files tools.]"
                         )
                         msg["content"] = (system_note + "\n\n" + text).strip() if text else system_note

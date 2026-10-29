@@ -1052,10 +1052,17 @@ class Config:
             with cls._locked():
                 with open(cls.CONFIG_FILE, "r") as _f:
                     _raw = json.load(_f)
+                # Decided again on what is on disk now: another process may have
+                # changed the value or the lane's provider since the first read.
+                _disk = {**cls.DEFAULTS, **_raw}
                 changed = False
-                for key, (old, new) in moved.items():
-                    if _raw.get(key) == old:
-                        _raw[key] = new
+                for key, (old, _new) in moved.items():
+                    if _raw.get(key) != old:
+                        continue
+                    target = _model_catalog.migration_target(
+                        old, provider=cls._model_key_provider(key, _disk))
+                    if target and target != old:
+                        _raw[key] = target
                         changed = True
                 if changed:
                     cls._write_config_file(_raw)

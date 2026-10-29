@@ -97,3 +97,30 @@ def test_the_check_lists_the_sandbox_after_the_services_and_never_fails_on_it(mo
     assert "vaf-env-*" in result.stdout and "None created yet" in result.stdout
     lines = repair.format_status(_with_sandbox())
     assert lines[-1].split()[:2] == ["vaf-env-*", "idle"]
+
+
+def test_the_check_lists_the_browser_pool_after_the_sandbox_and_never_fails_on_it(monkeypatch):
+    """The personal browsers are shown after the sandbox line in both renderers, and a
+    full pool (room for 0 more) does not turn the check into a failure. MUTATION: drop
+    the browser pool line from format_status (the TUI's renderer) - red; from
+    print_status - red."""
+    def _with_pool():
+        status = _status()
+        status["services"][0].update(port_mismatch=False, state="ok", reason="Connected.")
+        status["sandbox"] = {"key": "sandbox", "name": "vaf-env-*", "state": "idle",
+                             "reason": "None created yet; they start when code runs."}
+        status["browser_pool"] = {"key": "browser_pool", "name": "vaf-browser-u-*",
+                                  "state": "ok", "mode": "auto", "running": 2, "room": 0,
+                                  "ceiling": 16, "free_mb": 6900,
+                                  "reason": "Automatic: 2 running, room for 0 more (6.7 GB free, "
+                                            "2.4 GB kept free, 2 GB reserved per browser)."}
+        return status
+
+    monkeypatch.setattr(repair, "collect_service_status", _with_pool)
+    result = CliRunner().invoke(_app(), ["--check"])
+    assert result.exit_code == 0
+    assert "vaf-browser-u-*" in result.stdout and "room for 0 more" in result.stdout
+    assert result.stdout.index("vaf-env-*") < result.stdout.index("vaf-browser-u-*")
+    lines = repair.format_status(_with_pool())
+    assert lines[-1].split()[:2] == ["vaf-browser-u-*", "ok"]
+    assert lines[-2].split()[:2] == ["vaf-env-*", "idle"]

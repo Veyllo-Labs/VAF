@@ -42,6 +42,8 @@ def _fake_services():
                           "state": "ok", "reason": "Connected."}],
             "sandbox": {"key": "sandbox", "name": "vaf-env-*", "state": "ok",
                         "reason": "1 running, 0 stopped."},
+            "browser_pool": {"key": "browser_pool", "name": "vaf-browser-u-*", "state": "idle",
+                             "reason": "Automatic: 0 running, room for 3 more."},
             "starting": False, "checked_at": ""}
 
 
@@ -65,6 +67,9 @@ def test_once_renders_one_snapshot_without_probing(monkeypatch):
     assert "https://srv1:8443" in result.output, "LAN hostname URL must be shown"
     assert "postgres" in result.output
     assert "1 running, 0 stopped." in result.output, "the sandbox row belongs to the services panel"
+    # MUTATION: drop the browser pool row from the services table - red.
+    assert "browser_pool" in result.output and "room for 3 more" in result.output, \
+        "the browser pool row belongs to the services panel"
     assert "PID 4242" in result.output
     assert "Network" in result.output
     assert "192.168.1.77" in result.output, "LAN clients must be listed per IP"

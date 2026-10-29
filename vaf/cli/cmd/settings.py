@@ -366,7 +366,17 @@ def select_model_menu():
         _select_api_model(current_provider)
         UI.console.input("\n[dim]Press Enter to continue...[/dim]")
         return
-    
+
+    # The vLLM engine runs a Hugging Face repo, not a GGUF from models/ (vaf/core/local_engine.py).
+    from vaf.core import local_engine
+    if local_engine.is_vllm():
+        UI.panel("Local Model (vLLM)", style="highlight")
+        UI.info(f"The local engine is vLLM; it runs {local_engine.resolve_vllm_model()}.")
+        UI.info("Change the model with `vaf engine vllm --model <owner/name>`, or go back to "
+                "llama.cpp (GGUF) with `vaf engine llama`.")
+        UI.console.input("[dim]Press Enter to continue...[/dim]")
+        return
+
     # Local model selection
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
     models_dir = os.path.join(base_dir, "models")

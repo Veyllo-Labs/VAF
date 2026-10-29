@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
-Thinking-done tool: only available when VAF_THINKING_MODE=1.
+Thinking-done tool: only available on an agent whose run kind is "thinking".
 The agent calls this to signal that the current thinking pass is finished.
 """
 from vaf.tools.base import BaseTool

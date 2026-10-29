@@ -650,6 +650,18 @@ class Platform:
         # here for every spawn site; the child adopts it via adopt_parent_cwd().
         # setdefault: an explicit caller value wins.
         _ee.setdefault("VAF_PARENT_CWD", os.getcwd())
+        # A child spawned from inside a background run belongs to that run: it carries the run
+        # (pro routing, the run id) and the run's own provider/model pins in ITS environment.
+        # The run declares itself per context, never in this process's environment, so the
+        # child of a chat turn running beside it gets none of this. setdefault: a value the
+        # caller passed (a sub-agent provider of its own) wins.
+        try:
+            from vaf.core.subagent_ipc import get_current_background_run
+            _bg_run = get_current_background_run()
+            for _k, _v in (_bg_run.child_env() if _bg_run is not None else {}).items():
+                _ee.setdefault(_k, _v)
+        except Exception:
+            pass
         _eff_session = _ee.get("VAF_SESSION_ID") or os.environ.get("VAF_SESSION_ID", "")
         _eff_task = _ee.get("VAF_TASK_ID") or os.environ.get("VAF_TASK_ID", "")
         _eff_agent = _ee.get("VAF_AGENT_TYPE") or os.environ.get("VAF_AGENT_TYPE", "")

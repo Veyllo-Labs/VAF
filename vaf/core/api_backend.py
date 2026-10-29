@@ -24,6 +24,34 @@ from vaf.cli.ui import UI
 logger = logging.getLogger("vaf.api_backend")
 
 
+def _deepseek_pro_trigger() -> Optional[str]:
+    """Why this call counts as background work that DeepSeek Auto sends to the pro model, or
+    None for a chat call (flash).
+
+    A thinking run is asked per call context (`subagent_ipc.in_thinking_run`), so it moves its
+    own calls, its workers' and its sub-agents' and nobody else's. NAMED BOUNDARY: the other
+    three are still process-wide environment flags, and each one turns a concurrent DeepSeek
+    Auto chat turn of the same process into pro for its duration: `VAF_IN_AUTOMATION` (set
+    in-process by `automation.py` around an in-process run, a boundary written there),
+    `VAF_COMPACTION_IN_PROGRESS` (`agent.py`, one compaction call long) and
+    `VAF_IN_WORKFLOW_TERMINAL` (set in-process by `workflow_executor.py` and
+    `agent_workflow_builder.py`, and per process, correctly, in a `vaf workflow` child). The
+    declaration this reads is the primitive their conversion would use.
+    """
+    try:
+        from vaf.core.subagent_ipc import in_thinking_run
+        if in_thinking_run():
+            return "thinking_run"
+    except Exception:
+        pass
+    for trigger, var in (("workflow_terminal", "VAF_IN_WORKFLOW_TERMINAL"),
+                         ("automation", "VAF_IN_AUTOMATION"),
+                         ("compaction", "VAF_COMPACTION_IN_PROGRESS")):
+        if os.environ.get(var, "").strip() in ("1", "true", "yes"):
+            return trigger
+    return None
+
+
 def consolidate_system_messages(messages: List[Dict]) -> List[Dict]:
     """Make a message list valid for strict LOCAL chat templates (e.g. Qwen, Gemma 4) that require a
     SINGLE system message at the very start.
@@ -1512,13 +1540,13 @@ class APIBackendManager:
         try:
             if deadline:
                 import concurrent.futures as _futures
-                ex = _futures.ThreadPoolExecutor(max_workers=1)
+                from vaf.core.bounded_run import call_with_deadline
+                # In the caller's context: the generator's first step runs the provider
+                # call, which has to see the caller's lane, account and background run.
                 try:
-                    first = ex.submit(lambda: next(gen)).result(timeout=deadline)
+                    first = call_with_deadline(next, gen, timeout=deadline, label="first-chunk")
                 except _futures.TimeoutError:
                     return None, f"timeout after {deadline:.0f}s"
-                finally:
-                    ex.shutdown(wait=False)
             else:
                 first = next(gen)
         except StopIteration:
@@ -1778,21 +1806,20 @@ class APIBackendManager:
 
         # DeepSeek Auto mode: flash for main chat, pro model for tools/workflows/compaction.
         if self.provider_name == "deepseek" and str(model or "").lower() == "deepseek-auto":
-            _pro_context = (
-                os.environ.get("VAF_IN_WORKFLOW_TERMINAL", "").strip() in ("1", "true", "yes")
-                or os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes")
-                or os.environ.get("VAF_COMPACTION_IN_PROGRESS", "").strip() in ("1", "true", "yes")
-                or os.environ.get("VAF_BACKGROUND_PRO", "").strip() in ("1", "true", "yes")
-            )
+            _pro_trigger = _deepseek_pro_trigger()
             # Targets come from the model catalog's alias table.
             from vaf.core.model_catalog import alias_target
-            if _pro_context:
+            if _pro_trigger:
                 # The tool / workflow model when it is a DeepSeek model, else the pro target.
-                # Named boundary: which calls count as a pro context (VAF_BACKGROUND_PRO is
-                # process-global, so a thinking run moves the main chat too) is decided above
-                # and is not this check's to change.
                 model = subagent_model_for("deepseek", live_config) or alias_target(
                     "deepseek", "deepseek-auto", pro=True)
+                try:
+                    from vaf.core.cost import current_lane
+                    from vaf.core.log_helper import append_domain_log
+                    append_domain_log("backend", f"[deepseek-auto] pro model={model} "
+                                                 f"trigger={_pro_trigger} lane={current_lane()}")
+                except Exception:
+                    pass
             else:
                 model = alias_target("deepseek", "deepseek-auto", pro=False)
 

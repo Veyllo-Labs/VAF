@@ -64,6 +64,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **The background agent no longer changes how everybody else's chats run.** While the
+  background agent (Thinking mode) worked for one person, everything else VAF did at the
+  same time was treated as part of that run: with DeepSeek Auto every chat of every account
+  was answered by the pro model instead of flash, other chats stopped showing their status
+  and retry notes and their context display, a chat could not change its own goal, and with
+  a separate Thinker provider or model in Settings, agents and sub-agents started meanwhile
+  used it too. Two background runs at once also took the pro model away from each other.
+  The run now keeps all of this to itself; its own calls, and the sub-agents it starts,
+  still use the pro model and the Thinker settings. Model calls VAF makes on helper threads
+  (tool choice, checks, timeouts) are now recorded under the right person and lane in the
+  usage records instead of the admin's main chat. Settings > Thinker model takes effect
+  only for a local Thinker; for an API Thinker the provider's own model is used, as before.
 - **Files and logins in the shared browser no longer cross from one account to the
   next.** When the shared browser changed hands while a file transfer or the previous
   person's sign-off was still running, that person's workspace files could appear in the

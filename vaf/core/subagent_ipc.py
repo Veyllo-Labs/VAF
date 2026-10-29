@@ -1358,6 +1358,94 @@ def get_current_conversation_id() -> Optional[str]:
     return (str(value).strip() or None) if value else None
 
 
+# Which BACKGROUND RUN this context's work belongs to, when one does. A thinking pass runs on a
+# daemon thread of the process that serves every chat, and it used to announce itself in
+# os.environ for its whole duration: six flags (thinking mode, its scope, its run id, the pro
+# routing flag, and VAF_PROVIDER / VAF_MODEL_OVERRIDE for the thinker's settings). Measured with the real run on a thread: while it
+# was active, another account's chat turn in the same process resolved DeepSeek Auto to the pro
+# model, lost its status and context-bar emits, could not change its own goal, and an agent built
+# meanwhile took the thinker's provider; a second run that ended first stripped the first run of
+# its flags. Declared here, per context, the run holds on its own thread and in the workers that
+# copy the context (`run_bounded`, `call_with_deadline`, `DaemonPool`, `asyncio.to_thread`), and
+# nowhere else. A bare `threading.Thread` starts with an empty context and sees no run.
+#
+# The cost lane (`vaf.core.cost.usage_context`) is not this answer: it is the innermost
+# accounting label, and `complete()` replaces it with its caller for each call
+# (`tool:web_search`), so "is this call part of a thinking run" cannot be read from it.
+#
+# NAMED BOUNDARY: not on the public facade. The only writer is the thinking lane
+# (`vaf/core/thinking_mode.py`); nothing in vaf/cli, vaf/api or web/ reads it, and no sentence of
+# docs/EMBEDDING.md promises background model routing. An embedder's agent built with
+# `run_kind="thinking"` keeps its own gates (the instance truth) and declares no run here.
+_background_run_ctx: "contextvars.ContextVar[Any]" = contextvars.ContextVar(
+    "vaf_current_background_run", default=_UNSET
+)
+
+
+@dataclass(frozen=True)
+class BackgroundRun:
+    """One background run, as its own context sees it.
+
+    ``provider`` and ``model`` are the run's own pins (the thinker's provider and model), carried
+    only so a sub-agent the run spawns gets them in ITS environment (`child_env`); the run's own
+    agent receives them as `config_overrides`, never through the process environment.
+    """
+    kind: str
+    run_id: Optional[str] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+
+    def child_env(self) -> Dict[str, str]:
+        """The environment entries a child process of this run starts with. Data for the child's
+        env (`Platform.open_new_terminal`), never written into this process's os.environ: the
+        child's whole life belongs to the run, which is what a process environment can say."""
+        env = {"VAF_BACKGROUND_RUN": self.kind}
+        if self.run_id:
+            env["VAF_BACKGROUND_RUN_ID"] = str(self.run_id)
+        if self.provider:
+            env["VAF_PROVIDER"] = str(self.provider)
+        if self.model:
+            env["VAF_MODEL_OVERRIDE"] = str(self.model)
+        return env
+
+
+def set_current_background_run(run: Optional[BackgroundRun]) -> None:
+    """Declare which background run this context's work belongs to, or `None` for none.
+    Mirrors `set_current_session_id`: per context, `None` is a declaration, sets never restores.
+    The thinking lane runs its pass in a context of its own (`contextvars.copy_context().run`),
+    so the declaration ends with the pass and never reaches the thread that started it."""
+    try:
+        _background_run_ctx.set(run)
+    except Exception:
+        pass
+
+
+def get_current_background_run() -> Optional[BackgroundRun]:
+    """The background run this context serves, or `None`. Context first, process boundary
+    second, like `get_current_turn_id`: a context that was never told reads
+    `VAF_BACKGROUND_RUN` / `VAF_BACKGROUND_RUN_ID`, the CHILD case (a sub-agent the run spawned
+    carries them in its own env, `BackgroundRun.child_env`). Nothing in VAF writes them into a
+    process's own environment (guarded by tests/test_thinking_run_context_isolation.py).
+    Never raises."""
+    try:
+        value = _background_run_ctx.get()
+    except Exception:
+        value = _UNSET
+    if value is not _UNSET:
+        return value if isinstance(value, BackgroundRun) else None
+    kind = (os.environ.get("VAF_BACKGROUND_RUN") or "").strip()
+    if not kind:
+        return None
+    return BackgroundRun(kind=kind,
+                         run_id=(os.environ.get("VAF_BACKGROUND_RUN_ID") or "").strip() or None)
+
+
+def in_thinking_run() -> bool:
+    """True when this context's work belongs to a thinking run (see `get_current_background_run`)."""
+    run = get_current_background_run()
+    return run is not None and run.kind == "thinking"
+
+
 def get_ipc() -> SubAgentIPC:
     """Get the global IPC instance."""
     global _ipc_instance

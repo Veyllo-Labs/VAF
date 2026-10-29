@@ -272,39 +272,40 @@ def _api_complete(backend, provider, model, messages, max_tokens, temperature,
         low = err_str.lower()
         return "400" in low or "404" in low or "invalid model" in low
 
-    executor = _cf.ThreadPoolExecutor(max_workers=1)
+    # In the caller's context (call_with_deadline): the call keeps its lane, account and
+    # background run, which a bare pool worker would lose.
+    from vaf.core.bounded_run import call_with_deadline
+
     try:
-        try:
-            text, error_text = executor.submit(_run, model).result(timeout=timeout)
-        except _cf.TimeoutError:
-            print(f"[WARN] complete({caller}): timeout after {timeout}s")
-            _note_error(f"timeout after {timeout}s")
-            return None
-        except Exception as e:
-            text, error_text = None, str(e)
-
-        if text is not None:
-            return text or None
-
-        # Self-heal ONCE on an invalid-model answer. The manager yields errors as
-        # sentinel strings and almost never raises, so the decision reads the
-        # SENTINEL TEXT too - the old exception-only retry was dead code.
-        if (error_text and _retryable(error_text)
-                and fallback_model and fallback_model != model):
-            print(f"[WARN] complete({caller}): model '{model}' rejected, "
-                  f"retrying with '{fallback_model}'")
-            try:
-                text, error_text = executor.submit(_run, fallback_model).result(timeout=timeout)
-                if text is not None:
-                    return text or None
-            except Exception:
-                pass
-        if error_text:
-            print(f"[WARN] complete({caller}): backend error: {str(error_text)[:200]}")
-            _note_error(error_text)
+        text, error_text = call_with_deadline(_run, model, timeout=timeout, label="complete")
+    except _cf.TimeoutError:
+        print(f"[WARN] complete({caller}): timeout after {timeout}s")
+        _note_error(f"timeout after {timeout}s")
         return None
-    finally:
-        executor.shutdown(wait=False)
+    except Exception as e:
+        text, error_text = None, str(e)
+
+    if text is not None:
+        return text or None
+
+    # Self-heal ONCE on an invalid-model answer. The manager yields errors as
+    # sentinel strings and almost never raises, so the decision reads the
+    # SENTINEL TEXT too - the old exception-only retry was dead code.
+    if (error_text and _retryable(error_text)
+            and fallback_model and fallback_model != model):
+        print(f"[WARN] complete({caller}): model '{model}' rejected, "
+              f"retrying with '{fallback_model}'")
+        try:
+            text, error_text = call_with_deadline(_run, fallback_model, timeout=timeout,
+                                                  label="complete")
+            if text is not None:
+                return text or None
+        except Exception:
+            pass
+    if error_text:
+        print(f"[WARN] complete({caller}): backend error: {str(error_text)[:200]}")
+        _note_error(error_text)
+    return None
 
 
 def complete(messages, *, provider: Optional[str] = None, model: Optional[str] = None,

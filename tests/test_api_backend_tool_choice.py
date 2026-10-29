@@ -48,6 +48,15 @@ def _drive(m, tool_choice, model="deepseek-flash", tools=_TOOLS):
     return m.provider.received
 
 
+@pytest.fixture
+def _in_thinking_run():
+    """A thinking run declared in the test's own context, as `_thinking_pass` declares it."""
+    from vaf.core import subagent_ipc as ipc
+    token = ipc._background_run_ctx.set(ipc.BackgroundRun("thinking", "runT0001"))
+    yield
+    ipc._background_run_ctx.reset(token)
+
+
 # ── DeepSeek: forcing forms get downgraded ────────────────────────────────────
 
 def test_deepseek_required_downgraded_to_auto():
@@ -97,10 +106,9 @@ def test_openrouter_required_untouched():
 
 # ── deepseek-auto resolution happens BEFORE the downgrade ─────────────────────
 
-def test_deepseek_auto_resolves_to_pro_then_downgrades(monkeypatch):
+def test_deepseek_auto_resolves_to_pro_then_downgrades(monkeypatch, _in_thinking_run):
     for var in ("VAF_IN_WORKFLOW_TERMINAL", "VAF_IN_AUTOMATION", "VAF_COMPACTION_IN_PROGRESS", "VAF_TOOL_MODEL"):
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("VAF_BACKGROUND_PRO", "1")
     m = _mgr("deepseek")
     received = _drive(m, "required", model="deepseek-auto")
     assert received["model"] == "deepseek-v4-pro"   # pro-context resolution
@@ -109,7 +117,7 @@ def test_deepseek_auto_resolves_to_pro_then_downgrades(monkeypatch):
 
 def test_deepseek_auto_resolves_to_flash_without_pro_context(monkeypatch):
     for var in ("VAF_IN_WORKFLOW_TERMINAL", "VAF_IN_AUTOMATION", "VAF_COMPACTION_IN_PROGRESS",
-                "VAF_TOOL_MODEL", "VAF_BACKGROUND_PRO"):
+                "VAF_TOOL_MODEL"):
         monkeypatch.delenv(var, raising=False)
     m = _mgr("deepseek")
     received = _drive(m, "auto", model="deepseek-auto")
@@ -123,7 +131,7 @@ def test_deepseek_auto_in_an_automation_resolves_to_the_catalog_pro_target(monke
     from vaf.core.model_catalog import alias_target
 
     for var in ("VAF_IN_WORKFLOW_TERMINAL", "VAF_COMPACTION_IN_PROGRESS",
-                "VAF_TOOL_MODEL", "VAF_BACKGROUND_PRO"):
+                "VAF_TOOL_MODEL"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("VAF_IN_AUTOMATION", "1")
     received = _drive(_mgr("deepseek"), "auto", model="deepseek-auto")
@@ -152,7 +160,7 @@ def test_coder_resolves_deepseek_auto_through_the_same_catalog_targets():
 # ── A model of another provider never reaches this one ────────────────────────
 
 _PRO_ENV = ("VAF_IN_WORKFLOW_TERMINAL", "VAF_IN_AUTOMATION", "VAF_COMPACTION_IN_PROGRESS",
-            "VAF_TOOL_MODEL", "VAF_BACKGROUND_PRO")
+            "VAF_TOOL_MODEL")
 
 
 @pytest.fixture
@@ -166,9 +174,10 @@ def _quiet_notes(monkeypatch):
     return events
 
 
-def test_the_pro_context_never_sends_a_tool_model_of_another_provider(monkeypatch, _quiet_notes):
+def test_the_pro_context_never_sends_a_tool_model_of_another_provider(monkeypatch, _quiet_notes,
+                                                                     _in_thinking_run):
     """The incident: main provider switched from Veyllo to DeepSeek, the tool /
-    workflow model still `veyllo-chat`, a thinking run set VAF_BACKGROUND_PRO,
+    workflow model still `veyllo-chat`, a thinking run in its pro context,
     and DeepSeek answered 400 "you passed veyllo-chat" on every call.
     MUTATION: read `self.config.get("subagent_model")` raw again in the
     deepseek-auto block."""
@@ -176,7 +185,6 @@ def test_the_pro_context_never_sends_a_tool_model_of_another_provider(monkeypatc
 
     for var in _PRO_ENV:
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("VAF_BACKGROUND_PRO", "1")
     live = {"provider": "deepseek", "subagent_model": "veyllo-chat"}
     monkeypatch.setattr(Config, "load", classmethod(lambda cls: dict(live)))
     m = _mgr("deepseek")
@@ -186,7 +194,7 @@ def test_the_pro_context_never_sends_a_tool_model_of_another_provider(monkeypatc
     assert _drive(_mgr("deepseek"), "auto", model="deepseek-auto")["model"] == "deepseek-flash"
 
 
-def test_the_pro_context_reads_the_tool_model_live(monkeypatch, _quiet_notes):
+def test_the_pro_context_reads_the_tool_model_live(monkeypatch, _quiet_notes, _in_thinking_run):
     """A long-lived product manager holds the config of its creation; a tool
     model changed in Settings since applies at once, like api_model_deepseek
     one line above it. MUTATION: pass `self.config` to subagent_model_for."""
@@ -194,7 +202,6 @@ def test_the_pro_context_reads_the_tool_model_live(monkeypatch, _quiet_notes):
 
     for var in _PRO_ENV:
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("VAF_BACKGROUND_PRO", "1")
     monkeypatch.setattr(Config, "load", classmethod(
         lambda cls: {"provider": "deepseek", "subagent_model": "deepseek-flash"}))
     m = _mgr("deepseek")

@@ -823,7 +823,9 @@ Always cite which source(s) you used."""
                 return complete(prompt, max_tokens=1024, temperature=0.3,
                                 caller="memory:rag-answer")
 
-            response = await asyncio.get_event_loop().run_in_executor(None, get_response)
+            # to_thread, not run_in_executor: it runs the call in a copy of this context,
+            # so the answer keeps the caller's lane, account and background run.
+            response = await asyncio.to_thread(get_response)
             return response or "Error generating answer: no response from the model backend"
         except Exception as e:
             logger.error(f"Error generating answer: {e}")

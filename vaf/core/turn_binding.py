@@ -46,7 +46,9 @@ lifetimes (guarded by tests/test_turn_binding.py, which reads the attributes fro
 - ``binding``: one turn, set by the lane. Only `bind_turn` and `end_turn` write them.
 
 Plus four per-context variables in `vaf.core.subagent_ipc`: the session, the turn, the room
-and the conversation of its own. `bind_turn` declares all four.
+and the conversation of its own. `bind_turn` declares all four. A fifth there, the background
+run (`set_current_background_run`), is no binding: the thinking lane declares it for its own
+pass, in a context of its own, so a runner lane's thread never sees one and has none to clear.
 
 THE ORDER inside `bind_turn` puts everything the prompt reads in place before the
 conversation's prompt is built: the account check (nothing has changed when it refuses), the

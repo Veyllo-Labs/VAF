@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 import asyncio
-import os
 import threading
 from typing import Optional, List
 from uuid import UUID
@@ -85,7 +84,10 @@ class UpdateIntentTool(BaseTool):
         # chat's goal; if a background run writes it, that can create a self-reinforcing directive loop
         # (a written intent gets read back as an instruction on the next run). The existing intent-locks
         # (agent.py) only guard the auto-write of user input, not this tool path — so guard it here too.
-        if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
+        # Asked of the call's own context, not the process environment: a chat turn running while a
+        # thinking pass is active keeps its own update_intent.
+        from vaf.core.subagent_ipc import in_thinking_run
+        if in_thinking_run():
             return "Noted (intent not changed: a background run does not modify the main chat's user intent)."
 
         try:
@@ -240,10 +242,11 @@ class UpdateWorkingMemoryTool(BaseTool):
                 tasks=tasks, add_task=add_task, mark_task_done=mark_task_done,
                 mark_all_done=mark_all_done,
             )
-            # Thinking Workspace bridge: in thinking mode, mirror latest working_memory snapshot
-            # into the per-user workspace for auditable run continuity.
+            # Thinking Workspace bridge: in a thinking run (this call's own context), mirror the
+            # latest working_memory snapshot into the per-user workspace for auditable run continuity.
             try:
-                if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
+                from vaf.core.subagent_ipc import in_thinking_run
+                if in_thinking_run():
                     from vaf.core.thinking_workspace import mirror_working_memory_snapshot
 
                     snapshot = mpm.get_working_memory()

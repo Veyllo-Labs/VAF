@@ -28,10 +28,10 @@ chat turn wrote its note into another tenant's bucket - and those notes are read
 into that tenant's next thinking prompt under a header telling the model to follow
 them carefully. A cross-tenant write that becomes a cross-tenant instruction.
 
-WHAT IS DELIBERATELY NOT PINNED HERE: `_emit_to_web_ui()` still reads the
-environment. It is a module function with no agent to ask, and its eleven call sites
-would each have to be handed one. Its hazard is already written at the one call site
-that refused to use it. That is a named boundary, not an oversight.
+`_emit_to_web_ui()` is a module function with no agent to ask. Its thinking half now
+reads the call's own context (the run declares itself there); that half is pinned in
+tests/test_thinking_run_context_isolation.py, beside a chat turn running next to an
+active run. Its automation half still reads the environment: a named boundary.
 """
 import types
 

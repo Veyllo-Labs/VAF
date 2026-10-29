@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """
-Thinking-note-add tool: only available when VAF_THINKING_MODE=1.
+Thinking-note-add tool: only available on an agent whose run kind is "thinking".
 
 The agent calls this to persist a note for its next thinking run —
 e.g. "User confirmed Yasin birthday automation is handled, do not ask again"

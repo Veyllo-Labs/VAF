@@ -8,7 +8,6 @@ cancels when user becomes active. Run logs (tool calls, history) are saved for i
 """
 import json
 import logging
-import os
 import threading
 import time
 import uuid
@@ -1049,8 +1048,8 @@ def resolve_thinking_provider() -> str:
     """The provider a thinking run will actually use.
 
     `thinking_provider` wins when set; `inherit` (the default) means the run's own Agent reads
-    the main `provider` from config. Mirrors how the run itself decides - see the
-    VAF_PROVIDER assignment in run_thinking_cycle - and exists so the unload watchdog cannot
+    the main `provider` from config. Mirrors how the run itself decides - see the provider
+    override `_thinking_pass` hands its own agent - and exists so the unload watchdog cannot
     answer that question differently than the run does.
     """
     from vaf.core.config import Config
@@ -1482,6 +1481,15 @@ def emit_message_to_web_ui(
         return None
 
 
+def _current_thinking_run_id() -> Optional[str]:
+    """The id of the thinking run this call belongs to, from its own context; None outside one.
+    Two runs of two accounts overlap in one process, so a process-wide value stamps a request
+    with whichever run started last."""
+    from vaf.core.subagent_ipc import get_current_background_run
+    run = get_current_background_run()
+    return run.run_id if run is not None and run.kind == "thinking" else None
+
+
 def deliver_tracked_message(
     user_scope_id: Optional[str],
     message: str,
@@ -1588,7 +1596,7 @@ def deliver_tracked_message(
             question=message,
             run_seq=run_seq,
             proposed_action=(proposed_action or "").strip() or None,
-            thinking_run_id=os.environ.get("VAF_THINKING_RUN_ID"),
+            thinking_run_id=_current_thinking_run_id(),
             source_note_id=(source_note_id or "").strip() or None,
             source_todo_id=(source_todo_id or "").strip() or None,
             details=(details or "").strip() or None,
@@ -2752,7 +2760,23 @@ def _run_thinking_for_user(
     Run one thinking pass for the user. Multiple agent turns until thinking_done is called
     or max_turns is reached. When the model calls thinking_done (or limit hit), the run
     ends and the lock is released.
+
+    The thread target. The pass runs in a context of its own (a copy of the caller's), so
+    what it declares about itself - the background run, its lane and account - holds for its
+    own thread and the workers that copy its context, ends with the pass, and never reaches
+    the thread that started it. Nothing about the run is written into os.environ: this
+    process serves every chat, and a flag there is read by all of them.
     """
+    import contextvars
+    contextvars.copy_context().run(_thinking_pass, user_scope_id, run_id, started_at_ts)
+
+
+def _thinking_pass(
+    user_scope_id: Optional[str],
+    run_id: str,
+    started_at_ts: float,
+) -> None:
+    """The body of `_run_thinking_for_user`, inside the pass's own context."""
     from vaf.core.last_interaction import get_last_interaction
     from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
 
@@ -2771,29 +2795,37 @@ def _run_thinking_for_user(
     # Bump the per-user run counter so ask_user can stamp requests with the current run sequence
     # (drives the "recently asked" window so the agent does not re-ask within ~6 runs).
     next_run_seq(user_scope_id)
-    # So Agent._load_tools() sees thinking mode and registers thinking_done / thinking_note_add tools
-    os.environ["VAF_THINKING_MODE"] = "1"
-    # Pass scope_key to thinking_note_add tool via env (tool reads VAF_THINKING_SCOPE_ID)
-    os.environ["VAF_THINKING_SCOPE_ID"] = scope_key
-    os.environ["VAF_THINKING_RUN_ID"] = run_id
-    # Background-task pro routing: the thinking run is a background task, so deepseek-auto must resolve
-    # to deepseek-v4-pro (the user's "background task = pro" design). A dedicated flag is used instead of
-    # VAF_IN_WORKFLOW_TERMINAL (which would make maybe_start_thinking_for_user SKIP the run) or
-    # VAF_IN_AUTOMATION (which carries other automation/buffer semantics). Cleared in the finally below.
-    os.environ["VAF_BACKGROUND_PRO"] = "1"
 
-    # 🚀 COST EFFICIENCY: Use specific provider/model for thinking if configured
+    # COST EFFICIENCY: a specific provider/model for thinking, if configured. They go to this
+    # run's own agent as config overrides (and, through the declaration below, into the
+    # environment of a sub-agent it spawns); a process-wide VAF_PROVIDER / VAF_MODEL_OVERRIDE
+    # would re-route every agent built in the process meanwhile and freeze every live agent's
+    # provider and model switch.
     t_provider = (Config.get("thinking_provider") or "inherit").strip().lower()
     t_model = Config.get("thinking_model")
+    _overrides: Dict[str, Any] = {}
     if t_provider != "inherit":
-        os.environ["VAF_PROVIDER"] = t_provider
+        _overrides["provider"] = t_provider
     if t_model:
-        os.environ["VAF_MODEL_OVERRIDE"] = str(t_model)
+        _overrides["model"] = str(t_model)
+
+    # The run declares itself in its own context: its calls (and its workers') are background
+    # work - DeepSeek Auto resolves them to the pro model, its live emits stay out of the chats,
+    # update_intent is a no-op, a request it delivers carries this run id - and the accounting
+    # books them to this lane and this account from the first call on, including the reply
+    # classification that runs before the first chat_step. A chat turn on another thread
+    # sees none of it.
+    from vaf.core.cost import set_usage_context
+    from vaf.core.subagent_ipc import BackgroundRun, set_current_background_run
+    set_current_background_run(BackgroundRun(
+        kind="thinking", run_id=run_id,
+        provider=_overrides.get("provider"), model=_overrides.get("model")))
+    set_usage_context(lane="thinking", scope=user_scope_id)
 
     try:
         from vaf.core.agent import Agent
 
-        agent = Agent(verbose=False, run_kind="thinking")
+        agent = Agent(verbose=False, run_kind="thinking", config_overrides=_overrides or None)
         agent.load_model()
         # Set user context BEFORE init_chat() so system prompt (User Identity, RAG scope) and tools get the right user
         identity = resolve_scope_identity(user_scope_id)
@@ -3429,19 +3461,9 @@ def _run_thinking_for_user(
                 agent.shutdown()
             except Exception:
                 pass
-            os.environ.pop("VAF_THINKING_MODE", None)
 
         logger.info("Thinking completed for user %s", scope_key[:8] if scope_key != "default" else "default")
     finally:
-        os.environ.pop("VAF_THINKING_MODE", None)
-        os.environ.pop("VAF_THINKING_SCOPE_ID", None)
-        os.environ.pop("VAF_BACKGROUND_PRO", None)   # don't leak the pro-routing flag into the main process
-        os.environ.pop("VAF_THINKING_RUN_ID", None)  # don't leak the run id into the main process / next run
-        # VAF_PROVIDER / VAF_MODEL_OVERRIDE are process-global: if thinking_provider/thinking_model are
-        # configured, leaving them set would silently re-route the MAIN agent and EVERY other user's
-        # subsequent turns to the thinking provider/model for the rest of the process lifetime.
-        os.environ.pop("VAF_PROVIDER", None)
-        os.environ.pop("VAF_MODEL_OVERRIDE", None)
         clear_run_evidence(user_scope_id)   # drop the proactive evidence pool + phase flag (no cross-run leak)
         clear_followup_context(user_scope_id)   # don't leak the follow-up target into a later run
         _set_last_run_completed(user_scope_id)

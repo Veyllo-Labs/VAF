@@ -81,20 +81,27 @@ def _vision_switch_sentence(provider: str) -> str:
 
 
 def _emit_to_web_ui() -> bool:
-    """False when running a background pass (thinking mode or a scheduled automation) – do not push
+    """False when running a background pass (thinking mode or a scheduled automation) - do not push
     tool/log/status updates into any live chat session. Automations deliver only their final result
     (via _push_result_to_web_ui); the live progress noise must stay out of whoever is the active user.
 
-    NAMED BOUNDARY - this one still reads the process environment, and it is the last
-    thinking-mode gate that does. It is a module function with no agent to ask, and its
-    eleven call sites would each have to be handed one. The hazard is already written down
-    at the call site that refused to use it (see the tool_update emit below): a concurrent
-    background run makes this return False for a live chat turn, suppressing that user's
-    updates. The fix is to give it the agent, and it is a change of its own - every other
-    gate in this file now reads the instance truth, so this is the only one left to move.
+    The thinking half asks the call's own context (`subagent_ipc.in_thinking_run`): a thinking
+    pass declares itself on its thread, so its emits stay quiet and a chat turn running at the
+    same time keeps its status, retry and context-bar updates. It used to read a process-wide
+    environment flag the pass set for its whole duration, which silenced every chat of the
+    process while it ran.
+
+    NAMED BOUNDARY - the automation half still reads the process environment
+    (`VAF_IN_AUTOMATION`, set in-process around an in-process automation run, see the
+    boundary written in `automation.py`), so while one runs the same suppression reaches a
+    concurrent chat turn. Its conversion uses the same per-context declaration.
     """
-    if os.environ.get("VAF_THINKING_MODE", "").strip() in ("1", "true", "yes"):
-        return False
+    try:
+        from vaf.core.subagent_ipc import in_thinking_run
+        if in_thinking_run():
+            return False
+    except Exception:
+        pass
     if os.environ.get("VAF_IN_AUTOMATION", "").strip() in ("1", "true", "yes"):
         return False
     return True
@@ -4735,21 +4742,12 @@ class Agent:
                 )
                 return "".join(c if isinstance(c, str) else str(c) for c in chunks if c)
 
-            if timeout_s and timeout_s > 0:
-                # Bounded wait, house pattern (api_backend.py failover deadline): the
-                # worker thread is abandoned on timeout, the caller falls back to its
-                # heuristic. TimeoutError propagates - "raises so the caller can fall
-                # back" is this method's contract. NO context manager here: `with`
-                # calls shutdown(wait=True) on exit, which would sit out the very hang
-                # the timeout exists to escape (found by the test hanging for the
-                # backend's full 120 s instead of the 0.3 s bound).
-                import concurrent.futures as _cf
-                _ex = _cf.ThreadPoolExecutor(max_workers=1)
-                try:
-                    return _ex.submit(_ask).result(timeout=timeout_s)
-                finally:
-                    _ex.shutdown(wait=False)
-            return _ask()
+            # Bounded wait: the worker is abandoned on timeout and the caller falls back
+            # to its heuristic. TimeoutError propagates - "raises so the caller can fall
+            # back" is this method's contract. The worker runs in the caller's context,
+            # so the call keeps its lane, account and background run.
+            from vaf.core.bounded_run import call_with_deadline
+            return call_with_deadline(_ask, timeout=timeout_s, label="validation")
         if self.llm:
             output = self.llm.create_chat_completion(
                 messages=messages, max_tokens=max_tokens, temperature=0
@@ -8987,10 +8985,12 @@ class Agent:
                      selected_tools_str = output['choices'][0]['message']['content']
                 elif self.api_backend:
                     # API Backend returns a generator of strings.
-                    # Use a thread + timeout so slow/reasoning models don't block forever.
-                    # NOTE: shutdown(wait=False) — we do NOT join the thread on timeout;
-                    # the HTTP connection will eventually close on its own.
+                    # A worker + timeout so slow/reasoning models don't block forever. The
+                    # worker is not joined on timeout; the HTTP connection closes on its own.
+                    # It runs in this turn's context, so the call keeps its lane, account
+                    # and background run.
                     import concurrent.futures as _cf
+                    from vaf.core.bounded_run import call_with_deadline
                     _ROUTER_TIMEOUT = 15  # seconds
 
                     def _collect_router_chunks():
@@ -9001,10 +9001,9 @@ class Agent:
                             stream=False
                         ))
 
-                    _ex = _cf.ThreadPoolExecutor(max_workers=1)
-                    _fut = _ex.submit(_collect_router_chunks)
                     try:
-                        response_chunks = _fut.result(timeout=_ROUTER_TIMEOUT)
+                        response_chunks = call_with_deadline(
+                            _collect_router_chunks, timeout=_ROUTER_TIMEOUT, label="router")
                     except _cf.TimeoutError:
                         _timeout_msg = (f"Tool Router: Timeout nach {_ROUTER_TIMEOUT}s - falle zurück auf "
                                         "die Stichwort-Treffer, list_tools und search_tools")
@@ -9017,8 +9016,6 @@ class Agent:
                         _fallback = [t for t in ("list_tools", "search_tools") if t in self.tools]
                         _chosen = _keyword_answer("router timeout")
                         return _chosen + [t for t in _fallback if t not in _chosen]
-                    finally:
-                        _ex.shutdown(wait=False)
                     selected_tools_str = "".join(str(c) for c in response_chunks)
                 else:
                     UI.event("Router Debug", "No backend available for routing", style="yellow")
@@ -12352,10 +12349,10 @@ class Agent:
                     UI.event("Tool", f"{function_name}", style="highlight")
                     
                     # Web UI Event: Tool Start
-                    # NOTE: Do NOT gate on _emit_to_web_ui() here. That function checks the
-                    # process-wide VAF_THINKING_MODE env var, which can be set by a concurrent
-                    # background thinking process — blocking tool_update for active WebUI sessions.
-                    # broadcast routes updates by session_id, so this is always safe.
+                    # NOTE: Do NOT gate on _emit_to_web_ui() here. Its automation half reads the
+                    # process-wide VAF_IN_AUTOMATION env var, which a concurrent in-process
+                    # automation run sets - that would block tool_update for active WebUI
+                    # sessions. broadcast routes updates by session_id, so this is always safe.
                     # EXCEPTION — a background run (scheduled automation): it has no own web session, so the
                     # get_current_session_id() fallback would route this tool bubble to whoever is the active
                     # web user (observed: an automation's web_search bubbles leaked into a LAN user's chat).

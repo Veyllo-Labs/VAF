@@ -298,7 +298,10 @@ def _run_async_in_new_loop(coro):
         finally:
             loop.close()
 
-    t = threading.Thread(target=_thread_run)
+    # In a copy of the caller's context: the run's model calls keep its lane, account and
+    # background run, which a bare thread (an empty context) would drop.
+    import contextvars
+    t = threading.Thread(target=contextvars.copy_context().run, args=(_thread_run,))
     t.start()
     t.join()
     if exception[0]:
@@ -447,7 +450,7 @@ class VAFLLMBridge:
 
     browser-use calls:  await llm.ainvoke(messages, output_format=SomePydanticModel)
     This class:         delegates to APIBackendManager.chat_completion() (sync,
-                        streaming) via asyncio.run_in_executor — correct for code
+                        streaming) via asyncio.to_thread, correct for code
                         already running inside an event loop (created by
                         _run_async_in_new_loop above).
 
@@ -514,10 +517,10 @@ class VAFLLMBridge:
         if output_format is not None:
             raw = self._inject_schema(raw, output_format)
 
-        # run_in_executor: runs blocking APIBackendManager inside the already-running
-        # event loop without blocking its scheduler.
-        loop = asyncio.get_event_loop()
-        text = await loop.run_in_executor(None, self._call_sync, raw, max_tokens)
+        # to_thread: runs the blocking APIBackendManager call off the running event loop,
+        # in a copy of this context, so the call keeps its lane, account and background
+        # run (an executor worker starts with an empty context).
+        text = await asyncio.to_thread(self._call_sync, raw, max_tokens)
 
         if output_format is not None:
             parsed = self._parse(text, output_format)

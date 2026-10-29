@@ -204,6 +204,44 @@ def run_bounded(
             )
 
 
+def call_with_deadline(fn: Callable[..., Any], *args: Any, timeout: Optional[float],
+                       label: str = "call") -> Any:
+    """``fn(*args)`` on a daemon worker, waited for at most ``timeout`` seconds.
+
+    For callers that want an exception rather than ``run_bounded``'s sentinel text: a model
+    call with a fallback of its own (the tool router, the validation call, the failover's
+    first token, ``complete()``). Raises ``concurrent.futures.TimeoutError`` when the time is
+    up, without waiting for the worker (it is abandoned and finishes on its own, like
+    ``run_bounded``'s), and re-raises ``fn``'s own exception with its type. ``timeout`` None
+    or not above zero calls ``fn`` inline.
+
+    The call runs in a copy of the caller's context. Four sites used to hand-roll "one
+    ThreadPoolExecutor worker, submit, result(timeout), shutdown(wait=False)", and a pool
+    worker starts with an EMPTY context: measured, a call made under a thinking run's
+    declaration and lane arrived as lane ``main``, with no run and no account, so the router
+    and the checks of one account's background run were booked to the machine owner and
+    routed like a chat. A daemon thread rather than a pool: a pool's workers are joined at
+    interpreter exit (see ``DaemonPool``), and a pool per call leaves its worker behind.
+    """
+    if timeout is None or timeout <= 0:
+        return fn(*args)
+    future: Future = Future()
+    ctx = contextvars.copy_context()
+
+    def _work() -> None:
+        if not future.set_running_or_notify_cancel():
+            return
+        try:
+            result = ctx.run(fn, *args)
+        except BaseException as exc:  # noqa: BLE001 - handed to the caller below
+            future.set_exception(exc)
+        else:
+            future.set_result(result)
+
+    threading.Thread(target=_work, name=f"vaf-deadline-{label}", daemon=True).start()
+    return future.result(timeout=timeout)
+
+
 class DaemonPool(Executor):
     """At most ``workers`` daemon threads behind the ``Executor`` interface, started as work
     arrives.

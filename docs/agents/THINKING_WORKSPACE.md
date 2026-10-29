@@ -88,7 +88,7 @@ The workspace is bridged with the automation system in three ways:
 ## Working memory bridge
 
 `update_working_memory` remains the fast operational scratchpad tool.  
-In Thinking Mode, each update also mirrors the latest snapshot into Thinking Workspace:
+Inside a thinking run (the call's own context, `in_thinking_run` in `vaf/core/subagent_ipc.py`), each update also mirrors the latest snapshot into Thinking Workspace:
 
 - `tasks/<task_id>/workspace/working_memory/latest.json`
 - `tasks/<task_id>/workspace/working_memory/history/<timestamp>.json`
@@ -101,7 +101,7 @@ This creates an auditable bridge between short-term planning (`working_memory.js
 - `thinking_workspace_write`
 - `thinking_workspace_handoff`
 
-These tools are loaded only when `VAF_THINKING_MODE=1` and are scope-injected by the agent.
+These tools are loaded only on an agent built with `run_kind="thinking"` (`_load_tools` in `vaf/core/agent.py`, the instance truth rather than the process environment) and are scope-injected by the agent.
 
 ## WebSocket review endpoints (MVP)
 

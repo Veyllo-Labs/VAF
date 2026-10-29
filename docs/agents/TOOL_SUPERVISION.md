@@ -33,6 +33,15 @@ underlying thread is *abandoned* (it keeps running until it finishes on its own)
 responsive regardless. Long pure-Python tools should therefore check the stop flag at safe points
 and return early - see "Cooperative cancel" below.
 
+A caller that wants an exception instead of a sentinel - a model call with a fallback of its
+own (the tool router, the validation call, the failover's first chunk, `complete()`) - uses
+`call_with_deadline(fn, *args, timeout)`: one daemon worker, `concurrent.futures.TimeoutError`
+when the time is up (the worker is abandoned, not joined), the callable's own exception
+otherwise. Like `run_bounded` it runs the call in a copy of the caller's context, so the call
+keeps its session, cost lane, account and background run (a bare `ThreadPoolExecutor` worker
+starts with an empty context: measured, a thinking run's router and validation calls were
+booked as lane `main` of the machine owner and routed like a chat).
+
 Several independent calls that may hang, such as the DNS lookups behind the host a room
 invitation names, go through `run_bounded_all(calls, *, timeout, pool, in_flight=None)` instead:
 it returns the answers that arrived within the time in all, leaves out a call that raised or

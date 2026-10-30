@@ -224,8 +224,9 @@ Already in place; reuse, don't reinvent:
 6. Everything new behind `max-md:` / `isMobile` - verify desktop is untouched.
 7. A loading placeholder (`web/components/ui/Skeleton.tsx`) whose loaded content is taller on
    a phone by more than 32 px gets a `max-md:` height of its own (measured: Remote access,
-   Certificate, Signed-in devices, Tokens for programs), so the content below does not jump
-   when the data lands.
+   Signed-in devices, Tokens for programs), so the content below does not jump when the data
+   lands. Where long fixed text decides the height (the Certificate section), the placeholder
+   draws that text for real instead, so it is right in every language and on every width.
 
 ## Verify before committing
 

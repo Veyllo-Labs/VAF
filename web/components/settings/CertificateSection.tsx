@@ -282,22 +282,63 @@ export default function CertificateSection({ sectionId }: { sectionId?: string }
         }
     };
 
+    // A fingerprint's label and its 95 characters: two lines on a desktop, three or four on a
+    // phone (measured: the in-use box carries a fourth line of its own there).
+    const fingerprintBars = (phoneLines: number) => (
+        <div className="flex flex-col">
+            <div className="h-[16.5px] flex items-center"><SkeletonBar className="h-2.5 w-20" /></div>
+            <div className="h-4 flex items-center"><SkeletonBar className="h-3 w-full" /></div>
+            <div className="h-4 flex items-center max-md:hidden"><SkeletonBar className="h-3 w-1/3" /></div>
+            {Array.from({ length: phoneLines - 1 }).map((_, i) => (
+                <div key={i} className="h-4 items-center hidden max-md:flex">
+                    <SkeletonBar className={`h-3 ${i === phoneLines - 2 ? 'w-1/2' : 'w-full'}`} />
+                </div>
+            ))}
+        </div>
+    );
     if (!data) {
         if (hidden) return null;
         if (!loadFailed) return (
             <div id={sectionId} className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 scroll-mt-2">
                 <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-2">{t('title')}</h3>
                 <p className="text-xs text-gray-600 mb-4">{t('intro')}</p>
-                {/* The certificate in use, VAF's authority and the own-certificate controls, at
-                    their loaded height with VAF's own certificate in use (measured). */}
-                <Skeleton className="h-[770px] max-md:h-[1040px]">
-                    <SkeletonBar className="h-2.5 w-28 mb-2" />
-                    <SkeletonBar className="h-40 rounded-lg" />
-                    <SkeletonBar className="h-2.5 w-36 mt-5 mb-2" />
-                    <SkeletonBar className="h-56 rounded-lg" />
-                    <SkeletonBar className="h-2.5 w-40 mt-5 mb-2" />
-                    <SkeletonBar className="h-2.5 w-3/4 mb-3" />
-                    <SkeletonBar className="h-40 rounded-lg" />
+                {/* The certificate in use, VAF's authority and the own-certificate controls in
+                    their real boxes, with VAF's own certificate in use (the common state). The
+                    fixed texts are drawn for real, so the placeholder is as tall as the loaded
+                    section in every language; only what the answer fills in is a bar. A
+                    fingerprint takes two lines, three or four on a phone. */}
+                <Skeleton>
+                    <p className="text-xs font-semibold text-gray-700 mb-1">{t('inUse')}</p>
+                    <div className="flex flex-col gap-2 px-3 py-3 rounded-lg border border-gray-200 bg-white">
+                        <div className="h-5 flex items-center gap-2"><SkeletonBar className="h-4 w-16" /><SkeletonBar className="h-3 w-48" /></div>
+                        <div className="flex gap-1.5">{[20, 16, 24].map(w => <SkeletonBar key={w} className="h-5" style={{ width: `${w * 4}px` }} />)}</div>
+                        <div className="h-4 flex items-center"><SkeletonBar className="h-3 w-56" /></div>
+                        {fingerprintBars(4)}
+                    </div>
+                    <p className="text-xs font-semibold text-gray-700 mt-4 mb-1">{t('authorityTitle')}</p>
+                    <div className="flex flex-col gap-2 px-3 py-3 rounded-lg border border-gray-200 bg-white">
+                        <p className="text-xs text-gray-600">{t('authorityIntro')}</p>
+                        {fingerprintBars(3)}
+                        <p className="text-xs text-gray-500">{t.rich('compare', RICH)}</p>
+                        <div className="h-4 flex items-center"><SkeletonBar className="h-3 w-64 max-w-full" /></div>
+                        <SkeletonBar className="h-[34px] w-44 rounded-lg" />
+                    </div>
+                    <p className="text-xs font-semibold text-gray-700 mt-4 mb-1">{t('ownTitle')}</p>
+                    <p className="text-xs text-gray-600 mb-1">{t('ownIntro')}</p>
+                    <p className="text-xs text-amber-700 mb-3">{t.rich('keyHint', RICH)}</p>
+                    <div className="flex flex-col gap-2">
+                        {PARTS.map(part => (
+                            <div key={part} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 rounded-lg border border-gray-200 bg-white">
+                                <span className="flex flex-col flex-1 min-w-0 max-md:basis-full">
+                                    <span className="text-sm text-gray-700">{t(`parts.${part}`)}</span>
+                                    {part === 'chain' && <span className="text-xs text-gray-500">{t('parts.chainHint')}</span>}
+                                </span>
+                                <span className="text-xs text-gray-500">{t('noFile')}</span>
+                                <SkeletonBar className="h-[34px] w-28 rounded-lg" />
+                            </div>
+                        ))}
+                    </div>
+                    <SkeletonBar className="mt-3 h-[34px] w-24 rounded-lg" />
                 </Skeleton>
             </div>
         );

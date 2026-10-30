@@ -577,7 +577,34 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   box-shadow: 0 0 0 1px rgba(255,255,255,.35), 0 0 18px 2px rgba(255,255,255,.12);
 }
 
+/* A setting reached from the "who does what" overview in Settings: a ring that lights up
+   around it for 1.6 s, so the eye finds what the scroll brought into view. OPACITY ONLY,
+   per the repaint rule above: the ring is a pseudo-element with a fixed shadow, and only
+   its opacity moves. The ink is the folded primary text colour, dark on the light theme and
+   light on the dark one, so one rule serves both. The class is added and removed by
+   SettingsModal's jumpToSetting. */
+[data-setting-role] { scroll-margin-top: .5rem; }
+@keyframes vafSettingFlash {
+  0% { opacity: 0 }
+  15% { opacity: 1 }
+  65% { opacity: 1 }
+  100% { opacity: 0 }
+}
+.vaf-setting-flash { position: relative; }
+.vaf-setting-flash::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 14px;
+  pointer-events: none;
+  box-shadow: 0 0 0 2px rgb(var(--txt-gray-900) / .55), 0 0 16px 2px rgb(var(--txt-gray-900) / .12);
+  opacity: 0;
+  animation: vafSettingFlash 1.6s ease-out both;
+}
+
 @media (prefers-reduced-motion: reduce) {
+  /* The setting's ring stands still for its 1.6 s and then goes, without fading. */
+  @keyframes vafSettingFlash { 0%, 100% { opacity: 1 } }
   /* A person who asked the system for less motion still gets a message that
      arrives - it fades without travelling, rather than not animating at all. */
   @keyframes roomMessageEnter { from { opacity: 0 } to { opacity: 1 } }

@@ -117,8 +117,8 @@ REASON_TEXT: Dict[str, str] = {
     "ocr_no_engine": "Neither Tesseract nor a vision model is available.",
     "browser_described": "This model cannot see; screenshots are described by the vision model.",
     "browser_dom_only": "No model here can see; the browser agent reads the page text only.",
-    "choice_inactive": ("A sub-agent provider is stored but not switched on; save \"inherit\" "
-                        "once, then the provider, to use it."),
+    "choice_inactive": ("A sub-agent provider is stored but not switched on; choose it again in "
+                        "Settings > AI & Model or in `vaf settings` to use it."),
     "thinking_model_ignored": "thinking_model is used for the local model only; this provider's own model runs.",
     "vllm_voice_api_main": "A local voice call under vLLM needs the local model as the main provider.",
     "no_local_models": "This installation runs without local models (profile \"api\").",

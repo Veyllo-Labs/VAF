@@ -20,6 +20,8 @@ import {
 import 'reactflow/dist/style.css';
 import TTSSettings from './settings/TTSSettings';
 import InferenceProfileSection from './settings/InferenceProfileSection';
+import ModelRolesOverview from './settings/ModelRolesOverview';
+import type { ModelRoleRow } from './settings/ModelRolesOverview';
 import BackupSection from './settings/BackupSection';
 import MemoryGraph from './memory/MemoryGraph';
 import { useMemoryStore } from './memory/stores/memoryStore';
@@ -306,8 +308,6 @@ const VISION_PROVIDERS: { id: string; label: string }[] = [
     { id: 'openrouter', label: 'OpenRouter' },
     { id: 'veyllo',     label: 'Veyllo' },
 ];
-
-const VISION_CAPABLE_PROVIDERS = new Set(['veyllo', 'openai', 'anthropic', 'google', 'openrouter']);
 
 // Common IANA timezones for Date & Time (Interface). Used in system prompt and user context.
 const DATE_TIME_TIMEZONES: { value: string; label: string }[] = [
@@ -707,8 +707,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // the backend (GET /api/config/model-fit, the predicate every API call passes), so
     // the hint and the runtime cannot disagree. Re-asked when the provider or the model
     // changes, including before it is saved.
-    const toolModelProvider = (localConfig.subagent_provider && localConfig.subagent_provider !== 'inherit')
-        ? String(localConfig.subagent_provider)
+    // What sub-agents run on: the stored name only while its gate is on
+    // (`subagent_use_separate_provider`, config.subagent_provider_override). A name
+    // without the gate is inert, so the select and the tool-model list show "inherit".
+    const subagentChoice = (localConfig.subagent_use_separate_provider && String(localConfig.subagent_provider || '').trim())
+        ? String(localConfig.subagent_provider).trim()
+        : 'inherit';
+    const toolModelProvider = subagentChoice !== 'inherit'
+        ? subagentChoice
         : String(localConfig.provider || 'local');
     const toolModel = String(localConfig.subagent_model || '');
     // null while the current selection has not been answered: a failed or pending lookup
@@ -725,6 +731,48 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             .catch(() => {});
         return () => { live = false; };
     }, [apiBase, toolModelProvider, toolModel]);
+
+    // Who does which job (POST /api/config/model-roles): the backend resolver every lane asks,
+    // never rebuilt here. The draft is what the form holds and the saved config does not, cut
+    // down to the keys the last answer named (`keys`), so a choice shows up in the overview
+    // before it is saved and no other value leaves the form. Asked when the AI tab opens, after
+    // a save, and 300 ms after the last change of such a key; a newer question cancels an older
+    // one. Admin only, like the route and the tab.
+    const [modelRoles, setModelRoles] = useState<{ rows: ModelRoleRow[]; keys: string[] } | null>(null);
+    const [modelRolesFailed, setModelRolesFailed] = useState(false);
+    const [modelRolesRetry, setModelRolesRetry] = useState(0);
+    const modelRolesShown = isOpen && activeTab === 'ai' && currentUser?.role === 'admin';
+    const modelRolesDraft = JSON.stringify(Object.fromEntries((modelRoles?.keys || [])
+        .filter(k => k in localConfig && JSON.stringify(localConfig[k]) !== JSON.stringify(config?.[k]))
+        .map(k => [k, localConfig[k]])));
+    const modelRolesAsked = useRef(false);
+    useEffect(() => {
+        if (!modelRolesShown) return;
+        const ctl = new AbortController();
+        const base = apiBase || document.location.origin;
+        const timer = setTimeout(() => {
+            modelRolesAsked.current = true;
+            fetch(`${base}/api/config/model-roles`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ draft: JSON.parse(modelRolesDraft) }),
+                signal: ctl.signal,
+            })
+                .then(r => (r.ok ? r.json() : null))
+                .then(d => {
+                    if (d && Array.isArray(d.roles)) {
+                        setModelRoles({ rows: d.roles, keys: Array.isArray(d.keys) ? d.keys : [] });
+                        setModelRolesFailed(false);
+                    } else {
+                        setModelRolesFailed(true);
+                    }
+                })
+                .catch(() => { if (!ctl.signal.aborted) setModelRolesFailed(true); });
+        }, modelRolesAsked.current ? 300 : 0);
+        return () => { clearTimeout(timer); ctl.abort(); };
+    }, [apiBase, modelRolesShown, modelRolesDraft, config, modelRolesRetry]);
+    const visionRole = modelRoles?.rows.find(r => r.role === 'vision');
 
     // One fetch, two callers: opening the tab and the refresh button. The button
     // exists because the ledger keeps being written while this dialog is open -
@@ -1264,13 +1312,46 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             return e.label.toLowerCase().includes(settingsSearchQuery) || (!!e.sectionSlug && catLabel.includes(settingsSearchQuery));
         })
         : [];
+    // One jump for the search and the "who does what" overview: switch the tab, then, once
+    // that tab has rendered, scroll the target into view and (for the overview) light it up
+    // briefly. The target is found by a selector, not by a translated title: the overview
+    // passes `[data-setting-role="<role>"]`, which is the same in every language.
+    const [pendingJump, setPendingJump] = useState<{ selector: string; highlight: boolean } | null>(null);
+    const jumpToSetting = (tab: string, selector: string | null, highlight: boolean) => {
+        setActiveTab(tab);
+        setPendingJump(selector ? { selector, highlight } : null);
+    };
+    // The element glowing right now. Outside the effect: clearing the pending jump re-runs the
+    // effect's cleanup, which must not cut the glow short.
+    const settingFlash = useRef<{ el: Element; timer: ReturnType<typeof setTimeout> } | null>(null);
+    const endSettingFlash = () => {
+        if (!settingFlash.current) return;
+        clearTimeout(settingFlash.current.timer);
+        settingFlash.current.el.classList.remove('vaf-setting-flash');
+        settingFlash.current = null;
+    };
+    useEffect(() => endSettingFlash, []);
+    useEffect(() => {
+        if (!pendingJump) return;
+        const { selector, highlight } = pendingJump;
+        // One frame after the commit: the tab that was switched to has its layout by then.
+        const frame = requestAnimationFrame(() => {
+            setPendingJump(null);
+            const target = document.querySelector(selector);
+            if (!target) return;
+            const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+            target.scrollIntoView({ block: 'start', behavior: still ? 'auto' : 'smooth' });
+            if (!highlight) return;
+            endSettingFlash();
+            void (target as HTMLElement).offsetWidth; // a second click on the same row restarts the glow
+            target.classList.add('vaf-setting-flash');
+            settingFlash.current = { el: target, timer: setTimeout(endSettingFlash, 1600) };
+        });
+        return () => cancelAnimationFrame(frame);
+    }, [activeTab, pendingJump]);
     const goToSearchResult = (e: { tab: string; sectionSlug?: string }) => {
-        setActiveTab(e.tab);
         setSettingsSearch('');
-        if (e.sectionSlug) {
-            const slug = e.sectionSlug;
-            setTimeout(() => document.getElementById(slug)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
-        }
+        jumpToSetting(e.tab, e.sectionSlug ? `#${CSS.escape(e.sectionSlug)}` : null, false);
     };
     const [changed, setChanged] = useState(false);
     const [hfQuery, setHfQuery] = useState('');
@@ -3158,13 +3239,28 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                         {activeTab === 'ai' && currentUser?.role === 'admin' && (
                             <div className="space-y-6">
+                                <ModelRolesOverview
+                                    rows={modelRoles?.rows ?? null}
+                                    loading={!modelRoles && !modelRolesFailed}
+                                    error={modelRolesFailed}
+                                    onRetry={() => { setModelRolesFailed(false); setModelRolesRetry(n => n + 1); }}
+                                    providerLabel={(provider, row) => {
+                                        // An engine on this machine rather than a provider: Tesseract
+                                        // for text recognition, the local speech engine for speech.
+                                        if (!provider) return row.source === 'local_engine' ? (row.role === 'ocr' ? 'Tesseract' : tAi('localSpeechEngine')) : '';
+                                        if (provider === 'local') return tAdvanced('failoverLocal');
+                                        if (provider === 'elevenlabs') return 'ElevenLabs';
+                                        return PROVIDER_META.find(m => m.id === provider)?.label || provider;
+                                    }}
+                                    onPick={(row) => jumpToSetting(row.tab, `[data-setting-role="${row.role}"]`, true)}
+                                />
                                 <InferenceProfileSection currentProfile={localConfig.inference_profile || 'local'} onChanged={(profile) => {
                                     // A config refresh resets the draft (setLocalConfig(config) below):
                                     // with unsaved edits only this key is taken over, never the rest.
                                     setLocalConfig((prev: any) => ({ ...prev, inference_profile: profile }));
                                     if (!changed) onRefreshConfig?.();
                                 }} />
-                                <Section title={tAi('provider')}>
+                                <Section title={tAi('provider')} anchor="chat">
                                     <Select
                                         label={tAi('primaryProvider')}
                                         value={localConfig.provider || 'local'}
@@ -3411,17 +3507,20 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     </Section>
                                 )}
 
-                                {/* Vision Model Fallback */}
+                                {/* Vision model. Whether the main provider can read images is the
+                                    backend's answer (the overview's vision row, model_roles), which
+                                    checks the model too and already reflects the unsaved draft. */}
                                 {(() => {
-                                    const primaryProvider = localConfig.provider || 'local';
-                                    const primaryHasVision = VISION_CAPABLE_PROVIDERS.has(primaryProvider);
                                     const selectedVisionProvider = localConfig.vision_provider || '';
                                     return (
-                                        <Section title={tAi('visionModel')}>
-                                            {primaryHasVision && !selectedVisionProvider && (
+                                        <Section title={tAi('visionModel')} anchor="vision">
+                                            {!selectedVisionProvider && visionRole?.source === 'follows_main' && (
                                                 <p className="text-xs text-green-600 mb-3 flex items-center gap-1">
                                                     <span>✓</span> {tAi('visionSameProvider')}
                                                 </p>
+                                            )}
+                                            {!selectedVisionProvider && visionRole?.source === 'unavailable' && visionRole.reason === 'main_cannot_see' && (
+                                                <p className="text-xs text-amber-700 mb-3">{tAi('visionMainCannot')}</p>
                                             )}
                                             <p className="text-xs text-gray-400 mb-3">{tAi('visionProviderDesc')}</p>
                                             <Select
@@ -3432,7 +3531,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     handleChange('vision_model', '');
                                                 }}
                                                 options={[
-                                                    { value: '', label: tAi('visionNone') },
+                                                    { value: '', label: tAi('visionFollowMain') },
                                                     /* 'local' added HERE, not in VISION_PROVIDERS:
                                                        the voice-agent select reuses that array and
                                                        adds its own local entry (would duplicate). */
@@ -3490,7 +3589,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 {(() => {
                                     const selectedBrowserProvider = localConfig.browser_agent_provider || '';
                                     return (
-                                        <Section title={tAi('browserAgentModel')}>
+                                        <Section title={tAi('browserAgentModel')} anchor="browser_agent">
                                             <p className="text-xs text-gray-400 mb-3">{tAi('browserAgentProviderDesc')}</p>
                                             <Select
                                                 label={tAi('browserAgentProvider')}
@@ -3545,7 +3644,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                                 {/* OCR for scanned PDFs: Tesseract (free, local) or the vision
                                     model above (one model call PER PAGE - real spend). */}
-                                <Section title={tAi('ocrEngine')}>
+                                <Section title={tAi('ocrEngine')} anchor="ocr">
                                     <p className="text-xs text-gray-400 mb-3">{tAi('ocrEngineDesc')}</p>
                                     <Select
                                         label={tAi('ocrEngine')}
@@ -3566,12 +3665,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         checked={localConfig.sub_agents_in_separate_terminals ?? true}
                                         onChange={(v: boolean) => handleChange('sub_agents_in_separate_terminals', v)}
                                     />
-                                    <div className="mt-4">
+                                    <div className="mt-4" data-setting-role="subagents">
                                         <Select
                                             label={tAdvanced('subAgentProvider')}
-                                            value={localConfig.subagent_provider || 'inherit'}
+                                            value={subagentChoice}
                                             onChange={(v: string) => {
                                                 handleChange('subagent_provider', v);
+                                                // The name and its gate together: a name alone is
+                                                // inert (config.subagent_provider_override).
+                                                handleChange('subagent_use_separate_provider', v !== 'inherit');
                                                 // The model list changes under the value. '' and not
                                                 // undefined: the save merges, so an absent key keeps the old one.
                                                 handleChange('subagent_model', '');
@@ -3643,7 +3745,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     )}
                                 </Section>
 
-                                <Section title={tAdvanced('thinker')}>
+                                <Section title={tAdvanced('thinker')} anchor="thinking">
                                     <p className="text-sm text-gray-600 mb-3">{tAdvanced('thinkerProviderDesc')}</p>
                                     <Select
                                         label={tAdvanced('thinkerProvider')}
@@ -4169,26 +4271,28 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             {leanProfile && (
                                                 <p className="text-xs text-gray-600">{tVoice('profileApiNote')}</p>
                                             )}
-                                            <Select
-                                                label={tVoice('ttsProvider')}
-                                                value={localConfig.speech_tts_provider || 'local'}
-                                                onChange={(v: string) => {
-                                                    if (v === 'local') {
-                                                        handleChange('speech_tts_provider', '');
-                                                    } else {
-                                                        // Model/voice defaults must match speech_api.py
-                                                        // (_DEFAULT_TTS_MODEL / _DEFAULT_TTS_VOICE).
-                                                        handleChange('speech_tts_provider', v);
-                                                        handleChange('speech_tts_api_model', v === 'elevenlabs' ? 'eleven_flash_v2_5' : 'gpt-4o-mini-tts');
-                                                        handleChange('speech_tts_api_voice', v === 'elevenlabs' ? '' : 'alloy');
-                                                    }
-                                                }}
-                                                options={[
-                                                    { value: 'local', label: leanProfile ? tVoice('localUnavailable') : tVoice('providerLocal'), disabled: leanProfile },
-                                                    { value: 'elevenlabs', label: 'ElevenLabs' },
-                                                    { value: 'openai', label: 'OpenAI' },
-                                                ]}
-                                            />
+                                            <div data-setting-role="text_to_speech">
+                                                <Select
+                                                    label={tVoice('ttsProvider')}
+                                                    value={localConfig.speech_tts_provider || 'local'}
+                                                    onChange={(v: string) => {
+                                                        if (v === 'local') {
+                                                            handleChange('speech_tts_provider', '');
+                                                        } else {
+                                                            // Model/voice defaults must match speech_api.py
+                                                            // (_DEFAULT_TTS_MODEL / _DEFAULT_TTS_VOICE).
+                                                            handleChange('speech_tts_provider', v);
+                                                            handleChange('speech_tts_api_model', v === 'elevenlabs' ? 'eleven_flash_v2_5' : 'gpt-4o-mini-tts');
+                                                            handleChange('speech_tts_api_voice', v === 'elevenlabs' ? '' : 'alloy');
+                                                        }
+                                                    }}
+                                                    options={[
+                                                        { value: 'local', label: leanProfile ? tVoice('localUnavailable') : tVoice('providerLocal'), disabled: leanProfile },
+                                                        { value: 'elevenlabs', label: 'ElevenLabs' },
+                                                        { value: 'openai', label: 'OpenAI' },
+                                                    ]}
+                                                />
+                                            </div>
                                             {(localConfig.speech_tts_provider || 'local') === 'elevenlabs' && (
                                                 <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
                                                     {elevenVoices.length > 0 ? (
@@ -4262,43 +4366,45 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 );
                                             })()}
 
-                                            <Select
-                                                label={tVoice('sttProvider')}
-                                                value={localConfig.speech_stt_provider
-                                                    ? localConfig.speech_stt_provider
-                                                    : ((localConfig.speech_stt_engine ?? 'docker') === 'local' ? 'local_whisper' : 'local_docker')}
-                                                onChange={(v: string) => {
-                                                    if (v === 'local_docker') {
-                                                        handleChange('speech_stt_provider', '');
-                                                        handleChange('speech_stt_engine', 'docker');
-                                                    } else if (v === 'local_whisper') {
-                                                        handleChange('speech_stt_provider', '');
-                                                        handleChange('speech_stt_engine', 'local');
-                                                    } else {
-                                                        // Defaults must match speech_api.py _DEFAULT_STT_MODEL.
-                                                        handleChange('speech_stt_provider', v);
-                                                        // Leave no contradictory engine behind: picking a
-                                                        // cloud provider on top of an earlier "local" pick
-                                                        // used to keep speech_stt_engine='local', so the
-                                                        // day the key stopped resolving the audio dropped
-                                                        // into faster-whisper while Settings showed a
-                                                        // cloud provider. The documented fallback is the
-                                                        // Docker lane.
-                                                        handleChange('speech_stt_engine', 'docker');
-                                                        handleChange('speech_stt_api_model',
-                                                            v === 'elevenlabs' ? 'scribe_v2'
-                                                            : v === 'veyllo' ? 'veyllo-transcribe'
-                                                            : 'whisper-1');
-                                                    }
-                                                }}
-                                                options={[
-                                                    { value: 'local_docker', label: leanProfile ? tVoice('localUnavailable') : tVoice('dockerStt'), disabled: leanProfile },
-                                                    { value: 'local_whisper', label: leanProfile ? tVoice('localUnavailable') : tVoice('localStt'), disabled: leanProfile },
-                                                    { value: 'veyllo', label: 'Veyllo' },
-                                                    { value: 'elevenlabs', label: 'ElevenLabs' },
-                                                    { value: 'openai', label: 'OpenAI' },
-                                                ]}
-                                            />
+                                            <div data-setting-role="speech_to_text">
+                                                <Select
+                                                    label={tVoice('sttProvider')}
+                                                    value={localConfig.speech_stt_provider
+                                                        ? localConfig.speech_stt_provider
+                                                        : ((localConfig.speech_stt_engine ?? 'docker') === 'local' ? 'local_whisper' : 'local_docker')}
+                                                    onChange={(v: string) => {
+                                                        if (v === 'local_docker') {
+                                                            handleChange('speech_stt_provider', '');
+                                                            handleChange('speech_stt_engine', 'docker');
+                                                        } else if (v === 'local_whisper') {
+                                                            handleChange('speech_stt_provider', '');
+                                                            handleChange('speech_stt_engine', 'local');
+                                                        } else {
+                                                            // Defaults must match speech_api.py _DEFAULT_STT_MODEL.
+                                                            handleChange('speech_stt_provider', v);
+                                                            // Leave no contradictory engine behind: picking a
+                                                            // cloud provider on top of an earlier "local" pick
+                                                            // used to keep speech_stt_engine='local', so the
+                                                            // day the key stopped resolving the audio dropped
+                                                            // into faster-whisper while Settings showed a
+                                                            // cloud provider. The documented fallback is the
+                                                            // Docker lane.
+                                                            handleChange('speech_stt_engine', 'docker');
+                                                            handleChange('speech_stt_api_model',
+                                                                v === 'elevenlabs' ? 'scribe_v2'
+                                                                : v === 'veyllo' ? 'veyllo-transcribe'
+                                                                : 'whisper-1');
+                                                        }
+                                                    }}
+                                                    options={[
+                                                        { value: 'local_docker', label: leanProfile ? tVoice('localUnavailable') : tVoice('dockerStt'), disabled: leanProfile },
+                                                        { value: 'local_whisper', label: leanProfile ? tVoice('localUnavailable') : tVoice('localStt'), disabled: leanProfile },
+                                                        { value: 'veyllo', label: 'Veyllo' },
+                                                        { value: 'elevenlabs', label: 'ElevenLabs' },
+                                                        { value: 'openai', label: 'OpenAI' },
+                                                    ]}
+                                                />
+                                            </div>
                                             {localConfig.speech_stt_provider === 'veyllo' && (
                                                 <Select
                                                     label={tVoice('sttModel')}
@@ -4343,7 +4449,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             {/* Voice-agent LLM lane (live call first layer): same as
                                                 main / dedicated local GGUF (one-server model swap) /
                                                 own API provider. Backend: voice_agent.py + voice_model.py. */}
-                                            <div className="pt-3 border-t border-black/5 dark:border-white/10 space-y-4">
+                                            <div className="pt-3 border-t border-black/5 dark:border-white/10 space-y-4" data-setting-role="voice_call">
                                                 <Select
                                                     label={tVoice('agentLlm')}
                                                     value={localConfig.voice_agent_provider || ''}
@@ -5065,7 +5171,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                         {activeTab === 'advanced' && currentUser?.role === 'admin' && (
                             <div className="space-y-6">
-                                <Section title={tAdvanced('failover')}>
+                                <Section title={tAdvanced('failover')} anchor="failover">
                                     <p className="text-sm text-gray-600 mb-4">{tAdvanced('failoverDesc')}</p>
                                     {(() => {
                                         const LEVELS = ['off', 'basic', 'balanced', 'maximum'];
@@ -8652,8 +8758,10 @@ const Switch = ({ label, description, checked, onChange }: SwitchProps) => (
 
 /** Stable DOM id for a section from its (localized) title — used as the scroll target by search. */
 const slugifySection = (s: string) => 'setting-sec-' + s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-+|-+$)/g, '');
-const Section = ({ title, children }: { title: string, children: React.ReactNode }) => (
-    <div id={slugifySection(title)} className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 scroll-mt-2">
+/** `anchor`: the job (vaf/core/model_roles.py ROLES) this section sets, the overview's jump target.
+ *  Rendered as `data-setting-role`, which unlike the slug id is the same in every language. */
+const Section = ({ title, children, anchor }: { title: string, children: React.ReactNode, anchor?: string }) => (
+    <div id={slugifySection(title)} data-setting-role={anchor} className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 scroll-mt-2">
         <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-4">{title}</h3>
         {children}
     </div>

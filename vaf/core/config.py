@@ -2079,9 +2079,10 @@ def pair_subagent_provider(existing: Mapping, incoming: dict) -> dict:
     changed gate with the same name is kept, but cannot switch on "inherit".
     Unchanged values are left alone, because every web save sends the whole form,
     and pairing those would silently switch on an inert name stored by an older
-    version, with money involved. The web select still shows such a name, so picking it
-    again is no change: saving "inherit" once and then the provider activates it, and
-    so does ``set_subagent_provider`` (``vaf settings``), which writes both keys.
+    version, with money involved. The web select shows such a name as "inherit" (it reads
+    the gate) and writes the name and the gate together, so picking the provider there is a
+    changed gate that switches it on; ``set_subagent_provider`` (``vaf settings``) writes
+    both keys as well.
     """
     name_key, gate_key = SUBAGENT_PROVIDER_KEYS
     if not isinstance(incoming, dict) or (name_key not in incoming and gate_key not in incoming):

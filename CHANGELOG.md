@@ -28,6 +28,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   do says so (DeepSeek cannot read images) instead of quietly sending your data to another
   provider. `vaf providers --json` prints the same rows as the new admin-only
   `POST /api/config/model-roles`.
+- **Settings > AI & Model opens with "Who does what"**, an overview of which provider and
+  model handles each job, the same rows as `vaf providers`. A click on a job jumps to its
+  setting and lights it up briefly. Jobs without their own setting follow the main provider,
+  and a job the main provider cannot do says so (DeepSeek cannot read images). The overview
+  already shows changes you have not saved yet; Save still decides. The vision option no
+  longer claims that leaving it empty shows an error: it uses the main provider when that
+  one can read images.
 
 ### Changed
 
@@ -50,9 +57,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 - Choosing a sub-agent provider in the web settings had no effect: sub-agents kept running on
   the main provider. A provider chosen there now takes effect when saved. A choice an older
-  version stored that way stays off, and `vaf providers` says so: to switch it on, save "Same
-  as main model" once and then the provider. The terminal settings menu no longer shows such
-  a choice as active.
+  version stored that way stays off until it is chosen again: the select now shows it as "Same
+  as main model", and `vaf providers` says so. The terminal settings menu no longer shows such
+  a choice as active, and the Tool / Workflow model list follows the provider sub-agents
+  really use.
 - Learning the knowledge in a chat's attachments no longer stores it twice when the
   transfer fails partway with an internal error. The failure is now reported, and the
   memories stored before it stay stored once.

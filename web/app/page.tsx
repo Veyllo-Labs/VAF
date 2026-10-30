@@ -3224,11 +3224,16 @@ function VAFDashboardContent() {
     // it, for load_session and new_session alike; the guard below clears it after 15 s, so a
     // dead socket ends on the welcome screen and its disconnected status, not on a skeleton.
     const [historyLoading, setHistoryLoading] = useState(true);
+    // Counts history requests (load_session): the guard's 15 s run from the LATEST request,
+    // even when the flag is already true (a list that lands just before the first deadline, a
+    // switch from one uncached chat to another), so an older timer cannot end the wait while
+    // the newer request is still on its way.
+    const [historyRequests, setHistoryRequests] = useState(0);
     useEffect(() => {
         if (!historyLoading) return;
         const t = setTimeout(() => setHistoryLoading(false), 15000);
         return () => clearTimeout(t);
-    }, [historyLoading]);
+    }, [historyLoading, historyRequests]);
     // How many messages of `messages` came from a snapshot (a history_update, or the cache on a
     // switch): those rows mount as they are, without the enter animation, because the whole
     // transcript mounting at once made the entire panel fade and slide up. Rows at or past this
@@ -4955,6 +4960,7 @@ function VAFDashboardContent() {
         // 5. Request sync — show a loading spinner only when there's nothing cached AND we have not
         //    already synced this session (a new/empty chat has nothing to load → no spinner flash).
         setHistoryLoading(cached.length === 0 && !syncedSessions.current.has(id));
+        setHistoryRequests(n => n + 1);
         ws?.send(JSON.stringify({ type: 'load_session', id }));
         // Entering the chat a stored workflow run belongs to: ask the backend
         // whether that run is actually still going. Its events were addressed to
@@ -5923,6 +5929,7 @@ function VAFDashboardContent() {
                             // 15 s guard gave up must not show the welcome screen and a centred
                             // composer until history_update (it also re-arms the guard).
                             setHistoryLoading(true);
+                            setHistoryRequests(n => n + 1);
                             wsSocketRef.current?.send(JSON.stringify({ type: 'load_session', id: chats[0].id }));
                         }
                     }

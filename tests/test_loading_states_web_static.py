@@ -268,13 +268,15 @@ def test_an_edit_during_a_persona_refetch_is_not_overwritten():
 def test_a_failed_first_usage_load_ends_the_placeholder():
     """An error status, a network failure or an answer without `totals` leaves the card without
     figures; it then says so with its refresh button instead of pulsing forever, in every
-    language. MUTATION: drop `else setUsageFailed(true);`, or the key from one catalogue."""
+    language. That holds as well for an account whose earlier answer had no calls (its card
+    has no Refresh of its own). MUTATION: drop `else setUsageFailed(true);`, the key from one
+    catalogue, or narrow the condition back to `!usage && usageFailed`."""
     src = _src(_MODAL)
     load = _between(src, "const loadUsage = useCallback(() => {", "}, [apiBase, currentUser?.role]);")
     assert "setUsageFailed(false);" in load
     assert "if (d && d.totals) setUsage(d);\n                    else setUsageFailed(true);" in load
     assert ".catch(() => setUsageFailed(true))," in load
-    card = _between(src, "{!usage && usageFailed ? (", ") : !usage ? (")
+    card = _between(src, "{usageFailed && (!usage || usage.totals.calls === 0) ? (", ") : !usage ? (")
     assert "{tUsage('loadFailed')}" in card and "onClick={loadUsage}" in card and "{tUsage('refresh')}" in card
     for loc in ("de", "en", "ja", "ko", "th", "tr", "zh"):
         cat = json.loads((_WEB / "messages" / f"{loc}.json").read_text(encoding="utf-8"))
@@ -287,6 +289,42 @@ def test_a_late_first_session_list_waits_for_its_history_again():
     show until history_update. MUTATION: drop the `setHistoryLoading(true);` before the send."""
     src = _src(_PAGE)
     branch = _between(src, "else if (data.type === 'session_list') {", "else if (data.type === 'rooms_changed')")
-    assert ("setCurrentSessionId(chats[0].id);" in branch
-            and "setHistoryLoading(true);\n                            wsSocketRef.current?.send(JSON.stringify({ type: 'load_session', id: chats[0].id }));"
-            in branch)
+    select = branch.index("setCurrentSessionId(chats[0].id);")
+    send = branch.index("wsSocketRef.current?.send(JSON.stringify({ type: 'load_session', id: chats[0].id }));")
+    assert "setHistoryLoading(true);" in branch[select:send]
+
+
+def test_every_history_request_restarts_the_wait():
+    """The 15 s guard runs from the latest history request, also when the flag is already true
+    (a list landing just before the first deadline, a switch between two uncached chats): an
+    older timer must not end the wait while the newer load_session is pending. MUTATION: drop
+    `historyRequests` from the guard's dependencies, or the bump in either request site."""
+    src = _src(_PAGE)
+    guard = _between(src, "const [historyRequests, setHistoryRequests] = useState(0);", "const snapshotLenRef")
+    assert "setTimeout(() => setHistoryLoading(false), 15000)" in guard
+    assert "}, [historyLoading, historyRequests]);" in guard
+    branch = _between(src, "else if (data.type === 'session_list') {", "else if (data.type === 'rooms_changed')")
+    assert ("setHistoryLoading(true);\n                            setHistoryRequests(n => n + 1);\n"
+            "                            wsSocketRef.current?.send(JSON.stringify({ type: 'load_session'") in branch
+    assert ("setHistoryLoading(cached.length === 0 && !syncedSessions.current.has(id));\n"
+            "        setHistoryRequests(n => n + 1);") in src
+
+
+def test_every_persona_writer_counts_against_a_late_refetch():
+    """Besides the person's typing, a save's answer writes the persona (the user identity and
+    its change log, the date and time); a refetch that started before the save must not put
+    the old state back. Only three places write the state: the counted edit, the counted save
+    answer, and the guarded fetch. MUTATION: write a save's answer with `setPersonaData`
+    directly, or drop the count from `applySavedUserIdentity`."""
+    src = _src(_MODAL)
+    assert src.count("setPersonaData(") == 3, "editPersona, applySavedUserIdentity, the guarded fetch"
+    saved = _between(src, "const applySavedUserIdentity = ", "};")
+    assert "personaEditsRef.current += 1;" in saved
+    assert src.count("applySavedUserIdentity(data.user_identity);") == 2
+
+
+def test_the_korean_usage_failure_speaks_like_its_neighbours():
+    """The usage strings in ko.json use the polite -요 register; the failure line does too.
+    MUTATION: the formal `-습니다` again."""
+    cat = json.loads((_WEB / "messages" / "ko.json").read_text(encoding="utf-8"))
+    assert cat["settings"]["usage"]["loadFailed"] == "토큰 사용량을 불러오지 못했어요."

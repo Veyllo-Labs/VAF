@@ -1841,6 +1841,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         personaEditsRef.current += 1;
         setPersonaData(next);
     };
+    // A save's answer is the stored state AFTER the edit: it counts as a change too, so a
+    // refetch that started before the save cannot put the old identity (and its change log)
+    // back when it lands later.
+    const applySavedUserIdentity = (userIdentity: any) => {
+        personaEditsRef.current += 1;
+        setPersonaData(prev => prev ? { ...prev, user_identity: userIdentity } : prev);
+    };
     useEffect(() => {
         if (activeTab === 'persona' || activeTab === 'interface') {
             setPersonaLoading(true);
@@ -1967,7 +1974,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             });
             if (res.ok) {
                 const data = await res.json();
-                setPersonaData(prev => prev ? { ...prev, user_identity: data.user_identity } : prev);
+                applySavedUserIdentity(data.user_identity);
 
                 // Calculate new entries and trigger animation
                 const newLength = data.user_identity?.change_log?.length ?? 0;
@@ -2012,7 +2019,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             });
             if (res.ok) {
                 const data = await res.json();
-                setPersonaData(prev => prev ? { ...prev, user_identity: data.user_identity } : prev);
+                applySavedUserIdentity(data.user_identity);
             }
         } catch (e) {
             console.error('Failed to save date/time settings', e);
@@ -4339,7 +4346,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </div>
                                     )}
                                     <p className="text-xs text-gray-500">{tUsage('desc')}</p>
-                                    {!usage && usageFailed ? (
+                                    {/* The last load failed and no figures are on screen (none yet, or
+                                        an account with no calls): say so, with the way to try again. */}
+                                    {usageFailed && (!usage || usage.totals.calls === 0) ? (
                                         <div className="flex items-center justify-between gap-4 mt-4">
                                             <p className="text-xs text-red-600">{tUsage('loadFailed')}</p>
                                             <button type="button" onClick={loadUsage} disabled={usageLoading}

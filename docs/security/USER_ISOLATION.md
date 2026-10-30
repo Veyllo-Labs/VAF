@@ -559,7 +559,7 @@ there too - cleared before the commit, a lookup in between re-cached the old ans
   automations stay silent after a restart as well.
 - **Standing grants can be taken back.** "Always" and "for this chat" skip the question
   before any event is emitted, so a grant nobody can see only grows. Each account lists and
-  revokes its own under Settings, Connections (`GET /api/security/grants`,
+  revokes its own under Settings, Account (`GET /api/security/grants`,
   `POST /api/security/grants/revoke`); an admin does it for another account in the user
   editor (`/api/users/<id>/grants`); `vaf trust --list` and `--revoke-tool` on the command
   line. The overview's list shows the CALLER's grants (it showed the local admin's,

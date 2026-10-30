@@ -593,7 +593,7 @@
     "ovGrNoStanding": "Keine dauerhaften Freigaben erteilt",
     "ovGrAllowAlways": "immer erlaubt",
     "ovGrTrustedDir": "vertrauenswürdiges Verzeichnis",
-    "ovGrStandingNote": "Diese Freigaben hast du per \"Immer erlauben\" erteilt. Widerrufen kannst du sie in den Einstellungen unter Verbindungen.",
+    "ovGrStandingNote": "Diese Freigaben hast du per \"Immer erlauben\" erteilt. Widerrufen kannst du sie in den Einstellungen unter Konto.",
     "ovGatePlan": "Plan-Gate",
     "ovGateConfirm": "Bestätigungs-Gate",
     "ovGateIncident": "Vorfall-Gates",

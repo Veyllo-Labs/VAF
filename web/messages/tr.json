@@ -593,7 +593,7 @@
     "ovGrNoStanding": "Kalıcı izin verilmedi",
     "ovGrAllowAlways": "her zaman izinli",
     "ovGrTrustedDir": "güvenilir dizin",
-    "ovGrStandingNote": "Bu izinleri \"Her zaman izin ver\" ile verdin. Ayarlar'da Bağlantılar altında geri alabilirsin.",
+    "ovGrStandingNote": "Bu izinleri \"Her zaman izin ver\" ile verdin. Ayarlar'da Hesap altında geri alabilirsin.",
     "ovGatePlan": "Plan kapısı",
     "ovGateConfirm": "Onay kapısı",
     "ovGateIncident": "Olay kapıları",

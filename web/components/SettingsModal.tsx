@@ -268,7 +268,7 @@ const CATEGORIES = [
     { id: 'advanced', labelKey: 'advanced', icon: Zap, adminOnly: true },
     { id: 'automations', labelKey: 'automations', icon: Check },
     { id: 'local_network', labelKey: 'localNetwork', icon: Network, adminOnly: true },
-    // Every account's own: its password (and later, its own sessions).
+    // Every account's own: its password, its signed-in devices and tokens, its standing grants.
     { id: 'account', labelKey: 'account', icon: Lock },
     { id: 'about', labelKey: 'about', icon: Globe },
 ];
@@ -537,6 +537,7 @@ function AccessPresetSection({
 export default function SettingsModal({ isOpen, onClose, config, onSave, availableModels, apiModels, onFetchApiModels, onRefreshLocalModels, onRequestModelPreview, onConfirmModelDownload, onCloseModelPreview, modelPreviewData, downloadModelStatus, onCancelModelDownload, tools = [], onRefreshTools, onCreateCustomTool, onUpdateCustomTool, onDeleteCustomTool, customToolUsers = [], onGetCustomToolUsers, isCustomToolSaving = false, customToolBackendError = null, workflows = [], onCreateWorkflow, onUpdateWorkflow, onDeleteWorkflow, isWorkflowSaving = false, workflowBackendError = null, skills = [], onCreateSkill, onUpdateSkill, onDeleteSkill, onUploadSkill, isSkillSaving = false, skillBackendError = null, skillSavedTick = 0, mcpServers = [], onRefreshMcpServers, onSaveMcpServer, onDeleteMcpServer, isMcpSaving = false, mcpBackendError = null, onTestMcpServer, mcpTestResult = null, isMcpTesting = false, trustedSources = { categories: [] }, onAddTrustedSource, onRemoveTrustedSource, onDeleteTrustedCategory, onRequestTrustedSources, onCreateTrustedCategory, trustedSourcesError, automations = [], currentUser, onLogout, apiBase, initialTab: initialTabProp, initialChatJump = null, onChatJumpConsumed, onOpenInbox, onRefreshConfig, connectionLabel = 'Connected', isConnected = true, showIdleState = false, onReconnect, onCreateAutomationSubmit, onAutomationCreated, onDeleteAutomation, deletingAutomationId = null, onDeleteAutomationAnimationEnd, automationNotes = [], automationTodos = [], onSendPlannerMessage, userTimeFormat, onOpenAutomationCalendar, calendarVersion = 0, speakerProfile = null, onStartVoiceEnrollment, onDeleteSpeakerProfile, onRefreshSpeakerProfile }: SettingsModalProps) {
     const t = useTranslations();
     const tTabs = useTranslations('settings.tabs');
+    const tGrants = useTranslations('grants');
     const tCommon = useTranslations('common');
     const tGeneral = useTranslations('settings.general');
     const tPersona = useTranslations('settings.persona');
@@ -1336,6 +1337,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         addSecs('advanced', [tAdvanced('failover'), tAdvanced('attachments'), tAdvanced('system'), tAdvanced('updateRepair'), tAdvanced('backups'), tAdvanced('browserPool')]);
         addSecs('automations', [tAutomations('scheduled')]);
         addSecs('local_network', [tLocalNet('networkSettings'), tLocalNet('remoteAccess.title'), tLocalNet('certificate.title'), tLocalNet('userManagement'), tLocalNet('connectionDetails'), tLocalNet('networkTopology')]);
+        addSecs('account', [tGrants('title')]);
         addSecs('about', [tAbout('principles'), tAbout('credits')]);
         return out;
     })();
@@ -5190,7 +5192,6 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {activeTab === 'connections' && <SshSection />}
                         {activeTab === 'connections' && <FtpSection />}
                         {activeTab === 'connections' && <SandboxSection />}
-                        {activeTab === 'connections' && <StandingGrantsSection endpoint="/api/security/grants" own />}
 
                         {activeTab === 'local_network' && currentUser?.role === 'admin' && (
                             <div className="space-y-6">
@@ -5998,7 +5999,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             </div>
                         )}
 
-                        {activeTab === 'account' && <><AccountSection /><SessionsSection /></>}
+                        {activeTab === 'account' && <><AccountSection /><SessionsSection /><StandingGrantsSection endpoint="/api/security/grants" own sectionId={slugifySection(tGrants('title'))} /></>}
                         {activeTab === 'about' && (
                             <div className="space-y-6 pb-8">
                                 <div className="text-center py-6">

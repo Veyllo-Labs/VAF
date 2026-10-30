@@ -593,7 +593,7 @@
     "ovGrNoStanding": "No standing grants issued",
     "ovGrAllowAlways": "always allowed",
     "ovGrTrustedDir": "trusted directory",
-    "ovGrStandingNote": "You granted these via \"Allow always\". Revoke them in Settings under Connections.",
+    "ovGrStandingNote": "You granted these via \"Allow always\". Revoke them in Settings under Account.",
     "ovGatePlan": "Plan gate",
     "ovGateConfirm": "Confirmation gate",
     "ovGateIncident": "Incident gates",

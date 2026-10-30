@@ -593,7 +593,7 @@
     "ovGrNoStanding": "常時の権限はまだありません",
     "ovGrAllowAlways": "常に許可",
     "ovGrTrustedDir": "信頼済みディレクトリ",
-    "ovGrStandingNote": "これらは「常に許可」で与えた権限です。設定の「連携」で取り消せます。",
+    "ovGrStandingNote": "これらは「常に許可」で与えた権限です。設定の「アカウント」で取り消せます。",
     "ovGatePlan": "計画のゲート",
     "ovGateConfirm": "確認のゲート",
     "ovGateIncident": "インシデントのゲート",

@@ -18,9 +18,10 @@ interface Grants {
  * allowed for a chat, and trusted folders. While one stands, the confirmation dialog is
  * skipped for that tool, so a grant nobody can see or take back only ever grows. `endpoint`
  * is the account's own list (/api/security/grants) or, for an admin, another account's
- * (/api/users/<id>/grants); revoking posts to `<endpoint>/revoke`.
+ * (/api/users/<id>/grants); revoking posts to `<endpoint>/revoke`. `sectionId` is the settings
+ * search's jump target; it stands on every state's root, so the jump also lands while loading.
  */
-export default function StandingGrantsSection({ endpoint, own }: { endpoint: string; own: boolean }) {
+export default function StandingGrantsSection({ endpoint, own, sectionId }: { endpoint: string; own: boolean; sectionId?: string }) {
     const t = useTranslations('grants');
     const apiBase = typeof window !== 'undefined' ? (document.location.origin || '') : '';
     // The list with the endpoint it came from: on the render where the account changes the
@@ -82,7 +83,7 @@ export default function StandingGrantsSection({ endpoint, own }: { endpoint: str
     if (!data) {
         // The title and the intro are known; the list waits (two grants, measured).
         if (!loadFailed) return (
-            <div className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 mt-6">
+            <div id={sectionId} className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 mt-6 scroll-mt-2">
                 <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-2">{t('title')}</h3>
                 <p className="text-xs text-gray-600 mb-4">{own ? t('intro') : t('introOther')}</p>
                 <Skeleton className="h-[90px]">
@@ -93,7 +94,7 @@ export default function StandingGrantsSection({ endpoint, own }: { endpoint: str
             </div>
         );
         return (
-            <div className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 mt-6">
+            <div id={sectionId} className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 mt-6 scroll-mt-2">
                 <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-2">{t('title')}</h3>
                 <div className="flex items-center gap-3">
                     <p className="text-sm text-red-600 flex-1">{t('loadFailed')}</p>
@@ -115,7 +116,7 @@ export default function StandingGrantsSection({ endpoint, own }: { endpoint: str
         </button>
     );
     return (
-        <div className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 mt-6">
+        <div id={sectionId} className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 mt-6 scroll-mt-2">
             <div className="flex items-center justify-between mb-2">
                 <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide">{t('title')}</h3>
                 {!empty && (

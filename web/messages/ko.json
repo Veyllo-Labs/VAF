@@ -593,7 +593,7 @@
     "ovGrNoStanding": "상시 허용을 준 적이 없어요",
     "ovGrAllowAlways": "항상 허용",
     "ovGrTrustedDir": "신뢰할 수 있는 디렉터리",
-    "ovGrStandingNote": "‘항상 허용’으로 준 권한이에요. 설정의 ‘연결’에서 취소할 수 있어요.",
+    "ovGrStandingNote": "‘항상 허용’으로 준 권한이에요. 설정의 ‘계정’에서 취소할 수 있어요.",
     "ovGatePlan": "계획 관문",
     "ovGateConfirm": "확인 관문",
     "ovGateIncident": "사고 관문",

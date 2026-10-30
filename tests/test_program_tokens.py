@@ -201,7 +201,8 @@ def test_the_account_tab_words_every_refusal():
     for path in ("/api/auth/sessions", "/api/auth/sessions/end-others", "/api/auth/tokens"):
         assert path in page, path
     modal = (root / "web" / "components" / "SettingsModal.tsx").read_text(encoding="utf-8")
-    assert "{activeTab === 'account' && <><AccountSection /><SessionsSection /></>}" in modal
+    assert ("{activeTab === 'account' && <><AccountSection /><SessionsSection /><StandingGrantsSection"
+            " endpoint=\"/api/security/grants\" own sectionId={slugifySection(tGrants('title'))} /></>}") in modal
     assert "fetch(`/api/users/${target}/sign-out`" in modal
 
 

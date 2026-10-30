@@ -39,6 +39,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- **Standing grants moved to Settings > Account**, below your signed-in devices and tokens: what
+  you allowed "always" or for a chat, and your trusted folders, sit with the rest of your own
+  account instead of between the connections. The settings search now finds them, and the
+  security overview points there. An admin still sees another account's grants in the user
+  editor.
 - **Settings tabs no longer slide or fade in.** The Local Network tab slid in from the right;
   every tab now simply appears.
 - **While a chat, the chat list or a settings section loads, a grey outline of it stands in

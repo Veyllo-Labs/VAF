@@ -319,6 +319,52 @@ def test_prepare_messages_injects_description_not_image_block(monkeypatch):
     assert not any(isinstance(m.get("content"), list) for m in out), "no raw image_url blocks to the main model"
 
 
+def test_inline_mode_hands_images_to_the_set_vision_provider(monkeypatch):
+    """The legacy inline_multimodal lane: a text-only main model with a vision provider
+    set sends the images to that provider (its model, else the registry default) and
+    reads the answer back as text. The choice comes from the vision role
+    (model_roles.resolve_role), read without the local-server probe: this runs on every
+    round trip. MUTATION: force the fallback provider empty, or drop probe_local=False."""
+    import requests
+    import vaf.core.api_backend as ab
+    from vaf.core.provider_registry import default_vision_model
+
+    built = []
+
+    class _Backend:
+        def __init__(self, provider, *a, **k):
+            built.append(provider)
+
+        def chat_completion(self, messages, model=None, **k):
+            built.append(model)
+            yield "A red ball."
+
+    monkeypatch.setattr(ab, "APIBackendManager", _Backend)
+    probes = []
+    monkeypatch.setattr(requests, "get", lambda *a, **k: probes.append(a) or (_ for _ in ()).throw(
+        requests.ConnectionError("down")))
+    # The machine's main provider is local (a probe would fire on `follows_main`), the
+    # agent itself runs on DeepSeek, which cannot see.
+    values = {"vision_mode": "inline_multimodal", "provider": "local", "model": "qwen.gguf",
+              "vision_provider": "google", "vision_model": "", "vision_image_max_edge": 2000,
+              "vision_image_jpeg_quality": 85}
+    _patch_config(monkeypatch, values)
+    stub = _Stub()
+    stub.provider = "deepseek"
+    stub.config = {"api_model_deepseek": "deepseek-v4-pro"}
+    out = Agent._prepare_messages(stub, [{"role": "user", "content": "was ist das?",
+                                          "images": [_img()]}])
+    user = next(m for m in out if m["role"] == "user")
+    assert built == ["google", default_vision_model("google")]
+    assert "A red ball." in user["content"] and "Vision (google/" in user["content"]
+
+    # No vision provider set: no fallback call, and no probe of the local server either.
+    built.clear()
+    values["vision_provider"] = ""
+    Agent._prepare_messages(stub, [{"role": "user", "content": "x", "images": [_img()]}])
+    assert built == [] and probes == []
+
+
 # ---------------------------------------------------------------------------
 # chat_step base-description generation: once, idempotent, mode-gated
 # ---------------------------------------------------------------------------

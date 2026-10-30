@@ -2805,7 +2805,7 @@ def _thinking_pass(
     t_role = resolve_role("thinking")
     t_model = Config.get("thinking_model")
     _overrides: Dict[str, Any] = {}
-    if t_role.source == "set":
+    if t_role.source == "set" and t_role.provider:
         _overrides["provider"] = t_role.provider
     if t_model:
         _overrides["model"] = str(t_model)

@@ -65,10 +65,11 @@ def machine(monkeypatch):
     return state
 
 
-def _row(role, provider, model, source, reason="", also=()):
+def _row(role, provider, model, source, reason="", also=(), also_reasons=()):
     spec = {r.name: r for r in mr.ROLES}[role]
     return {"role": role, "provider": provider, "model": model, "source": source,
-            "reason": reason, "setting": spec.setting, "tab": spec.tab, "also": list(also)}
+            "reason": reason, "setting": spec.setting, "tab": spec.tab, "also": list(also),
+            "also_reasons": list(also_reasons)}
 
 
 def _default(provider):
@@ -183,9 +184,20 @@ EXPECTED = {
         {"provider": "openai", "failover_level": "balanced", "failover_backup_provider": "anthropic",
          "inference_profile": "api"}, {"openai"}, False,
         "failover", _row("failover", None, None, "unavailable", "failover_no_link")),
-    "failover-local-main": (
+    "failover-local-main-basic": (
         {"provider": "local", "failover_level": "basic"}, set(), False,
-        "failover", _row("failover", None, None, "unavailable", "failover_main_local")),
+        "failover", _row("failover", None, None, "unavailable", "failover_no_link")),
+    # The browser agent on a local main provider goes through APIBackendManager("local"),
+    # whose chain does fail over to a keyed backup.
+    "failover-local-main-backup": (
+        {"provider": "local", "failover_level": "balanced", "failover_backup_provider": "anthropic"},
+        {"anthropic"}, False,
+        "failover", _row("failover", "anthropic", None, "set")),
+    "subagent-inert-under-api-profile": (
+        {"provider": "local", "subagent_provider": "openai", "subagent_use_separate_provider": False,
+         "inference_profile": "api", "model": "qwen.gguf"}, {"openai"}, False,
+        "subagents", _row("subagents", "local", "qwen.gguf", "follows_main", "no_local_models",
+                          also_reasons=("choice_inactive",))),
 }
 
 
@@ -225,6 +237,49 @@ def test_a_mapping_is_read_instead_of_the_machine(machine):
     assert mr.resolve_role("vision").source == "unavailable"
 
 
+@pytest.mark.parametrize("draft,want", [
+    # The draft names a vision provider: OCR (auto, no Tesseract) reads with it.
+    ({"vision_provider": "openai"}, ("openai", "via_vision")),
+    # The draft switches the main provider to one that can see and follows it.
+    ({"provider": "anthropic", "api_model_anthropic": "claude-sonnet-4-6", "vision_provider": ""},
+     ("anthropic", "via_vision")),
+    # The draft takes the vision provider away again: nothing reads scanned pages.
+    ({"vision_provider": ""}, (None, "unavailable")),
+])
+def test_ocr_follows_the_drafts_vision_row(machine, draft, want):
+    """The previewed OCR row must use the DRAFT's vision row, not the saved one."""
+    from vaf.core.vision_infer import select_vision_backend
+    machine.update(cfg={"provider": "deepseek", "vision_provider": "google"},
+                   keys={"deepseek", "openai", "anthropic", "google"}, tesseract=False)
+    cfg = {**Config.DEFAULTS, **machine["cfg"], **draft}
+    rows = {a.role: a for a in mr.resolve_roles(cfg)}
+    assert (rows["ocr"].provider, rows["ocr"].source) == want
+    assert rows["ocr"].provider == rows["vision"].provider
+    # The vision lane's own config parameter reads the same mapping.
+    vision = (rows["vision"].provider, rows["vision"].model) if rows["vision"].provider else (None, None)
+    assert select_vision_backend(cfg) == vision
+    from vaf.core.pdf_extract import resolve_ocr_engine
+    assert resolve_ocr_engine(cfg)[0] == ("vision" if want[0] else None)
+
+
+def test_the_overview_probes_the_local_server_at_most_once(machine, monkeypatch):
+    """OCR and the browser row reuse the vision row; resolving it again would repeat the
+    2 s local probe per overview refresh."""
+    import requests
+    calls = []
+
+    def _probe(*a, **k):
+        calls.append(a)
+        raise requests.ConnectionError("down")
+    monkeypatch.setattr(requests, "get", _probe)
+    machine.update(cfg={"provider": "local", "model": "qwen.gguf"}, tesseract=False)
+    mr.resolve_roles()
+    assert len(calls) == 1
+    calls.clear()
+    mr.resolve_role("vision", probe_local=False)
+    assert calls == []
+
+
 def test_no_silent_vision_fallback(machine):
     """With DeepSeek as the main provider and vision on follow, nothing else reads the
     images, however many vision-capable providers have a key (Decision 3)."""
@@ -241,7 +296,8 @@ def test_the_role_list_is_one_list():
     assert names == ["chat", "vision", "ocr", "browser_agent", "subagents", "thinking",
                      "voice_call", "speech_to_text", "text_to_speech", "failover"]
     assert set(names) == set(mr._RESOLVERS)
-    assert set(mr.REASON_TEXT) >= {"no_api_key", "main_cannot_see", "ocr_no_engine",
+    # A closed set: the web overview translates each code.
+    assert set(mr.REASON_TEXT) == {"no_api_key", "main_cannot_see", "ocr_no_engine",
                                    "browser_described", "browser_dom_only", "choice_inactive",
                                    "thinking_model_ignored", "vllm_voice_api_main",
                                    "no_local_models", "speech_provider_unusable",
@@ -376,8 +432,6 @@ def test_backend_agrees_with_overview(machine, monkeypatch, main, variant, keyed
     rows = {a.role: a for a in mr.resolve_roles()}
     entry = _entry_points(monkeypatch)
     for role, call in entry.items():
-        if role == "failover" and main[0] == "local":
-            continue  # no request on the local model goes through the chain
         if role == "speech_to_text" and not (cfg.get("speech_stt_enabled") or cfg.get("stt_enabled")):
             continue  # off: the provider choice is not asked
         if role == "text_to_speech" and not cfg.get("speech_tts_enabled"):
@@ -405,9 +459,14 @@ _EXEMPT = {
 def test_no_hand_reads_of_the_role_keys():
     """Shrink-only. A second reader of a role key is a second answer to "who does this
     job", the thing the overview exists to make impossible."""
-    pattern = "|".join(f'"{k}"' for k in _ROLE_PROVIDER_KEYS)
+    if not (ROOT / ".git").exists():
+        pytest.skip("not a git checkout: git grep has nothing to read")
+    # Both quote styles: a 'vision_provider' read is the same hand read.
+    pattern = "|".join(f"[\"']{k}[\"']" for k in _ROLE_PROVIDER_KEYS)
     out = subprocess.run(["git", "grep", "-n", "-E", pattern, "--", "vaf/"],
                          cwd=str(ROOT), capture_output=True, text=True)
+    # 0 = hits, 1 = none; anything else is git failing, which must not read as "clean".
+    assert out.returncode in (0, 1), out.stderr
     hits = [line for line in out.stdout.splitlines()
             if line and line.split(":", 1)[0] not in _EXEMPT]
     assert hits == [], "a role key is read outside model_roles again:\n" + "\n".join(hits)

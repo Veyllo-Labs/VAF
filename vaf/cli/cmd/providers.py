@@ -43,8 +43,9 @@ _HOW = {
 def _how(row: dict) -> str:
     from vaf.core.model_roles import REASON_TEXT
     how = _HOW.get(row["source"], row["source"])
-    if row["reason"]:
-        how += ". " + REASON_TEXT.get(row["reason"], row["reason"])
+    for code in [row["reason"], *row.get("also_reasons", [])]:
+        if code:
+            how += ". " + REASON_TEXT.get(code, code)
     return how
 
 

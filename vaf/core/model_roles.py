@@ -117,13 +117,13 @@ REASON_TEXT: Dict[str, str] = {
     "ocr_no_engine": "Neither Tesseract nor a vision model is available.",
     "browser_described": "This model cannot see; screenshots are described by the vision model.",
     "browser_dom_only": "No model here can see; the browser agent reads the page text only.",
-    "choice_inactive": "A sub-agent provider is stored but not switched on; choose it again to use it.",
+    "choice_inactive": ("A sub-agent provider is stored but not switched on; save \"inherit\" "
+                        "once, then the provider, to use it."),
     "thinking_model_ignored": "thinking_model is used for the local model only; this provider's own model runs.",
     "vllm_voice_api_main": "A local voice call under vLLM needs the local model as the main provider.",
     "no_local_models": "This installation runs without local models (profile \"api\").",
     "speech_provider_unusable": "The chosen speech provider is unknown, cannot do this, or has no API key.",
     "failover_no_link": "No backup link can be used (no backup provider with a key, no local model).",
-    "failover_main_local": "The main provider is the local model; failover covers API providers only.",
     "config_unreadable": "The configuration could not be read.",
 }
 
@@ -134,7 +134,9 @@ SOURCES = ("main", "follows_main", "set", "unavailable", "off", "local_engine", 
 class RoleAssignment:
     """Who serves one role. ``provider`` None: nothing serves it, or an engine that is
     not a provider does (``source`` local_engine). ``model`` None: the provider's own
-    default, or the engine decides."""
+    default, or the engine decides. ``also``: further providers in order (the failover
+    links after the first). ``also_reasons``: further reason codes behind ``reason``
+    (a row that is both ``no_local_models`` and, say, ``choice_inactive``)."""
     role: str
     provider: Optional[str]
     model: Optional[str]
@@ -143,21 +145,24 @@ class RoleAssignment:
     setting: str = ""
     tab: str = "ai"
     also: Tuple[str, ...] = ()
+    also_reasons: Tuple[str, ...] = ()
 
     def as_dict(self) -> Dict[str, Any]:
         """The JSON shape of the API and of `vaf providers --json`."""
         return {"role": self.role, "provider": self.provider, "model": self.model,
                 "source": self.source, "reason": self.reason, "setting": self.setting,
-                "tab": self.tab, "also": list(self.also)}
+                "tab": self.tab, "also": list(self.also),
+                "also_reasons": list(self.also_reasons)}
 
 
 class _Reader:
     """The configuration one resolution reads, plus what several roles share."""
 
-    def __init__(self, config: Optional[Mapping], warn: bool):
+    def __init__(self, config: Optional[Mapping], warn: bool, probe_local: bool = True):
         self.config = config
         self.get = _config.config_reader(config)
         self.warn = warn
+        self.probe_local = probe_local
         self._snap: Optional[Mapping] = None
         self.memo: Dict[str, RoleAssignment] = {}
 
@@ -182,9 +187,11 @@ class _Reader:
 
 
 def _row(role: str, provider: Optional[str], model: Optional[str], source: str,
-         reason: str = "", also: Tuple[str, ...] = ()) -> RoleAssignment:
+         reason: str = "", also: Tuple[str, ...] = (),
+         also_reasons: Tuple[str, ...] = ()) -> RoleAssignment:
     spec = _BY_NAME[role]
-    return RoleAssignment(role, provider, model, source, reason, spec.setting, spec.tab, also)
+    return RoleAssignment(role, provider, model, source, reason, spec.setting, spec.tab, also,
+                          also_reasons)
 
 
 def _api_model(r: _Reader, provider: str) -> Optional[str]:
@@ -228,11 +235,13 @@ def _vision(r: _Reader, explain: bool) -> RoleAssignment:
         vm = r.text("vision_model") or default_vision_model(vp)
         row = _row("vision", vp, vm, "set")
     else:
-        # The main provider, if it can see images (default local probe kept).
+        # The main provider, if it can see images. The local probe (one GET of
+        # 127.0.0.1:8080/v1/models, 2 s) is kept as the lane always had it; a hot path
+        # that needs only an explicit choice passes probe_local=False.
         mp = r.text("provider", "local") or "local"
         snap = r.snapshot()
         mm = (snap.get(f"api_model_{mp}", "") if mp != "local" else snap.get("model", "")) or ""
-        if model_supports_vision(mp, mm):
+        if model_supports_vision(mp, mm, probe_local=r.probe_local):
             row = _row("vision", mp, mm or None, "follows_main")
         else:
             row = _row("vision", None, None, "unavailable", "main_cannot_see")
@@ -242,7 +251,12 @@ def _vision(r: _Reader, explain: bool) -> RoleAssignment:
 
 def _ocr(r: _Reader, explain: bool) -> RoleAssignment:
     from vaf.core.pdf_extract import resolve_ocr_engine
-    engine, _why = resolve_ocr_engine(r.config)
+
+    # The vision row of THIS reading (a draft's, when one is previewed), resolved once.
+    def _vision_backend():
+        v = _vision(r, explain)
+        return (v.provider, v.model) if v.provider else (None, None)
+    engine, _why = resolve_ocr_engine(r.config, vision=_vision_backend)
     if engine == "tesseract":
         return _row("ocr", None, "tesseract", "local_engine")
     if engine == "vision":
@@ -408,9 +422,10 @@ def _failover(r: _Reader, explain: bool) -> RoleAssignment:
     level = r.text("failover_level", "off").lower() or "off"
     if not FAILOVER_LINKS.get(level):
         return _row("failover", None, None, "off")
+    # With the local model as the main provider the chat loop talks to the local server
+    # directly, but the lanes that reach it through the API backend (the browser agent)
+    # still run this chain, so the row is the chain's answer, not "nothing".
     primary = r.main()
-    if primary == "local":
-        return _row("failover", None, None, "unavailable", "failover_main_local")
     links = failover_links(r.get, primary, r.has_key, lambda: local_inference_allowed(r.config))
     if not links:
         return _row("failover", None, None, "unavailable", "failover_no_link")
@@ -438,33 +453,39 @@ def _resolve(name: str, r: _Reader, explain: bool) -> RoleAssignment:
     except Exception:
         return _row(name, None, None, "unavailable", "config_unreadable")
     # The same facts inference_profile.conflicts names: a local lane while this
-    # installation runs no local models.
+    # installation runs no local models. That is the reason that matters most; one the
+    # row already had stays in also_reasons.
     if row.provider == "local" and row.source in ("main", "follows_main", "set"):
         try:
             from vaf.core.inference_profile import local_inference_allowed
             if not local_inference_allowed(r.config):
-                row = _row(name, row.provider, row.model, row.source, "no_local_models", row.also)
+                earlier = (row.reason,) if row.reason else ()
+                row = _row(name, row.provider, row.model, row.source, "no_local_models", row.also,
+                           earlier + row.also_reasons)
         except Exception:
             pass
     return row
 
 
 def resolve_role(role: str, config: Optional[Mapping] = None, *, warn: bool = True,
-                 explain: bool = True) -> RoleAssignment:
+                 explain: bool = True, probe_local: bool = True) -> RoleAssignment:
     """Who serves ``role`` under ``config`` (None: the installation's configuration).
 
     ``warn`` False keeps the lanes' one-time warnings (a foreign lane model, an unusable
     speech provider) out of a preview. ``explain`` False skips the reason codes that
     cost a lookup of their own (the browser row's vision tier), for a hot path that
-    needs only provider and model. Never raises for a known role; an unknown role name
-    is a KeyError."""
+    needs only provider and model. ``probe_local`` False skips the one network touch,
+    the vision row's probe of the local server (a local main then counts as able to
+    see, as on the agent loop's hot path). Never raises for a known role; an unknown
+    role name is a KeyError."""
     if role not in _RESOLVERS:
         raise KeyError(role)
-    return _resolve(role, _Reader(config, warn), explain)
+    return _resolve(role, _Reader(config, warn, probe_local), explain)
 
 
 def resolve_roles(config: Optional[Mapping] = None, *, warn: bool = False) -> List[RoleAssignment]:
     """Every role, in ``ROLES`` order: the overview. One reading of the configuration is
-    shared, so the vision row (and its local probe) is resolved once."""
+    shared, so the vision row (and its local probe) is resolved once; the OCR and
+    browser rows reuse it."""
     r = _Reader(config, warn)
     return [_resolve(spec.name, r, True) for spec in ROLES]

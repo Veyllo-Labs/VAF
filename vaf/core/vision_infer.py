@@ -47,14 +47,21 @@ def select_vision_backend(config=None) -> Tuple[Optional[str], Optional[str]]:
 
     Decided by ``model_roles.resolve_role("vision")``: an explicit ``vision_provider``,
     else the main provider when it can see images, else nothing (never another vendor
-    by itself). ``config`` reads that mapping instead of the installation's."""
+    by itself). ``config`` reads that mapping instead of the installation's.
+
+    Network: at most one GET of the local server's ``/v1/models`` (2 s timeout), and
+    only when no vision provider is set and the main provider is ``local`` (does the
+    running llama server have a projector?). Nothing else, and never a cloud call;
+    this was already so before the resolver took the decision over."""
     from vaf.core.model_roles import resolve_role
     a = resolve_role("vision", config)
     return (a.provider, a.model) if a.provider else (None, None)
 
 
 def vision_available() -> bool:
-    """True if some vision backend is configured/derivable (cheap; no network)."""
+    """True if some vision backend is configured/derivable. Cheap: no cloud call, and the
+    only network touch is ``select_vision_backend``'s local-server probe (local main
+    provider, no vision provider set)."""
     try:
         provider, _ = select_vision_backend()
         return bool(provider)

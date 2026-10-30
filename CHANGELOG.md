@@ -50,8 +50,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 - Choosing a sub-agent provider in the web settings had no effect: sub-agents kept running on
   the main provider. A provider chosen there now takes effect when saved. A choice an older
-  version stored that way stays off until it is chosen again, and the terminal settings menu
-  no longer shows such a choice as active.
+  version stored that way stays off, and `vaf providers` says so: to switch it on, save "Same
+  as main model" once and then the provider. The terminal settings menu no longer shows such
+  a choice as active.
 - Learning the knowledge in a chat's attachments no longer stores it twice when the
   transfer fails partway with an internal error. The failure is now reported, and the
   memories stored before it stay stored once.

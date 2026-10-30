@@ -15297,7 +15297,9 @@ class Agent:
                     # with its own design doc (docs/agents/AGENT_LOOP.md) and its own
                     # test surface.
                     from vaf.core.model_roles import resolve_role as _resolve_role
-                    _vision_role = _resolve_role("vision")
+                    # probe_local=False: only an explicit choice is read here, and this
+                    # runs on every round trip (no local-server probe).
+                    _vision_role = _resolve_role("vision", probe_local=False)
                     _vision_set = _vision_role.source == "set"
                     _vision_fb_provider = (_vision_role.provider or "") if _vision_set else ""
                     _vision_fb_model = _vision_role.model if _vision_set else None

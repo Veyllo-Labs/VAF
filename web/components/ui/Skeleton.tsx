@@ -13,6 +13,11 @@
 //   finishes sooner causes neither a jump nor a flash.
 // - The bars pulse in opacity only (skelPulse), and hold still under reduced motion.
 // - One status line for screen readers (`label`, else common.loading); the shapes are hidden.
+//   The root is positioned so that line (sr-only, absolute) is contained and clipped by the
+//   box: otherwise its containing block is the nearest positioned ancestor, often outside the
+//   scroll pane the placeholder sits in, and the line, standing at its place far down the pane,
+//   makes that ancestor scrollable. A scrollIntoView into the pane then scrolls the ancestor
+//   too (the Settings window's whole content slid up on a search jump while a section loaded).
 // - A refetch with data on screen keeps the data: a site shows this only while it has none.
 
 import type { CSSProperties, ReactNode } from 'react';
@@ -28,7 +33,7 @@ export default function Skeleton({ label, className, style, children }: {
 }) {
     const t = useTranslations('common');
     return (
-        <div role="status" className={cn('vaf-skel overflow-hidden', className)} style={style}>
+        <div role="status" className={cn('vaf-skel relative overflow-hidden', className)} style={style}>
             <span className="sr-only">{label ?? t('loading')}</span>
             {/* Fills the root, so a placeholder with a set height can lay out a full frame. */}
             <div aria-hidden="true" className="h-full">{children}</div>

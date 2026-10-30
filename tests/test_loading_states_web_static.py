@@ -68,8 +68,10 @@ def test_no_settings_tab_enters_with_an_animation():
 
 def test_the_placeholder_is_one_quiet_primitive():
     """The primitive carries the status, the label and the hidden shapes, and no motion or
-    colour of its own beyond the folded grey. MUTATION: drop `role="status"`, swap in
-    `animate-pulse`, or add `bg-gradient-to-r`."""
+    colour of its own beyond the folded grey. The root is positioned, so the absolute sr-only
+    line is contained by the box and cannot make an outer, overflow-hidden ancestor scrollable
+    (a search jump scrolled the whole Settings window while a section loaded). MUTATION: drop
+    `role="status"`, swap in `animate-pulse`, add `bg-gradient-to-r`, or drop `relative`."""
     src = _src(_SKELETON)
     assert src.startswith("// SPDX-FileCopyrightText: 2026 Veyllo GmbH\n")
     assert 'role="status"' in src
@@ -78,7 +80,7 @@ def test_the_placeholder_is_one_quiet_primitive():
     assert '<div aria-hidden="true" className="h-full">' in src
     assert "export default function Skeleton(" in src
     assert "export function SkeletonBar(" in src and "export function SkeletonRows(" in src
-    assert "'vaf-skel overflow-hidden'" in src and "'vaf-skel-bar rounded bg-gray-200'" in src
+    assert "'vaf-skel relative overflow-hidden'" in src and "'vaf-skel-bar rounded bg-gray-200'" in src
     for banned in ("animate-pulse", "gradient", "background-position"):
         assert banned not in src, banned
     assert not re.search(r"#[0-9a-fA-F]{3,6}\b", src)

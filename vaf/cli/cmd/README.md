@@ -26,6 +26,7 @@ This directory contains the logic for individual `vaf` CLI commands. Each file t
 - **setup.py**: Creates the admin account for this machine (`vaf setup`).
 - **repair.py**: Checks the Docker services and puts a broken one back (`vaf repair`); the work is `vaf.core.service_health`.
 - **backup.py**: Encrypted backups of everything VAF keeps (`backup create|verify|list|restore`) and the ones that run by themselves (`backup schedule`, `backup prune`); the work is `vaf.core.backup` and `vaf.core.backup_schedule`.
+- **providers.py**: Which provider and model does each job (`vaf providers`, `--json` for the rows of `POST /api/config/model-roles`): chat, images, text recognition, the browser agent, sub-agents, background thinking, the voice call, speech and failover; the work is `vaf.core.model_roles`.
 - **health.py**: Is the installation healthy (`vaf health`, exit 0 ok, 1 degraded, 2 down): the services, the disk and the running VAF's agent loop; the work is `vaf.core.health`.
 - **top.py**: Live server dashboard in the terminal (`vaf top`): uptime, configuration, utilization, services.
 - **usage.py**: Token usage and spend records (`usage show`, `usage set-currency`).

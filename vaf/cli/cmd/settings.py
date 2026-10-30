@@ -1143,6 +1143,16 @@ $;+xxxx+++xxxxxxxx+++xxxxx;;$
     UI.console.input("\n[dim]Press Enter to return...[/dim]")
 
 
+def _subagent_menu_label(current_provider: str) -> str:
+    """The main menu's sub-agent row: what sub-agents actually run on, from the role
+    resolver. A name stored without its gate is inert, so it shows as inherited."""
+    from vaf.core.model_roles import resolve_role
+    role = resolve_role("subagents", warn=False)
+    if role.source != "set" or not role.provider:
+        return f"🔧 Sub-Agent Provider: {current_provider.upper()} (inherited)"
+    return f"🔧 Sub-Agent Provider: {role.provider.upper()}"
+
+
 def main_menu(agent=None):
     # Track if reload is required (provider/model changes)
     reload_required = False
@@ -1209,11 +1219,7 @@ def main_menu(agent=None):
         current_provider = Config.get("provider", "local")
         provider_label = f"🌐 AI Provider: {current_provider.upper()}"
         
-        subagent_provider = Config.get("subagent_provider", "inherit")
-        if subagent_provider == "inherit":
-            subagent_label = f"🔧 Sub-Agent Provider: {current_provider.upper()} (inherited)"
-        else:
-            subagent_label = f"🔧 Sub-Agent Provider: {subagent_provider.upper()}"
+        subagent_label = _subagent_menu_label(current_provider)
         
         # Get current API model if using API
         if current_provider != "local":

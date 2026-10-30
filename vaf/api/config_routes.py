@@ -7,15 +7,21 @@ REST API for app config (for onboarding and other clients that cannot use WebSoc
 Endpoints:
 - GET   /api/config - Get full config (auth required when local_network_enabled)
 - PATCH /api/config - Merge and save config (auth required when local_network_enabled)
+- POST  /api/config/model-roles - Which provider and model does each job use (admin)
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
 
 from vaf.api.user_routes import caller_is_admin, require_admin
-from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
+from vaf.core.config import (
+    Config,
+    get_local_admin_scope_id,
+    get_local_admin_username,
+    pair_subagent_provider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +117,36 @@ async def get_model_fit(
 
     fits = model_fits_provider(provider, model, config=Config.load()) if model else True
     return {"provider": provider, "model": model, "fits": fits}
+
+
+@router.post("/config/model-roles")
+def post_model_roles(
+    body: Optional[Dict[str, Any]] = Body(None),
+    _admin: Dict[str, Any] = Depends(require_admin),
+) -> Dict[str, Any]:
+    """Which provider and model does each job use, for the settings overview.
+
+    Computed by `model_roles.resolve_roles`, the resolver every lane asks, so the
+    overview and the backend cannot disagree and the browser keeps no copy of the
+    rules. Read-only; it writes nothing.
+
+    `{"draft": {...}}` previews choices the user has made but not saved, on top of the
+    saved config, like `context-effort` does for the provider; only the keys in
+    `ROLE_CONFIG_KEYS` (returned as `keys`) are taken, so a draft carries no key, URL or
+    secret into the resolver. POST because the draft is a set of keys, not a query.
+
+    Admin-only: the rows name the installation's providers and models, which are an
+    admin's to change, and the AI tab that reads them is admin-only.
+
+    A plain `def`: resolving can wait on the local server's vision probe and the
+    Tesseract check, which must not block the event loop.
+    """
+    from vaf.core.model_roles import ROLE_CONFIG_KEYS, resolve_roles
+
+    draft = (body or {}).get("draft") if isinstance(body, dict) else None
+    draft = {k: v for k, v in draft.items() if k in ROLE_CONFIG_KEYS} if isinstance(draft, dict) else {}
+    rows = resolve_roles({**Config.load(), **draft}) if draft else resolve_roles()
+    return {"roles": [a.as_dict() for a in rows], "keys": sorted(ROLE_CONFIG_KEYS)}
 
 
 @router.get("/usage")
@@ -464,6 +500,8 @@ async def patch_config(
     # WebSocket save uses too; this path used to know only the role.
     is_admin = caller_is_admin(request)
     body = Config.split_connection_toggles(current, body, _user.get("user_scope_id"), is_admin=is_admin)
+    # A changed sub-agent provider brings its gate along; without it the choice is inert.
+    body = pair_subagent_provider(current, body)
     # API keys leave the payload here and go into the encrypted store. Without this the
     # read side would migrate a key on first read while this path kept writing raw into a
     # file nobody asks any more - the user changes their key, the UI says saved, and the

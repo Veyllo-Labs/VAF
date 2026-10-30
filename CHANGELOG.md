@@ -21,6 +21,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   with an NVIDIA GPU of compute capability 7.5 or newer; on AMD, Intel, Apple Silicon and
   Windows `vaf engine` says why not yet and llama.cpp keeps running. llama.cpp stays the
   default. `vaf health` shows an `engine` row while vLLM is the engine.
+- **`vaf providers` shows which provider and model handles each job**: chat, images, text
+  recognition, the browser agent, sub-agents, background thinking, voice calls, speech and
+  failover, with how each was decided (the main provider, followed, set by hand, off, or not
+  available and why). A job that follows the main provider and that the main provider cannot
+  do says so (DeepSeek cannot read images) instead of quietly sending your data to another
+  provider. `vaf providers --json` prints the same rows as the new admin-only
+  `POST /api/config/model-roles`.
 
 ### Changed
 
@@ -41,6 +48,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- Choosing a sub-agent provider in the web settings had no effect: sub-agents kept running on
+  the main provider. A provider chosen there now takes effect when saved. A choice an older
+  version stored that way stays off until it is chosen again, and the terminal settings menu
+  no longer shows such a choice as active.
 - Learning the knowledge in a chat's attachments no longer stores it twice when the
   transfer fails partway with an internal error. The failure is now reported, and the
   memories stored before it stay stored once.

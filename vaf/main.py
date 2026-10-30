@@ -365,6 +365,7 @@ from vaf.cli.cmd import users as users_cmd
 from vaf.cli.cmd import backup as backup_cmd
 from vaf.cli.cmd import profile as profile_cmd
 from vaf.cli.cmd import engine as engine_cmd
+from vaf.cli.cmd import providers as providers_cmd
 from vaf.core.session import session_app
 from vaf.core.snapshot import snapshot_app
 from vaf.core.automation import automation_app
@@ -500,6 +501,8 @@ app.command(name="profile", help="Local models or none: what this installation r
     profile_cmd.profile_cmd)
 app.command(name="engine", help="The local engine: llama.cpp (GGUF) or vLLM")(
     engine_cmd.engine_cmd)
+app.command(name="providers", help="Which provider and model does each job")(
+    providers_cmd.providers_cmd)
 
 app.command(name="start",   help="Start VAF as a background service")(service.cmd_start)
 app.command(name="stop",    help="Stop the VAF background service")(service.cmd_stop)

@@ -113,40 +113,51 @@ def _api_key(provider: str) -> str:
     return Config.get_api_key(provider) or ""
 
 
-def select_tts_backend() -> Tuple[Optional[str], Optional[str], Optional[str]]:
-    """Return (provider, model, voice) for cloud TTS, or (None, None, None)."""
+def select_tts_backend(config=None, warn: bool = True) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Return (provider, model, voice) for cloud TTS, or (None, None, None).
+
+    ``config`` reads that mapping instead of the installation's (``config_reader``; the
+    key stays the machine's). ``warn`` False keeps a refused provider out of the log, for
+    the settings overview (``model_roles``), which reports it as a reason instead."""
     try:
-        from vaf.core.config import Config
-        provider = (Config.get("speech_tts_provider", "") or "").strip().lower()
+        from vaf.core.config import config_reader
+        get = config_reader(config)
+        provider = (get("speech_tts_provider", "") or "").strip().lower()
         if not provider:
             return None, None, None
         if provider not in AUDIO_PROVIDERS or not AUDIO_PROVIDERS[provider].get("tts"):
-            _log.warning("speech_tts_provider '%s' is unknown/not TTS-capable; using local lane", provider)
+            if warn:
+                _log.warning("speech_tts_provider '%s' is unknown/not TTS-capable; using local lane", provider)
             return None, None, None
         if not _api_key(provider):
-            _log.warning("speech_tts_provider '%s' has no API key configured; using local lane", provider)
+            if warn:
+                _log.warning("speech_tts_provider '%s' has no API key configured; using local lane", provider)
             return None, None, None
-        model = (Config.get("speech_tts_api_model", "") or "").strip() or _DEFAULT_TTS_MODEL[provider]
-        voice = (Config.get("speech_tts_api_voice", "") or "").strip() or _DEFAULT_TTS_VOICE[provider]
+        model = (get("speech_tts_api_model", "") or "").strip() or _DEFAULT_TTS_MODEL[provider]
+        voice = (get("speech_tts_api_voice", "") or "").strip() or _DEFAULT_TTS_VOICE[provider]
         return provider, model, voice
     except Exception:
         return None, None, None
 
 
-def select_stt_backend() -> Tuple[Optional[str], Optional[str]]:
-    """Return (provider, model) for cloud STT, or (None, None)."""
+def select_stt_backend(config=None, warn: bool = True) -> Tuple[Optional[str], Optional[str]]:
+    """Return (provider, model) for cloud STT, or (None, None). ``config`` and ``warn``
+    as in ``select_tts_backend``."""
     try:
-        from vaf.core.config import Config
-        provider = (Config.get("speech_stt_provider", "") or "").strip().lower()
+        from vaf.core.config import config_reader
+        get = config_reader(config)
+        provider = (get("speech_stt_provider", "") or "").strip().lower()
         if not provider:
             return None, None
         if provider not in AUDIO_PROVIDERS or not AUDIO_PROVIDERS[provider].get("stt"):
-            _log.warning("speech_stt_provider '%s' is unknown/not STT-capable; using local lane", provider)
+            if warn:
+                _log.warning("speech_stt_provider '%s' is unknown/not STT-capable; using local lane", provider)
             return None, None
         if not _api_key(provider):
-            _log.warning("speech_stt_provider '%s' has no API key configured; using local lane", provider)
+            if warn:
+                _log.warning("speech_stt_provider '%s' has no API key configured; using local lane", provider)
             return None, None
-        model = (Config.get("speech_stt_api_model", "") or "").strip() or _DEFAULT_STT_MODEL[provider]
+        model = (get("speech_stt_api_model", "") or "").strip() or _DEFAULT_STT_MODEL[provider]
         return provider, model
     except Exception:
         return None, None

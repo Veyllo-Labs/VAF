@@ -422,6 +422,18 @@ point `openai` at a gateway that serves other vendors' models (LiteLLM and simil
 only the name in `api_model_openai` is vouched for, so another `claude-*` or `gemini-*`
 name used as an explicit model there is treated as foreign and replaced.
 
+**Which provider does each job is the machine's decision, not your `config=`.** Your
+dict decides the provider and model of THIS agent's chat. Which provider reads images,
+runs the browser agent, the background thinking runs, the sub-agents and the voice call
+is decided from the machine configuration (`~/.vaf/config.json`), whatever an embedded
+`Agent` carries: those lanes read `Config.get`, and none is handed the agent's config.
+The decision is made in one place in the framework, `vaf/core/model_roles.py`
+(`resolve_role`, `resolve_roles`), which every one of those lanes asks and which
+`vaf providers` prints. It is not on the facade yet, deliberately: a public
+`vaf.model_roles(config)` would promise a per-agent answer the lanes cannot keep. Its
+`config` parameter is the seam for the change that makes them read the agent's config,
+and the export belongs to that change (named boundary in the module docstring).
+
 **Where a key lives when VAF stores one.** Keys set through the product go into the
 same envelope-encrypted store as mail, GitHub and cloud credentials - not into
 `config.json`, which now holds no key material at all. The key that opens that

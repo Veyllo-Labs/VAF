@@ -598,35 +598,13 @@ def _resolve_backend():
       model), and (None, None) with an API main provider (not supported there).
     - voice_agent_provider "<api id>": the call runs on that API regardless
       of the main provider (key required).
+    Decided by ``model_roles.resolve_role("voice_call")``, which the settings
+    overview reads too; ``(None, None)`` is its ``unavailable`` row (no key, or the
+    vLLM case above).
     """
-    from vaf.core.config import Config
-    override = (Config.get("voice_agent_provider", "") or "").strip().lower()
-    if override == "local":
-        from vaf.core import local_engine
-        if local_engine.is_vllm():
-            # Under the vLLM engine the call rides the running vLLM model: a swap to a
-            # voice GGUF would be a multi-minute vLLM restart (and a GGUF vLLM does not run).
-            # That model is the main agent's; with an API main provider nothing starts vLLM
-            # for a call (the call start would report a model that is not there), so the
-            # combination is refused here and named by local_engine.conflicts().
-            main = (Config.get("provider", "local") or "local").strip().lower()
-            if main != "local":
-                return None, None
-            return "local", None
-        from vaf.core import voice_model
-        return "local", voice_model.voice_model_ref()
-    if override:
-        if not Config.get_api_key(override):
-            return None, None
-        model = (Config.get("voice_agent_model", "") or "").strip() or None
-        return override, model
-    provider = (Config.get("provider", "local") or "local").strip().lower()
-    if provider == "local":
-        return "local", None
-    if not Config.get_api_key(provider):
-        return None, None
-    model = (Config.get(f"api_model_{provider}", "") or "").strip() or None
-    return provider, model
+    from vaf.core.model_roles import resolve_role
+    a = resolve_role("voice_call")
+    return (a.provider, a.model) if a.provider else (None, None)
 
 
 def dedicated_local_model():

@@ -42,46 +42,15 @@ BASE_DESCRIPTION_PROMPT = (
 )
 
 
-def _model_supports_vision(provider: str, model: str) -> bool:
-    """Whether (provider, model) accepts image input.
+def select_vision_backend(config=None) -> Tuple[Optional[str], Optional[str]]:
+    """Return ``(provider, model)`` to use for vision, or ``(None, None)`` if none is available.
 
-    Thin delegation to the shared registry predicate (previously one of three
-    manually-synced copies alongside agent.py and browser_agent.py that had
-    already diverged). The module-level name stays: other code imports it from here.
-    """
-    from vaf.core.provider_registry import model_supports_vision
-    return model_supports_vision(provider, model)
-
-
-def _default_vision_model(provider: str) -> Optional[str]:
-    """Safe default vision model for an explicit vision_provider without a vision_model.
-
-    Thin delegation to the shared registry lookup (tracks Config.PROVIDER_MODELS
-    for SDK providers; openrouter keeps an explicitly vision-capable route).
-    """
-    from vaf.core.provider_registry import default_vision_model
-    return default_vision_model(provider)
-
-
-def select_vision_backend() -> Tuple[Optional[str], Optional[str]]:
-    """Return ``(provider, model)`` to use for vision, or ``(None, None)`` if none is available."""
-    from vaf.core.config import Config
-    cfg = Config.load()
-
-    # 1. Explicit override.
-    vp = (Config.get("vision_provider", "") or "").strip()
-    if vp:
-        vm = (Config.get("vision_model", "") or "").strip() or _default_vision_model(vp)
-        return vp, vm
-
-    # 2. Main provider, if it can see images.
-    mp = (Config.get("provider", "local") or "local").strip()
-    mm = (cfg.get(f"api_model_{mp}", "") if mp != "local" else cfg.get("model", "")) or ""
-    if _model_supports_vision(mp, mm):
-        return mp, (mm or None)
-
-    # 3. Nothing configured that can see.
-    return None, None
+    Decided by ``model_roles.resolve_role("vision")``: an explicit ``vision_provider``,
+    else the main provider when it can see images, else nothing (never another vendor
+    by itself). ``config`` reads that mapping instead of the installation's."""
+    from vaf.core.model_roles import resolve_role
+    a = resolve_role("vision", config)
+    return (a.provider, a.model) if a.provider else (None, None)
 
 
 def vision_available() -> bool:

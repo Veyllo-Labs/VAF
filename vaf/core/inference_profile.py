@@ -247,13 +247,12 @@ def conflicts(config: Optional[Dict] = None) -> List[str]:
     if _v("provider", LOCAL) == LOCAL:
         out.append("The chat provider is the local model: choose an AI provider under "
                    "Settings > AI & Model.")
-    for key, label in (("vision_provider", "image understanding"),
-                       ("voice_agent_provider", "the voice call"),
-                       ("browser_agent_provider", "the browser agent"),
-                       ("thinking_provider", "the thinking runs"),
-                       ("subagent_provider", "the sub-agents")):
-        if _v(key) == LOCAL:
-            out.append(f"{key} is \"local\": {label} would need a local model.")
+    # The role lanes come from the one role list (vaf/core/model_roles.py).
+    from vaf.core.model_roles import ROLES
+    for role in ROLES:
+        if role.local_conflict_label and _v(role.setting) == LOCAL:
+            out.append(f"{role.setting} is \"local\": {role.local_conflict_label} "
+                       "would need a local model.")
     if _v("failover_level", "off") == "basic":
         out.append("failover_level is \"basic\", whose only link is the local model: it adds "
                    "nothing here (\"balanced\" keeps a backup API provider).")

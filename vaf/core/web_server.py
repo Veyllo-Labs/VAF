@@ -5821,6 +5821,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         new_config = without_certificate_keys(new_config)
                         new_config = Config.split_connection_toggles(
                             existing, new_config, str(user_scope_id) if user_scope_id else None, is_admin=is_admin)
+                        # A changed sub-agent provider brings its gate along; the Settings
+                        # select writes the name only, which alone is inert.
+                        from vaf.core.config import pair_subagent_provider
+                        new_config = pair_subagent_provider(existing, new_config)
                         # Keys leave the payload for the encrypted store; see
                         # api_keys.absorb_config_keys for why the write side had to move in the
                         # same change as the read side - otherwise a Settings save keeps writing

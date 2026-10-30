@@ -1050,12 +1050,14 @@ def resolve_thinking_provider() -> str:
     `thinking_provider` wins when set; `inherit` (the default) means the run's own Agent reads
     the main `provider` from config. Mirrors how the run itself decides - see the provider
     override `_thinking_pass` hands its own agent - and exists so the unload watchdog cannot
-    answer that question differently than the run does.
+    answer that question differently than the run does. Decided by
+    ``model_roles.resolve_role("thinking")``, the row the settings overview shows.
     """
     from vaf.core.config import Config
-    configured = (Config.get("thinking_provider") or "inherit").strip().lower()
-    if configured and configured != "inherit":
-        return configured
+    from vaf.core.model_roles import resolve_role
+    provider = resolve_role("thinking").provider
+    if provider:
+        return provider
     return (Config.get("provider", "local") or "local").strip().lower()
 
 
@@ -1543,9 +1545,7 @@ def deliver_tracked_message(
             _pool = get_run_evidence(user_scope_id)
             # Provider-calibrated evidence bar: strict for the weak LOCAL model (fabricates), lenient for a
             # strong HOSTED model (rarely fabricates). Selected automatically by the active thinking provider.
-            _main_local = (Config.get("provider") or "local").strip().lower() == "local"
-            _t_prov = (Config.get("thinking_provider") or "inherit").strip().lower()
-            _think_local = _main_local if _t_prov == "inherit" else (_t_prov == "local")
+            _think_local = resolve_thinking_provider() == "local"
             _min_chars = int(Config.get("thinking_proactive_evidence_min_chars", 24) or 24)
             if not _think_local:
                 _min_chars = int(Config.get("thinking_proactive_evidence_min_chars_api", 12) or 12)
@@ -2801,11 +2801,12 @@ def _thinking_pass(
     # environment of a sub-agent it spawns); a process-wide VAF_PROVIDER / VAF_MODEL_OVERRIDE
     # would re-route every agent built in the process meanwhile and freeze every live agent's
     # provider and model switch.
-    t_provider = (Config.get("thinking_provider") or "inherit").strip().lower()
+    from vaf.core.model_roles import resolve_role
+    t_role = resolve_role("thinking")
     t_model = Config.get("thinking_model")
     _overrides: Dict[str, Any] = {}
-    if t_provider != "inherit":
-        _overrides["provider"] = t_provider
+    if t_role.source == "set":
+        _overrides["provider"] = t_role.provider
     if t_model:
         _overrides["model"] = str(t_model)
 
@@ -3545,8 +3546,7 @@ def maybe_start_thinking_for_user(user_scope_id: Optional[str]) -> bool:
     # with the user's live turn. The thinking run runs in its own thread and never enqueues, so this never
     # self-suppresses.
     main_provider = (Config.get("provider") or "local").strip().lower()
-    t_provider = (Config.get("thinking_provider") or "inherit").strip().lower()
-    both_local = (main_provider == "local") and (t_provider in ("inherit", "local"))
+    both_local = (main_provider == "local") and resolve_thinking_provider() == "local"
     # Per-user start-gate: don't start a run while THIS user's own turn is in flight (fairness — a
     # different user's busy turn must not block this user). Additionally, when the main and thinking
     # providers are the same single local model, keep a GLOBAL gate to avoid loading that one model

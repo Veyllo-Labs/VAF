@@ -15,6 +15,7 @@ import time
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, Generator, List, Union
 from vaf.core.config import Config, subagent_model_for
+from vaf.core import model_roles as _model_roles
 from vaf.core.cost import blank_request_usage, cache_usage, cache_usage_from_openai
 from vaf.core.local_engine import reasoning_text
 from vaf.core.provider_registry import is_local_model_id, model_fits_provider, note_foreign_model
@@ -1320,14 +1321,6 @@ class APIBackendManager:
     # (default) this layer is bypassed and behaviour is byte-identical to before.
     # ══════════════════════════════════════════════════════════════════════════
 
-    # level → ordered fallback links appended after the primary
-    _FAILOVER_LINKS = {
-        "off": [],
-        "basic": ["local"],
-        "balanced": ["backup", "local"],
-        "maximum": ["backup", "local"],
-    }
-
     def _failover_cfg(self, key, default):
         """Read a failover setting, preferring this manager's own (embedded/agent) config,
         falling back to the global Config. Returns ``default`` when unset/None."""
@@ -1343,35 +1336,39 @@ class APIBackendManager:
         """Ordered provider chain for this request as a list of (manager, model) tuples,
         primary first. Empty / duplicate / key-less links are dropped. Returns just the
         primary (length 1) whenever failover is off or nothing valid can be added."""
-        level = str(self._failover_cfg("failover_level", "off") or "off").lower()
-        chain = [(self, model)]
-        wanted = self._FAILOVER_LINKS.get(level, [])
-        if not wanted:
-            return chain
-        seen = {self.provider_name}
-        for kind in wanted:
+        # The links are planned by model_roles.failover_links, the function the settings
+        # overview reads, so the two cannot disagree. The caller's overrides travel into
+        # the fallback too - the key lookup and the manager below carry caller_config
+        # (without it an embedder's failover chain was structurally dead).
+        from vaf.core.api_keys import resolve_api_key as _resolve
+        # The local model is a link only where local models run at all
+        # (inference_profile = api leaves it out; the backup link stays).
+        from vaf.core.inference_profile import local_inference_allowed
+
+        def _has_key(provider):
             try:
-                if kind == "backup":
-                    bp = str(self._failover_cfg("failover_backup_provider", "") or "").strip()
-                    # The caller's overrides travel into the fallback too - this is the
-                    # line that made an embedder's failover chain structurally dead.
-                    from vaf.core.api_keys import resolve_api_key as _resolve
-                    if not bp or bp == "local" or bp in seen or not _resolve(bp, self.caller_config):
-                        continue
-                    bm = str(self._failover_cfg("failover_backup_model", "") or "").strip() or None
-                    chain.append((APIBackendManager(bp, config=self.config,
-                                                    caller_config=self.caller_config), bm))
-                    seen.add(bp)
-                elif kind == "local":
-                    # The local model is a link only where local models run at all
-                    # (inference_profile = api leaves it out; the backup link stays).
-                    from vaf.core.inference_profile import local_inference_allowed
-                    if "local" in seen or not local_inference_allowed():
-                        continue
-                    lm = str(self._failover_cfg("failover_local_model", "") or "").strip() or None
-                    chain.append((APIBackendManager("local", config=self.config), lm))
-                    seen.add("local")
+                return bool(_resolve(provider, self.caller_config))
             except Exception as e:
+                logger.warning(f"[failover] could not add backup link: {e}")
+                return False
+
+        chain = [(self, model)]
+        try:
+            links = _model_roles.failover_links(
+                self._failover_cfg, self.provider_name, _has_key, local_inference_allowed)
+        except Exception as e:
+            logger.warning(f"[failover] could not plan the links: {e}")
+            return chain
+        for provider, link_model in links:
+            try:
+                if provider == "local":
+                    manager = APIBackendManager("local", config=self.config)
+                else:
+                    manager = APIBackendManager(provider, config=self.config,
+                                                caller_config=self.caller_config)
+                chain.append((manager, link_model))
+            except Exception as e:
+                kind = "local" if provider == "local" else "backup"
                 logger.warning(f"[failover] could not add {kind} link: {e}")
         return chain
 

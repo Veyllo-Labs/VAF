@@ -42,10 +42,11 @@ _DOWNLOAD_THREAD_LOCK = threading.Lock()
 _download_running = False
 
 
-def voice_model_ref() -> str:
-    """The configured dedicated voice model ref (config, else the default)."""
-    from vaf.core.config import Config
-    return (Config.get("voice_agent_model", "") or "").strip() or DEFAULT_VOICE_MODEL
+def voice_model_ref(config=None) -> str:
+    """The configured dedicated voice model ref (config, else the default).
+    ``config`` reads that mapping instead of the installation's (``config_reader``)."""
+    from vaf.core.config import config_reader
+    return (config_reader(config)("voice_agent_model", "") or "").strip() or DEFAULT_VOICE_MODEL
 
 
 def voice_model_path(download: bool = True) -> str:

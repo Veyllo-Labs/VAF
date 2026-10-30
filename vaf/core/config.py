@@ -7,7 +7,7 @@ import tempfile
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Mapping, Optional
 
 from vaf.core import model_catalog as _model_catalog
 from vaf.core.channels import CHAT_CHANNELS as _CHAT_CHANNELS
@@ -142,9 +142,10 @@ class Config:
         "api_model_google": PROVIDER_MODELS["google"]["default"],
         "api_model_openrouter": PROVIDER_MODELS["openrouter"]["default"],
 
-        # Vision Model Fallback — used when the primary provider does not support image input.
-        # Example: primary = deepseek (no vision) → vision_provider = google / openai / anthropic.
-        # Leave empty to keep current behavior (strip images + show error to user).
+        # Vision provider: who turns images into text (vaf/core/model_roles.py resolves it).
+        # Empty = the main provider when it can read images, else no vision at all: nothing
+        # falls back to another vendor by itself. Example: primary = deepseek (no vision)
+        # -> vision_provider = google / openai / anthropic.
         "vision_provider": "",   # "veyllo"/"google"/"openai"/"anthropic"/"openrouter", or "local":
                                  # the llama server is launched with the model's mmproj projector
                                  # (backend.resolve_mmproj_for) and sees images itself.
@@ -2026,6 +2027,80 @@ def scope_id_for_username(username: str) -> Optional[str]:
     return None
 
 
+def config_reader(config: Optional[Mapping] = None) -> Callable[..., Any]:
+    """A ``get(key, default=None)`` over ``config``, or over the installation's
+    configuration when ``config`` is None.
+
+    None returns ``Config.get`` itself, looked up at call time, so a test that
+    patches it (or replaces ``Config``) is seen. A mapping is read with
+    ``Config.get``'s own default rule: a missing key gives the caller's default,
+    else ``Config.DEFAULTS``. The resolvers that take an optional config dict
+    (``model_roles``, the speech and OCR lanes) all read through this one helper.
+    """
+    if config is None:
+        return Config.get
+
+    def _get(key: str, default: Any = None) -> Any:
+        if key in config:
+            return config[key]
+        return default if default is not None else Config.DEFAULTS.get(key)
+
+    return _get
+
+
+# The two keys of the sub-agent provider choice: the name and its gate. Exported as a
+# pair so a reader that needs both names (the draft allowlist of model_roles) takes
+# them from here instead of spelling the gate out.
+SUBAGENT_PROVIDER_KEYS = ("subagent_provider", "subagent_use_separate_provider")
+
+
+def _subagent_choice(name: Any) -> str:
+    """The stored form of a sub-agent provider name: "inherit" for empty or None."""
+    return str(name or "inherit").strip() or "inherit"
+
+
+def _as_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in Config._TRUTHY
+
+
+def pair_subagent_provider(existing: Mapping, incoming: dict) -> dict:
+    """``incoming`` (a settings save) with the sub-agent gate derived from the name.
+
+    A save path that writes ``subagent_provider`` alone leaves the choice inert
+    (``subagent_provider_override``); the web settings select did exactly that, so
+    a provider picked there never reached a sub-agent. Called by both save paths
+    (the WebSocket ``save_config`` and ``PATCH /api/config``) after the admin-only
+    keys of a non-admin were dropped, so it can never create a gate its caller was
+    not allowed to write.
+
+    Only a CHANGE is paired: a new name sets the gate to "name is not inherit"; a
+    changed gate with the same name is kept, but cannot switch on "inherit".
+    Unchanged values are left alone, because every web save sends the whole form,
+    and pairing those would silently switch on an inert name stored by an older
+    version, with money involved. Choosing the provider again activates it.
+    """
+    name_key, gate_key = SUBAGENT_PROVIDER_KEYS
+    if not isinstance(incoming, dict) or (name_key not in incoming and gate_key not in incoming):
+        return incoming
+    old_name = _subagent_choice(existing.get(name_key))
+    old_gate = _as_flag(existing.get(gate_key, False))
+    name = _subagent_choice(incoming.get(name_key, old_name))
+    gate = _as_flag(incoming.get(gate_key, old_gate))
+    if name != old_name:
+        gate = name != "inherit"
+    elif gate != old_gate:
+        gate = gate and name != "inherit"
+    else:
+        return incoming
+    out = dict(incoming)
+    if name_key in incoming:
+        out[name_key] = name
+    out[gate_key] = gate
+    return out
+
+
 def subagent_provider_override(config: Optional[dict] = None) -> Optional[str]:
     """The provider a sub-agent must run on, or None when it inherits the main one.
 
@@ -2048,7 +2123,7 @@ def subagent_provider_override(config: Optional[dict] = None) -> Optional[str]:
     (a manager's snapshot, an embedder's dict) instead of the installation's.
     """
     try:
-        _get = config.get if config is not None else Config.get
+        _get = config_reader(config)
         if not _get("subagent_use_separate_provider", False):
             return None
         name = str(_get("subagent_provider", "inherit") or "inherit").strip()
@@ -2117,6 +2192,6 @@ def set_subagent_provider(name: Optional[str]) -> None:
     the change observers fire exactly as they did when callers set both keys by
     hand.
     """
-    chosen = str(name or "inherit").strip() or "inherit"
+    chosen = _subagent_choice(name)
     Config.set("subagent_provider", chosen)
     Config.set("subagent_use_separate_provider", chosen != "inherit")

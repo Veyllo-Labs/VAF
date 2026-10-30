@@ -15285,26 +15285,23 @@ class Agent:
                 else:
                     # Non-vision model: try configured vision fallback provider first.
                     #
-                    # This is the LAST hand-rolled copy of the vision cascade in the
-                    # tree - vision_infer.vision_infer() does all of it (backend
-                    # resolution, downscale, the "[API Error from ...]" sentinel guard
-                    # this copy lacks) and every other lane routes through it. It stays
-                    # hand-rolled only because it is the legacy vision_mode
-                    # "inline_multimodal" branch inside _prepare_messages, i.e. a
-                    # conversion in the main agent loop with its own design doc
-                    # (docs/agents/AGENT_LOOP.md) and its own test surface. Convert it
-                    # there, not from a lane that happens to pass by.
-                    _vision_fb_provider = Config.get("vision_provider", "").strip()
-                    _vision_fb_model = Config.get("vision_model", "").strip() or None
+                    # The provider and model come from the vision role
+                    # (model_roles.resolve_role): only an explicitly set vision
+                    # provider is a fallback here, with its vision_model or the
+                    # registry's default vision model. The CALL below is still
+                    # hand-rolled - vision_infer.vision_infer() does all of it
+                    # (downscale, the "[API Error from ...]" sentinel guard this copy
+                    # lacks) and every other lane routes through it. It stays only
+                    # because it is the legacy vision_mode "inline_multimodal" branch
+                    # inside _prepare_messages, a conversion in the main agent loop
+                    # with its own design doc (docs/agents/AGENT_LOOP.md) and its own
+                    # test surface.
+                    from vaf.core.model_roles import resolve_role as _resolve_role
+                    _vision_role = _resolve_role("vision")
+                    _vision_set = _vision_role.source == "set"
+                    _vision_fb_provider = (_vision_role.provider or "") if _vision_set else ""
+                    _vision_fb_model = _vision_role.model if _vision_set else None
                     _vision_fb_used = False
-
-                    # Safe default vision model per provider (used when vision_model is
-                    # not set): shared registry lookup that tracks Config.PROVIDER_MODELS
-                    # for SDK providers and keeps openrouter on an explicitly
-                    # vision-capable route (the former local dict did not know veyllo).
-                    if not _vision_fb_model and _vision_fb_provider:
-                        from vaf.core.provider_registry import default_vision_model as _dvm
-                        _vision_fb_model = _dvm(_vision_fb_provider)
 
                     if _vision_fb_provider and _vision_fb_provider != _provider:
                         try:

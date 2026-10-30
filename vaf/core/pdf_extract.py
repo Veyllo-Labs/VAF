@@ -258,7 +258,7 @@ def _extract_pypdf2(
     return "\n\n".join(out), total_pages, pages_read
 
 
-def resolve_ocr_engine() -> Tuple[Optional[str], str]:
+def resolve_ocr_engine(config=None) -> Tuple[Optional[str], str]:
     """Which engine reads scanned pages: ("tesseract"|"vision"|None, reason).
 
     The speech-lane resolver pattern: ONE place decides, every consumer asks it.
@@ -274,11 +274,13 @@ def resolve_ocr_engine() -> Tuple[Optional[str], str]:
       choice that quietly falls elsewhere is the settings lie this codebase
       keeps paying for.
 
-    Never raises; the reason is "" when an engine resolved.
+    Never raises; the reason is "" when an engine resolved. ``config`` reads that
+    mapping instead of the installation's (``config_reader``), for the settings
+    overview (``model_roles``).
     """
-    from vaf.core.config import Config
+    from vaf.core.config import config_reader
 
-    choice = str(Config.get("ocr_engine", "auto") or "auto").strip().lower()
+    choice = str(config_reader(config)("ocr_engine", "auto") or "auto").strip().lower()
 
     def _tesseract_ok() -> Tuple[bool, str]:
         try:
@@ -295,7 +297,7 @@ def resolve_ocr_engine() -> Tuple[Optional[str], str]:
     def _vision_ok() -> Tuple[bool, str]:
         try:
             from vaf.core.vision_infer import select_vision_backend
-            provider, _model = select_vision_backend()
+            provider, _model = select_vision_backend() if config is None else select_vision_backend(config)
             if provider:
                 return True, ""
             return False, ("no vision model is configured "

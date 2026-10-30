@@ -208,8 +208,11 @@ CALLERS = {
     "vaf/cli/tui_app/app.py": 1,
     "vaf/core/api_backend.py": 1,
     "vaf/core/headless_runner.py": 1,
+    # The role resolver asks whether a provider has a key (the voice call, the chat
+    # row, the failover backup); it replaced the two voice-lane calls and never hands
+    # the value on.
+    "vaf/core/model_roles.py": 1,
     "vaf/core/speech_api.py": 1,
-    "vaf/core/voice_agent.py": 2,
     "vaf/tools/coder.py": 1,
     "vaf/tools/search.py": 4,
     "vaf/whare_wananga/teacher.py": 1,

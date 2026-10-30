@@ -36,7 +36,8 @@ _LOCALES = ("de", "en", "ja", "ko", "th", "tr", "zh")
 
 
 def _src(path: Path) -> str:
-    return path.read_bytes().decode("utf-8")
+    # Text mode: the needles below hold newlines, and a CRLF checkout must read as LF.
+    return path.read_text(encoding="utf-8")
 
 
 def _tab_regions(src: str) -> dict:
@@ -121,15 +122,18 @@ def test_the_highlight_moves_opacity_only():
 
 
 def test_the_component_holds_no_provider_or_role_logic():
-    """It renders the rows it is given, in their order. MUTATION: add a provider list or
-    a role-name branch to the component."""
+    """It renders the rows it is given and decides nothing. The only job names in it are the
+    area table; no provider name at all. MUTATION: add a provider list or a role-name branch
+    to the component."""
     src = _src(_OVERVIEW)
-    assert "rows.map(" in src
-    assert ".sort(" not in src and ".filter(row" not in src
+    groups = src[src.index("export const ROLE_GROUPS"):]
+    groups = groups[:groups.index("];") + 2]
+    rest = src.replace(groups, "")
+    assert ".sort(" not in src
     for provider in list(config_mod.Config.PROVIDER_MODELS) + ["local", "elevenlabs"]:
         assert f"'{provider}'" not in src and f'"{provider}"' not in src, provider
     for role in model_roles.ROLES:
-        assert f"'{role.name}'" not in src and f'"{role.name}"' not in src, role.name
+        assert f"'{role.name}'" not in rest and f'"{role.name}"' not in rest, role.name
 
 
 def _catalogue(locale: str) -> dict:
@@ -137,20 +141,49 @@ def _catalogue(locale: str) -> dict:
 
 
 @pytest.mark.parametrize("locale", _LOCALES)
-def test_every_role_source_and_reason_has_a_text(locale):
-    """Every code the resolver can send has its text in every catalogue, and no stale one
-    is left. MUTATION: delete one reason from tr.json, or add a code to REASON_TEXT."""
+def test_every_role_area_and_reason_has_a_text(locale):
+    """Every job, area and reason code has its text in every catalogue, and no stale one is
+    left. MUTATION: delete one reason from tr.json, add a code to REASON_TEXT, or drop an
+    area's title."""
     ai = _catalogue(locale)
     assert set(ai["role"]) == {r.name for r in model_roles.ROLES}
-    assert set(ai["roleSource"]) == set(model_roles.SOURCES)
     assert set(ai["roleReason"]) == set(model_roles.REASON_TEXT)
-    for key in ("rolesTitle", "rolesIntro", "rolesLoading", "rolesError", "rolesRetry",
-                "rolesJumpHint", "rolesShowLess", "rolesAllFine", "localSpeechEngine",
-                "visionFollowMain", "visionMainCannot"):
+    assert set(ai["rolesGroup"]) == {g for g, _ in _role_groups()}
+    for key in ("rolesTitle", "rolesIntroNoMain", "rolesLoading", "rolesError", "rolesRetry",
+                "rolesJumpHint", "rolesNoteMain", "rolesNoteViaVision", "rolesOff", "roleLocal",
+                "rolesFollowsMain", "rolesAllOptions", "visionFollowMain", "visionMainCannot"):
         assert ai.get(key, "").strip(), key
-    assert "{count}" in ai["rolesShowAll"]
-    for text in [*ai["role"].values(), *ai["roleSource"].values(), *ai["roleReason"].values()]:
+    assert "<b>{provider}</b>" in ai["rolesIntro"]
+    assert "{chain}" in ai["rolesNoteThen"] and "{save}" in ai["rolesSaveHint"]
+    assert "{provider}" in ai["roleReason"]["main_cannot_see"]
+    texts = [*ai["role"].values(), *ai["rolesGroup"].values(), *ai["roleReason"].values(),
+             *(v for k, v in ai.items() if k.startswith("roles") and isinstance(v, str))]
+    for text in texts:
         assert text.strip() and "\u2014" not in text
+
+
+# The chips and the phone's "show all" toggle of the previous card, gone with them.
+_STALE_KEYS = ("roleSource", "rolesShowAll", "rolesShowLess", "rolesAllFine", "localSpeechEngine")
+
+
+@pytest.mark.parametrize("locale", _LOCALES)
+def test_no_key_of_the_chip_card_is_left(locale):
+    """MUTATION: put `roleSource` back into one catalogue."""
+    ai = _catalogue(locale)
+    assert not [k for k in _STALE_KEYS if k in ai]
+    src = _src(_OVERVIEW) + _src(_MODAL)
+    assert not [k for k in _STALE_KEYS if k in src]
+
+
+@pytest.mark.parametrize("locale", ("de", "en", "tr"))
+def test_every_reason_reads_as_a_sentence(locale):
+    """The reason stands where the provider would, so it is a whole sentence: a capital letter
+    (or a name) first, a full stop last. MUTATION: lower-case the first letter of
+    the blind-browser sentence again."""
+    for code, text in _catalogue(locale)["roleReason"].items():
+        # A product name keeps its own spelling ("vLLM").
+        assert text[0].isupper() or text.startswith(("{provider}", "vLLM")), (code, text)
+        assert text.endswith("."), (code, text)
 
 
 @pytest.mark.parametrize("locale", _LOCALES)
@@ -232,7 +265,7 @@ def test_the_overview_asks_the_backend_with_the_unsaved_draft():
     assert "}, [apiBase, modelRolesShown, modelRolesDraft, config, modelRolesRetry]);" in block
 
 
-# ── Round of the compact card ────────────────────────────────────────────────────────
+# ── The card by area, with rows that open in place ────────────────────────────────────
 
 
 def _const_set(src: str, name: str) -> set:
@@ -240,18 +273,107 @@ def _const_set(src: str, name: str) -> set:
     return set(re.findall(r"'([a-z_]+)'", body))
 
 
+def _role_groups() -> list:
+    src = _src(_OVERVIEW)
+    table = src[src.index("export const ROLE_GROUPS"):]
+    table = table[:table.index("];")]
+    return [(g, re.findall(r"'([a-z_]+)'", roles))
+            for g, roles in re.findall(r"\['([a-z_]+)', \[(.*?)\]\]", table)]
+
+
+def test_every_role_is_in_exactly_one_area():
+    """Every job the resolver can return is listed in exactly one area, and a job no area
+    names still shows (in the last one). MUTATION: drop `ocr` from its area, list `chat`
+    twice, or drop the fallback for unknown jobs."""
+    listed = [role for _, roles in _role_groups() for role in roles]
+    assert sorted(listed) == sorted(r.name for r in model_roles.ROLES), listed
+    src = _src(_OVERVIEW)
+    assert "i === ROLE_GROUPS.length - 1 ? rows.filter(r => !known.has(r.role)) : []" in src
+
+
 def test_warning_reasons_are_real_codes_and_include_a_blind_browser():
-    """The warning set decides which rows say their reason and stay visible on a collapsed
-    phone card. A code the resolver does not send is a silent typo. A browser agent that
-    works blind is a lost capability, not a note. MUTATION: drop `browser_dom_only` from the
-    set, or misspell a code."""
+    """The warning set decides which rows say their reason in place of the provider. A code
+    the resolver does not send is a silent typo. A browser agent that works blind is a lost
+    capability, not a note, and an ignored Thinker model is not what the person chose.
+    MUTATION: drop `browser_dom_only` or `thinking_model_ignored` from the set, or misspell
+    a code."""
     codes = _const_set(_src(_OVERVIEW), "WARNING_REASONS")
     assert codes <= set(model_roles.REASON_TEXT), codes - set(model_roles.REASON_TEXT)
-    assert "browser_dom_only" in codes and "no_api_key" in codes
-    # An ignored Thinker model is not "unavailable" (the provider's own model runs), so only
-    # the warning set keeps it visible on a collapsed phone card instead of "nothing needs
-    # attention". MUTATION: drop `thinking_model_ignored` from the set.
-    assert "thinking_model_ignored" in codes
+    assert {"browser_dom_only", "no_api_key", "thinking_model_ignored"} <= codes
+
+
+def _function(src: str, head: str) -> str:
+    body = src[src.index(head):]
+    return body[:body.index("\n    };\n")]
+
+
+def test_every_source_has_one_way_to_show():
+    """The value cell answers every source the resolver sends: a problem (unavailable, or a
+    warning reason) says why in amber, `off` says off, a job that follows the main provider
+    shows the provider muted, every other source shows provider and model. If the resolver
+    grows a source, this list has to be looked at again. MUTATION: add a source to
+    `model_roles.SOURCES`, or drop the `off` branch."""
+    assert set(model_roles.SOURCES) == {"main", "follows_main", "set", "unavailable", "off",
+                                        "local_engine", "via_vision"}
+    value = _function(_src(_OVERVIEW), "const value = (row: ModelRoleRow, reasons: string[]) => {")
+    order = [value.index(s) for s in ("if (isWarning(row))", "row.source === 'off'",
+                                      "row.source === 'follows_main'", "const shown = modelLabel(row);")]
+    assert order == sorted(order)
+    assert "row.source === 'unavailable'" in _src(_OVERVIEW).split("const isWarning =")[1][:200]
+
+
+def test_amber_marks_problems_and_nothing_else():
+    """Amber is the only colour on the card and only a problem row wears it: its job name and
+    its reason. MUTATION: put amber on the note, or a green or black chip on a row."""
+    src = _src(_OVERVIEW)
+    families = set(re.findall(r"(?:bg|border|text|ring)-([a-z]+)-\d{2,3}", src))
+    assert families <= {"gray", "amber", "red"}, families
+    amber = [m.start() for m in re.finditer(r"text-amber-", src)]
+    assert len(amber) == 2, amber
+    value = _function(src, "const value = (row: ModelRoleRow, reasons: string[]) => {")
+    assert "text-amber-700" in value.split("if (row.source === 'off')")[0]
+    assert "warn ? 'text-amber-700' : 'text-gray-700'" in src
+    assert "text-red-600" in src.split("{error && (")[1][:200], "red is the load error only"
+
+
+_EMOJI = re.compile("[\U0001F300-\U0001FAFF☀-➿⭐✅✔✖]")
+
+
+def test_no_icons_emoji_chips_dots_shadows_or_gradients():
+    """A list of plain text: the caret is a text character. MUTATION: import an icon, put a
+    status dot or a chip back, or add a shadow."""
+    src = _src(_OVERVIEW)
+    assert not re.search(r"from '(lucide-react|react-icons[^']*|@heroicons[^']*)'", src)
+    assert not _EMOJI.search(src)
+    for banned in ("rounded-full", "shadow", "gradient", "rounded px-1.5"):
+        assert banned not in src, banned
+
+
+def test_a_phone_stacks_each_row_and_keeps_every_row():
+    """On a phone the job stands above its value and the note under that, the caret on the
+    right; nothing is hidden behind a "show all" any more. The stacking is behind `max-md:`,
+    so the desktop grid is untouched. MUTATION: hide rows on a phone again, or drop the row
+    placement."""
+    src = _src(_OVERVIEW)
+    assert "sessionStorage" not in src and "showAll" not in src
+    row = src[src.index('className="vaf-role-row'):]
+    row = row[:row.index('"\n')]
+    assert "grid-cols-[9.5rem_minmax(0,1fr)_auto_0.75rem]" in row
+    assert "max-md:grid-cols-[minmax(0,1fr)_0.75rem]" in row
+    for cell in ("max-md:col-start-1 max-md:row-start-1", "max-md:col-start-1 max-md:row-start-2",
+                 "max-md:col-start-1 max-md:row-start-3",
+                 "max-md:col-start-2 max-md:row-start-1 max-md:row-span-2"):
+        assert cell in src, cell
+    assert "max-md:hidden" not in src.replace("!noteText && 'max-md:hidden'", "")
+
+
+def test_the_skeleton_keeps_the_card_height():
+    """As many placeholder lines as there are jobs, so nothing below jumps when the rows
+    arrive; the loading text is a status for screen readers. MUTATION: six lines again, or
+    the label back on a role-less div."""
+    src = _src(_OVERVIEW)
+    assert int(re.search(r"const SKELETON_ROWS = (\d+);", src).group(1)) == len(model_roles.ROLES)
+    assert 'role="status"' in src and "<span className=\"sr-only\">{t('rolesLoading')}</span>" in src
 
 
 def test_a_retry_shows_no_stale_rows_before_the_new_answer():
@@ -267,61 +389,11 @@ def test_a_retry_shows_no_stale_rows_before_the_new_answer():
     assert src.count("setModelRolesStale(false)") == 1 and src.count("setModelRolesStale(true)") == 2
 
 
-def test_one_line_per_job_with_the_reason_only_where_it_needs_attention():
-    """Every row is one line; a reason is in the hover title and for screen readers. Only the
-    rows that need attention have their reason written out, once, at the card's full width
-    under the grid. MUTATION: write every reason out again, or drop the warning filter."""
-    src = _src(_OVERVIEW)
-    assert "title={[unmarked ? source : '', ...reasons].filter(Boolean).join('. ') || undefined}" in src
-    assert "{reasons.length > 0 && <span className=\"sr-only\">{reasons.join(' ')}</span>}" in src
-    notes = src[src.index("{warningCount > 0 && ("):]
-    notes = notes[:notes.index("</ul>")]
-    assert "rows.filter(isWarning).map(" in notes and "text-amber-700" in notes
-    row = src[src.index("{rows.map(row => {"):src.index("</ul>")]
-    assert "roleReason" not in row.replace("t(`roleReason.${r}`)", "", 1)
-
-
-def test_a_phone_shows_the_rows_that_need_attention_until_asked_for_all():
-    """Collapsed by default on a phone, remembered for the session; desktop always shows
-    every row (the hiding is behind `max-md:`). MUTATION: hide rows on desktop too, drop the
-    session memory, or show the toggle on desktop."""
-    src = _src(_OVERVIEW)
-    assert "useState(false)" in src.split("const [showAll, setShowAll] = ")[1][:20]
-    assert "!warn && !showAll && 'max-md:hidden'" in src
-    assert "sessionStorage.getItem(SHOW_ALL_KEY)" in src and "sessionStorage.setItem(SHOW_ALL_KEY" in src
-    toggle = src[src.index("onClick={toggleShowAll}"):]
-    toggle = toggle[:toggle.index(">")]
-    assert "hidden" in toggle.split() or " hidden " in toggle
-    assert "max-md:inline-block" in toggle and "aria-expanded={showAll}" in toggle
-
-
-def test_the_skeleton_keeps_the_card_height():
-    """As many placeholder lines as there are jobs, so nothing below jumps when the rows
-    arrive; the loading text is a status for screen readers. MUTATION: six lines again, or
-    the label back on a role-less div."""
-    src = _src(_OVERVIEW)
-    assert int(re.search(r"const SKELETON_ROWS = (\d+);", src).group(1)) == len(model_roles.ROLES)
-    assert 'role="status"' in src and "<span className=\"sr-only\">{t('rolesLoading')}</span>" in src
-    assert "aria-labelledby={headingId}" in src
-
-
-def test_amber_is_the_only_coloured_chip():
-    """An own choice is not an alarm: the chips are neutral grays, and amber marks only a
-    job that is not available. MUTATION: put the black `set` chip back."""
-    src = _src(_OVERVIEW)
-    chip = src[src.index("'shrink-0 whitespace-nowrap rounded px-1.5"):]
-    chip = chip[:chip.index(")}>")]
-    families = set(re.findall(r"(?:bg|border|text)-([a-z]+)-\d{2,3}", chip))
-    assert families <= {"gray", "amber"}, families
-    assert "bg-gray-900" not in chip and "text-white" not in chip
-
-
 def test_a_failed_request_shows_no_stale_rows():
     """The previous answer stays in state for its `keys`, but its rows are hidden from the
     card and from the vision hint while the failure stands. MUTATION: pass `modelRoles.rows`
     again."""
     src = _src(_MODAL)
-    assert "const modelRoleRows = (modelRolesFailed || modelRolesStale) ? null : (modelRoles?.rows ?? null);" in src
     assert "rows={modelRoleRows}" in src
     assert "const visionRole = modelRoleRows?.find(r => r.role === 'vision');" in src
 
@@ -354,11 +426,11 @@ def test_the_vision_description_steps_aside_for_the_amber_line():
 
 
 @pytest.mark.parametrize("locale", _LOCALES)
-def test_the_chips_use_the_main_settings_own_word(locale):
-    """The chip for the main provider names the thing the main select is called, in every
-    language. MUTATION: en chip back to "Main provider"."""
+def test_the_main_note_uses_the_main_settings_own_word(locale):
+    """The note on the chat row names the thing the main select is called, in every language.
+    MUTATION: en note back to "Main provider"."""
     ai = _catalogue(locale)
-    assert ai["roleSource"]["main"] in ai["primaryProvider"]
+    assert ai["rolesNoteMain"] in ai["primaryProvider"]
 
 
 @pytest.mark.parametrize("locale", ("en", "de"))
@@ -371,52 +443,9 @@ def test_models_read_images_rather_than_see(locale):
         assert not re.search(word, reasons[code]), reasons[code]
 
 
-def test_the_primary_provider_and_following_it_need_no_visible_mark():
-    """A half-width line has room for the job, the provider and ONE short chip. The chat row
-    IS the primary provider and following it is the default, so neither carries a chip (the
-    intro says unmarked jobs follow it); both stay in the row's title and its screen-reader
-    text. MUTATION: give the chat row its chip back, or render the follows-main chip."""
-    src = _src(_OVERVIEW)
-    assert _const_set(src, "UNMARKED_SOURCES") == {"main", "follows_main"}
-    assert re.search(r"\{unmarked \? \(\s*<span className=\"sr-only\">\{source\}</span>", src)
-    assert "title={[unmarked ? source : '', ...reasons]" in src
-    chip = src[src.index("'shrink-0 whitespace-nowrap rounded px-1.5"):]
-    chip = chip[:chip.index(")}>")]
-    assert "'main'" not in chip
-
-
-def test_the_provider_name_is_never_cut():
-    """The provider is what the line is for: it does not shrink and has no ellipsis. MUTATION:
-    let it truncate again."""
-    src = _src(_OVERVIEW)
-    assert "<span data-role-provider className=\"shrink-0 whitespace-nowrap\">{name}</span>" in src
-
-
-def test_a_model_without_room_is_hidden_whole():
-    """The model and its separator are ONE group with a minimum width of MODEL_MIN_CH
-    characters, in a single-line wrapping row whose second line is clipped: a model that
-    cannot show that much wraps away entirely, separator included, instead of leaving a
-    stray letter after the dot. A failover chain takes the model's place. MUTATION: drop the
-    minimum width, the wrapping or the clipping, take the separator out of the group, or
-    show the model next to a chain."""
-    src = _src(_OVERVIEW)
-    assert int(re.search(r"export const MODEL_MIN_CH = (\d+);", src).group(1)) >= 5
-    line = src[src.index("title={[name, model, ...chain]"):]
-    line = line[:line.index("</span>\n                                            {unmarked")]
-    wrapper = src[:src.index("title={[name, model, ...chain]")].rsplit("<span", 1)[1]
-    for cls in ("flex-wrap", "overflow-hidden", "h-4", "leading-4", "min-w-0", "flex-1"):
-        assert cls in wrapper.split('"')[1].split(), cls
-    group = line[line.index("<span data-role-model"):]
-    assert "style={{ minWidth: `${MODEL_MIN_CH}ch` }}" in group.split(">")[0]
-    assert "flex-1 basis-0" in group.split(">")[0]
-    assert group.index('aria-hidden="true">·</span>') < group.index("{model}</span>")
-    assert "{model && chain.length === 0 && (" in line
-
-
-# The label column is w-28 (7rem, 112 px). Measured at 13 px in the app's font, the longest
-# de/en/tr label is 108 px ("Görselleri anlama", 17 characters). A longer label than that is
-# cut (the column truncates with a title as the last resort for scripts that cannot be
-# measured here); hold the Latin-script catalogues to the measured length.
+# The label column is 9.5rem (152 px). Measured at 13 px in the app's font, the longest
+# de/en/tr label is 108 px ("Görselleri anlama", 17 characters). A label beyond that is
+# looked at again before it ships.
 _LABEL_MAX_CHARS = 17
 
 
@@ -424,14 +453,177 @@ _LABEL_MAX_CHARS = 17
 def test_every_job_label_fits_the_label_column(locale):
     """MUTATION: put "Thinker (Hintergrund)" back as the German label."""
     src = _src(_OVERVIEW)
-    assert "data-role-label className={cn('w-28 shrink-0 truncate text-[13px]'" in src
+    assert "grid-cols-[9.5rem_" in src
     for role, label in _catalogue(locale)["role"].items():
         assert len(label) <= _LABEL_MAX_CHARS, (role, label)
 
 
-def test_a_local_provider_uses_the_short_local_word():
-    """"Lokales Modell" next to an "Eigene Wahl" chip did not fit a half-width line; the
-    overview names a local provider with its own short chip word. MUTATION: use the long
-    failover label again."""
+def test_a_local_provider_and_an_engine_use_the_short_local_word():
+    """The local model and an engine on this machine are both "Local"; the engine's name
+    follows as the model, never the config value (`docker`). MUTATION: name the engine row
+    by its config value again."""
     src = _src(_MODAL)
-    assert "if (provider === 'local') return tAi('roleSource.local_engine');" in src
+    assert "if (provider === 'local') return tAi('roleLocal');" in src
+    assert "if (!provider) return row.source === 'local_engine' ? tAi('roleLocal') : '';" in src
+    label = src[src.index("modelLabel={(row) => {"):]
+    label = label[:label.index("}}")]
+    assert "if (row.role === 'ocr') return 'Tesseract';" in label
+    assert "return engine === 'local' ? 'faster-whisper' : 'Whisper';" in label
+
+
+# ── The open row: the section's own controls, not a copy ────────────────────────────────
+
+# What each job's open row offers: the elements the section below renders. The failover row
+# names its picker and selects; a speech job offers provider and model.
+_CHOICES = {
+    "chat": ["chatProviderSelect", "chatApiModelField", "localModelField"],
+    "vision": ["visionProviderSelect", "visionModelField"],
+    "ocr": ["ocrEngineSelect"],
+    "browser_agent": ["browserProviderSelect", "browserModelField"],
+    "subagents": ["subagentProviderSelect"],
+    "thinking": ["thinkingProviderSelect", "thinkingModelSelect"],
+    "voice_call": ["voiceProviderSelect", "voiceModelField"],
+    "speech_to_text": ["sttProviderSelect", "sttModelSelect"],
+    "text_to_speech": ["ttsProviderSelect", "ttsModelSelect"],
+    "failover": ["failoverLevelPicker", "failoverBackupSelect", "failoverBackupModelSelect"],
+}
+
+
+def _role_choice(src: str) -> str:
+    return _function(src, "const roleChoice = (row: ModelRoleRow): React.ReactNode => {")
+
+
+def test_every_job_has_a_choice_or_a_jump():
+    """The open row's switch names every job the resolver knows; one it does not know only
+    jumps. MUTATION: drop the vision case."""
+    choice = _role_choice(_src(_MODAL))
+    cases = re.findall(r"case '([a-z_]+)':", choice)
+    assert sorted(cases) == sorted(r.name for r in model_roles.ROLES), cases
+    assert "default:\n                return null;" in choice
+
+
+@pytest.mark.parametrize("role", sorted(_CHOICES))
+def test_the_open_row_renders_the_sections_own_elements(role):
+    """Each element the open row shows is defined once and rendered by its section too, inside
+    the content of the tab that holds the job: the overview and the section show one value
+    from one draft and save with the one Save. MUTATION: give the open row its own copy of a
+    select, or stop rendering an element in its section."""
+    src = _src(_MODAL)
+    choice = _role_choice(src)
+    case = choice[choice.index(f"case '{role}':"):]
+    case = case[:case.index("case '", 6) if "case '" in case[6:] else case.index("default:")]
+    tab = next(r.tab for r in model_roles.ROLES if r.name == role)
+    regions = _tab_regions(src).get(tab, [])
+    for name in _CHOICES[role]:
+        assert re.search(r"\b" + name + r"\b", case), (role, name)
+        assert len(re.findall(r"const " + name + r" = ", src)) == 1, name
+        uses = [m.start() for m in re.finditer(r"\{" + name + r"[ }]", src)
+                if not choice.count(src[m.start():m.start() + 80])]
+        in_section = [u for u in uses if any(a <= u < b for a, b in regions)]
+        assert in_section, f"{name} is not rendered on the {tab} tab"
+
+
+@pytest.mark.parametrize("key", ["provider", "vision_provider", "browser_agent_provider", "ocr_engine",
+                                 "subagent_provider", "thinking_provider", "voice_agent_provider",
+                                 "speech_stt_provider", "speech_tts_provider", "failover_level",
+                                 "failover_backup_provider"])
+def test_each_choice_is_written_in_one_place(key):
+    """One handler per setting: a second `handleChange('<key>'` would be a copy of the
+    control. MUTATION: write a hand-made vision select into the open row."""
+    src = _src(_MODAL)
+    writes = re.findall(r"handleChange\('" + key + r"', ", src)
+    allowed = {"speech_stt_provider": 3, "speech_tts_provider": 2}.get(key, 1)
+    assert len(writes) == allowed, (key, len(writes))
+
+
+def test_one_row_opens_in_place_and_escape_closes_it():
+    """One open row at a time; a second click or Escape closes it (Escape not the window
+    around it), and focus goes back to the row. The row is a button that names its panel; a
+    row without a choice jumps instead. The panel stays mounted while closed, inert, so the
+    toggle is a transition. MUTATION: render the panel only while open, drop aria-controls,
+    or let Escape reach the settings window."""
+    src = _src(_OVERVIEW)
+    assert "const [open, setOpen] = useState<string | null>(null);" in src
+    assert "onClick={() => (expandable ? setOpen(isOpen ? null : row.role) : onPick(row))}" in src
+    assert "aria-expanded={expandable ? isOpen : undefined}" in src
+    assert "aria-controls={expandable ? panelId : undefined}" in src
+    esc = src[src.index("const closeOpen = (e: KeyboardEvent) => {"):]
+    esc = esc[:esc.index("\n    };")]
+    assert "e.key !== 'Escape' || !open" in esc and "e.stopPropagation();" in esc
+    assert "setOpen(null);" in esc and ".focus()" in esc
+    assert "onKeyDown={closeOpen}" in src
+    assert "{expandable && (" in src and "{isOpen && (" not in src
+    assert "data-open={isOpen ? 'true' : 'false'}" in src
+    assert "inert: isOpen ? undefined : ''" in src
+    assert "onClick={() => onPick(row)}" in src and "t('rolesAllOptions')" in src
+    assert "t('rolesSaveHint', { save: tCommon('saveChanges') })" in src
+
+
+def test_the_overview_gets_the_choices_and_the_jump():
+    """MUTATION: drop `renderChoice` from the overview, or let it jump without the highlight."""
+    src = _src(_MODAL)
+    assert "renderChoice={roleChoice}" in src
+    assert "onPick={(row) => jumpToSetting(row.tab, `[data-setting-role=\"${row.role}\"]`, true)}" in src
+
+
+def test_an_off_speech_job_jumps_to_its_switch():
+    """The speech switch sits with the device and engine settings; the open row would only
+    change a provider that does not run. MUTATION: offer the provider select for an off row."""
+    choice = _role_choice(_src(_MODAL))
+    for role in ("speech_to_text", "text_to_speech"):
+        case = choice[choice.index(f"case '{role}':"):]
+        assert case.split("\n")[1].strip().startswith("return row.source === 'off' ? null :"), role
+
+
+# ── The motion of an opening row ────────────────────────────────────────────────────────
+
+_MOVING = {"grid-template-rows", "opacity", "transform"}
+
+
+def _rules(css: str, prefix: str) -> list:
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    return [(m.group(1).strip(), m.group(2)) for m in
+            re.finditer(r"([^{}]*" + re.escape(prefix) + r"[^{}]*)\{([^{}]*)\}", css)]
+
+
+def _transitioned(body: str) -> set:
+    props = set()
+    for decl in re.findall(r"transition\s*:\s*([^;]+);", body):
+        for part in re.split(r",(?![^(]*\))", decl):
+            word = part.strip().split()[0]
+            if word != "none":
+                props.add(word)
+    return props
+
+
+def test_an_opening_row_moves_only_rows_opacity_and_transform():
+    """Short-lived, compositor-friendly motion: the panel's height by grid rows, its opacity,
+    a small shift of its content, the caret's turn and the tint's opacity. Nothing else
+    transitions or animates, and no rule loops. 320 ms to open and 220 ms to close, on the
+    settling curve. MUTATION: transition background-color or box-shadow, or loop it."""
+    css = _src(_CSS)
+    rules = _rules(css, ".vaf-role-")
+    assert rules
+    curve = "cubic-bezier(0.32, 0.72, 0, 1)"
+    for selector, body in rules:
+        assert _transitioned(body) <= _MOVING, (selector, _transitioned(body))
+        assert "animation" not in body, selector
+        assert "transition-property" not in body and "will-change" not in body, selector
+    base = {}
+    for selector, body in rules:  # the first rule of a selector, not its reduced-motion twin
+        base.setdefault(selector, body)
+    assert f"transition: grid-template-rows 220ms {curve}, opacity 220ms {curve};" in base[".vaf-role-panel"]
+    assert "grid-template-rows: 1fr; opacity: 1; transition-duration: 320ms;" in base['.vaf-role-panel[data-open="true"]']
+    assert f"transition: transform 220ms {curve};" in base[".vaf-role-caret"]
+    assert "transform: translateY(-3px);" in base[".vaf-role-panel > div > div"]
+
+
+def test_reduced_motion_opens_a_row_without_travel():
+    """With reduced motion nothing travels or turns: the shift and the caret's transition are
+    off and the panel only fades. MUTATION: drop the reduced-motion rule for the panel."""
+    css = _src(_CSS)
+    reduced = css[css.index("@media (prefers-reduced-motion: reduce)"):]
+    reduced = reduced[:reduced.index("\n}\n")]
+    assert ".vaf-role-row::before, .vaf-role-caret, .vaf-role-panel > div > div { transition: none; }" in reduced
+    assert '.vaf-role-panel, .vaf-role-panel[data-open="true"] { transition: opacity 120ms linear; }' in reduced
+    assert ".vaf-role-panel > div > div { transform: none; }" in reduced

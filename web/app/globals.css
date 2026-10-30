@@ -606,9 +606,46 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   animation: vafSettingFlash 1.6s ease-out both;
 }
 
+/* A "who does what" row opening in place (ModelRolesOverview). The motion is a spring
+   settling without overshoot (iOS's sheet curve): 320 ms to open, 220 ms to close, the
+   duration of the state being entered. Only grid-template-rows (the panel's height, 0fr to
+   1fr, so no height is measured), opacity and transform move, and only during the toggle;
+   the row's tint is a pseudo-element whose opacity moves, never a background colour. The
+   rows stay mounted, so a toggle is a transition and not a re-render. */
+.vaf-role-row { position: relative; isolation: isolate; }
+.vaf-role-row::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background: rgb(var(--sfc-gray-100));
+  opacity: 0;
+  transition: opacity 220ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.vaf-role-row:hover::before,
+.vaf-role-row[aria-expanded="true"]::before { opacity: 1; transition-duration: 320ms; }
+.vaf-role-caret { display: inline-block; transition: transform 220ms cubic-bezier(0.32, 0.72, 0, 1); }
+.vaf-role-row[aria-expanded="true"] .vaf-role-caret { transform: rotate(90deg); transition-duration: 320ms; }
+.vaf-role-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 220ms cubic-bezier(0.32, 0.72, 0, 1), opacity 220ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.vaf-role-panel[data-open="true"] { grid-template-rows: 1fr; opacity: 1; transition-duration: 320ms; }
+.vaf-role-panel > div { min-height: 0; overflow: hidden; }
+.vaf-role-panel > div > div { transform: translateY(-3px); transition: transform 220ms cubic-bezier(0.32, 0.72, 0, 1); }
+.vaf-role-panel[data-open="true"] > div > div { transform: none; transition-duration: 320ms; }
+
 @media (prefers-reduced-motion: reduce) {
   /* The setting's ring stands still for its 1.6 s and then goes, without fading. */
   @keyframes vafSettingFlash { 0%, 100% { opacity: 1 } }
+  /* A "who does what" row opens and closes at once: nothing travels or turns, the panel
+     only fades in and out. */
+  .vaf-role-row::before, .vaf-role-caret, .vaf-role-panel > div > div { transition: none; }
+  .vaf-role-panel, .vaf-role-panel[data-open="true"] { transition: opacity 120ms linear; }
+  .vaf-role-panel > div > div { transform: none; }
   /* A person who asked the system for less motion still gets a message that
      arrives - it fades without travelling, rather than not animating at all. */
   @keyframes roomMessageEnter { from { opacity: 0 } to { opacity: 1 } }

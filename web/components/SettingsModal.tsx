@@ -2870,6 +2870,605 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         }
     };
 
+    // ── The choice behind each "who does what" row ─────────────────────────────────────────
+    // The provider and, where the job has one, the model: one element each, rendered by the
+    // section that holds the setting AND by the overview's open row, so both show the same
+    // value from the same draft and the normal Save stores it. Rendered as elements, not as
+    // components declared here: a component type created per render would remount its select
+    // on every keystroke.
+
+    const chatProviderSelect = (
+        <Select
+            label={tAi('primaryProvider')}
+            value={localConfig.provider || 'local'}
+            onChange={(v: string) => handleChange('provider', v)}
+            options={[
+                { value: 'local', label: leanProfile ? tAi('localLlamaUnavailable') : tAi('localLlama'), disabled: leanProfile },
+                { value: 'veyllo', label: 'Veyllo' },
+                ...PROVIDERS.filter(p => p.id !== 'veyllo').map(p => ({ value: p.id, label: p.label }))
+            ]}
+        />
+    );
+
+    const localModelField = (
+        <div className="flex gap-2 items-end">
+            <div className="flex-1">
+                <Select
+                    label={tAi('localModelFile')}
+                    value={localConfig.model || ''}
+                    onChange={(v: string) => handleChange('model', v)}
+                    options={[
+                        { value: '', label: tAi('selectModel') },
+                        ...availableModels.map(m => ({ value: m, label: m }))
+                    ]}
+                />
+            </div>
+            <button
+                onClick={onRefreshLocalModels}
+                className="px-3 bg-gray-100 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors h-10 flex items-center justify-center"
+                title={tAi('refreshLocalModels')}
+            >
+                <RefreshCw size={18} />
+            </button>
+        </div>
+    );
+
+    const chatApiProvider = PROVIDERS.find(p => p.id === localConfig.provider);
+
+    const chatApiModelField = chatApiProvider ? (
+        <div className="flex gap-2 items-end">
+            <div className="flex-1">
+                <Select
+                    label={`${chatApiProvider.label} Model`}
+                    value={localConfig[`api_model_${chatApiProvider.id}`] || chatApiProvider.defaultModel}
+                    onChange={(v: string) => handleChange(`api_model_${chatApiProvider.id}`, v)}
+                    options={(() => {
+                        const fetched = apiModels[chatApiProvider.id];
+                        const list = fetched && fetched.length > 0
+                            ? fetched
+                            : (chatApiProvider.staticModels || []);
+                        const seen = new Set<string>();
+                        return [
+                            { value: chatApiProvider.defaultModel, label: `${chatApiProvider.defaultModel} (Default)` },
+                            ...list
+                                .filter(m => { if (m === chatApiProvider.defaultModel || seen.has(m)) return false; seen.add(m); return true; })
+                                .map(m => ({ value: m, label: m }))
+                        ];
+                    })()}
+                />
+            </div>
+            <button
+                onClick={() => handleFetchModels(chatApiProvider.id)}
+                className={cn(
+                    "px-3 bg-gray-100 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors h-10 flex items-center justify-center",
+                    fetchingProvider === chatApiProvider.id && "animate-pulse"
+                )}
+                title={tAi('fetchModels')}
+                disabled={!providerHasKey(chatApiProvider.id)}
+            >
+                <RefreshCw size={18} className={cn(fetchingProvider === chatApiProvider.id && "animate-spin")} />
+            </button>
+        </div>
+    ) : null;
+
+    const visionChoice = (localConfig.vision_provider || '') as string;
+
+    const visionProviderSelect = (
+        <Select
+            label={tAi('visionProvider')}
+            value={visionChoice}
+            onChange={(v: string) => {
+                handleChange('vision_provider', v);
+                handleChange('vision_model', '');
+            }}
+            options={[
+                { value: '', label: tAi('visionFollowMain') },
+                /* 'local' added HERE, not in VISION_PROVIDERS:
+                   the voice-agent select reuses that array and
+                   adds its own local entry (would duplicate). */
+                { value: 'local', label: leanProfile ? tAi('localLlamaUnavailable') : tAi('visionLocal'), disabled: leanProfile },
+                { value: 'veyllo', label: 'Veyllo' },
+                ...VISION_PROVIDERS.filter(p => p.id !== 'veyllo').map(p => ({ value: p.id, label: p.label }))
+            ]}
+        />
+    );
+
+    const visionModelField = visionChoice && visionChoice !== 'local' ? (
+        <div className="flex gap-2 items-end">
+            <div className="flex-1">
+                <Select
+                    label={tAi('visionModelLabel')}
+                    value={localConfig.vision_model || ''}
+                    onChange={(v: string) => handleChange('vision_model', v)}
+                    options={(() => {
+                        const fetched = apiModels[visionChoice] || [];
+                        const seen = new Set<string>();
+                        return [
+                            { value: '', label: fetched.length === 0 ? tAi('fetchModels') + ' →' : tAi('visionModelDesc') },
+                            ...fetched
+                                .filter(m => { if (seen.has(m)) return false; seen.add(m); return true; })
+                                .map(m => ({ value: m, label: m }))
+                        ];
+                    })()}
+                />
+            </div>
+            <button
+                onClick={() => handleFetchModels(visionChoice)}
+                className={cn(
+                    "px-3 bg-gray-100 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors h-10 flex items-center justify-center",
+                    fetchingProvider === visionChoice && "animate-pulse"
+                )}
+                title={tAi('fetchModels')}
+                disabled={!providerHasKey(visionChoice)}
+            >
+                <RefreshCw size={18} className={cn(fetchingProvider === visionChoice && "animate-spin")} />
+            </button>
+        </div>
+    ) : null;
+
+    const browserChoice = (localConfig.browser_agent_provider || '') as string;
+
+    const browserProviderSelect = (
+        <Select
+            label={tAi('browserAgentProvider')}
+            value={browserChoice}
+            onChange={(v: string) => {
+                handleChange('browser_agent_provider', v);
+                handleChange('browser_agent_model', '');
+            }}
+            options={[
+                { value: '', label: tAi('browserAgentMain') },
+                { value: 'veyllo', label: 'Veyllo' },
+                ...VISION_PROVIDERS.filter(p => p.id !== 'veyllo').map(p => ({ value: p.id, label: p.label }))
+            ]}
+        />
+    );
+
+    const browserModelField = browserChoice ? (
+        <div className="flex gap-2 items-end">
+            <div className="flex-1">
+                <Select
+                    label={tAi('browserAgentModelLabel')}
+                    value={localConfig.browser_agent_model || ''}
+                    onChange={(v: string) => handleChange('browser_agent_model', v)}
+                    options={(() => {
+                        const fetched = apiModels[browserChoice] || [];
+                        const seen = new Set<string>();
+                        return [
+                            { value: '', label: fetched.length === 0 ? tAi('fetchModels') + ' →' : tAi('browserAgentModelDesc') },
+                            ...fetched
+                                .filter(m => { if (seen.has(m)) return false; seen.add(m); return true; })
+                                .map(m => ({ value: m, label: m }))
+                        ];
+                    })()}
+                />
+            </div>
+            <button
+                onClick={() => handleFetchModels(browserChoice)}
+                className={cn(
+                    "px-3 bg-gray-100 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors h-10 flex items-center justify-center",
+                    fetchingProvider === browserChoice && "animate-pulse"
+                )}
+                title={tAi('fetchModels')}
+                disabled={!providerHasKey(browserChoice)}
+            >
+                <RefreshCw size={18} className={cn(fetchingProvider === browserChoice && "animate-spin")} />
+            </button>
+        </div>
+    ) : null;
+
+    const ocrEngineSelect = (
+        <Select
+            label={tAi('ocrEngine')}
+            value={localConfig.ocr_engine || 'auto'}
+            onChange={(v: string) => handleChange('ocr_engine', v)}
+            options={[
+                { value: 'auto', label: tAi('ocrAuto') },
+                { value: 'tesseract', label: tAi('ocrTesseract') },
+                { value: 'vision', label: tAi('ocrVision') },
+            ]}
+        />
+    );
+
+    const subagentProviderSelect = (
+        <Select
+            label={tAdvanced('subAgentProvider')}
+            value={subagentChoice}
+            onChange={(v: string) => {
+                handleChange('subagent_provider', v);
+                // The name and its gate together: a name alone is
+                // inert (config.subagent_provider_override).
+                handleChange('subagent_use_separate_provider', v !== 'inherit');
+                // The model list changes under the value. '' and not
+                // undefined: the save merges, so an absent key keeps the old one.
+                handleChange('subagent_model', '');
+            }}
+            options={[
+                { value: 'inherit', label: tAdvanced('sameAsMain') },
+                { value: 'veyllo', label: 'Veyllo' },
+                { value: 'openai', label: 'OpenAI' },
+                { value: 'anthropic', label: 'Anthropic' },
+                { value: 'deepseek', label: 'DeepSeek' },
+                { value: 'google', label: 'Google' },
+                { value: 'openrouter', label: 'OpenRouter' },
+                { value: 'local', label: leanProfile ? tAi('localLlamaUnavailable') : 'Local', disabled: leanProfile },
+            ]}
+        />
+    );
+
+    const thinkingProviderSelect = (
+        <Select
+            label={tAdvanced('thinkerProvider')}
+            value={localConfig.thinking_provider || 'inherit'}
+            onChange={(v: string) => {
+                handleChange('thinking_provider', v);
+                // '' and not undefined: the save merges, so an absent key
+                // keeps the previous provider's model.
+                handleChange('thinking_model', '');
+            }}
+            options={[
+                { value: 'inherit', label: tAdvanced('sameAsMain') },
+                { value: 'veyllo', label: 'Veyllo' },
+                { value: 'openai', label: 'OpenAI' },
+                { value: 'anthropic', label: 'Anthropic' },
+                { value: 'deepseek', label: 'DeepSeek' },
+                { value: 'google', label: 'Google' },
+                { value: 'openrouter', label: 'OpenRouter' },
+                { value: 'local', label: leanProfile ? tAi('localLlamaUnavailable') : 'Local', disabled: leanProfile },
+            ]}
+        />
+    );
+
+    const thinkingModelSelect = (() => {
+        const tp = localConfig.thinking_provider;
+        if (!tp || tp === 'inherit') return null;
+        const isLocal = tp === 'local';
+        const defaultModel = isLocal
+            ? (availableModels?.[0] ?? '')
+            : (() => { const p = PROVIDERS.find(pr => pr.id === tp); return p ? (localConfig[`api_model_${p.id}`] || p.defaultModel) : ''; })();
+        const options = isLocal
+            ? (availableModels ?? []).map(m => ({ value: m, label: m }))
+            : (() => {
+                const p = PROVIDERS.find(pr => pr.id === tp);
+                if (!p) return [];
+                const list = apiModels?.[p.id] ?? [];
+                const def = localConfig[`api_model_${p.id}`] || p.defaultModel;
+                const rest = list.filter(m => m !== def);
+                return [
+                    { value: def, label: list.includes(def) ? def : `${def} (Default)` },
+                    ...rest.map(m => ({ value: m, label: m }))
+                ];
+            })();
+        return (
+            <Select
+                key={tp}
+                label={tAdvanced('thinkerModel')}
+                value={localConfig.thinking_model || defaultModel}
+                onChange={(v: string) => handleChange('thinking_model', v || '')}
+                options={options}
+            />
+        );
+    })();
+
+    const voiceProviderSelect = (
+        <Select
+            label={tVoice('agentLlm')}
+            value={localConfig.voice_agent_provider || ''}
+            onChange={(v: string) => {
+                handleChange('voice_agent_provider', v);
+                handleChange('voice_agent_model', '');
+            }}
+            options={[
+                { value: '', label: tVoice('agentLlmMain') },
+                { value: 'local', label: leanProfile ? tVoice('localUnavailable') : tVoice('agentLlmLocal'), disabled: leanProfile },
+                { value: 'veyllo', label: 'Veyllo' },
+                ...VISION_PROVIDERS.filter(p => p.id !== 'veyllo').map(p => ({ value: p.id, label: p.label })),
+            ]}
+        />
+    );
+
+    const voiceModelField = (() => {
+        const vChoice = (localConfig.voice_agent_provider || '') as string;
+        if (!vChoice) return null;
+        // Pick from already-downloaded GGUFs (same availableModels source as the main
+        // "Modelldatei" dropdown). Downloading beliebiger Refs lives only under AI & Model;
+        // the empty "" option = the recommended Gemma default, which is fetched on save (see
+        // voice_model + web_server save_config trigger). A previously-saved HF ref stays
+        // selectable via Select's "(Current)" fallback.
+        if (vChoice === 'local') return (
+            <Select
+                label={tVoice('agentLlmLocalFile')}
+                value={localConfig.voice_agent_model || ''}
+                onChange={(v: string) => handleChange('voice_agent_model', v)}
+                options={[
+                    { value: '', label: tVoice('agentLlmLocalDefault') },
+                    ...(availableModels ?? []).map((m: string) => ({ value: m, label: m })),
+                ]}
+            />
+        );
+        // API model: dropdown of the provider's models (live /v1/models via the
+        // refresh button, else the static fallback list), same source/pattern as
+        // the main-agent per-provider selector. "" = provider default; a name
+        // saved by an earlier version stays via Select's "(Current)" fallback.
+        const vProv = vChoice;
+        const vp = PROVIDERS.find(pr => pr.id === vProv);
+        const fetched = apiModels[vProv];
+        const list = fetched && fetched.length > 0 ? fetched : (vp?.staticModels || []);
+        const hasKey = providerHasKey(vProv);
+        const seen = new Set<string>();
+        return (
+            <div className="flex gap-2 items-end">
+                <div className="flex-1">
+                    <Select
+                        label={tVoice('agentLlmApiModel')}
+                        value={localConfig.voice_agent_model || ''}
+                        onChange={(v: string) => handleChange('voice_agent_model', v)}
+                        options={[
+                            { value: '', label: tVoice('agentLlmApiModelDefault') },
+                            ...list
+                                .filter(m => { if (!m || seen.has(m)) return false; seen.add(m); return true; })
+                                .map(m => ({ value: m, label: m })),
+                        ]}
+                    />
+                </div>
+                <button
+                    onClick={() => handleFetchModels(vProv)}
+                    className={cn(
+                        "px-3 bg-gray-100 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors h-10 flex items-center justify-center",
+                        fetchingProvider === vProv && "animate-pulse"
+                    )}
+                    title={tAi('fetchModels')}
+                    disabled={!hasKey}
+                >
+                    <RefreshCw size={18} className={cn(fetchingProvider === vProv && "animate-spin")} />
+                </button>
+            </div>
+        );
+    })();
+
+    const ttsProviderSelect = (
+        <Select
+            label={tVoice('ttsProvider')}
+            value={localConfig.speech_tts_provider || 'local'}
+            onChange={(v: string) => {
+                if (v === 'local') {
+                    handleChange('speech_tts_provider', '');
+                } else {
+                    // Model/voice defaults must match speech_api.py
+                    // (_DEFAULT_TTS_MODEL / _DEFAULT_TTS_VOICE).
+                    handleChange('speech_tts_provider', v);
+                    handleChange('speech_tts_api_model', v === 'elevenlabs' ? 'eleven_flash_v2_5' : 'gpt-4o-mini-tts');
+                    handleChange('speech_tts_api_voice', v === 'elevenlabs' ? '' : 'alloy');
+                }
+            }}
+            options={[
+                { value: 'local', label: leanProfile ? tVoice('localUnavailable') : tVoice('providerLocal'), disabled: leanProfile },
+                { value: 'elevenlabs', label: 'ElevenLabs' },
+                { value: 'openai', label: 'OpenAI' },
+            ]}
+        />
+    );
+
+    // Voice availability is model-dependent (verified 2026-07-14): tts-1/tts-1-hd accept only
+    // the 9 classic voices; gpt-4o-mini-tts additionally accepts ballad/verse/marin/cedar
+    // (marin and cedar are OpenAI's quality recommendation).
+    const ttsOpenaiModel = localConfig.speech_tts_api_model || 'gpt-4o-mini-tts';
+    const TTS_CLASSIC_VOICES = ['alloy', 'ash', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'];
+    const ttsModelSelect = (() => {
+        const tp = localConfig.speech_tts_provider || 'local';
+        if (tp === 'elevenlabs') return (
+            <Select
+                label={tVoice('ttsModel')}
+                value={localConfig.speech_tts_api_model || 'eleven_flash_v2_5'}
+                onChange={(v: string) => handleChange('speech_tts_api_model', v)}
+                options={elevenModels.length > 0
+                    ? elevenModels.map(m => ({ value: m.model_id, label: m.name }))
+                    : [
+                        { value: 'eleven_flash_v2_5', label: 'Eleven Flash v2.5' },
+                        { value: 'eleven_multilingual_v2', label: 'Eleven Multilingual v2' },
+                    ]}
+            />
+        );
+        if (tp === 'openai') return (
+            <Select
+                label={tVoice('ttsModel')}
+                value={ttsOpenaiModel}
+                onChange={(v: string) => {
+                    handleChange('speech_tts_api_model', v);
+                    // The 4 new voices only exist on gpt-4o-mini-tts.
+                    if (v !== 'gpt-4o-mini-tts'
+                        && !TTS_CLASSIC_VOICES.includes(localConfig.speech_tts_api_voice)) {
+                        handleChange('speech_tts_api_voice', 'alloy');
+                    }
+                }}
+                options={[
+                    { value: 'gpt-4o-mini-tts', label: 'gpt-4o-mini-tts' },
+                    { value: 'tts-1', label: 'tts-1' },
+                    { value: 'tts-1-hd', label: 'tts-1-hd' },
+                ]}
+            />
+        );
+        return null;
+    })();
+
+    const sttProviderSelect = (
+        <Select
+            label={tVoice('sttProvider')}
+            value={localConfig.speech_stt_provider
+                ? localConfig.speech_stt_provider
+                : ((localConfig.speech_stt_engine ?? 'docker') === 'local' ? 'local_whisper' : 'local_docker')}
+            onChange={(v: string) => {
+                if (v === 'local_docker') {
+                    handleChange('speech_stt_provider', '');
+                    handleChange('speech_stt_engine', 'docker');
+                } else if (v === 'local_whisper') {
+                    handleChange('speech_stt_provider', '');
+                    handleChange('speech_stt_engine', 'local');
+                } else {
+                    // Defaults must match speech_api.py _DEFAULT_STT_MODEL.
+                    handleChange('speech_stt_provider', v);
+                    // Leave no contradictory engine behind: picking a
+                    // cloud provider on top of an earlier "local" pick
+                    // used to keep speech_stt_engine='local', so the
+                    // day the key stopped resolving the audio dropped
+                    // into faster-whisper while Settings showed a
+                    // cloud provider. The documented fallback is the
+                    // Docker lane.
+                    handleChange('speech_stt_engine', 'docker');
+                    handleChange('speech_stt_api_model',
+                        v === 'elevenlabs' ? 'scribe_v2'
+                        : v === 'veyllo' ? 'veyllo-transcribe'
+                        : 'whisper-1');
+                }
+            }}
+            options={[
+                { value: 'local_docker', label: leanProfile ? tVoice('localUnavailable') : tVoice('dockerStt'), disabled: leanProfile },
+                { value: 'local_whisper', label: leanProfile ? tVoice('localUnavailable') : tVoice('localStt'), disabled: leanProfile },
+                { value: 'veyllo', label: 'Veyllo' },
+                { value: 'elevenlabs', label: 'ElevenLabs' },
+                { value: 'openai', label: 'OpenAI' },
+            ]}
+        />
+    );
+
+    const sttModelSelect = (() => {
+        const sp = localConfig.speech_stt_provider;
+        if (sp === 'veyllo') return (
+            <Select
+                label={tVoice('sttModel')}
+                value={localConfig.speech_stt_api_model || 'veyllo-transcribe'}
+                onChange={(v: string) => handleChange('speech_stt_api_model', v)}
+                options={[{ value: 'veyllo-transcribe', label: 'veyllo-transcribe' }]}
+            />
+        );
+        if (sp === 'elevenlabs') return (
+            <Select
+                label={tVoice('sttModel')}
+                value={localConfig.speech_stt_api_model || 'scribe_v2'}
+                onChange={(v: string) => handleChange('speech_stt_api_model', v)}
+                options={[{ value: 'scribe_v2', label: 'Scribe v2' }]}
+            />
+        );
+        if (sp === 'openai') return (
+            <Select
+                label={tVoice('sttModel')}
+                value={localConfig.speech_stt_api_model || 'whisper-1'}
+                onChange={(v: string) => handleChange('speech_stt_api_model', v)}
+                options={[
+                    { value: 'whisper-1', label: 'whisper-1' },
+                    { value: 'gpt-4o-mini-transcribe', label: 'gpt-4o-mini-transcribe' },
+                    { value: 'gpt-4o-transcribe', label: 'gpt-4o-transcribe' },
+                ]}
+            />
+        );
+        return null;
+    })();
+
+    // The failover level and backup: the overview's open row and the Advanced section render
+    // the same picker and selects.
+    const FAILOVER_LEVELS = ['off', 'basic', 'balanced', 'maximum'];
+    const failoverLevel = (localConfig.failover_level as string) || 'off';
+    const failoverIdx = Math.max(0, FAILOVER_LEVELS.indexOf(failoverLevel));
+    const failoverShowBackup = failoverLevel === 'balanced' || failoverLevel === 'maximum';
+    const FAILOVER_LEVEL_LABELS = [tAdvanced('failoverLevelOff'), tAdvanced('failoverLevelBasic'), tAdvanced('failoverLevelBalanced'), tAdvanced('failoverLevelMaximum')];
+    const failoverPrimary = (localConfig.provider as string) || 'local';
+    const failoverBp = (localConfig.failover_backup_provider as string) || '';
+    const failoverBpMeta = PROVIDERS.find(p => p.id === failoverBp);
+    const failoverBpDefault = failoverBpMeta ? (localConfig[`api_model_${failoverBp}`] || failoverBpMeta.defaultModel) : '';
+    const failoverBpList = failoverBp ? (apiModels?.[failoverBp] ?? []) : [];
+    const failoverBackupModelOpts = failoverBp ? [
+        ...(failoverBpDefault ? [{ value: failoverBpDefault, label: failoverBpList.includes(failoverBpDefault) ? failoverBpDefault : `${failoverBpDefault} (${tAdvanced('failoverProviderDefault')})` }] : []),
+        ...failoverBpList.filter((m: string) => m !== failoverBpDefault).map((m: string) => ({ value: m, label: m })),
+    ] : [];
+    // 4-stop selector: each dot + its label live in the SAME centered grid column, so the
+    // marker is always exactly over its label (a native range thumb is inset by half its
+    // width and never lines up with the labels).
+    const failoverLevelPicker = (
+        <div className="relative mt-2 select-none">
+            {/* track between the first and last dot centers (12.5% .. 87.5%) */}
+            <div className="pointer-events-none absolute left-[12.5%] right-[12.5%] top-[7px] h-1 -translate-y-1/2 rounded-full bg-gray-200" />
+            <div
+                className="pointer-events-none absolute left-[12.5%] top-[7px] h-1 -translate-y-1/2 rounded-full bg-gray-900 dark:bg-[#d9d9d9] transition-all"
+                style={{ width: `${(75 * failoverIdx) / 3}%` }}
+            />
+            {/* relative z-10: paint the dots ABOVE the absolute track lines so the
+                line never shows through the hollow (unselected) dots. */}
+            <div className="relative z-10 grid grid-cols-4 max-md:grid-cols-2">
+                {FAILOVER_LEVEL_LABELS.map((lbl, i) => (
+                    <button
+                        key={i}
+                        type="button"
+                        onClick={() => handleChange('failover_level', FAILOVER_LEVELS[i])}
+                        aria-pressed={i === failoverIdx}
+                        className="flex cursor-pointer flex-col items-center gap-1.5"
+                    >
+                        <span className={cn('h-3.5 w-3.5 rounded-full border-2 transition', i <= failoverIdx ? 'border-gray-900 bg-gray-900 dark:border-[#d9d9d9] dark:bg-[#d9d9d9]' : 'border-gray-300 bg-white')} />
+                        <span className={cn('whitespace-nowrap text-[11px]', i === failoverIdx ? 'font-semibold text-gray-900' : 'text-gray-400')}>{lbl}</span>
+                    </button>
+                ))}
+            </div>
+        </div>
+    );
+    const failoverBackupSelect = (
+        <Select
+            label={tAdvanced('failoverBackupProvider')}
+            value={failoverBp}
+            onChange={(v: string) => {
+                handleChange('failover_backup_provider', v);
+                handleChange('failover_backup_model', '');
+            }}
+            options={[{ value: '', label: tAdvanced('failoverNone') }, ...PROVIDERS.filter(p => p.id !== failoverPrimary).map(p => ({ value: p.id, label: p.label }))]}
+        />
+    );
+    const failoverBackupModelSelect = failoverBp ? (
+        <Select
+            label={tAdvanced('failoverBackupModel')}
+            value={(localConfig.failover_backup_model as string) || ''}
+            onChange={(v: string) => handleChange('failover_backup_model', v)}
+            options={[{ value: '', label: tAdvanced('failoverProviderDefault') }, ...failoverBackupModelOpts]}
+        />
+    ) : null;
+
+    // A model field for a job that follows the main provider: shown, so the open row has the
+    // same two fields for every job, and disabled, because the model is the main provider's.
+    const followsMainModel = (label: string) => (
+        <Select label={label} value="" onChange={() => {}} options={[{ value: '', label: tAi('rolesFollowsMain') }]} disabled />
+    );
+    // What the overview's open row offers for a job: the elements above, nothing of its own.
+    // null keeps the plain jump: a speech job that is off is switched on in its section, next to
+    // the device and engine settings the switch belongs with.
+    const roleChoice = (row: ModelRoleRow): React.ReactNode => {
+        switch (row.role) {
+            case 'chat':
+                return <>{chatProviderSelect}{chatApiModelField ?? (!leanProfile && (!localConfig.provider || localConfig.provider === 'local') ? localModelField : null)}</>;
+            case 'vision':
+                return <>{visionProviderSelect}{visionModelField ?? (visionChoice ? null : followsMainModel(tAi('visionModelLabel')))}</>;
+            case 'ocr':
+                return ocrEngineSelect;
+            case 'browser_agent':
+                return <>{browserProviderSelect}{browserModelField ?? followsMainModel(tAi('browserAgentModelLabel'))}</>;
+            case 'subagents':
+                return subagentProviderSelect;
+            case 'thinking':
+                return <>{thinkingProviderSelect}{thinkingModelSelect ?? followsMainModel(tAdvanced('thinkerModel'))}</>;
+            case 'voice_call':
+                return <>{voiceProviderSelect}{voiceModelField ?? followsMainModel(tVoice('agentLlmApiModel'))}</>;
+            case 'speech_to_text':
+                return row.source === 'off' ? null : <>{sttProviderSelect}{sttModelSelect}</>;
+            case 'text_to_speech':
+                return row.source === 'off' ? null : <>{ttsProviderSelect}{ttsModelSelect}</>;
+            case 'failover':
+                return (
+                    <>
+                        <div className="col-span-2 max-md:col-span-1">{failoverLevelPicker}</div>
+                        {failoverShowBackup && <>{failoverBackupSelect}{failoverBackupModelSelect}</>}
+                    </>
+                );
+            default:
+                return null;
+        }
+    };
+
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 max-md:p-0">
             {/* Backdrop */}
@@ -3258,15 +3857,25 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     error={modelRolesFailed}
                                     onRetry={() => { setModelRolesFailed(false); setModelRolesRetry(n => n + 1); }}
                                     providerLabel={(provider, row) => {
-                                        // An engine on this machine rather than a provider: Tesseract
-                                        // for text recognition, the local speech engine for speech.
-                                        if (!provider) return row.source === 'local_engine' ? (row.role === 'ocr' ? 'Tesseract' : tAi('localSpeechEngine')) : '';
-                                        // The short word the overview's own chip uses: a whole "Local model"
-                                        // next to an "Own choice" chip does not fit a half-width line.
-                                        if (provider === 'local') return tAi('roleSource.local_engine');
+                                        // An engine on this machine and the local model are both "Local";
+                                        // the engine's name follows as the model.
+                                        if (!provider) return row.source === 'local_engine' ? tAi('roleLocal') : '';
+                                        if (provider === 'local') return tAi('roleLocal');
                                         if (provider === 'elevenlabs') return 'ElevenLabs';
                                         return PROVIDER_META.find(m => m.id === provider)?.label || provider;
                                     }}
+                                    modelLabel={(row) => {
+                                        // An engine row carries the config value (`docker` is how the speech
+                                        // containers are reached, not what runs in them): name the engine.
+                                        if (row.source !== 'local_engine') return row.model;
+                                        const engine = (row.model || '').toLowerCase();
+                                        if (row.role === 'ocr') return 'Tesseract';
+                                        if (row.role === 'speech_to_text') return engine === 'local' ? 'faster-whisper' : 'Whisper';
+                                        if (engine === 'docker' || engine === 'piper') return 'Piper';
+                                        if (engine === 'chatterbox') return 'Chatterbox';
+                                        return row.model;
+                                    }}
+                                    renderChoice={roleChoice}
                                     onPick={(row) => jumpToSetting(row.tab, `[data-setting-role="${row.role}"]`, true)}
                                 />
                                 <InferenceProfileSection currentProfile={localConfig.inference_profile || 'local'} onChanged={(profile) => {
@@ -3276,16 +3885,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     if (!changed) onRefreshConfig?.();
                                 }} />
                                 <Section title={tAi('provider')} anchor="chat">
-                                    <Select
-                                        label={tAi('primaryProvider')}
-                                        value={localConfig.provider || 'local'}
-                                        onChange={(v: string) => handleChange('provider', v)}
-                                        options={[
-                                            { value: 'local', label: leanProfile ? tAi('localLlamaUnavailable') : tAi('localLlama'), disabled: leanProfile },
-                                            { value: 'veyllo', label: 'Veyllo' },
-                                            ...PROVIDERS.filter(p => p.id !== 'veyllo').map(p => ({ value: p.id, label: p.label }))
-                                        ]}
-                                    />
+                                    {chatProviderSelect}
                                     {leanProfile && (!localConfig.provider || localConfig.provider === 'local') && (
                                         <p className="text-xs text-amber-700 mt-2">{tAi('needsProvider')}</p>
                                     )}
@@ -3293,26 +3893,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                                 {!leanProfile && (!localConfig.provider || localConfig.provider === 'local') && (
                                     <Section title={tAi('localModelSettings')}>
-                                        <div className="flex gap-2 items-end">
-                                            <div className="flex-1">
-                                                <Select
-                                                    label={tAi('localModelFile')}
-                                                    value={localConfig.model || ''}
-                                                    onChange={(v: string) => handleChange('model', v)}
-                                                    options={[
-                                                        { value: '', label: tAi('selectModel') },
-                                                        ...availableModels.map(m => ({ value: m, label: m }))
-                                                    ]}
-                                                />
-                                            </div>
-                                            <button
-                                                onClick={onRefreshLocalModels}
-                                                className="px-3 bg-gray-100 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors h-10 flex items-center justify-center"
-                                                title={tAi('refreshLocalModels')}
-                                            >
-                                                <RefreshCw size={18} />
-                                            </button>
-                                        </div>
+                                        {localModelField}
                                         <p className="text-xs text-gray-400 mt-1 mb-4">{tAi('modelsDir')}</p>
 
                                         {onRequestModelPreview && (
@@ -3440,39 +4021,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     <span>{tGeneral('keyStateUnknown')}</span>
                                                 </div>
                                             )}
-                                            <div className="flex gap-2 items-end">
-                                                <div className="flex-1">
-                                                    <Select
-                                                        label={`${p.label} Model`}
-                                                        value={localConfig[`api_model_${p.id}`] || p.defaultModel}
-                                                        onChange={(v: string) => handleChange(`api_model_${p.id}`, v)}
-                                                        options={(() => {
-                                                            const fetched = apiModels[p.id];
-                                                            const list = fetched && fetched.length > 0
-                                                                ? fetched
-                                                                : (p.staticModels || []);
-                                                            const seen = new Set<string>();
-                                                            return [
-                                                                { value: p.defaultModel, label: `${p.defaultModel} (Default)` },
-                                                                ...list
-                                                                    .filter(m => { if (m === p.defaultModel || seen.has(m)) return false; seen.add(m); return true; })
-                                                                    .map(m => ({ value: m, label: m }))
-                                                            ];
-                                                        })()}
-                                                    />
-                                                </div>
-                                                <button
-                                                    onClick={() => handleFetchModels(p.id)}
-                                                    className={cn(
-                                                        "px-3 bg-gray-100 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors h-10 flex items-center justify-center",
-                                                        fetchingProvider === p.id && "animate-pulse"
-                                                    )}
-                                                    title={tAi('fetchModels')}
-                                                    disabled={!hasKey}
-                                                >
-                                                    <RefreshCw size={18} className={cn(fetchingProvider === p.id && "animate-spin")} />
-                                                </button>
-                                            </div>
+                                            {chatApiModelField}
                                         </Section>
                                     );
                                 })}
@@ -3541,60 +4090,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             {!(!selectedVisionProvider && visionRole?.reason === 'main_cannot_see') && (
                                                 <p className="text-xs text-gray-400 mb-3">{tAi('visionProviderDesc')}</p>
                                             )}
-                                            <Select
-                                                label={tAi('visionProvider')}
-                                                value={selectedVisionProvider}
-                                                onChange={(v: string) => {
-                                                    handleChange('vision_provider', v);
-                                                    handleChange('vision_model', '');
-                                                }}
-                                                options={[
-                                                    { value: '', label: tAi('visionFollowMain') },
-                                                    /* 'local' added HERE, not in VISION_PROVIDERS:
-                                                       the voice-agent select reuses that array and
-                                                       adds its own local entry (would duplicate). */
-                                                    { value: 'local', label: leanProfile ? tAi('localLlamaUnavailable') : tAi('visionLocal'), disabled: leanProfile },
-                                                    { value: 'veyllo', label: 'Veyllo' },
-                                                    ...VISION_PROVIDERS.filter(p => p.id !== 'veyllo').map(p => ({ value: p.id, label: p.label }))
-                                                ]}
-                                            />
+                                            {visionProviderSelect}
                                             {selectedVisionProvider === 'local' && (
                                                 <p className="text-xs text-gray-400 mt-2">{tAi('visionLocalHint')}</p>
                                             )}
-                                            {selectedVisionProvider && selectedVisionProvider !== 'local' && (
-                                                <div className="mt-3">
-                                                    <div className="flex gap-2 items-end">
-                                                        <div className="flex-1">
-                                                            <Select
-                                                                label={tAi('visionModelLabel')}
-                                                                value={localConfig.vision_model || ''}
-                                                                onChange={(v: string) => handleChange('vision_model', v)}
-                                                                options={(() => {
-                                                                    const fetched = apiModels[selectedVisionProvider] || [];
-                                                                    const seen = new Set<string>();
-                                                                    return [
-                                                                        { value: '', label: fetched.length === 0 ? tAi('fetchModels') + ' →' : tAi('visionModelDesc') },
-                                                                        ...fetched
-                                                                            .filter(m => { if (seen.has(m)) return false; seen.add(m); return true; })
-                                                                            .map(m => ({ value: m, label: m }))
-                                                                    ];
-                                                                })()}
-                                                            />
-                                                        </div>
-                                                        <button
-                                                            onClick={() => handleFetchModels(selectedVisionProvider)}
-                                                            className={cn(
-                                                                "px-3 bg-gray-100 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors h-10 flex items-center justify-center",
-                                                                fetchingProvider === selectedVisionProvider && "animate-pulse"
-                                                            )}
-                                                            title={tAi('fetchModels')}
-                                                            disabled={!providerHasKey(selectedVisionProvider)}
-                                                        >
-                                                            <RefreshCw size={18} className={cn(fetchingProvider === selectedVisionProvider && "animate-spin")} />
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            )}
+                                            {visionModelField && <div className="mt-3">{visionModelField}</div>}
                                         </Section>
                                     );
                                 })()}
@@ -3609,53 +4109,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     return (
                                         <Section title={tAi('browserAgentModel')} anchor="browser_agent">
                                             <p className="text-xs text-gray-400 mb-3">{tAi('browserAgentProviderDesc')}</p>
-                                            <Select
-                                                label={tAi('browserAgentProvider')}
-                                                value={selectedBrowserProvider}
-                                                onChange={(v: string) => {
-                                                    handleChange('browser_agent_provider', v);
-                                                    handleChange('browser_agent_model', '');
-                                                }}
-                                                options={[
-                                                    { value: '', label: tAi('browserAgentMain') },
-                                                    { value: 'veyllo', label: 'Veyllo' },
-                                                    ...VISION_PROVIDERS.filter(p => p.id !== 'veyllo').map(p => ({ value: p.id, label: p.label }))
-                                                ]}
-                                            />
-                                            {selectedBrowserProvider && (
-                                                <div className="mt-3">
-                                                    <div className="flex gap-2 items-end">
-                                                        <div className="flex-1">
-                                                            <Select
-                                                                label={tAi('browserAgentModelLabel')}
-                                                                value={localConfig.browser_agent_model || ''}
-                                                                onChange={(v: string) => handleChange('browser_agent_model', v)}
-                                                                options={(() => {
-                                                                    const fetched = apiModels[selectedBrowserProvider] || [];
-                                                                    const seen = new Set<string>();
-                                                                    return [
-                                                                        { value: '', label: fetched.length === 0 ? tAi('fetchModels') + ' →' : tAi('browserAgentModelDesc') },
-                                                                        ...fetched
-                                                                            .filter(m => { if (seen.has(m)) return false; seen.add(m); return true; })
-                                                                            .map(m => ({ value: m, label: m }))
-                                                                    ];
-                                                                })()}
-                                                            />
-                                                        </div>
-                                                        <button
-                                                            onClick={() => handleFetchModels(selectedBrowserProvider)}
-                                                            className={cn(
-                                                                "px-3 bg-gray-100 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors h-10 flex items-center justify-center",
-                                                                fetchingProvider === selectedBrowserProvider && "animate-pulse"
-                                                            )}
-                                                            title={tAi('fetchModels')}
-                                                            disabled={!providerHasKey(selectedBrowserProvider)}
-                                                        >
-                                                            <RefreshCw size={18} className={cn(fetchingProvider === selectedBrowserProvider && "animate-spin")} />
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            )}
+                                            {browserProviderSelect}
+                                            {browserModelField && <div className="mt-3">{browserModelField}</div>}
                                         </Section>
                                     );
                                 })()}
@@ -3664,16 +4119,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     model above (one model call PER PAGE - real spend). */}
                                 <Section title={tAi('ocrEngine')} anchor="ocr">
                                     <p className="text-xs text-gray-400 mb-3">{tAi('ocrEngineDesc')}</p>
-                                    <Select
-                                        label={tAi('ocrEngine')}
-                                        value={localConfig.ocr_engine || 'auto'}
-                                        onChange={(v: string) => handleChange('ocr_engine', v)}
-                                        options={[
-                                            { value: 'auto', label: tAi('ocrAuto') },
-                                            { value: 'tesseract', label: tAi('ocrTesseract') },
-                                            { value: 'vision', label: tAi('ocrVision') },
-                                        ]}
-                                    />
+                                    {ocrEngineSelect}
                                 </Section>
 
                                 <Section title={tAdvanced('subAgents')}>
@@ -3684,29 +4130,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         onChange={(v: boolean) => handleChange('sub_agents_in_separate_terminals', v)}
                                     />
                                     <div className="mt-4" data-setting-role="subagents">
-                                        <Select
-                                            label={tAdvanced('subAgentProvider')}
-                                            value={subagentChoice}
-                                            onChange={(v: string) => {
-                                                handleChange('subagent_provider', v);
-                                                // The name and its gate together: a name alone is
-                                                // inert (config.subagent_provider_override).
-                                                handleChange('subagent_use_separate_provider', v !== 'inherit');
-                                                // The model list changes under the value. '' and not
-                                                // undefined: the save merges, so an absent key keeps the old one.
-                                                handleChange('subagent_model', '');
-                                            }}
-                                            options={[
-                                                { value: 'inherit', label: tAdvanced('sameAsMain') },
-                                                { value: 'veyllo', label: 'Veyllo' },
-                                                { value: 'openai', label: 'OpenAI' },
-                                                { value: 'anthropic', label: 'Anthropic' },
-                                                { value: 'deepseek', label: 'DeepSeek' },
-                                                { value: 'google', label: 'Google' },
-                                                { value: 'openrouter', label: 'OpenRouter' },
-                                                { value: 'local', label: leanProfile ? tAi('localLlamaUnavailable') : 'Local', disabled: leanProfile },
-                                            ]}
-                                        />
+                                        {subagentProviderSelect}
                                     </div>
                                     {(() => {
                                         // Effective provider for tool/workflow calls: the sub-agent provider when set,
@@ -3765,57 +4189,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                                 <Section title={tAdvanced('thinker')} anchor="thinking">
                                     <p className="text-sm text-gray-600 mb-3">{tAdvanced('thinkerProviderDesc')}</p>
-                                    <Select
-                                        label={tAdvanced('thinkerProvider')}
-                                        value={localConfig.thinking_provider || 'inherit'}
-                                        onChange={(v: string) => {
-                                            handleChange('thinking_provider', v);
-                                            // '' and not undefined: the save merges, so an absent key
-                                            // keeps the previous provider's model.
-                                            handleChange('thinking_model', '');
-                                        }}
-                                        options={[
-                                            { value: 'inherit', label: tAdvanced('sameAsMain') },
-                                            { value: 'veyllo', label: 'Veyllo' },
-                                            { value: 'openai', label: 'OpenAI' },
-                                            { value: 'anthropic', label: 'Anthropic' },
-                                            { value: 'deepseek', label: 'DeepSeek' },
-                                            { value: 'google', label: 'Google' },
-                                            { value: 'openrouter', label: 'OpenRouter' },
-                                            { value: 'local', label: leanProfile ? tAi('localLlamaUnavailable') : 'Local', disabled: leanProfile },
-                                        ]}
-                                    />
-                                    {(localConfig.thinking_provider && localConfig.thinking_provider !== 'inherit') && (() => {
-                                        const tp = localConfig.thinking_provider;
-                                        const isLocal = tp === 'local';
-                                        const defaultModel = isLocal
-                                            ? (availableModels?.[0] ?? '')
-                                            : (() => { const p = PROVIDERS.find(pr => pr.id === tp); return p ? (localConfig[`api_model_${p.id}`] || p.defaultModel) : ''; })();
-                                        const options = isLocal
-                                            ? (availableModels ?? []).map(m => ({ value: m, label: m }))
-                                            : (() => {
-                                                const p = PROVIDERS.find(pr => pr.id === tp);
-                                                if (!p) return [];
-                                                const list = apiModels?.[p.id] ?? [];
-                                                const def = localConfig[`api_model_${p.id}`] || p.defaultModel;
-                                                const rest = list.filter(m => m !== def);
-                                                return [
-                                                    { value: def, label: list.includes(def) ? def : `${def} (Default)` },
-                                                    ...rest.map(m => ({ value: m, label: m }))
-                                                ];
-                                            })();
-                                        return (
-                                            <div className="mt-3" key={tp}>
-                                                <Select
-                                                    label={tAdvanced('thinkerModel')}
-                                                    value={localConfig.thinking_model || defaultModel}
-                                                    onChange={(v: string) => handleChange('thinking_model', v || '')}
-                                                    options={options}
-                                                />
-                                                <p className="text-xs text-gray-500 mt-1">{tAdvanced('thinkerModelDesc')}</p>
-                                            </div>
-                                        );
-                                    })()}
+                                    {thinkingProviderSelect}
+                                    {thinkingModelSelect && (
+                                        <div className="mt-3">
+                                            {thinkingModelSelect}
+                                            <p className="text-xs text-gray-500 mt-1">{tAdvanced('thinkerModelDesc')}</p>
+                                        </div>
+                                    )}
                                 </Section>
 
                                 <div className="mt-4 p-4 bg-gray-50 rounded-lg border border-gray-100">
@@ -4290,26 +4670,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 <p className="text-xs text-gray-600">{tVoice('profileApiNote')}</p>
                                             )}
                                             <div data-setting-role="text_to_speech">
-                                                <Select
-                                                    label={tVoice('ttsProvider')}
-                                                    value={localConfig.speech_tts_provider || 'local'}
-                                                    onChange={(v: string) => {
-                                                        if (v === 'local') {
-                                                            handleChange('speech_tts_provider', '');
-                                                        } else {
-                                                            // Model/voice defaults must match speech_api.py
-                                                            // (_DEFAULT_TTS_MODEL / _DEFAULT_TTS_VOICE).
-                                                            handleChange('speech_tts_provider', v);
-                                                            handleChange('speech_tts_api_model', v === 'elevenlabs' ? 'eleven_flash_v2_5' : 'gpt-4o-mini-tts');
-                                                            handleChange('speech_tts_api_voice', v === 'elevenlabs' ? '' : 'alloy');
-                                                        }
-                                                    }}
-                                                    options={[
-                                                        { value: 'local', label: leanProfile ? tVoice('localUnavailable') : tVoice('providerLocal'), disabled: leanProfile },
-                                                        { value: 'elevenlabs', label: 'ElevenLabs' },
-                                                        { value: 'openai', label: 'OpenAI' },
-                                                    ]}
-                                                />
+                                                {ttsProviderSelect}
                                             </div>
                                             {(localConfig.speech_tts_provider || 'local') === 'elevenlabs' && (
                                                 <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
@@ -4332,29 +4693,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                             link="https://elevenlabs.io/app/voice-library"
                                                         />
                                                     )}
-                                                    <Select
-                                                        label={tVoice('ttsModel')}
-                                                        value={localConfig.speech_tts_api_model || 'eleven_flash_v2_5'}
-                                                        onChange={(v: string) => handleChange('speech_tts_api_model', v)}
-                                                        options={elevenModels.length > 0
-                                                            ? elevenModels.map(m => ({ value: m.model_id, label: m.name }))
-                                                            : [
-                                                                { value: 'eleven_flash_v2_5', label: 'Eleven Flash v2.5' },
-                                                                { value: 'eleven_multilingual_v2', label: 'Eleven Multilingual v2' },
-                                                            ]}
-                                                    />
+                                                    {ttsModelSelect}
                                                 </div>
                                             )}
                                             {(localConfig.speech_tts_provider || 'local') === 'openai' && (() => {
-                                                // Voice availability is model-dependent (verified 2026-07-14):
-                                                // tts-1/tts-1-hd accept only the 9 classic voices; gpt-4o-mini-tts
-                                                // additionally accepts ballad/verse/marin/cedar (marin and cedar
-                                                // are OpenAI's quality recommendation).
-                                                const openaiModel = localConfig.speech_tts_api_model || 'gpt-4o-mini-tts';
-                                                const classicVoices = ['alloy', 'ash', 'coral', 'echo', 'fable', 'nova', 'onyx', 'sage', 'shimmer'];
-                                                const openaiVoices = openaiModel === 'gpt-4o-mini-tts'
-                                                    ? [...classicVoices, 'ballad', 'verse', 'marin', 'cedar']
-                                                    : classicVoices;
+                                                const openaiVoices = ttsOpenaiModel === 'gpt-4o-mini-tts'
+                                                    ? [...TTS_CLASSIC_VOICES, 'ballad', 'verse', 'marin', 'cedar']
+                                                    : TTS_CLASSIC_VOICES;
                                                 return (
                                                     <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
                                                         <Select
@@ -4363,94 +4708,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                             onChange={(v: string) => handleChange('speech_tts_api_voice', v)}
                                                             options={openaiVoices.map(v => ({ value: v, label: v }))}
                                                         />
-                                                        <Select
-                                                            label={tVoice('ttsModel')}
-                                                            value={openaiModel}
-                                                            onChange={(v: string) => {
-                                                                handleChange('speech_tts_api_model', v);
-                                                                // The 4 new voices only exist on gpt-4o-mini-tts.
-                                                                if (v !== 'gpt-4o-mini-tts'
-                                                                    && !classicVoices.includes(localConfig.speech_tts_api_voice)) {
-                                                                    handleChange('speech_tts_api_voice', 'alloy');
-                                                                }
-                                                            }}
-                                                            options={[
-                                                                { value: 'gpt-4o-mini-tts', label: 'gpt-4o-mini-tts' },
-                                                                { value: 'tts-1', label: 'tts-1' },
-                                                                { value: 'tts-1-hd', label: 'tts-1-hd' },
-                                                            ]}
-                                                        />
+                                                        {ttsModelSelect}
                                                     </div>
                                                 );
                                             })()}
 
                                             <div data-setting-role="speech_to_text">
-                                                <Select
-                                                    label={tVoice('sttProvider')}
-                                                    value={localConfig.speech_stt_provider
-                                                        ? localConfig.speech_stt_provider
-                                                        : ((localConfig.speech_stt_engine ?? 'docker') === 'local' ? 'local_whisper' : 'local_docker')}
-                                                    onChange={(v: string) => {
-                                                        if (v === 'local_docker') {
-                                                            handleChange('speech_stt_provider', '');
-                                                            handleChange('speech_stt_engine', 'docker');
-                                                        } else if (v === 'local_whisper') {
-                                                            handleChange('speech_stt_provider', '');
-                                                            handleChange('speech_stt_engine', 'local');
-                                                        } else {
-                                                            // Defaults must match speech_api.py _DEFAULT_STT_MODEL.
-                                                            handleChange('speech_stt_provider', v);
-                                                            // Leave no contradictory engine behind: picking a
-                                                            // cloud provider on top of an earlier "local" pick
-                                                            // used to keep speech_stt_engine='local', so the
-                                                            // day the key stopped resolving the audio dropped
-                                                            // into faster-whisper while Settings showed a
-                                                            // cloud provider. The documented fallback is the
-                                                            // Docker lane.
-                                                            handleChange('speech_stt_engine', 'docker');
-                                                            handleChange('speech_stt_api_model',
-                                                                v === 'elevenlabs' ? 'scribe_v2'
-                                                                : v === 'veyllo' ? 'veyllo-transcribe'
-                                                                : 'whisper-1');
-                                                        }
-                                                    }}
-                                                    options={[
-                                                        { value: 'local_docker', label: leanProfile ? tVoice('localUnavailable') : tVoice('dockerStt'), disabled: leanProfile },
-                                                        { value: 'local_whisper', label: leanProfile ? tVoice('localUnavailable') : tVoice('localStt'), disabled: leanProfile },
-                                                        { value: 'veyllo', label: 'Veyllo' },
-                                                        { value: 'elevenlabs', label: 'ElevenLabs' },
-                                                        { value: 'openai', label: 'OpenAI' },
-                                                    ]}
-                                                />
+                                                {sttProviderSelect}
                                             </div>
-                                            {localConfig.speech_stt_provider === 'veyllo' && (
-                                                <Select
-                                                    label={tVoice('sttModel')}
-                                                    value={localConfig.speech_stt_api_model || 'veyllo-transcribe'}
-                                                    onChange={(v: string) => handleChange('speech_stt_api_model', v)}
-                                                    options={[{ value: 'veyllo-transcribe', label: 'veyllo-transcribe' }]}
-                                                />
-                                            )}
-                                            {localConfig.speech_stt_provider === 'elevenlabs' && (
-                                                <Select
-                                                    label={tVoice('sttModel')}
-                                                    value={localConfig.speech_stt_api_model || 'scribe_v2'}
-                                                    onChange={(v: string) => handleChange('speech_stt_api_model', v)}
-                                                    options={[{ value: 'scribe_v2', label: 'Scribe v2' }]}
-                                                />
-                                            )}
-                                            {localConfig.speech_stt_provider === 'openai' && (
-                                                <Select
-                                                    label={tVoice('sttModel')}
-                                                    value={localConfig.speech_stt_api_model || 'whisper-1'}
-                                                    onChange={(v: string) => handleChange('speech_stt_api_model', v)}
-                                                    options={[
-                                                        { value: 'whisper-1', label: 'whisper-1' },
-                                                        { value: 'gpt-4o-mini-transcribe', label: 'gpt-4o-mini-transcribe' },
-                                                        { value: 'gpt-4o-transcribe', label: 'gpt-4o-transcribe' },
-                                                    ]}
-                                                />
-                                            )}
+                                            {sttModelSelect}
 
                                             {keyStateKnown && localConfig.speech_stt_provider === 'veyllo' && !providerHasKey('veyllo') && (
                                                 <p className="text-xs text-amber-600">{tVoice('veylloKeyHint')}</p>
@@ -4468,85 +4734,21 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 main / dedicated local GGUF (one-server model swap) /
                                                 own API provider. Backend: voice_agent.py + voice_model.py. */}
                                             <div className="pt-3 border-t border-black/5 dark:border-white/10 space-y-4" data-setting-role="voice_call">
-                                                <Select
-                                                    label={tVoice('agentLlm')}
-                                                    value={localConfig.voice_agent_provider || ''}
-                                                    onChange={(v: string) => {
-                                                        handleChange('voice_agent_provider', v);
-                                                        handleChange('voice_agent_model', '');
-                                                    }}
-                                                    options={[
-                                                        { value: '', label: tVoice('agentLlmMain') },
-                                                        { value: 'local', label: leanProfile ? tVoice('localUnavailable') : tVoice('agentLlmLocal'), disabled: leanProfile },
-                                                        { value: 'veyllo', label: 'Veyllo' },
-                                                        ...VISION_PROVIDERS.filter(p => p.id !== 'veyllo').map(p => ({ value: p.id, label: p.label })),
-                                                    ]}
-                                                />
+                                                {voiceProviderSelect}
                                                 {(localConfig.voice_agent_provider || '') === 'local' && (
                                                     <>
-                                                        {/* Pick from already-downloaded GGUFs (same availableModels source
-                                                            as the main "Modelldatei" dropdown). Downloading beliebiger Refs
-                                                            lives only under AI & Model; the empty "" option = the recommended
-                                                            Gemma default, which is fetched on save (see voice_model +
-                                                            web_server save_config trigger). A previously-saved HF ref stays
-                                                            selectable via Select's "(Current)" fallback. */}
-                                                        <Select
-                                                            label={tVoice('agentLlmLocalFile')}
-                                                            value={localConfig.voice_agent_model || ''}
-                                                            onChange={(v: string) => handleChange('voice_agent_model', v)}
-                                                            options={[
-                                                                { value: '', label: tVoice('agentLlmLocalDefault') },
-                                                                ...(availableModels ?? []).map((m: string) => ({ value: m, label: m })),
-                                                            ]}
-                                                        />
+                                                        {voiceModelField}
                                                         <p className="text-xs text-gray-400">{tVoice('agentLlmLocalHint')}</p>
                                                     </>
                                                 )}
-                                                {!!(localConfig.voice_agent_provider || '') && localConfig.voice_agent_provider !== 'local' && (() => {
-                                                    // API model: dropdown of the provider's models (live /v1/models via the
-                                                    // refresh button, else the static fallback list), same source/pattern as
-                                                    // the main-agent per-provider selector. "" = provider default; a name
-                                                    // saved by an earlier version stays via Select's "(Current)" fallback.
-                                                    const vProv = localConfig.voice_agent_provider as string;
-                                                    const vp = PROVIDERS.find(pr => pr.id === vProv);
-                                                    const fetched = apiModels[vProv];
-                                                    const list = fetched && fetched.length > 0 ? fetched : (vp?.staticModels || []);
-                                                    const hasKey = providerHasKey(vProv);
-                                                    const seen = new Set<string>();
-                                                    return (
-                                                        <>
-                                                            <div className="flex gap-2 items-end">
-                                                                <div className="flex-1">
-                                                                    <Select
-                                                                        label={tVoice('agentLlmApiModel')}
-                                                                        value={localConfig.voice_agent_model || ''}
-                                                                        onChange={(v: string) => handleChange('voice_agent_model', v)}
-                                                                        options={[
-                                                                            { value: '', label: tVoice('agentLlmApiModelDefault') },
-                                                                            ...list
-                                                                                .filter(m => { if (!m || seen.has(m)) return false; seen.add(m); return true; })
-                                                                                .map(m => ({ value: m, label: m })),
-                                                                        ]}
-                                                                    />
-                                                                </div>
-                                                                <button
-                                                                    onClick={() => handleFetchModels(vProv)}
-                                                                    className={cn(
-                                                                        "px-3 bg-gray-100 text-gray-600 hover:bg-gray-200 rounded-lg transition-colors h-10 flex items-center justify-center",
-                                                                        fetchingProvider === vProv && "animate-pulse"
-                                                                    )}
-                                                                    title={tAi('fetchModels')}
-                                                                    disabled={!hasKey}
-                                                                >
-                                                                    <RefreshCw size={18} className={cn(fetchingProvider === vProv && "animate-spin")} />
-                                                                </button>
-                                                            </div>
-                                                            {keyStateKnown && !hasKey && (
-                                                                <p className="text-xs text-amber-600">{tVoice('agentLlmKeyHint')}</p>
-                                                            )}
-                                                        </>
-                                                    );
-                                                })()}
+                                                {voiceModelField && (localConfig.voice_agent_provider || '') !== 'local' && (
+                                                    <>
+                                                        {voiceModelField}
+                                                        {keyStateKnown && !providerHasKey(localConfig.voice_agent_provider) && (
+                                                            <p className="text-xs text-amber-600">{tVoice('agentLlmKeyHint')}</p>
+                                                        )}
+                                                    </>
+                                                )}
                                                 <p className="text-xs text-gray-500">{tVoice('agentLlmDesc')}</p>
                                             </div>
                                             <p className="text-xs text-gray-500">{tVoice('providerDesc')}</p>
@@ -5192,30 +5394,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 <Section title={tAdvanced('failover')} anchor="failover">
                                     <p className="text-sm text-gray-600 mb-4">{tAdvanced('failoverDesc')}</p>
                                     {(() => {
-                                        const LEVELS = ['off', 'basic', 'balanced', 'maximum'];
-                                        const level = (localConfig.failover_level as string) || 'off';
-                                        const idx = Math.max(0, LEVELS.indexOf(level));
-                                        const isOff = level === 'off';
-                                        const showBackup = level === 'balanced' || level === 'maximum';
+                                        const isOff = failoverLevel === 'off';
                                         // No local link where the installation runs no local model (inference_profile
                                         // = api): the backend chain leaves it out too (APIBackendManager).
-                                        const showLocal = level !== 'off' && !leanProfile;
-                                        const LEVEL_LABELS = [tAdvanced('failoverLevelOff'), tAdvanced('failoverLevelBasic'), tAdvanced('failoverLevelBalanced'), tAdvanced('failoverLevelMaximum')];
+                                        const showLocal = failoverLevel !== 'off' && !leanProfile;
                                         const LEVEL_DESCS = [tAdvanced('failoverLevelOffDesc'), tAdvanced('failoverLevelBasicDesc'), tAdvanced('failoverLevelBalancedDesc'), tAdvanced('failoverLevelMaximumDesc')];
 
-                                        const primaryProvider = (localConfig.provider as string) || 'local';
-                                        const primaryLabel = primaryProvider === 'local'
+                                        const primaryLabel = failoverPrimary === 'local'
                                             ? tAdvanced('failoverLocal')
-                                            : (PROVIDERS.find(p => p.id === primaryProvider)?.label || primaryProvider);
+                                            : (PROVIDERS.find(p => p.id === failoverPrimary)?.label || failoverPrimary);
 
-                                        const bp = (localConfig.failover_backup_provider as string) || '';
-                                        const bpMeta = PROVIDERS.find(p => p.id === bp);
-                                        const bpDefault = bpMeta ? (localConfig[`api_model_${bp}`] || bpMeta.defaultModel) : '';
-                                        const bpList = bp ? (apiModels?.[bp] ?? []) : [];
-                                        const backupModelOpts = bp ? [
-                                            ...(bpDefault ? [{ value: bpDefault, label: bpList.includes(bpDefault) ? bpDefault : `${bpDefault} (${tAdvanced('failoverProviderDefault')})` }] : []),
-                                            ...bpList.filter((m: string) => m !== bpDefault).map((m: string) => ({ value: m, label: m })),
-                                        ] : [];
                                         const localModelOpts = (availableModels ?? []).map((m: string) => ({ value: m, label: m }));
 
                                         const rawTriggers = Array.isArray(localConfig.failover_triggers) ? (localConfig.failover_triggers as string[]) : [];
@@ -5238,47 +5426,21 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         return (
                                             <div>
                                                 <div className="flex items-center gap-2 mb-1">
-                                                    <span className="text-base font-semibold text-gray-900">{LEVEL_LABELS[idx]}</span>
-                                                    {level === 'balanced' && (
+                                                    <span className="text-base font-semibold text-gray-900">{FAILOVER_LEVEL_LABELS[failoverIdx]}</span>
+                                                    {failoverLevel === 'balanced' && (
                                                         <span className="text-[10px] font-medium text-gray-500 border border-gray-200 px-1.5 py-0.5 rounded">{tAdvanced('failoverRecommended')}</span>
                                                     )}
                                                 </div>
-                                                <p className="text-xs text-gray-500 mb-3 min-h-[2rem]">{LEVEL_DESCS[idx]}</p>
+                                                <p className="text-xs text-gray-500 mb-3 min-h-[2rem]">{LEVEL_DESCS[failoverIdx]}</p>
 
-                                                {/* 4-stop selector: each dot + its label live in the SAME centered grid
-                                                    column, so the marker is always exactly over its label (a native range
-                                                    thumb is inset by half its width and never lines up with the labels). */}
-                                                <div className="relative mt-2 select-none">
-                                                    {/* track between the first and last dot centers (12.5% .. 87.5%) */}
-                                                    <div className="pointer-events-none absolute left-[12.5%] right-[12.5%] top-[7px] h-1 -translate-y-1/2 rounded-full bg-gray-200" />
-                                                    <div
-                                                        className="pointer-events-none absolute left-[12.5%] top-[7px] h-1 -translate-y-1/2 rounded-full bg-gray-900 dark:bg-[#d9d9d9] transition-all"
-                                                        style={{ width: `${(75 * idx) / 3}%` }}
-                                                    />
-                                                    {/* relative z-10: paint the dots ABOVE the absolute track lines so the
-                                                        line never shows through the hollow (unselected) dots. */}
-                                                    <div className="relative z-10 grid grid-cols-4 max-md:grid-cols-2">
-                                                        {LEVEL_LABELS.map((lbl, i) => (
-                                                            <button
-                                                                key={i}
-                                                                type="button"
-                                                                onClick={() => handleChange('failover_level', LEVELS[i])}
-                                                                aria-pressed={i === idx}
-                                                                className="flex cursor-pointer flex-col items-center gap-1.5"
-                                                            >
-                                                                <span className={cn('h-3.5 w-3.5 rounded-full border-2 transition', i <= idx ? 'border-gray-900 bg-gray-900 dark:border-[#d9d9d9] dark:bg-[#d9d9d9]' : 'border-gray-300 bg-white')} />
-                                                                <span className={cn('whitespace-nowrap text-[11px]', i === idx ? 'font-semibold text-gray-900' : 'text-gray-400')}>{lbl}</span>
-                                                            </button>
-                                                        ))}
-                                                    </div>
-                                                </div>
+                                                {failoverLevelPicker}
 
                                                 <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mt-5 mb-2">{tAdvanced('failoverChain')}</div>
                                                 <div className="flex items-center flex-wrap gap-1.5">
                                                     <span className="bg-gray-100 text-gray-700 rounded-full px-2.5 py-1 text-xs font-medium">{tAdvanced('failoverPrimary')}{tCommon('labelSeparator')}{primaryLabel}</span>
-                                                    {showBackup && bp && (<>
+                                                    {failoverShowBackup && failoverBp && (<>
                                                         <ChevronRight size={14} className="text-gray-300" />
-                                                        <span className="bg-gray-100 text-gray-700 rounded-full px-2.5 py-1 text-xs font-medium">{bpMeta?.label || bp}</span>
+                                                        <span className="bg-gray-100 text-gray-700 rounded-full px-2.5 py-1 text-xs font-medium">{failoverBpMeta?.label || failoverBp}</span>
                                                     </>)}
                                                     {showLocal && (<>
                                                         <ChevronRight size={14} className="text-gray-300" />
@@ -5289,25 +5451,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                     <p className="text-xs text-gray-500 mt-2">{tAdvanced('failoverLeanNote')}</p>
                                                 )}
 
-                                                {showBackup && (
+                                                {failoverShowBackup && (
                                                     <div className="mt-3 grid grid-cols-2 gap-3 max-md:grid-cols-1">
-                                                        <Select
-                                                            label={tAdvanced('failoverBackupProvider')}
-                                                            value={bp}
-                                                            onChange={(v: string) => {
-                                                                handleChange('failover_backup_provider', v);
-                                                                handleChange('failover_backup_model', '');
-                                                            }}
-                                                            options={[{ value: '', label: tAdvanced('failoverNone') }, ...PROVIDERS.filter(p => p.id !== primaryProvider).map(p => ({ value: p.id, label: p.label }))]}
-                                                        />
-                                                        {bp && (
-                                                            <Select
-                                                                label={tAdvanced('failoverBackupModel')}
-                                                                value={(localConfig.failover_backup_model as string) || ''}
-                                                                onChange={(v: string) => handleChange('failover_backup_model', v)}
-                                                                options={[{ value: '', label: tAdvanced('failoverProviderDefault') }, ...backupModelOpts]}
-                                                            />
-                                                        )}
+                                                        {failoverBackupSelect}
+                                                        {failoverBackupModelSelect}
                                                     </div>
                                                 )}
                                                 {showLocal && (
@@ -8713,9 +8860,10 @@ interface SelectProps {
     value: any;
     onChange: (value: string) => void;
     options: { value: string; label: string; disabled?: boolean }[];
+    disabled?: boolean;
 }
 
-const Select = ({ label, value, onChange, options }: SelectProps) => {
+const Select = ({ label, value, onChange, options, disabled }: SelectProps) => {
     const uniqueOptions = options.filter((option, index) => {
         return options.findIndex((candidate) => candidate.value === option.value) === index;
     });
@@ -8727,7 +8875,8 @@ const Select = ({ label, value, onChange, options }: SelectProps) => {
                 <select
                     value={value}
                     onChange={(e) => onChange(e.target.value)}
-                    className="w-full h-10 appearance-none px-4 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all text-gray-700 pr-10"
+                    disabled={disabled}
+                    className={cn("w-full h-10 appearance-none px-4 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all text-gray-700 pr-10", disabled && "cursor-not-allowed text-gray-400")}
                 >
                     {/* Default option if current value is not in options (e.g. custom input previously saved) */}
                     {!uniqueOptions.some(o => o.value === value) && value && (

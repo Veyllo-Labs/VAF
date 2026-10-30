@@ -29,12 +29,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   provider. `vaf providers --json` prints the same rows as the new admin-only
   `POST /api/config/model-roles`.
 - **Settings > AI & Model opens with "Who does what"**, an overview of which provider and
-  model handles each job, the same rows as `vaf providers`. A click on a job jumps to its
-  setting and lights it up briefly. Jobs without their own setting follow the main provider,
-  and a job the main provider cannot do says so (DeepSeek cannot read images). The overview
-  already shows changes you have not saved yet; Save still decides. The vision option no
-  longer claims that leaving it empty shows an error: it uses the main provider when that
-  one can read images.
+  model handles each job, grouped by area (answers and work, images and documents, speech,
+  failover), the same rows as `vaf providers`. It names the primary provider first; a job
+  that cannot run says why in a plain sentence (DeepSeek cannot read images). Click a job to
+  change its provider and model right there; "All options" jumps to the full setting. The
+  overview already shows changes you have not saved yet; Save still decides. The vision
+  option no longer claims that leaving it empty shows an error: it uses the main provider
+  when that one can read images.
 
 ### Changed
 

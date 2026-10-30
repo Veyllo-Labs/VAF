@@ -15,7 +15,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import {
-    AlertTriangle, Check, ChevronDown, Loader2, Mail, Pencil, Plus, RefreshCw, ShieldCheck, Trash2, X,
+    AlertTriangle, Check, ChevronRight, Loader2, Mail, Pencil, Plus, RefreshCw, ShieldCheck, Trash2, X,
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 import { SFC_CHROME, SFC_FILL, SFC_HOVER, SFC_WINDOW } from './ChannelDashboardShell';
@@ -501,8 +501,8 @@ function AddImapForm({ open, setOpen, onAdded }: { open: boolean; setOpen: (v: b
                 className={cn('w-full', SFC_FILL, 'border border-gray-200 rounded-md text-sm px-2.5 py-1.5 text-gray-900 focus:outline-none focus:border-gray-400')} />
             <input value={label} onChange={e => setLabel(e.target.value)} placeholder={t('accountLabelPlaceholder')}
                 className={cn('w-full', SFC_FILL, 'border border-gray-200 rounded-md text-sm px-2.5 py-1.5 text-gray-900 focus:outline-none focus:border-gray-400')} />
-            <button type="button" onClick={() => setAdvanced(v => !v)} className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1">
-                <ChevronDown className={`w-3 h-3 transition-transform ${advanced ? 'rotate-180' : ''}`} /> {t('advanced')}
+            <button type="button" onClick={() => setAdvanced(v => !v)} aria-expanded={advanced} className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1">
+                <ChevronRight className={`w-3 h-3 transition-transform ${advanced ? 'rotate-90' : ''}`} /> {t('advanced')}
             </button>
             {advanced && (
                 <div className="space-y-2">

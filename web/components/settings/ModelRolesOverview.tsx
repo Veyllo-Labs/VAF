@@ -206,7 +206,7 @@ export default function ModelRolesOverview({ rows, loading, error, onRetry, prov
                                         <span className="flex min-w-0 max-md:col-start-1 max-md:row-start-2">{value(row, reasons)}</span>
                                         <span className={cn('whitespace-nowrap text-xs text-gray-400 max-md:col-start-1 max-md:row-start-3', !noteText && 'max-md:hidden')}>{noteText}</span>
                                         <span aria-hidden="true" className="vaf-role-caret h-3 w-3 self-center text-gray-400 max-md:col-start-2 max-md:row-start-1 max-md:row-span-2">
-                                            <svg viewBox="0 0 12 12" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M7.5 2.5 4 6l3.5 3.5" /></svg>
+                                            <svg viewBox="0 0 12 12" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4.5 2.5 8 6l-3.5 3.5" /></svg>
                                         </span>
                                         {!warn && reasons.length > 0 && <span className="sr-only">{reasons.join(' ')}</span>}
                                         {!expandable && <span className="sr-only">{t('rolesJumpHint')}</span>}

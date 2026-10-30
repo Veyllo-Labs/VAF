@@ -261,6 +261,20 @@ useEscapeLayer({ active: isOpen, level: 60, onEscape: onClose });
 
 ---
 
+### 4.7 Disclosure vs. Menu Chevrons
+
+Two controls, two chevrons, used the same way everywhere:
+
+- **Something that opens in place** (a row, a section, "Advanced", a tool call's details): a
+  chevron pointing **right** when closed that turns **down** (90 degrees) when open, with
+  `aria-expanded` on the button. `ChevronRight` with `rotate-90`, or the drawn chevron of the
+  "Who does what" rows (`.vaf-role-caret`).
+- **Something that opens a list on top** (a `<select>`, a dropdown menu): a chevron pointing
+  **down**, which may turn up while the list is open. `ChevronDown`, `rotate-180`.
+
+A left-pointing chevron means "back" and is never a disclosure. Guard:
+`tests/test_disclosure_chevrons_web_static.py`.
+
 ## 5. Layout Patterns
 
 ### 5.1 Sidebar

@@ -14,6 +14,7 @@ The heights are measured in a browser (the jump probe of the build report); what
 is the wiring that makes them hold, and that each site no longer renders nothing, a spinner or
 a false "empty" while it waits.
 """
+import json
 import re
 from pathlib import Path
 
@@ -241,3 +242,51 @@ def test_the_conversation_placeholder_is_the_shared_one():
     assert '<Skeleton className="pt-2">' in body
     assert 'aria-hidden="true"' not in body and "skelPulse" not in body
     assert "vaf-pulse-note" in src and ".vaf-pulse-note { animation: skelPulse" in _src(_CSS)
+
+
+def test_an_edit_during_a_persona_refetch_is_not_overwritten():
+    """A revisit refetches while the fields stay editable. An answer that lands after an edit
+    began was read before it; applying it would put the stored value back over the typing, and
+    the soul's blur would then save that old value. Every edit goes through the counter, and
+    the effect drops a late answer. MUTATION: drop the `!== editsAtStart` return, or let the
+    soul (or a date and time field) bypass the counter."""
+    src = _src(_MODAL)
+    effect = _between(src, "const personaEditsRef = useRef(0);", "// Sync Date & Time fields")
+    assert "const editsAtStart = personaEditsRef.current;" in effect
+    assert ("if (personaEditsRef.current !== editsAtStart) return;\n"
+            "                    setPersonaData(data);") in effect
+    assert "personaEditsRef.current += 1;\n        setPersonaData(next);" in effect
+    # No edit site writes the persona around the counter.
+    assert "setPersonaData({ ...personaData" not in src
+    assert src.count("editPersona({ ...personaData!, identity: newIdentity });") == 2
+    assert "onChange={(e) => editPersona({ ...personaData!, soul: e.target.value })}" in src
+    assert "editPersona({ ...personaData, soul: content });" in src
+    for setter in ("setDateTimeTimezone", "setDateTimeDateFormat", "setDateTimeTimeFormat"):
+        assert f"onChange={{(v: string) => {{ personaEditsRef.current += 1; {setter}(v); }}}}" in src, setter
+
+
+def test_a_failed_first_usage_load_ends_the_placeholder():
+    """An error status, a network failure or an answer without `totals` leaves the card without
+    figures; it then says so with its refresh button instead of pulsing forever, in every
+    language. MUTATION: drop `else setUsageFailed(true);`, or the key from one catalogue."""
+    src = _src(_MODAL)
+    load = _between(src, "const loadUsage = useCallback(() => {", "}, [apiBase, currentUser?.role]);")
+    assert "setUsageFailed(false);" in load
+    assert "if (d && d.totals) setUsage(d);\n                    else setUsageFailed(true);" in load
+    assert ".catch(() => setUsageFailed(true))," in load
+    card = _between(src, "{!usage && usageFailed ? (", ") : !usage ? (")
+    assert "{tUsage('loadFailed')}" in card and "onClick={loadUsage}" in card and "{tUsage('refresh')}" in card
+    for loc in ("de", "en", "ja", "ko", "th", "tr", "zh"):
+        cat = json.loads((_WEB / "messages" / f"{loc}.json").read_text(encoding="utf-8"))
+        assert cat["settings"]["usage"].get("loadFailed"), loc
+
+
+def test_a_late_first_session_list_waits_for_its_history_again():
+    """A session list that arrives after the 15 s guard gave up auto-selects the newest chat;
+    its history is on its way again, so the welcome screen and the centred composer must not
+    show until history_update. MUTATION: drop the `setHistoryLoading(true);` before the send."""
+    src = _src(_PAGE)
+    branch = _between(src, "else if (data.type === 'session_list') {", "else if (data.type === 'rooms_changed')")
+    assert ("setCurrentSessionId(chats[0].id);" in branch
+            and "setHistoryLoading(true);\n                            wsSocketRef.current?.send(JSON.stringify({ type: 'load_session', id: chats[0].id }));"
+            in branch)

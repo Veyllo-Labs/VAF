@@ -5919,6 +5919,10 @@ function VAFDashboardContent() {
                         const sessionIds = new Set(chats.map((s: Session) => s.id));
                         if (!activeSessionId || !sessionIds.has(activeSessionId)) {
                             setCurrentSessionId(chats[0].id);
+                            // The history is on its way again: a list that arrives after the
+                            // 15 s guard gave up must not show the welcome screen and a centred
+                            // composer until history_update (it also re-arms the guard).
+                            setHistoryLoading(true);
                             wsSocketRef.current?.send(JSON.stringify({ type: 'load_session', id: chats[0].id }));
                         }
                     }

@@ -903,15 +903,23 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     }, [toTarget]);
 
     const [usageLoading, setUsageLoading] = useState(false);
+    // The last usage request answered with nothing usable (an error status, a network failure,
+    // or no `totals`). With figures on screen they simply stay; without any, the card says so
+    // with its refresh button instead of a placeholder that would pulse forever.
+    const [usageFailed, setUsageFailed] = useState(false);
     const loadUsage = useCallback(() => {
         const base = apiBase || (typeof window !== 'undefined' ? document.location.origin : '');
         const path = currentUser?.role === 'admin' ? '/api/usage' : '/api/usage/me';
         setUsageLoading(true);
+        setUsageFailed(false);
         Promise.all([
             fetch(`${base}${path}`, { credentials: 'include', cache: 'no-store' })
                 .then(r => (r.ok ? r.json() : null))
-                .then(d => { if (d && d.totals) setUsage(d); })
-                .catch(() => {}),
+                .then(d => {
+                    if (d && d.totals) setUsage(d);
+                    else setUsageFailed(true);
+                })
+                .catch(() => setUsageFailed(true)),
             fetch(`${base}/api/usage/fx`, { credentials: 'include' })
                 .then(r => (r.ok ? r.json() : null))
                 .then(d => { if (d && d.rate) setFx(d.rate); })
@@ -1823,12 +1831,26 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [newTimelineEntryCount, setNewTimelineEntryCount] = useState(0); // Track new entries for animation
     const timelineRef = useRef<HTMLDivElement>(null);
 
+    // Counts the person's edits of the persona fields (name, symbol, soul, date and time). A
+    // revisit refetches while the fields stay on screen and editable; an answer that lands
+    // after an edit began was read before it, so applying it would put the stored value back
+    // over the typing (and a blur would then save that old value). Such an answer is dropped:
+    // the fields on screen are newer, and every edit is saved by its own request.
+    const personaEditsRef = useRef(0);
+    const editPersona = (next: { identity: any, user_identity?: any, soul: string }) => {
+        personaEditsRef.current += 1;
+        setPersonaData(next);
+    };
     useEffect(() => {
         if (activeTab === 'persona' || activeTab === 'interface') {
             setPersonaLoading(true);
+            const editsAtStart = personaEditsRef.current;
             fetch('/api/user/persona')
                 .then(res => res.json())
-                .then(data => setPersonaData(data))
+                .then(data => {
+                    if (personaEditsRef.current !== editsAtStart) return;
+                    setPersonaData(data);
+                })
                 .catch(e => console.error("Failed to load persona", e))
                 .finally(() => setPersonaLoading(false));
         }
@@ -3762,7 +3784,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             value={personaData?.identity?.name || ''}
                                             onChange={(v) => {
                                                 const newIdentity = { ...personaData?.identity, name: v };
-                                                setPersonaData({ ...personaData!, identity: newIdentity });
+                                                editPersona({ ...personaData!, identity: newIdentity });
                                                 fetch('/api/user/identity', {
                                                     method: 'PUT',
                                                     headers: { 'Content-Type': 'application/json' },
@@ -3775,7 +3797,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             value={personaData?.identity?.emoji || ''}
                                             onChange={(v) => {
                                                 const newIdentity = { ...personaData?.identity, emoji: v };
-                                                setPersonaData({ ...personaData!, identity: newIdentity });
+                                                editPersona({ ...personaData!, identity: newIdentity });
                                                 fetch('/api/user/identity', {
                                                     method: 'PUT',
                                                     headers: { 'Content-Type': 'application/json' },
@@ -3803,7 +3825,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     <textarea
                                         className="w-full h-64 p-4 bg-gray-50 border border-gray-200 rounded-xl font-mono text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 resize-none"
                                         value={personaData?.soul || ''}
-                                        onChange={(e) => setPersonaData({ ...personaData!, soul: e.target.value })}
+                                        onChange={(e) => editPersona({ ...personaData!, soul: e.target.value })}
                                         onBlur={() => fetch('/api/user/soul', {
                                             method: 'PUT',
                                             headers: { 'Content-Type': 'application/json' },
@@ -4317,7 +4339,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </div>
                                     )}
                                     <p className="text-xs text-gray-500">{tUsage('desc')}</p>
-                                    {!usage ? (
+                                    {!usage && usageFailed ? (
+                                        <div className="flex items-center justify-between gap-4 mt-4">
+                                            <p className="text-xs text-red-600">{tUsage('loadFailed')}</p>
+                                            <button type="button" onClick={loadUsage} disabled={usageLoading}
+                                                    className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50">
+                                                <RefreshCw className={`w-3.5 h-3.5 ${usageLoading ? 'animate-spin' : ''}`} />
+                                                {tUsage('refresh')}
+                                            </button>
+                                        </div>
+                                    ) : !usage ? (
                                         // The card in its common state: the three figures, one provider
                                         // line, the per-account table and the refresh row.
                                         <Skeleton label={tUsage('loading')} className="mt-4">
@@ -5052,20 +5083,20 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 <PickerSelect
                                                     label={tInterface('timezone')}
                                                     value={dateTimeTimezone}
-                                                    onChange={(v: string) => setDateTimeTimezone(v)}
+                                                    onChange={(v: string) => { personaEditsRef.current += 1; setDateTimeTimezone(v); }}
                                                     options={DATE_TIME_TIMEZONES}
                                                     emptyText={tInterface('timezoneNoResults')}
                                                 />
                                                 <Select
                                                     label={tInterface('dateFormat')}
                                                     value={dateTimeDateFormat}
-                                                    onChange={(v: string) => setDateTimeDateFormat(v)}
+                                                    onChange={(v: string) => { personaEditsRef.current += 1; setDateTimeDateFormat(v); }}
                                                     options={DATE_TIME_DATE_FORMATS}
                                                 />
                                                 <Select
                                                     label={tInterface('timeFormat')}
                                                     value={dateTimeTimeFormat}
-                                                    onChange={(v: string) => setDateTimeTimeFormat(v)}
+                                                    onChange={(v: string) => { personaEditsRef.current += 1; setDateTimeTimeFormat(v); }}
                                                     options={DATE_TIME_TIME_FORMATS}
                                                 />
                                             </div>
@@ -8899,7 +8930,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 username={currentUser?.username || 'Admin'}
                 onComplete={(content) => {
                     if (personaData) {
-                        setPersonaData({ ...personaData, soul: content });
+                        editPersona({ ...personaData, soul: content });
                     }
                     fetch('/api/user/soul', {
                         method: 'PUT',

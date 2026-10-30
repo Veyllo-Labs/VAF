@@ -154,7 +154,9 @@ many frames have not been read.
   themselves after 15 seconds so a dead server does not trap the person under
   them. This includes the very first load of the app: the newest chat is
   opened from the first session list, and until its history arrives the
-  message area is that chat on its way, not the welcome screen of a new chat.
+  message area is that chat on its way, not the welcome screen of a new chat
+  (also when that list only arrives after the 15 seconds: it starts the wait
+  again).
   The transcript that arrives (or the cached one shown on a switch) appears as
   it is, without the per-message enter animation; only messages that are new
   to the screen afterwards (a send, a reply, a tool) fade in. Until the first
@@ -1299,7 +1301,8 @@ The Web UI runs alongside the CLI interface:
 - **It pulses in opacity only** (`.vaf-skel-bar`, `skelPulse`): no shimmer, no gradient, no moving band, per the repaint rule in `globals.css`. With reduced motion it holds still.
 - **Screen readers hear one status line**: the placeholder is `role="status"` with a short label (the section's own loading text, else `common.loading`), and its shapes are hidden.
 - **In the chat**: the conversation on its way, the session list and the session check use the same primitive (see section 2b), and the composer stays at the bottom while a history loads (see Input Box).
-- **A refetch keeps the data on screen.** The placeholder stands only while there is no data yet; going back to a tab, or reloading a list that is already shown, keeps what is there.
+- **A refetch keeps the data on screen.** The placeholder stands only while there is no data yet; going back to a tab, or reloading a list that is already shown, keeps what is there. Fields that stay editable during such a refetch win over it: Persona's name, symbol and soul and the date and time fields count the person's edits, and an answer that lands after an edit began is dropped, because it was read before the edit (each edit is saved by its own request).
+- **A first load that fails ends the placeholder.** The section says it could not load, with its retry or refresh button, instead of a placeholder that pulses forever (Usage: "Token usage could not be loaded." and Refresh).
 - **Not loading states:** a spinner on a button that is doing something (checking a key, refreshing models), live status chips (a connection being checked), and a list that refetches with its rows on screen.
 - **Sections that may vanish.** SSH and FTP are hidden for an account without that tool, and Remote access and Certificate for a non-admin. They show the placeholder until the answer says so, then collapse; that only happens below the fold of a long tab.
 - **Out of scope so far:** the windows outside the chat and Settings (the inbox, the file viewers, Notifications) and canvases with no predictable shape (the memory graph).

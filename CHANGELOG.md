@@ -39,13 +39,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
-- **Settings tabs no longer slide or fade in** (the Local Network tab slid in from the right).
-  While a chat, the chat list or a settings section loads, a quiet placeholder in the shape of
-  what is coming stands in its place instead of a spinner, an empty area or a misleading
-  "nothing here", so nothing jumps when the content arrives. Opening the app shows the newest
-  chat where it will stay: no welcome screen first, and the input box no longer floats in the
-  middle and then sinks. A loaded conversation appears at once instead of sliding in. On a phone, an API key's state (stored, change, delete) now
-  sits on its own line under the key's name instead of squeezing it.
+- **Settings tabs no longer slide or fade in.** The Local Network tab slid in from the right;
+  every tab now simply appears.
+- **While a chat, the chat list or a settings section loads, a grey outline of it stands in
+  its place** instead of a spinner, an empty area or a false "nothing here", and nothing jumps
+  when the content arrives. Opening the app shows the newest chat where it stays: no welcome
+  screen first, and the input box no longer floats in the middle and then sinks. A loaded
+  conversation appears at once instead of sliding in.
+- **On a phone, an API key's state** (stored, change, delete) now sits on its own line under
+  the key's name instead of squeezing the name onto two lines.
 - **The per-user browser pool now sizes itself by free memory** (`browser_pool_max: "auto"`,
   the new default): a personal browser starts for each person who needs one as long as the
   machine can hold its full 2 GB cap above the free-memory floor, never fewer than the former

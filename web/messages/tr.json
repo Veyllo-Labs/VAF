@@ -818,6 +818,7 @@
       "title": "Token kullanımı",
       "desc": "Bu örneğin gerçekte ne tükettiği. Buradaki her sayı, sağlayıcının kendisinin faturaladığı bir çağrı için bildirdiği sayıdır, burada bir tokenizer ile sayılmış değildir - yani sağlayıcılar tokenleri farklı saysa bile doğru kalır. Yanındaki maliyet bir fiyat listesinden çıkarılmış tahmindir ve sapabilir, tokenler sapmaz.",
       "loading": "Yükleniyor...",
+      "loadFailed": "Token kullanımı yüklenemedi.",
       "empty": "Henüz kayıt yok. Kullanım, bir API sağlayıcısından gelen ilk yanıttan sonra burada görünür (yerel modeller ücretsizdir ve sayılmaz).",
       "totalTokens": "Toplam token",
       "requests": "İstek",

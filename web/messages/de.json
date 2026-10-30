@@ -818,6 +818,7 @@
       "title": "Token-Verbrauch",
       "desc": "Was diese Instanz tatsächlich verbraucht hat. Jede Zahl hier stammt vom Anbieter selbst, für einen Aufruf, den er berechnet hat, und wurde nicht hier gezählt - sie stimmt also auch dann, wenn Anbieter Tokens unterschiedlich zählen. Die Kosten daneben sind eine Schätzung aus einer Preisliste und können abweichen, die Tokens nicht.",
       "loading": "Wird geladen...",
+      "loadFailed": "Der Token-Verbrauch konnte nicht geladen werden.",
       "empty": "Noch nichts erfasst. Der Verbrauch erscheint hier nach der ersten Antwort über einen API-Anbieter (lokale Modelle kosten nichts und werden nicht gezählt).",
       "totalTokens": "Tokens gesamt",
       "requests": "Anfragen",

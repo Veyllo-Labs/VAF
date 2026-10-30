@@ -347,6 +347,9 @@ className="hover:shadow-md transition-shadow"
 
 // Modal entrance
 className="animate-in fade-in zoom-in-95 duration-200"
+
+// Tab and panel content: no enter animation; loading uses `Skeleton`
+<Skeleton label={t('loading')}><SkeletonRows count={3} widths={[40, 60]} rowClassName="h-8" /></Skeleton>
 ```
 
 ---

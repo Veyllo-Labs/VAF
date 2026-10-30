@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState, type ChangeEvent, type ReactNode } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { Copy, Download, ShieldAlert, ShieldCheck, Upload } from 'lucide-react';
+import Skeleton, { SkeletonBar } from '@/components/ui/Skeleton';
 import { copyText } from '@/lib/clipboard';
 
 interface Facts {
@@ -146,6 +147,9 @@ export default function CertificateSection({ sectionId }: { sectionId?: string }
     const apiBase = typeof window !== 'undefined' ? (document.location.origin || '') : '';
     const [data, setData] = useState<State | null>(null);
     const [loadFailed, setLoadFailed] = useState(false);
+    // The route said this section is not the caller's (401/403); until any answer the section
+    // stands with its title and a placeholder.
+    const [hidden, setHidden] = useState(false);
     const [picked, setPicked] = useState<Picked>({});
     const [report, setReport] = useState<Report | null>(null);
     const [code, setCode] = useState('');
@@ -157,7 +161,8 @@ export default function CertificateSection({ sectionId }: { sectionId?: string }
         try {
             const res = await fetch(`${apiBase}/api/network/certificate`, { credentials: 'include' });
             // Not an admin: the section is not theirs, it stays hidden.
-            if (res.status === 401 || res.status === 403) { setData(null); setLoadFailed(false); return; }
+            if (res.status === 401 || res.status === 403) { setData(null); setLoadFailed(false); setHidden(true); return; }
+            setHidden(false);
             if (!res.ok) { setLoadFailed(true); return; }
             setData(await res.json());
             setLoadFailed(false);
@@ -278,7 +283,24 @@ export default function CertificateSection({ sectionId }: { sectionId?: string }
     };
 
     if (!data) {
-        if (!loadFailed) return null;
+        if (hidden) return null;
+        if (!loadFailed) return (
+            <div id={sectionId} className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 scroll-mt-2">
+                <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-2">{t('title')}</h3>
+                <p className="text-xs text-gray-600 mb-4">{t('intro')}</p>
+                {/* The certificate in use, VAF's authority and the own-certificate controls, at
+                    their loaded height with VAF's own certificate in use (measured). */}
+                <Skeleton className="h-[770px] max-md:h-[1040px]">
+                    <SkeletonBar className="h-2.5 w-28 mb-2" />
+                    <SkeletonBar className="h-40 rounded-lg" />
+                    <SkeletonBar className="h-2.5 w-36 mt-5 mb-2" />
+                    <SkeletonBar className="h-56 rounded-lg" />
+                    <SkeletonBar className="h-2.5 w-40 mt-5 mb-2" />
+                    <SkeletonBar className="h-2.5 w-3/4 mb-3" />
+                    <SkeletonBar className="h-40 rounded-lg" />
+                </Skeleton>
+            </div>
+        );
         return (
             <div id={sectionId} className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 scroll-mt-2">
                 <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-2">{t('title')}</h3>

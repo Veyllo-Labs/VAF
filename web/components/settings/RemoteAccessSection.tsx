@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { useTranslations } from 'next-intl';
 import { Copy, Network, Shield, Trash2 } from 'lucide-react';
+import Skeleton, { SkeletonBar, SkeletonRows } from '@/components/ui/Skeleton';
 import { copyText } from '@/lib/clipboard';
 
 interface Iface {
@@ -66,12 +67,16 @@ export default function RemoteAccessSection({ sectionId }: { sectionId?: string 
     // the field is emptied once the confirmed save went through.
     const [lockout, setLockout] = useState<{ address: string; allowed: string[]; vpnOnly: boolean; draft?: string } | null>(null);
     const [loadFailed, setLoadFailed] = useState(false);
+    // The route said this section is not the caller's (401/403); until any answer the section
+    // stands with its title and a placeholder.
+    const [hidden, setHidden] = useState(false);
 
     const load = useCallback(async () => {
         try {
             const res = await fetch(`${apiBase}/api/network/remote-access`, { credentials: 'include' });
             // Not an admin: the section is not theirs, it stays hidden.
-            if (res.status === 401 || res.status === 403) { setData(null); setLoadFailed(false); return; }
+            if (res.status === 401 || res.status === 403) { setData(null); setLoadFailed(false); setHidden(true); return; }
+            setHidden(false);
             // Anything else keeps the last state and says so, instead of the section vanishing.
             if (!res.ok) { setLoadFailed(true); return; }
             setData(await res.json());
@@ -139,7 +144,27 @@ export default function RemoteAccessSection({ sectionId }: { sectionId?: string 
     };
 
     if (!data) {
-        if (!loadFailed) return null;
+        if (hidden) return null;
+        if (!loadFailed) return (
+            <div id={sectionId} className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 scroll-mt-2">
+                <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-2">{t('title')}</h3>
+                <p className="text-xs text-gray-600 mb-2">{t('intro')}</p>
+                <p className="text-xs text-gray-600 mb-4">{t('scope')}</p>
+                {/* The connections, the three admission rows, your own networks and the add
+                    field, at their loaded height with one connection (measured). */}
+                <Skeleton className="h-[390px] max-md:h-[426px]">
+                    <SkeletonBar className="h-2.5 w-24 mb-2" />
+                    <SkeletonBar className="h-10 rounded-lg mb-6" />
+                    <SkeletonBar className="h-2.5 w-28 mb-3" />
+                    <div className="flex flex-col gap-2">
+                        <SkeletonRows count={3} widths={['100%']} rowClassName="h-14" barClassName="h-full rounded-lg" />
+                    </div>
+                    <SkeletonBar className="h-2.5 w-32 mt-6 mb-2" />
+                    <SkeletonBar className="h-3 w-48 mb-3" />
+                    <SkeletonBar className="h-9 rounded-lg" />
+                </Skeleton>
+            </div>
+        );
         return (
             <div id={sectionId} className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 scroll-mt-2">
                 <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-2">{t('title')}</h3>

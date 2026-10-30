@@ -134,7 +134,7 @@ def test_the_section_is_mounted_and_reads_its_strings():
     assert "useTranslations('sandboxEnv')" in section and "/api/sandbox" in section
     # The refresh after an action reloads with the current selection, not the closure's:
     # the old scope's answer would win the race and leave the list dimmed for good.
-    act = section[section.index("const act = async"):section.index("if (!data && !loadFailed)")]
+    act = section[section.index("const act = async"):section.index("const stale = ")]
     assert "void loadNow.current();" in act and "void load();" not in act
     assert "useEffect(() => { loadNow.current = load; }, [load]);" in section
     server = (root / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")

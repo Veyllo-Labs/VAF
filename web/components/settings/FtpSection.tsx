@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Server, Trash2 } from 'lucide-react';
+import Skeleton, { SkeletonBar, SkeletonRows } from '@/components/ui/Skeleton';
 
 interface FtpServer {
     name: string;
@@ -28,6 +29,9 @@ export default function FtpSection() {
     const [servers, setServers] = useState<FtpServer[] | null>(null);
     const [note, setNote] = useState<string | null>(null);
     const [loadFailed, setLoadFailed] = useState(false);
+    // 403: the tool is not enabled for this account. Until any answer the section stands with
+    // a placeholder; after a 403 it is not there at all.
+    const [hidden, setHidden] = useState(false);
     // Removing loses the remembered certificate, and the next connection trusts whatever the
     // server then shows: so the first click asks, the second removes (as SandboxSection does).
     const [confirming, setConfirming] = useState<string | null>(null);
@@ -36,7 +40,8 @@ export default function FtpSection() {
         try {
             const res = await fetch(`${apiBase}/api/ftp`, { credentials: 'include' });
             // 403: the tool is not enabled for this account - the section stays away.
-            if (res.status === 403) { setServers(null); setLoadFailed(false); return; }
+            if (res.status === 403) { setServers(null); setLoadFailed(false); setHidden(true); return; }
+            setHidden(false);
             if (!res.ok) { setLoadFailed(true); return; }
             const body = await res.json();
             const list: FtpServer[] = Array.isArray(body.servers) ? body.servers : [];
@@ -72,7 +77,7 @@ export default function FtpSection() {
     const trustLabel = (s: FtpServer) =>
         s.trust === 'authority' ? t('trustAuthority') : s.trust === 'pinned' ? t('trustPinned') : t('trustNone');
 
-    if (servers === null && !loadFailed) return null;
+    if (hidden) return null;
     return (
         <div className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 mt-6">
             <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-2">{t('title')}</h3>
@@ -86,7 +91,13 @@ export default function FtpSection() {
                     </button>
                 </div>
             )}
-            {servers === null ? null : <>
+            {servers === null ? (loadFailed ? null : (
+                // One server with its fingerprint line (measured).
+                <Skeleton className="h-[86px]">
+                    <SkeletonBar className="h-2.5 w-16 mb-2" />
+                    <SkeletonRows count={1} widths={[['45%', '12%']]} lead="w-4 h-4" rowClassName="h-14 px-3" />
+                </Skeleton>
+            )) : <>
             <p className="text-xs font-semibold text-gray-700 mb-1">{t('servers')}</p>
             {servers.length === 0 ? (
                 <p className="text-sm text-gray-500">{t('noServers')}</p>

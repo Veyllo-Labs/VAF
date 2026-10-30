@@ -640,6 +640,8 @@ def test_the_grants_list_never_shows_another_accounts_grants():
     """Switching accounts in the user editor left the previous one's list - and its revoke
     buttons - on screen until the next answer, and a failed fetch kept it for good.
     A failed fetch says so, with a retry, instead of hiding the section.
+    While the first answer is on its way the section stands with its title and the shared
+    placeholder (tests/test_loading_states_web_static.py), never an empty gap.
     MUTATION: keep the old list on a failed fetch, accept a late answer for another account,
     or hide the section when the list could not be loaded."""
     from pathlib import Path
@@ -650,7 +652,7 @@ def test_the_grants_list_never_shows_another_accounts_grants():
     assert "next = null;" in src
     assert "useEffect(() => { setLoaded(null); setLoadFailed(false); void load(); }, [load]);" in src
     empty = src[src.index("if (!data) {"):src.index("const tools = Object.entries")]
-    assert "if (!loadFailed) return null;" in empty and "t('loadFailed')" in empty
+    assert "if (!loadFailed) return (" in empty and "<Skeleton" in empty and "t('loadFailed')" in empty
     assert "onClick={() => void load()}" in empty
     # A revoke that answers after the admin moved to another account touches neither that
     # account's error line nor its list.

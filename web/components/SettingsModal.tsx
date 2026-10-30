@@ -46,6 +46,7 @@ import CertificateSection from './settings/CertificateSection';
 import StandingGrantsSection from './settings/StandingGrantsSection';
 import { PickerSelect } from '@/components/ui/PickerDialog';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
+import Skeleton, { SkeletonBar, SkeletonRows } from '@/components/ui/Skeleton';
 import { groupToolsIntoBundles, bundleColor, bundleLabel, bundleIconKey } from '@/lib/toolBundles';
 import type { SkillSaveData } from './settings/SkillsEditor';
 import type { CreateAutomationPayload } from './CreateAutomationPopup';
@@ -616,7 +617,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     type ArchivedChat = { id: string; name: string; updated_at: string; message_count: number };
     type ArchivedMsg = { role: string; content: string; timestamp?: string };
     const [showArchive, setShowArchive] = useState(false);
-    const [archiveChats, setArchiveChats] = useState<ArchivedChat[]>([]);
+    // null until the first answer: "loading" and "the archive is empty" are different screens.
+    const [archiveChats, setArchiveChats] = useState<ArchivedChat[] | null>(null);
     const [archiveQuery, setArchiveQuery] = useState('');
     const [archiveOpenId, setArchiveOpenId] = useState<string | null>(null);
     type ArchiveHit = { chat_id: string; name: string; index: number; line: string; words?: string[]; span?: [number, number] };
@@ -655,13 +657,19 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     }, []);
 
     const [archiveMsgs, setArchiveMsgs] = useState<ArchivedMsg[]>([]);
+    // Which chat `archiveMsgs` belongs to: while it is not the opened one, the messages are
+    // on their way (an empty chat and a loading one look alike otherwise).
+    const [archiveMsgsFor, setArchiveMsgsFor] = useState<string | null>(null);
     const archiveBase = apiBase || (typeof window !== 'undefined' ? document.location.origin : '');
     useEffect(() => {
         if (!showArchive) return;
         fetch(`${archiveBase}/api/archive/chats`, { credentials: 'include' })
             .then(r => (r.ok ? r.json() : null))
-            .then(d => { if (d && Array.isArray(d.chats)) setArchiveChats(d.chats); })
-            .catch(() => {});
+            .then(d => {
+                if (d && Array.isArray(d.chats)) setArchiveChats(d.chats);
+                else setArchiveChats(list => list ?? []);
+            })
+            .catch(() => setArchiveChats(list => list ?? []));
     }, [showArchive, archiveBase]);
     useEffect(() => {
         // Searching happens on the server: the browser only holds the chat it has
@@ -679,11 +687,15 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     }, [archiveQuery, showArchive, archiveBase]);
 
     useEffect(() => {
-        if (!archiveOpenId) { setArchiveMsgs([]); return; }
+        if (!archiveOpenId) { setArchiveMsgs([]); setArchiveMsgsFor(null); return; }
+        // An answer for a chat that is no longer open is dropped.
+        let current = true;
         fetch(`${archiveBase}/api/archive/chats/${encodeURIComponent(archiveOpenId)}`, { credentials: 'include' })
             .then(r => (r.ok ? r.json() : null))
-            .then(d => { if (d && Array.isArray(d.messages)) setArchiveMsgs(d.messages); })
-            .catch(() => {});
+            .then(d => { if (current) setArchiveMsgs(d && Array.isArray(d.messages) ? d.messages : []); })
+            .catch(() => { if (current) setArchiveMsgs([]); })
+            .finally(() => { if (current) setArchiveMsgsFor(archiveOpenId); });
+        return () => { current = false; };
     }, [archiveOpenId, archiveBase]);
     const asOfLabel = pricesAsOf
         ? new Date(pricesAsOf).toLocaleDateString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' })
@@ -1060,7 +1072,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         const locked = isSet && !keyEditing[group] && !typed;
         const confirming = secretConfirm === group;
         const state = (
-            <span className="flex items-center gap-2 text-[11px] leading-none">
+            // On a phone the state takes a line of its own under the label, held from the first
+            // frame: beside the label it squeezed the name onto two lines, and arriving after
+            // the load it pushed every field below down.
+            <span className="flex items-center gap-2 text-[11px] leading-none max-md:basis-full max-md:min-h-[11px]">
                 {isSet ? (
                     <>
                         <span className="inline-flex items-center gap-1 text-emerald-600">
@@ -1179,7 +1194,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         // trapping a half-typed replacement inside a disabled box would eat it.
         const locked = isSet && !keyEditing[provider] && !typed;
         const state = (
-            <span className="flex items-center gap-2 text-[11px] leading-none">
+            // On a phone the state takes a line of its own under the label, held from the first
+            // frame: beside the label it squeezed the name onto two lines, and arriving after
+            // the load it pushed every field below down.
+            <span className="flex items-center gap-2 text-[11px] leading-none max-md:basis-full max-md:min-h-[11px]">
                 {check?.result === 'checking' ? (
                     <span className="inline-flex items-center gap-1 text-gray-400">
                         <Loader2 size={11} className="animate-spin" />{tGeneral('keyChecking')}
@@ -1743,11 +1761,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
      *  They are separate fields because they were once one, and the edit dialog then wrote
      *  presence back as the account state - saving an offline user deactivated them. */
     const [users, setUsers] = useState<Array<{ id: number; username: string; email?: string; role: string; lastActive: string; status: string; accountActive: boolean; tools: string[]; workflows: string[]; access: string; confirmation_bypass?: boolean }>>([]);
-    const [usersLoading, setUsersLoading] = useState(false);
+    // Starts true: the user table is only drawn on the tab whose first render starts the load,
+    // and a first frame reading "no users yet" before that would flash a false empty state.
+    const [usersLoading, setUsersLoading] = useState(true);
     const [networkLinkCopied, setNetworkLinkCopied] = useState(false);
     /** LAN URL for other devices (from backend); e.g. http://192.168.1.100:3000 */
     /** From API /api/network/access-url: host, ports (access/backend), url (full URL for copy). */
     const [accessUrlData, setAccessUrlData] = useState<{ host: string | null; port: number; backend_port: number; url: string | null } | null>(null);
+    // The access URL has answered at least once (with or without an address): before that the
+    // LAN line is a placeholder, after it a missing address says so.
+    const [accessUrlResolved, setAccessUrlResolved] = useState(false);
     /** Real runtime status from /api/network/status: did the integrated HTTPS proxy ACTUALLY bind, on
      *  which effective port, the resulting LAN URL, or the bind error — so the tab shows the truth. */
     const [networkStatus, setNetworkStatus] = useState<{ proxy_bound: boolean; effective_https_port: number | null; error: string | null; url: string | null; host: string | null } | null>(null);
@@ -1771,7 +1794,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
     // Persona State
     const [personaData, setPersonaData] = useState<{identity: any, user_identity?: any, soul: string} | null>(null);
-    const [personaLoading, setPersonaLoading] = useState(false);
+    // Starts true: the two tabs that read it (Persona, Interface) start the fetch on their first
+    // render, and a first frame of empty fields before the effect runs would flash.
+    const [personaLoading, setPersonaLoading] = useState(true);
+    // Only the FIRST load stands as a placeholder; a revisit refetches with the data on screen.
+    const personaFirstLoad = personaLoading && !personaData;
     // Date & Time (Interface tab) – synced from user_identity when on interface tab
     const [dateTimeTimezone, setDateTimeTimezone] = useState<string>('');
     const [dateTimeDateFormat, setDateTimeDateFormat] = useState<string>('');
@@ -2176,7 +2203,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 else
                     setAccessUrlData(null);
             })
-            .catch(() => setAccessUrlData(null));
+            .catch(() => setAccessUrlData(null))
+            .finally(() => setAccessUrlResolved(true));
     }, [isOpen, activeTab]);
 
     // Reset fetching state when apiModels update
@@ -3714,138 +3742,149 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         )}
 
                         {activeTab === 'persona' && (
-                            <div className="space-y-6 animate-in fade-in duration-300">
-                                {personaLoading ? (
-                                    <div className="flex justify-center py-12"><div className="w-8 h-8 border-2 border-gray-200 border-t-gray-900 rounded-full animate-spin" /></div>
-                                ) : (
-                                    <>
-                                        <Section title={tPersona('identity')}>
+                            <div className="space-y-6">
+                                <Section title={tPersona('identity')}>
+                                    {personaFirstLoad ? (
+                                        <Skeleton>
                                             <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
-                                                <Input
-                                                    label={tPersona('agentName')}
-                                                    value={personaData?.identity?.name || ''}
-                                                    onChange={(v) => {
-                                                        const newIdentity = { ...personaData?.identity, name: v };
-                                                        setPersonaData({ ...personaData!, identity: newIdentity });
-                                                        fetch('/api/user/identity', {
-                                                            method: 'PUT',
-                                                            headers: { 'Content-Type': 'application/json' },
-                                                            body: JSON.stringify(newIdentity)
-                                                        });
-                                                    }}
-                                                />
-                                                <Input
-                                                    label={tPersona('emojiSymbol')}
-                                                    value={personaData?.identity?.emoji || ''}
-                                                    onChange={(v) => {
-                                                        const newIdentity = { ...personaData?.identity, emoji: v };
-                                                        setPersonaData({ ...personaData!, identity: newIdentity });
-                                                        fetch('/api/user/identity', {
-                                                            method: 'PUT',
-                                                            headers: { 'Content-Type': 'application/json' },
-                                                            body: JSON.stringify(newIdentity)
-                                                        });
-                                                    }}
-                                                />
+                                                {[24, 32].map(w => (
+                                                    <div key={w} className="flex flex-col gap-1.5">
+                                                        <div className="h-5 ml-1 flex items-center"><SkeletonBar className="h-3" style={{ width: `${w}%` }} /></div>
+                                                        <SkeletonBar className="h-10 rounded-lg" />
+                                                    </div>
+                                                ))}
                                             </div>
-                                        </Section>
-
-                                        <Section title={tPersona('soul')}>
-                                            <div className="flex justify-between items-center mb-2">
-                                                <p className="text-xs text-gray-500">{tPersona('soulDesc')}</p>
-                                                <button
-                                                    onClick={() => setShowSoulWizard(true)}
-                                                    className="text-xs px-2 py-1 bg-purple-50 text-purple-600 rounded-lg hover:bg-purple-100 transition-colors flex items-center gap-1 font-medium"
-                                                >
-                                                    <Wand2 size={12} /> {tPersona('createWithWizard')}
-                                                </button>
-                                            </div>
-                                            <textarea
-                                                className="w-full h-64 p-4 bg-gray-50 border border-gray-200 rounded-xl font-mono text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 resize-none"
-                                                value={personaData?.soul || ''}
-                                                onChange={(e) => setPersonaData({ ...personaData!, soul: e.target.value })}
-                                                onBlur={() => fetch('/api/user/soul', {
+                                        </Skeleton>
+                                    ) : (
+                                    <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
+                                        <Input
+                                            label={tPersona('agentName')}
+                                            value={personaData?.identity?.name || ''}
+                                            onChange={(v) => {
+                                                const newIdentity = { ...personaData?.identity, name: v };
+                                                setPersonaData({ ...personaData!, identity: newIdentity });
+                                                fetch('/api/user/identity', {
                                                     method: 'PUT',
                                                     headers: { 'Content-Type': 'application/json' },
-                                                    body: JSON.stringify({ content: personaData?.soul })
-                                                })}
-                                            />
-                                        </Section>
+                                                    body: JSON.stringify(newIdentity)
+                                                });
+                                            }}
+                                        />
+                                        <Input
+                                            label={tPersona('emojiSymbol')}
+                                            value={personaData?.identity?.emoji || ''}
+                                            onChange={(v) => {
+                                                const newIdentity = { ...personaData?.identity, emoji: v };
+                                                setPersonaData({ ...personaData!, identity: newIdentity });
+                                                fetch('/api/user/identity', {
+                                                    method: 'PUT',
+                                                    headers: { 'Content-Type': 'application/json' },
+                                                    body: JSON.stringify(newIdentity)
+                                                });
+                                            }}
+                                        />
+                                    </div>
+                                    )}
+                                </Section>
 
-                                        <Section title={tPersona('longTermMemory')}>
-                                            <div className="flex flex-wrap items-center gap-4">
-                                                <div className="flex items-center gap-2">
-                                                    <span className="text-sm font-medium text-gray-700">{tPersona('maxRagSnippets')}</span>
-                                                    <input
-                                                        type="number"
-                                                        min={1}
-                                                        max={20}
-                                                        value={localConfig.memory_rag_k ?? 5}
-                                                        onChange={(e) => handleChange('memory_rag_k', Math.max(1, Math.min(20, parseInt(e.target.value) || 5)))}
-                                                        className="w-14 px-2 h-9 bg-white border border-gray-200 rounded-lg text-sm text-center focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500"
-                                                    />
-                                                </div>
-                                                <div className="flex items-center gap-2">
-                                                    <span className="text-sm font-medium text-gray-700">{tPersona('minRelevance')}</span>
-                                                    <input
-                                                        type="number"
-                                                        min={0}
-                                                        max={100}
-                                                        value={Math.round((localConfig.memory_rag_threshold ?? 0.3) * 100)}
-                                                        onChange={(e) => {
-                                                            const pct = Math.max(0, Math.min(100, parseInt(e.target.value) || 0));
-                                                            handleChange('memory_rag_threshold', pct / 100);
-                                                        }}
-                                                        className="w-14 px-2 h-9 bg-white border border-gray-200 rounded-lg text-sm text-center focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500"
-                                                    />
-                                                </div>
-                                            </div>
-                                            <p className="text-xs text-gray-400 mt-1">{tPersona('ragDesc')}</p>
-                                            <div className="flex flex-wrap items-center gap-4 mt-3">
-                                                <div className="flex items-center gap-2">
-                                                    <span className="text-sm font-medium text-gray-700">{tPersona('crossChatHints')}</span>
-                                                    <input
-                                                        type="number"
-                                                        min={1}
-                                                        max={5}
-                                                        value={localConfig.cross_chat_hint_k ?? 2}
-                                                        onChange={(e) => handleChange('cross_chat_hint_k', Math.max(1, Math.min(5, parseInt(e.target.value) || 2)))}
-                                                        className="w-14 px-2 h-9 bg-white border border-gray-200 rounded-lg text-sm text-center focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500"
-                                                    />
-                                                </div>
-                                            </div>
-                                            <p className="text-xs text-gray-400 mt-1">{tPersona('crossChatHintsDesc')}</p>
-                                            <div className="flex flex-wrap gap-2 mt-3">
-                                                <button
-                                                    onClick={() => setShowMemoryModal(true)}
-                                                    disabled={!localConfig.memory_enabled}
-                                                    className={cn(
-                                                        "text-sm px-3 py-2 rounded-lg transition-colors flex items-center gap-2",
-                                                        localConfig.memory_enabled
-                                                            ? "bg-purple-50 text-purple-600 hover:bg-purple-100"
-                                                            : "bg-gray-100 text-gray-400 cursor-not-allowed"
-                                                    )}
-                                                >
-                                                    <Brain size={16} /> {tPersona('viewGraph')}
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setShowUserIdentityModal(true)}
-                                                    className="text-sm px-3 py-2 rounded-lg transition-colors flex items-center gap-2 bg-amber-100 text-amber-700 hover:bg-amber-200"
-                                                >
-                                                    <User size={16} /> {tPersona('userIdentity')}
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setShowArchive(true)}
-                                                    className="text-sm px-3 py-2 rounded-lg transition-colors flex items-center gap-2 bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-[#242424] dark:text-[#c8c8c8] dark:hover:bg-[#2a2a2a]"
-                                                >
-                                                    <Folder size={16} /> {tPersona('archive')}
-                                                </button>
-                                            </div>
-                                        </Section>
-                                    </>
-                                )}
+                                <Section title={tPersona('soul')}>
+                                    <div className="flex justify-between items-center mb-2">
+                                        <p className="text-xs text-gray-500">{tPersona('soulDesc')}</p>
+                                        <button
+                                            onClick={() => setShowSoulWizard(true)}
+                                            className="text-xs px-2 py-1 bg-purple-50 text-purple-600 rounded-lg hover:bg-purple-100 transition-colors flex items-center gap-1 font-medium"
+                                        >
+                                            <Wand2 size={12} /> {tPersona('createWithWizard')}
+                                        </button>
+                                    </div>
+                                    {personaFirstLoad ? (
+                                        <Skeleton><SkeletonBar className="h-64 rounded-xl" /></Skeleton>
+                                    ) : (
+                                    <textarea
+                                        className="w-full h-64 p-4 bg-gray-50 border border-gray-200 rounded-xl font-mono text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 resize-none"
+                                        value={personaData?.soul || ''}
+                                        onChange={(e) => setPersonaData({ ...personaData!, soul: e.target.value })}
+                                        onBlur={() => fetch('/api/user/soul', {
+                                            method: 'PUT',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({ content: personaData?.soul })
+                                        })}
+                                    />
+                                    )}
+                                </Section>
+
+                                <Section title={tPersona('longTermMemory')}>
+                                    <div className="flex flex-wrap items-center gap-4">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-sm font-medium text-gray-700">{tPersona('maxRagSnippets')}</span>
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                max={20}
+                                                value={localConfig.memory_rag_k ?? 5}
+                                                onChange={(e) => handleChange('memory_rag_k', Math.max(1, Math.min(20, parseInt(e.target.value) || 5)))}
+                                                className="w-14 px-2 h-9 bg-white border border-gray-200 rounded-lg text-sm text-center focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500"
+                                            />
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-sm font-medium text-gray-700">{tPersona('minRelevance')}</span>
+                                            <input
+                                                type="number"
+                                                min={0}
+                                                max={100}
+                                                value={Math.round((localConfig.memory_rag_threshold ?? 0.3) * 100)}
+                                                onChange={(e) => {
+                                                    const pct = Math.max(0, Math.min(100, parseInt(e.target.value) || 0));
+                                                    handleChange('memory_rag_threshold', pct / 100);
+                                                }}
+                                                className="w-14 px-2 h-9 bg-white border border-gray-200 rounded-lg text-sm text-center focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500"
+                                            />
+                                        </div>
+                                    </div>
+                                    <p className="text-xs text-gray-400 mt-1">{tPersona('ragDesc')}</p>
+                                    <div className="flex flex-wrap items-center gap-4 mt-3">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-sm font-medium text-gray-700">{tPersona('crossChatHints')}</span>
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                max={5}
+                                                value={localConfig.cross_chat_hint_k ?? 2}
+                                                onChange={(e) => handleChange('cross_chat_hint_k', Math.max(1, Math.min(5, parseInt(e.target.value) || 2)))}
+                                                className="w-14 px-2 h-9 bg-white border border-gray-200 rounded-lg text-sm text-center focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500"
+                                            />
+                                        </div>
+                                    </div>
+                                    <p className="text-xs text-gray-400 mt-1">{tPersona('crossChatHintsDesc')}</p>
+                                    <div className="flex flex-wrap gap-2 mt-3">
+                                        <button
+                                            onClick={() => setShowMemoryModal(true)}
+                                            disabled={!localConfig.memory_enabled}
+                                            className={cn(
+                                                "text-sm px-3 py-2 rounded-lg transition-colors flex items-center gap-2",
+                                                localConfig.memory_enabled
+                                                    ? "bg-purple-50 text-purple-600 hover:bg-purple-100"
+                                                    : "bg-gray-100 text-gray-400 cursor-not-allowed"
+                                            )}
+                                        >
+                                            <Brain size={16} /> {tPersona('viewGraph')}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowUserIdentityModal(true)}
+                                            className="text-sm px-3 py-2 rounded-lg transition-colors flex items-center gap-2 bg-amber-100 text-amber-700 hover:bg-amber-200"
+                                        >
+                                            <User size={16} /> {tPersona('userIdentity')}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowArchive(true)}
+                                            className="text-sm px-3 py-2 rounded-lg transition-colors flex items-center gap-2 bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-[#242424] dark:text-[#c8c8c8] dark:hover:bg-[#2a2a2a]"
+                                        >
+                                            <Folder size={16} /> {tPersona('archive')}
+                                        </button>
+                                    </div>
+                                </Section>
                             </div>
                         )}
 
@@ -4279,7 +4318,30 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     )}
                                     <p className="text-xs text-gray-500">{tUsage('desc')}</p>
                                     {!usage ? (
-                                        <p className="text-xs text-gray-400 mt-4">{tUsage('loading')}</p>
+                                        // The card in its common state: the three figures, one provider
+                                        // line, the per-account table and the refresh row.
+                                        <Skeleton label={tUsage('loading')} className="mt-4">
+                                            <div className="grid grid-cols-3 gap-4 max-md:grid-cols-1">
+                                                {[56, 40, 48].map(w => (
+                                                    <div key={w} className="flex flex-col gap-2 pt-1">
+                                                        <SkeletonBar className="h-6" style={{ width: `${w}%` }} />
+                                                        <SkeletonBar className="h-2.5 w-20" />
+                                                    </div>
+                                                ))}
+                                            </div>
+                                            <div className="mt-6 flex flex-col gap-2">
+                                                <SkeletonBar className="h-2.5 w-28" />
+                                                <SkeletonBar className="h-2.5 w-2/3" />
+                                                <SkeletonBar className="mt-3 h-1.5 w-full" />
+                                            </div>
+                                            <div className="mt-6">
+                                                <SkeletonRows count={3} widths={[[24, 16, 16, 16]]} rowClassName="h-9 justify-between" />
+                                            </div>
+                                            <div className="mt-4 flex items-center justify-between gap-4">
+                                                <SkeletonBar className="h-2.5 w-1/2" />
+                                                <SkeletonBar className="h-8 w-24 rounded-lg" />
+                                            </div>
+                                        </Skeleton>
                                     ) : usage.totals.calls === 0 ? (
                                         <p className="text-xs text-gray-400 mt-4">{tUsage('empty')}</p>
                                     ) : (
@@ -4972,8 +5034,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 </Section>
                                 <Section title={tInterface('dateTime')}>
                                     <p className="text-xs text-gray-500 mb-4">{tInterface('dateTimeDesc')}</p>
-                                    {personaLoading ? (
-                                        <p className="text-sm text-gray-500">Loading…</p>
+                                    {personaFirstLoad ? (
+                                        <Skeleton>
+                                            <div className="grid grid-cols-1 gap-4">
+                                                {[18, 22, 20].map(w => (
+                                                    <div key={w} className="flex flex-col gap-1.5">
+                                                        <div className="h-5 ml-1 flex items-center"><SkeletonBar className="h-3" style={{ width: `${w}%` }} /></div>
+                                                        <SkeletonBar className="h-10 rounded-lg" />
+                                                    </div>
+                                                ))}
+                                            </div>
+                                            <SkeletonBar className="mt-3 h-9 w-20 rounded-lg" />
+                                        </Skeleton>
                                     ) : (
                                         <>
                                             <div className="grid grid-cols-1 gap-4">
@@ -5081,7 +5153,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {activeTab === 'connections' && <StandingGrantsSection endpoint="/api/security/grants" own />}
 
                         {activeTab === 'local_network' && currentUser?.role === 'admin' && (
-                            <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+                            <div className="space-y-6">
                                 <Section title={tLocalNet('networkSettings')}>
                                     {localConfig.server_mode ? (
                                         <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-blue-50 border border-blue-200 text-sm text-blue-800">
@@ -5137,7 +5209,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         <div className="flex items-center justify-between gap-3">
                                                             <div className="flex-1 min-w-0">
                                                                 <div className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-0.5">{tLocalNet('thisDeviceUrl')}</div>
-                                                                {apiHost ? (
+                                                                {!accessUrlResolved ? (
+                                                                    // The address and its ports line arrive with the LAN
+                                                                    // address below, whose placeholder carries the one
+                                                                    // status line for both.
+                                                                    <Skeleton label="">
+                                                                        <div className="h-5 flex items-center"><SkeletonBar className="h-3.5 w-32" /></div>
+                                                                        <div className="mt-0.5 h-4 flex items-center max-md:h-8 max-md:flex-col max-md:items-start max-md:justify-center max-md:gap-1.5">
+                                                                            <SkeletonBar className="h-2.5 w-64 max-w-full" />
+                                                                            <SkeletonBar className="h-2.5 w-16 hidden max-md:block" />
+                                                                        </div>
+                                                                    </Skeleton>
+                                                                ) : apiHost ? (
                                                                     <>
                                                                         <div className="font-mono text-sm text-gray-900 break-all">{apiHost}</div>
                                                                         {portsText && <div className="text-xs text-gray-600 mt-0.5">{tLocalNet('portsUsed')}{tCommon('labelSeparator')}{portsText}</div>}
@@ -5161,6 +5244,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                                         <div className="font-mono text-sm text-green-800 break-all">{lanUrl}</div>
                                                                         <div className="text-xs text-green-700 mt-0.5">{tLocalNet('lanUrlHint')}</div>
                                                                     </>
+                                                                ) : !accessUrlResolved ? (
+                                                                    <Skeleton label={tLocalNet('lanUrlLoading')}>
+                                                                        <div className="h-5 flex items-center"><SkeletonBar className="h-3.5 w-56 max-w-full" /></div>
+                                                                        <div className="mt-0.5 h-4 flex items-center max-md:h-8 max-md:flex-col max-md:items-start max-md:justify-center max-md:gap-1.5">
+                                                                            <SkeletonBar className="h-2.5 w-72 max-w-full" />
+                                                                            <SkeletonBar className="h-2.5 w-24 hidden max-md:block" />
+                                                                        </div>
+                                                                    </Skeleton>
                                                                 ) : (
                                                                     <div className="text-sm text-amber-700">{tLocalNet('lanUrlLoading')}</div>
                                                                 )}
@@ -5231,10 +5322,14 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         </tr>
                                                     </thead>
                                                     <tbody className="divide-y divide-gray-100">
-                                                        {usersLoading ? (
+                                                        {/* Only the first load: a refetch keeps the rows on screen. */}
+                                                        {usersLoading && users.length === 0 ? (
                                                             <tr>
-                                                                <td colSpan={5} className="px-4 py-8 text-center text-gray-500">
-                                                                    {tLocalNet('loadingUsers')}
+                                                                <td colSpan={5} className="p-0">
+                                                                    <Skeleton label={tLocalNet('loadingUsers')}>
+                                                                        <SkeletonRows count={2} widths={[[18, 10, 18, 12, 8]]} lead="w-8 h-8 rounded-full"
+                                                                            rowClassName="h-14 px-4 justify-around" />
+                                                                    </Skeleton>
                                                                 </td>
                                                             </tr>
                                                         ) : users.filter(u => 
@@ -5310,13 +5405,24 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             <div className="flex flex-col gap-1.5 w-full">
                                                 <label className="text-sm font-medium text-gray-700 ml-1">{tLocalNet('hostIp')}</label>
                                                 <div className="px-4 h-10 flex items-center bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 font-mono select-all">
-                                                    {accessUrlData?.host ?? (displayHost || 'localhost')}
+                                                    {/* The address arrives with the LAN address above, whose
+                                                        placeholder carries the status line for both. */}
+                                                    {!accessUrlResolved
+                                                        ? <Skeleton label="" className="w-full"><SkeletonBar className="h-3.5 w-32" /></Skeleton>
+                                                        : (accessUrlData?.host ?? (displayHost || 'localhost'))}
                                                 </div>
                                             </div>
                                             <div className="flex flex-col gap-1.5 w-full">
                                                 <label className="text-sm font-medium text-gray-700 ml-1">{tLocalNet('portsUsed')}</label>
                                                 <div className="px-4 py-2.5 flex items-center bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-700 font-mono">
-                                                    {accessUrlData
+                                                    {!accessUrlResolved ? (
+                                                        <Skeleton label="" className="w-full">
+                                                            <div className="h-10 flex flex-col justify-center gap-2.5">
+                                                                <SkeletonBar className="h-3.5 w-11/12" />
+                                                                <SkeletonBar className="h-3.5 w-1/3" />
+                                                            </div>
+                                                        </Skeleton>
+                                                    ) : accessUrlData
                                                         ? `${accessUrlData.port} (${tLocalNet('portAccess')}), ${accessUrlData.backend_port} (${tLocalNet('portBackend')})`
                                                         : '—'}
                                                 </div>
@@ -7320,7 +7426,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 the reading surface is the wider one. */}
                             {!archiveOpenId ? (
                                 <div className="flex-1 overflow-y-auto p-6 min-h-0">
-                                    {archiveChats.length === 0 ? (
+                                    {archiveChats === null ? (
+                                        // Closed boxes in the grid's own columns, each the height of
+                                        // a real one (the drawing, its name and its line).
+                                        <Skeleton>
+                                            <div className="grid grid-cols-5 gap-4 max-xl:grid-cols-4 max-md:grid-cols-2">
+                                                {Array.from({ length: 10 }).map((_, i) => (
+                                                    <SkeletonBar key={i} className="h-[162px] rounded-2xl"
+                                                        style={{ animationDelay: `${(i * 0.08).toFixed(2)}s` }} />
+                                                ))}
+                                            </div>
+                                        </Skeleton>
+                                    ) : archiveChats.length === 0 ? (
                                         <p className="text-sm text-gray-400">{tPersona('archiveEmpty')}</p>
                                     ) : (
                                         // A grid of archive boxes rather than a list of rows: the
@@ -7381,12 +7498,22 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </button>
                                         <button type="button"
                                                 onClick={() => setArchiveToDelete(
-                                                    archiveChats.find(c => c.id === archiveOpenId) || null)}
+                                                    archiveChats?.find(c => c.id === archiveOpenId) || null)}
                                                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg border border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors">
                                             <Trash2 className="w-4 h-4" /> {tPersona('archiveDelete')}
                                         </button>
                                     </div>
                                     <div className="flex-1 overflow-y-auto px-6 pb-6 min-h-0">
+                                        {archiveMsgsFor !== archiveOpenId ? (
+                                            <Skeleton>
+                                                <div className="space-y-3 max-w-3xl">
+                                                    {[44, 64, 44, 84, 44, 64].map((h, i) => (
+                                                        <SkeletonBar key={i} className="rounded-xl"
+                                                            style={{ height: h, animationDelay: `${(i * 0.08).toFixed(2)}s` }} />
+                                                    ))}
+                                                </div>
+                                            </Skeleton>
+                                        ) : (
                                         <div className="space-y-3 max-w-3xl">
                                             {archiveMsgs.map((m, i) => (
                                                 <div key={i} id={`arch-msg-${i}`}
@@ -7414,6 +7541,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 </div>
                                             ))}
                                         </div>
+                                        )}
                                     </div>
                                 </div>
                             )}
@@ -7491,7 +7619,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                               { method: 'DELETE', credentials: 'include' })
                                             .then(r => {
                                                 if (!r.ok) return;
-                                                setArchiveChats(list => list.filter(c => c.id !== id));
+                                                setArchiveChats(list => (list ?? []).filter(c => c.id !== id));
                                                 setArchiveOpenId(null);
                                                 setArchiveJump(null);
                                                 setArchiveHits(h => h.filter(x => x.chat_id !== id));
@@ -8808,7 +8936,7 @@ function browserPoolIsAuto(value: unknown): boolean {
 
 const Input = ({ label, value, onChange, type = "text", placeholder, disabled, link, labelExtra }: InputProps) => (
     <div className="flex flex-col gap-1.5 w-full">
-        <div className="flex items-center gap-1.5 ml-1">
+        <div className="flex items-center gap-1.5 ml-1 max-md:flex-wrap">
             <label className="text-sm font-medium text-gray-700">{label}</label>
             {link && (
                 <a

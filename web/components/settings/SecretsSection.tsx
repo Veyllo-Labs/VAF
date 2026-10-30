@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { KeyRound, Trash2 } from 'lucide-react';
+import Skeleton, { SkeletonRows } from '@/components/ui/Skeleton';
 
 interface Row {
     name: string;
@@ -21,7 +22,8 @@ interface Row {
 export default function SecretsSection() {
     const t = useTranslations('secrets');
     const apiBase = typeof window !== 'undefined' ? (document.location.origin || '') : '';
-    const [rows, setRows] = useState<Row[]>([]);
+    // null until the first answer: "nothing stored" is only said once the list says so.
+    const [rows, setRows] = useState<Row[] | null>(null);
     const [name, setName] = useState('');
     const [value, setValue] = useState('');
     const [busy, setBusy] = useState(false);
@@ -30,10 +32,13 @@ export default function SecretsSection() {
     const load = useCallback(async () => {
         try {
             const res = await fetch(`${apiBase}/api/secrets`, { credentials: 'include' });
-            if (!res.ok) return;
+            if (!res.ok) { setRows(r => r ?? []); return; }
             const data = await res.json().catch(() => ({}));
             setRows(Array.isArray(data.names) ? data.names : []);
-        } catch { /* a list that cannot be fetched stays as it was */ }
+        } catch {
+            // A list already on screen stays as it was; a first load that fails shows none.
+            setRows(r => r ?? []);
+        }
     }, [apiBase]);
 
     useEffect(() => { void load(); }, [load]);
@@ -85,7 +90,12 @@ export default function SecretsSection() {
         <div className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 mt-6">
             <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-2">{t('title')}</h3>
             <p className="text-xs text-gray-600 mb-4">{t('intro')}</p>
-            {rows.length === 0 ? (
+            {rows === null ? (
+                // One stored credential (measured).
+                <Skeleton className="h-[42px] mb-4">
+                    <SkeletonRows count={1} widths={[['35%']]} lead="w-4 h-4" rowClassName="h-[42px] px-3" />
+                </Skeleton>
+            ) : rows.length === 0 ? (
                 <p className="text-sm text-gray-500 mb-4">{t('empty')}</p>
             ) : (
                 <ul className="flex flex-col gap-2 mb-4">

@@ -6,6 +6,7 @@
 import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
+import Skeleton, { SkeletonBar, SkeletonRows } from '@/components/ui/Skeleton';
 
 /** One row of POST /api/config/model-roles (`RoleAssignment.as_dict` in vaf/core/model_roles.py). */
 export interface ModelRoleRow {
@@ -39,9 +40,8 @@ export const ROLE_GROUPS: [string, string[]][] = [
     ['failover', ['failover']],
 ];
 
-// Placeholder lines while the first answer is on its way: as many as the resolver has jobs
-// today, so the settings below do not jump when the rows arrive.
-const SKELETON_ROWS = 10;
+// A placeholder row on a phone stacks its bars the way a real row stacks job, model and note.
+const ROW_MOBILE = 'max-md:flex-col max-md:items-start max-md:justify-center max-md:gap-2';
 
 /**
  * "Who does what" at the top of Settings > AI & Model: which provider and model serves each
@@ -131,11 +131,13 @@ export default function ModelRolesOverview({ rows, loading, error, onRetry, prov
     return (
         <div ref={cardRef} onKeyDown={closeOpen} className="bg-gray-50/50 px-5 py-4 rounded-xl border border-gray-100" data-testid="model-roles-overview">
             <h3 id={headingId} className="text-sm font-bold text-gray-900 uppercase tracking-wide">{t('rolesTitle')}</h3>
-            <p className="mt-0.5 text-xs text-gray-500">
-                {mainName
-                    ? t.rich('rolesIntro', { provider: mainName, b: (c) => <b className="font-semibold text-gray-900">{c}</b> })
-                    : t('rolesIntroNoMain')}
-            </p>
+            {!(loading && !rows) && (
+                <p className="mt-0.5 text-xs text-gray-500">
+                    {mainName
+                        ? t.rich('rolesIntro', { provider: mainName, b: (c) => <b className="font-semibold text-gray-900">{c}</b> })
+                        : t('rolesIntroNoMain')}
+                </p>
+            )}
             {error && (
                 <div className="mt-2 flex items-center gap-3">
                     <p className="text-sm text-red-600">{t('rolesError')}</p>
@@ -146,16 +148,31 @@ export default function ModelRolesOverview({ rows, loading, error, onRetry, prov
                 </div>
             )}
             {loading && !rows && (
-                <div className="mt-3" role="status">
-                    <span className="sr-only">{t('rolesLoading')}</span>
-                    {Array.from({ length: SKELETON_ROWS }).map((_, i) => (
-                        <div key={i} aria-hidden="true" className="flex h-8 items-center gap-3"
-                            style={{ animation: 'skelPulse 1.6s ease-in-out infinite', animationDelay: `${i * 0.08}s` }}>
-                            <div className="h-2.5 w-28 rounded bg-gray-200" />
-                            <div className="h-2.5 w-40 rounded bg-gray-100" />
-                        </div>
+                // While the first answer is on its way: the intro naming the primary provider (one
+                // line, three on a phone), the real area headings and one line per job in each
+                // (ROLE_GROUPS names every job the resolver has), at the row's height, so the
+                // settings below do not jump when the rows arrive. The first job is the primary
+                // provider's, whose row always carries a note: a third bar, a third line on a phone.
+                <Skeleton label={t('rolesLoading')}>
+                    <div className="mt-0.5 h-4 flex flex-col justify-center gap-[5.5px] max-md:h-12">
+                        <SkeletonBar className="h-2.5 w-4/5 max-md:w-full" />
+                        <SkeletonBar className="h-2.5 w-full hidden max-md:block" />
+                        <SkeletonBar className="h-2.5 w-1/2 hidden max-md:block" />
+                    </div>
+                    {ROLE_GROUPS.map(([id, roles], g) => (
+                        <section key={id}>
+                            <div className="mt-3 mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                                {t(`rolesGroup.${id}`)}
+                            </div>
+                            {g === 0 && (
+                                <SkeletonRows count={1} widths={[['7rem', '10rem', '6rem']]} rowClassName={`h-8 max-md:h-[71px] ${ROW_MOBILE}`} />
+                            )}
+                            <SkeletonRows count={g === 0 ? roles.length - 1 : roles.length}
+                                widths={[['7rem', '8rem'], ['7rem', '12rem'], ['7rem', '10rem']]}
+                                rowClassName={`h-8 max-md:h-[52px] ${ROW_MOBILE}`} />
+                        </section>
                     ))}
-                </div>
+                </Skeleton>
             )}
             {rows && groups.map(group => (
                 <section key={group.id}>

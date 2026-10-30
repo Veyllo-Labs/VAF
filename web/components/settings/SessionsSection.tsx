@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { Check, Copy, KeyRound, Laptop, Monitor, Smartphone } from 'lucide-react';
+import Skeleton, { SkeletonBar } from '@/components/ui/Skeleton';
 import { copyText } from '@/lib/clipboard';
 import { retryAfterSeconds, retryWhen } from '@/lib/retryAfter';
 
@@ -178,7 +179,43 @@ export default function SessionsSection() {
     const label = 'block text-xs font-semibold text-gray-700 mb-1';
 
     if (rows === null) {
-        if (!loadFailed) return null;
+        // Both cards with their titles; the device list and the token list wait for the answer
+        // (heights measured with one signed-in device and no token).
+        if (!loadFailed) return (
+            <>
+                <div className={card}>
+                    <h3 className={`${title} mb-2`}>{t('devicesTitle')}</h3>
+                    <Skeleton className="h-[129px] max-md:h-[161px]">
+                        <div className="flex flex-col gap-1.5 mb-5">
+                            <SkeletonBar className="h-2.5 w-full" />
+                            <SkeletonBar className="h-2.5 w-full hidden max-md:block" />
+                            <SkeletonBar className="h-2.5 w-2/3" />
+                        </div>
+                        <div className="flex items-start gap-3 px-3 py-2.5">
+                            <SkeletonBar className="w-4 h-4 shrink-0" />
+                            <div className="flex-1 min-w-0 flex flex-col gap-2">
+                                <SkeletonBar className="h-3 w-40" />
+                                <SkeletonBar className="h-2.5 w-56 max-w-full" />
+                                <SkeletonBar className="h-2.5 w-64 max-w-full" />
+                            </div>
+                        </div>
+                    </Skeleton>
+                </div>
+                <div className={card}>
+                    <h3 className={`${title} mb-2`}>{t('tokensTitle')}</h3>
+                    <p className="text-xs text-gray-600 mb-4">{t('tokensIntro')}</p>
+                    <Skeleton className="h-[95px] max-md:h-[283px]">
+                        <SkeletonBar className="h-3 w-40 mb-5" />
+                        <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-3 items-end max-md:grid-cols-1">
+                            <SkeletonBar className="h-[58px] rounded-lg" />
+                            <SkeletonBar className="h-[58px] w-28 rounded-lg max-md:w-full" />
+                            <SkeletonBar className="h-[58px] w-32 rounded-lg max-md:w-full" />
+                            <SkeletonBar className="h-9 w-24 rounded-lg" />
+                        </div>
+                    </Skeleton>
+                </div>
+            </>
+        );
         return (
             <div className={card}>
                 <h3 className={`${title} mb-2`}>{t('devicesTitle')}</h3>

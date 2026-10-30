@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Box, Square, Trash2 } from 'lucide-react';
+import Skeleton, { SkeletonRows } from '@/components/ui/Skeleton';
 
 interface Environment {
     id: string;
@@ -105,7 +106,6 @@ export default function SandboxSection() {
         void loadNow.current();
     };
 
-    if (!data && !loadFailed) return null;
     // The list on screen belongs to the other "All accounts" setting until the new one has
     // arrived (or failed to): shown dimmed, and nothing on it can be acted on.
     const stale = !!data && data.all !== everyone;
@@ -137,7 +137,12 @@ export default function SandboxSection() {
                     </button>
                 </div>
             )}
-            {!data ? null : !data.available ? (
+            {!data ? (loadFailed ? null : (
+                // One environment with its detail line (measured).
+                <Skeleton className="h-[64px] max-md:h-[86px]">
+                    <SkeletonRows count={1} widths={[['14%', '40%', '10%']]} lead="w-4 h-4" rowClassName="h-16 px-3" />
+                </Skeleton>
+            )) : !data.available ? (
                 <p className="text-sm text-gray-500">
                     {data.reason === 'docker_unavailable' ? t('dockerUnavailable') : t('unavailable', { reason: data.reason || '' })}
                 </p>

@@ -546,6 +546,15 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   35% { transform: scaleX(.78) }
   100% { transform: scaleX(.94) }
 }
+/* The shared placeholder (web/components/ui/Skeleton.tsx). The box holds its space from the
+   first frame but stays invisible for 180 ms, so a load that answers sooner shows nothing at
+   all instead of a grey flash; after that it simply is there. A 0 s step, not a fade: pure CSS,
+   so nothing has to run a timer, and nothing travels. The bars pulse in OPACITY only - no
+   gradient, no background-position sweep, no transform - per the repaint rule above; under
+   reduced motion the skelPulse twin below holds them still. */
+@keyframes vafSkelReveal { to { opacity: 1 } }
+.vaf-skel { opacity: 0; animation: vafSkelReveal 0s linear 180ms forwards; }
+.vaf-skel-bar { animation: skelPulse 1.6s ease-in-out infinite; }
 .room-msg-enter { animation: roomMessageEnter .75s cubic-bezier(.16,.84,.44,1) both }
 /* The person's own message while it travels to the store: dimmed in place, a
    light band sweeping left to right for as long as the send lasts (honest at

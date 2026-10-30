@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Cpu, Cloud } from 'lucide-react';
+import Skeleton, { SkeletonBar } from '@/components/ui/Skeleton';
 
 interface SwitchState {
     running: boolean;
@@ -181,7 +182,6 @@ export default function InferenceProfileSection({ onChanged, currentProfile }: {
         }
     };
 
-    if (!data && !loadFailed) return null;
     const lean = data?.profile === 'api';
     const Icon = lean ? Cloud : Cpu;
 
@@ -196,6 +196,20 @@ export default function InferenceProfileSection({ onChanged, currentProfile }: {
                         {t('retry')}
                     </button>
                 </div>
+            )}
+            {!data && !loadFailed && (
+                // The profile line, its description, the switch button and its hint.
+                <Skeleton className="h-[106px] max-md:h-[124px]">
+                    <div className="flex items-start gap-3">
+                        <SkeletonBar className="w-5 h-5 shrink-0 mt-0.5" />
+                        <div className="min-w-0 flex-1 flex flex-col gap-2 pt-1">
+                            <SkeletonBar className="h-3 w-44" />
+                            <SkeletonBar className="h-2.5 w-3/4" />
+                        </div>
+                    </div>
+                    <SkeletonBar className="mt-5 h-7 w-40 rounded-md" />
+                    <SkeletonBar className="mt-3 h-2.5 w-2/3" />
+                </Skeleton>
             )}
             {data && (
                 <>

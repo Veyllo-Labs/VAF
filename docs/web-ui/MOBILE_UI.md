@@ -222,6 +222,10 @@ Already in place; reuse, don't reinvent:
 5. Scrollable body? Confirm the scroll works on touch (no overlay/rail/`touch-action`
    eating it) and the scrolling child has `min-h-0`.
 6. Everything new behind `max-md:` / `isMobile` - verify desktop is untouched.
+7. A loading placeholder (`web/components/ui/Skeleton.tsx`) whose loaded content is taller on
+   a phone by more than 32 px gets a `max-md:` height of its own (measured: Remote access,
+   Certificate, Signed-in devices, Tokens for programs), so the content below does not jump
+   when the data lands.
 
 ## Verify before committing
 

@@ -368,12 +368,19 @@ def test_a_phone_stacks_each_row_and_keeps_every_row():
 
 
 def test_the_skeleton_keeps_the_card_height():
-    """As many placeholder lines as there are jobs, so nothing below jumps when the rows
-    arrive; the loading text is a status for screen readers. MUTATION: six lines again, or
-    the label back on a role-less div."""
+    """One placeholder line per job in each area (ROLE_GROUPS, which names every job the
+    resolver has, see the test above), under the real area headings, so nothing below jumps
+    when the rows arrive; the shared placeholder carries the status for screen readers.
+    MUTATION: six lines again (`count={6}`), or a placeholder of the card's own."""
     src = _src(_OVERVIEW)
-    assert int(re.search(r"const SKELETON_ROWS = (\d+);", src).group(1)) == len(model_roles.ROLES)
-    assert 'role="status"' in src and "<span className=\"sr-only\">{t('rolesLoading')}</span>" in src
+    block = src[src.index("{loading && !rows && ("):]
+    block = block[:block.index("</Skeleton>")]
+    assert "<Skeleton label={t('rolesLoading')}>" in block
+    assert "{ROLE_GROUPS.map(([id, roles], g) => (" in block
+    assert "{g === 0 && (\n" in block and "<SkeletonRows count={1} " in block
+    assert "<SkeletonRows count={g === 0 ? roles.length - 1 : roles.length}" in block
+    assert len(re.findall(r"<SkeletonRows count=", block)) == 2
+    assert "role=\"status\"" not in src and "skelPulse" not in src
 
 
 def test_a_retry_shows_no_stale_rows_before_the_new_answer():

@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { Archive, Loader2 } from 'lucide-react';
+import Skeleton, { SkeletonBar, SkeletonRows } from '@/components/ui/Skeleton';
 
 interface BackupRow {
     name: string;
@@ -173,6 +174,14 @@ export default function BackupSection({ config, onChange }: {
             <p className="text-xs text-gray-500 mb-4">{t('backupsIntro')}</p>
 
             {loadFailed && <p className="text-sm text-red-600 mb-3">{t('backupLoadFailed')}</p>}
+            {!data && !loadFailed && (
+                <Skeleton className="h-5 mb-4">
+                    <div className="h-5 flex items-center gap-2">
+                        <SkeletonBar className="w-2 h-2 rounded-full" />
+                        <SkeletonBar className="h-3 w-64 max-w-full" />
+                    </div>
+                </Skeleton>
+            )}
             {status && (
                 <div className="flex items-start gap-2 mb-4">
                     <span className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${status.color}`} />
@@ -234,6 +243,15 @@ export default function BackupSection({ config, onChange }: {
                 </ul>
             )}
 
+            {!data && !loadFailed && (
+                // The list heading, one backup, the folder and the offsite note (measured).
+                <Skeleton className="mt-5 h-[110px] max-md:h-[126px]">
+                    <SkeletonBar className="h-2.5 w-32 mb-3" />
+                    <SkeletonRows count={1} widths={[['30%', '12%']]} rowClassName="h-8 px-3 justify-between" />
+                    <SkeletonBar className="h-2.5 w-1/2 mt-3" />
+                    <SkeletonBar className="h-2.5 w-3/4 mt-2" />
+                </Skeleton>
+            )}
             {data && (
                 <div className="mt-5">
                     <div className="text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">

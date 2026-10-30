@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Folder, Wrench, X } from 'lucide-react';
+import Skeleton, { SkeletonRows } from '@/components/ui/Skeleton';
 
 interface Grants {
     tools: Record<string, { always: boolean; chats: number }>;
@@ -79,7 +80,18 @@ export default function StandingGrantsSection({ endpoint, own }: { endpoint: str
     };
 
     if (!data) {
-        if (!loadFailed) return null;
+        // The title and the intro are known; the list waits (two grants, measured).
+        if (!loadFailed) return (
+            <div className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 mt-6">
+                <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-2">{t('title')}</h3>
+                <p className="text-xs text-gray-600 mb-4">{own ? t('intro') : t('introOther')}</p>
+                <Skeleton className="h-[90px]">
+                    <div className="flex flex-col gap-2">
+                        <SkeletonRows count={2} widths={[['30%', '12%'], ['45%', '10%']]} lead="w-4 h-4" rowClassName="h-[41px] px-3" />
+                    </div>
+                </Skeleton>
+            </div>
+        );
         return (
             <div className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 mt-6">
                 <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-2">{t('title')}</h3>

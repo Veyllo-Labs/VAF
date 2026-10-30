@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useTranslations } from 'next-intl';
 import { Copy, Server, Trash2 } from 'lucide-react';
 import { copyText } from '@/lib/clipboard';
+import Skeleton, { SkeletonBar, SkeletonRows } from '@/components/ui/Skeleton';
 
 interface Host {
     host: string;
@@ -38,6 +39,9 @@ export default function SshSection() {
     // Removing loses the remembered host key, and the next connection trusts whatever the
     // server then shows: so the first click asks, the second removes (as SandboxSection does).
     const [confirming, setConfirming] = useState<string | null>(null);
+    // The first answer is in (or failed): before it the section stands with a placeholder,
+    // after it an account without the tool sees no section at all.
+    const [settled, setSettled] = useState(false);
 
     const load = useCallback(async () => {
         try {
@@ -48,6 +52,7 @@ export default function SshSection() {
             // A confirmation whose server is gone (removed elsewhere) is dropped.
             setConfirming(c => (c && (body.hosts ?? []).some(h => h.host === c) ? c : null));
         } catch { /* a section that cannot be fetched stays as it was */ }
+        finally { setSettled(true); }
     }, [apiBase]);
 
     useEffect(() => { void load(); }, [load]);
@@ -91,12 +96,21 @@ export default function SshSection() {
         void load();
     };
 
-    if (!data) return null;
+    if (!data && settled) return null;
     return (
         <div className="bg-gray-50/50 p-6 rounded-xl border border-gray-100 mt-6">
             <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wide mb-2">{t('title')}</h3>
             <p className="text-xs text-gray-600 mb-4">{t('intro')}</p>
-            {!data.available ? (
+            {!data ? (
+                // The key, its hint and one server (measured with a key and one server).
+                <Skeleton className="h-[172px] max-md:h-[228px]">
+                    <SkeletonBar className="h-2.5 w-20 mb-2" />
+                    <SkeletonBar className="h-14 rounded-lg mb-2" />
+                    <SkeletonBar className="h-2.5 w-2/3 mb-6" />
+                    <SkeletonBar className="h-2.5 w-16 mb-2" />
+                    <SkeletonRows count={1} widths={[['30%', '40%']]} lead="w-4 h-4" rowClassName="h-10 px-3" />
+                </Skeleton>
+            ) : !data.available ? (
                 <p className="text-sm text-gray-500">{t('unavailable', { reason: data.reason || '' })}</p>
             ) : (
                 <>

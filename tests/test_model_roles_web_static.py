@@ -625,6 +625,22 @@ def test_an_opening_row_moves_only_rows_opacity_and_transform():
     assert "transform: translateY(-3px);" in base[".vaf-role-panel > div > div"]
 
 
+def test_the_caret_turns_in_place():
+    """The caret is a drawn chevron in a fixed square turning about its centre: closed it points
+    left, open down, and it does not move. A text glyph sat off centre in its line box, so the
+    turn shifted it. MUTATION: put the text glyph back, or turn it the other way."""
+    tsx = _src(_OVERVIEW)
+    caret = tsx[tsx.index('className="vaf-role-caret'):]
+    caret = caret[:caret.index("</span>")]
+    assert "h-3 w-3 self-center" in caret and "<svg" in caret
+    assert 'd="M7.5 2.5 4 6l3.5 3.5"' in caret  # points left
+    assert "›" not in caret
+    base = dict(reversed(_rules(_src(_CSS), ".vaf-role-")))
+    assert "transform-origin: center;" in base[".vaf-role-caret"]
+    assert "display: inline-flex;" in base[".vaf-role-caret"]
+    assert "transform: rotate(-90deg);" in base['.vaf-role-row[aria-expanded="true"] .vaf-role-caret']
+
+
 def test_reduced_motion_opens_a_row_without_travel():
     """With reduced motion nothing travels or turns: the shift and the caret's transition are
     off and the panel only fades. MUTATION: drop the reduced-motion rule for the panel."""

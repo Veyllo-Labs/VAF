@@ -2919,7 +2919,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         <div className="flex gap-2 items-end">
             <div className="flex-1">
                 <Select
-                    label={`${chatApiProvider.label} Model`}
+                    label={tAi('providerModel', { provider: chatApiProvider.label })}
                     value={localConfig[`api_model_${chatApiProvider.id}`] || chatApiProvider.defaultModel}
                     onChange={(v: string) => handleChange(`api_model_${chatApiProvider.id}`, v)}
                     options={(() => {
@@ -2929,7 +2929,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             : (chatApiProvider.staticModels || []);
                         const seen = new Set<string>();
                         return [
-                            { value: chatApiProvider.defaultModel, label: `${chatApiProvider.defaultModel} (Default)` },
+                            { value: chatApiProvider.defaultModel, label: `${chatApiProvider.defaultModel} (${tAdvanced('failoverProviderDefault')})` },
                             ...list
                                 .filter(m => { if (m === chatApiProvider.defaultModel || seen.has(m)) return false; seen.add(m); return true; })
                                 .map(m => ({ value: m, label: m }))
@@ -3135,7 +3135,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 const def = localConfig[`api_model_${p.id}`] || p.defaultModel;
                 const rest = list.filter(m => m !== def);
                 return [
-                    { value: def, label: list.includes(def) ? def : `${def} (Default)` },
+                    { value: def, label: list.includes(def) ? def : `${def} (${tAdvanced('failoverProviderDefault')})` },
                     ...rest.map(m => ({ value: m, label: m }))
                 ];
             })();
@@ -3174,7 +3174,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         // "Modelldatei" dropdown). Downloading beliebiger Refs lives only under AI & Model;
         // the empty "" option = the recommended Gemma default, which is fetched on save (see
         // voice_model + web_server save_config trigger). A previously-saved HF ref stays
-        // selectable via Select's "(Current)" fallback.
+        // selectable via Select's current-value fallback.
         if (vChoice === 'local') return (
             <Select
                 label={tVoice('agentLlmLocalFile')}
@@ -3189,7 +3189,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         // API model: dropdown of the provider's models (live /v1/models via the
         // refresh button, else the static fallback list), same source/pattern as
         // the main-agent per-provider selector. "" = provider default; a name
-        // saved by an earlier version stays via Select's "(Current)" fallback.
+        // saved by an earlier version stays via Select's current-value fallback.
         const vProv = vChoice;
         const vp = PROVIDERS.find(pr => pr.id === vProv);
         const fetched = apiModels[vProv];
@@ -3393,7 +3393,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             />
             {/* relative z-10: paint the dots ABOVE the absolute track lines so the
                 line never shows through the hollow (unselected) dots. */}
-            <div className="relative z-10 grid grid-cols-4 max-md:grid-cols-2">
+            <div className="relative z-10 grid grid-cols-4">
                 {FAILOVER_LEVEL_LABELS.map((lbl, i) => (
                     <button
                         key={i}
@@ -3403,7 +3403,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         className="flex cursor-pointer flex-col items-center gap-1.5"
                     >
                         <span className={cn('h-3.5 w-3.5 rounded-full border-2 transition', i <= failoverIdx ? 'border-gray-900 bg-gray-900 dark:border-[#d9d9d9] dark:bg-[#d9d9d9]' : 'border-gray-300 bg-white')} />
-                        <span className={cn('whitespace-nowrap text-[11px]', i === failoverIdx ? 'font-semibold text-gray-900' : 'text-gray-400')}>{lbl}</span>
+                        <span className={cn('whitespace-nowrap text-[11px] max-md:whitespace-normal max-md:text-center max-md:leading-tight', i === failoverIdx ? 'font-semibold text-gray-900' : 'text-gray-400')}>{lbl}</span>
                     </button>
                 ))}
             </div>
@@ -4143,11 +4143,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         const modelOpts = isLocal
                                             ? (availableModels ?? []).map(m => ({ value: m, label: m }))
                                             : [
-                                                ...(def ? [{ value: def, label: list.includes(def) ? def : `${def} (Default)` }] : []),
+                                                ...(def ? [{ value: def, label: list.includes(def) ? def : `${def} (${tAdvanced('failoverProviderDefault')})` }] : []),
                                                 ...list.filter(m => m !== def).map(m => ({ value: m, label: m })),
                                               ];
                                         // A stored model of another provider: the runtime ignores it, so the
-                                        // picker says so instead of the generic "(Current)" entry.
+                                        // picker says so instead of the generic current-value entry.
                                         const ignored = !!toolModel && toolModelFits === false;
                                         const spLabel = p ? p.label : (isLocal ? 'Local' : sp);
                                         return (
@@ -8864,6 +8864,7 @@ interface SelectProps {
 }
 
 const Select = ({ label, value, onChange, options, disabled }: SelectProps) => {
+    const tCommon = useTranslations('common');
     const uniqueOptions = options.filter((option, index) => {
         return options.findIndex((candidate) => candidate.value === option.value) === index;
     });
@@ -8876,11 +8877,13 @@ const Select = ({ label, value, onChange, options, disabled }: SelectProps) => {
                     value={value}
                     onChange={(e) => onChange(e.target.value)}
                     disabled={disabled}
+                    // A half-width select cuts a long option; the full text stays one hover away.
+                    title={uniqueOptions.find(o => o.value === value)?.label || value || undefined}
                     className={cn("w-full h-10 appearance-none px-4 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all text-gray-700 pr-10", disabled && "cursor-not-allowed text-gray-400")}
                 >
                     {/* Default option if current value is not in options (e.g. custom input previously saved) */}
                     {!uniqueOptions.some(o => o.value === value) && value && (
-                        <option value={value}>{value} (Current)</option>
+                        <option value={value}>{tCommon('currentOption', { value })}</option>
                     )}
                     {uniqueOptions.map((o) => (
                         <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>

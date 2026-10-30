@@ -56,6 +56,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- Settings showed a few words only in English whatever the language: the main provider's
+  "Model" field, "(Default)" after a provider's default model and "(Current)" after a stored
+  value that is not in the list. On a phone the failover level picker keeps its four steps
+  on one scale instead of two loose pairs.
 - Choosing a sub-agent provider in the web settings had no effect: sub-agents kept running on
   the main provider. A provider chosen there now takes effect when saved. A choice an older
   version stored that way stays off until it is chosen again: the select now shows it as "Same

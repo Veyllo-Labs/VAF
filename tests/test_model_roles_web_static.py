@@ -627,3 +627,51 @@ def test_reduced_motion_opens_a_row_without_travel():
     assert ".vaf-role-row::before, .vaf-role-caret, .vaf-role-panel > div > div { transition: none; }" in reduced
     assert '.vaf-role-panel, .vaf-role-panel[data-open="true"] { transition: opacity 120ms linear; }' in reduced
     assert ".vaf-role-panel > div > div { transform: none; }" in reduced
+
+
+# ── The shared controls on a phone and in every language ────────────────────────────────
+
+
+def test_the_failover_scale_keeps_four_steps_on_one_track():
+    """The level picker serves the Advanced section and the open failover row. Its track runs
+    from the first dot's centre to the last (12.5% to 87.5%), which only holds while the four
+    steps share one row: a 2x2 grid on a phone put two of them under no track at all. On a
+    phone the labels wrap instead. MUTATION: put `max-md:grid-cols-2` back."""
+    src = _src(_MODAL)
+    picker = src[src.index("const failoverLevelPicker = ("):]
+    picker = picker[:picker.index("\n    );")]
+    assert "left-[12.5%] right-[12.5%]" in picker
+    grid = re.search(r'<div className="relative z-10 ([^"]*)">', picker).group(1).split()
+    assert "grid-cols-4" in grid and not [c for c in grid if "grid-cols-" in c and c != "grid-cols-4"], grid
+    assert "max-md:whitespace-normal max-md:text-center" in picker
+
+
+def _choice_elements(src: str) -> str:
+    start = src.index("The choice behind each \"who does what\" row")
+    end = src.index("const roleChoice = (row: ModelRoleRow)")
+    return src[start:end]
+
+
+def test_no_english_words_are_built_into_the_shared_controls():
+    """The controls the section and the open row share carry no hand-written English: the
+    model label of the main provider, the default and the current-value suffixes come from
+    the catalogues. MUTATION: put `${chatApiProvider.label} Model` or `(Default)` back, or
+    `(Current)` into `Select`."""
+    src = _src(_MODAL)
+    block = _choice_elements(src)
+    assert "label={tAi('providerModel', { provider: chatApiProvider.label })}" in block
+    for english in (" Model`", "(Default)", "(Current)"):
+        assert english not in block, english
+    select = src[src.index("const Select = ("):]
+    select = select[:select.index("\n};")]
+    assert "(Current)" not in select and "tCommon('currentOption', { value })" in select
+    assert "(Default)" not in src and "(Current)" not in src
+
+
+@pytest.mark.parametrize("locale", _LOCALES)
+def test_the_shared_controls_have_their_words_in_every_language(locale):
+    """MUTATION: drop `providerModel` from ko.json, or its placeholder from de.json."""
+    cat = json.loads((_MESSAGES / f"{locale}.json").read_bytes())
+    assert "{provider}" in cat["settings"]["ai"]["providerModel"]
+    assert "{value}" in cat["common"]["currentOption"]
+    assert cat["settings"]["advanced"]["failoverProviderDefault"].strip()

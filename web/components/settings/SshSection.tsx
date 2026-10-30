@@ -103,7 +103,7 @@ export default function SshSection() {
             <p className="text-xs text-gray-600 mb-4">{t('intro')}</p>
             {!data ? (
                 // The key, its hint and one server (measured with a key and one server).
-                <Skeleton className="h-[172px] max-md:h-[228px]">
+                <Skeleton className="h-[176px] max-md:h-[224px]">
                     <SkeletonBar className="h-2.5 w-20 mb-2" />
                     <SkeletonBar className="h-14 rounded-lg mb-2" />
                     <SkeletonBar className="h-2.5 w-2/3 mb-6" />

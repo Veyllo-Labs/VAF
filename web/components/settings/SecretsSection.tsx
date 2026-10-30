@@ -92,8 +92,8 @@ export default function SecretsSection() {
             <p className="text-xs text-gray-600 mb-4">{t('intro')}</p>
             {rows === null ? (
                 // One stored credential (measured).
-                <Skeleton className="h-[42px] mb-4">
-                    <SkeletonRows count={1} widths={[['35%']]} lead="w-4 h-4" rowClassName="h-[42px] px-3" />
+                <Skeleton className="h-[46px] mb-4">
+                    <SkeletonRows count={1} widths={[['35%']]} lead="w-4 h-4" rowClassName="h-[46px] px-3" />
                 </Skeleton>
             ) : rows.length === 0 ? (
                 <p className="text-sm text-gray-500 mb-4">{t('empty')}</p>

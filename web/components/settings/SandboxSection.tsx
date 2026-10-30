@@ -139,7 +139,7 @@ export default function SandboxSection() {
             )}
             {!data ? (loadFailed ? null : (
                 // One environment with its detail line (measured).
-                <Skeleton className="h-[64px] max-md:h-[86px]">
+                <Skeleton className="h-[72px] max-md:h-[92px]">
                     <SkeletonRows count={1} widths={[['14%', '40%', '10%']]} lead="w-4 h-4" rowClassName="h-16 px-3" />
                 </Skeleton>
             )) : !data.available ? (

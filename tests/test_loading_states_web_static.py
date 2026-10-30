@@ -286,28 +286,38 @@ def test_a_failed_first_usage_load_ends_the_placeholder():
 def test_a_late_first_session_list_waits_for_its_history_again():
     """A session list that arrives after the 15 s guard gave up auto-selects the newest chat;
     its history is on its way again, so the welcome screen and the centred composer must not
-    show until history_update. MUTATION: drop the `setHistoryLoading(true);` before the send."""
+    show until history_update. MUTATION: ask with `wait` false, or send load_session raw."""
     src = _src(_PAGE)
     branch = _between(src, "else if (data.type === 'session_list') {", "else if (data.type === 'rooms_changed')")
-    select = branch.index("setCurrentSessionId(chats[0].id);")
-    send = branch.index("wsSocketRef.current?.send(JSON.stringify({ type: 'load_session', id: chats[0].id }));")
-    assert "setHistoryLoading(true);" in branch[select:send]
+    assert "requestHistory(wsSocketRef.current, chats[0].id, true);" in branch
 
 
 def test_every_history_request_restarts_the_wait():
     """The 15 s guard runs from the latest history request, also when the flag is already true
-    (a list landing just before the first deadline, a switch between two uncached chats): an
-    older timer must not end the wait while the newer load_session is pending. MUTATION: drop
-    `historyRequests` from the guard's dependencies, or the bump in either request site."""
+    (a list landing just before the first deadline, a switch between two uncached chats, a
+    proactive message adopting a chat): an older timer must not end the wait while the newer
+    load_session is pending. So the page holds exactly ONE load_session send, inside
+    `requestHistory`, which restarts the guard; every request path calls it, and a raw send
+    added anywhere fails here. MUTATION: send load_session directly at any call site, drop the
+    counter bump from the helper, or drop `historyRequests` from the guard's dependencies."""
     src = _src(_PAGE)
-    guard = _between(src, "const [historyRequests, setHistoryRequests] = useState(0);", "const snapshotLenRef")
+    sends = [m.start() for m in re.finditer(r"type: 'load_session'", src)]
+    helper_at = src.index("const requestHistory = useCallback(")
+    helper = src[helper_at:src.index("}, []);", helper_at)]
+    assert len(sends) == 1 and helper_at < sends[0] < helper_at + len(helper), \
+        "every load_session goes through requestHistory"
+    assert "setHistoryLoading(wait);" in helper and "setHistoryRequests(n => n + 1);" in helper
+    guard = _between(src, "const [historyRequests, setHistoryRequests] = useState(0);", "const requestHistory")
     assert "setTimeout(() => setHistoryLoading(false), 15000)" in guard
     assert "}, [historyLoading, historyRequests]);" in guard
-    branch = _between(src, "else if (data.type === 'session_list') {", "else if (data.type === 'rooms_changed')")
-    assert ("setHistoryLoading(true);\n                            setHistoryRequests(n => n + 1);\n"
-            "                            wsSocketRef.current?.send(JSON.stringify({ type: 'load_session'") in branch
-    assert ("setHistoryLoading(cached.length === 0 && !syncedSessions.current.has(id));\n"
-            "        setHistoryRequests(n => n + 1);") in src
+    # The four request paths: a switch, the first session list, and a proactive update or
+    # append that adopts a chat while none is open.
+    assert "requestHistory(ws, id, cached.length === 0 && !syncedSessions.current.has(id));" in src
+    for kind in ("agent_message_update", "agent_message_append"):
+        start = src.index(f"else if (data.type === '{kind}') {{")
+        branch = src[start:src.index("else if (data.type === ", start + 30)]
+        assert "requestHistory(wsSocketRef.current, data.sessionId, true);" in branch, kind
+    assert src.count("requestHistory(") == 4, "the four callers"
 
 
 def test_every_persona_writer_counts_against_a_late_refetch():

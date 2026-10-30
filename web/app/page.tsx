@@ -3234,6 +3234,16 @@ function VAFDashboardContent() {
         const t = setTimeout(() => setHistoryLoading(false), 15000);
         return () => clearTimeout(t);
     }, [historyLoading, historyRequests]);
+    // THE one way to ask for a chat's history: it sets whether the placeholder waits for it and
+    // restarts the guard above, then sends load_session. Every request path (a switch, the first
+    // session list, a proactive message adopting a chat) goes through here, so none can leave
+    // the wait to an older timer. Only state setters inside, so the socket handler's closure
+    // from the first render may call it.
+    const requestHistory = useCallback((socket: WebSocket | null | undefined, id: string, wait: boolean) => {
+        setHistoryLoading(wait);
+        setHistoryRequests(n => n + 1);
+        socket?.send(JSON.stringify({ type: 'load_session', id }));
+    }, []);
     // How many messages of `messages` came from a snapshot (a history_update, or the cache on a
     // switch): those rows mount as they are, without the enter animation, because the whole
     // transcript mounting at once made the entire panel fade and slide up. Rows at or past this
@@ -4959,9 +4969,7 @@ function VAFDashboardContent() {
 
         // 5. Request sync — show a loading spinner only when there's nothing cached AND we have not
         //    already synced this session (a new/empty chat has nothing to load → no spinner flash).
-        setHistoryLoading(cached.length === 0 && !syncedSessions.current.has(id));
-        setHistoryRequests(n => n + 1);
-        ws?.send(JSON.stringify({ type: 'load_session', id }));
+        requestHistory(ws, id, cached.length === 0 && !syncedSessions.current.has(id));
         // Entering the chat a stored workflow run belongs to: ask the backend
         // whether that run is actually still going. Its events were addressed to
         // this chat while another one was open (nobody was subscribed), so the
@@ -5528,7 +5536,7 @@ function VAFDashboardContent() {
                     const activeSessionId = currentSessionIdRef.current;
                     if (!activeSessionId && data.sessionId) {
                         setCurrentSessionId(data.sessionId);
-                        wsSocketRef.current?.send(JSON.stringify({ type: 'load_session', id: data.sessionId }));
+                        requestHistory(wsSocketRef.current, data.sessionId, true);
                     } else if (!eventBelongsHere(data, activeSessionId, 'chat')) {
                         // Update per-session state even if not the active session
                         // So when user switches back, animations are correct
@@ -5621,7 +5629,7 @@ function VAFDashboardContent() {
                     // (the message was already persisted server-side, so it will appear).
                     if (!activeSessionId && data.sessionId) {
                         setCurrentSessionId(data.sessionId);
-                        wsSocketRef.current?.send(JSON.stringify({ type: 'load_session', id: data.sessionId }));
+                        requestHistory(wsSocketRef.current, data.sessionId, true);
                         return;
                     }
                     // Targets a different conversation: surface an unread badge, don't inject here.
@@ -5928,9 +5936,7 @@ function VAFDashboardContent() {
                             // The history is on its way again: a list that arrives after the
                             // 15 s guard gave up must not show the welcome screen and a centred
                             // composer until history_update (it also re-arms the guard).
-                            setHistoryLoading(true);
-                            setHistoryRequests(n => n + 1);
-                            wsSocketRef.current?.send(JSON.stringify({ type: 'load_session', id: chats[0].id }));
+                            requestHistory(wsSocketRef.current, chats[0].id, true);
                         }
                     }
                 }

@@ -296,8 +296,8 @@ def test_the_frontend_never_picks_a_room_when_it_picks_a_session():
     # asserts a guard is called without asserting the guard does anything.
     assert "const isRoom = (s: Session) => s.kind === 'room';" in source
     assert "const conversationsOnly = (list: Session[]) => list.filter(s => !isRoom(s));" in source
-    # the auto-select on connect
-    assert "wsSocketRef.current?.send(JSON.stringify({ type: 'load_session', id: chats[0].id }))" in source
+    # the auto-select on connect (every history request goes through requestHistory)
+    assert "requestHistory(wsSocketRef.current, chats[0].id, true);" in source
     assert "id: data.sessions[0].id" not in source, "the auto-load can still pick a room"
     # the fallback after a delete
     assert "conversationsOnly(sessions).filter" in source

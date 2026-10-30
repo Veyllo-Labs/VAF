@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { cn, getApiBase, getWsBase } from '@/lib/utils';
+import Skeleton, { SkeletonBar, SkeletonRows } from '@/components/ui/Skeleton';
 import { useEscapeLayer } from '@/hooks/useEscapeLayer';
 import { copyText } from '@/lib/clipboard';
 import { downloadText } from '@/lib/download';
@@ -1212,11 +1213,14 @@ const SetupLine = ({ message }: { message: string }) => {
 // over skeleton bubbles in the rhythm of the view they stand in for. A chat
 // alternates sides the way user and agent do; a room stacks left with a name
 // line, the way its transcript does. Widths are fixed per row, never random -
-// a skeleton that reshuffles on every render flickers. Opacity and transform
-// only (the repaint rule in globals.css).
+// a skeleton that reshuffles on every render flickers. Built on the shared
+// placeholder (web/components/ui/Skeleton.tsx): it says "loading" once to a
+// screen reader, and it, bar included, shows only after 180 ms, so a history
+// that answers sooner never flashes. Opacity and transform only (the repaint
+// rule in globals.css).
 const LoadingIllusion = ({ kind, label }: { kind: 'chat' | 'room'; label?: string }) => (
-    <div className="pt-2" aria-hidden="true">
-        <div className="h-[3px] rounded-full overflow-hidden bg-gray-200 dark:bg-[#2a2a2a] mb-6">
+    <Skeleton className="pt-2">
+        <div className="h-[3px] rounded-full overflow-hidden bg-gray-200 mb-6">
             <div className="h-full w-full origin-left rounded-full bg-gray-500 dark:bg-[#8a8a8a]"
                 style={{ animation: 'loadCrawl 9s cubic-bezier(0.2, 0.8, 0.3, 1) forwards' }} />
         </div>
@@ -1225,24 +1229,49 @@ const LoadingIllusion = ({ kind, label }: { kind: 'chat' | 'room'; label?: strin
         )}
         {(kind === 'room' ? [72, 46, 64, 38, 58] : [44, 68, 36, 74, 52]).map((w, i) => {
             const right = kind === 'chat' && i % 2 === 0;
+            const delay = { animationDelay: `${(i * 0.18).toFixed(2)}s` };
             return (
-                <div key={i} className={cn('flex gap-3 py-2', right && 'flex-row-reverse')}
-                    style={{ animation: 'skelPulse 1.6s ease-in-out infinite', animationDelay: `${i * 0.18}s` }}>
-                    <div className="w-8 h-8 rounded-full shrink-0 bg-gray-200 dark:bg-[#2a2a2a]" />
+                <div key={i} className={cn('flex gap-3 py-2', right && 'flex-row-reverse')}>
+                    <SkeletonBar className="w-8 h-8 rounded-full shrink-0" style={delay} />
                     <div className={cn('min-w-0 flex-1 flex flex-col gap-2 pt-1', right && 'items-end')}>
                         {kind === 'room' && (
-                            <div className="h-3 rounded bg-gray-200 dark:bg-[#2a2a2a]" style={{ width: '18%' }} />
+                            <SkeletonBar className="h-3" style={{ ...delay, width: '18%' }} />
                         )}
-                        <div className="h-4 rounded-lg bg-gray-200 dark:bg-[#2a2a2a]" style={{ width: `${w}%` }} />
+                        <SkeletonBar className="h-4 rounded-lg" style={{ ...delay, width: `${w}%` }} />
                         {i % 2 === 1 && (
-                            <div className="h-4 rounded-lg bg-gray-200 dark:bg-[#2a2a2a]"
-                                style={{ width: `${Math.max(18, w - 22)}%` }} />
+                            <SkeletonBar className="h-4 rounded-lg"
+                                style={{ ...delay, width: `${Math.max(18, w - 22)}%` }} />
                         )}
                     </div>
                 </div>
             );
         })}
-    </div>
+    </Skeleton>
+);
+
+// The app's frame while the session is checked or the page code loads, in place of a
+// full-screen spinner: on a desktop the 64 px sidebar rail with the logo cell and five rows at
+// the session row's pitch, and the composer at the bottom of the chat column; below md only
+// the composer (the sidebar is a drawer there). The sidebar's white surface and border are its
+// real chrome; everything else is the shared placeholder.
+const AppShellSkeleton = ({ label }: { label?: string }) => (
+    <main className="h-screen bg-gray-50">
+        <Skeleton label={label} className="h-full">
+            <div className="h-full flex">
+                <div className="w-16 shrink-0 h-full bg-white border-r border-gray-200 flex flex-col max-md:hidden">
+                    <div className="h-16 flex items-center px-4 shrink-0">
+                        <SkeletonBar className="w-[38px] h-[38px] rounded-lg -ml-[5.5px]" />
+                    </div>
+                    <div className="p-2 pt-0 space-y-1">
+                        <SkeletonRows count={5} widths={[]} lead="w-4 h-4" rowClassName="p-2 pl-3.5 h-9" />
+                    </div>
+                </div>
+                <div className="flex-1 min-w-0 flex flex-col justify-end px-6 pb-8 max-md:px-3 max-md:pb-6">
+                    <SkeletonBar className="w-full max-w-4xl mx-auto h-[60px] rounded-2xl" />
+                </div>
+            </div>
+        </Skeleton>
+    </main>
 );
 
 /**
@@ -2570,8 +2599,7 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                                 }} />
                         </div>
                         {pendingNote && (
-                            <div className="text-[10px] text-gray-400 mt-0.5"
-                                style={{ animation: 'skelPulse 1.6s ease-in-out infinite' }}>{pendingNote}</div>
+                            <div className="text-[10px] text-gray-400 mt-0.5 vaf-pulse-note">{pendingNote}</div>
                         )}
                     </div>
                 </div>
@@ -2812,6 +2840,16 @@ function VAFDashboardContent() {
     const [modelLoaded, setModelLoaded] = useState<boolean | null>(null);
     const [modelProvider, setModelProvider] = useState<string | null>(null);
     const [sessions, setSessions] = useState<Session[]>([]);
+    // The first session_list has arrived: until then the sidebar shows placeholder rows where
+    // the chats will be, instead of only "New Chat" and then the whole list popping in.
+    // Cleared after 15 s without a list as well, like the chat's own placeholder: a dead socket
+    // leaves "New Chat" and the disconnected status, not rows that never arrive.
+    const [sessionsLoaded, setSessionsLoaded] = useState(false);
+    useEffect(() => {
+        if (sessionsLoaded) return;
+        const t = setTimeout(() => setSessionsLoaded(true), 15000);
+        return () => clearTimeout(t);
+    }, [sessionsLoaded]);
     const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
     const [unreadSessions, setUnreadSessions] = useState<Set<string>>(new Set());
     // The open agent room, painted as a read-only overlay. Deliberately NOT the chat
@@ -3178,7 +3216,29 @@ function VAFDashboardContent() {
         statusMessage: string;
         loadingMessageId: number | null;
     }>>({});
-    const [historyLoading, setHistoryLoading] = useState(false);  // chat history is being fetched (load_session) and nothing is cached to show meanwhile
+    // Chat history is being fetched (load_session) and nothing is cached to show meanwhile.
+    // Starts TRUE: on a fresh load the newest chat is auto-loaded from the first session_list,
+    // past handleSessionSwitch, so until its history_update the message area is a chat on its
+    // way, not a new chat (the welcome screen used to show first, then the conversation
+    // replaced it, and the composer sank from mid-screen to the bottom). history_update clears
+    // it, for load_session and new_session alike; the guard below clears it after 15 s, so a
+    // dead socket ends on the welcome screen and its disconnected status, not on a skeleton.
+    const [historyLoading, setHistoryLoading] = useState(true);
+    useEffect(() => {
+        if (!historyLoading) return;
+        const t = setTimeout(() => setHistoryLoading(false), 15000);
+        return () => clearTimeout(t);
+    }, [historyLoading]);
+    // How many messages of `messages` came from a snapshot (a history_update, or the cache on a
+    // switch): those rows mount as they are, without the enter animation, because the whole
+    // transcript mounting at once made the entire panel fade and slide up. Rows at or past this
+    // index are new to the screen (a send, a streamed reply, a tool) and keep it.
+    const snapshotLenRef = useRef(0);
+    // A transcript cut short (a retry, an edit) lowers the mark with it, so the next new row
+    // still arrives with its animation.
+    useEffect(() => {
+        if (messages.length < snapshotLenRef.current) snapshotLenRef.current = messages.length;
+    }, [messages.length]);
     const syncedSessions = useRef<Set<string>>(new Set());        // sessions whose history snapshot already arrived → re-entering an (empty) one shows no spinner flash
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editName, setEditName] = useState('');
@@ -4867,6 +4927,7 @@ function VAFDashboardContent() {
         lastUserSendTimeRef.current = 0;
         expectNewAssistantAfterToolRef.current = false;
         const cached = sessionCache.current[id] || [];
+        snapshotLenRef.current = cached.length;
         setMessages(cached);
         // Per-turn ephemeral state belongs to the previous session, not this one - clear it so a
         // stale RAG-snippets badge / context X-ray cannot linger across a switch (defense-in-depth
@@ -5820,6 +5881,7 @@ function VAFDashboardContent() {
                 }
                 else if (data.type === 'session_list') {
                     setSessions(data.sessions);
+                    setSessionsLoaded(true);
 
                     // Rooms ride at the top of this list and are not conversations, so
                     // every decision below is taken over the chats alone. Without this
@@ -6640,6 +6702,7 @@ function VAFDashboardContent() {
                         // sends messages:[] intentionally to clear the chat).
                         const sessionSwitched = data.sessionId !== prevSessionId;
                         if (sessionSwitched || finalServerMsgs.length > 0 || messagesRef.current.length === 0) {
+                            snapshotLenRef.current = finalServerMsgs.length;
                             setMessages(finalServerMsgs);
                             if (sessionSwitched) setAttachedImages([]);
                         }
@@ -6861,6 +6924,7 @@ function VAFDashboardContent() {
                         }
                     }
 
+                    snapshotLenRef.current = finalMsgs.length;
                     setMessages(finalMsgs);
 
                     // If a chat was queued before we had a session, send it now.
@@ -8825,12 +8889,7 @@ function VAFDashboardContent() {
     const messagesAreaWidthClass = anyDockPanelOpen ? 'max-w-5xl mx-auto' : 'max-w-6xl mx-auto';
 
     if (authChecking) {
-        return (
-            <main className="h-screen flex flex-col items-center justify-center bg-gray-50">
-                <div className="w-10 h-10 border-2 border-gray-300 border-t-gray-900 rounded-full animate-spin" />
-                <p className="mt-4 text-sm text-gray-500">{tAuth('checkingSession')}</p>
-            </main>
-        );
+        return <AppShellSkeleton label={tAuth('checkingSession')} />;
     }
     if (authError) {
         return (
@@ -9042,6 +9101,18 @@ function VAFDashboardContent() {
                                 <Plus size={16} className="shrink-0" />
                                 <span className="text-sm font-medium whitespace-nowrap opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity duration-200">New Chat</span>
                             </div>
+
+                            {/* Rows in the session row's own chrome until the first list arrives:
+                                the icon square shows in the collapsed rail, the title bar fades
+                                in with the sidebar like a real title. */}
+                            {!sessionsLoaded && (
+                                <Skeleton className="space-y-1">
+                                    <SkeletonRows count={6} widths={[70, 55, 80, 62, 48, 74]} lead="w-4 h-4"
+                                        rowClassName="p-2 pl-3.5 h-9 max-md:min-h-[44px] rounded-lg"
+                                        textClassName="opacity-0 group-hover:opacity-100 group-data-[editing=true]:opacity-100 max-md:opacity-100 transition-opacity"
+                                        barClassName="h-3" />
+                                </Skeleton>
+                            )}
 
                             {sessions.map(s => isRoom(s) ? (
                                 /* An agent room. It gets its own row rather than a
@@ -9785,7 +9856,7 @@ function VAFDashboardContent() {
                                                         const isSubAgentTool = /(?:^|[^a-z])(librarian|research|document|coding|browser)_agent(?:$|[^a-z])/.test(toolLower);
                                                         const prevWasSystem = i > 0 && visibleMessages[i - 1].role === 'system';
                                                         return (
-                                                            <div className={cn("flex vaf-msg-row animate-in fade-in slide-in-from-bottom-2 duration-300", prevWasSystem ? "pt-0" : "pt-4")}>
+                                                            <div className={cn("flex vaf-msg-row", trueIndex >= snapshotLenRef.current && "animate-in fade-in slide-in-from-bottom-2 duration-300", prevWasSystem ? "pt-0" : "pt-4")}>
                                                                 <div className="w-full max-w-[85%] flex gap-4">
                                                                     <div className="w-9 shrink-0" aria-hidden />
                                                                     <div className="flex-1 min-w-0">
@@ -10297,7 +10368,7 @@ function VAFDashboardContent() {
                                                     );
 
                                                     return (
-                                                        <div key={`bubble-${trueIndex}`} data-role={msg.role} data-msg-idx={trueIndex} className={cn("flex gap-4 pt-4 animate-in fade-in slide-in-from-bottom-2 duration-300", isBot ? "vaf-msg-row" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
+                                                        <div key={`bubble-${trueIndex}`} data-role={msg.role} data-msg-idx={trueIndex} className={cn("flex gap-4 pt-4", trueIndex >= snapshotLenRef.current && "animate-in fade-in slide-in-from-bottom-2 duration-300", isBot ? "vaf-msg-row" : "justify-end", prevWasSystem ? "pt-2" : "pt-4")}>
                                                             {isBot ? (
                                                                 hasTimeline ? (
                                                                     <div className={cn(
@@ -10433,13 +10504,16 @@ function VAFDashboardContent() {
                                 // live: a fresh empty chat plus a click into a room floated the
                                 // input (and the welcome hero below) mid-screen over the
                                 // transcript.
-                                messages.length === 0 && !roomView
+                                // While a history or a room is on its way it stands at the bottom too,
+                                // where the conversation will put it, instead of floating mid-screen
+                                // over the placeholder and then sinking.
+                                messages.length === 0 && !roomView && !historyLoading && !roomOpening
                                     ? "top-1/2 -translate-y-1/2 bottom-auto max-md:top-[38%]"
                                     : "top-auto bottom-0 translate-y-0"
                             )}
                         >
                             <div className="bg-gradient-to-t from-white via-white to-transparent pt-10 pb-8 px-6 max-md:px-3 max-md:pt-6 max-md:pb-[max(1.5rem,calc(var(--safe-bottom)+0.75rem))] max-md:[&>*]:pointer-events-auto">
-                                {messages.length === 0 && !roomView && !historyLoading && (
+                                {messages.length === 0 && !roomView && !historyLoading && !roomOpening && (
                                     <div className={cn(chatWidthClass, "mb-4 text-center")}>
                                         <div className="flex justify-center mb-8 max-md:mb-4 origin-center scale-[1.8] max-md:scale-[1.35]">
                                             <AgentAvatar mode="idle" />
@@ -13346,7 +13420,7 @@ function VAFDashboardContent() {
 
 export default function VAFDashboard() {
     return (
-        <Suspense fallback={<div className="min-h-screen flex items-center justify-center bg-gray-50"><Loader2 className="w-8 h-8 animate-spin text-gray-400" /></div>}>
+        <Suspense fallback={<AppShellSkeleton />}>
             <VAFDashboardContent />
         </Suspense>
     );

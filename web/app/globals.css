@@ -555,6 +555,8 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 @keyframes vafSkelReveal { to { opacity: 1 } }
 .vaf-skel { opacity: 0; animation: vafSkelReveal 0s linear 180ms forwards; }
 .vaf-skel-bar { animation: skelPulse 1.6s ease-in-out infinite; }
+/* A room's "sending…" note under the person's own pending message breathes at the same pace. */
+.vaf-pulse-note { animation: skelPulse 1.6s ease-in-out infinite; }
 .room-msg-enter { animation: roomMessageEnter .75s cubic-bezier(.16,.84,.44,1) both }
 /* The person's own message while it travels to the store: dimmed in place, a
    light band sweeping left to right for as long as the send lasts (honest at

@@ -4,7 +4,7 @@
 """Loading states in the web UI: no enter animation on a tab, one placeholder for a first load.
 
 A Settings tab appears the same way as every other one, without sliding or fading in. A
-region waiting for its first data shows the shared placeholder (web/components/ui/Skeleton.tsx)
+region waiting for its first data, in Settings and in the chat, shows the shared placeholder (web/components/ui/Skeleton.tsx)
 in the shape and height of what is coming, so nothing below it moves when the data lands, and
 it says so once to a screen reader. The motion lives in one place (globals.css: opacity only, a
 reveal after 180 ms so fast loads never flash, still under reduced motion), and no site writes
@@ -27,11 +27,12 @@ _MODAL = _WEB / "components" / "SettingsModal.tsx"
 _SKELETON = _WEB / "components" / "ui" / "Skeleton.tsx"
 _CSS = _WEB / "app" / "globals.css"
 _SETTINGS = _WEB / "components" / "settings"
+_PAGE = _WEB / "app" / "page.tsx"
 
 
 def _src(path: Path) -> str:
-    # Bytes, decoded: a CRLF checkout must read the same as an LF one for these needles.
-    return path.read_bytes().decode("utf-8").replace("\r\n", "\n")
+    # Text mode: the needles below hold newlines, and a CRLF checkout must read as LF.
+    return path.read_text(encoding="utf-8")
 
 
 def _block(css: str, start: int) -> str:
@@ -73,7 +74,7 @@ def test_the_placeholder_is_one_quiet_primitive():
     assert 'role="status"' in src
     assert "useTranslations('common')" in src and "label ?? t('loading')" in src
     assert '<span className="sr-only">' in src
-    assert '<div aria-hidden="true">' in src
+    assert '<div aria-hidden="true" className="h-full">' in src
     assert "export default function Skeleton(" in src
     assert "export function SkeletonBar(" in src and "export function SkeletonRows(" in src
     assert "'vaf-skel overflow-hidden'" in src and "'vaf-skel-bar rounded bg-gray-200'" in src
@@ -149,8 +150,9 @@ def test_every_settings_first_load_shows_the_placeholder(name, gone, there):
 
 def test_no_site_draws_a_placeholder_pulse_of_its_own():
     """The pulse and its pace live in globals.css and the primitive only, so two placeholders
-    cannot drift apart. MUTATION: inline `animation: 'skelPulse ...'` in any component."""
-    offenders = [str(p.relative_to(_ROOT)) for p in (_WEB / "components").rglob("*.tsx")
+    cannot drift apart. MUTATION: inline `animation: 'skelPulse ...'` in any component or in
+    the chat page."""
+    offenders = [p.relative_to(_ROOT).as_posix() for d in ("components", "app") for p in (_WEB / d).rglob("*.tsx")
                  if p != _SKELETON and "skelPulse" in _src(p)]
     assert offenders == [], offenders
     assert "Loading…" not in _src(_MODAL)
@@ -165,3 +167,77 @@ def test_a_refetch_keeps_the_data_on_screen():
     assert persona.count("{personaFirstLoad ? (") == 2
     assert "personaLoading ?" not in src
     assert "{usersLoading && users.length === 0 ? (" in src
+
+
+# ---- The chat (web/app/page.tsx) ----
+
+def _between(src: str, start: str, end: str) -> str:
+    a = src.index(start)
+    return src[a:src.index(end, a)]
+
+
+def test_a_fresh_load_waits_for_the_newest_chat_not_the_welcome_screen():
+    """The newest chat is auto-loaded from the first session list, past handleSessionSwitch, so
+    the flag starts true: the welcome screen never shows before the history, and the composer
+    stands at the bottom where the conversation will put it. A dead socket ends after 15 s.
+    MUTATION: `useState(false)`, drop `!historyLoading` from the centring, or delete the guard."""
+    src = _src(_PAGE)
+    assert "const [historyLoading, setHistoryLoading] = useState(true);" in src
+    guard = _between(src, "const [historyLoading, setHistoryLoading] = useState(true);", "const snapshotLenRef")
+    assert "setTimeout(() => setHistoryLoading(false), 15000)" in guard
+    centre = _between(src, '"absolute left-0 right-0 w-full z-40', '"top-auto bottom-0 translate-y-0"')
+    assert "messages.length === 0 && !roomView && !historyLoading && !roomOpening" in centre
+    assert "{messages.length === 0 && !roomView && !historyLoading && !roomOpening && (" in src
+    handler = _between(src, "else if (data.type === 'history_update') {", "else if (data.type === 'context_checkpoint')")
+    assert "setHistoryLoading(false);" in handler
+
+
+def test_a_transcript_from_a_snapshot_arrives_without_the_enter_animation():
+    """Rows from a history snapshot (or the cache on a switch) mount as they are; only rows
+    past the snapshot (a send, a streamed reply, a tool) slide in. MUTATION: make the class
+    unconditional again on either row, or stop recording the snapshot length."""
+    src = _src(_PAGE)
+    gated = 'trueIndex >= snapshotLenRef.current && "animate-in fade-in slide-in-from-bottom-2 duration-300"'
+    assert src.count(gated) == 2, "the tool row and the bubble"
+    assert '"flex vaf-msg-row animate-in' not in src and '"flex gap-4 pt-4 animate-in' not in src
+    handler = _between(src, "else if (data.type === 'history_update') {", "else if (data.type === 'context_checkpoint')")
+    assert "snapshotLenRef.current = finalServerMsgs.length;\n                            setMessages(finalServerMsgs);" in handler
+    assert "snapshotLenRef.current = finalMsgs.length;\n                    setMessages(finalMsgs);" in handler
+    assert "snapshotLenRef.current = cached.length;\n        setMessages(cached);" in src
+    assert "if (messages.length < snapshotLenRef.current) snapshotLenRef.current = messages.length;" in src
+
+
+def test_the_sidebar_shows_rows_until_the_first_list():
+    """Until the first session list, placeholder rows in the session row's chrome stand below
+    New Chat, cleared by the list or after 15 s. MUTATION: remove the set, or the rows."""
+    src = _src(_PAGE)
+    branch = _between(src, "else if (data.type === 'session_list') {", "else if (data.type === 'rooms_changed')")
+    assert "setSessionsLoaded(true);" in branch
+    assert "setTimeout(() => setSessionsLoaded(true), 15000)" in src
+    sidebar = _between(src, "{/* Session list: outer box", "{sessions.map(s => isRoom(s) ? (")
+    assert "{!sessionsLoaded && (" in sidebar
+    assert "<SkeletonRows count={6}" in sidebar and 'rowClassName="p-2 pl-3.5 h-9 max-md:min-h-[44px] rounded-lg"' in sidebar
+    assert 'textClassName="opacity-0 group-hover:opacity-100' in sidebar
+
+
+def test_the_auth_check_and_the_page_fallback_show_the_app_frame():
+    """Both full-screen spinners became the app-shell placeholder, with the status label.
+    MUTATION: put the spinner back in either place."""
+    src = _src(_PAGE)
+    auth = _between(src, "    if (authChecking) {", "    if (authError) {")
+    assert "<AppShellSkeleton label={tAuth('checkingSession')} />" in auth and "animate-spin" not in auth
+    fallback = _between(src, "<Suspense fallback=", "<VAFDashboardContent />")
+    assert "<AppShellSkeleton />" in fallback and "animate-spin" not in fallback
+    shell = _between(src, "const AppShellSkeleton = ", "\n);\n")
+    assert "<Skeleton label={label}" in shell and "max-md:hidden" in shell and "animate-spin" not in shell
+
+
+def test_the_conversation_placeholder_is_the_shared_one():
+    """The chat's and the room's loading illusion render through the primitive (status role,
+    reveal delay), not a hidden box of their own; the room's sending note keeps its pulse
+    through a class. MUTATION: revert the root to `<div className="pt-2" aria-hidden="true">`."""
+    src = _src(_PAGE)
+    body = _between(src, "const LoadingIllusion = ", "\n);\n")
+    assert '<Skeleton className="pt-2">' in body
+    assert 'aria-hidden="true"' not in body and "skelPulse" not in body
+    assert "vaf-pulse-note" in src and ".vaf-pulse-note { animation: skelPulse" in _src(_CSS)

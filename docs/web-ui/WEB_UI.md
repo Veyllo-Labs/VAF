@@ -144,12 +144,25 @@ many frames have not been read.
   faces says "read this far", a row of emojis says what people made of it.
   Loading shows the SHAPE of what is coming, in both lanes: while a chat's
   history or a clicked room's transcript is on its way, skeleton bubbles stand
-  in the message area (one shared `LoadingIllusion` component - a chat
-  alternates sides, a room stacks left with a name line) under a thin progress
-  bar that races to two thirds and then creeps, because finishing is the
-  content's job; both vanish the moment real messages arrive, and a room
-  skeleton clears itself after 15 seconds so a dead server does not trap the
-  person under it. The person's own room message appears at once
+  in the message area (one shared `LoadingIllusion` component on the shared
+  placeholder `web/components/ui/Skeleton.tsx` - a chat alternates sides, a
+  room stacks left with a name line) under a thin progress bar that races to
+  two thirds and then creeps, because finishing is the content's job. Like
+  every placeholder it holds its space at once but shows only after 180 ms, so
+  a history that answers sooner never flashes, and a screen reader hears one
+  "Loading" status. Both vanish the moment real messages arrive, and both clear
+  themselves after 15 seconds so a dead server does not trap the person under
+  them. This includes the very first load of the app: the newest chat is
+  opened from the first session list, and until its history arrives the
+  message area is that chat on its way, not the welcome screen of a new chat.
+  The transcript that arrives (or the cached one shown on a switch) appears as
+  it is, without the per-message enter animation; only messages that are new
+  to the screen afterwards (a send, a reply, a tool) fade in. Until the first
+  session list arrives, the sidebar shows six placeholder rows in the chat
+  row's own chrome (icon squares in the collapsed rail, a title bar when it is
+  open). While the session is checked, or the page code loads, the app shows
+  its frame (the sidebar rail and the composer) as a placeholder instead of a
+  spinner. The person's own room message appears at once
   below the transcript, drawn exactly like the delivered message it is about to
   become - their initials, name and role, the text - only dimmed to half
   opacity, with a light band sweeping the text left to right for as long as the
@@ -1249,7 +1262,7 @@ The Web UI runs alongside the CLI interface:
 ### Input Box
 
 - **Features**: Attachment button, text input, voice input, send button; file chips and token stats above the form when relevant. When the document panel is open with attachments, **quote chips** appear above the input: any text selected in the panel is automatically added as a quoted snippet (colored by order: dark, orange, pink, blue, green). Chips show a red hover state; clicking a chip removes that quote only. Sent messages combine the typed input and all quote snippets (joined by blank lines).
-- **Layout**: On a **new chat** (no messages), the input bar is shown **centered** in the viewport with a short welcome line (“How can I help you?”). After the first message is sent, the bar **animates** (≈500 ms) to its **fixed position at the bottom** and stays there for the rest of the conversation.
+- **Layout**: On a **new chat** (no messages), the input bar is shown **centered** in the viewport with a short welcome line (“How can I help you?”). After the first message is sent, the bar **animates** (≈500 ms) to its **fixed position at the bottom** and stays there for the rest of the conversation. While a chat's history or a room is still loading, the bar already stands at the bottom, where the conversation will put it, so it never floats over the placeholder and then sinks; a chat that turns out empty centers it after the load.
 - **States**: Disabled during loading, focus ring on interaction.
 - **Submit**: Enter key or click send button.
 
@@ -1285,6 +1298,7 @@ The Web UI runs alongside the CLI interface:
 - **It never flashes.** The placeholder holds its space from the first frame but becomes visible only after 180 ms (`.vaf-skel` in `globals.css`, pure CSS, no timer), so a load that answers sooner shows nothing at all.
 - **It pulses in opacity only** (`.vaf-skel-bar`, `skelPulse`): no shimmer, no gradient, no moving band, per the repaint rule in `globals.css`. With reduced motion it holds still.
 - **Screen readers hear one status line**: the placeholder is `role="status"` with a short label (the section's own loading text, else `common.loading`), and its shapes are hidden.
+- **In the chat**: the conversation on its way, the session list and the session check use the same primitive (see section 2b), and the composer stays at the bottom while a history loads (see Input Box).
 - **A refetch keeps the data on screen.** The placeholder stands only while there is no data yet; going back to a tab, or reloading a list that is already shown, keeps what is there.
 - **Not loading states:** a spinner on a button that is doing something (checking a key, refreshing models), live status chips (a connection being checked), and a list that refetches with its rows on screen.
 - **Sections that may vanish.** SSH and FTP are hidden for an account without that tool, and Remote access and Certificate for a non-admin. They show the placeholder until the answer says so, then collapse; that only happens below the fold of a long tab.

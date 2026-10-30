@@ -30,7 +30,8 @@ export default function Skeleton({ label, className, style, children }: {
     return (
         <div role="status" className={cn('vaf-skel overflow-hidden', className)} style={style}>
             <span className="sr-only">{label ?? t('loading')}</span>
-            <div aria-hidden="true">{children}</div>
+            {/* Fills the root, so a placeholder with a set height can lay out a full frame. */}
+            <div aria-hidden="true" className="h-full">{children}</div>
         </div>
     );
 }
@@ -47,31 +48,36 @@ const cssWidth = (w: Width) => (typeof w === 'number' ? `${w}%` : w);
 
 /**
  * `count` rows of fixed height (`rowClassName` sets height, gap and padding). Each row holds an
- * optional leading bar (`lead`, an icon or avatar) and one bar per width of its `widths` entry;
+ * optional leading bar (`lead`, an icon or avatar) and one bar per width of its `widths` entry
+ * (inside a box of `textClassName` when given: the pulse animates the bars' own opacity, so a
+ * row whose text fades in and out with its container, like the collapsed sidebar, fades the box;
+ * an empty `widths` draws the leading bar alone);
  * the entries are cycled, never random, because a placeholder that reshuffles on every render
  * flickers. Each row's pulse starts `stagger` seconds after the one above, so the column reads
  * as one gentle wave instead of a blink.
  */
-export function SkeletonRows({ count, widths, rowClassName, barClassName, lead, stagger = 0.08 }: {
+export function SkeletonRows({ count, widths, rowClassName, barClassName, textClassName, lead, stagger = 0.08 }: {
     count: number;
     widths: (Width | Width[])[];
     rowClassName?: string;
     barClassName?: string;
+    textClassName?: string;
     lead?: string;
     stagger?: number;
 }) {
     return (
         <>
             {Array.from({ length: count }).map((_, i) => {
-                const entry = widths[i % widths.length];
+                const entry = widths.length ? widths[i % widths.length] : [];
                 const delay = { animationDelay: `${(i * stagger).toFixed(2)}s` };
+                const bars = (Array.isArray(entry) ? entry : [entry]).map((w, j) => (
+                    <SkeletonBar key={j} className={cn('h-2.5', barClassName)}
+                        style={{ ...delay, width: cssWidth(w) }} />
+                ));
                 return (
                     <div key={i} className={cn('flex items-center gap-3', rowClassName)}>
                         {lead && <SkeletonBar className={cn('shrink-0', lead)} style={delay} />}
-                        {(Array.isArray(entry) ? entry : [entry]).map((w, j) => (
-                            <SkeletonBar key={j} className={cn('h-2.5', barClassName)}
-                                style={{ ...delay, width: cssWidth(w) }} />
-                        ))}
+                        {textClassName ? <div className={cn('flex-1 min-w-0 flex items-center gap-3', textClassName)}>{bars}</div> : bars}
                     </div>
                 );
             })}

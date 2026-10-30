@@ -26,7 +26,7 @@ export interface ModelRoleRow {
 // model that cannot read images gets its screenshots described) and are shown on hover only.
 export const WARNING_REASONS = new Set([
     'no_api_key', 'no_local_models', 'choice_inactive', 'config_unreadable',
-    'speech_provider_unusable', 'browser_dom_only',
+    'speech_provider_unusable', 'browser_dom_only', 'thinking_model_ignored',
 ]);
 
 // Sources that carry no chip. The chat row IS the primary provider, and following it is the

@@ -248,6 +248,23 @@ def test_warning_reasons_are_real_codes_and_include_a_blind_browser():
     codes = _const_set(_src(_OVERVIEW), "WARNING_REASONS")
     assert codes <= set(model_roles.REASON_TEXT), codes - set(model_roles.REASON_TEXT)
     assert "browser_dom_only" in codes and "no_api_key" in codes
+    # An ignored Thinker model is not "unavailable" (the provider's own model runs), so only
+    # the warning set keeps it visible on a collapsed phone card instead of "nothing needs
+    # attention". MUTATION: drop `thinking_model_ignored` from the set.
+    assert "thinking_model_ignored" in codes
+
+
+def test_a_retry_shows_no_stale_rows_before_the_new_answer():
+    """A retry clears the error at once; the rows of the failed configuration stay hidden (the
+    card shows loading) until a fresh answer arrives. MUTATION: derive the rows from the failure
+    flag alone, or clear the stale mark on retry."""
+    src = _src(_MODAL)
+    assert "const modelRoleRows = (modelRolesFailed || modelRolesStale) ? null : (modelRoles?.rows ?? null);" in src
+    assert "loading={(!modelRoles || modelRolesStale) && !modelRolesFailed}" in src
+    retry = src[src.index("onRetry={() => {"):]
+    retry = retry[:retry.index("}}")]
+    assert "setModelRolesStale(false)" not in retry
+    assert src.count("setModelRolesStale(false)") == 1 and src.count("setModelRolesStale(true)") == 2
 
 
 def test_one_line_per_job_with_the_reason_only_where_it_needs_attention():
@@ -304,7 +321,7 @@ def test_a_failed_request_shows_no_stale_rows():
     card and from the vision hint while the failure stands. MUTATION: pass `modelRoles.rows`
     again."""
     src = _src(_MODAL)
-    assert "const modelRoleRows = modelRolesFailed ? null : (modelRoles?.rows ?? null);" in src
+    assert "const modelRoleRows = (modelRolesFailed || modelRolesStale) ? null : (modelRoles?.rows ?? null);" in src
     assert "rows={modelRoleRows}" in src
     assert "const visionRole = modelRoleRows?.find(r => r.role === 'vision');" in src
 

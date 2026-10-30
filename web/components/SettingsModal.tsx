@@ -740,6 +740,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // one. Admin only, like the route and the tab.
     const [modelRoles, setModelRoles] = useState<{ rows: ModelRoleRow[]; keys: string[] } | null>(null);
     const [modelRolesFailed, setModelRolesFailed] = useState(false);
+    // Set by a failure, cleared only by a fresh answer: a retry clears the error at once, but the
+    // old rows must not come back before the new answer replaces them.
+    const [modelRolesStale, setModelRolesStale] = useState(false);
     const [modelRolesRetry, setModelRolesRetry] = useState(0);
     const modelRolesShown = isOpen && activeTab === 'ai' && currentUser?.role === 'admin';
     const modelRolesDraft = JSON.stringify(Object.fromEntries((modelRoles?.keys || [])
@@ -764,18 +767,20 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                     if (d && Array.isArray(d.roles)) {
                         setModelRoles({ rows: d.roles, keys: Array.isArray(d.keys) ? d.keys : [] });
                         setModelRolesFailed(false);
+                        setModelRolesStale(false);
                     } else {
                         setModelRolesFailed(true);
+                        setModelRolesStale(true);
                     }
                 })
-                .catch(() => { if (!ctl.signal.aborted) setModelRolesFailed(true); });
+                .catch(() => { if (!ctl.signal.aborted) { setModelRolesFailed(true); setModelRolesStale(true); } });
         }, modelRolesAsked.current ? 300 : 0);
         return () => { clearTimeout(timer); ctl.abort(); };
     }, [apiBase, modelRolesShown, modelRolesDraft, config, modelRolesRetry]);
     // A failed question leaves the previous answer in state (its `keys` drive the retry's
     // draft), but its rows describe a configuration the form may no longer hold: neither the
     // overview nor the vision hint shows them while the failure stands.
-    const modelRoleRows = modelRolesFailed ? null : (modelRoles?.rows ?? null);
+    const modelRoleRows = (modelRolesFailed || modelRolesStale) ? null : (modelRoles?.rows ?? null);
     const visionRole = modelRoleRows?.find(r => r.role === 'vision');
 
     // One fetch, two callers: opening the tab and the refresh button. The button
@@ -3249,7 +3254,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             <div className="space-y-6">
                                 <ModelRolesOverview
                                     rows={modelRoleRows}
-                                    loading={!modelRoles && !modelRolesFailed}
+                                    loading={(!modelRoles || modelRolesStale) && !modelRolesFailed}
                                     error={modelRolesFailed}
                                     onRetry={() => { setModelRolesFailed(false); setModelRolesRetry(n => n + 1); }}
                                     providerLabel={(provider, row) => {

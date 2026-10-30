@@ -145,8 +145,10 @@ def test_every_role_source_and_reason_has_a_text(locale):
     assert set(ai["roleSource"]) == set(model_roles.SOURCES)
     assert set(ai["roleReason"]) == set(model_roles.REASON_TEXT)
     for key in ("rolesTitle", "rolesIntro", "rolesLoading", "rolesError", "rolesRetry",
-                "rolesJumpHint", "localSpeechEngine", "visionFollowMain", "visionMainCannot"):
+                "rolesJumpHint", "rolesShowLess", "rolesAllFine", "localSpeechEngine",
+                "visionFollowMain", "visionMainCannot"):
         assert ai.get(key, "").strip(), key
+    assert "{count}" in ai["rolesShowAll"]
     for text in [*ai["role"].values(), *ai["roleSource"].values(), *ai["roleReason"].values()]:
         assert text.strip() and "\u2014" not in text
 
@@ -168,7 +170,7 @@ def test_the_vision_hint_reads_the_backend_row():
     assert "VISION_CAPABLE_PROVIDERS" not in src
     assert "visionNone" not in src
     assert "{ value: '', label: tAi('visionFollowMain') }" in src
-    assert "const visionRole = modelRoles?.rows.find(r => r.role === 'vision');" in src
+    assert "const visionRole = modelRoleRows?.find(r => r.role === 'vision');" in src
     assert re.search(r"visionRole\?\.source === 'follows_main' && \(\s*<p[^>]*text-green-600", src)
     assert re.search(r"visionRole\.reason === 'main_cannot_see' && \(\s*<p className=\"text-xs text-amber-700[^\"]*\">\{tAi\('visionMainCannot'\)\}", src)
 
@@ -228,3 +230,136 @@ def test_the_overview_asks_the_backend_with_the_unsaved_draft():
     assert "modelRolesAsked.current ? 300 : 0" in block
     assert "activeTab === 'ai' && currentUser?.role === 'admin'" in block
     assert "}, [apiBase, modelRolesShown, modelRolesDraft, config, modelRolesRetry]);" in block
+
+
+# ── Round of the compact card ────────────────────────────────────────────────────────
+
+
+def _const_set(src: str, name: str) -> set:
+    body = re.search(r"const " + name + r" = new Set\(\[(.*?)\]\)", src, re.S).group(1)
+    return set(re.findall(r"'([a-z_]+)'", body))
+
+
+def test_warning_reasons_are_real_codes_and_include_a_blind_browser():
+    """The warning set decides which rows say their reason and stay visible on a collapsed
+    phone card. A code the resolver does not send is a silent typo. A browser agent that
+    works blind is a lost capability, not a note. MUTATION: drop `browser_dom_only` from the
+    set, or misspell a code."""
+    codes = _const_set(_src(_OVERVIEW), "WARNING_REASONS")
+    assert codes <= set(model_roles.REASON_TEXT), codes - set(model_roles.REASON_TEXT)
+    assert "browser_dom_only" in codes and "no_api_key" in codes
+
+
+def test_one_line_per_job_with_the_reason_only_where_it_needs_attention():
+    """Every row is one line; a reason is in the hover title and for screen readers. Only the
+    rows that need attention have their reason written out, once, at the card's full width
+    under the grid. MUTATION: write every reason out again, or drop the warning filter."""
+    src = _src(_OVERVIEW)
+    assert "title={reasons.join(' ') || undefined}" in src
+    assert "{reasons.length > 0 && <span className=\"sr-only\">{reasons.join(' ')}</span>}" in src
+    notes = src[src.index("{warningCount > 0 && ("):]
+    notes = notes[:notes.index("</ul>")]
+    assert "rows.filter(isWarning).map(" in notes and "text-amber-700" in notes
+    row = src[src.index("{rows.map(row => {"):src.index("</ul>")]
+    assert "roleReason" not in row.replace("t(`roleReason.${r}`)", "", 1)
+
+
+def test_a_phone_shows_the_rows_that_need_attention_until_asked_for_all():
+    """Collapsed by default on a phone, remembered for the session; desktop always shows
+    every row (the hiding is behind `max-md:`). MUTATION: hide rows on desktop too, drop the
+    session memory, or show the toggle on desktop."""
+    src = _src(_OVERVIEW)
+    assert "useState(false)" in src.split("const [showAll, setShowAll] = ")[1][:20]
+    assert "!warn && !showAll && 'max-md:hidden'" in src
+    assert "sessionStorage.getItem(SHOW_ALL_KEY)" in src and "sessionStorage.setItem(SHOW_ALL_KEY" in src
+    toggle = src[src.index("onClick={toggleShowAll}"):]
+    toggle = toggle[:toggle.index(">")]
+    assert "hidden" in toggle.split() or " hidden " in toggle
+    assert "max-md:inline-block" in toggle and "aria-expanded={showAll}" in toggle
+
+
+def test_the_skeleton_keeps_the_card_height():
+    """As many placeholder lines as there are jobs, so nothing below jumps when the rows
+    arrive; the loading text is a status for screen readers. MUTATION: six lines again, or
+    the label back on a role-less div."""
+    src = _src(_OVERVIEW)
+    assert int(re.search(r"const SKELETON_ROWS = (\d+);", src).group(1)) == len(model_roles.ROLES)
+    assert 'role="status"' in src and "<span className=\"sr-only\">{t('rolesLoading')}</span>" in src
+    assert "aria-labelledby={headingId}" in src
+
+
+def test_amber_is_the_only_coloured_chip():
+    """An own choice is not an alarm: the chips are neutral grays, and amber marks only a
+    job that is not available. MUTATION: put the black `set` chip back."""
+    src = _src(_OVERVIEW)
+    chip = src[src.index("'shrink-0 whitespace-nowrap rounded px-1.5"):]
+    chip = chip[:chip.index(")}>")]
+    families = set(re.findall(r"(?:bg|border|text)-([a-z]+)-\d{2,3}", chip))
+    assert families <= {"gray", "amber"}, families
+    assert "bg-gray-900" not in chip and "text-white" not in chip
+
+
+def test_a_failed_request_shows_no_stale_rows():
+    """The previous answer stays in state for its `keys`, but its rows are hidden from the
+    card and from the vision hint while the failure stands. MUTATION: pass `modelRoles.rows`
+    again."""
+    src = _src(_MODAL)
+    assert "const modelRoleRows = modelRolesFailed ? null : (modelRoles?.rows ?? null);" in src
+    assert "rows={modelRoleRows}" in src
+    assert "const visionRole = modelRoleRows?.find(r => r.role === 'vision');" in src
+
+
+def test_the_tab_strip_follows_a_jump():
+    """On a phone the tabs are a horizontal strip; a jump to another tab brings that tab into
+    it. MUTATION: drop the strip scroll or the tab attribute."""
+    src = _src(_MODAL)
+    assert "data-settings-tab={cat.id}" in src
+    effect = src[src.index("const settingFlash = useRef"):]
+    effect = effect[:effect.index("}, [activeTab, pendingJump]);")]
+    assert "document.querySelector(`[data-settings-tab=\"${tab}\"]`)?.scrollIntoView(" in effect
+
+
+def test_a_bare_control_lands_with_room_above_it():
+    """Anchors on a plain wrapper (no section id) get more scroll margin than a section.
+    MUTATION: drop the rule, or give a plain wrapper an id."""
+    css = _src(_CSS)
+    assert "[data-setting-role]:not([id]) { scroll-margin-top: 1.5rem; }" in css
+    src = _src(_MODAL)
+    for m in re.finditer(r'<div([^>]*)data-setting-role="(\w+)"', src):
+        assert "id=" not in m.group(1), m.group(2)
+
+
+def test_the_vision_description_steps_aside_for_the_amber_line():
+    """MUTATION: show the gray description unconditionally again."""
+    src = _src(_MODAL)
+    assert re.search(r"\{!\(!selectedVisionProvider && visionRole\?\.reason === 'main_cannot_see'\) && \(\s*"
+                     r"<p className=\"text-xs text-gray-400 mb-3\">\{tAi\('visionProviderDesc'\)\}", src)
+
+
+@pytest.mark.parametrize("locale", _LOCALES)
+def test_the_chips_use_the_main_settings_own_word(locale):
+    """The chip for the main provider names the thing the main select is called, in every
+    language. MUTATION: en chip back to "Main provider"."""
+    ai = _catalogue(locale)
+    assert ai["roleSource"]["main"] in ai["primaryProvider"]
+
+
+@pytest.mark.parametrize("locale", ("en", "de"))
+def test_models_read_images_rather_than_see(locale):
+    """The source sentences say "read images", as every other vision text does; the
+    translations were derived from them. MUTATION: restore "No model here can see"."""
+    reasons = _catalogue(locale)["roleReason"]
+    word = {"en": r"\bsee\b", "de": r"\bsieht\b|\bsehen\b"}[locale]
+    for code in ("browser_described", "browser_dom_only"):
+        assert not re.search(word, reasons[code]), reasons[code]
+
+
+def test_following_the_primary_provider_needs_no_visible_mark():
+    """A half-width line has room for the job, the provider and ONE short chip; following
+    the primary provider is the default, so it carries no chip (the intro says unmarked jobs
+    follow it) and stays in the text for screen readers. The model gives way, the provider
+    name does not. MUTATION: render the follows-main chip again, or let the provider shrink."""
+    src = _src(_OVERVIEW)
+    assert re.search(r"\{row\.source === 'follows_main' \? \(\s*<span className=\"sr-only\">\{t\(`roleSource\.\$\{row\.source\}`\)\}</span>", src)
+    assert "{name && <span className=\"max-w-full shrink-0 truncate\">{name}</span>}" in src
+    assert "<span className=\"min-w-0 truncate font-mono text-[11px] text-gray-500\">{model}</span>" in src

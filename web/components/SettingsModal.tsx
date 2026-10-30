@@ -772,7 +772,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         }, modelRolesAsked.current ? 300 : 0);
         return () => { clearTimeout(timer); ctl.abort(); };
     }, [apiBase, modelRolesShown, modelRolesDraft, config, modelRolesRetry]);
-    const visionRole = modelRoles?.rows.find(r => r.role === 'vision');
+    // A failed question leaves the previous answer in state (its `keys` drive the retry's
+    // draft), but its rows describe a configuration the form may no longer hold: neither the
+    // overview nor the vision hint shows them while the failure stands.
+    const modelRoleRows = modelRolesFailed ? null : (modelRoles?.rows ?? null);
+    const visionRole = modelRoleRows?.find(r => r.role === 'vision');
 
     // One fetch, two callers: opening the tab and the refresh button. The button
     // exists because the ledger keeps being written while this dialog is open -
@@ -1316,10 +1320,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // that tab has rendered, scroll the target into view and (for the overview) light it up
     // briefly. The target is found by a selector, not by a translated title: the overview
     // passes `[data-setting-role="<role>"]`, which is the same in every language.
-    const [pendingJump, setPendingJump] = useState<{ selector: string; highlight: boolean } | null>(null);
+    const [pendingJump, setPendingJump] = useState<{ tab: string; selector: string; highlight: boolean } | null>(null);
     const jumpToSetting = (tab: string, selector: string | null, highlight: boolean) => {
         setActiveTab(tab);
-        setPendingJump(selector ? { selector, highlight } : null);
+        setPendingJump(selector ? { tab, selector, highlight } : null);
     };
     // The element glowing right now. Outside the effect: clearing the pending jump re-runs the
     // effect's cleanup, which must not cut the glow short.
@@ -1333,10 +1337,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     useEffect(() => endSettingFlash, []);
     useEffect(() => {
         if (!pendingJump) return;
-        const { selector, highlight } = pendingJump;
+        const { tab, selector, highlight } = pendingJump;
         // One frame after the commit: the tab that was switched to has its layout by then.
         const frame = requestAnimationFrame(() => {
             setPendingJump(null);
+            // On a phone the tabs are a horizontal strip: bring the tab the jump switched to
+            // into it. Instant, so it cannot cancel the smooth scroll of the content below.
+            document.querySelector(`[data-settings-tab="${tab}"]`)?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'auto' });
             const target = document.querySelector(selector);
             if (!target) return;
             const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -2924,6 +2931,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                             return (
                             <button
                                 key={cat.id}
+                                data-settings-tab={cat.id}
                                 onClick={() => setActiveTab(cat.id)}
                                 className={cn(
                                     "flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-lg transition-all max-md:shrink-0 max-md:whitespace-nowrap",
@@ -3240,7 +3248,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                         {activeTab === 'ai' && currentUser?.role === 'admin' && (
                             <div className="space-y-6">
                                 <ModelRolesOverview
-                                    rows={modelRoles?.rows ?? null}
+                                    rows={modelRoleRows}
                                     loading={!modelRoles && !modelRolesFailed}
                                     error={modelRolesFailed}
                                     onRetry={() => { setModelRolesFailed(false); setModelRolesRetry(n => n + 1); }}
@@ -3522,7 +3530,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             {!selectedVisionProvider && visionRole?.source === 'unavailable' && visionRole.reason === 'main_cannot_see' && (
                                                 <p className="text-xs text-amber-700 mb-3">{tAi('visionMainCannot')}</p>
                                             )}
-                                            <p className="text-xs text-gray-400 mb-3">{tAi('visionProviderDesc')}</p>
+                                            {/* The description says the same as the amber line; one of them is enough. */}
+                                            {!(!selectedVisionProvider && visionRole?.reason === 'main_cannot_see') && (
+                                                <p className="text-xs text-gray-400 mb-3">{tAi('visionProviderDesc')}</p>
+                                            )}
                                             <Select
                                                 label={tAi('visionProvider')}
                                                 value={selectedVisionProvider}

@@ -584,6 +584,10 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
    light on the dark one, so one rule serves both. The class is added and removed by
    SettingsModal's jumpToSetting. */
 [data-setting-role] { scroll-margin-top: .5rem; }
+/* A bare control (a select with no section title of its own, which is what an anchor
+   without the section's id is) keeps some room above it, so it does not land flush under
+   the dialog header with the ring touching the rule. */
+[data-setting-role]:not([id]) { scroll-margin-top: 1.5rem; }
 @keyframes vafSettingFlash {
   0% { opacity: 0 }
   15% { opacity: 1 }

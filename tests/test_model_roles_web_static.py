@@ -554,7 +554,7 @@ def test_one_row_opens_in_place_and_escape_closes_it():
     assert "onKeyDown={closeOpen}" in src
     assert "{expandable && (" in src and "{isOpen && (" not in src
     assert "data-open={isOpen ? 'true' : 'false'}" in src
-    assert "inert: isOpen ? undefined : ''" in src
+    assert "inert: isOpen ? undefined : true" in src
     assert "onClick={() => onPick(row)}" in src and "t('rolesAllOptions')" in src
     assert "t('rolesSaveHint', { save: tCommon('saveChanges') })" in src
 

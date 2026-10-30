@@ -193,9 +193,11 @@ export default function ModelRolesOverview({ rows, loading, error, onRetry, prov
                                         {!expandable && <span className="sr-only">{t('rolesJumpHint')}</span>}
                                     </button>
                                     {expandable && (
+                                        // `inert` is a boolean to React 18.3 (an empty string reads as false) and is
+                                        // not in its types yet, hence the spread.
                                         <div id={panelId} role="region" aria-label={t(`role.${row.role}`)}
                                             className="vaf-role-panel" data-open={isOpen ? 'true' : 'false'}
-                                            {...({ inert: isOpen ? undefined : '' } as Record<string, string | undefined>)}>
+                                            {...({ inert: isOpen ? undefined : true } as Record<string, boolean | undefined>)}>
                                             <div>
                                                 <div className="mt-0.5 mb-2 rounded-lg border border-gray-200 bg-white p-3">
                                                     <div className="grid grid-cols-2 gap-3 max-md:grid-cols-1">{choice}</div>

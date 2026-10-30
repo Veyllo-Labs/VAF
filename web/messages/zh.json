@@ -1437,13 +1437,13 @@
       "role": {
         "chat": "聊天",
         "vision": "理解图片",
-        "ocr": "文字识别（OCR）",
+        "ocr": "文字识别",
         "browser_agent": "浏览器智能体",
         "subagents": "子智能体",
-        "thinking": "后台思考",
+        "thinking": "思考器",
         "voice_call": "语音通话",
-        "speech_to_text": "语音识别（STT）",
-        "text_to_speech": "语音合成（TTS）",
+        "speech_to_text": "语音识别",
+        "text_to_speech": "语音合成",
         "failover": "故障转移"
       },
       "roleSource": {

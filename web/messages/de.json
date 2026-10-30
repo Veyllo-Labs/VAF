@@ -1437,13 +1437,13 @@
       "role": {
         "chat": "Chat",
         "vision": "Bilder verstehen",
-        "ocr": "Texterkennung (OCR)",
+        "ocr": "Texterkennung",
         "browser_agent": "Browser-Agent",
         "subagents": "Sub-Agenten",
-        "thinking": "Thinker (Hintergrund)",
+        "thinking": "Thinker",
         "voice_call": "Sprachanruf",
-        "speech_to_text": "Spracheingabe (STT)",
-        "text_to_speech": "Sprachausgabe (TTS)",
+        "speech_to_text": "Spracheingabe",
+        "text_to_speech": "Sprachausgabe",
         "failover": "Ausfallsicherung"
       },
       "roleSource": {

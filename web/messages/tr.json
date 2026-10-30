@@ -1437,23 +1437,23 @@
       "role": {
         "chat": "Sohbet",
         "vision": "Görselleri anlama",
-        "ocr": "Metin tanıma (OCR)",
+        "ocr": "Metin tanıma",
         "browser_agent": "Tarayıcı ajanı",
         "subagents": "Alt ajanlar",
-        "thinking": "Arka planda düşünme",
+        "thinking": "Düşünür",
         "voice_call": "Sesli arama",
-        "speech_to_text": "Konuşma tanıma (STT)",
-        "text_to_speech": "Seslendirme (TTS)",
+        "speech_to_text": "Konuşma tanıma",
+        "text_to_speech": "Seslendirme",
         "failover": "Yük devretme"
       },
       "roleSource": {
         "main": "Ana sağlayıcı",
         "follows_main": "Ana sağlayıcıyla aynı",
-        "set": "Kendi seçimin",
+        "set": "Seçimin",
         "unavailable": "Kullanılamıyor",
         "off": "Kapalı",
         "local_engine": "Yerel",
-        "via_vision": "Görüntü modeliyle"
+        "via_vision": "Görüntüyle"
       },
       "roleReason": {
         "no_api_key": "Bu sağlayıcı için API anahtarı ayarlanmamış.",

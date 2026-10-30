@@ -29,6 +29,17 @@ export const WARNING_REASONS = new Set([
     'speech_provider_unusable', 'browser_dom_only',
 ]);
 
+// Sources that carry no chip. The chat row IS the primary provider, and following it is the
+// default for every other job (the intro says so); both stay in the row's title and its
+// screen-reader text. A chip there took the room the provider name needs.
+const UNMARKED_SOURCES = new Set(['main', 'follows_main']);
+
+// The model is shown only with at least this many characters of room; a model cut down to a
+// letter or two after its separator reads as a typo. CSS does the measuring: the model and
+// its separator form one group with this minimum width in a single-line wrapping row whose
+// second line is clipped, so a group without room wraps away whole.
+export const MODEL_MIN_CH = 7;
+
 // Placeholder lines while the first answer is on its way: as many as the resolver has jobs
 // today, so the settings below do not jump when the rows arrive.
 const SKELETON_ROWS = 10;
@@ -105,45 +116,48 @@ export default function ModelRolesOverview({ rows, loading, error, onRetry, prov
                             const model = row.model && row.model.toLowerCase() !== name.toLowerCase() ? row.model : '';
                             const chain = row.also.map(p => providerLabel(p, row));
                             const reasons = [row.reason, ...row.also_reasons].filter(Boolean).map(r => t(`roleReason.${r}`));
+                            const unmarked = UNMARKED_SOURCES.has(row.source);
+                            const source = t(`roleSource.${row.source}`);
                             return (
                                 <li key={row.role} className={cn('min-w-0', !warn && !showAll && 'max-md:hidden')}>
                                     <button
                                         type="button"
                                         onClick={() => onPick(row)}
-                                        title={reasons.join(' ') || undefined}
+                                        title={[unmarked ? source : '', ...reasons].filter(Boolean).join('. ') || undefined}
                                         className="w-full min-w-0 text-left rounded-md px-2 py-0.5 max-md:py-1.5 transition-colors hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-gray-400"
                                     >
                                         <span className="flex min-w-0 items-center gap-2">
-                                            <span className={cn('w-[46%] shrink-0 truncate text-[13px]', warn ? 'text-amber-700' : 'text-gray-800')} title={t(`role.${row.role}`)}>
+                                            <span data-role-label className={cn('w-28 shrink-0 truncate text-[13px]', warn ? 'text-amber-700' : 'text-gray-800')} title={t(`role.${row.role}`)}>
                                                 {t(`role.${row.role}`)}
                                             </span>
-                                            {/* Only the model gives way: the provider is what the line is for, and
-                                                the full model is in the title. */}
-                                            <span className="flex min-w-0 flex-1 items-baseline gap-1 overflow-hidden text-xs text-gray-600"
+                                            {/* One line, never cut inside a word. The provider comes first and does
+                                                not shrink; the label column (7rem, the longest de/en/tr label is 108
+                                                px) and the short chips leave it room in a 285 px line. A failover
+                                                chain and the model (with its separator, as one group of at least
+                                                MODEL_MIN_CH characters) wrap onto the clipped second line, whole,
+                                                when they do not fit. The full text is in the title. */}
+                                            <span className="flex h-4 min-w-0 flex-1 flex-wrap items-baseline gap-x-1 overflow-hidden text-xs leading-4 text-gray-600"
                                                 title={[name, model, ...chain].filter(Boolean).join(' · ') || undefined}>
-                                                {name && <span className="max-w-full shrink-0 truncate">{name}</span>}
-                                                {model && (
-                                                    <>
+                                                {name && <span data-role-provider className="shrink-0 whitespace-nowrap">{name}</span>}
+                                                {chain.length > 0 && (
+                                                    <span className="shrink-0 whitespace-nowrap text-gray-500">{chain.map(c => `→ ${c}`).join(' ')}</span>
+                                                )}
+                                                {model && chain.length === 0 && (
+                                                    <span data-role-model className="flex min-w-0 flex-1 basis-0 items-baseline gap-1" style={{ minWidth: `${MODEL_MIN_CH}ch` }}>
                                                         <span className="shrink-0 text-gray-400" aria-hidden="true">·</span>
                                                         <span className="min-w-0 truncate font-mono text-[11px] text-gray-500">{model}</span>
-                                                    </>
-                                                )}
-                                                {chain.length > 0 && (
-                                                    <span className="shrink-0 text-gray-500">{chain.map(c => `→ ${c}`).join(' ')}</span>
+                                                    </span>
                                                 )}
                                             </span>
-                                            {/* Following the primary provider is the default and needs no mark
-                                                (the intro says so); it stays readable for screen readers. */}
-                                            {row.source === 'follows_main' ? (
-                                                <span className="sr-only">{t(`roleSource.${row.source}`)}</span>
+                                            {unmarked ? (
+                                                <span className="sr-only">{source}</span>
                                             ) : <span className={cn(
                                                 'shrink-0 whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium leading-none border',
                                                 unavailable ? 'bg-amber-50 border-amber-200 text-amber-700'
                                                     : row.source === 'set' ? 'bg-gray-200 border-gray-300 text-gray-800'
-                                                    : row.source === 'main' ? 'bg-gray-100 border-gray-200 text-gray-700'
                                                     : 'bg-transparent border-gray-200 text-gray-500'
                                             )}>
-                                                {t(`roleSource.${row.source}`)}
+                                                {source}
                                             </span>}
                                         </span>
                                         {reasons.length > 0 && <span className="sr-only">{reasons.join(' ')}</span>}

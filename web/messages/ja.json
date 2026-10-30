@@ -1437,13 +1437,13 @@
       "role": {
         "chat": "チャット",
         "vision": "画像の理解",
-        "ocr": "文字認識（OCR）",
+        "ocr": "文字認識",
         "browser_agent": "ブラウザーエージェント",
         "subagents": "サブエージェント",
-        "thinking": "バックグラウンドの思考",
+        "thinking": "思考エンジン",
         "voice_call": "音声通話",
-        "speech_to_text": "音声認識（STT）",
-        "text_to_speech": "読み上げ（TTS）",
+        "speech_to_text": "音声認識",
+        "text_to_speech": "読み上げ",
         "failover": "フェイルオーバー"
       },
       "roleSource": {

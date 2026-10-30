@@ -3256,7 +3256,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         // An engine on this machine rather than a provider: Tesseract
                                         // for text recognition, the local speech engine for speech.
                                         if (!provider) return row.source === 'local_engine' ? (row.role === 'ocr' ? 'Tesseract' : tAi('localSpeechEngine')) : '';
-                                        if (provider === 'local') return tAdvanced('failoverLocal');
+                                        // The short word the overview's own chip uses: a whole "Local model"
+                                        // next to an "Own choice" chip does not fit a half-width line.
+                                        if (provider === 'local') return tAi('roleSource.local_engine');
                                         if (provider === 'elevenlabs') return 'ElevenLabs';
                                         return PROVIDER_META.find(m => m.id === provider)?.label || provider;
                                     }}

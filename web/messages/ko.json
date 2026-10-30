@@ -1437,13 +1437,13 @@
       "role": {
         "chat": "채팅",
         "vision": "이미지 이해",
-        "ocr": "글자 인식(OCR)",
+        "ocr": "글자 인식",
         "browser_agent": "브라우저 에이전트",
         "subagents": "하위 에이전트",
-        "thinking": "백그라운드 생각",
+        "thinking": "생각 엔진",
         "voice_call": "음성 통화",
-        "speech_to_text": "음성 인식(STT)",
-        "text_to_speech": "읽어주기(TTS)",
+        "speech_to_text": "음성 인식",
+        "text_to_speech": "읽어주기",
         "failover": "장애 조치"
       },
       "roleSource": {

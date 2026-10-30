@@ -1440,10 +1440,10 @@
         "ocr": "Text recognition",
         "browser_agent": "Browser agent",
         "subagents": "Sub-agents",
-        "thinking": "Background thinking",
+        "thinking": "Thinker",
         "voice_call": "Voice call",
-        "speech_to_text": "Speech input (STT)",
-        "text_to_speech": "Speech output (TTS)",
+        "speech_to_text": "Speech input",
+        "text_to_speech": "Speech output",
         "failover": "Failover"
       },
       "roleSource": {

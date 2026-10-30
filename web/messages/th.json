@@ -1437,13 +1437,13 @@
       "role": {
         "chat": "แชต",
         "vision": "เข้าใจภาพ",
-        "ocr": "การอ่านตัวอักษร (OCR)",
+        "ocr": "การอ่านตัวอักษร",
         "browser_agent": "เอเจนต์เบราว์เซอร์",
         "subagents": "เอเจนต์ย่อย",
-        "thinking": "การคิดเบื้องหลัง",
+        "thinking": "ตัวคิด",
         "voice_call": "การโทรด้วยเสียง",
-        "speech_to_text": "เสียงพูดเข้า (STT)",
-        "text_to_speech": "เสียงพูดออก (TTS)",
+        "speech_to_text": "เสียงพูดเข้า",
+        "text_to_speech": "เสียงพูดออก",
         "failover": "การสลับเมื่อล้มเหลว"
       },
       "roleSource": {

@@ -255,7 +255,7 @@ def test_one_line_per_job_with_the_reason_only_where_it_needs_attention():
     rows that need attention have their reason written out, once, at the card's full width
     under the grid. MUTATION: write every reason out again, or drop the warning filter."""
     src = _src(_OVERVIEW)
-    assert "title={reasons.join(' ') || undefined}" in src
+    assert "title={[unmarked ? source : '', ...reasons].filter(Boolean).join('. ') || undefined}" in src
     assert "{reasons.length > 0 && <span className=\"sr-only\">{reasons.join(' ')}</span>}" in src
     notes = src[src.index("{warningCount > 0 && ("):]
     notes = notes[:notes.index("</ul>")]
@@ -354,12 +354,67 @@ def test_models_read_images_rather_than_see(locale):
         assert not re.search(word, reasons[code]), reasons[code]
 
 
-def test_following_the_primary_provider_needs_no_visible_mark():
-    """A half-width line has room for the job, the provider and ONE short chip; following
-    the primary provider is the default, so it carries no chip (the intro says unmarked jobs
-    follow it) and stays in the text for screen readers. The model gives way, the provider
-    name does not. MUTATION: render the follows-main chip again, or let the provider shrink."""
+def test_the_primary_provider_and_following_it_need_no_visible_mark():
+    """A half-width line has room for the job, the provider and ONE short chip. The chat row
+    IS the primary provider and following it is the default, so neither carries a chip (the
+    intro says unmarked jobs follow it); both stay in the row's title and its screen-reader
+    text. MUTATION: give the chat row its chip back, or render the follows-main chip."""
     src = _src(_OVERVIEW)
-    assert re.search(r"\{row\.source === 'follows_main' \? \(\s*<span className=\"sr-only\">\{t\(`roleSource\.\$\{row\.source\}`\)\}</span>", src)
-    assert "{name && <span className=\"max-w-full shrink-0 truncate\">{name}</span>}" in src
-    assert "<span className=\"min-w-0 truncate font-mono text-[11px] text-gray-500\">{model}</span>" in src
+    assert _const_set(src, "UNMARKED_SOURCES") == {"main", "follows_main"}
+    assert re.search(r"\{unmarked \? \(\s*<span className=\"sr-only\">\{source\}</span>", src)
+    assert "title={[unmarked ? source : '', ...reasons]" in src
+    chip = src[src.index("'shrink-0 whitespace-nowrap rounded px-1.5"):]
+    chip = chip[:chip.index(")}>")]
+    assert "'main'" not in chip
+
+
+def test_the_provider_name_is_never_cut():
+    """The provider is what the line is for: it does not shrink and has no ellipsis. MUTATION:
+    let it truncate again."""
+    src = _src(_OVERVIEW)
+    assert "<span data-role-provider className=\"shrink-0 whitespace-nowrap\">{name}</span>" in src
+
+
+def test_a_model_without_room_is_hidden_whole():
+    """The model and its separator are ONE group with a minimum width of MODEL_MIN_CH
+    characters, in a single-line wrapping row whose second line is clipped: a model that
+    cannot show that much wraps away entirely, separator included, instead of leaving a
+    stray letter after the dot. A failover chain takes the model's place. MUTATION: drop the
+    minimum width, the wrapping or the clipping, take the separator out of the group, or
+    show the model next to a chain."""
+    src = _src(_OVERVIEW)
+    assert int(re.search(r"export const MODEL_MIN_CH = (\d+);", src).group(1)) >= 5
+    line = src[src.index("title={[name, model, ...chain]"):]
+    line = line[:line.index("</span>\n                                            {unmarked")]
+    wrapper = src[:src.index("title={[name, model, ...chain]")].rsplit("<span", 1)[1]
+    for cls in ("flex-wrap", "overflow-hidden", "h-4", "leading-4", "min-w-0", "flex-1"):
+        assert cls in wrapper.split('"')[1].split(), cls
+    group = line[line.index("<span data-role-model"):]
+    assert "style={{ minWidth: `${MODEL_MIN_CH}ch` }}" in group.split(">")[0]
+    assert "flex-1 basis-0" in group.split(">")[0]
+    assert group.index('aria-hidden="true">·</span>') < group.index("{model}</span>")
+    assert "{model && chain.length === 0 && (" in line
+
+
+# The label column is w-28 (7rem, 112 px). Measured at 13 px in the app's font, the longest
+# de/en/tr label is 108 px ("Görselleri anlama", 17 characters). A longer label than that is
+# cut (the column truncates with a title as the last resort for scripts that cannot be
+# measured here); hold the Latin-script catalogues to the measured length.
+_LABEL_MAX_CHARS = 17
+
+
+@pytest.mark.parametrize("locale", ("de", "en", "tr"))
+def test_every_job_label_fits_the_label_column(locale):
+    """MUTATION: put "Thinker (Hintergrund)" back as the German label."""
+    src = _src(_OVERVIEW)
+    assert "data-role-label className={cn('w-28 shrink-0 truncate text-[13px]'" in src
+    for role, label in _catalogue(locale)["role"].items():
+        assert len(label) <= _LABEL_MAX_CHARS, (role, label)
+
+
+def test_a_local_provider_uses_the_short_local_word():
+    """"Lokales Modell" next to an "Eigene Wahl" chip did not fit a half-width line; the
+    overview names a local provider with its own short chip word. MUTATION: use the long
+    failover label again."""
+    src = _src(_MODAL)
+    assert "if (provider === 'local') return tAi('roleSource.local_engine');" in src

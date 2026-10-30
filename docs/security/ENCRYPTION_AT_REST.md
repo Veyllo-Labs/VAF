@@ -160,9 +160,9 @@ version 1 kit keeps working for what it covers; `vaf secure status` and
 `vaf security doctor` (`recovery_key_partial`) say what it does not, and
 `vaf secure renew-recovery-key` replaces it (a person at the terminal, the admin
 password, never from the agent's own commands; the old key stops opening the
-key store). Backups written before the renewal are encrypted to the old key and
-this machine, so only those open them: run `vaf backup create` afterwards for a
-backup the new key opens. If the new key cannot be stored, the old note is put
+key store). A version 1 key has no public half, so backups written before the
+renewal are encrypted to this machine alone and open only here: run
+`vaf backup create` afterwards for a backup the new key opens. If the new key cannot be stored, the old note is put
 back and the old key keeps working. Stores sealed under `VAF_MASTER_PASSPHRASE` instead of a machine key
 open with that passphrase on any machine; the kit does not replace it.
 

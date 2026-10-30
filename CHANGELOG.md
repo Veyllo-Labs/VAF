@@ -522,7 +522,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   character is reported.
   Existing recovery keys keep working for what they covered; `vaf secure status` says what they do not, and
   `vaf secure renew-recovery-key` (in a terminal, with the admin password) replaces one.
-  Backups written before a renewal keep opening with the old key, so write a new one after it.
+  A backup written before a renewal opens with the key it was written for, not with the new
+  one. A version 1 key never opened backups at all: they open only on the machine that wrote
+  them, and `vaf backup create` says so. Write a new backup after a renewal.
 - **Host access is given per account.** `host_bash` and `python_exec` run on this computer as
   the user VAF runs as, outside every sandbox. A regular account now gets them only when the
   admin ticks them in user management, like `ssh` and `ftp`; the Standard and Read-only presets

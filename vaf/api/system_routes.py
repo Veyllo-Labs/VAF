@@ -304,8 +304,9 @@ def _run_engine_switch(engine: str, model: Optional[str], install: bool) -> None
     except Exception as e:      # a switch must never take the server with it
         _engine_state["error"] = str(e)[:300]
     finally:
-        _engine_state["running"] = False
+        # finished_at first: a poll that sees running False reads a finished job.
         _engine_state["finished_at"] = _now()
+        _engine_state["running"] = False
         container_jobs.release(container_jobs.ENGINE_SWITCH)
 
 

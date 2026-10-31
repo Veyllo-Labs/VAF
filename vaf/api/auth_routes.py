@@ -316,11 +316,13 @@ async def needs_setup(request: Request):
                       "setup_code_required": _setup_code_required(request)}
             if answer["inference_profile"] == "local":
                 # The wizard's engine choice: the verdict's class only. No GPU name or
-                # numbers, since this answer needs no session.
+                # numbers, since this answer needs no session; worked out once per process
+                # (support_class), never per request, and never a reason to refuse setup.
                 from starlette.concurrency import run_in_threadpool
-                from vaf.core.local_engine import support
-                verdict = await run_in_threadpool(support)
-                answer["vllm_support"] = {"level": verdict.level, "code": verdict.code}
+                from vaf.core.local_engine import support_class
+                verdict = await run_in_threadpool(support_class)
+                if verdict is not None:
+                    answer["vllm_support"] = {"level": verdict[0], "code": verdict[1]}
             return answer
         except Exception as exc:
             if not _is_db_not_ready_error(exc):

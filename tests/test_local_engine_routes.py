@@ -240,7 +240,9 @@ def test_needs_setup_vllm_support(monkeypatch):
             return False
     monkeypatch.setattr(auth_routes, "get_auth_db", lambda: _Ctx())
     monkeypatch.setattr(auth_routes, "_setup_code_required", lambda request: False)
-    monkeypatch.setattr(le, "support", lambda **kw: le.EngineSupport(
+    calls = []
+    monkeypatch.setattr(le, "_SUPPORT_CLASS", None)
+    monkeypatch.setattr(le, "support", lambda **kw: calls.append(1) or le.EngineSupport(
         le.SUPPORTED, "vLLM runs here (NVIDIA RTX 3080, 10 GB).", "supported",
         {"gpu": "RTX 3080", "vram_gb": "10"}))
     monkeypatch.setattr(inference_profile, "current", lambda config=None: "local")
@@ -248,8 +250,16 @@ def test_needs_setup_vllm_support(monkeypatch):
     answer = asyncio.run(auth_routes.needs_setup(request))
     assert answer["vllm_support"] == {"level": "supported", "code": "supported"}
     assert "RTX" not in str(answer) and "10" not in str(answer["vllm_support"])
+    asyncio.run(auth_routes.needs_setup(request))
+    assert calls == [1], "an unauthenticated poll started the GPU probes again"
     monkeypatch.setattr(inference_profile, "current", lambda config=None: "api")
     assert "vllm_support" not in asyncio.run(auth_routes.needs_setup(request))
+    # A detection that fails leaves the field out; it never turns setup into a 503.
+    monkeypatch.setattr(inference_profile, "current", lambda config=None: "local")
+    monkeypatch.setattr(le, "_SUPPORT_CLASS", None)
+    monkeypatch.setattr(le, "support", lambda **kw: (_ for _ in ()).throw(OSError("no lspci")))
+    answer = asyncio.run(auth_routes.needs_setup(request))
+    assert answer["needs_setup"] is True and "vllm_support" not in answer
 
 
 def test_services_snapshot_has_engine_row():
@@ -277,3 +287,24 @@ def test_engine_row_never_raises(monkeypatch):
     monkeypatch.setattr(le, "status_row", lambda config=None: 1 / 0)
     row = sh.probe_local_engine()
     assert row["state"] == "unknown" and "division" in row["text"]
+
+
+def test_ws_cancel_call_site_asks_the_shared_admin_rule():
+    """The handler hands the socket's admin answer of `connection_is_admin` to the cancel, not
+    a hand-rolled copy (a constant there would keep every behaviour test green)."""
+    import inspect
+
+    from vaf.core import web_server
+    source = inspect.getsource(web_server)
+    lane = source[source.index('elif type == "cancel_model_download":'):]
+    lane = lane[:lane.index("elif type ==", 10)]
+    assert "manager.connection_is_admin(websocket)" in lane
+    assert "is_admin_identity(" not in lane
+
+
+def test_a_finished_job_has_its_end_time_before_it_reads_finished():
+    """A poll that sees running False must find finished_at set."""
+    import inspect
+    body = inspect.getsource(sr._run_engine_switch)
+    tail = body[body.index("finally:"):]
+    assert tail.index('_engine_state["finished_at"]') < tail.index('_engine_state["running"] = False')

@@ -5727,10 +5727,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         asyncio.create_task(run_download())
 
                 elif type == "cancel_model_download":
-                    from vaf.core.config import is_admin_identity
-                    cancel_model_download(id(websocket), is_admin_identity(
-                        manager.get_connection_user_role(websocket) if manager else None,
-                        manager.get_connection_user(websocket) if manager else None))
+                    cancel_model_download(id(websocket),
+                                          bool(manager and manager.connection_is_admin(websocket)))
 
                 elif type == "get_api_models":
                     # Fetch available models from API providers. The discovery

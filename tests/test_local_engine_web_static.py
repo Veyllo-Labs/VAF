@@ -245,14 +245,14 @@ def test_pickers_boundary_gone():
 
 def test_review_round_layout_fixes():
     """The progress bar moves by transform only (DESIGN.md motion rule); the banner's phase
-    wraps on a phone; the cards keep their own height; the download row stacks on a phone;
+    wraps on a phone; the two cards share one height side by side; the download row stacks on a phone;
     the wizard's engine choice sits above the button that takes the local path."""
     body = _src(_SECTION)
     assert "transition-[width]" not in body and "scaleX(" in body and "origin-left" in body
     page = _src(_PAGE)
     banner = _between(page, "{maintenanceStatus && (", "{/* Token Stats")
     assert 'className="truncate max-md:whitespace-normal"' in banner
-    assert "items-start max-md:grid-cols-1" in _src(_CHOICE)
+    assert "items-stretch max-md:grid-cols-1" in _src(_CHOICE)
     modal = _src(_MODAL)
     row = modal[modal.index("tAi('downloadModelFromHf')") - 500:modal.index("tAi('downloadModelFromHf')")]
     assert "max-md:flex-col max-md:items-stretch" in row

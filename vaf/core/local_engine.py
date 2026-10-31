@@ -77,8 +77,11 @@ Named boundaries, each deliberate:
   the model only through an API ``vision_provider``.
 - **Concurrency**: vLLM batches concurrent requests, but the local worker clamp
   (``max_parallel_local_workers``) stays as it is until that is measured.
-- **The install is pinned, not hash-locked**: ``vllm==<PIN>`` from PyPI, its dependency
-  tree resolved by pip over TLS (llama.cpp's asset is SHA-256 pinned).
+- **The install is hash-locked to one tree**: ``vllm==<PIN>`` and every package of its tree
+  from ``vllm_requirements.lock`` (pinned, SHA-256 of every file, wheels only), the same
+  practice as VAF's own ``requirements.lock``. Not checked beyond PyPI's own files: a release
+  that was already malicious when the lock was generated is locked in with it; the lock
+  only stops anything newer or different from being installed.
 """
 from __future__ import annotations
 

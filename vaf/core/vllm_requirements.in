@@ -1,0 +1,11 @@
+# The input of vllm_requirements.lock, the hash-locked tree of the managed vLLM environment
+# (vaf/core/vllm_server.py installs the lock with --require-hashes, never this file).
+# Regenerate from the repository root with the CI's pip-compile (docs/setup/RELEASING.md):
+#   pip-compile --allow-unsafe --generate-hashes \
+#     --output-file=vaf/core/vllm_requirements.lock vaf/core/vllm_requirements.in
+# then run scripts/check_vllm_lock.py, which checks the lock for every supported target.
+vllm==0.32.0
+# mistral-common requires numpy<2.4 on Python 3.12 and older; a resolution on 3.13 picks
+# numpy 2.4.x, which would make the one lock untrue for Python 3.11 and 3.12. numpy 2.3.x
+# satisfies every requirement of the tree on Linux x86_64 and aarch64, Python 3.11 to 3.14.
+numpy<2.4

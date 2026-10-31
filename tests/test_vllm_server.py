@@ -36,7 +36,9 @@ MUTATIONS, each turns the named test red:
   test_a_failed_probe_names_its_cause;
 - `env = dict(os.environ)` in install, or child_env filtering os.environ directly ->
   test_install_and_server_get_the_gpu_back;
-- start() checking only `is_installed()` -> test_start_refuses_an_environment_of_the_earlier_recipe.
+- start() checking only `is_installed()` -> test_start_refuses_an_environment_of_the_earlier_recipe;
+- drop `--require-hashes` or `--only-binary=:all:` from the pip step -> test_install_steps;
+- drop the lock check before the uninstall -> test_a_missing_lock_refuses_before_anything_changes.
 """
 import json
 import os
@@ -328,8 +330,10 @@ def test_install_steps(config, monkeypatch, home):
     calls, records = [], []
     assert vs.install(run=_fake_installing_run(home, calls, records=records)) == ""
     assert calls[0] == [sys.executable, "-m", "venv", str(vs.venv_dir())]
-    # The release's own command: PyPI only, its CUDA 13.0 build and the torch it requires.
-    assert calls[1] == [str(vs.venv_python()), "-m", "pip", "install", "vllm==0.32.0"]
+    # The hash-locked tree from PyPI only: no extra index, no unhashed file, no source build.
+    assert calls[1] == [str(vs.venv_python()), "-m", "pip", "install", "--require-hashes",
+                        "--no-deps", "--only-binary=:all:", "-r", str(vs.LOCK_PATH)]
+    assert vs.LOCK_PATH == Path(vs.__file__).with_name("vllm_requirements.lock")
     assert calls[2] == [str(vs.vllm_exe()), "download-kernels"]
     assert calls[3][:2] == [str(vs.venv_python()), "-c"]
     assert "torch.cuda.is_available" in calls[3][2]
@@ -341,6 +345,17 @@ def test_install_steps(config, monkeypatch, home):
     calls.clear()
     assert vs.install(run=_fake_installing_run(home, calls)) == "" and calls == [], \
         "an installed pin installs nothing"
+
+
+def test_a_missing_lock_refuses_before_anything_changes(config, monkeypatch, home, tmp_path):
+    _supported(monkeypatch)
+    monkeypatch.setattr(vs, "LOCK_PATH", tmp_path / "gone.lock")
+    vs.venv_dir().mkdir(parents=True)
+    (vs.venv_dir() / "keep").write_bytes(b"x")
+    calls = []
+    reason = vs.install(run=_fake_installing_run(home, calls))
+    assert "hash-locked" in reason and "gone.lock" in reason
+    assert calls == [] and (vs.venv_dir() / "keep").exists(), "the old environment was touched"
 
 
 def test_a_failed_install_leaves_nothing(config, monkeypatch, home):

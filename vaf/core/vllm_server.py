@@ -10,8 +10,10 @@ WHEN (handover, reuse, waiting for a server that is loading); this module does t
 - **Install** (``install``): only on request (`vaf engine vllm`, Settings, the TUI, all
   through ``local_engine.apply``), never on a start. A fresh
   environment under ``bin/vllm/venv`` (gitignored, next to the llama-server binary) made
-  with VAF's own Python, the pinned ``vllm==PIN`` installed from PyPI with the release's own
-  command (its CUDA 13.0 build and the CUDA 13.0 PyTorch it requires), its kernels fetched,
+  with VAF's own Python, the pinned ``vllm==PIN`` installed from PyPI, its CUDA 13.0 build and
+  the CUDA 13.0 PyTorch it requires, from the hash-locked tree ``vllm_requirements.lock``
+  (``--require-hashes --no-deps --only-binary=:all:``: pip refuses any file whose hash the
+  lock does not name, any package it does not pin, and any build from source), its kernels fetched,
   and a probe that PyTorch in it sees the GPU AND vLLM's CUDA extension loads. Only a passing
   probe writes the recipe record (``RECIPE_FORMAT`` in ``vaf_recipe``); an environment
   without it is rebuilt by the next install and refused by ``start``. Every step runs
@@ -62,7 +64,13 @@ CUDA_VERSION = "13.0"
 # cudnn-cu13 366, nccl-cu13 206, cusparselt-cu13 170, nvshmem-cu13 60); the rest of the tree
 # and the installed size come on top.
 DOWNLOAD_GB_AT_LEAST = 2.8
-# The recipe record: a file in the environment, written only after a passing probe, that says
+# The hash-locked tree of the environment: every package of the vllm==PIN tree, pinned, with
+# the SHA-256 of every file PyPI publishes for it (pip-compile --generate-hashes from
+# vllm_requirements.in; one lock for Linux x86_64 and aarch64, Python 3.11 to 3.14, checked by
+# scripts/check_vllm_lock.py). Regenerated with every PIN bump (docs/setup/RELEASING.md).
+LOCK_PATH = Path(__file__).with_name("vllm_requirements.lock")
+# The recipe record: a file in the environment, written only after a hash-locked install and a
+# passing probe, that says
 # which install recipe built it. Bump the middle number whenever the install command or the
 # probe changes. Deliberate: an environment WITHOUT the tag is not an older format to keep
 # reading; it is what the earlier recipe (the cu129 extra index) built, and that recipe was
@@ -219,6 +227,10 @@ def install(log: Optional[Callable[[str], None]] = None, run: Optional[Runner] =
         return verdict.reason
     if is_current():
         return ""
+    if not LOCK_PATH.is_file():
+        # Checked before the old environment is removed: without the lock nothing installs.
+        return (f"The hash-locked vLLM tree {LOCK_PATH} is missing from this VAF installation; "
+                "reinstall VAF.")
     from vaf.core.gpu_detection import gpu_child_env
     # Without VAF's GPU hide for in-process torch: the probe must see the GPU vLLM will use.
     env = gpu_child_env()
@@ -257,7 +269,8 @@ def _install_steps(say, run, step, env, root, streams, where, outcome) -> str:
     steps = [
         ("install_env", "Creating the environment", [sys.executable, "-m", "venv", str(root)]),
         ("install_vllm", f"Installing vLLM {PIN} (at least {DOWNLOAD_GB_AT_LEAST:.1f} GB to download)",
-         [str(venv_python()), "-m", "pip", "install", f"vllm=={PIN}"]),
+         [str(venv_python()), "-m", "pip", "install", "--require-hashes", "--no-deps",
+          "--only-binary=:all:", "-r", str(LOCK_PATH)]),
     ]
     for code, label, argv in steps:
         if not inference_profile.local_inference_allowed():

@@ -20,7 +20,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `vaf engine llama` switches back, `vaf engine` shows what this machine can run. It needs Linux
   with an NVIDIA GPU of compute capability 7.5 or newer and an NVIDIA driver 580 or newer
   (vLLM's CUDA 13.0 build); an earlier vLLM install that cannot start is rebuilt by the next
-  `vaf engine vllm`. On AMD, Intel, Apple Silicon and
+  `vaf engine vllm`. vLLM and its whole dependency tree are installed from a hash-locked list
+  shipped with VAF, so pip installs exactly the files VAF was released with and nothing newer.
+  On AMD, Intel, Apple Silicon and
   Windows `vaf engine` says why not yet and llama.cpp keeps running. llama.cpp stays the
   default. `vaf health` shows an `engine` row while vLLM is the engine.
   Settings > AI & Model now has an Engine choice for the local model, llama.cpp or vLLM, right

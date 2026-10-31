@@ -139,7 +139,17 @@ waiting for a stable `X.Y.Z`.
    extension the install probe imports (`_PROBE`, the import of
    `vllm/platforms/cuda.py`) true; bump the middle number of `RECIPE_FORMAT` when
    the install command or the probe changes, so environments of the old recipe
-   are rebuilt.
+   are rebuilt. The environment is installed from the hash-locked tree
+   `vaf/core/vllm_requirements.lock`; regenerate it with the PIN, from the repository
+   root in the same throwaway venv as `requirements.lock` (pip==26.1.2,
+   pip-tools==7.5.3, Python 3.13): edit the `vllm==` line of
+   `vaf/core/vllm_requirements.in`, run `pip-compile --allow-unsafe --generate-hashes
+   --output-file=vaf/core/vllm_requirements.lock vaf/core/vllm_requirements.in`
+   (it resolves metadata and hashes only, nothing is installed), then
+   `venv/bin/python scripts/check_vllm_lock.py`, which must report 0 problems for
+   every supported target; a conflict it reports goes into the input as a constraint
+   (the `numpy<2.4` cap is one). `tests/test_vllm_lock.py` refuses a lock whose vllm
+   is not `PIN`.
 3. In `CHANGELOG.md`, move the relevant `[Unreleased]` notes into a new
    `## [X.Y.Z] - YYYY-MM-DD` section.
 4. Commit (on request) and push to `main`.

@@ -539,9 +539,15 @@ class SettingsScreen(ModalScreen[None]):
             self._engine_state = f"engine state unavailable: {exc}"
 
     def _engine_line(self, engine: str, active: bool) -> str:
+        """The engine's name (with "in use" on the active one) and its description below it,
+        wrapped with a hanging indent, so a wrapped line never starts under the marker."""
+        import textwrap
         name, line = self.ENGINE_LINES[engine]
         marker = "▍" if active else " "
-        return f"[$primary]{marker}[/][$text]{name:<10}[/] [$vaf-muted]{_esc(line)}[/]"
+        in_use = "  [$success]in use[/]" if active else ""
+        wrapped = textwrap.fill(line, width=58, initial_indent="   ", subsequent_indent="   ")
+        return (f"[$primary]{marker}[/][$text]{name}[/]{in_use}\n"
+                f"[$vaf-muted]{_esc(wrapped)}[/]")
 
     def _engine_rows(self) -> list:
         """The two engines with their lines, the active one marked, and this machine's
@@ -568,7 +574,7 @@ class SettingsScreen(ModalScreen[None]):
             word = "not yet" if support.get("level") == "later" else "not available"
             rows.append(("note", None, f"vLLM  {self.ENGINE_LINES['vllm'][1]} - {word}: "
                                        f"{support.get('reason') or ''}"))
-        return rows + [("back", None, "Back")]
+        return rows + [("sep", None, ""), ("back", None, "Back")]
 
     def _vllm_model_rows(self) -> list:
         """The vLLM model: Automatic (the GPU's default), the curated repos with their
@@ -603,6 +609,10 @@ class SettingsScreen(ModalScreen[None]):
         vllm = state.get("vllm") or {}
 
         def _go(install: bool) -> None:
+            if getattr(self.app._bridge, "busy", False):
+                # The bridge would refuse it with a note; saying "switching" would be false.
+                self.app.notify("not while a turn is running", severity="warning", timeout=2.5)
+                return
             self.app._bridge.apply_engine(engine, model=model, install=install)
             self.app.notify("switching the local engine - see the chat for progress",
                             timeout=2.5)
@@ -712,7 +722,14 @@ class SettingsScreen(ModalScreen[None]):
         lv.index = 0
 
     def _refresh_labels(self) -> None:
-        self._rows = self._menu_rows(self._stack[-1])
+        rows = self._menu_rows(self._stack[-1])
+        if len(rows) != len(self._row_statics):
+            # The menu changed shape under the open list (an engine switch finished and the
+            # GGUF search row came or went): relabelling in place would shift every row after
+            # it, and a pick would run the action of the row below the highlighted one.
+            self._rebuild()
+            return
+        self._rows = rows
         for static, (kind, arg, label) in zip(self._row_statics, self._rows):
             static.update(self._row_markup(kind, arg, label))
 

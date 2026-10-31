@@ -233,3 +233,15 @@ def test_models_set_warns_under_vllm(config):
     config["local_engine"] = "llama"
     result = runner.invoke(models_mod.app, ["set", "qwen.gguf"])
     assert "vaf engine vllm --model" not in result.output
+
+
+@pytest.mark.parametrize("key", ["local_engine", "vllm_model", " Local_Engine "])
+def test_models_config_refuses_the_switch_keys(config, key):
+    """`vaf models config` writes any key; the engine and its model change only through the
+    switch (install, download, fit). The parser keys stay writable there."""
+    from vaf.cli.cmd import models as models_mod
+    result = CliRunner().invoke(models_mod.app, ["config", key, "vllm"])
+    assert result.exit_code == 2 and "vaf engine" in result.output
+    assert config.get("local_engine") is None and config["vllm_model"] == REPO
+    result = CliRunner().invoke(models_mod.app, ["config", "vllm_tool_call_parser", "hermes"])
+    assert result.exit_code == 0 and config["vllm_tool_call_parser"] == "hermes"

@@ -47,6 +47,12 @@ def set_model(model_name: str):
 @app.command("config")
 def set_config(key: str, value: str):
     """Set arbitrary config value (e.g., gpu_layers)."""
+    from vaf.core import local_engine
+    if key.strip().lower() in local_engine.SWITCH_KEYS:
+        UI.error(f"{key} changes through `vaf engine` (it installs, downloads the model and "
+                 "checks that it fits): `vaf engine vllm --model owner/name` or "
+                 "`vaf engine llama`.")
+        raise typer.Exit(2)
     # Try to parse number
     try:
         val = int(value)

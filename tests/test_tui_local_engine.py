@@ -88,10 +88,17 @@ def test_engine_submenu_lists_both_with_their_lines(monkeypatch):
     rows = s._menu_rows("engine")
     picks = [(arg, text) for kind, arg, text in rows if kind == "engine_pick"]
     assert [a for a, _ in picks] == ["llama", "vllm"]
-    assert "GGUF models, runs on almost any hardware, starts in seconds" in picks[0][1]
+    flat = [" ".join(text.split()) for _, text in picks]
+    assert "GGUF models, runs on almost any hardware, starts in seconds" in flat[0]
     assert "Hugging Face models, fast with many requests, needs a supported GPU, starts in minutes" \
-        in picks[1][1]
+        in flat[1]
     assert "▍" in picks[0][1] and "▍" not in picks[1][1], "the active engine is marked"
+    assert "in use" in picks[0][1] and "in use" not in picks[1][1], "the active engine is named"
+    assert [kind for kind, _, _ in rows][-2:] == ["sep", "back"], "a gap before Back"
+    for text in picks:
+        lines = text[1].split("\n")[1:]
+        assert lines and all(line.startswith("[$vaf-muted]   ") or line.startswith("   ")
+                             for line in lines), "a wrapped line starts under the marker"
     assert any(kind == "note" and "vLLM runs here" in text for kind, _, text in rows)
 
 
@@ -236,3 +243,33 @@ def test_apply_engine_runs_on_the_lane_and_reloads(monkeypatch, tmp_path):
     assert seen == [("vllm", None, True, str(tmp_path / "vllm_install.log"))]
     assert reloads == [1]
     assert any("2/7" in str(n) for n in notes)
+
+
+def test_no_switch_notice_while_the_bridge_is_busy(monkeypatch):
+    """A running turn makes the bridge refuse the switch; the screen must not then claim it is
+    switching (after a confirmed multi-GB install question)."""
+    s, calls, pushed, notified = _screen(monkeypatch, state=_state(needs_install=True))
+    s.app._bridge.busy = True
+    s._stack = ["main", "engine"]
+    s._load_engine_state()
+    s._rows = s._menu_rows("engine")
+    s._activate([r[1] for r in s._rows].index("vllm"))
+    pushed[-1][1](True)
+    assert calls == [] and notified == ["not while a turn is running"]
+    assert s._stack == ["main", "engine"], "the menu was reset for a switch that never ran"
+
+
+def test_refresh_rebuilds_when_the_menu_changes_shape(monkeypatch):
+    """The engine switch finishes on the lane while the main menu is open: the GGUF search row
+    goes away. Relabelling in place would shift the rows; the list is rebuilt instead."""
+    s, *_ = _screen(monkeypatch, engine="llama")
+    rebuilt = []
+    s._rebuild = lambda: rebuilt.append(1)
+    s._stack = ["main"]
+    s._rows = s._menu_rows("main")
+    s._row_statics = [SimpleNamespace(update=lambda text: None) for _ in s._rows]
+    SettingsScreen._refresh_labels(s)       # the helper stubs the instance's one
+    assert rebuilt == [], "same shape: labels only"
+    monkeypatch.setattr(le, "is_vllm", lambda config=None: True)
+    SettingsScreen._refresh_labels(s)
+    assert rebuilt == [1]

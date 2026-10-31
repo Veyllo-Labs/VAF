@@ -271,6 +271,7 @@ class SettingsScreen(ModalScreen[None]):
     }
 
     TITLES = {"main": "Settings", "voice": "Settings › Voice", "engine": "Settings › Engine",
+              "local_model": "Settings › Active Model",
               "theme": "Settings › Theme", "stt_lang": "Settings › Input Language",
               "subagent_provider": "Settings › Sub-Agent Provider",
               "mic": "Settings › Microphone"}
@@ -592,7 +593,8 @@ class SettingsScreen(ModalScreen[None]):
             rows.append(row(repo, f"{repo} ({gb:.2f} GB)"))
         if setting.lower() != "auto" and setting not in curated:
             rows.append(row(setting, setting))
-        rows.append(("vllm_model_other", None, "Other Hugging Face model..."))
+        # The leading space lines it up with the rows above, which carry their marker column.
+        rows.append(("vllm_model_other", None, " Other Hugging Face model\u2026"))
         return rows + [("back", None, "Back")]
 
     def _switch_engine(self, engine: str, model=None) -> None:

@@ -74,7 +74,7 @@ def test_engine_choice_above_model_field():
 def test_gguf_field_only_under_llama():
     body = _src(_SECTION)
     assert body.count("{children}") == 1
-    block = body[body.index("{!lean && shown === 'llama' && data.engine === 'llama' && ("):]
+    block = body[body.index("{!lean && shown === 'llama' && data.engine === 'llama' && !progress && ("):]
     block = block[:block.index("\n            )}\n")]
     assert "{children}" in block, "the GGUF picker renders outside the llama branch"
     picker = body[body.index("{showVllmPicker && ("):]

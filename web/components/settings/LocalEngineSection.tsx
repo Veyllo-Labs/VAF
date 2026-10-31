@@ -4,7 +4,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useTranslations } from 'next-intl';
+import { useFormatter, useTranslations } from 'next-intl';
 import { Loader2 } from 'lucide-react';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Skeleton, { SkeletonBar } from '@/components/ui/Skeleton';
@@ -108,6 +108,9 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
     currentEngine?: string;
 }) {
     const t = useTranslations('localEngine');
+    const format = useFormatter();
+    // Sizes in the reader's notation (2,67 GB in German).
+    const num = (value: number, digits: number) => format.number(value, { minimumFractionDigits: digits, maximumFractionDigits: digits });
     const apiBase = typeof window !== 'undefined' ? (document.location.origin || '') : '';
     const [data, setData] = useState<EngineState | null>(null);
     const [loadFailed, setLoadFailed] = useState(false);
@@ -286,7 +289,7 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
             if (res.ok) {
                 setNote({
                     lines: [answer.kept_model
-                        ? t('removedModel', { model: answer.kept_model, gb: (Number(answer.kept_bytes || 0) / 1024 ** 3).toFixed(1) })
+                        ? t('removedModel', { model: answer.kept_model, gb: num(Number(answer.kept_bytes || 0) / 1024 ** 3, 1) })
                         : t('removedNoModel')],
                     tone: 'ok',
                 });
@@ -350,12 +353,12 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
     const sizeGb = gbOf(runningRepo);
     // A free repo's size is not known before its download.
     const sizeLine = sizeGb
-        ? t('sizeLine', { pin: data.vllm.pin, gb: data.vllm.download_gb_at_least.toFixed(1), modelGb: sizeGb.toFixed(2) })
-        : t('sizeLineNoSize', { pin: data.vllm.pin, gb: data.vllm.download_gb_at_least.toFixed(1) });
+        ? t('sizeLine', { pin: data.vllm.pin, gb: num(data.vllm.download_gb_at_least, 1), modelGb: num(sizeGb, 2) })
+        : t('sizeLineNoSize', { pin: data.vllm.pin, gb: num(data.vllm.download_gb_at_least, 1) });
     const autoGb = gbOf(data.vllm.auto_model);
     const modelOptions = [
-        { value: 'auto', label: autoGb ? t('modelAuto', { repo: data.vllm.auto_model, gb: autoGb.toFixed(2) }) : t('modelAutoNoSize', { repo: data.vllm.auto_model }) },
-        ...curated.map((c) => ({ value: c.repo, label: t('modelCurated', { repo: c.repo, gb: c.weights_gb.toFixed(2) }) })),
+        { value: 'auto', label: autoGb ? t('modelAuto', { repo: data.vllm.auto_model, gb: num(autoGb, 2) }) : t('modelAutoNoSize', { repo: data.vllm.auto_model }) },
+        ...curated.map((c) => ({ value: c.repo, label: t('modelCurated', { repo: c.repo, gb: num(c.weights_gb, 2) }) })),
         ...(setting !== 'auto' && !gbOf(setting) ? [{ value: setting, label: setting }] : []),
         { value: OTHER, label: t('modelOther') },
     ];
@@ -478,12 +481,12 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
 
             {progress && (
                 <div className="mt-4 space-y-2" aria-live="polite">
-                    <div className="flex items-center justify-between text-xs text-gray-700">
-                        <span className="flex items-center gap-2 min-w-0">
-                            <Loader2 size={14} className="animate-spin shrink-0" />
-                            <span className="truncate">{progress.phase ? coded('phase', progress.phase, {}, progress.phase) : t('stepOf', { step: 0, steps: progress.steps || 0 })}</span>
+                    <div className="flex items-start justify-between gap-3 text-xs text-gray-700">
+                        <span className="flex items-start gap-2 min-w-0">
+                            <Loader2 size={14} className="animate-spin shrink-0 mt-px" />
+                            <span>{progress.phase ? coded('phase', progress.phase, {}, progress.phase) : t('stepOf', { step: 0, steps: progress.steps || 0 })}</span>
                         </span>
-                        {progress.steps > 0 && <span className="shrink-0 ml-2 text-gray-500">{t('stepOf', { step: Math.min(progress.step + 1, progress.steps), steps: progress.steps })}</span>}
+                        {progress.steps > 0 && <span className="shrink-0 text-gray-500">{t('stepOf', { step: Math.min(progress.step + 1, progress.steps), steps: progress.steps })}</span>}
                     </div>
                     <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
                         <div className="h-full bg-gray-900 dark:bg-[#ececec] rounded-full transition-[width] duration-300"
@@ -493,7 +496,7 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
                         <div className="flex items-center justify-between text-xs text-gray-500">
                             <span>
                                 {downloadModelStatus?.bytes_done != null && downloadModelStatus?.bytes_total
-                                    ? `${(downloadModelStatus.bytes_done / (1024 * 1024)).toFixed(0)} MB / ${(downloadModelStatus.bytes_total / (1024 * 1024)).toFixed(0)} MB`
+                                    ? `${num(downloadModelStatus.bytes_done / (1024 * 1024), 0)} MB / ${num(downloadModelStatus.bytes_total / (1024 * 1024), 0)} MB`
                                     : downloadModelStatus?.progress_pct != null ? `${Math.round(downloadModelStatus.progress_pct)}%` : ''}
                             </span>
                             {downloadModelStatus?.speed_str && <span>{downloadModelStatus.speed_str}</span>}
@@ -510,11 +513,13 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
                 </div>
             )}
 
-            {/* Under llama.cpp: the GGUF picker of the caller, and the way to remove vLLM. */}
-            {!lean && shown === 'llama' && data.engine === 'llama' && (
+            {/* Under llama.cpp: the GGUF picker of the caller, and the way to remove vLLM. Not while
+                a switch runs: the engine is changing, and the GGUF download box would repeat the
+                vLLM model's download bytes shown above. */}
+            {!lean && shown === 'llama' && data.engine === 'llama' && !progress && (
                 <div className="mt-4">
                     {children}
-                    {data.vllm.installed_version && !progress && (
+                    {data.vllm.installed_version && (
                         <button type="button" className={`${secondary} mt-3`} disabled={jobRunning} onClick={() => setConfirming('remove')}>
                             {t('removeVllm')}
                         </button>

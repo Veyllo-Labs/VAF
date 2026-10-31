@@ -340,3 +340,34 @@ def test_refresh_identity_all(monkeypatch):
     monkeypatch.setenv("VAF_MODEL_OVERRIDE", "x.gguf")
     plain.model_mode = "gemma4"
     assert agent_mod.refresh_local_identity_all() == 0 and plain.model_mode == "gemma4"
+
+
+def test_cancelled_gguf_download_has_no_fallback(monkeypatch, tmp_path):
+    """A GGUF download cancelled from the banner ends there: the self-heal does not start
+    downloading the VRAM default in its place. A failure that was no cancel still does."""
+    import huggingface_hub
+
+    from vaf.core import backend, web_interface
+    monkeypatch.setattr(web_interface, "start_model_download_broadcast", lambda: (lambda: None))
+    monkeypatch.setattr(web_interface, "get_web_interface",
+                        lambda: SimpleNamespace(push_update=lambda frame: None))
+    fetched = []
+
+    def hf_hub_download(repo_id, filename, local_dir, tqdm_class=None):
+        fetched.append(filename)
+        if filename == "m.gguf":
+            raise InterruptedError("The download was cancelled.")
+        (tmp_path / filename).write_bytes(b"gguf")
+        return str(tmp_path / filename)
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", hf_hub_download)
+    monkeypatch.setattr(backend, "_resolve_model_ref",
+                        lambda name: ("org/repo", "m.gguf") if "m.gguf" in name else ("org/auto", "auto.gguf"))
+    import vaf.core.gpu_detection as gd
+    monkeypatch.setattr(gd, "recommended_default_model", lambda: "org/auto/auto.gguf")
+    monkeypatch.setattr(type(MODEL_DOWNLOAD), "cancel_requested", property(lambda self: True))
+    backend.ensure_model_available("org/repo/m.gguf", tmp_path)
+    assert fetched == ["m.gguf"], "a cancelled download fell back to the default model"
+    monkeypatch.setattr(type(MODEL_DOWNLOAD), "cancel_requested", property(lambda self: False))
+    fetched.clear()
+    backend.ensure_model_available("org/repo/m.gguf", tmp_path)
+    assert fetched == ["m.gguf", "auto.gguf"], "a plain failure keeps its self-heal"

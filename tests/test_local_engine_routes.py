@@ -241,7 +241,10 @@ def test_needs_setup_vllm_support(monkeypatch):
     monkeypatch.setattr(auth_routes, "get_auth_db", lambda: _Ctx())
     monkeypatch.setattr(auth_routes, "_setup_code_required", lambda request: False)
     calls = []
+    import vaf.core.gpu_detection as gd
+    monkeypatch.setattr(gd, "get_primary_gpu", lambda: None)
     monkeypatch.setattr(le, "_SUPPORT_CLASS", None)
+    monkeypatch.setattr(le, "_SUPPORT_RETRY_AT", 0.0)
     monkeypatch.setattr(le, "support", lambda **kw: calls.append(1) or le.EngineSupport(
         le.SUPPORTED, "vLLM runs here (NVIDIA RTX 3080, 10 GB).", "supported",
         {"gpu": "RTX 3080", "vram_gb": "10"}))
@@ -250,13 +253,16 @@ def test_needs_setup_vllm_support(monkeypatch):
     answer = asyncio.run(auth_routes.needs_setup(request))
     assert answer["vllm_support"] == {"level": "supported", "code": "supported"}
     assert "RTX" not in str(answer) and "10" not in str(answer["vllm_support"])
-    asyncio.run(auth_routes.needs_setup(request))
+    again = asyncio.run(auth_routes.needs_setup(request))
     assert calls == [1], "an unauthenticated poll started the GPU probes again"
+    assert again["vllm_support"] == {"level": "supported", "code": "supported"}, \
+        "a conclusive verdict was not kept"
     monkeypatch.setattr(inference_profile, "current", lambda config=None: "api")
     assert "vllm_support" not in asyncio.run(auth_routes.needs_setup(request))
     # A detection that fails leaves the field out; it never turns setup into a 503.
     monkeypatch.setattr(inference_profile, "current", lambda config=None: "local")
     monkeypatch.setattr(le, "_SUPPORT_CLASS", None)
+    monkeypatch.setattr(le, "_SUPPORT_RETRY_AT", 0.0)
     monkeypatch.setattr(le, "support", lambda **kw: (_ for _ in ()).throw(OSError("no lspci")))
     answer = asyncio.run(auth_routes.needs_setup(request))
     assert answer["needs_setup"] is True and "vllm_support" not in answer

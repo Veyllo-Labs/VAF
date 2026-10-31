@@ -66,7 +66,7 @@ def _fake_install(monkeypatch, calls, fits=True):
         state["installed"] = True
         return ""
     monkeypatch.setattr(vs, "install", install)
-    monkeypatch.setattr(vs, "ensure_model", lambda repo: calls.append(("model", repo)) or "/hf/snap")
+    monkeypatch.setattr(vs, "ensure_model", lambda repo, outcome=None: calls.append(("model", repo)) or "/hf/snap")
     monkeypatch.setattr(vs, "plan_fit", lambda d, n, kv_dtype=None: vs.FitResult(
         fits, n, 0.78, "fp8", 6076, 7987, "Fits: about 6076 of 7987 MiB." if fits else
         "The model needs about 9000 MiB, but vLLM gets 7987 MiB."))

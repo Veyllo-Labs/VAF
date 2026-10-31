@@ -80,6 +80,8 @@ from __future__ import annotations
 
 import re
 import sys
+import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
@@ -249,22 +251,42 @@ def support(gpu: Any = _DETECT, system: Optional[str] = None, machine: Optional[
 
 
 _SUPPORT_CLASS: Optional[Tuple[str, str]] = None
+_SUPPORT_RETRY_AT = 0.0
+_SUPPORT_LOCK = threading.Lock()
+# How long an inconclusive detection is not repeated (see support_class).
+SUPPORT_RETRY_SECONDS = 60.0
 
 
 def support_class() -> Optional[Tuple[str, str]]:
-    """(level, code) of this machine's verdict, worked out once per process, or None when the
-    detection failed. For the unauthenticated first-run question (``needs-setup``): the
-    hardware does not change while VAF runs, and ``support`` starts external programs
-    (nvidia-smi, lspci) that an unauthenticated caller must not be able to start on every
-    request. Never raises."""
-    global _SUPPORT_CLASS
-    if _SUPPORT_CLASS is None:
+    """(level, code) of this machine's verdict for the unauthenticated first-run question
+    (``needs-setup``), or None while it is not known. Never raises.
+
+    A conclusive verdict is kept for the process: the hardware does not change while VAF runs,
+    and ``support`` starts external programs (nvidia-smi, lspci) that an unauthenticated
+    caller must not be able to start on every request. An inconclusive one is not kept: a
+    detection that raised, or "no GPU" while nvidia-smi is installed (its probe swallows a
+    timeout or a driver still loading and reports no GPU, gpu_detection.detect_nvidia_gpu).
+    Kept, that would leave the wizard saying vLLM cannot run until a restart. It is tried
+    again after ``SUPPORT_RETRY_SECONDS``, and None comes back meanwhile, so the probes still
+    run at most once a minute."""
+    global _SUPPORT_CLASS, _SUPPORT_RETRY_AT
+    with _SUPPORT_LOCK:
+        if _SUPPORT_CLASS is not None:
+            return _SUPPORT_CLASS
+        now = time.monotonic()
+        if now < _SUPPORT_RETRY_AT:
+            return None
+        _SUPPORT_RETRY_AT = now + SUPPORT_RETRY_SECONDS
         try:
-            verdict = support()
-            _SUPPORT_CLASS = (str(verdict.level), str(verdict.code))
+            from vaf.core.gpu_detection import get_primary_gpu
+            verdict = support(gpu=get_primary_gpu())
         except Exception:
             return None
-    return _SUPPORT_CLASS
+        import shutil
+        if verdict.code == "no_gpu" and shutil.which("nvidia-smi"):
+            return None
+        _SUPPORT_CLASS = (str(verdict.level), str(verdict.code))
+        return _SUPPORT_CLASS
 
 
 # Every code ``support`` gives, for the catalogues (a guard test reads this tuple).
@@ -807,11 +829,10 @@ def _apply_vllm(setting, repo, install, progress, output, say) -> EngineSwitch:
                 "success")
 
         steps.begin("download_model")
-        from vaf.core.model_download_state import MODEL_DOWNLOAD
-        cancels = MODEL_DOWNLOAD.cancels
-        model_dir = vllm_server.ensure_model(repo)
+        download: Dict[str, bool] = {}
+        model_dir = vllm_server.ensure_model(repo, outcome=download)
         if not model_dir:
-            if MODEL_DOWNLOAD.cancels != cancels:
+            if download.get("cancelled"):
                 return failed("download_cancelled", f"The download of {repo} was cancelled; "
                                                     "the local engine is unchanged.")
             return failed("download_failed", f"The model {repo} could not be downloaded; the "

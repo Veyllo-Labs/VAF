@@ -1060,6 +1060,23 @@ def get_web_interface():
     return WebInterfaceManager()
 
 
+def _stopper(thread, stop_evt, timeout: float = 2.0):
+    """The ``stop()`` of a broadcast loop: set its event and wait until the thread has ended.
+    Setting the event alone left the thread alive for a moment (inside a push, or before its
+    next check), so a caller that stops it could not rely on it being gone (measured: the
+    test guard against leaked product loops caught it under a slower environment). The loop's
+    wait wakes at once and its push does not block, so the join is short; never from the
+    loop's own thread."""
+    import threading
+
+    def stop() -> None:
+        stop_evt.set()
+        if thread is not threading.current_thread():
+            thread.join(timeout)
+
+    return stop
+
+
 def start_model_download_broadcast(poll_seconds: float = 0.5):
     """Stream the current model download's progress to all WebSocket clients as
     ``model_download_progress`` -- the SAME message a WebUI-initiated download uses, so the existing
@@ -1096,8 +1113,9 @@ def start_model_download_broadcast(poll_seconds: float = 0.5):
                     pass
             stop_evt.wait(poll_seconds)
 
-    threading.Thread(target=_loop, daemon=True, name="model-download-broadcast").start()
-    return stop_evt.set
+    thread = threading.Thread(target=_loop, daemon=True, name="model-download-broadcast")
+    thread.start()
+    return _stopper(thread, stop_evt)
 
 
 @contextlib.contextmanager
@@ -1177,8 +1195,9 @@ def start_maintenance_broadcast(poll_seconds: float = 1.0):
             was_active = snap["active"]
             stop_evt.wait(poll_seconds)
 
-    threading.Thread(target=_loop, daemon=True, name="maintenance-broadcast").start()
-    return stop_evt.set
+    thread = threading.Thread(target=_loop, daemon=True, name="maintenance-broadcast")
+    thread.start()
+    return _stopper(thread, stop_evt)
 
 
 def maintenance_snapshot_frame() -> dict:

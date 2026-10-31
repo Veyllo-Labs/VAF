@@ -295,7 +295,10 @@ closing frame without a model list, so the GGUF list stays). pip has no progress
 install step shows its name for minutes. pip's output goes to `logs/vllm_install.log` in the
 web server and the TUI (`install(output=...)`); the terminal keeps printing it. The banner's
 Cancel ends a vLLM model download for an admin (`MODEL_DOWNLOAD.request_cancel`); the switch
-ends with `download_cancelled` and the engine stays. The pip step has no cancel, as in the
+ends with `download_cancelled` and the engine stays. Whether a download was cancelled is read
+from its own exception (`model_download_state.was_cancelled`): a GGUF and a vLLM model can
+download at once, each on its own file lock, and a cancel of one must not read as the cause
+of the other's failure (the GGUF download keeps its fallback to the default model then). The pip step has no cancel, as in the
 terminal.
 
 **Every outcome has a code** (the verdicts, the fit, the conflicts, each result of `apply` and
@@ -307,9 +310,13 @@ switch the live agents of the process recompute their model identity
 **The first-run wizard.** On the Veyllo step, above "Skip, I'll run locally", for the `local`
 profile only: the same Engine choice, llama.cpp preselected, vLLM enabled only for a
 `supported` verdict. `needs-setup` sends the verdict's level and code only (no GPU name: it
-needs no session), worked out once per process (`local_engine.support_class`): the route
-needs no session and the wizard polls it, and the detection starts nvidia-smi and lspci. A
-detection that fails leaves the field out, never the setup answer. Choosing vLLM says that VAF installs it and its model after the setup; once
+needs no session), from `local_engine.support_class`: the route needs no session and the
+wizard polls it, and the detection starts nvidia-smi and lspci, so a conclusive verdict is
+kept for the process and the probes run at most once a minute otherwise. An inconclusive
+detection (it raised, or "no GPU" while nvidia-smi is installed, which is how a probe timeout
+or a driver still loading reports) is not kept, so it cannot leave the wizard saying vLLM is
+unavailable until a restart; meanwhile the field is left out, never the setup answer.
+Choosing vLLM says that VAF installs it and its model after the setup; once
 the account exists, the wizard starts the switch with the install, and its progress shows in
 the main page's banners while llama.cpp answers.
 

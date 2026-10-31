@@ -621,3 +621,27 @@ def test_ensure_model_broadcasts_and_closes(config, monkeypatch, home):
     assert vs.ensure_model("Qwen/Qwen3-4B-AWQ")
     assert streams == ["start", "stop"] and not MODEL_DOWNLOAD.active
     assert pushed == [{"type": "model_download_done", "success": True}]
+
+
+@pytest.mark.parametrize("raised, cancelled", [("cancel", True), ("guard", False), ("network", False)])
+def test_ensure_model_reports_only_its_own_cancel(config, monkeypatch, home, raised, cancelled):
+    """The caller learns whether THIS download was cancelled, from its own exception: the
+    profile guard's InterruptedError or a network error is a failure, not a cancel."""
+    import huggingface_hub
+
+    from vaf.core import web_interface
+    from vaf.core.model_download_state import DownloadCancelled
+    monkeypatch.setattr(web_interface, "start_model_download_broadcast", lambda: (lambda: None))
+    monkeypatch.setattr(web_interface, "get_web_interface",
+                        lambda: type("W", (), {"push_update": staticmethod(lambda f: None)})())
+
+    def snapshot_download(repo_id, **kw):
+        if kw.get("local_files_only"):
+            raise FileNotFoundError("not cached")
+        raise {"cancel": DownloadCancelled("cancelled"),
+               "guard": InterruptedError("profile switched to api"),
+               "network": OSError("connection reset")}[raised]
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+    outcome = {}
+    assert vs.ensure_model("Qwen/Qwen3-4B-AWQ", outcome=outcome) == ""
+    assert outcome.get("cancelled", False) is cancelled

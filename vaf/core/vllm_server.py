@@ -302,11 +302,12 @@ def weights_complete(model_dir: str) -> bool:
     return bool(shards) and all((root / name).is_file() for name in shards)
 
 
-def ensure_model(repo_id: str) -> str:
+def ensure_model(repo_id: str, outcome: Optional[Dict[str, bool]] = None) -> str:
     """The model's directory, downloaded from Hugging Face when it is not in the cache yet.
     "" under the ``api`` profile (nothing is downloaded), for a value that is no repo id, or
-    when the download failed or was cancelled (``MODEL_DOWNLOAD.request_cancel``: the
-    caller tells the two apart by ``MODEL_DOWNLOAD.cancels`` before and after the call).
+    when the download failed or was cancelled (``MODEL_DOWNLOAD.request_cancel``; a caller
+    that passes ``outcome`` finds ``outcome["cancelled"]`` True then, decided from this
+    download's own exception).
     The download runs inside ``web_interface.model_download_broadcast``: the download banner
     of every open page shows
     its bytes and closes on its end, with no model list in the closing frame (the GGUF list
@@ -323,7 +324,7 @@ def ensure_model(repo_id: str) -> str:
         return found
     from filelock import FileLock
 
-    from vaf.core.model_download_state import DownloadCancelled, make_state_tqdm
+    from vaf.core.model_download_state import make_state_tqdm, was_cancelled
     lock_dir = venv_dir().parent
     lock_dir.mkdir(parents=True, exist_ok=True)
     with FileLock(str(lock_dir / "download.lock")):
@@ -336,18 +337,20 @@ def ensure_model(repo_id: str) -> str:
 
         from vaf.core.web_interface import model_download_broadcast
         _ui().event("System", f"Downloading {repo_id} for vLLM...", style="warning")
-        with model_download_broadcast(repo_id, repo_id.rsplit("/", 1)[-1]) as outcome:
+        with model_download_broadcast(repo_id, repo_id.rsplit("/", 1)[-1]) as banner:
             try:
                 path = snapshot_download(
                     repo_id, allow_patterns=MODEL_PATTERNS, ignore_patterns=CODE_PATTERNS,
                     tqdm_class=make_state_tqdm(inference_profile.download_guard()))
             except Exception as e:      # noqa: BLE001 - reported, and the caller sees ""
-                if isinstance(e, DownloadCancelled):
+                if was_cancelled(e):
+                    if outcome is not None:
+                        outcome["cancelled"] = True
                     _ui().event("System", f"Download of {repo_id} cancelled.", style="warning")
                 else:
                     _ui().error(f"Download of {repo_id} failed: {e}")
                 return ""
-            outcome["success"] = weights_complete(str(path or ""))
+            banner["success"] = weights_complete(str(path or ""))
     path = str(path or "")
     if not weights_complete(path):
         _ui().error(f"{repo_id} has no complete set of safetensors weights; the vLLM engine "

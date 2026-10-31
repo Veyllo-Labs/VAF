@@ -170,7 +170,8 @@ These are sent only on the local path; cloud APIs ignore them.
 
 Which engine runs the local model; switched with `vaf engine`, in Settings > AI & Model or in
 the full-screen TUI, all through `local_engine.apply`, never by a Settings save: both save
-lanes drop `local_engine` and every `vllm_` key (`local_engine.without_engine_keys`). See
+lanes drop `local_engine` and every `vllm_` key (`local_engine.without_engine_keys`), and
+`vaf models config` refuses `local_engine` and `vllm_model`. See
 [VLLM_ENGINE.md](../llm/VLLM_ENGINE.md).
 
 | Key | Default | Meaning |

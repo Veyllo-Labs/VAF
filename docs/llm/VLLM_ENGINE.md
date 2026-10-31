@@ -164,7 +164,10 @@ argument.
   overhead, against that share; a share larger than the free memory counts as not fitting
   too (vLLM refuses to start then). A model that does not fit is refused with the numbers
   instead of a crash a minute later. `vaf engine vllm` prints the same check and does not
-  switch when it fails; it stops a running llama server first, whose memory vLLM needs.
+  switch when it fails; it stops a running llama server first, whose memory vLLM needs, and
+  a running managed vLLM serving another model too: measured against its own share of the
+  GPU, a model change was refused although it fits (820 of 10240 MiB free with the old
+  server up). A vLLM that already serves the wanted model is neither stopped nor measured.
 
 Measured case (RTX 3080, 10240 MiB, 8500 MiB free): `Qwen3-4B-AWQ` at 32768 tokens needs
 about 6079 MiB with fp8 KV and fits in the 7988 MiB share; with 16-bit KV it needs about
@@ -264,6 +267,10 @@ Tool / Workflow model, the voice call and the failover's local link) show one re
 "Runs on the vLLM model (...)" under vLLM instead of a GGUF list, since every local lane rides
 the one vLLM model.
 
+**Never by another write.** `vaf models config` refuses `local_engine` and `vllm_model`
+(`local_engine.SWITCH_KEYS`) with the `vaf engine` command to use; the parser and GPU-share
+keys stay writable there, which is where the refusal of an unknown model family points.
+
 **Applies right away, never with Save changes.** A switch installs, downloads, stops a server
 and checks the fit, and a save sends the whole page: a page opened before a switch would write
 the old engine back. Both save lanes (the WebSocket `save_config` and `PATCH /api/config`) drop
@@ -297,10 +304,12 @@ language; the English sentence stays for `vaf engine`, `vaf health` and the logs
 switch the live agents of the process recompute their model identity
 (`agent.refresh_local_identity_all`), so the tool-call parser follows the new engine's model.
 
-**The first-run wizard.** On the Veyllo step, under "Skip, I'll run locally", for the `local`
+**The first-run wizard.** On the Veyllo step, above "Skip, I'll run locally", for the `local`
 profile only: the same Engine choice, llama.cpp preselected, vLLM enabled only for a
 `supported` verdict. `needs-setup` sends the verdict's level and code only (no GPU name: it
-needs no session). Choosing vLLM says that VAF installs it and its model after the setup; once
+needs no session), worked out once per process (`local_engine.support_class`): the route
+needs no session and the wizard polls it, and the detection starts nvidia-smi and lspci. A
+detection that fails leaves the field out, never the setup answer. Choosing vLLM says that VAF installs it and its model after the setup; once
 the account exists, the wizard starts the switch with the install, and its progress shows in
 the main page's banners while llama.cpp answers.
 

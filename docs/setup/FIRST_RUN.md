@@ -137,7 +137,7 @@ What **Skip** does depends on the installation profile
 
 On either profile you can add this or other providers later under **Settings → AI & Model**.
 
-On the Full profile the step also shows **Engine**, the engine of the local model, under the
+On the Full profile the step also shows **Engine**, the engine of the local model, above the
 skip button: llama.cpp (preselected) and vLLM, with this machine's verdict
 ([VLLM_ENGINE.md](../llm/VLLM_ENGINE.md)). vLLM can be chosen only where it runs (Linux with an
 NVIDIA GPU of compute capability 7.5 or newer); elsewhere its card is disabled and says why.

@@ -9,6 +9,16 @@ Supports:
 - AMD (ROCm)
 - Intel Arc (SYCL/OpenCL)
 - Apple Silicon (Metal)
+
+The GPU hide (``hide_gpu_from_inprocess_torch``) and its undo (``gpu_child_env``): VAF's own
+entry points (the tray, the headless runner) hide the GPU from PyTorch in their process,
+because in-process PyTorch users (embeddings, speech) pre-allocate GPU memory even for a
+CPU-only model. The GPU engines VAF starts as children (the vLLM install and its probe, the
+vLLM server, the llama server) must not inherit that hide: under the tray the vLLM probe once
+reported "no CUDA GPU" on a machine whose GPU was fine, because the child got
+``CUDA_VISIBLE_DEVICES=""``. So the hide records which variables IT set, and
+``gpu_child_env`` takes exactly those out again; a value the user set is never touched.
+Stdlib-only: the tray imports this module before anything that could load torch.
 """
 import os
 import re
@@ -16,8 +26,42 @@ import sys
 import platform
 import shutil
 import subprocess
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Mapping, Tuple
 from pathlib import Path
+
+
+# The names of the variables hide_gpu_from_inprocess_torch set itself (comma-separated). It is
+# inherited by VAF's own children (sub-agents, the headless runner subprocess), so a GPU engine
+# they start undoes the hide correctly too.
+HIDE_RECORD = "VAF_GPU_HIDDEN_FOR_TORCH"
+_HIDE = (("CUDA_VISIBLE_DEVICES", ""), ("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:32"))
+
+
+def hide_gpu_from_inprocess_torch() -> None:
+    """Hide the GPU from PyTorch in this process, before anything imports torch. Sets each
+    variable of the hide that is not in the environment yet and records its name in
+    ``HIDE_RECORD``; a variable the user set (also an empty one) is left as it is and not
+    recorded. Idempotent: a second call (the headless runner imported into the tray) finds
+    both set and the record in place."""
+    recorded = [n for n in os.environ.get(HIDE_RECORD, "").split(",") if n]
+    for name, value in _HIDE:
+        if name in os.environ:
+            continue
+        os.environ[name] = value
+        if name not in recorded:
+            recorded.append(name)
+    if recorded:
+        os.environ[HIDE_RECORD] = ",".join(recorded)
+
+
+def gpu_child_env(base: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
+    """The environment for a GPU engine VAF starts as a child: a copy of ``base`` (default
+    ``os.environ``) without every variable the hide set and without the record itself. A
+    ``CUDA_VISIBLE_DEVICES`` the user set (no record entry) passes through unchanged, empty or
+    not: choosing or hiding a GPU for the engines is the user's decision."""
+    source = os.environ if base is None else base
+    hidden = {n for n in str(source.get(HIDE_RECORD, "") or "").split(",") if n}
+    return {k: v for k, v in source.items() if k != HIDE_RECORD and k not in hidden}
 
 
 def _get_subprocess_kwargs() -> dict:
@@ -32,7 +76,7 @@ class GPUInfo:
     """Information about a detected GPU."""
     def __init__(self, vendor: str, model: str = "", vram_mb: int = 0, 
                  driver_available: bool = False, compute_available: bool = False,
-                 compute_capability: str = ""):
+                 compute_capability: str = "", driver_version: str = ""):
         self.vendor = vendor  # "nvidia", "amd", "intel", "apple"
         self.model = model
         self.vram_mb = vram_mb
@@ -41,6 +85,9 @@ class GPUInfo:
         # NVIDIA compute capability as nvidia-smi prints it ("8.6"); "" when unknown or
         # not an NVIDIA GPU. vLLM's CUDA build needs 7.5 or newer (vaf/core/local_engine.py).
         self.compute_capability = compute_capability
+        # NVIDIA driver version as nvidia-smi prints it ("580.65.06"); "" when unknown. vLLM's
+        # CUDA 13.0 build needs driver 580 or newer (vaf/core/local_engine.py).
+        self.driver_version = driver_version
     
     def __repr__(self):
         return f"GPUInfo(vendor={self.vendor}, model={self.model}, vram={self.vram_mb}MB, compute={self.compute_available})"
@@ -52,11 +99,13 @@ def detect_nvidia_gpu() -> Optional[GPUInfo]:
         return None
     
     try:
-        # compute_cap is asked for too (vLLM's hardware verdict needs it). A driver too old to
-        # know the field refuses the whole query, so the two-field query it always answered
-        # runs again without it: detection must never lose the GPU over the extra column.
+        # compute_cap and driver_version are asked for too (vLLM's hardware verdict needs
+        # them). A driver too old to know compute_cap refuses the whole query, so the two-field
+        # query it always answered runs again without them: detection must never lose the GPU
+        # over the extra columns.
         result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name,memory.total,compute_cap", "--format=csv,noheader,nounits"],
+            ["nvidia-smi", "--query-gpu=name,memory.total,compute_cap,driver_version",
+             "--format=csv,noheader,nounits"],
             capture_output=True,
             text=True,
             timeout=5,
@@ -92,6 +141,9 @@ def detect_nvidia_gpu() -> Optional[GPUInfo]:
             compute_capability = parts[2].strip() if len(parts) >= 3 else ""
             if not re.fullmatch(r"\d+\.\d+", compute_capability):
                 compute_capability = ""     # "[N/A]" or anything else that is no version
+            driver_version = parts[3].strip() if len(parts) >= 4 else ""
+            if not re.fullmatch(r"\d+(\.\d+)+", driver_version):
+                driver_version = ""
             
             # Check if CUDA is actually available (not just driver)
             cuda_available = _check_cuda_available()
@@ -103,6 +155,7 @@ def detect_nvidia_gpu() -> Optional[GPUInfo]:
                 driver_available=True,
                 compute_available=cuda_available,
                 compute_capability=compute_capability,
+                driver_version=driver_version,
             )
     except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
         pass
@@ -158,7 +211,7 @@ def _check_cuda_available() -> bool:
     
     # REMOVED: PyTorch fallback check - importing torch causes 1GB+ RAM explosion!
     # The DLL/library checks above are sufficient for CUDA detection.
-    # If someone needs torch, the embedding model will handle CUDA_VISIBLE_DEVICES.
+    # If someone needs torch, the GPU hide above (hide_gpu_from_inprocess_torch) keeps it on the CPU.
 
     return False
 

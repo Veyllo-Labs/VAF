@@ -126,6 +126,8 @@ def test_format_identities_are_pinned_literals():
     assert CONTEXT_REPAIR_FORMAT == "ctxrepair-1-141182"
     from vaf.core.browser_jar import JAR_FORMAT
     assert JAR_FORMAT == "browserjar-1-6e0d93"
+    from vaf.core.vllm_server import RECIPE_FORMAT
+    assert RECIPE_FORMAT == "vllmenv-1-18dfb7"
 
 
 def test_chain_with_versioned_seed_verifies():

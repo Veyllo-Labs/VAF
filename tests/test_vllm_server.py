@@ -27,7 +27,16 @@ MUTATIONS, each turns the named test red:
 - drop the clamp to max_position_embeddings -> test_fit_clamps_to_max_position;
 - drop the retry with auto, or the memo -> test_a_dying_fp8_start_retries_once_with_auto;
 - let pip run in a shell, or keep a half environment after a failed pip ->
-  test_install_steps / test_a_failed_install_leaves_nothing.
+  test_install_steps / test_a_failed_install_leaves_nothing;
+- re-add `--extra-index-url`, drop the extension import from the probe, or write the recipe
+  record before the probe -> test_install_steps;
+- go back to the early return `installed_version() == PIN and vllm_exe().exists()` ->
+  test_an_environment_of_the_earlier_recipe_is_rebuilt;
+- map probe exit 4 to no_cuda, or write the record on a failed probe ->
+  test_a_failed_probe_names_its_cause;
+- `env = dict(os.environ)` in install, or child_env filtering os.environ directly ->
+  test_install_and_server_get_the_gpu_back;
+- start() checking only `is_installed()` -> test_start_refuses_an_environment_of_the_earlier_recipe.
 """
 import json
 import os
@@ -90,6 +99,7 @@ def _ready_to_launch(monkeypatch, home, *, free_mb=8500, total_mb=10240, shape=S
     model_dir = home / "hf" / "snapshot"
     model_dir.mkdir(parents=True)
     monkeypatch.setattr(vs, "is_installed", lambda: True)
+    monkeypatch.setattr(vs, "is_current", lambda: True)
     monkeypatch.setattr(vs, "local_snapshot", lambda repo: str(model_dir))
     monkeypatch.setattr(vs.ModelShape, "from_dir", classmethod(lambda cls, d: shape))
     monkeypatch.setattr(vs, "_gpu_memory", lambda: (free_mb, total_mb))
@@ -293,10 +303,14 @@ def _supported(monkeypatch):
     monkeypatch.setattr(le, "support", lambda **kw: le.EngineSupport(le.SUPPORTED, "ok"))
 
 
-def _fake_installing_run(home, calls, pip_code=0, probe_code=0):
+def _fake_installing_run(home, calls, pip_code=0, probe_code=0, envs=None, records=None):
     def run(argv, env=None, **kw):
         assert isinstance(argv, list) and "shell" not in kw
         calls.append(argv)
+        if envs is not None:
+            envs.append(env)
+        if records is not None:
+            records.append(vs.recipe_path().exists())
         if argv[1:3] == ["-m", "venv"]:
             vs.venv_python().parent.mkdir(parents=True, exist_ok=True)
         elif "pip" in argv and pip_code == 0:
@@ -311,14 +325,19 @@ def _fake_installing_run(home, calls, pip_code=0, probe_code=0):
 
 def test_install_steps(config, monkeypatch, home):
     _supported(monkeypatch)
-    calls = []
-    assert vs.install(run=_fake_installing_run(home, calls)) == ""
+    calls, records = [], []
+    assert vs.install(run=_fake_installing_run(home, calls, records=records)) == ""
     assert calls[0] == [sys.executable, "-m", "venv", str(vs.venv_dir())]
-    assert calls[1] == [str(vs.venv_python()), "-m", "pip", "install", f"vllm=={vs.PIN}",
-                        "--extra-index-url", "https://download.pytorch.org/whl/cu129"]
+    # The release's own command: PyPI only, its CUDA 13.0 build and the torch it requires.
+    assert calls[1] == [str(vs.venv_python()), "-m", "pip", "install", "vllm==0.32.0"]
     assert calls[2] == [str(vs.vllm_exe()), "download-kernels"]
-    assert calls[3][:2] == [str(vs.venv_python()), "-c"] and "torch.cuda.is_available" in calls[3][2]
-    assert vs.installed_version() == vs.PIN and vs.is_installed()
+    assert calls[3][:2] == [str(vs.venv_python()), "-c"]
+    assert "torch.cuda.is_available" in calls[3][2]
+    assert "import vllm._C_stable_libtorch" in calls[3][2]
+    assert records == [False, False, False, False], "the record was written before the probe"
+    assert vs.recipe_path() == vs.venv_dir() / "vaf_recipe"
+    assert vs.recipe_path().read_bytes() == b"vllmenv-1-18dfb7"
+    assert vs.installed_version() == vs.PIN and vs.is_installed() and vs.is_current()
     calls.clear()
     assert vs.install(run=_fake_installing_run(home, calls)) == "" and calls == [], \
         "an installed pin installs nothing"
@@ -332,10 +351,115 @@ def test_a_failed_install_leaves_nothing(config, monkeypatch, home):
     assert not vs.venv_dir().exists()
 
 
-def test_a_gpu_pytorch_cannot_see_is_reported(config, monkeypatch, home):
+def test_the_probe_script_maps_its_causes(tmp_path):
+    """The probe really exits 3 without a CUDA GPU and 4 when the extension does not load
+    (stand-in torch and vllm packages on its path)."""
+    import textwrap
+    for cuda, ext_ok, expected in [(False, True, 3), (True, False, 4), (True, True, 0)]:
+        pkgs = tmp_path / f"p{int(cuda)}{int(ext_ok)}"
+        (pkgs / "torch").mkdir(parents=True)
+        (pkgs / "torch" / "__init__.py").write_text(textwrap.dedent(f"""
+            class cuda:
+                @staticmethod
+                def is_available():
+                    return {cuda}
+        """), encoding="utf-8")
+        (pkgs / "vllm").mkdir()
+        (pkgs / "vllm" / "__init__.py").write_text("", encoding="utf-8")
+        if ext_ok:
+            (pkgs / "vllm" / "_C_stable_libtorch.py").write_text("", encoding="utf-8")
+        else:
+            (pkgs / "vllm" / "_C_stable_libtorch.py").write_text(
+                "raise ImportError('libcudart.so.13: cannot open shared object file')",
+                encoding="utf-8")
+        out = subprocess.run([sys.executable, "-c", vs._PROBE], capture_output=True, text=True,
+                             timeout=60, env={**os.environ, "PYTHONPATH": str(pkgs)})
+        assert out.returncode == expected, (cuda, ext_ok, out.stderr)
+        if expected == 4:
+            assert "libcudart.so.13" in out.stderr
+
+
+@pytest.mark.parametrize("probe_code, cause", [(3, "no_cuda"), (4, "libs"), (1, "libs"),
+                                               (None, "libs")])
+def test_a_failed_probe_names_its_cause(config, monkeypatch, home, probe_code, cause):
     _supported(monkeypatch)
-    reason = vs.install(run=_fake_installing_run(home, [], probe_code=3))
-    assert "driver" in reason
+    run = _fake_installing_run(home, [], probe_code=probe_code or 0)
+    if probe_code is None:
+        inner = run
+
+        def run(argv, env=None, **kw):     # noqa: F811 - the probe cannot even run
+            if "-c" in argv:
+                raise OSError("no such file")
+            return inner(argv, env=env, **kw)
+    outcome = {}
+    reason = vs.install(run=run, outcome=outcome)
+    assert outcome == {"probe": cause}
+    assert "12.9" not in reason
+    if cause == "no_cuda":
+        assert "13.0" in reason and "580" in reason and "CUDA_VISIBLE_DEVICES" in reason
+    else:
+        assert "CUDA libraries" in reason and "cannot start" in reason
+    assert not vs.recipe_path().exists(), "a failed probe left a recipe record"
+    assert not vs.is_current()
+
+
+def test_an_environment_of_the_earlier_recipe_is_rebuilt(config, monkeypatch, home):
+    """The pinned METADATA and the exe, but no recipe record: what the earlier cu129 recipe
+    left behind. It is not current, so the install removes it and runs every step again."""
+    _supported(monkeypatch)
+    site = vs.venv_dir() / "lib" / "python3.13" / "site-packages" / f"vllm-{vs.PIN}.dist-info"
+    site.mkdir(parents=True)
+    (site / "METADATA").write_text(f"Name: vllm\nVersion: {vs.PIN}\n", encoding="utf-8")
+    vs.vllm_exe().parent.mkdir(parents=True, exist_ok=True)
+    vs.vllm_exe().write_text("#!/bin/sh\n", encoding="utf-8")
+    stale = vs.venv_dir() / "lib" / "python3.13" / "site-packages" / "torch-2.13.0+cu129.dist-info"
+    stale.mkdir(parents=True)
+    assert vs.is_installed() and not vs.recipe_current() and not vs.is_current()
+    assert le.needs_install()
+    calls = []
+    assert vs.install(run=_fake_installing_run(home, calls)) == ""
+    assert calls[0] == [sys.executable, "-m", "venv", str(vs.venv_dir())]
+    assert not stale.exists(), "the old environment was not removed first"
+    assert vs.is_current() and not le.needs_install()
+
+
+def test_install_and_server_get_the_gpu_back(config, monkeypatch, home):
+    """Under the tray's hide every install step and the server run without the hidden
+    CUDA_VISIBLE_DEVICES; a VLLM_ variable is still dropped from the server's env."""
+    from vaf.core.gpu_detection import HIDE_RECORD
+    _supported(monkeypatch)
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
+    monkeypatch.setenv("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:32")
+    monkeypatch.setenv(HIDE_RECORD, "CUDA_VISIBLE_DEVICES,PYTORCH_CUDA_ALLOC_CONF")
+    monkeypatch.setenv("VLLM_PLUGINS", "evil")
+    envs = []
+    assert vs.install(run=_fake_installing_run(home, [], envs=envs)) == ""
+    assert len(envs) == 4
+    for env in envs:
+        assert "CUDA_VISIBLE_DEVICES" not in env and HIDE_RECORD not in env
+        assert env["PIP_DISABLE_PIP_VERSION_CHECK"] == "1"
+    server = vs.child_env()
+    assert "CUDA_VISIBLE_DEVICES" not in server and "PYTORCH_CUDA_ALLOC_CONF" not in server
+    assert "VLLM_PLUGINS" not in server and server["VLLM_NO_USAGE_STATS"] == "1"
+
+
+def test_start_refuses_an_environment_of_the_earlier_recipe(config, monkeypatch, home):
+    from vaf.cli.ui import UI
+    _ready_to_launch(monkeypatch, home)
+    monkeypatch.setattr(vs, "is_current", lambda: False)
+    said = []
+    monkeypatch.setattr(UI, "error", staticmethod(lambda text, *a, **k: said.append(text)))
+    spawned = []
+
+    def popen(*a, **k):
+        # Recorded, then refused, so a start that wrongly launches returns at once instead of
+        # waiting for /health.
+        spawned.append(a)
+        raise RuntimeError("launched")
+    monkeypatch.setattr(vs, "health_status", lambda port=8080, timeout=1.0: None)
+    assert vs.start("Qwen/Qwen3-4B-AWQ", 32768, popen=popen) is False
+    assert spawned == [], "an environment of the earlier recipe was launched"
+    assert said and "earlier VAF" in said[-1] and "`vaf engine vllm`" in said[-1]
 
 
 def test_install_refuses_an_unsupported_machine(config, monkeypatch, home):

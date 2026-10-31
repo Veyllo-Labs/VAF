@@ -383,7 +383,8 @@ def _mentions_environ(node) -> bool:
 # Helpers in other modules that return the whole environment plus keys of their own. The
 # guard reads one file at a time and cannot follow the call, so they are named here, and
 # test_named_environment_helpers_carry_the_environment holds each one to it.
-_CARRIES_ENVIRON = {"child_env"}   # vaf/core/node_runtime.py
+_CARRIES_ENVIRON = {"child_env",       # vaf/core/node_runtime.py
+                    "gpu_child_env"}   # vaf/core/gpu_detection.py
 
 
 def _inherits_environ(region) -> bool:
@@ -553,12 +554,22 @@ def test_no_posix_only_subprocess_env():
 
 def test_named_environment_helpers_carry_the_environment():
     """What lets _CARRIES_ENVIRON vouch for a helper: every key of this process's environment
-    comes back, SystemRoot included on Windows. MUTATION: return only PATH from child_env - red."""
-    from vaf.core import node_runtime
-    assert _CARRIES_ENVIRON == {"child_env"}, "a new name here needs its own check below"
+    comes back, SystemRoot included on Windows. MUTATION: return only PATH from child_env - red;
+    let gpu_child_env drop anything besides the hide's own recorded names - red."""
+    from vaf.core import gpu_detection, node_runtime
+    assert _CARRIES_ENVIRON == {"child_env", "gpu_child_env"}, \
+        "a new name here needs its own check below"
     env = node_runtime.child_env(sys.executable)
     assert {k: v for k, v in env.items() if k != "PATH"} == {
         k: v for k, v in os.environ.items() if k != "PATH"}
+    # gpu_child_env drops only the variables the GPU hide set itself (and its record).
+    hidden = {n for n in os.environ.get(gpu_detection.HIDE_RECORD, "").split(",") if n}
+    hidden.add(gpu_detection.HIDE_RECORD)
+    assert gpu_detection.gpu_child_env() == {
+        k: v for k, v in os.environ.items() if k not in hidden}
+    base = {"SYSTEMROOT": "C:\\Windows", "PATH": "x", "CUDA_VISIBLE_DEVICES": "",
+            gpu_detection.HIDE_RECORD: "CUDA_VISIBLE_DEVICES"}
+    assert gpu_detection.gpu_child_env(base) == {"SYSTEMROOT": "C:\\Windows", "PATH": "x"}
 
 
 def test_the_isabs_class_is_real():

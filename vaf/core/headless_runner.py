@@ -12,10 +12,11 @@ import logging
 import uuid
 from typing import NamedTuple
 
-# CRITICAL: Disable CUDA for PyTorch BEFORE any torch import to prevent memory explosion
-# PyTorch pre-allocates GPU memory even when using CPU-only models!
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")  # Hide GPU from PyTorch
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:32")
+# CRITICAL: hide the GPU from PyTorch BEFORE any torch import: PyTorch pre-allocates GPU
+# memory even for CPU-only models. The GPU engines VAF starts get the GPU back
+# (gpu_detection.gpu_child_env).
+from vaf.core.gpu_detection import hide_gpu_from_inprocess_torch
+hide_gpu_from_inprocess_torch()
 
 import requests
 from vaf.core.agent import Agent
@@ -1629,7 +1630,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
             gc.collect()
 
         # REMOVED: torch import causes 1GB+ RAM explosion!
-        # CUDA cache clearing is not needed when CUDA_VISIBLE_DEVICES="" is set
+        # CUDA cache clearing is not needed while the GPU is hidden from in-process torch
+        # (hide_gpu_from_inprocess_torch at the top of this module)
 
         try:
             import psutil

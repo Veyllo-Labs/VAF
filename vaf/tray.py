@@ -15,11 +15,12 @@ Key platform considerations (see docs/platform/SYSTEM_TRAY.md):
 import os
 import sys
 
-# CRITICAL: Disable CUDA for PyTorch BEFORE any torch import to prevent memory explosion
-# PyTorch pre-allocates GPU memory even when using CPU-only models!
-# This MUST happen at the very beginning of the process.
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")  # Hide GPU from PyTorch
-os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:32")
+# CRITICAL: hide the GPU from PyTorch BEFORE any torch import: PyTorch pre-allocates GPU
+# memory even for CPU-only models. This MUST happen at the very beginning of the process.
+# The GPU engines VAF starts get the GPU back (gpu_detection.gpu_child_env). Stdlib-only
+# module, and vaf/core/__init__.py is empty - no import cascade here.
+from vaf.core.gpu_detection import hide_gpu_from_inprocess_torch as _hide_gpu
+_hide_gpu()
 
 # Linux: point BOTH toolkits at X11/XWayland. Native Wayland causes GTK protocol errors and
 # an EGL/GLX conflict in Qt WebEngine - and with the GPU in-process it can deadlock the

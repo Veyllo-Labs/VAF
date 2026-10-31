@@ -1554,7 +1554,10 @@ class ServerManager:
             except Exception:
                 log_file = None
 
-            run_env = os.environ.copy()
+            # Without VAF's own GPU hide for in-process torch: the CUDA build (Windows with
+            # NVIDIA) sees no device under an inherited empty CUDA_VISIBLE_DEVICES.
+            from vaf.core.gpu_detection import gpu_child_env
+            run_env = gpu_child_env()
             run_env["LLAMA_ARG_N_PARALLEL"] = str(final_parallel)
 
             if self.system == "Windows":

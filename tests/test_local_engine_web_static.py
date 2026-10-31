@@ -290,3 +290,26 @@ def test_automatic_option_fits_a_phone():
     body = _src(_SECTION)
     assert "t('modelAutoNoSize', { repo: data.vllm.auto_model.split('/').pop()" in body
     assert "t('modelAuto'," not in body
+
+
+@pytest.mark.parametrize("locale", _LOCALES)
+def test_cuda_facts_and_size_follow_the_core(locale):
+    """The wizard's size is the core's DOWNLOAD_GB_AT_LEAST (with the decimal comma in de and
+    tr), and no sentence names the CUDA version of the earlier recipe. MUTATION: leave 1.8 in
+    one catalogue - red."""
+    cat = json.loads((_MESSAGES / f"{locale}.json").read_bytes())["localEngine"]
+    size = f"{vs.DOWNLOAD_GB_AT_LEAST:.1f}"
+    if locale in ("de", "tr"):
+        size = size.replace(".", ",")
+    assert f"{size} GB" in cat["wizardAfterSetup"], (locale, cat["wizardAfterSetup"])
+    for path, value in _flat(cat):
+        assert "12.9" not in value and "cu129" not in value, (locale, path)
+    for key in ("cuda_probe_failed",):
+        assert vs.CUDA_VERSION in cat["result"][key] and "580" in cat["result"][key], locale
+    assert vs.CUDA_VERSION in cat["support"]["nvidia_driver_old"] and "580" in cat["support"]["nvidia_driver_old"]
+    assert "{" not in cat["support"]["nvidia_driver_old"], "the wizard renders support codes without params"
+
+
+def test_libs_failure_gets_the_log_hint():
+    body = _src(_SECTION)
+    assert "r.code === 'vllm_libs_failed') lines.push(t('logHint'" in body

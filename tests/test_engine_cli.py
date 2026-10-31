@@ -60,6 +60,7 @@ def _fake_install(monkeypatch, calls, fits=True):
     state = {"installed": False}
     monkeypatch.setattr(vs, "is_installed", lambda: state["installed"])
     monkeypatch.setattr(vs, "installed_version", lambda: vs.PIN if state["installed"] else None)
+    monkeypatch.setattr(vs, "recipe_current", lambda: state["installed"])
 
     def install(log=None, run=None, **kw):
         calls.append("install")
@@ -128,7 +129,7 @@ def test_switch_asks_before_installing(config, monkeypatch):
     _fake_install(monkeypatch, calls)
     result = _invoke("vllm", input="n\n")
     assert result.exit_code == 1 and calls == [] and config.get("local_engine") is None
-    assert "1.8 GB" in result.output
+    assert f"{vs.DOWNLOAD_GB_AT_LEAST:.1f} GB" in result.output
     result = _invoke("vllm", input="y\n")
     assert result.exit_code == 0 and calls[0] == "install"
 

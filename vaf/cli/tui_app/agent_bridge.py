@@ -983,7 +983,7 @@ class AgentBridge:
                 "install_env": "creating the vLLM environment",
                 "install_vllm": "installing vLLM (several GB, this takes minutes)",
                 "install_kernels": "fetching vLLM's prebuilt kernels",
-                "install_probe": "checking that PyTorch sees the GPU",
+                "install_probe": "checking that vLLM loads on the GPU",
                 "download_model": "downloading the model",
                 "handover": "stopping the llama server",
                 "fit_check": "checking that the model fits",
@@ -1015,7 +1015,7 @@ class AgentBridge:
                 if result.note:
                     self.events.system_note(result.note)
                 text = " ".join(t for t in (result.text, result.detail) if t)
-                if result.code in ("install_failed", "cuda_probe_failed"):
+                if result.code in ("install_failed", "cuda_probe_failed", "vllm_libs_failed"):
                     text += f" Details: {output}"
                 self.events.event_note("Engine", text, "error")
             self._emit("chrome_changed")

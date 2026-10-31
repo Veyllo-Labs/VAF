@@ -131,7 +131,15 @@ waiting for a stable `X.Y.Z`.
    `vaf engine vllm` once on a supported machine (Linux, NVIDIA, compute capability
    7.5 or newer), check that the first start comes up and a tool call works, and
    record the measured download and installed size in
-   [VLLM_ENGINE.md](../llm/VLLM_ENGINE.md).
+   [VLLM_ENGINE.md](../llm/VLLM_ENGINE.md). Read the new wheel's CUDA version (its
+   METADATA's `nvidia-cutlass-dsl[cuNN]` extra, or `readelf -d` on
+   `vllm/_C_stable_libtorch*.so` for the `libcudart.so.NN` it needs) and keep
+   `CUDA_VERSION` in `vaf/core/vllm_server.py`, `MIN_DRIVER` in
+   `vaf/core/local_engine.py` (NVIDIA's CUDA compatibility guide) and the CUDA
+   extension the install probe imports (`_PROBE`, the import of
+   `vllm/platforms/cuda.py`) true; bump the middle number of `RECIPE_FORMAT` when
+   the install command or the probe changes, so environments of the old recipe
+   are rebuilt.
 3. In `CHANGELOG.md`, move the relevant `[Unreleased]` notes into a new
    `## [X.Y.Z] - YYYY-MM-DD` section.
 4. Commit (on request) and push to `main`.

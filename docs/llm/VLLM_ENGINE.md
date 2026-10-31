@@ -79,16 +79,44 @@ command.
 
 - **Where:** `bin/vllm/venv/`, next to the llama-server binary (`bin/` is gitignored). A
   fresh environment made with VAF's own Python (vLLM 0.32.0 accepts 3.11 to 3.14).
-- **What:** `pip install vllm==0.32.0 --extra-index-url https://download.pytorch.org/whl/cu129`,
-  the command of vLLM's installation guide, then `vllm download-kernels` (without the
-  prebuilt kernels FlashInfer compiles them at the first start, several minutes). vLLM is
-  never imported into VAF's process; its version is read from the package metadata.
-- **Check:** `python -c "import torch; ..."` in that environment must see a CUDA GPU; when it
-  does not, the NVIDIA driver is the likely cause (the build needs a driver for CUDA 12.9),
-  and the local engine stays as it was.
-- **Size:** measured lower bound of the download about 1.8 GB (the vllm wheel 327 MB, torch
-  527 MB, torch's NVIDIA wheels 932 MB), before the rest of the dependency tree. The
-  installed size is recorded with the first live install.
+- **What:** `pip install vllm==0.32.0`, from PyPI only: the release's own command (the table
+  "Release Artifacts" of vLLM v0.32.0 lists `PyPI (CUDA 13.0) | pip install vllm`). That wheel
+  is the CUDA 13.0 build (its METADATA requires `torch==2.13.0` and
+  `nvidia-cutlass-dsl[cu13]`, its `_C_stable_libtorch` extension needs `libcudart.so.13`), and
+  PyPI's `torch 2.13.0` is the CUDA 13.0 PyTorch, so the tree is consistent. Not the cu129
+  extra index that vLLM's installation page at that tag still shows: with it pip prefers
+  `torch 2.13.0+cu129` (a local version label from the extra index) over PyPI's CUDA 13.0
+  torch, vLLM's extension then cannot load `libcudart.so.13`, and vLLM cannot start at all
+  (measured; `vllm download-kernels` already died on that ImportError). Then `vllm
+  download-kernels` (without the prebuilt kernels FlashInfer compiles them at the first
+  start, several minutes). vLLM is never imported into VAF's process; its version is read
+  from the package metadata.
+- **Check:** a probe in that environment must pass two things: PyTorch sees a CUDA GPU
+  (exit 3 otherwise: `cuda_probe_failed`, the NVIDIA driver for CUDA 13.0 or a hidden GPU is
+  the cause), AND `import vllm._C_stable_libtorch` works, the CUDA extension vLLM's platform
+  module imports at its first start (exit 4 or any other failure: `vllm_libs_failed`, the
+  CUDA libraries of the environment do not load). Either failure leaves the local engine as
+  it was.
+- **Recipe record:** only a passing probe writes `bin/vllm/venv/vaf_recipe`, holding the
+  recipe's format tag (`vllm_server.RECIPE_FORMAT`). An environment without it (built by an
+  earlier VAF with the cu129 index, or one whose probe failed) counts as not installed:
+  `vaf engine vllm` and Settings offer the install again, and the install removes it and
+  builds it fresh; a start refuses it before any launch with "installed by an earlier VAF and
+  cannot start" and the command to rebuild it.
+- **The GPU for the engines:** the desktop tray and the headless runner hide the GPU from
+  PyTorch in their own process (`CUDA_VISIBLE_DEVICES=""`, because in-process PyTorch users
+  such as embeddings and speech pre-allocate GPU memory even for a CPU model;
+  `gpu_detection.hide_gpu_from_inprocess_torch`). The hide records the variables it set, and
+  every GPU engine VAF starts as a child (each install step and the probe, the vLLM server,
+  the llama server) gets an environment without them (`gpu_detection.gpu_child_env`). A
+  `CUDA_VISIBLE_DEVICES` you set yourself is passed on unchanged. Before this, the probe ran
+  under the tray with the hidden GPU and reported "no CUDA GPU" on a machine whose GPU was
+  fine.
+- **Size:** measured lower bound of the download about 2.8 GB, from PyPI's file sizes (the
+  vllm wheel 327 MB, torch 527 MB, the CUDA 13 NVIDIA wheels about 1990 MB: the cuda-toolkit
+  13.0.3 components 1189 MB, cudnn-cu13 366, nccl-cu13 206, cusparselt-cu13 170, nvshmem-cu13
+  60), before the rest of the dependency tree. The installed size is recorded with the first
+  live install.
 - **Pinned, not hash-locked** (named boundary): pip resolves the tree over TLS; the
   llama.cpp asset is SHA-256 pinned, the vLLM tree is not. Bumping `PIN` is a release step
   ([RELEASING.md](../setup/RELEASING.md)).
@@ -175,7 +203,7 @@ about 6079 MiB with fp8 KV and fits in the 7988 MiB share; with 16-bit KV it nee
 
 ## Privacy and execution
 
-The server's environment is VAF's environment plus `VLLM_NO_USAGE_STATS=1` and
+The server's environment is VAF's environment (without VAF's own GPU hide, see Install) plus `VLLM_NO_USAGE_STATS=1` and
 `DO_NOT_TRACK=1` (vLLM sends usage statistics by default), `HF_HUB_OFFLINE=1` and
 `VLLM_SKIP_MODEL_NAME_VALIDATION=1`. Every other `VLLM_` variable of VAF's environment is left
 out (development endpoints, runtime LoRA loading, plugins imported at start are launch
@@ -188,16 +216,19 @@ is an execution decision. Every `vllm_` key and `local_engine` are admin-only.
 ## Platforms
 
 `local_engine.support()` gives every machine a verdict and a sentence; `vaf engine` prints
-it, and only `supported` installs. From vLLM's installation guide
+it, and only `supported` installs. The driver version comes from the same nvidia-smi query as
+the compute capability; one it cannot read is not refused (the install's probe still catches
+a driver that is too old). From vLLM's installation guide
 (https://docs.vllm.ai/en/latest/getting_started/installation/, the
 [GPU](https://docs.vllm.ai/en/latest/getting_started/installation/gpu/) and
 [CPU](https://docs.vllm.ai/en/latest/getting_started/installation/cpu/) pages):
 
 | Machine | Verdict | Why |
 |---|---|---|
-| Linux x86_64 or aarch64, NVIDIA, compute capability 7.5 or newer | supported | the prebuilt wheel carries CUDA 12.9 binaries and installs into VAF's Python |
+| Linux x86_64 or aarch64, NVIDIA, compute capability 7.5 or newer, driver 580 or newer | supported | the PyPI wheel is the CUDA 13.0 build and installs into VAF's Python |
 | Linux, NVIDIA below 7.5 (Pascal, Volta) | unsupported | vLLM needs 7.5 or newer |
-| Linux, NVIDIA whose compute capability nvidia-smi does not report | unsupported | a driver too old to report it is too old for the CUDA 12.9 build |
+| Linux, NVIDIA, driver below 580 | unsupported | the CUDA 13.0 build needs driver 580 or newer ("CUDA 13.x >= 580", NVIDIA's CUDA compatibility guide); VAF installs one recipe, not the CUDA 12.9 wheel that exists only as a release asset |
+| Linux, NVIDIA whose compute capability nvidia-smi does not report | unsupported | a driver too old to report it is too old for the CUDA 13.0 build |
 | Linux, AMD GPU | later | ROCm 6.3+ on selected Instinct and Radeon cards, prebuilt for Python 3.12 only |
 | Linux, Intel GPU | later | "basic model inference and serving", needs Python 3.12 |
 | Linux, no GPU | unsupported | the CPU backend is basic, no 4-bit GGUF-style quantization; llama.cpp is the better CPU engine |
@@ -367,7 +398,10 @@ engine reads. Under the `api` inference profile neither engine installs or runs.
 - `logs/vllm_server.log`: the server's output of the last start (the start before it in
   `vllm_server.prev.log`); "Application startup complete" marks the end of a start.
 - `~/.vaf/vllm.pid`: the pid of the managed server (the leader of its process group).
-- `logs/vllm_install.log`: pip's output of an install started from Settings or the TUI.
+- `logs/vllm_install.log`: pip's output of an install started from Settings or the TUI, and
+  the probe's error (the ImportError of vLLM's CUDA extension) when it fails.
+- `bin/vllm/venv/vaf_recipe`: the recipe record; missing means the next install rebuilds the
+  environment.
 - `bin/vllm/switch.lock`: held while a switch runs; a second switch (another process) is
   refused with `busy` instead of waiting.
 - `vaf engine`, `vaf health` (the `engine` row): installed version, model, server running

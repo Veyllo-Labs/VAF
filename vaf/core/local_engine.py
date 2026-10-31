@@ -30,11 +30,15 @@ and its process has exited, before the chosen one is spawned.
 
 Platform verdicts (``support()``), from the vLLM documentation:
 
-- Linux on x86_64 or aarch64 with an NVIDIA GPU of compute capability 7.5 or newer:
-  supported. vLLM's prebuilt wheel carries CUDA 12.9 binaries and installs into a fresh
-  environment of VAF's own Python (vLLM 0.32.0 accepts 3.11 to 3.14).
+- Linux on x86_64 or aarch64 with an NVIDIA GPU of compute capability 7.5 or newer and an
+  NVIDIA driver 580 or newer: supported. vLLM's PyPI wheel is its CUDA 13.0 build (the
+  release table of v0.32.0) and installs into a fresh environment of VAF's own Python (vLLM
+  0.32.0 accepts 3.11 to 3.14).
   https://docs.vllm.ai/en/latest/getting_started/installation/gpu/
 - NVIDIA below 7.5 (Pascal, Volta): unsupported by vLLM itself.
+- NVIDIA driver below 580: unsupported, CUDA 13.x needs 580 or newer (NVIDIA's CUDA
+  compatibility guide); VAF installs one recipe, the release's PyPI build, not a CUDA 12.9
+  wheel from the release assets for older drivers.
 - AMD (ROCm 6.3+, selected Instinct and Radeon cards) and Intel GPUs (XPU, "basic model
   inference and serving"): vLLM supports them with builds for Python 3.12 only, which is
   not the Python VAF runs on; VAF does not manage them yet (later).
@@ -96,6 +100,10 @@ UNSUPPORTED = "unsupported"
 
 # The oldest NVIDIA architecture vLLM's CUDA build runs on (Turing).
 MIN_COMPUTE_CAPABILITY = (7, 5)
+# The oldest NVIDIA driver for the CUDA 13.0 build of the pinned release
+# (vllm_server.CUDA_VERSION): "CUDA 13.x >= 580" in NVIDIA's CUDA compatibility guide
+# (docs.nvidia.com/deploy/cuda-compatibility); 580.65.06 shipped with CUDA 13.0.
+MIN_DRIVER = (580, 0, 0)
 # The Python range of the pinned vLLM release (its requires_python: >=3.11,<3.15).
 PYTHON_RANGE = ((3, 11), (3, 15))
 
@@ -170,6 +178,14 @@ def restarts_running_engine(key: str, config: Optional[Dict] = None) -> bool:
     return False
 
 
+def _parse_driver(text: str) -> Optional[Tuple[int, int, int]]:
+    """"580.65.06" -> (580, 65, 6); None when it is no driver version."""
+    if not re.fullmatch(r"\d+(\.\d+)+", str(text or "").strip()):
+        return None
+    parts = [int(p) for p in str(text).strip().split(".")][:3]
+    return tuple(parts + [0] * (3 - len(parts)))  # type: ignore[return-value]
+
+
 def _parse_capability(text: str) -> Optional[Tuple[int, int]]:
     m = re.fullmatch(r"\s*(\d+)\.(\d+)\s*", str(text or ""))
     return (int(m.group(1)), int(m.group(2))) if m else None
@@ -225,7 +241,7 @@ def support(gpu: Any = _DETECT, system: Optional[str] = None, machine: Optional[
     raw = str(getattr(gpu, "compute_capability", "") or "")
     capability = _parse_capability(raw)
     if capability is None:
-        # nvidia-smi learned the field long before the driver a CUDA 12.9 build needs, so a
+        # nvidia-smi learned the field long before the driver a CUDA 13.0 build needs, so a
         # driver that cannot report it is too old for vLLM as well.
         return EngineSupport(UNSUPPORTED, "VAF could not read this GPU's compute capability "
                                           "from nvidia-smi (the driver may be too old for "
@@ -235,6 +251,16 @@ def support(gpu: Any = _DETECT, system: Optional[str] = None, machine: Optional[
         return EngineSupport(UNSUPPORTED, f"vLLM needs compute capability 7.5 or newer; this "
                                           f"GPU has {raw.strip()}. llama.cpp runs here.",
                              "nvidia_too_old", {"capability": raw.strip()})
+    driver = str(getattr(gpu, "driver_version", "") or "").strip()
+    parsed = _parse_driver(driver)
+    if parsed is not None and parsed < MIN_DRIVER:
+        # An unreadable driver version is not refused: the install's probe still catches it.
+        from vaf.core.vllm_server import CUDA_VERSION, PIN
+        return EngineSupport(UNSUPPORTED, f"vLLM {PIN} is built for CUDA {CUDA_VERSION} and "
+                                          f"needs NVIDIA driver {MIN_DRIVER[0]} or newer; this "
+                                          f"one is {driver}. Update the NVIDIA driver and "
+                                          "restart VAF. llama.cpp runs here.",
+                             "nvidia_driver_old", {"driver": driver})
     low, high = PYTHON_RANGE
     if not (low <= tuple(python) < high):
         version = f"{python[0]}.{python[1]}"
@@ -299,7 +325,7 @@ def support_class() -> Optional[Tuple[str, str]]:
 
 # Every code ``support`` gives, for the catalogues (a guard test reads this tuple).
 SUPPORT_CODES = ("supported", "windows", "apple", "no_build", "no_build_gpu", "no_gpu", "amd",
-                 "intel", "nvidia_unknown", "nvidia_too_old", "python")
+                 "intel", "nvidia_unknown", "nvidia_too_old", "nvidia_driver_old", "python")
 
 
 def default_vllm_model(vram_gb: Optional[float] = None) -> str:
@@ -572,7 +598,8 @@ class EngineSwitch:
 # support codes (a refusal on the verdict carries the verdict's own code), for the catalogues.
 SWITCH_CODES = ("unknown_engine", "bad_repo", "profile_api", "parser_unknown", "parser_bad",
                 "busy", "needs_install", "switched_vllm", "unchanged_vllm", "switched_llama",
-                "unchanged_llama", "install_failed", "cuda_probe_failed", "download_failed",
+                "unchanged_llama", "install_failed", "cuda_probe_failed", "vllm_libs_failed",
+                "download_failed",
                 "download_cancelled", "llama_stop_failed", "no_fit", "vllm_stop_failed",
                 "engine_active", "not_installed", "uninstall_failed", "removed")
 # The phases of a switch, in order (MAINTENANCE kind ``vllm_engine``): the four install steps
@@ -654,9 +681,10 @@ def _n_ctx() -> int:
 
 
 def needs_install() -> bool:
-    """True when vLLM is not installed, or installed at another version than the pin."""
+    """True when vLLM is not installed, installed at another version than the pin, or built by
+    an earlier recipe (no recipe record: ``vllm_server.is_current``)."""
     from vaf.core import vllm_server
-    return not vllm_server.is_installed() or vllm_server.installed_version() != vllm_server.PIN
+    return not vllm_server.is_current()
 
 
 def _switch_lock():
@@ -822,16 +850,13 @@ def _apply_vllm(setting, repo, install, progress, output, say) -> EngineSwitch:
 
     try:
         if missing:
-            last = [""]
-
-            def on_step(code: str) -> None:
-                last[0] = code
-                steps.begin(code)
-
+            probe: Dict[str, str] = {}
             reason = vllm_server.install(log=lambda text: say(text, "info"), output=output,
-                                         on_step=on_step)
+                                         on_step=steps.begin, outcome=probe)
             if reason:
-                code = "cuda_probe_failed" if last[0] == "install_probe" else "install_failed"
+                code = {"libs": "vllm_libs_failed",
+                        "no_cuda": "cuda_probe_failed"}.get(probe.get("probe", ""),
+                                                            "install_failed")
                 return failed(code, reason, "The local engine is unchanged.")
             say(f"vLLM {vllm_server.installed_version() or vllm_server.PIN} is installed.",
                 "success")

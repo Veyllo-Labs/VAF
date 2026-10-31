@@ -10,9 +10,13 @@ WHEN (handover, reuse, waiting for a server that is loading); this module does t
 - **Install** (``install``): only on request (`vaf engine vllm`, Settings, the TUI, all
   through ``local_engine.apply``), never on a start. A fresh
   environment under ``bin/vllm/venv`` (gitignored, next to the llama-server binary) made
-  with VAF's own Python, the pinned ``vllm==PIN`` installed with the command of vLLM's
-  documentation (PyTorch's CUDA 12.9 index as the extra index), its kernels fetched, and a
-  probe that PyTorch in it sees the GPU. vLLM is never imported into VAF's process.
+  with VAF's own Python, the pinned ``vllm==PIN`` installed from PyPI with the release's own
+  command (its CUDA 13.0 build and the CUDA 13.0 PyTorch it requires), its kernels fetched,
+  and a probe that PyTorch in it sees the GPU AND vLLM's CUDA extension loads. Only a passing
+  probe writes the recipe record (``RECIPE_FORMAT`` in ``vaf_recipe``); an environment
+  without it is rebuilt by the next install and refused by ``start``. Every step runs
+  without VAF's GPU hide for in-process torch (``gpu_detection.gpu_child_env``). vLLM is
+  never imported into VAF's process.
 - **Model** (``ensure_model``): a Hugging Face repo in safetensors form, in the standard
   Hugging Face cache, which vLLM reads itself; no code file of the repo is fetched
   (``CODE_PATTERNS`` are ignored), and a sharded download counts only when every shard of
@@ -46,10 +50,38 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 PIN = "0.32.0"
-TORCH_INDEX = "https://download.pytorch.org/whl/cu129"
-# Measured lower bound of the download (the vllm and torch wheels and torch's NVIDIA
-# wheels); the rest of the tree and the installed size come on top.
-DOWNLOAD_GB_AT_LEAST = 1.8
+# The CUDA version of PIN's PyPI wheel: the release table of vLLM v0.32.0 lists
+# "PyPI (CUDA 13.0) | pip install vllm", its METADATA requires nvidia-cutlass-dsl[cu13] and
+# its _C_stable_libtorch extension NEEDS libcudart.so.13. vLLM's installation page at that tag
+# still shows a cu129 PyTorch extra index; that command is wrong for this wheel: pip then
+# prefers torch 2.13.0+cu129 over PyPI's CUDA 13.0 torch 2.13.0, and the extension cannot
+# load. Re-read on every PIN bump (docs/setup/RELEASING.md).
+CUDA_VERSION = "13.0"
+# Measured lower bound of the download, from PyPI's file sizes: the vllm wheel 327 MB, torch
+# 527 MB, the CUDA 13 NVIDIA wheels about 1990 MB (cuda-toolkit 13.0.3 components 1189 MB,
+# cudnn-cu13 366, nccl-cu13 206, cusparselt-cu13 170, nvshmem-cu13 60); the rest of the tree
+# and the installed size come on top.
+DOWNLOAD_GB_AT_LEAST = 2.8
+# The recipe record: a file in the environment, written only after a passing probe, that says
+# which install recipe built it. Bump the middle number whenever the install command or the
+# probe changes. Deliberate: an environment WITHOUT the tag is not an older format to keep
+# reading; it is what the earlier recipe (the cu129 extra index) built, and that recipe was
+# measured unable to start vLLM (libcudart.so.13 missing), so it counts as not installed and
+# the next install rebuilds it.
+RECIPE_FORMAT = "vllmenv-1-18dfb7"
+# The probe imports the CUDA extension vLLM's platform module imports at its first start
+# (vllm/platforms/cuda.py in 0.32.0); a PIN bump re-checks the name (RELEASING.md).
+_PROBE = (
+    "import sys\n"
+    "import torch\n"
+    "if not torch.cuda.is_available():\n"
+    "    sys.exit(3)\n"
+    "try:\n"
+    "    import vllm._C_stable_libtorch\n"
+    "except ImportError as e:\n"
+    "    print(e, file=sys.stderr)\n"
+    "    sys.exit(4)\n"
+)
 
 # What the fit check counts besides weights and KV cache: CUDA context, activations and
 # the graphs vLLM captures.
@@ -134,6 +166,25 @@ def is_installed() -> bool:
     return installed_version() is not None and vllm_exe().exists()
 
 
+def recipe_path() -> Path:
+    return venv_dir() / "vaf_recipe"
+
+
+def recipe_current() -> bool:
+    """True when the environment carries this version's recipe record (``RECIPE_FORMAT``)."""
+    try:
+        return recipe_path().read_bytes().decode("utf-8", errors="replace").strip() == RECIPE_FORMAT
+    except OSError:
+        return False
+
+
+def is_current() -> bool:
+    """Installed at the pin AND built by this version's recipe, with a passing probe. An
+    environment that is installed but not current cannot be trusted to start (the earlier
+    recipe's could not) and is rebuilt by ``install``."""
+    return is_installed() and installed_version() == PIN and recipe_current()
+
+
 # ── install ──────────────────────────────────────────────────────────────────────
 
 
@@ -145,14 +196,18 @@ INSTALL_STEPS = ("install_env", "install_vllm", "install_kernels", "install_prob
 
 def install(log: Optional[Callable[[str], None]] = None, run: Optional[Runner] = None, *,
             output: Optional[str] = None,
-            on_step: Optional[Callable[[str], None]] = None) -> str:
+            on_step: Optional[Callable[[str], None]] = None,
+            outcome: Optional[Dict[str, str]] = None) -> str:
     """Install the pinned vLLM into its own environment. Returns "" when it is installed (now
-    or already), else why not. Refused under the ``api`` profile and on a machine whose
-    verdict is not ``supported``. A failed install leaves no half environment behind.
+    or already, ``is_current``), else why not. Refused under the ``api`` profile and on a
+    machine whose verdict is not ``supported``. A failed install leaves no half environment
+    behind; an environment that is installed but not current is removed and rebuilt.
 
     ``output``: a file that receives the stdout and stderr of every step (the web server and
     the full-screen TUI have no terminal to print pip's output on); without it the steps
-    inherit the terminal. ``on_step(code)`` runs before each step (``INSTALL_STEPS``)."""
+    inherit the terminal. ``on_step(code)`` runs before each step (``INSTALL_STEPS``).
+    ``outcome``: a failed probe sets ``outcome["probe"]`` to ``"no_cuda"`` (PyTorch sees no
+    CUDA GPU) or ``"libs"`` (vLLM's CUDA extension does not load, or the probe did not run)."""
     from vaf.core import inference_profile, local_engine
     say = log or (lambda text: None)
     run = run or subprocess.run
@@ -162,14 +217,16 @@ def install(log: Optional[Callable[[str], None]] = None, run: Optional[Runner] =
     verdict = local_engine.support()
     if not verdict.supported:
         return verdict.reason
-    if installed_version() == PIN and vllm_exe().exists():
+    if is_current():
         return ""
-    env = dict(os.environ)
+    from vaf.core.gpu_detection import gpu_child_env
+    # Without VAF's GPU hide for in-process torch: the probe must see the GPU vLLM will use.
+    env = gpu_child_env()
     env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
     root = venv_dir()
     if root.exists():
-        # A different pin or a broken install: start from a fresh environment, as vLLM's
-        # documentation asks.
+        # A different pin, an earlier recipe or a broken install: start from a fresh
+        # environment, as vLLM's documentation asks.
         reason = uninstall()
         if reason:
             return reason
@@ -185,7 +242,8 @@ def install(log: Optional[Callable[[str], None]] = None, run: Optional[Runner] =
     streams = {"stdout": sink, "stderr": subprocess.STDOUT} if sink is not None else {}
     where = f"see {output}" if sink is not None else "see the output above"
     try:
-        return _install_steps(say, run, step, env, root, streams, where)
+        return _install_steps(say, run, step, env, root, streams, where,
+                              outcome if outcome is not None else {})
     finally:
         if sink is not None:
             try:
@@ -194,13 +252,12 @@ def install(log: Optional[Callable[[str], None]] = None, run: Optional[Runner] =
                 pass
 
 
-def _install_steps(say, run, step, env, root, streams, where) -> str:
+def _install_steps(say, run, step, env, root, streams, where, outcome) -> str:
     from vaf.core import inference_profile
     steps = [
         ("install_env", "Creating the environment", [sys.executable, "-m", "venv", str(root)]),
         ("install_vllm", f"Installing vLLM {PIN} (at least {DOWNLOAD_GB_AT_LEAST:.1f} GB to download)",
-         [str(venv_python()), "-m", "pip", "install", f"vllm=={PIN}",
-          "--extra-index-url", TORCH_INDEX]),
+         [str(venv_python()), "-m", "pip", "install", f"vllm=={PIN}"]),
     ]
     for code, label, argv in steps:
         if not inference_profile.local_inference_allowed():
@@ -227,18 +284,28 @@ def _install_steps(say, run, step, env, root, streams, where) -> str:
         say("The kernels could not be fetched; vLLM compiles them at its first start "
             "(several minutes).")
     step("install_probe")
-    say("Checking that PyTorch sees the GPU...")
+    say("Checking that vLLM loads on the GPU...")
     try:
-        probe = run([str(venv_python()), "-c",
-                     "import torch; raise SystemExit(0 if torch.cuda.is_available() else 3)"],
-                    env=env, **streams)
-        ok = getattr(probe, "returncode", 1) == 0
+        probe = run([str(venv_python()), "-c", _PROBE], env=env, **streams)
+        code = getattr(probe, "returncode", 1)
     except Exception:
-        ok = False
-    if not ok:
-        return ("vLLM is installed, but PyTorch in its environment sees no CUDA GPU. The "
-                "NVIDIA driver is the likely cause: vLLM's build needs a driver for CUDA 12.9.")
-    return ""
+        code = None
+    if code == 0:
+        try:
+            recipe_path().write_bytes(RECIPE_FORMAT.encode("utf-8"))
+        except OSError as e:
+            return f"vLLM was installed, but its recipe record could not be written: {e}"
+        return ""
+    # No record: the next install rebuilds this environment, and start() refuses it.
+    if code == 3:
+        outcome["probe"] = "no_cuda"
+        from vaf.core.local_engine import MIN_DRIVER
+        return (f"vLLM was installed, but PyTorch in its environment sees no CUDA GPU. vLLM "
+                f"{PIN} needs an NVIDIA driver for CUDA {CUDA_VERSION} (version {MIN_DRIVER[0]} "
+                f"or newer), and CUDA_VISIBLE_DEVICES must not hide the GPU.")
+    outcome["probe"] = "libs"
+    return ("vLLM was installed, but its CUDA libraries do not load in its environment, so it "
+            f"cannot start; {where}.")
 
 
 def uninstall() -> str:
@@ -534,9 +601,11 @@ def child_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     """The server's environment: VAF's environment without any VLLM_ variable of its own,
     plus the switches below. A VLLM_ variable is a launch decision like a command-line flag
     (development endpoints, runtime LoRA loading, plugins that are imported at start), and
-    there is no free-form way to pass those on either."""
-    env = {k: v for k, v in (os.environ if base is None else base).items()
-           if not k.upper().startswith("VLLM_")}
+    there is no free-form way to pass those on either. VAF's own GPU hide for in-process
+    torch is taken out (``gpu_detection.gpu_child_env``): the server needs the GPU."""
+    from vaf.core.gpu_detection import gpu_child_env
+    # Without VAF's GPU hide for in-process torch (a user's own CUDA_VISIBLE_DEVICES stays).
+    env = {k: v for k, v in gpu_child_env(base).items() if not k.upper().startswith("VLLM_")}
     for name in _PINNED_OFF:
         env[name] = "0"
     env["VLLM_SKIP_MODEL_NAME_VALIDATION"] = "1"
@@ -711,6 +780,12 @@ def start(repo_id: str, n_ctx: int, port: int = 8080,
     if not is_installed():
         UI.error("The local engine is vLLM, but vLLM is not installed. Run `vaf engine vllm` "
                  "to install it, or `vaf engine llama` to go back to llama.cpp.")
+        return False
+    if not is_current():
+        # Refused before any launch: the earlier recipe's environment dies on its CUDA
+        # extension a minute into the start.
+        UI.error(f"vLLM in {venv_dir()} was installed by an earlier VAF and cannot start; run "
+                 "`vaf engine vllm` to rebuild it, or `vaf engine llama`.")
         return False
     model_dir = local_snapshot(repo_id)
     if not model_dir:

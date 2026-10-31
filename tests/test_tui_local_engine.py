@@ -22,6 +22,7 @@ import pytest
 
 from vaf.cli.tui_app.screens import ConfirmScreen, RenameScreen, SettingsScreen
 from vaf.core import local_engine as le
+from vaf.core import vllm_server as vs
 
 
 def _state(engine="llama", level="supported", profile="local", needs_install=False,
@@ -31,7 +32,7 @@ def _state(engine="llama", level="supported", profile="local", needs_install=Fal
         "support": {"level": level, "code": "supported" if level == "supported" else "amd",
                     "params": {}, "reason": "vLLM runs here (NVIDIA RTX 3080, 10 GB)."
                     if level == "supported" else "vLLM supports some AMD GPUs; not yet."},
-        "vllm": {"pin": "0.32.0", "needs_install": needs_install, "download_gb_at_least": 1.8,
+        "vllm": {"pin": "0.32.0", "needs_install": needs_install, "download_gb_at_least": vs.DOWNLOAD_GB_AT_LEAST,
                  "model_setting": setting, "model": "Qwen/Qwen3-4B-AWQ",
                  "auto_model": "Qwen/Qwen3-4B-AWQ",
                  "curated": [{"repo": "Qwen/Qwen3-4B-AWQ", "weights_gb": 2.67},
@@ -129,7 +130,7 @@ def test_install_asks_first(monkeypatch):
     assert calls == [], "the install ran before the question was answered"
     screen, callback = pushed[-1]
     assert isinstance(screen, ConfirmScreen)
-    assert "0.32.0" in screen._question and "1.8 GB" in screen._question
+    assert "0.32.0" in screen._question and f"{vs.DOWNLOAD_GB_AT_LEAST:.1f} GB" in screen._question
     assert "Qwen/Qwen3-4B-AWQ (2.67 GB)" in screen._question
     callback(False)
     assert calls == []
@@ -243,6 +244,35 @@ def test_apply_engine_runs_on_the_lane_and_reloads(monkeypatch, tmp_path):
     assert seen == [("vllm", None, True, str(tmp_path / "vllm_install.log"))]
     assert reloads == [1]
     assert any("2/7" in str(n) for n in notes)
+
+
+@pytest.mark.parametrize("code", ["install_failed", "cuda_probe_failed", "vllm_libs_failed"])
+def test_install_failures_name_the_install_log(monkeypatch, tmp_path, code):
+    """Every install failure, the two probe verdicts included, points at pip's log; the probe
+    step is named for what it checks. MUTATION: drop vllm_libs_failed from the bridge's tuple
+    - red."""
+    from vaf.cli.tui_app.agent_bridge import AgentBridge
+    from vaf.core import log_helper
+    monkeypatch.setattr(log_helper, "get_app_log_dir", lambda: tmp_path)
+    notes, lane = [], []
+
+    def apply(engine, model=None, install=False, progress=None, output=None):
+        progress({"phase": "install_probe", "step": 3, "steps": 7, "error": ""})
+        return le.EngineSwitch("failed", code, "vLLM was installed, but it cannot start.", "vllm",
+                               detail="The local engine is unchanged.")
+    monkeypatch.setattr(le, "apply", apply)
+    bridge = AgentBridge.__new__(AgentBridge)
+    bridge.agent = SimpleNamespace(provider="local", reload_local_model=lambda: None)
+    bridge.events = SimpleNamespace(event_note=lambda *a: notes.append(a),
+                                    system_note=lambda *a: notes.append(a))
+    bridge._emit = lambda *a: None
+    bridge._refresh_context = lambda: None
+    bridge._busy = False
+    bridge._submit = lane.append
+    bridge.apply_engine("vllm", install=True)
+    lane[0]()
+    assert any("checking that vLLM loads on the GPU" in str(n) for n in notes), notes
+    assert f"Details: {tmp_path / 'vllm_install.log'}" in notes[-1][1], notes[-1]
 
 
 def test_no_switch_notice_while_the_bridge_is_busy(monkeypatch):

@@ -21,7 +21,10 @@ MUTATIONS, each turns the named test red:
 - drop `models` from the GGUF closing frame -> test_gguf_done_frame_unchanged;
 - ignore `cancel_requested` in the progress hook -> test_cancelled_download;
 - remove the vLLM skip in `reload_local_model` -> test_reload_under_vllm_downloads_no_gguf;
-- refresh a pinned or embedded agent -> test_refresh_identity_all.
+- refresh a pinned or embedded agent -> test_refresh_identity_all;
+- `needs_install` without the recipe record -> test_an_environment_of_the_earlier_recipe_needs_install;
+- `_apply_vllm` deciding the code by the last step instead of the probe outcome ->
+  test_failed_steps_keep_engine[libs] / [probe_last_step].
 """
 import threading
 import time
@@ -64,18 +67,21 @@ def config(monkeypatch, tmp_path):
 
 
 def _fakes(monkeypatch, config, *, installed=False, install_reason="", fail_step="",
-           model_dir="/hf/snap", fits=True):
+           model_dir="/hf/snap", fits=True, probe=""):
     events = config["_events"]
     state = {"installed": installed}
     monkeypatch.setattr(vs, "is_installed", lambda: state["installed"])
     monkeypatch.setattr(vs, "installed_version", lambda: vs.PIN if state["installed"] else None)
+    monkeypatch.setattr(vs, "recipe_current", lambda: state["installed"])
 
-    def install(log=None, run=None, *, output=None, on_step=None):
+    def install(log=None, run=None, *, output=None, on_step=None, outcome=None):
         events.append(("install", output))
         for code in vs.INSTALL_STEPS:
             if on_step:
                 on_step(code)
             if code == fail_step:
+                if probe and outcome is not None:
+                    outcome["probe"] = probe
                 return install_reason
         state["installed"] = True
         return ""
@@ -94,7 +100,8 @@ def test_needs_install_changes_nothing(config, monkeypatch):
     events = _fakes(monkeypatch, config)
     result = le.apply("vllm")
     assert result.status == "needs_install" and result.code == "needs_install"
-    assert "1.8 GB" in result.text and result.params["pin"] == vs.PIN
+    assert f"{vs.DOWNLOAD_GB_AT_LEAST:.1f} GB" in result.text and result.params["pin"] == vs.PIN
+    assert result.params["download_gb"] == "2.8"
     assert events == [], "nothing installs, downloads, stops or writes without install=True"
     assert not MAINTENANCE.active
 
@@ -165,7 +172,8 @@ def test_busy_lock(config, monkeypatch):
 
 
 @pytest.mark.parametrize("failure, code", [
-    ("install", "install_failed"), ("probe", "cuda_probe_failed"),
+    ("install", "install_failed"), ("probe", "cuda_probe_failed"), ("libs", "vllm_libs_failed"),
+    ("probe_last_step", "install_failed"),
     ("download", "download_failed"), ("cancelled", "download_cancelled"),
     ("llama_stop", "llama_stop_failed"), ("no_fit", "no_fit")])
 def test_failed_steps_keep_engine(config, monkeypatch, failure, code):
@@ -174,7 +182,15 @@ def test_failed_steps_keep_engine(config, monkeypatch, failure, code):
     if failure == "install":
         kwargs = {"fail_step": "install_vllm", "install_reason": "pip failed (exit 1)."}
     elif failure == "probe":
-        kwargs = {"fail_step": "install_probe", "install_reason": "PyTorch sees no CUDA GPU."}
+        kwargs = {"fail_step": "install_probe", "install_reason": "PyTorch sees no CUDA GPU.",
+                  "probe": "no_cuda"}
+    elif failure == "libs":
+        kwargs = {"fail_step": "install_probe", "probe": "libs",
+                  "install_reason": "vLLM's CUDA libraries do not load."}
+    elif failure == "probe_last_step":
+        # A failure at the probe step that is no probe outcome (the record could not be
+        # written) is an install failure, not a driver or library verdict.
+        kwargs = {"fail_step": "install_probe", "install_reason": "record not written."}
     elif failure in ("download", "cancelled"):
         kwargs = {"model_dir": ""}
     elif failure == "no_fit":
@@ -190,6 +206,22 @@ def test_failed_steps_keep_engine(config, monkeypatch, failure, code):
     assert result.status == "failed" and result.code == code, result
     assert config["local_engine"] == "llama", "a failed step changed the engine"
     assert MAINTENANCE.snapshot()["error"] == code and not MAINTENANCE.active
+
+
+def test_an_environment_of_the_earlier_recipe_needs_install(config, monkeypatch, tmp_path):
+    """The pinned METADATA and the exe but no recipe record (built by the earlier recipe):
+    the switch offers the install instead of switching onto it."""
+    site = vs.venv_dir() / "lib" / "python3.13" / "site-packages" / f"vllm-{vs.PIN}.dist-info"
+    site.mkdir(parents=True)
+    (site / "METADATA").write_bytes(f"Name: vllm\nVersion: {vs.PIN}\n".encode("utf-8"))
+    vs.vllm_exe().parent.mkdir(parents=True, exist_ok=True)
+    vs.vllm_exe().write_bytes(b"#!/bin/sh\n")
+    assert vs.is_installed() and vs.installed_version() == vs.PIN
+    assert le.needs_install()
+    result = le.apply("vllm")
+    assert result.code == "needs_install"
+    vs.recipe_path().write_bytes(vs.RECIPE_FORMAT.encode("utf-8"))
+    assert not le.needs_install()
 
 
 def test_no_fit_reports_stopped_llama(config, monkeypatch):

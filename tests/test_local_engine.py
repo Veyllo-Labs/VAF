@@ -11,6 +11,8 @@ MUTATIONS, each turns the named test red:
 - drop the `.strip().lower()` in `current` -> test_current_engine_values;
 - change the 7.5 floor to 7.0, or drop compute_cap from the nvidia-smi query ->
   test_support_matrix / test_detect_nvidia_reads_compute_cap;
+- lower MIN_DRIVER to (575, 0, 0), or drop driver_version from the nvidia-smi query ->
+  test_support_matrix[driver-575] / test_detect_nvidia_reads_compute_cap;
 - drop the two-field retry for an old driver -> test_an_old_driver_still_finds_the_gpu;
 - remove the profile check in `vllm_server.ensure_model` (or `install`) ->
   test_api_profile_refuses_install_model_and_start;
@@ -53,8 +55,8 @@ def test_current_engine_values(value, expected):
     assert le.current({}) == "llama"
 
 
-def _nv(cc="8.6", vram=10240, model="NVIDIA GeForce RTX 3080"):
-    return GPUInfo("nvidia", model, vram, True, True, compute_capability=cc)
+def _nv(cc="8.6", vram=10240, model="NVIDIA GeForce RTX 3080", driver=""):
+    return GPUInfo("nvidia", model, vram, True, True, compute_capability=cc, driver_version=driver)
 
 
 @pytest.mark.parametrize("gpu, system, machine, level, words", [
@@ -64,6 +66,17 @@ def _nv(cc="8.6", vram=10240, model="NVIDIA GeForce RTX 3080"):
     (_nv(cc="7.0"), "Linux", "x86_64", le.UNSUPPORTED, ["7.5", "7.0", "llama.cpp runs here"]),
     (_nv(cc="6.1"), "Linux", "x86_64", le.UNSUPPORTED, ["6.1", "llama.cpp runs here"]),
     (_nv(cc=""), "Linux", "x86_64", le.UNSUPPORTED, ["compute capability", "llama.cpp runs here"]),
+    pytest.param(_nv(driver="575.57.08"), "Linux", "x86_64", le.UNSUPPORTED,
+                 ["CUDA 13.0", "driver 580 or newer", "575.57.08", "llama.cpp runs here"],
+                 id="driver-575"),
+    pytest.param(_nv(driver="579.99"), "Linux", "x86_64", le.UNSUPPORTED, ["579.99"],
+                 id="driver-579"),
+    pytest.param(_nv(driver="580.65.06"), "Linux", "x86_64", le.SUPPORTED, ["vLLM runs here"],
+                 id="driver-580"),
+    pytest.param(_nv(driver="590.44.01"), "Linux", "x86_64", le.SUPPORTED, ["vLLM runs here"],
+                 id="driver-590"),
+    pytest.param(_nv(driver="[N/A]"), "Linux", "x86_64", le.SUPPORTED, ["vLLM runs here"],
+                 id="driver-unreadable"),
     (GPUInfo("amd", "Radeon RX 7900", 24576), "Linux", "x86_64", le.LATER,
      ["ROCm", "Python 3.12", "llama.cpp (Vulkan) runs here"]),
     (GPUInfo("intel", "Arc A770", 16384), "Linux", "x86_64", le.LATER,
@@ -112,11 +125,16 @@ def _fake_smi(monkeypatch, answers):
 def test_detect_nvidia_reads_compute_cap(monkeypatch):
     from vaf.core.gpu_detection import detect_nvidia_gpu
     calls = _fake_smi(monkeypatch, {
-        "--query-gpu=name,memory.total,compute_cap": (0, "NVIDIA GeForce RTX 3080, 10240, 8.6\n")})
+        "--query-gpu=name,memory.total,compute_cap,driver_version":
+            (0, "NVIDIA GeForce RTX 3080, 10240, 8.6, 580.196.07\n")})
     gpu = detect_nvidia_gpu()
     assert gpu is not None and gpu.vram_mb == 10240
-    assert gpu.compute_capability == "8.6"
-    assert calls == ["--query-gpu=name,memory.total,compute_cap"]
+    assert gpu.compute_capability == "8.6" and gpu.driver_version == "580.196.07"
+    assert calls == ["--query-gpu=name,memory.total,compute_cap,driver_version"]
+    _fake_smi(monkeypatch, {
+        "--query-gpu=name,memory.total,compute_cap,driver_version":
+            (0, "NVIDIA GeForce RTX 3080, 10240, 8.6, [N/A]\n")})
+    assert detect_nvidia_gpu().driver_version == ""
 
 
 def test_an_old_driver_still_finds_the_gpu(monkeypatch):
@@ -124,10 +142,11 @@ def test_an_old_driver_still_finds_the_gpu(monkeypatch):
     lost for llama.cpp over the extra column."""
     from vaf.core.gpu_detection import detect_nvidia_gpu
     _fake_smi(monkeypatch, {
-        "--query-gpu=name,memory.total,compute_cap": (2, ""),
+        "--query-gpu=name,memory.total,compute_cap,driver_version": (2, ""),
         "--query-gpu=name,memory.total": (0, "Tesla P4, 7680\n")})
     gpu = detect_nvidia_gpu()
     assert gpu is not None and gpu.vram_mb == 7680 and gpu.compute_capability == ""
+    assert gpu.driver_version == ""
     assert le.support(gpu=gpu, system="Linux", machine="x86_64").level == le.UNSUPPORTED
 
 
@@ -199,6 +218,7 @@ def test_unknown_family_refuses(config, monkeypatch, tmp_path):
 
     errors = []
     monkeypatch.setattr(vs, "is_installed", lambda: True)
+    monkeypatch.setattr(vs, "is_current", lambda: True)
     monkeypatch.setattr(vs, "local_snapshot", lambda repo: str(tmp_path))
     monkeypatch.setattr("vaf.cli.ui.UI.error", staticmethod(lambda text, *a, **kw: errors.append(text)))
 
@@ -353,6 +373,9 @@ _REASONS = {
                  "choice for small GPUs and quick starts.",
     "nvidia_too_old": "vLLM needs compute capability 7.5 or newer; this GPU has 6.1. llama.cpp "
                       "runs here.",
+    "nvidia_driver_old": "vLLM 0.32.0 is built for CUDA 13.0 and needs NVIDIA driver 580 or "
+                         "newer; this one is 575.57.08. Update the NVIDIA driver and restart "
+                         "VAF. llama.cpp runs here.",
     "nvidia_unknown": "VAF could not read this GPU's compute capability from nvidia-smi (the "
                       "driver may be too old for vLLM's CUDA build). llama.cpp runs here.",
     "amd": "vLLM supports some AMD GPUs through ROCm 6.3+, with Python 3.12 builds only; VAF "
@@ -376,6 +399,8 @@ _REASONS = {
      {"gpu": "GeForce RTX 3080", "vram_gb": "10"}),
     (_nv(cc="6.1"), "Linux", "x86_64", (3, 13), le.UNSUPPORTED, "nvidia_too_old", {"capability": "6.1"}),
     (_nv(cc=""), "Linux", "x86_64", (3, 13), le.UNSUPPORTED, "nvidia_unknown", {}),
+    (_nv(driver="575.57.08"), "Linux", "x86_64", (3, 13), le.UNSUPPORTED, "nvidia_driver_old",
+     {"driver": "575.57.08"}),
     (GPUInfo("amd", "Radeon RX 7900", 24576), "Linux", "x86_64", (3, 13), le.LATER, "amd", {}),
     (GPUInfo("intel", "Arc A770", 16384), "Linux", "x86_64", (3, 13), le.LATER, "intel", {}),
     (None, "Linux", "x86_64", (3, 13), le.UNSUPPORTED, "no_gpu", {}),

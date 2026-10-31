@@ -209,7 +209,7 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
         }
         if (r.code === 'no_fit' && r.stopped_llama) lines.push(t('stoppedLlama'));
         if (r.code === 'no_fit' && r.stopped_vllm) lines.push(t('stoppedVllm'));
-        if (r.code === 'install_failed' || r.code === 'cuda_probe_failed') lines.push(t('logHint', { path: INSTALL_LOG }));
+        if (r.code === 'install_failed' || r.code === 'cuda_probe_failed' || r.code === 'vllm_libs_failed') lines.push(t('logHint', { path: INSTALL_LOG }));
         return { lines, tone: r.status === 'done' ? 'ok' : 'error' };
     }, [coded, t, num]);
 

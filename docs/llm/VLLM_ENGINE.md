@@ -141,10 +141,19 @@ command.
   `https://flashinfer.ai/whl/cu130`, version-pinned but not hashed and not from PyPI: the
   only compiled code that would bypass the lock (read in the source of vLLM 0.32.0,
   `vllm/entrypoints/cli/download_kernels.py`, and FlashInfer 0.7.0.post1,
-  `flashinfer/__main__.py`). Without them FlashInfer compiles the kernels it needs at the
-  first start, so the first start takes longer; vLLM's own warning about missing kernels
-  fires only on compute capability 9.0 and newer. A measured first-start compile that is too
-  slow would earn hash-locking `flashinfer-cubin` and `flashinfer-jit-cache` in the lock.
+  `flashinfer/__main__.py`). Without them FlashInfer builds the kernels it needs at the first
+  start, so the first start takes longer; vLLM's own warning about missing kernels fires only
+  on compute capability 9.0 and newer. A measured first start that is too slow would earn
+  hash-locking `flashinfer-cubin` and `flashinfer-jit-cache` in the lock.
+  On compute capability 9.0 and newer, the locked FlashInfer itself downloads some prebuilt
+  kernels at runtime (DeepGEMM, the TensorRT-LLM generated kernels, the CuTe DSL attention
+  kernels) from NVIDIA's artifact server when they are not in its cache
+  (`flashinfer/jit/cubin_loader.py`, `get_artifact`). That download is hash-pinned by the
+  locked wheel: every file is checked against a `checksums.txt` whose SHA-256 is fixed in
+  `flashinfer/artifacts.py` (`CheckSumHash`), and a mismatch is not loaded. It stays allowed,
+  because refusing it can break those GPUs; `FLASHINFER_NO_DOWNLOAD=1` in VAF's environment
+  refuses it (the server inherits it), and `FLASHINFER_CUBIN_CHECKSUM_DISABLED` must never be
+  set, since it turns the check off.
 - **Uninstall:** `vaf engine vllm --uninstall` or "Remove vLLM" in Settings (refused while vLLM
   is the engine) removes
   only `bin/vllm/venv`; the models stay in the Hugging Face cache and the command says

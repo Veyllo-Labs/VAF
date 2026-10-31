@@ -8,16 +8,17 @@ runs vLLM once it is chosen. ``ServerManager.start_server`` (vaf/core/backend.py
 WHEN (handover, reuse, waiting for a server that is loading); this module does the work.
 
 - **Install** (``install``): only on request (`vaf engine vllm`, Settings, the TUI, all
-  through ``local_engine.apply``), never on a start. A fresh
-  environment under ``bin/vllm/venv`` (gitignored, next to the llama-server binary) made
-  with VAF's own Python, the pinned ``vllm==PIN`` installed from PyPI, its CUDA 13.0 build and
-  the CUDA 13.0 PyTorch it requires, from the hash-locked tree ``vllm_requirements.lock``
+  through ``local_engine.apply``), never on a start. A fresh environment under
+  ``bin/vllm/venv`` (gitignored, next to the llama-server binary) made with VAF's own
+  Python, the pinned ``vllm==PIN`` installed from PyPI, its CUDA 13.0 build and the CUDA
+  13.0 PyTorch it requires, from the hash-locked tree ``vllm_requirements.lock``
   (``--require-hashes --no-deps --only-binary=:all:``: pip refuses any file whose hash the
-  lock does not name, any package it does not pin, and any build from source), and a probe that PyTorch in it sees the GPU AND vLLM's CUDA extension loads. Only a passing
-  probe writes the recipe record (``RECIPE_FORMAT`` in ``vaf_recipe``); an environment
-  without it is rebuilt by the next install and refused by ``start``. Every step runs
-  without VAF's GPU hide for in-process torch (``gpu_detection.gpu_child_env``). vLLM is
-  never imported into VAF's process.
+  lock does not name, any package it does not pin, and any build from source), and a probe
+  that PyTorch in it sees the GPU AND vLLM's CUDA extension loads. Only a passing probe
+  writes the recipe record (``RECIPE_FORMAT`` in ``vaf_recipe``); an environment without it
+  is rebuilt by the next install and refused by ``start``. Every step runs without VAF's GPU
+  hide for in-process torch (``gpu_detection.gpu_child_env``). vLLM is never imported into
+  VAF's process.
 - **Model** (``ensure_model``): a Hugging Face repo in safetensors form, in the standard
   Hugging Face cache, which vLLM reads itself; no code file of the repo is fetched
   (``CODE_PATTERNS`` are ignored), and a sharded download counts only when every shard of
@@ -287,8 +288,9 @@ def _install_steps(say, run, step, env, root, streams, where, outcome) -> str:
             return f"{label} failed (exit {getattr(result, 'returncode', '?')}); {where}."
     # Deliberately no `vllm download-kernels`: it lets FlashInfer pip-install flashinfer-cubin and
     # flashinfer-jit-cache from its own index, version-pinned but unhashed, the only compiled
-    # code that would bypass the lock. Without them FlashInfer compiles the kernels it needs at
-    # the first start (docs/llm/VLLM_ENGINE.md).
+    # package that would bypass the lock. Without them FlashInfer builds the kernels it needs at
+    # the first start; on compute capability 9.0+ it also downloads some at runtime, checked
+    # against checksums pinned in the locked wheel (docs/llm/VLLM_ENGINE.md).
     step("install_probe")
     say("Checking that vLLM loads on the GPU...")
     try:

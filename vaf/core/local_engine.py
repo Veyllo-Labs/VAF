@@ -84,9 +84,11 @@ Named boundaries, each deliberate:
   that was already malicious when the lock was generated is locked in with it; the lock
   only stops anything newer or different from being installed. FlashInfer's prebuilt
   kernels are deliberately not fetched (``vllm download-kernels`` would pip-install them
-  from flashinfer.ai, unhashed): FlashInfer compiles the kernels it needs at the first start.
-  A measured first-start compile that is too slow would earn hash-locking flashinfer-cubin
-  and flashinfer-jit-cache as well.
+  from flashinfer.ai, unhashed): FlashInfer builds the kernels it needs at the first start.
+  On compute capability 9.0 and newer the locked FlashInfer also downloads some prebuilt
+  kernels at runtime from NVIDIA's artifact server, each checked against checksums pinned in
+  the locked wheel (allowed; ``FLASHINFER_NO_DOWNLOAD=1`` refuses it). A measured first
+  start that is too slow would earn hash-locking flashinfer-cubin and flashinfer-jit-cache.
 """
 from __future__ import annotations
 

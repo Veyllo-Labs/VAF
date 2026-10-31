@@ -4,14 +4,14 @@
 """Check vaf/core/vllm_requirements.lock for every machine the vLLM verdict calls supported.
 
 pip-compile resolves for the interpreter and platform it runs on, but the managed vLLM
-environment installs this one lock with ``--require-hashes --no-deps --only-binary=:all:`` on
-Linux x86_64 and aarch64 with Python 3.11 to 3.14 (``local_engine.PYTHON_RANGE``). For each
-of those targets, at the oldest glibc the verdict accepts (``local_engine.MIN_GLIBC``; a wheel
-is counted only when pip would install it there), this script reads, from PyPI, the core metadata (PEP 658) of the very wheel
-pip would pick for every pinned release, evaluates its requirements' markers for that target
-and checks that each requirement is in the lock, at a version that satisfies it, with the
-extras it asks for. It also checks that the lock carries the hash of every file PyPI
-publishes for each pinned release.
+environment installs this one lock with ``--require-hashes --no-deps --only-binary=:all:``
+on Linux x86_64 and aarch64 with Python 3.11 to 3.14 (``local_engine.PYTHON_RANGE``). For
+each of those targets, at the oldest glibc the verdict accepts (``local_engine.MIN_GLIBC``;
+a wheel is counted only when pip would install it there), this script reads, from PyPI, the
+core metadata (PEP 658) of the very wheel pip would pick for every pinned release, evaluates
+its requirements' markers for that target and checks that each requirement is in the lock,
+at a version that satisfies it, with the extras it asks for. It also checks that the lock
+carries the hash of every file PyPI publishes for each pinned release.
 
 Measured when the lock was introduced: a resolution on Python 3.13 alone is untrue for 3.11
 and 3.12 (mistral-common requires numpy<2.4 there), which is why vllm_requirements.in caps

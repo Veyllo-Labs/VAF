@@ -493,8 +493,9 @@ async def patch_config(
         _SERVER_LOCKED = {"local_network_enabled", "local_network_tls_enabled", "server_mode"}
         body = {k: v for k, v in body.items() if k not in _SERVER_LOCKED}
     from vaf.core.inference_profile import without_profile_key
+    from vaf.core.local_engine import without_engine_keys
     from vaf.network.ssl_utils import without_certificate_keys
-    body = without_certificate_keys(without_profile_key(body))
+    body = without_certificate_keys(without_engine_keys(without_profile_key(body)))
 
     # The shared rule (`is_admin_identity` over the request as authenticated), the one the
     # WebSocket save uses too; this path used to know only the role.

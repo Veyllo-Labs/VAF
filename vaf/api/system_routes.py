@@ -16,6 +16,8 @@ Two shapes worth knowing before reading on:
   profile is a job for the same reason: back to Full it runs `compose up` for
   the speech containers, which pulls a 7.5 GB image after a prune, and the
   HTTPS proxy in front of a server gives up on a request after 60 seconds.
+  A switch of the local engine is one too: installing vLLM runs pip for
+  several GB and downloads its model, for minutes.
 - **An update is spawned, not awaited.** The update stops the VAF service, and
   this server IS that service. The updater is therefore detached and outlives
   us; the client watches `GET /api/version` and sees the answer change when the
@@ -31,6 +33,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.concurrency import run_in_threadpool
 
@@ -67,6 +70,21 @@ _profile_state: Dict[str, Any] = {
     "started_at": None,
     "finished_at": None,
     "profile": None,
+    "result": None,
+    "error": None,
+}
+
+# The local engine's switch (Settings > AI & Model): local_engine.apply as a job. ``phase``,
+# ``step`` and ``steps`` follow its progress; ``result`` is its EngineSwitch as data.
+_engine_state: Dict[str, Any] = {
+    "running": False,
+    "started_at": None,
+    "finished_at": None,
+    "engine": None,
+    "model": None,
+    "phase": None,
+    "step": 0,
+    "steps": 0,
     "result": None,
     "error": None,
 }
@@ -246,6 +264,101 @@ def set_inference_profile(body: _ProfileSwitch,
     _start_job(_run_profile_switch, (wanted, body.prune), "vaf-api-profile",
                container_jobs.PROFILE_SWITCH, _profile_state)
     return {"started": True, "profile": wanted, "started_at": _profile_state["started_at"]}
+
+
+@router.get("/local-engine")
+async def get_local_engine(model: Optional[str] = None,
+                           _: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    """The local engine as the pickers show it (``local_engine.state``: the engine, this
+    machine's verdict, the vLLM install, its model, parsers and server) and the switch job
+    (``job``). ``model`` previews another repo's parsers and download state. What `vaf engine`
+    prints. Admin only: the engine is the installation's."""
+    from vaf.core import local_engine
+    state = await run_in_threadpool(local_engine.state, model)
+    state["job"] = dict(_engine_state)
+    return state
+
+
+class _EngineSwitch(BaseModel):
+    engine: str
+    model: Optional[str] = None
+    install: bool = False
+
+
+def _install_log() -> str:
+    from vaf.core.log_helper import get_app_log_dir
+    return str(get_app_log_dir() / "vllm_install.log")
+
+
+def _run_engine_switch(engine: str, model: Optional[str], install: bool) -> None:
+    from vaf.core import local_engine
+
+    def progress(step: Dict[str, Any]) -> None:
+        _engine_state.update(phase=step.get("phase"), step=step.get("step", 0),
+                             steps=step.get("steps", 0))
+
+    try:
+        result = local_engine.apply(engine, model=model, install=install, progress=progress,
+                                    output=_install_log())
+        _engine_state["result"] = result.to_dict()
+    except Exception as e:      # a switch must never take the server with it
+        _engine_state["error"] = str(e)[:300]
+    finally:
+        _engine_state["running"] = False
+        _engine_state["finished_at"] = _now()
+        container_jobs.release(container_jobs.ENGINE_SWITCH)
+
+
+def _refused(status: int, code: str, text: str, params: Optional[Dict[str, Any]] = None):
+    return JSONResponse(status_code=status,
+                        content={"detail": text, "code": code, "params": params or {}})
+
+
+@router.post("/local-engine", status_code=202)
+def set_local_engine(body: _EngineSwitch, _: Dict[str, Any] = Depends(require_admin)):
+    """Start a switch of the local engine and return at once; GET on this path follows it
+    (``job``). The same implementation as `vaf engine` (``local_engine.apply``); a wrong
+    request is refused here with 400 and its code, before a job starts. Not beside another
+    container job: a profile switch to api halfway would refuse the install mid-way, and an
+    update stops this process mid-pip."""
+    from vaf.core import local_engine
+    try:
+        wanted = local_engine.validate(body.engine, body.model)
+    except local_engine.EngineRefusal as e:
+        return _refused(400, e.code, str(e), e.params)
+    _claim_or_409(container_jobs.ENGINE_SWITCH)
+    _engine_state.update({
+        "running": True,
+        "started_at": _now(),
+        "finished_at": None,
+        "engine": wanted,
+        "model": body.model,
+        "phase": None,
+        "step": 0,
+        "steps": 0,
+        "result": None,
+        "error": None,
+    })
+    _start_job(_run_engine_switch, (wanted, body.model, body.install), "vaf-api-engine",
+               container_jobs.ENGINE_SWITCH, _engine_state)
+    return {"started": True, "engine": wanted, "started_at": _engine_state["started_at"]}
+
+
+@router.delete("/local-engine/vllm")
+async def uninstall_vllm(_: Dict[str, Any] = Depends(require_admin)):
+    """Remove the vLLM environment (``local_engine.uninstall_vllm``): refused while vLLM is
+    the engine (400) or another job runs (409). The models stay in the Hugging Face cache;
+    the answer names the one of the setting and its size."""
+    from vaf.core import local_engine
+    _claim_or_409(container_jobs.ENGINE_SWITCH)
+    try:
+        out = await run_in_threadpool(local_engine.uninstall_vllm)
+    finally:
+        container_jobs.release(container_jobs.ENGINE_SWITCH)
+    if out["ok"]:
+        return out
+    status = {"engine_active": 400, "busy": 409}.get(out["code"], 500)
+    return _refused(status, out["code"], out["text"])
 
 
 def _run_repair() -> None:

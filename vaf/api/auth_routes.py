@@ -311,9 +311,17 @@ async def needs_setup(request: Request):
             from vaf.core.inference_profile import current as inference_profile
             # The profile tells the wizard whether skipping the provider step leaves a
             # local model to fall back on (only while no admin exists, like the rest).
-            return {"needs_setup": True, "agent_name_suggestion": suggest_agent_name(),
-                    "inference_profile": inference_profile(),
-                    "setup_code_required": _setup_code_required(request)}
+            answer = {"needs_setup": True, "agent_name_suggestion": suggest_agent_name(),
+                      "inference_profile": inference_profile(),
+                      "setup_code_required": _setup_code_required(request)}
+            if answer["inference_profile"] == "local":
+                # The wizard's engine choice: the verdict's class only. No GPU name or
+                # numbers, since this answer needs no session.
+                from starlette.concurrency import run_in_threadpool
+                from vaf.core.local_engine import support
+                verdict = await run_in_threadpool(support)
+                answer["vllm_support"] = {"level": verdict.level, "code": verdict.code}
+            return answer
         except Exception as exc:
             if not _is_db_not_ready_error(exc):
                 raise

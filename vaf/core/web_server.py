@@ -49,6 +49,21 @@ async def api_version():
 # Active model download cancel events keyed by websocket id (for cancel_model_download)
 _active_model_download_cancels: dict[int, threading.Event] = {}
 
+
+def cancel_model_download(ws_id: int, is_admin: bool) -> str:
+    """The banner's Cancel. A download this socket started ends through its own event
+    ("own"); any other one (the automatic first-run GGUF, a vLLM model of an engine switch)
+    is the machine's, so only an admin may end it ("shared", or "none" when none runs);
+    anyone else is refused ("refused")."""
+    event = _active_model_download_cancels.get(ws_id)
+    if event is not None:
+        event.set()
+        return "own"
+    if not is_admin:
+        return "refused"
+    from vaf.core.model_download_state import MODEL_DOWNLOAD
+    return "shared" if MODEL_DOWNLOAD.request_cancel() else "none"
+
 # Active attachment-indexing tasks keyed by session id, so the stop button can cancel
 # in-flight document indexing (the LLM RAG-indexes attachments in the background).
 _active_index_tasks: "dict[str, set[asyncio.Task]]" = {}
@@ -5712,9 +5727,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         asyncio.create_task(run_download())
 
                 elif type == "cancel_model_download":
-                    ws_id = id(websocket)
-                    if ws_id in _active_model_download_cancels:
-                        _active_model_download_cancels[ws_id].set()
+                    from vaf.core.config import is_admin_identity
+                    cancel_model_download(id(websocket), is_admin_identity(
+                        manager.get_connection_user_role(websocket) if manager else None,
+                        manager.get_connection_user(websocket) if manager else None))
 
                 elif type == "get_api_models":
                     # Fetch available models from API providers. The discovery
@@ -5815,6 +5831,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         is_admin = is_admin_identity(stored_role, user_scope_id)
                         existing = Config.load()
                         new_config = _inference_profile.without_profile_key(new_config)
+                        # The engine changes only through local_engine.apply.
+                        from vaf.core.local_engine import without_engine_keys
+                        new_config = without_engine_keys(new_config)
                         # The certificate keys change only through the checked route
                         # (/api/network/certificate, behind a second factor).
                         from vaf.network.ssl_utils import without_certificate_keys

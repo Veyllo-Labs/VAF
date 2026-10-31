@@ -285,38 +285,17 @@ def ensure_model_available(model_name, models_dir) -> str:
                 raise InterruptedError(inference_profile.refusal("downloading a local model"))
             if local.is_file():                       # another caller finished while we waited on the lock
                 return str(local)
-            from vaf.core.model_download_state import MODEL_DOWNLOAD, make_state_tqdm
+            from vaf.core.model_download_state import make_state_tqdm
+            from vaf.core.web_interface import model_download_broadcast
             from huggingface_hub import hf_hub_download
             UI.event("System", f"Downloading {fname} from {repo_id}...", style="warning")
-            MODEL_DOWNLOAD.start(repo_id, fname)
-            # Stream progress to the WebUI download banner (same channel a WebUI-initiated download uses),
-            # so tray/auto (first-run) downloads are visible too -- not only WebUI-started ones.
-            _stop_broadcast = None
-            try:
-                from vaf.core.web_interface import start_model_download_broadcast
-                _stop_broadcast = start_model_download_broadcast()
-            except Exception:
-                _stop_broadcast = None
-            try:
+            # The WebUI download banner sees tray/auto (first-run) downloads too, not only
+            # WebUI-started ones; its closing frame refreshes the GGUF list.
+            with model_download_broadcast(repo_id, fname, done_extra=lambda: {
+                    "success": local.is_file(),
+                    "models": [p.name for p in models_dir.glob("*.gguf")]}):
                 hf_hub_download(repo_id=repo_id, filename=fname, local_dir=str(models_dir),
                                 tqdm_class=make_state_tqdm(inference_profile.download_guard()))
-            finally:
-                MODEL_DOWNLOAD.finish()
-                if _stop_broadcast:
-                    try:
-                        _stop_broadcast()
-                    except Exception:
-                        pass
-                # Tell the WebUI the download finished: clears the banner and refreshes the model list.
-                try:
-                    from vaf.core.web_interface import get_web_interface
-                    get_web_interface().push_update({
-                        "type": "model_download_done",
-                        "success": local.is_file(),
-                        "models": [p.name for p in models_dir.glob("*.gguf")],
-                    })
-                except Exception:
-                    pass
             UI.event("System", "Download complete", style="success")
             return str(local)
 
@@ -342,6 +321,10 @@ def ensure_model_available(model_name, models_dir) -> str:
             return _download(repo_id, filename)
         except Exception as e:
             UI.error(f"Download of {filename} failed: {e}")
+            from vaf.core.model_download_state import MODEL_DOWNLOAD
+            if MODEL_DOWNLOAD.cancel_requested:
+                # Cancelled from the banner: no fallback download in its place.
+                return str(models_dir / filename)
 
     # A switch to the api profile during the download above ended it: no fallback download.
     if not inference_profile.local_inference_allowed():

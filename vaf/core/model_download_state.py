@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""Process-wide signal for an in-progress local model (GGUF) download.
+"""Process-wide signal for an in-progress local model download (a GGUF, or a vLLM model).
 
 The tray (activity thread) and the uvicorn web worker (`headless_runner`) run in the SAME process on
 different threads, so they otherwise race when the first prompt triggers a download: the worker would
@@ -29,6 +29,7 @@ class _ModelDownloadState:
         self._filename = ""
         self._bytes_done = 0
         self._bytes_total = 0
+        self._cancel = False
 
     def start(self, repo: str, filename: str) -> None:
         with self._lock:
@@ -37,6 +38,7 @@ class _ModelDownloadState:
             self._filename = filename or ""
             self._bytes_done = 0
             self._bytes_total = 0
+            self._cancel = False
 
     def update(self, bytes_done: int, bytes_total: int) -> None:
         with self._lock:
@@ -52,6 +54,22 @@ class _ModelDownloadState:
     def active(self) -> bool:
         with self._lock:
             return self._active
+
+    def request_cancel(self) -> bool:
+        """Ask the running download to end (its progress hook raises at the next tick). False,
+        and nothing remembered, when none runs: a request must not end the next download. The
+        flag stays set after the download ended, so its caller can tell a cancel from a
+        failure; the next ``start`` clears it."""
+        with self._lock:
+            if not self._active:
+                return False
+            self._cancel = True
+            return True
+
+    @property
+    def cancel_requested(self) -> bool:
+        with self._lock:
+            return self._cancel
 
     def snapshot(self) -> dict:
         """A consistent copy for readers (the worker status push, load_model's wait loop, the WS layer)."""
@@ -78,7 +96,7 @@ def make_state_tqdm(should_abort=None):
     progress into :data:`MODEL_DOWNLOAD`. Mirrors the pattern of ``make_progress_tqdm`` in
     ``web_server.py`` but writes to the shared state instead of a per-websocket queue.
     ``should_abort`` is called on every tick and ends the download by raising
-    (``inference_profile.download_guard``)."""
+    (``inference_profile.download_guard``); a ``request_cancel`` ends it the same way."""
     from tqdm import tqdm as _tqdm
 
     state = MODEL_DOWNLOAD
@@ -94,6 +112,8 @@ def make_state_tqdm(should_abort=None):
         def update(self, n=1):
             if should_abort is not None:
                 should_abort()
+            if state.cancel_requested:
+                raise InterruptedError("The download was cancelled.")
             res = super().update(n)
             try:
                 state.update(self.n, self.total or 0)

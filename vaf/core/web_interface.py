@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import threading
 import time
 import uuid
-from typing import List, Dict, Any, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 # Throttle log pushes to WebUI so typing and UI stay responsive (max ~3 log updates/sec)
 LOG_PUSH_THROTTLE_SEC = 0.35
@@ -1097,6 +1098,40 @@ def start_model_download_broadcast(poll_seconds: float = 0.5):
 
     threading.Thread(target=_loop, daemon=True, name="model-download-broadcast").start()
     return stop_evt.set
+
+
+@contextlib.contextmanager
+def model_download_broadcast(repo: str, filename: str,
+                             done_extra: Optional[Callable[[], dict]] = None):
+    """A download that every open page sees: marks ``MODEL_DOWNLOAD`` active, streams its
+    progress (``start_model_download_broadcast``), and at the end marks it finished, stops the
+    stream and pushes one ``model_download_done`` {success, **done_extra()} that closes the
+    banner. The caller sets ``outcome["success"]`` on the yielded dict; ``done_extra`` adds
+    what its own download changed (the GGUF download sends the new model list; a vLLM model
+    sends none, and a page keeps its GGUF list for a frame without ``models``)."""
+    from vaf.core.model_download_state import MODEL_DOWNLOAD
+    outcome = {"success": False}
+    MODEL_DOWNLOAD.start(repo, filename)
+    try:
+        stop = start_model_download_broadcast()
+    except Exception:
+        stop = None
+    try:
+        yield outcome
+    finally:
+        MODEL_DOWNLOAD.finish()
+        if stop is not None:
+            try:
+                stop()
+            except Exception:
+                pass
+        frame = {"type": "model_download_done", "success": bool(outcome.get("success"))}
+        try:
+            if done_extra is not None:
+                frame.update(done_extra() or {})
+            get_web_interface().push_update(frame)
+        except Exception:
+            pass
 
 
 def start_maintenance_broadcast(poll_seconds: float = 1.0):

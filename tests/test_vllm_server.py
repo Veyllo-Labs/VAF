@@ -563,3 +563,61 @@ def test_a_refused_start_leaves_the_running_servers_log_alone(config, monkeypatc
     assert vs.start("Qwen/Qwen3-4B-AWQ", 32768, popen=lambda *a, **k: _Proc()) is False
     assert log.read_text(encoding="utf-8") == "INFO: the other process's server is loading\n"
     assert not log.with_name("vllm_server.prev.log").exists()
+
+
+# ── the switch from Settings and the TUI: pip output, the banner ──────────────────────
+
+
+def test_install_output_goes_to_file(config, monkeypatch, home):
+    """In the web server and the full-screen TUI pip has no terminal: every step writes into
+    the file, and without one every step inherits the terminal as before. MUTATION: pass
+    `stdout` only to the first step - red."""
+    _supported(monkeypatch)
+    calls, seen = [], []
+
+    def run(argv, env=None, **kw):
+        seen.append(kw)
+        return _fake_installing_run(home, calls)(argv, env=env)
+    steps = []
+    log = home / "logs" / "vllm_install.log"
+    assert vs.install(run=run, output=str(log), on_step=steps.append) == ""
+    assert steps == list(vs.INSTALL_STEPS)
+    assert len(seen) == 4 and all(kw.get("stderr") is subprocess.STDOUT for kw in seen)
+    assert all(getattr(kw.get("stdout"), "name", "") == str(log) for kw in seen)
+    assert log.exists()
+    vs.uninstall()
+    seen.clear()
+    assert vs.install(run=run) == ""
+    assert seen == [{}, {}, {}, {}], "without a file the steps print to the terminal"
+
+
+def test_ensure_model_broadcasts_and_closes(config, monkeypatch, home):
+    """A vLLM model download reaches the banner of every page: the progress stream runs
+    while it downloads, and one closing frame without a model list ends it (the GGUF list
+    on the page must not be emptied by it). MUTATION: drop the context manager from
+    `ensure_model` - red."""
+    import huggingface_hub
+
+    from vaf.core import web_interface
+    from vaf.core.model_download_state import MODEL_DOWNLOAD
+    streams, pushed = [], []
+
+    def start():
+        streams.append("start")
+        return lambda: streams.append("stop")
+    monkeypatch.setattr(web_interface, "start_model_download_broadcast", start)
+    monkeypatch.setattr(web_interface, "get_web_interface",
+                        lambda: type("W", (), {"push_update": staticmethod(pushed.append)})())
+
+    def snapshot_download(repo_id, **kw):
+        if kw.get("local_files_only"):
+            raise FileNotFoundError("not cached")
+        assert MODEL_DOWNLOAD.active and streams == ["start"], "the banner does not see it"
+        d = home / "hf" / "b"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "model.safetensors").write_bytes(b"x")
+        return str(d)
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+    assert vs.ensure_model("Qwen/Qwen3-4B-AWQ")
+    assert streams == ["start", "stop"] and not MODEL_DOWNLOAD.active
+    assert pushed == [{"type": "model_download_done", "success": True}]

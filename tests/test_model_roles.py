@@ -501,3 +501,16 @@ def test_the_resolver_stays_off_the_facade():
     assert not any("role" in name.lower() for name in vaf.__all__)
     doc = (ROOT / "docs" / "EMBEDDING.md").read_text(encoding="utf-8")
     assert "model_roles" in doc
+
+
+@pytest.mark.parametrize("engine, want", [("vllm", "Qwen/Qwen3-8B-AWQ"), ("llama", "backup.gguf")])
+def test_failover_local_link_under_vllm(machine, engine, want):
+    """The local link names the model the local engine serves: under vLLM the vLLM repo,
+    since `failover_local_model` names a GGUF only llama.cpp loads. MUTATION: keep
+    `failover_local_model` under vLLM - red."""
+    cfg = {"provider": "openai", "failover_level": "basic", "local_engine": engine,
+           "vllm_model": "Qwen/Qwen3-8B-AWQ", "failover_local_model": "backup.gguf"}
+    machine.update(cfg=dict(cfg), keys={"openai"}, tesseract=False)
+    row = mr.resolve_role("failover", {**Config.DEFAULTS, **cfg})
+    assert (row.provider, row.model) == ("local", want)
+    assert mr.resolve_role("failover").model == want

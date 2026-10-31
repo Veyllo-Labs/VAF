@@ -342,3 +342,140 @@ def test_import_stays_light():
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     assert out.stdout.split()[-1] == "0", out.stdout
+
+
+# ── codes for the translated surfaces, the status row, the health row ─────────────────
+
+# The sentences main printed, recorded literally: a reason must never change while it gains
+# its code (the terminal, `vaf health` and the logs read the sentence).
+_REASONS = {
+    "supported": "vLLM runs here (NVIDIA GeForce RTX 3080, 10 GB). llama.cpp stays the lighter "
+                 "choice for small GPUs and quick starts.",
+    "nvidia_too_old": "vLLM needs compute capability 7.5 or newer; this GPU has 6.1. llama.cpp "
+                      "runs here.",
+    "nvidia_unknown": "VAF could not read this GPU's compute capability from nvidia-smi (the "
+                      "driver may be too old for vLLM's CUDA build). llama.cpp runs here.",
+    "amd": "vLLM supports some AMD GPUs through ROCm 6.3+, with Python 3.12 builds only; VAF "
+           "does not manage that yet. llama.cpp (Vulkan) runs here.",
+    "intel": "vLLM's Intel GPU support is basic and needs Python 3.12; VAF does not manage it "
+             "yet. llama.cpp runs here.",
+    "no_gpu": "vLLM's CPU backend is basic (no 4-bit GGUF-style quantization); llama.cpp is the "
+              "better engine for a CPU.",
+    "apple": "vLLM on Apple GPUs is the community plugin vLLM-Metal (MLX models); VAF does not "
+             "manage it yet. llama.cpp (Metal) runs here.",
+    "no_build": "vLLM has no build for this machine. llama.cpp runs here.",
+    "windows": "vLLM has no native Windows support (WSL only); VAF does not manage it yet. "
+               "llama.cpp runs here.",
+    "no_build_gpu": "vLLM has no build for this GPU. llama.cpp runs here.",
+    "python": "vLLM needs Python 3.11 to 3.14; VAF runs on 3.10 here. llama.cpp runs here.",
+}
+
+
+@pytest.mark.parametrize("gpu, system, machine, python, level, code, params", [
+    (_nv(), "Linux", "x86_64", (3, 13), le.SUPPORTED, "supported",
+     {"gpu": "GeForce RTX 3080", "vram_gb": "10"}),
+    (_nv(cc="6.1"), "Linux", "x86_64", (3, 13), le.UNSUPPORTED, "nvidia_too_old", {"capability": "6.1"}),
+    (_nv(cc=""), "Linux", "x86_64", (3, 13), le.UNSUPPORTED, "nvidia_unknown", {}),
+    (GPUInfo("amd", "Radeon RX 7900", 24576), "Linux", "x86_64", (3, 13), le.LATER, "amd", {}),
+    (GPUInfo("intel", "Arc A770", 16384), "Linux", "x86_64", (3, 13), le.LATER, "intel", {}),
+    (None, "Linux", "x86_64", (3, 13), le.UNSUPPORTED, "no_gpu", {}),
+    (GPUInfo("apple", "M2", 10240), "Darwin", "arm64", (3, 13), le.LATER, "apple", {}),
+    (None, "Darwin", "x86_64", (3, 13), le.UNSUPPORTED, "no_build", {}),
+    (_nv(), "Windows", "AMD64", (3, 13), le.LATER, "windows", {}),
+    (_nv(), "Linux", "riscv64", (3, 13), le.UNSUPPORTED, "no_build", {}),
+    (GPUInfo("qualcomm", "X", 1024), "Linux", "x86_64", (3, 13), le.UNSUPPORTED, "no_build_gpu", {}),
+    (_nv(), "Linux", "x86_64", (3, 10), le.UNSUPPORTED, "python", {"python": "3.10"}),
+])
+def test_support_codes_and_unchanged_reasons(gpu, system, machine, python, level, code, params):
+    """Every row of the platform table keeps its level and its sentence byte for byte and
+    gains a code with its parameters. MUTATION: swap the codes amd/intel, or change one
+    sentence - red."""
+    verdict = le.support(gpu=gpu, system=system, machine=machine, python=python)
+    assert (verdict.level, verdict.code, dict(verdict.params)) == (level, code, params)
+    assert verdict.reason == _REASONS[code]
+    assert code in le.SUPPORT_CODES
+
+
+@pytest.fixture
+def vllm_box(monkeypatch, tmp_path, config):
+    from vaf.core import backend
+    from vaf.core import vllm_server as vs
+    monkeypatch.setattr(vs, "venv_dir", lambda: tmp_path / "bin" / "vllm" / "venv")
+    box = {"supported": True, "version": "0.32.0", "pid": None, "health": None, "loaded": None}
+    monkeypatch.setattr(le, "support", lambda **kw: le.EngineSupport(
+        le.SUPPORTED, "vLLM runs here.", "supported") if box["supported"] else le.EngineSupport(
+        le.LATER, "AMD here.", "amd", {}))
+    monkeypatch.setattr(vs, "installed_version", lambda: box["version"])
+    monkeypatch.setattr(vs, "running_pid", lambda: box["pid"])
+    monkeypatch.setattr(vs, "health_status", lambda port=8080, timeout=1.0: box["health"])
+    monkeypatch.setattr(backend, "get_loaded_model_id", lambda port=8080, timeout=2.0: box["loaded"])
+    config["vllm_model"] = "Qwen/Qwen3-4B-AWQ"
+    return box
+
+
+def test_status_row_states(config, vllm_box):
+    """Update and Repair's row: llama running/idle, vLLM ok/loading/idle/degraded, off under
+    the api profile. MUTATION: report `ok` while vLLM is not installed - red."""
+    row = le.status_row(dict(config))
+    assert (row["engine"], row["state"], row["code"]) == ("llama", "idle", "llama_idle")
+    vllm_box["loaded"] = "qwen3-4b.gguf"
+    row = le.status_row(dict(config))
+    assert (row["state"], row["code"], row["model"]) == ("ok", "llama_running", "qwen3-4b.gguf")
+    config["local_engine"] = "vllm"
+    vllm_box["pid"], vllm_box["health"] = 4242, 200
+    assert le.status_row(dict(config))["state"] == "ok"
+    vllm_box["health"] = None
+    row = le.status_row(dict(config))
+    assert (row["state"], row["code"]) == ("loading", "vllm_loading")
+    vllm_box["pid"] = None
+    assert le.status_row(dict(config))["code"] == "vllm_idle"
+    vllm_box["version"] = None
+    row = le.status_row(dict(config))
+    assert (row["state"], row["code"]) == ("degraded", "not_installed")
+    vllm_box["supported"] = False
+    row = le.status_row(dict(config))
+    assert (row["state"], row["code"], row["params"]["support"]) == ("degraded", "unsupported", "amd")
+    config["inference_profile"] = "api"
+    assert le.status_row(dict(config))["state"] == "off"
+    for row_code in ("profile_api", "llama_running", "vllm_loading", "unsupported"):
+        assert row_code in le.STATUS_CODES
+
+
+def test_engine_check_text_unchanged(config, vllm_box):
+    """`vaf health` says what it said before it read the shared row. MUTATION: change one
+    sentence - red."""
+    from vaf.core.health import engine_check
+    assert engine_check() is None
+    config["local_engine"] = "vllm"
+    assert engine_check() == {"name": "engine", "status": "ok", "reason":
+                              "vLLM 0.32.0 installed, model Qwen/Qwen3-4B-AWQ, server idle."}
+    vllm_box["pid"] = 4242
+    assert engine_check()["reason"] == "vLLM 0.32.0 installed, model Qwen/Qwen3-4B-AWQ, server running."
+    vllm_box["version"] = None
+    assert engine_check() == {"name": "engine", "status": "degraded", "reason":
+                              "vLLM is the local engine but is not installed: run `vaf engine vllm`."}
+    vllm_box["supported"] = False
+    assert engine_check()["reason"] == "vLLM is the local engine, but: AMD here."
+    config["inference_profile"] = "api"
+    assert engine_check()["reason"] == "vLLM is the local engine, but: AMD here.", \
+        "the api profile does not hide the row health always showed"
+
+
+def test_conflict_codes_keep_their_sentences(config, monkeypatch):
+    from vaf.core import vllm_server as vs
+    monkeypatch.setattr(le, "support", lambda **kw: le.EngineSupport(le.LATER, "AMD here.", "amd"))
+    monkeypatch.setattr(vs, "is_installed", lambda: False)
+    config.update(local_engine="vllm", provider="openai", voice_agent_provider="local",
+                  vision_provider="local", voice_agent_model="voice.gguf")
+    items = le.conflict_items()
+    assert [code for code, _ in items] == list(le.CONFLICT_CODES)
+    assert le.conflicts() == [text for _, text in items]
+    assert items[0][1] == 'local_engine is "vllm", but: AMD here.'
+
+
+def test_without_engine_keys():
+    payload = {"local_engine": "llama", "vllm_model": "a/b", "vllm_gpu_memory_utilization": 0.9,
+               "model": "x.gguf", "provider": "local"}
+    assert le.without_engine_keys(payload) == {"model": "x.gguf", "provider": "local"}
+    same = {"model": "x.gguf"}
+    assert le.without_engine_keys(same) is same

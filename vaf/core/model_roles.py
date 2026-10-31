@@ -412,9 +412,21 @@ def failover_links(get: Callable[..., Any], primary: str,
         elif kind == "local":
             if "local" in seen or not local_allowed():
                 continue
-            links.append(("local", str(get("failover_local_model", "") or "").strip() or None))
+            links.append(("local", _failover_local_model(get)))
             seen.add("local")
     return links
+
+
+def _failover_local_model(get: Callable[[str, Any], Any]) -> Optional[str]:
+    """The local link's model: under vLLM the one vLLM serves (``failover_local_model``
+    names a GGUF, which only llama.cpp loads), else that GGUF setting."""
+    try:
+        from vaf.core import local_engine
+        if local_engine.current({"local_engine": get("local_engine", "llama")}) == local_engine.VLLM:
+            return local_engine.resolve_vllm_model({"vllm_model": get("vllm_model", "auto")})
+    except Exception:
+        pass
+    return str(get("failover_local_model", "") or "").strip() or None
 
 
 def _failover(r: _Reader, explain: bool) -> RoleAssignment:

@@ -1265,6 +1265,30 @@ def live_agents() -> list:
         return [a for a in _LIVE_AGENTS]
 
 
+def refresh_local_identity_all() -> int:
+    """Recompute the local model identity (``_apply_local_model_identity``: the display name,
+    the Gemma message handling and the tool-call parser) of every live agent on provider
+    local, after a switch of the local engine (``local_engine.apply``) moved the server onto
+    another model. Skipped: an agent pinned by ``VAF_MODEL_OVERRIDE`` (a sub-agent process)
+    and an embedded one (``config_overrides``, its caller chose). Returns how many were
+    refreshed; never raises, one agent failing must not stop the rest."""
+    if os.environ.get("VAF_MODEL_OVERRIDE", "").strip():
+        return 0
+    count = 0
+    for agent in live_agents():
+        try:
+            if getattr(agent, "_config_overrides", None):
+                continue
+            if getattr(agent, "provider", "local") != "local":
+                continue
+            agent._apply_local_model_identity()
+            agent._tokenizer_instance = None
+            count += 1
+        except Exception:
+            continue
+    return count
+
+
 def reload_all_api_backends(*, force: bool = False) -> int:
     """Re-apply provider + API key from the live config to EVERY agent in this process.
 
@@ -1566,7 +1590,10 @@ class Agent:
             lock = self._backend_swap_lock = threading.Lock()
         with lock:
             self.config = Config.load()
-            self.ensure_model_exists()
+            # Under vLLM the GGUF is not what runs: resolving it would download one (the
+            # same skip as load_model).
+            if not local_engine.is_vllm():
+                self.ensure_model_exists()
             from vaf.core.backend import ensure_local_model
             if not ensure_local_model(self.model_path, reason="settings"):
                 return False

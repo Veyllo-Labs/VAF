@@ -177,21 +177,13 @@ def agent_check(workers: Optional[Dict[str, int]]) -> Optional[Dict[str, str]]:
 
 
 def engine_check() -> Optional[Dict[str, str]]:
-    """The vLLM engine; None (no row) while llama.cpp is the local engine."""
+    """The vLLM engine; None (no row) while llama.cpp is the local engine. The sentence is
+    the one Update and Repair shows (``local_engine.status_row``), read from the same place."""
     from vaf.core import local_engine
     if not local_engine.is_vllm():
         return None
-    from vaf.core import vllm_server
-    verdict = local_engine.support()
-    if not verdict.supported:
-        return _check("engine", DEGRADED, f"vLLM is the local engine, but: {verdict.reason}")
-    version = vllm_server.installed_version()
-    if version is None:
-        return _check("engine", DEGRADED, "vLLM is the local engine but is not installed: run "
-                                          "`vaf engine vllm`.")
-    state = "server running" if vllm_server.running_pid() is not None else "server idle"
-    return _check("engine", OK, f"vLLM {version} installed, model "
-                                f"{local_engine.resolve_vllm_model()}, {state}.")
+    row = local_engine._vllm_row(local_engine._cfg(), probe_health=False)
+    return _check("engine", DEGRADED if row["state"] == "degraded" else OK, row["text"])
 
 
 def _worker_status() -> Optional[Dict[str, int]]:

@@ -541,6 +541,17 @@ def derive_browser_pool_status(summary: Optional[Dict[str, Any]],
     return {**base, "state": "ok" if running else "idle", "reason": text}
 
 
+def probe_local_engine() -> Dict[str, Any]:
+    """The local engine's row (``local_engine.status_row``); never raises: a failure is a
+    row in state ``unknown``."""
+    try:
+        from vaf.core import local_engine
+        return local_engine.status_row()
+    except Exception as e:      # noqa: BLE001 - shown, not raised
+        return {"engine": "", "state": "unknown", "code": "unknown", "params": {},
+                "text": f"The local engine's state is unknown: {e}", "version": "", "model": ""}
+
+
 def collect_service_status(
     daemon_probe: Callable[[], Dict[str, Any]] = diagnose_docker_daemon,
     inspect_probe: Callable[[Sequence[str]], List[Dict[str, Any]]] = inspect_containers,
@@ -550,11 +561,13 @@ def collect_service_status(
     sandbox_probe: Callable[[], Optional[Dict[str, Any]]] = probe_sandbox,
     start_probe: Optional[Callable[[], bool]] = None,
     browser_pool_probe: Callable[[], Optional[Dict[str, Any]]] = probe_browser_pool,
+    engine_probe: Callable[[], Dict[str, Any]] = probe_local_engine,
 ) -> Dict[str, Any]:
     """Every service's state in one snapshot, plus the host's forwarding switch, the
-    sandbox environments (`derive_sandbox_status`) and the per-user browser pool
-    (`derive_browser_pool_status`). Neither of the last two is a service, so neither
-    is a row of `services`.
+    sandbox environments (`derive_sandbox_status`), the per-user browser pool
+    (`derive_browser_pool_status`) and the local engine (`local_engine.status_row`). None
+    of the last three is a service, so none is a row of `services`, and none is a repair
+    target (the repair cannot install an engine).
 
     With the daemon down nothing else is attempted: no inspect, no probes. That
     keeps the worst case at one `docker info` (10s) instead of a timeout per service,
@@ -633,6 +646,7 @@ def collect_service_status(
         "services": services,
         "sandbox": sandbox,
         "browser_pool": browser_pool,
+        "local_engine": engine_probe(),
         "starting": bool(starting),
         "starting_seconds_left": max([int(s.get("starting_seconds_left") or 0)
                                       for s in starting], default=0),

@@ -7,7 +7,8 @@ The engine choice and its platform verdicts are in vaf/core/local_engine.py; thi
 runs vLLM once it is chosen. ``ServerManager.start_server`` (vaf/core/backend.py) decides
 WHEN (handover, reuse, waiting for a server that is loading); this module does the work.
 
-- **Install** (``install``): only on request (`vaf engine vllm`), never on a start. A fresh
+- **Install** (``install``): only on request (`vaf engine vllm`, Settings, the TUI, all
+  through ``local_engine.apply``), never on a start. A fresh
   environment under ``bin/vllm/venv`` (gitignored, next to the llama-server binary) made
   with VAF's own Python, the pinned ``vllm==PIN`` installed with the command of vLLM's
   documentation (PyTorch's CUDA 12.9 index as the extra index), its kernels fetched, and a
@@ -139,13 +140,23 @@ def is_installed() -> bool:
 Runner = Callable[..., "subprocess.CompletedProcess"]
 
 
-def install(log: Optional[Callable[[str], None]] = None, run: Optional[Runner] = None) -> str:
+INSTALL_STEPS = ("install_env", "install_vllm", "install_kernels", "install_probe")
+
+
+def install(log: Optional[Callable[[str], None]] = None, run: Optional[Runner] = None, *,
+            output: Optional[str] = None,
+            on_step: Optional[Callable[[str], None]] = None) -> str:
     """Install the pinned vLLM into its own environment. Returns "" when it is installed (now
     or already), else why not. Refused under the ``api`` profile and on a machine whose
-    verdict is not ``supported``. A failed install leaves no half environment behind."""
+    verdict is not ``supported``. A failed install leaves no half environment behind.
+
+    ``output``: a file that receives the stdout and stderr of every step (the web server and
+    the full-screen TUI have no terminal to print pip's output on); without it the steps
+    inherit the terminal. ``on_step(code)`` runs before each step (``INSTALL_STEPS``)."""
     from vaf.core import inference_profile, local_engine
     say = log or (lambda text: None)
     run = run or subprocess.run
+    step = on_step or (lambda code: None)
     if not inference_profile.local_inference_allowed():
         return inference_profile.refuse("vLLM")
     verdict = local_engine.support()
@@ -163,39 +174,64 @@ def install(log: Optional[Callable[[str], None]] = None, run: Optional[Runner] =
         if reason:
             return reason
     root.parent.mkdir(parents=True, exist_ok=True)
+    sink = None
+    if output:
+        try:
+            Path(output).parent.mkdir(parents=True, exist_ok=True)
+            sink = open(output, "a", encoding="utf-8", errors="replace")
+        except OSError:
+            sink = None
+    # Every step's stdout and stderr into the file; without one, the terminal's.
+    streams = {"stdout": sink, "stderr": subprocess.STDOUT} if sink is not None else {}
+    where = f"see {output}" if sink is not None else "see the output above"
+    try:
+        return _install_steps(say, run, step, env, root, streams, where)
+    finally:
+        if sink is not None:
+            try:
+                sink.close()
+            except OSError:
+                pass
+
+
+def _install_steps(say, run, step, env, root, streams, where) -> str:
+    from vaf.core import inference_profile
     steps = [
-        ("Creating the environment", [sys.executable, "-m", "venv", str(root)]),
-        (f"Installing vLLM {PIN} (at least {DOWNLOAD_GB_AT_LEAST:.1f} GB to download)",
+        ("install_env", "Creating the environment", [sys.executable, "-m", "venv", str(root)]),
+        ("install_vllm", f"Installing vLLM {PIN} (at least {DOWNLOAD_GB_AT_LEAST:.1f} GB to download)",
          [str(venv_python()), "-m", "pip", "install", f"vllm=={PIN}",
           "--extra-index-url", TORCH_INDEX]),
     ]
-    for label, argv in steps:
+    for code, label, argv in steps:
         if not inference_profile.local_inference_allowed():
             uninstall()
             return inference_profile.refuse("vLLM")
+        step(code)
         say(label + "...")
         try:
-            result = run(argv, env=env)
+            result = run(argv, env=env, **streams)
         except Exception as e:      # noqa: BLE001 - reported to the caller
             uninstall()
             return f"{label} failed: {e}"
         if getattr(result, "returncode", 1) != 0:
             uninstall()
-            return f"{label} failed (exit {getattr(result, 'returncode', '?')}); see the output above."
+            return f"{label} failed (exit {getattr(result, 'returncode', '?')}); {where}."
+    step("install_kernels")
     say("Fetching vLLM's prebuilt kernels...")
     try:
-        kernels = run([str(vllm_exe()), "download-kernels"], env=env)
+        kernels = run([str(vllm_exe()), "download-kernels"], env=env, **streams)
         if getattr(kernels, "returncode", 1) != 0:
             say("The kernels could not be fetched; vLLM compiles them at its first start "
                 "(several minutes).")
     except Exception:
         say("The kernels could not be fetched; vLLM compiles them at its first start "
             "(several minutes).")
+    step("install_probe")
     say("Checking that PyTorch sees the GPU...")
     try:
         probe = run([str(venv_python()), "-c",
                      "import torch; raise SystemExit(0 if torch.cuda.is_available() else 3)"],
-                    env=env)
+                    env=env, **streams)
         ok = getattr(probe, "returncode", 1) == 0
     except Exception:
         ok = False
@@ -269,8 +305,11 @@ def weights_complete(model_dir: str) -> bool:
 def ensure_model(repo_id: str) -> str:
     """The model's directory, downloaded from Hugging Face when it is not in the cache yet.
     "" under the ``api`` profile (nothing is downloaded), for a value that is no repo id, or
-    when the download failed. Progress goes to the shared download state, so the existing
-    banner shows it."""
+    when the download failed or was cancelled (``MODEL_DOWNLOAD.request_cancel``: the
+    caller tells the two apart by ``cancel_requested``). The download runs inside
+    ``web_interface.model_download_broadcast``: the download banner of every open page shows
+    its bytes and closes on its end, with no model list in the closing frame (the GGUF list
+    is not affected by a vLLM model)."""
     from vaf.core import inference_profile, local_engine
     if not inference_profile.local_inference_allowed():
         inference_profile.refuse(f"the local model {repo_id}")
@@ -293,17 +332,21 @@ def ensure_model(repo_id: str) -> str:
         if found:
             return found
         from huggingface_hub import snapshot_download
+
+        from vaf.core.web_interface import model_download_broadcast
         _ui().event("System", f"Downloading {repo_id} for vLLM...", style="warning")
-        MODEL_DOWNLOAD.start(repo_id, repo_id.rsplit("/", 1)[-1])
-        try:
-            path = snapshot_download(repo_id, allow_patterns=MODEL_PATTERNS,
-                                     ignore_patterns=CODE_PATTERNS,
-                                     tqdm_class=make_state_tqdm(inference_profile.download_guard()))
-        except Exception as e:      # noqa: BLE001 - reported, and the caller sees ""
-            _ui().error(f"Download of {repo_id} failed: {e}")
-            return ""
-        finally:
-            MODEL_DOWNLOAD.finish()
+        with model_download_broadcast(repo_id, repo_id.rsplit("/", 1)[-1]) as outcome:
+            try:
+                path = snapshot_download(
+                    repo_id, allow_patterns=MODEL_PATTERNS, ignore_patterns=CODE_PATTERNS,
+                    tqdm_class=make_state_tqdm(inference_profile.download_guard()))
+            except Exception as e:      # noqa: BLE001 - reported, and the caller sees ""
+                if MODEL_DOWNLOAD.cancel_requested:
+                    _ui().event("System", f"Download of {repo_id} cancelled.", style="warning")
+                else:
+                    _ui().error(f"Download of {repo_id} failed: {e}")
+                return ""
+            outcome["success"] = weights_complete(str(path or ""))
     path = str(path or "")
     if not weights_complete(path):
         _ui().error(f"{repo_id} has no complete set of safetensors weights; the vLLM engine "
@@ -359,6 +402,9 @@ class ModelShape:
 
 @dataclass(frozen=True)
 class FitResult:
+    """The fit, with the English ``reason`` (`vaf engine`, the start's error) and the numbers
+    and ``code`` a translated sentence is built from: ``fits``, ``too_big``,
+    ``share_above_free``, ``no_shape``, ``no_gpu_memory``."""
     ok: bool
     max_model_len: int
     utilization: float
@@ -367,6 +413,15 @@ class FitResult:
     budget_mb: int
     reason: str
     note: str = ""
+    code: str = ""
+    weights_mb: int = 0
+    kv_mb: int = 0
+    free_mb: int = 0
+    total_mb: int = 0
+    overhead_mb: int = 0
+
+
+FIT_CODES = ("fits", "too_big", "share_above_free", "no_shape", "no_gpu_memory")
 
 
 def _mb(value: float) -> int:
@@ -396,20 +451,24 @@ def fit(shape: ModelShape, n_ctx: int, free_mb: int, total_mb: int, *,
     budget_mb = int(share * total_mb)
     kv_total = 2 * shape.layers * shape.kv_heads * shape.head_dim * kv_bytes * max_len
     need_mb = _mb(shape.weights_bytes + kv_total + OVERHEAD_BYTES)
+    numbers = {"weights_mb": _mb(shape.weights_bytes), "kv_mb": _mb(kv_total),
+               "free_mb": int(free_mb), "total_mb": int(total_mb),
+               "overhead_mb": _mb(OVERHEAD_BYTES)}
     if budget_mb > free_mb:
         return FitResult(False, max_len, share, dtype, need_mb, budget_mb,
                          f"vLLM would take {budget_mb} MiB of the GPU ({share:.2f} of "
-                         f"{total_mb} MiB), but only {free_mb} MiB are free.", note)
+                         f"{total_mb} MiB), but only {free_mb} MiB are free.", note,
+                         "share_above_free", **numbers)
     if need_mb > budget_mb:
         return FitResult(False, max_len, share, dtype, need_mb, budget_mb,
                          f"The model needs about {need_mb} MiB (weights "
                          f"{_mb(shape.weights_bytes)}, KV cache {_mb(kv_total)} for {max_len} "
                          f"tokens in {dtype}, overhead {_mb(OVERHEAD_BYTES)}), but vLLM gets "
                          f"{budget_mb} MiB ({share:.2f} of {total_mb} MiB, {free_mb} MiB free).",
-                         note)
+                         note, "too_big", **numbers)
     return FitResult(True, max_len, share, dtype, need_mb, budget_mb,
                      f"Fits: about {need_mb} of {budget_mb} MiB (context {max_len}, KV cache "
-                     f"{dtype}, GPU share {share:.2f}).", note)
+                     f"{dtype}, GPU share {share:.2f}).", note, "fits", **numbers)
 
 
 def _gpu_memory() -> tuple:
@@ -434,11 +493,12 @@ def plan_fit(model_dir: str, n_ctx: int, kv_dtype: Optional[str] = None) -> FitR
     shape = ModelShape.from_dir(model_dir)
     if shape is None:
         return FitResult(False, int(n_ctx), 0.0, kv_dtype or "fp8", 0, 0,
-                         f"The model's config.json in {model_dir} does not say its shape.")
+                         f"The model's config.json in {model_dir} does not say its shape.",
+                         code="no_shape")
     free_mb, total_mb = _gpu_memory()
     if not total_mb or not free_mb:
         return FitResult(False, int(n_ctx), 0.0, kv_dtype or "fp8", 0, 0,
-                         "nvidia-smi does not report the GPU's memory.")
+                         "nvidia-smi does not report the GPU's memory.", code="no_gpu_memory")
     return fit(shape, n_ctx, free_mb, total_mb, kv_dtype=kv_dtype,
                utilization=_configured_utilization())
 

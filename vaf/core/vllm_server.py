@@ -13,8 +13,7 @@ WHEN (handover, reuse, waiting for a server that is loading); this module does t
   with VAF's own Python, the pinned ``vllm==PIN`` installed from PyPI, its CUDA 13.0 build and
   the CUDA 13.0 PyTorch it requires, from the hash-locked tree ``vllm_requirements.lock``
   (``--require-hashes --no-deps --only-binary=:all:``: pip refuses any file whose hash the
-  lock does not name, any package it does not pin, and any build from source), its kernels fetched,
-  and a probe that PyTorch in it sees the GPU AND vLLM's CUDA extension loads. Only a passing
+  lock does not name, any package it does not pin, and any build from source), and a probe that PyTorch in it sees the GPU AND vLLM's CUDA extension loads. Only a passing
   probe writes the recipe record (``RECIPE_FORMAT`` in ``vaf_recipe``); an environment
   without it is rebuilt by the next install and refused by ``start``. Every step runs
   without VAF's GPU hide for in-process torch (``gpu_detection.gpu_child_env``). vLLM is
@@ -199,7 +198,7 @@ def is_current() -> bool:
 Runner = Callable[..., "subprocess.CompletedProcess"]
 
 
-INSTALL_STEPS = ("install_env", "install_vllm", "install_kernels", "install_probe")
+INSTALL_STEPS = ("install_env", "install_vllm", "install_probe")
 
 
 def install(log: Optional[Callable[[str], None]] = None, run: Optional[Runner] = None, *,
@@ -286,18 +285,10 @@ def _install_steps(say, run, step, env, root, streams, where, outcome) -> str:
         if getattr(result, "returncode", 1) != 0:
             uninstall()
             return f"{label} failed (exit {getattr(result, 'returncode', '?')}); {where}."
-    step("install_kernels")
-    # Outside the lock (named boundary, docs/llm/VLLM_ENGINE.md): FlashInfer pip-installs
-    # flashinfer-cubin and flashinfer-jit-cache from its own index, version-pinned, unhashed.
-    say("Fetching vLLM's prebuilt kernels...")
-    try:
-        kernels = run([str(vllm_exe()), "download-kernels"], env=env, **streams)
-        if getattr(kernels, "returncode", 1) != 0:
-            say("The kernels could not be fetched; vLLM compiles them at its first start "
-                "(several minutes).")
-    except Exception:
-        say("The kernels could not be fetched; vLLM compiles them at its first start "
-            "(several minutes).")
+    # Deliberately no `vllm download-kernels`: it lets FlashInfer pip-install flashinfer-cubin and
+    # flashinfer-jit-cache from its own index, version-pinned but unhashed, the only compiled
+    # code that would bypass the lock. Without them FlashInfer compiles the kernels it needs at
+    # the first start (docs/llm/VLLM_ENGINE.md).
     step("install_probe")
     say("Checking that vLLM loads on the GPU...")
     try:

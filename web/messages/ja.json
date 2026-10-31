@@ -2832,7 +2832,6 @@
     "phase": {
       "install_env": "環境を作成しています",
       "install_vllm": "パッケージをインストールしています（数GB、数分かかります）",
-      "install_kernels": "ビルド済みカーネルを取得しています",
       "install_probe": "vLLMがGPUで読み込めるか確認しています",
       "download_model": "モデルをダウンロードしています",
       "handover": "実行中のモデルサーバーを停止しています",

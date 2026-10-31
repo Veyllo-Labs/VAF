@@ -89,10 +89,8 @@ command.
   extra index that vLLM's installation page at that tag still shows: with it pip prefers
   `torch 2.13.0+cu129` (a local version label from the extra index) over PyPI's CUDA 13.0
   torch, vLLM's extension then cannot load `libcudart.so.13`, and vLLM cannot start at all
-  (measured; `vllm download-kernels` already died on that ImportError). Then `vllm
-  download-kernels` (without the prebuilt kernels FlashInfer compiles them at the first
-  start, several minutes). vLLM is never imported into VAF's process; its version is read
-  from the package metadata.
+  (measured; `vllm download-kernels` already died on that ImportError). vLLM is never
+  imported into VAF's process; its version is read from the package metadata.
 - **Check:** a probe in that environment must pass two things: PyTorch sees a CUDA GPU
   (exit 3 otherwise: `cuda_probe_failed`, the NVIDIA driver for CUDA 13.0 or a hidden GPU is
   the cause), AND `import vllm._C_stable_libtorch` works, the CUDA extension vLLM's platform
@@ -137,14 +135,16 @@ command.
   already malicious on PyPI when the lock was generated is locked in with it; the lock stops
   anything newer or different. Bumping `PIN` regenerates it as a release step
   ([RELEASING.md](../setup/RELEASING.md)).
-  Second named boundary, the prebuilt kernels: `vllm download-kernels` runs FlashInfer's own
-  `python -m flashinfer download-kernels`, which pip-installs `flashinfer-cubin` from
-  `https://flashinfer.ai/whl` and `flashinfer-jit-cache` from `https://flashinfer.ai/whl/cu130`
-  (`--upgrade --no-deps --index-url`), version-pinned to the installed FlashInfer but not
-  hashed, and not from PyPI: compiled GPU code from outside the lock. The step is soft;
-  without it FlashInfer compiles its kernels at the first start (several minutes). Read in the
-  source of vLLM 0.32.0 (`vllm/entrypoints/cli/download_kernels.py`) and FlashInfer
-  0.7.0.post1 (`flashinfer/__main__.py`).
+- **No prebuilt kernels:** the install deliberately does not run `vllm download-kernels`. That
+  command runs FlashInfer's own `python -m flashinfer download-kernels`, which pip-installs
+  `flashinfer-cubin` from `https://flashinfer.ai/whl` and `flashinfer-jit-cache` from
+  `https://flashinfer.ai/whl/cu130`, version-pinned but not hashed and not from PyPI: the
+  only compiled code that would bypass the lock (read in the source of vLLM 0.32.0,
+  `vllm/entrypoints/cli/download_kernels.py`, and FlashInfer 0.7.0.post1,
+  `flashinfer/__main__.py`). Without them FlashInfer compiles the kernels it needs at the
+  first start, so the first start takes longer; vLLM's own warning about missing kernels
+  fires only on compute capability 9.0 and newer. A measured first-start compile that is too
+  slow would earn hash-locking `flashinfer-cubin` and `flashinfer-jit-cache` in the lock.
 - **Uninstall:** `vaf engine vllm --uninstall` or "Remove vLLM" in Settings (refused while vLLM
   is the engine) removes
   only `bin/vllm/venv`; the models stay in the Hugging Face cache and the command says
@@ -345,7 +345,7 @@ terminal while the web switch runs) `apply` holds `bin/vllm/switch.lock` without
 refuses with `busy`.
 
 **Progress.** The steps go to the machine's maintenance banner (`MAINTENANCE`, kind
-`vllm_engine`, done/total = finished steps of 7 with the install, 3 without; no "please wait"
+`vllm_engine`, done/total = finished steps of 6 with the install, 3 without; no "please wait"
 line, llama.cpp keeps answering until the switch is done) and to the section's own step bar;
 the model download to the download banner (`web_interface.model_download_broadcast`, its
 closing frame without a model list, so the GGUF list stays). pip has no progress figure: the

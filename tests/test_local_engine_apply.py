@@ -269,10 +269,13 @@ def test_maintenance_steps(config, monkeypatch):
     seen = []
     le.apply("vllm", install=True, progress=lambda p: seen.append(
         (p["phase"], p["step"], p["steps"], MAINTENANCE.snapshot()["kind"])))
-    assert [s[0] for s in seen[:7]] == list(le.PHASES[:7])
-    assert [s[1] for s in seen[:7]] == list(range(7)), "done counts the finished steps"
-    assert {s[2] for s in seen} == {7} and {s[3] for s in seen} == {"vllm_engine"}
-    assert seen[-1][1] == 7 and not MAINTENANCE.active
+    # Six steps with the install: env, vLLM, probe, then the model, the handover and the fit.
+    assert le.PHASES[:6] == ("install_env", "install_vllm", "install_probe", "download_model",
+                             "handover", "fit_check")
+    assert [s[0] for s in seen[:6]] == list(le.PHASES[:6])
+    assert [s[1] for s in seen[:6]] == list(range(6)), "done counts the finished steps"
+    assert {s[2] for s in seen} == {6} and {s[3] for s in seen} == {"vllm_engine"}
+    assert seen[-1][1] == 6 and not MAINTENANCE.active
     seen.clear()
     le.apply("vllm", progress=lambda p: seen.append((p["phase"], p["step"], p["steps"])))
     assert [s[0] for s in seen[:3]] == ["download_model", "handover", "fit_check"]

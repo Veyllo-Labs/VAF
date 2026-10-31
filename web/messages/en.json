@@ -2832,7 +2832,6 @@
     "phase": {
       "install_env": "Creating the environment",
       "install_vllm": "Installing the packages (several GB, this takes minutes)",
-      "install_kernels": "Fetching the prebuilt kernels",
       "install_probe": "Checking that vLLM loads on the GPU",
       "download_model": "Downloading the model",
       "handover": "Stopping the running model server",

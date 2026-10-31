@@ -82,10 +82,11 @@ Named boundaries, each deliberate:
   from ``vllm_requirements.lock`` (pinned, SHA-256 of every file, wheels only), the same
   practice as VAF's own ``requirements.lock``. Not checked beyond PyPI's own files: a release
   that was already malicious when the lock was generated is locked in with it; the lock
-  only stops anything newer or different from being installed. And not the prebuilt kernels:
-  ``vllm download-kernels`` lets FlashInfer pip-install flashinfer-cubin and
-  flashinfer-jit-cache from its own index (flashinfer.ai), version-pinned but unhashed; the
-  step is soft, and without it FlashInfer compiles its kernels at the first start.
+  only stops anything newer or different from being installed. FlashInfer's prebuilt
+  kernels are deliberately not fetched (``vllm download-kernels`` would pip-install them
+  from flashinfer.ai, unhashed): FlashInfer compiles the kernels it needs at the first start.
+  A measured first-start compile that is too slow would earn hash-locking flashinfer-cubin
+  and flashinfer-jit-cache as well.
 """
 from __future__ import annotations
 
@@ -655,10 +656,10 @@ SWITCH_CODES = ("unknown_engine", "bad_repo", "profile_api", "parser_unknown", "
                 "download_failed",
                 "download_cancelled", "llama_stop_failed", "no_fit", "vllm_stop_failed",
                 "engine_active", "not_installed", "uninstall_failed", "removed")
-# The phases of a switch, in order (MAINTENANCE kind ``vllm_engine``): the four install steps
+# The phases of a switch, in order (MAINTENANCE kind ``vllm_engine``): the install steps
 # of ``vllm_server.install``, then the model, the handover and the fit; ``stop_vllm`` is the
 # one step back to llama.cpp.
-PHASES = ("install_env", "install_vllm", "install_kernels", "install_probe", "download_model",
+PHASES = ("install_env", "install_vllm", "install_probe", "download_model",
           "handover", "fit_check", "stop_vllm")
 MAINTENANCE_KIND = "vllm_engine"
 
@@ -897,7 +898,8 @@ def _apply_vllm(setting, repo, install, progress, output, say) -> EngineSwitch:
             f"{replaces}This installs vLLM {vllm_server.PIN} (about {gb} GB or more to download, "
             f"more on disk) into {vllm_server.venv_dir()}.", VLLM, repo,
             params={"pin": vllm_server.PIN, "download_gb": gb, "replaces": old or ""})
-    steps = _Steps(7 if missing else 3, progress)
+    # The install's own steps, then the model, the handover and the fit.
+    steps = _Steps(len(vllm_server.INSTALL_STEPS) + 3 if missing else 3, progress)
     previous = current()
 
     def failed(code: str, text: str, detail: str = "", **extra) -> EngineSwitch:

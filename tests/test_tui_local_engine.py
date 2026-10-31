@@ -241,7 +241,7 @@ def test_apply_engine_runs_on_the_lane_and_reloads(monkeypatch, tmp_path):
 
     def apply(engine, model=None, install=False, progress=None, output=None):
         seen.append((engine, model, install, output))
-        progress({"phase": "install_vllm", "step": 1, "steps": 7, "error": ""})
+        progress({"phase": "install_vllm", "step": 1, "steps": 6, "error": ""})
         return le.EngineSwitch("done", "switched_vllm", "The local engine is vLLM.", "vllm")
     monkeypatch.setattr(le, "apply", apply)
     bridge = AgentBridge.__new__(AgentBridge)
@@ -260,7 +260,7 @@ def test_apply_engine_runs_on_the_lane_and_reloads(monkeypatch, tmp_path):
     lane[0]()
     assert seen == [("vllm", None, True, str(tmp_path / "vllm_install.log"))]
     assert reloads == [1]
-    assert any("2/7" in str(n) for n in notes)
+    assert any("2/6" in str(n) for n in notes)
 
 
 @pytest.mark.parametrize("code", ["install_failed", "cuda_probe_failed", "vllm_libs_failed"])
@@ -274,7 +274,7 @@ def test_install_failures_name_the_install_log(monkeypatch, tmp_path, code):
     notes, lane = [], []
 
     def apply(engine, model=None, install=False, progress=None, output=None):
-        progress({"phase": "install_probe", "step": 3, "steps": 7, "error": ""})
+        progress({"phase": "install_probe", "step": 2, "steps": 6, "error": ""})
         return le.EngineSwitch("failed", code, "vLLM was installed, but it cannot start.", "vllm",
                                detail="The local engine is unchanged.")
     monkeypatch.setattr(le, "apply", apply)

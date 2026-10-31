@@ -2832,7 +2832,6 @@
     "phase": {
       "install_env": "Ortam oluşturuluyor",
       "install_vllm": "Paketler yükleniyor (birkaç GB, dakikalar sürer)",
-      "install_kernels": "Hazır çekirdekler alınıyor",
       "install_probe": "vLLM'nin GPU'da yüklenip yüklenmediği denetleniyor",
       "download_model": "Model indiriliyor",
       "handover": "Çalışan model sunucusu durduruluyor",

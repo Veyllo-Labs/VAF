@@ -2832,7 +2832,6 @@
     "phase": {
       "install_env": "Umgebung wird angelegt",
       "install_vllm": "Pakete werden installiert (mehrere GB, das dauert einige Minuten)",
-      "install_kernels": "Vorkompilierte Kernels werden geladen",
       "install_probe": "Prüfung, ob vLLM auf der GPU lädt",
       "download_model": "Modell wird heruntergeladen",
       "handover": "Laufender Modellserver wird angehalten",

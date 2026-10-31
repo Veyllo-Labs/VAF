@@ -2832,7 +2832,6 @@
     "phase": {
       "install_env": "환경을 만드는 중",
       "install_vllm": "패키지를 설치하는 중(수 GB, 몇 분 걸려요)",
-      "install_kernels": "미리 빌드된 커널을 가져오는 중",
       "install_probe": "vLLM이 GPU에서 로드되는지 확인하는 중",
       "download_model": "모델을 다운로드하는 중",
       "handover": "실행 중인 모델 서버를 중지하는 중",

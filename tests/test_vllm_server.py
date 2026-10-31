@@ -38,7 +38,8 @@ MUTATIONS, each turns the named test red:
   test_install_and_server_get_the_gpu_back;
 - start() checking only `is_installed()` -> test_start_refuses_an_environment_of_the_earlier_recipe;
 - drop `--require-hashes` or `--only-binary=:all:` from the pip step -> test_install_steps;
-- drop the lock check before the uninstall -> test_a_missing_lock_refuses_before_anything_changes.
+- drop the lock check before the uninstall -> test_a_missing_lock_refuses_before_anything_changes;
+- run `vllm download-kernels` again -> test_install_steps.
 """
 import json
 import os
@@ -334,11 +335,13 @@ def test_install_steps(config, monkeypatch, home):
     assert calls[1] == [str(vs.venv_python()), "-m", "pip", "install", "--require-hashes",
                         "--no-deps", "--only-binary=:all:", "-r", str(vs.LOCK_PATH)]
     assert vs.LOCK_PATH == Path(vs.__file__).with_name("vllm_requirements.lock")
-    assert calls[2] == [str(vs.vllm_exe()), "download-kernels"]
-    assert calls[3][:2] == [str(vs.venv_python()), "-c"]
-    assert "torch.cuda.is_available" in calls[3][2]
-    assert "import vllm._C_stable_libtorch" in calls[3][2]
-    assert records == [False, False, False, False], "the record was written before the probe"
+    assert calls[2][:2] == [str(vs.venv_python()), "-c"]
+    assert "torch.cuda.is_available" in calls[2][2]
+    assert "import vllm._C_stable_libtorch" in calls[2][2]
+    # No `vllm download-kernels`: it would pip-install unhashed FlashInfer kernels from
+    # FlashInfer's own index, past the lock.
+    assert len(calls) == 3 and not any("download-kernels" in a for argv in calls for a in argv)
+    assert records == [False, False, False], "the record was written before the probe"
     assert vs.recipe_path() == vs.venv_dir() / "vaf_recipe"
     assert vs.recipe_path().read_bytes() == b"vllmenv-1-18dfb7"
     assert vs.installed_version() == vs.PIN and vs.is_installed() and vs.is_current()
@@ -451,7 +454,7 @@ def test_install_and_server_get_the_gpu_back(config, monkeypatch, home):
     monkeypatch.setenv("VLLM_PLUGINS", "evil")
     envs = []
     assert vs.install(run=_fake_installing_run(home, [], envs=envs)) == ""
-    assert len(envs) == 4
+    assert len(envs) == 3
     for env in envs:
         assert "CUDA_VISIBLE_DEVICES" not in env and HIDE_RECORD not in env
         assert env["PIP_DISABLE_PIP_VERSION_CHECK"] == "1"
@@ -723,13 +726,13 @@ def test_install_output_goes_to_file(config, monkeypatch, home):
     log = home / "logs" / "vllm_install.log"
     assert vs.install(run=run, output=str(log), on_step=steps.append) == ""
     assert steps == list(vs.INSTALL_STEPS)
-    assert len(seen) == 4 and all(kw.get("stderr") is subprocess.STDOUT for kw in seen)
+    assert len(seen) == 3 and all(kw.get("stderr") is subprocess.STDOUT for kw in seen)
     assert all(getattr(kw.get("stdout"), "name", "") == str(log) for kw in seen)
     assert log.exists()
     vs.uninstall()
     seen.clear()
     assert vs.install(run=run) == ""
-    assert seen == [{}, {}, {}, {}], "without a file the steps print to the terminal"
+    assert seen == [{}, {}, {}], "without a file the steps print to the terminal"
 
 
 def test_ensure_model_broadcasts_and_closes(config, monkeypatch, home):

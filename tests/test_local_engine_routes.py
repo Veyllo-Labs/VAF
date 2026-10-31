@@ -93,7 +93,7 @@ def test_routes_call_the_core(client, monkeypatch):
 
     def apply(engine, model=None, install=False, progress=None, output=None, log=None):
         calls.append((engine, model, install, output.endswith("vllm_install.log")))
-        progress({"phase": "download_model", "step": 4, "steps": 7})
+        progress({"phase": "download_model", "step": 3, "steps": 6})
         return le.EngineSwitch("done", "switched_vllm", "The local engine is vLLM.", "vllm",
                                "Qwen/Qwen3-8B-AWQ")
     monkeypatch.setattr(le, "validate", lambda engine, model=None: "vllm")
@@ -104,7 +104,7 @@ def test_routes_call_the_core(client, monkeypatch):
     job = _follow(client)
     assert calls == [("vllm", "Qwen/Qwen3-8B-AWQ", True, True)]
     assert job["result"]["code"] == "switched_vllm" and job["phase"] == "download_model"
-    assert (job["step"], job["steps"]) == (4, 7)
+    assert (job["step"], job["steps"]) == (3, 6)
     removed = {"ok": True, "code": "removed", "text": "Removed.", "kept_model": "a/b",
                "kept_bytes": 5, "kept_path": "/hf"}
     monkeypatch.setattr(le, "uninstall_vllm", lambda: removed)

@@ -982,7 +982,6 @@ class AgentBridge:
             labels = {
                 "install_env": "creating the vLLM environment",
                 "install_vllm": "installing vLLM (several GB, this takes minutes)",
-                "install_kernels": "fetching vLLM's prebuilt kernels",
                 "install_probe": "checking that vLLM loads on the GPU",
                 "download_model": "downloading the model",
                 "handover": "stopping the llama server",

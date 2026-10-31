@@ -270,7 +270,7 @@ class SettingsScreen(ModalScreen[None]):
         "auto_start_local_server": ("Auto-Start Local Server", ""),
     }
 
-    TITLES = {"main": "Settings", "voice": "Settings › Voice",
+    TITLES = {"main": "Settings", "voice": "Settings › Voice", "engine": "Settings › Engine",
               "theme": "Settings › Theme", "stt_lang": "Settings › Input Language",
               "subagent_provider": "Settings › Sub-Agent Provider",
               "mic": "Settings › Microphone"}
@@ -335,6 +335,9 @@ class SettingsScreen(ModalScreen[None]):
         # Automations submenu cache, same contract: loaded on entry (disk
         # reads), invalidated on back and after every toggle.
         self._automations = None
+        # The engine and vLLM model submenus' state (local_engine.state: nvidia-smi, the
+        # Hugging Face cache, the server's /health), loaded on entry like the microphones.
+        self._engine_state = None
 
     # menu definitions ---------------------------------------------------------------
     def _cfg(self, key, default=None):
@@ -374,11 +377,18 @@ class SettingsScreen(ModalScreen[None]):
             if provider != "local":
                 rows.append(("api_model", provider,
                              f"API Model: [$text]{_esc(api_model)}[/]"))
+            from vaf.core import local_engine
+            vllm = local_engine.is_vllm()
             rows += [
                 ("sep", None, ""),
                 ("choice", "n_ctx", ""),
+                ("submenu", "engine", f"Engine: {'vLLM' if vllm else 'llama.cpp'}"),
                 ("submenu", "local_model", "Select Active Model"),
-                ("later", "search_models", "Search & Download New Models"),
+            ]
+            if not vllm:
+                # A GGUF search and download is llama.cpp's; vLLM's model is a repo id.
+                rows.append(("later", "search_models", "Search & Download New Models"))
+            rows += [
                 ("toggle", "auto_start_local_server", ""),
                 ("sep", None, ""),
                 ("toggle", "web_ui_enabled", ""),
@@ -411,6 +421,10 @@ class SettingsScreen(ModalScreen[None]):
             ]
         if menu.startswith("choice:"):
             return self._choice_rows(menu.split(":", 1)[1])
+        if menu == "engine":
+            return self._engine_rows()
+        if menu == "local_model" and self._engine_is_vllm():
+            return self._vllm_model_rows()
         if menu == "local_model":
             # Rendered straight from disk, no cache: a directory listing is
             # cheap (unlike the microphone enumeration) and the active marker
@@ -503,6 +517,113 @@ class SettingsScreen(ModalScreen[None]):
         if key in self.NUMBERS:
             rows.append(("number", key, "Custom..."))
         return rows + [("back", None, "Back")]
+
+    ENGINE_LINES = {
+        "llama": ("llama.cpp", "GGUF models, runs on almost any hardware, starts in seconds"),
+        "vllm": ("vLLM", "Hugging Face models, fast with many requests, needs a supported "
+                         "GPU, starts in minutes"),
+    }
+
+    def _engine_is_vllm(self) -> bool:
+        state = getattr(self, "_engine_state", None)
+        if isinstance(state, dict):
+            return state.get("engine") == "vllm"
+        from vaf.core import local_engine
+        return local_engine.is_vllm()
+
+    def _load_engine_state(self) -> None:
+        try:
+            self._engine_state = self.app._bridge.engine_state()
+        except Exception as exc:
+            self._engine_state = f"engine state unavailable: {exc}"
+
+    def _engine_line(self, engine: str, active: bool) -> str:
+        name, line = self.ENGINE_LINES[engine]
+        marker = "▍" if active else " "
+        return f"[$primary]{marker}[/][$text]{name:<10}[/] [$vaf-muted]{_esc(line)}[/]"
+
+    def _engine_rows(self) -> list:
+        """The two engines with their lines, the active one marked, and this machine's
+        verdict. vLLM is a note (not selectable) where it cannot run, with the reason; under
+        the api profile neither engine runs, and both are notes with the profile's
+        sentence."""
+        state = self._engine_state
+        if not isinstance(state, dict):
+            return [("note", None, str(state or "engine state unavailable")),
+                    ("back", None, "Back")]
+        engine = state.get("engine")
+        support = state.get("support") or {}
+        if state.get("profile") == "api":
+            from vaf.core import inference_profile
+            return [("note", None, f"llama.cpp  {self.ENGINE_LINES['llama'][1]}"),
+                    ("note", None, f"vLLM  {self.ENGINE_LINES['vllm'][1]}"),
+                    ("note", None, inference_profile.refusal("a local engine")),
+                    ("back", None, "Back")]
+        rows = [("engine_pick", "llama", self._engine_line("llama", engine == "llama"))]
+        if support.get("level") == "supported":
+            rows.append(("engine_pick", "vllm", self._engine_line("vllm", engine == "vllm")))
+            rows.append(("note", None, str(support.get("reason") or "")))
+        else:
+            word = "not yet" if support.get("level") == "later" else "not available"
+            rows.append(("note", None, f"vLLM  {self.ENGINE_LINES['vllm'][1]} - {word}: "
+                                       f"{support.get('reason') or ''}"))
+        return rows + [("back", None, "Back")]
+
+    def _vllm_model_rows(self) -> list:
+        """The vLLM model: Automatic (the GPU's default), the curated repos with their
+        weights, a stored repo of its own, and a free entry. No GGUF: llama.cpp's files mean
+        nothing to vLLM."""
+        state = self._engine_state
+        if not isinstance(state, dict):
+            return [("note", None, str(state or "engine state unavailable")),
+                    ("back", None, "Back")]
+        vllm = state.get("vllm") or {}
+        setting = str(vllm.get("model_setting") or "auto")
+        curated = {c["repo"]: c["weights_gb"] for c in vllm.get("curated") or []}
+        auto_model = str(vllm.get("auto_model") or "")
+        auto_gb = curated.get(auto_model)
+        auto_text = f"Automatic for this GPU: {auto_model}" + (f" ({auto_gb:.2f} GB)" if auto_gb else "")
+
+        def row(value: str, text: str) -> tuple:
+            marker = "▍" if (setting.lower() == value.lower()) else " "
+            return ("vllm_model", value, f"[$primary]{marker}[/][$text]{_esc(text)}[/]")
+        rows = [row("auto", auto_text)]
+        for repo, gb in curated.items():
+            rows.append(row(repo, f"{repo} ({gb:.2f} GB)"))
+        if setting.lower() != "auto" and setting not in curated:
+            rows.append(row(setting, setting))
+        rows.append(("vllm_model_other", None, "Other Hugging Face model..."))
+        return rows + [("back", None, "Back")]
+
+    def _switch_engine(self, engine: str, model=None) -> None:
+        """Hand the switch to the bridge's lane; ask first when vLLM is to be installed."""
+        state = self._engine_state if isinstance(self._engine_state, dict) else {}
+        vllm = state.get("vllm") or {}
+
+        def _go(install: bool) -> None:
+            self.app._bridge.apply_engine(engine, model=model, install=install)
+            self.app.notify("switching the local engine - see the chat for progress",
+                            timeout=2.5)
+            self._engine_state = None
+            self._stack = ["main"]
+            self._rebuild()
+            self.app.post_message(SettingsChanged())
+
+        if engine == "vllm" and vllm.get("needs_install"):
+            repo = model if model and model != "auto" else (
+                vllm.get("auto_model") if model == "auto" else vllm.get("model"))
+            gb = {c["repo"]: c["weights_gb"] for c in vllm.get("curated") or []}.get(repo)
+            size = f" ({gb:.2f} GB)" if gb else ""
+            question = (f"Install vLLM {vllm.get('pin')}: at least "
+                        f"{float(vllm.get('download_gb_at_least') or 0):.1f} GB to download, "
+                        f"more on disk, plus {repo}{size}?")
+
+            def _answered(yes) -> None:
+                if yes:
+                    _go(True)
+            self.app.push_screen(ConfirmScreen(question), _answered)
+            return
+        _go(False)
 
     def _subagent_provider_rows(self) -> list:
         """The sub-agent provider menu, marked by what sub-agents ACTUALLY run on.
@@ -618,6 +739,12 @@ class SettingsScreen(ModalScreen[None]):
                 self._load_mics()
             elif arg == "automations":
                 self._load_automations()
+            elif arg == "engine":
+                self._load_engine_state()
+            elif arg == "local_model":
+                from vaf.core import local_engine
+                if local_engine.is_vllm():
+                    self._load_engine_state()
             self._stack.append(arg)
             self._rebuild()
             return
@@ -697,6 +824,25 @@ class SettingsScreen(ModalScreen[None]):
                 NumberScreen(name, current, minimum=minimum, maximum=maximum,
                              hint=hint), _entered)
             return
+        if kind == "engine_pick":
+            self._switch_engine(str(arg))
+            return
+        if kind == "vllm_model":
+            self._switch_engine("vllm", model=str(arg))
+            return
+        if kind == "vllm_model_other":
+            def _typed(value) -> None:
+                if not value:
+                    return
+                from vaf.core import local_engine
+                if not local_engine.valid_repo_id(value):
+                    self.app.notify(f"{value} is no Hugging Face repo id (owner/name)",
+                                    severity="warning", timeout=3.0)
+                    return
+                self._switch_engine("vllm", model=value)
+            self.app.push_screen(RenameScreen(title="Hugging Face model",
+                                              placeholder="owner/name"), _typed)
+            return
         if kind == "local_model":
             # The swap itself runs on the bridge's lane (the new weights have
             # to load, which blocks for a while) - the row only hands the file
@@ -762,6 +908,8 @@ class SettingsScreen(ModalScreen[None]):
                 self._mic_devices = None      # re-enumerate on next entry
             elif left == "automations":
                 self._automations = None      # re-read on next entry
+            elif left in ("engine", "local_model"):
+                self._engine_state = None     # re-read on next entry
             self._rebuild()
         else:
             self.dismiss(None)
@@ -956,14 +1104,19 @@ class RenameScreen(ModalScreen["str | None"]):
 
     BINDINGS = [Binding("escape", "cancel", "cancel")]
 
-    def __init__(self, current: str = "") -> None:
+    def __init__(self, current: str = "", title: str = "Rename session",
+                 placeholder: str = "session name") -> None:
         super().__init__()
         self._current = str(current or "")
+        # One text field for more than a session name (the vLLM model's repo id): the
+        # defaults are the rename's own words.
+        self._title = str(title)
+        self._placeholder = str(placeholder)
 
     def compose(self) -> ComposeResult:
         with Vertical(id="rename-box", classes="modal-box"):
-            yield Static("[bold $text]Rename session[/]", classes="modal-title")
-            yield Input(value=self._current, placeholder="session name",
+            yield Static(f"[bold $text]{_esc(self._title)}[/]", classes="modal-title")
+            yield Input(value=self._current, placeholder=self._placeholder,
                         id="rename-input")
             yield Static("[$text-disabled]enter saves · esc cancels[/]",
                          classes="modal-keys")

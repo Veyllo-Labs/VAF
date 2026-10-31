@@ -21,6 +21,7 @@ from vaf.core import local_engine as le
 from vaf.core import vllm_server as vs
 
 REPO = "Qwen/Qwen3-4B-AWQ"
+REAL_STOP_LLAMA = le._stop_llama
 
 
 @pytest.fixture
@@ -34,7 +35,7 @@ def config(monkeypatch, tmp_path):
     monkeypatch.setattr(Config, "load", staticmethod(lambda: dict(values)))
     monkeypatch.setattr(vs, "pid_file", lambda: tmp_path / "vllm.pid")
     monkeypatch.setattr(vs, "venv_dir", lambda: tmp_path / "bin" / "vllm" / "venv")
-    monkeypatch.setattr(engine_mod, "_stop_llama", lambda: None)
+    monkeypatch.setattr(le, "_stop_llama", lambda say: (False, ""))
     return values
 
 
@@ -60,7 +61,7 @@ def _fake_install(monkeypatch, calls, fits=True):
     monkeypatch.setattr(vs, "is_installed", lambda: state["installed"])
     monkeypatch.setattr(vs, "installed_version", lambda: vs.PIN if state["installed"] else None)
 
-    def install(log=None, run=None):
+    def install(log=None, run=None, **kw):
         calls.append("install")
         state["installed"] = True
         return ""
@@ -192,25 +193,43 @@ def test_a_failed_fit_says_the_llama_server_was_stopped(config, monkeypatch):
     """The llama server was stopped for the measurement; the user learns it comes back."""
     _supported(monkeypatch)
     _fake_install(monkeypatch, [], fits=False)
-    monkeypatch.setattr(engine_mod, "_stop_llama", lambda: True)
+    monkeypatch.setattr(le, "_stop_llama", lambda say: (True, ""))
     result = _invoke("vllm", "--yes")
     assert result.exit_code == 1
     assert "stopped" in result.output and "next use" in result.output
 
 
-def test_the_fit_check_waits_for_the_released_gpu_memory(monkeypatch):
+def test_the_fit_check_waits_for_the_released_gpu_memory(config, monkeypatch):
     """`vaf engine vllm` measures after the same handover the vLLM start runs (stopped, gone,
-    port free, memory settled), not right after the kill."""
+    port free, memory settled), not right after the kill. The handover moved into the core
+    with the switch (local_engine._stop_llama); a handover that fails exits 1."""
     from vaf.core.backend import ServerManager
     calls = []
     monkeypatch.setattr(ServerManager, "_llama_pid", lambda self: 4242)
     monkeypatch.setattr(ServerManager, "hand_over_from_llama",
                         lambda self, port=8080, wait=15.0: calls.append(port) or "")
-    assert engine_mod._stop_llama() is True and calls == [8080]
+    monkeypatch.setattr(le, "_stop_llama", REAL_STOP_LLAMA)
+    assert le._stop_llama(lambda text, kind="info": None) == (True, "") and calls == [8080]
     monkeypatch.setattr(ServerManager, "hand_over_from_llama",
                         lambda self, port=8080, wait=15.0: "llama-server (PID 4242) did not stop.")
-    with pytest.raises(typer.Exit) as stopped:
-        engine_mod._stop_llama()
-    assert stopped.value.exit_code == 1
+    _supported(monkeypatch)
+    _fake_install(monkeypatch, [])
+    stopped = _invoke("vllm", "--yes")
+    assert stopped.exit_code == 1 and "did not stop" in stopped.output
+    assert config.get("local_engine") is None
     monkeypatch.setattr(ServerManager, "_llama_pid", lambda self: None)
-    assert engine_mod._stop_llama() is False
+    assert le._stop_llama(lambda text, kind="info": None) == (False, "")
+
+
+def test_models_set_warns_under_vllm(config):
+    """A GGUF set under vLLM is stored but not run: the command says so and names the vLLM
+    model command. MUTATION: remove the warning - red."""
+    from vaf.cli.cmd import models as models_mod
+    runner = CliRunner()
+    config["local_engine"] = "vllm"
+    result = runner.invoke(models_mod.app, ["set", "qwen.gguf"])
+    assert result.exit_code == 0 and config["model"] == "qwen.gguf"
+    assert "vaf engine vllm --model" in result.output
+    config["local_engine"] = "llama"
+    result = runner.invoke(models_mod.app, ["set", "qwen.gguf"])
+    assert "vaf engine vllm --model" not in result.output

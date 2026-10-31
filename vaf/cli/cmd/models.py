@@ -38,6 +38,11 @@ def set_model(model_name: str):
     """Set the active model."""
     Config.set("model", model_name)
     UI.success(f"Active model set to: {model_name}")
+    from vaf.core import local_engine
+    if local_engine.is_vllm():
+        # The GGUF setting is llama.cpp's; under vLLM it is stored and not run.
+        UI.warning("The local engine is vLLM: this GGUF applies to llama.cpp only. Choose the "
+                   "vLLM model with `vaf engine vllm --model owner/name`.")
 
 @app.command("config")
 def set_config(key: str, value: str):

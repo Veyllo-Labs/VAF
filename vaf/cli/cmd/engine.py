@@ -14,6 +14,9 @@
 
 Exit codes like `vaf profile`: 0 done, 1 not complete, 2 refused.
 
+Every step is ``local_engine.apply`` (and ``state``, ``uninstall_vllm``), the implementation
+Settings > AI & Model and the full-screen TUI call too; this module only prints.
+
 The switch does not start vLLM itself: the next use of the local model starts it, as it
 starts the GGUF engine. Not behind the terminal door, like `vaf profile`: what it changes
 is the machine's, not an account's data, and an account that could run it from the
@@ -30,151 +33,78 @@ def _gb(size: int) -> str:
     return f"{size / 1024 ** 3:.1f} GB"
 
 
-def _n_ctx() -> int:
-    from vaf.core.config import Config
-    from vaf.core.vllm_server import MIN_CONTEXT
-    try:
-        return max(int(Config.get("n_ctx", MIN_CONTEXT) or MIN_CONTEXT), MIN_CONTEXT)
-    except (TypeError, ValueError):
-        return MIN_CONTEXT
+def _say(text: str, kind: str = "info") -> None:
+    {"success": UI.success, "warning": UI.warning}.get(kind, UI.info)(text)
 
 
 def _show() -> None:
     from vaf.core import local_engine as le
-    from vaf.core import vllm_server as vs
-    engine = le.current()
-    UI.info("Engine: " + ("vllm (vLLM, Hugging Face safetensors)" if engine == le.VLLM
+    state = le.state()
+    vllm = state["vllm"]
+    UI.info("Engine: " + ("vllm (vLLM, Hugging Face safetensors)" if state["engine"] == le.VLLM
                           else "llama (llama.cpp, GGUF)"))
-    verdict = le.support()
-    UI.info(f"vLLM on this machine: {verdict.level}. {verdict.reason}")
-    version = vs.installed_version()
+    UI.info(f"vLLM on this machine: {state['support']['level']}. {state['support']['reason']}")
+    version = vllm["installed_version"]
     UI.info(f"vLLM installed: {version}" if version
-            else f"vLLM installed: no (VAF installs {vs.PIN} with `vaf engine vllm`)")
-    repo = le.resolve_vllm_model()
-    tool, reasoning = le.parsers_for(repo)
-    UI.info(f"vLLM model: {repo}; tool-call parser {tool or 'unknown'}, reasoning parser "
-            f"{reasoning or 'none'}")
-    pid = vs.running_pid()
-    if engine == le.VLLM:
+            else f"vLLM installed: no (VAF installs {vllm['pin']} with `vaf engine vllm`)")
+    parsers = vllm["parsers"]
+    UI.info(f"vLLM model: {vllm['model']}; tool-call parser {parsers['tool'] or 'unknown'}, "
+            f"reasoning parser {parsers['reasoning'] or 'none'}")
+    if state["engine"] == le.VLLM:
+        from vaf.core import vllm_server as vs
+        pid = vs.running_pid()
         UI.info(f"vLLM server: running (PID {pid})" if pid else "vLLM server: not running "
                 "(it starts with the next use of the local model)")
-    for sentence in le.conflicts():
-        UI.warning(sentence)
+    for conflict in state["conflicts"]:
+        UI.warning(conflict["text"])
 
 
-def _stop_llama() -> bool:
-    """Stop the llama server, which holds the GPU memory vLLM is measured against and needs,
-    and wait until that memory is released (the same handover the vLLM start runs). True when
-    one was running and is stopped now; exit 1 when it does not stop."""
-    from vaf.core.backend import ServerManager
-    mgr = ServerManager(skip_cleanup=True)
-    if mgr._llama_pid() is None:
-        return False
-    UI.info("Stopping the llama server (vLLM needs its GPU memory)...")
-    reason = mgr.hand_over_from_llama()
-    if reason:
-        UI.error(reason + " The local engine is unchanged.")
-        raise typer.Exit(1)
-    return True
+def _finish(result) -> None:
+    """Print what ``local_engine.apply`` did and exit like `vaf profile`: 0 done, 1 not
+    complete, 2 refused."""
+    if result.status == "done":
+        UI.success(result.text)
+        return
+    if result.note:
+        UI.success(result.note)
+    UI.error(result.text)
+    if result.detail:
+        UI.error(result.detail)
+    raise typer.Exit(2 if result.status == "refused" else 1)
 
 
 def _uninstall() -> None:
     from vaf.core import local_engine as le
-    from vaf.core import vllm_server as vs
-    if le.is_vllm():
-        UI.error("vLLM is the local engine: switch back first (`vaf engine llama`), then "
-                 "uninstall.")
-        raise typer.Exit(2)
-    if vs.installed_version() is None and not vs.venv_dir().exists():
-        UI.info("vLLM is not installed.")
+    out = le.uninstall_vllm()
+    if out["code"] == "not_installed":
+        UI.info(out["text"])
         return
-    reason = vs.uninstall()
-    if reason:
-        UI.error(reason)
-        raise typer.Exit(1)
-    UI.success(f"Removed {vs.venv_dir()}.")
-    repo = le.resolve_vllm_model()
-    snapshot = vs.local_snapshot(repo)
-    if snapshot:
-        UI.info(f"The model {repo} ({_gb(vs.model_size_bytes(snapshot))}) stays in the Hugging "
-                f"Face cache ({snapshot}); delete it there when you need the space.")
+    if not out["ok"]:
+        UI.error(out["text"])
+        raise typer.Exit(2 if out["code"] == "engine_active" else 1)
+    UI.success(out["text"])
+    if out["kept_model"]:
+        UI.info(f"The model {out['kept_model']} ({_gb(out['kept_bytes'])}) stays in the Hugging "
+                f"Face cache ({out['kept_path']}); delete it there when you need the space.")
     else:
         UI.info("Models downloaded for vLLM stay in the Hugging Face cache.")
 
 
 def _to_vllm(model: Optional[str], yes: bool) -> None:
-    from vaf.core import inference_profile as ip
     from vaf.core import local_engine as le
-    from vaf.core import vllm_server as vs
-    from vaf.core.config import Config
-
-    if not ip.local_inference_allowed():
-        UI.error(ip.refusal("vLLM"))
-        raise typer.Exit(2)
-    if model is not None and not le.valid_repo_id(model):
-        UI.error(f"--model takes a Hugging Face repo id (owner/name), not {model!r}.")
-        raise typer.Exit(2)
-    verdict = le.support()
-    if not verdict.supported:
-        UI.error(verdict.reason)
-        raise typer.Exit(2)
-    repo = model.strip() if model else le.resolve_vllm_model()
-    tool, reasoning = le.parsers_for(repo)
-    refusal = le.parser_refusal(repo, tool, reasoning)
-    if refusal:
-        UI.error(refusal)
-        raise typer.Exit(2)
-
-    if not vs.is_installed() or vs.installed_version() != vs.PIN:
-        UI.info(f"This installs vLLM {vs.PIN} (about {vs.DOWNLOAD_GB_AT_LEAST:.1f} GB or more to "
-                f"download, more on disk) into {vs.venv_dir()}.")
+    result = le.apply(le.VLLM, model=model, log=_say)
+    if result.status == "needs_install":
+        UI.info(result.text)
         if not yes and not typer.confirm("Install it now?", default=False):
             UI.info("Nothing was installed; the local engine is unchanged.")
             raise typer.Exit(1)
-        reason = vs.install(log=UI.info)
-        if reason:
-            UI.error(reason)
-            UI.error("The local engine is unchanged.")
-            raise typer.Exit(1)
-        UI.success(f"vLLM {vs.installed_version() or vs.PIN} is installed.")
-
-    model_dir = vs.ensure_model(repo)
-    if not model_dir:
-        UI.error(f"The model {repo} could not be downloaded; the local engine is unchanged.")
-        raise typer.Exit(1)
-
-    stopped_llama = _stop_llama()
-    result = vs.plan_fit(model_dir, _n_ctx())
-    if result.note:
-        UI.warning(result.note)
-    if not result.ok:
-        UI.error(result.reason)
-        UI.error(f"The local engine stays {le.current()}; a smaller model (--model) or a "
-                 "smaller n_ctx may fit."
-                 + (" The llama server was stopped for the measurement; it starts again with "
-                    "the next use of the local model." if stopped_llama else ""))
-        raise typer.Exit(1)
-    UI.info(f"{repo}: {result.reason}")
-    if model is not None:
-        Config.set("vllm_model", repo)
-    previous = le.current()
-    Config.set("local_engine", le.VLLM)
-    UI.success("The local engine is vLLM." + (" (unchanged)" if previous == le.VLLM else "")
-               + " It starts with the next use of the local model; the first start takes "
-               "minutes.")
+        result = le.apply(le.VLLM, model=model, install=True, log=_say)
+    _finish(result)
 
 
 def _to_llama() -> None:
     from vaf.core import local_engine as le
-    from vaf.core import vllm_server as vs
-    from vaf.core.config import Config
-    previous = le.current()
-    Config.set("local_engine", le.LLAMA)
-    reason = vs.stop() if vs.running_pid() is not None else ""
-    UI.success("The local engine is llama.cpp." + (" (unchanged)" if previous == le.LLAMA else ""))
-    if reason:
-        UI.error(reason)
-        raise typer.Exit(1)
+    _finish(le.apply(le.LLAMA))
 
 
 def engine_cmd(

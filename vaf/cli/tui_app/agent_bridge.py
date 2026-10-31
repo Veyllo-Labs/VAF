@@ -923,6 +923,14 @@ class AgentBridge:
         With a non-local provider only the config moves (the classic contract):
         the file becomes active the next time the local provider serves.
         """
+        from vaf.core import local_engine
+        if local_engine.is_vllm():
+            # The GGUF setting is llama.cpp's; under vLLM it would be stored and not run.
+            self.events.event_note(
+                "Model", "the local engine is vLLM; choose its model under Select Active "
+                         "Model", "warning")
+            return
+
         def _run():
             from vaf.core.config import Config
             Config.set("model", filename)
@@ -953,6 +961,68 @@ class AgentBridge:
         if self._busy:
             self.events.event_note("Model", "not while a turn is running",
                                    "warning")
+            return
+        self._submit(_run)
+
+    def engine_state(self, model=None) -> dict:
+        """What the engine and model submenus show (``local_engine.state``)."""
+        from vaf.core import local_engine
+        return local_engine.state(model)
+
+    def apply_engine(self, engine: str, model=None, install: bool = False) -> None:
+        """Switch the local engine (``local_engine.apply``) on the lane: an install and a
+        model download take minutes, and a running turn refuses it like a model swap. pip's
+        output goes to ``logs/vllm_install.log`` (the alternate screen has no room for it);
+        each phase is a note in the transcript. A running local agent is moved onto the new
+        engine's model afterwards (``reload_local_model``)."""
+        def _run():
+            from vaf.core import local_engine
+            from vaf.core.log_helper import get_app_log_dir
+            output = str(get_app_log_dir() / "vllm_install.log")
+            labels = {
+                "install_env": "creating the vLLM environment",
+                "install_vllm": "installing vLLM (several GB, this takes minutes)",
+                "install_kernels": "fetching vLLM's prebuilt kernels",
+                "install_probe": "checking that PyTorch sees the GPU",
+                "download_model": "downloading the model",
+                "handover": "stopping the llama server",
+                "fit_check": "checking that the model fits",
+                "stop_vllm": "stopping vLLM",
+            }
+
+            def progress(step) -> None:
+                phase = step.get("phase")
+                if phase and not step.get("error") and step.get("step", 0) < step.get("steps", 0):
+                    self.events.event_note(
+                        "Engine", f"{step['step'] + 1}/{step['steps']} "
+                                  f"{labels.get(phase, phase)}", "info")
+            try:
+                result = local_engine.apply(engine, model=model, install=install,
+                                            progress=progress, output=output)
+            except Exception as exc:
+                self.events.event_note("Engine", f"engine switch failed: {exc}", "error")
+                return
+            if result.status == "done":
+                self.events.system_note(result.text)
+                if (getattr(self.agent, "provider", "local") == "local"
+                        and result.code not in ("unchanged_llama",)):
+                    try:
+                        self.agent.reload_local_model()
+                    except Exception as exc:
+                        self.events.event_note("Engine", f"the running agent did not switch: "
+                                                         f"{exc}", "warning")
+            else:
+                if result.note:
+                    self.events.system_note(result.note)
+                text = " ".join(t for t in (result.text, result.detail) if t)
+                if result.code in ("install_failed", "cuda_probe_failed"):
+                    text += f" Details: {output}"
+                self.events.event_note("Engine", text, "error")
+            self._emit("chrome_changed")
+            self._refresh_context()
+
+        if self._busy:
+            self.events.event_note("Engine", "not while a turn is running", "warning")
             return
         self._submit(_run)
 

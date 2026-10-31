@@ -1126,9 +1126,12 @@ def model_download_broadcast(repo: str, filename: str,
             except Exception:
                 pass
         frame = {"type": "model_download_done", "success": bool(outcome.get("success"))}
-        try:
-            if done_extra is not None:
+        if done_extra is not None:
+            try:
                 frame.update(done_extra() or {})
+            except Exception:
+                pass    # the extra is optional; the frame that closes the banner is not
+        try:
             get_web_interface().push_update(frame)
         except Exception:
             pass

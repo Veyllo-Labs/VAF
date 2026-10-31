@@ -317,12 +317,13 @@ def ensure_model_available(model_name, models_dir) -> str:
     if _present(filename):
         return str(models_dir / filename)
     if repo_id and filename:
+        from vaf.core.model_download_state import MODEL_DOWNLOAD
+        cancels = MODEL_DOWNLOAD.cancels
         try:
             return _download(repo_id, filename)
         except Exception as e:
             UI.error(f"Download of {filename} failed: {e}")
-            from vaf.core.model_download_state import MODEL_DOWNLOAD
-            if MODEL_DOWNLOAD.cancel_requested:
+            if MODEL_DOWNLOAD.cancels != cancels:
                 # Cancelled from the banner: no fallback download in its place.
                 return str(models_dir / filename)
 

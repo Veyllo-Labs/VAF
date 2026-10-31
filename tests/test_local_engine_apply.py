@@ -32,7 +32,7 @@ import pytest
 from vaf.core import local_engine as le
 from vaf.core import vllm_server as vs
 from vaf.core.maintenance_state import MAINTENANCE
-from vaf.core.model_download_state import MODEL_DOWNLOAD
+from vaf.core.model_download_state import MODEL_DOWNLOAD, DownloadCancelled
 
 REPO = "Qwen/Qwen3-4B-AWQ"
 REAL_ENSURE_MODEL = vs.ensure_model
@@ -183,7 +183,8 @@ def test_failed_steps_keep_engine(config, monkeypatch, failure, code):
     if failure == "llama_stop":
         monkeypatch.setattr(le, "_stop_llama", lambda say: (True, "llama-server (PID 1) did not stop."))
     if failure == "cancelled":
-        monkeypatch.setattr(type(MODEL_DOWNLOAD), "cancel_requested", property(lambda self: True))
+        # The progress hook honoured a cancel during this download (it counts and raises).
+        monkeypatch.setattr(vs, "ensure_model", lambda repo: MODEL_DOWNLOAD.note_cancelled() or "")
     result = le.apply("vllm", install=True)
     assert result.status == "failed" and result.code == code, result
     assert config["local_engine"] == "llama", "a failed step changed the engine"
@@ -353,10 +354,15 @@ def test_cancelled_gguf_download_has_no_fallback(monkeypatch, tmp_path):
                         lambda: SimpleNamespace(push_update=lambda frame: None))
     fetched = []
 
+    mode = {"cancel": True}
+
     def hf_hub_download(repo_id, filename, local_dir, tqdm_class=None):
         fetched.append(filename)
         if filename == "m.gguf":
-            raise InterruptedError("The download was cancelled.")
+            if mode["cancel"]:
+                MODEL_DOWNLOAD.note_cancelled()
+                raise DownloadCancelled("The download was cancelled.")
+            raise InterruptedError("The connection dropped.")
         (tmp_path / filename).write_bytes(b"gguf")
         return str(tmp_path / filename)
     monkeypatch.setattr(huggingface_hub, "hf_hub_download", hf_hub_download)
@@ -364,10 +370,126 @@ def test_cancelled_gguf_download_has_no_fallback(monkeypatch, tmp_path):
                         lambda name: ("org/repo", "m.gguf") if "m.gguf" in name else ("org/auto", "auto.gguf"))
     import vaf.core.gpu_detection as gd
     monkeypatch.setattr(gd, "recommended_default_model", lambda: "org/auto/auto.gguf")
-    monkeypatch.setattr(type(MODEL_DOWNLOAD), "cancel_requested", property(lambda self: True))
     backend.ensure_model_available("org/repo/m.gguf", tmp_path)
     assert fetched == ["m.gguf"], "a cancelled download fell back to the default model"
-    monkeypatch.setattr(type(MODEL_DOWNLOAD), "cancel_requested", property(lambda self: False))
+    # A later plain failure: the earlier cancel must not answer for it (no stale flag).
+    mode["cancel"] = False
     fetched.clear()
     backend.ensure_model_available("org/repo/m.gguf", tmp_path)
     assert fetched == ["m.gguf", "auto.gguf"], "a plain failure keeps its self-heal"
+
+
+def test_model_change_stops_running_vllm_before_fit(config, monkeypatch):
+    """A running vLLM holds its own share of the GPU: measured against it, a model change was
+    refused although it fits once the old server is gone (820 of 10240 MiB free). The switch
+    stops it first and says so; the same model already served is neither stopped nor measured."""
+    config["local_engine"] = "vllm"
+    events = _fakes(monkeypatch, config, installed=True)
+    running = {"pid": 4242}
+    monkeypatch.setattr(vs, "running_pid", lambda: running["pid"])
+    monkeypatch.setattr(vs, "served_model", lambda port=8080: REPO)
+    monkeypatch.setattr(vs, "stop", lambda wait=15.0: events.append(("stop_vllm",))
+                        or running.__setitem__("pid", None) or "")
+
+    def plan_fit(d, n, kv_dtype=None):
+        events.append(("fit",))
+        fits = running["pid"] is None
+        return vs.FitResult(fits, n, 0.5, "fp8", 6000, 5120, "x",
+                            code="fits" if fits else "share_above_free")
+    monkeypatch.setattr(vs, "plan_fit", plan_fit)
+    result = le.apply("vllm", model="Qwen/Qwen3-8B-AWQ")
+    assert result.status == "done", result
+    names = [e[0] for e in events if e[0] != "set"]
+    assert names.index("stop_vllm") < names.index("fit"), "measured while the old vLLM held the GPU"
+    assert result.stopped_vllm is True and result.to_dict()["stopped_vllm"] is True
+    assert config["vllm_model"] == "Qwen/Qwen3-8B-AWQ"
+    # The model it already serves: no stop, no measurement, and no needless vllm_model write.
+    events.clear()
+    running["pid"] = 4242
+    config["vllm_model"] = REPO
+    result = le.apply("vllm", model=REPO)
+    assert result.status == "done" and result.fit is None and result.stopped_vllm is False
+    assert not [e for e in events if e[0] in ("stop_vllm", "fit")]
+    assert ("set", "vllm_model", REPO) not in events
+
+
+def test_no_fit_after_stopping_vllm_says_so(config, monkeypatch):
+    config["local_engine"] = "vllm"
+    _fakes(monkeypatch, config, installed=True, fits=False)
+    running = {"pid": 4242}
+    monkeypatch.setattr(vs, "running_pid", lambda: running["pid"])
+    monkeypatch.setattr(vs, "served_model", lambda port=8080: REPO)
+    monkeypatch.setattr(vs, "stop", lambda wait=15.0: running.__setitem__("pid", None) or "")
+    result = le.apply("vllm", model="Qwen/Qwen3-8B-AWQ")
+    assert result.code == "no_fit" and result.stopped_vllm is True
+    assert "vLLM was stopped for the measurement" in result.detail
+
+
+def test_uninstall_rechecks_the_engine_under_the_lock(config, monkeypatch):
+    """A switch to vLLM that finishes between the first check and the lock must not lose its
+    environment."""
+    removed = []
+    monkeypatch.setattr(vs, "uninstall", lambda: removed.append(1) or "")
+    monkeypatch.setattr(vs, "installed_version", lambda: vs.PIN)
+    answers = iter([False, True])
+    monkeypatch.setattr(le, "is_vllm", lambda config=None: next(answers))
+    out = le.uninstall_vllm()
+    assert out["code"] == "engine_active" and removed == []
+
+
+def test_a_cancel_request_ends_with_its_download():
+    """A request belongs to the download it was made for: finish() drops it, so it can never
+    end the next download; whether a download was cancelled is the honoured-cancel count."""
+    MODEL_DOWNLOAD.start("a/b", "b")
+    assert MODEL_DOWNLOAD.request_cancel() is True and MODEL_DOWNLOAD.cancel_requested
+    MODEL_DOWNLOAD.finish()
+    assert MODEL_DOWNLOAD.cancel_requested is False
+    before = MODEL_DOWNLOAD.cancels
+    MODEL_DOWNLOAD.note_cancelled()
+    assert MODEL_DOWNLOAD.cancels == before + 1
+
+
+def test_maintenance_done_frame_reaches_banner(config, monkeypatch):
+    """The switch marks MAINTENANCE done and clears it at once; the 1 s broadcaster still
+    sends one inactive frame with the kind, which the banner shows as "finished"."""
+    import time
+
+    from vaf.core import web_interface
+    frames = []
+    monkeypatch.setattr(web_interface, "get_web_interface",
+                        lambda: SimpleNamespace(push_update=frames.append))
+    stop = web_interface.start_maintenance_broadcast(poll_seconds=0.05)
+    try:
+        _fakes(monkeypatch, config, installed=True)
+        original = vs.ensure_model
+        monkeypatch.setattr(vs, "ensure_model", lambda repo: time.sleep(0.2) or original(repo))
+        assert le.apply("vllm").status == "done"
+        time.sleep(0.3)
+    finally:
+        stop()
+    seen = [f for f in frames if f["kind"] == "vllm_engine"]
+    assert any(f["active"] for f in seen)
+    assert seen[-1]["active"] is False and seen[-1]["error"] == "", seen[-1]
+
+
+def test_done_frame_sent_when_the_extra_fails(monkeypatch):
+    from vaf.core import web_interface
+    pushed = []
+    monkeypatch.setattr(web_interface, "start_model_download_broadcast", lambda: (lambda: None))
+    monkeypatch.setattr(web_interface, "get_web_interface",
+                        lambda: SimpleNamespace(push_update=pushed.append))
+    with web_interface.model_download_broadcast("a/b", "b", done_extra=lambda: 1 / 0) as out:
+        out["success"] = True
+    assert pushed == [{"type": "model_download_done", "success": True}]
+
+
+def test_support_class_is_worked_out_once_and_never_raises(monkeypatch):
+    calls = []
+    monkeypatch.setattr(le, "_SUPPORT_CLASS", None)
+    monkeypatch.setattr(le, "support", lambda **kw: calls.append(1) or le.EngineSupport(
+        le.SUPPORTED, "x", "supported", {"gpu": "RTX"}))
+    assert le.support_class() == ("supported", "supported")
+    assert le.support_class() == ("supported", "supported") and calls == [1]
+    monkeypatch.setattr(le, "_SUPPORT_CLASS", None)
+    monkeypatch.setattr(le, "support", lambda **kw: 1 / 0)
+    assert le.support_class() is None

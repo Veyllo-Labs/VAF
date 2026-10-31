@@ -113,6 +113,10 @@ LLAMA_RESTART_KEYS = ("model", "n_ctx", "gpu_layers")
 ENGINE_KEYS = ("local_engine", "vllm_model", "vllm_tool_call_parser", "vllm_reasoning_parser",
                "vllm_gpu_memory_utilization")
 RESTART_KEYS = LLAMA_RESTART_KEYS + ENGINE_KEYS
+# The keys only ``apply`` writes: a direct write would switch the engine or its model without
+# the install, the download and the fit check. The parser and GPU-share keys stay writable
+# (config-file and `vaf models config` settings).
+SWITCH_KEYS = ("local_engine", "vllm_model")
 
 _REPO_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*")
 _PARSER_NAME = re.compile(r"[a-z0-9_]+")
@@ -242,6 +246,25 @@ def support(gpu: Any = _DETECT, system: Optional[str] = None, machine: Optional[
                                     f"{vram_gb:.0f} GB). llama.cpp stays the lighter choice "
                                     "for small GPUs and quick starts.",
                          "supported", {"gpu": name, "vram_gb": f"{vram_gb:.0f}"})
+
+
+_SUPPORT_CLASS: Optional[Tuple[str, str]] = None
+
+
+def support_class() -> Optional[Tuple[str, str]]:
+    """(level, code) of this machine's verdict, worked out once per process, or None when the
+    detection failed. For the unauthenticated first-run question (``needs-setup``): the
+    hardware does not change while VAF runs, and ``support`` starts external programs
+    (nvidia-smi, lspci) that an unauthenticated caller must not be able to start on every
+    request. Never raises."""
+    global _SUPPORT_CLASS
+    if _SUPPORT_CLASS is None:
+        try:
+            verdict = support()
+            _SUPPORT_CLASS = (str(verdict.level), str(verdict.code))
+        except Exception:
+            return None
+    return _SUPPORT_CLASS
 
 
 # Every code ``support`` gives, for the catalogues (a guard test reads this tuple).
@@ -501,6 +524,7 @@ class EngineSwitch:
     model: str = ""
     fit: Any = None
     stopped_llama: bool = False
+    stopped_vllm: bool = False
     note: str = ""
     detail: str = ""
     previous: str = ""
@@ -510,6 +534,7 @@ class EngineSwitch:
         return {"status": self.status, "code": self.code, "text": self.text,
                 "detail": self.detail, "engine": self.engine, "model": self.model,
                 "fit": fit_dict(self.fit), "stopped_llama": self.stopped_llama,
+                "stopped_vllm": self.stopped_vllm,
                 "note": self.note, "previous": self.previous, "params": dict(self.params)}
 
 
@@ -782,10 +807,11 @@ def _apply_vllm(setting, repo, install, progress, output, say) -> EngineSwitch:
                 "success")
 
         steps.begin("download_model")
+        from vaf.core.model_download_state import MODEL_DOWNLOAD
+        cancels = MODEL_DOWNLOAD.cancels
         model_dir = vllm_server.ensure_model(repo)
         if not model_dir:
-            from vaf.core.model_download_state import MODEL_DOWNLOAD
-            if MODEL_DOWNLOAD.cancel_requested:
+            if MODEL_DOWNLOAD.cancels != cancels:
                 return failed("download_cancelled", f"The download of {repo} was cancelled; "
                                                     "the local engine is unchanged.")
             return failed("download_failed", f"The model {repo} could not be downloaded; the "
@@ -796,20 +822,40 @@ def _apply_vllm(setting, repo, install, progress, output, say) -> EngineSwitch:
         if reason:
             return failed("llama_stop_failed", reason + " The local engine is unchanged.",
                           stopped_llama=stopped)
+        stopped_vllm = False
+        result = None
+        if vllm_server.running_pid() is not None:
+            if previous == VLLM and vllm_server.served_model() == repo:
+                # It already serves this model, so it fits: nothing to stop or measure.
+                say(f"vLLM already serves {repo}.", "info")
+            else:
+                # Its own share of the GPU would be measured as taken, and the fit refused a
+                # model that fits once it is gone (measured: 820 of 10240 MiB free).
+                say("Stopping vLLM (the new model is measured against the memory it holds)...",
+                    "info")
+                reason = vllm_server.stop()
+                if reason:
+                    return failed("vllm_stop_failed", reason + " The local engine is unchanged.",
+                                  stopped_llama=stopped)
+                stopped_vllm = True
 
-        steps.begin("fit_check")
-        result = vllm_server.plan_fit(model_dir, _n_ctx())
-        if result.note:
-            say(result.note, "warning")
-        if not result.ok:
-            return failed("no_fit", result.reason,
-                          f"The local engine stays {previous}; a smaller model (--model) or a "
-                          "smaller n_ctx may fit."
-                          + (" The llama server was stopped for the measurement; it starts "
-                             "again with the next use of the local model." if stopped else ""),
-                          fit=result, stopped_llama=stopped)
-        say(f"{repo}: {result.reason}", "info")
-        if setting is not None:
+        if not (previous == VLLM and vllm_server.running_pid() is not None and not stopped_vllm):
+            steps.begin("fit_check")
+            result = vllm_server.plan_fit(model_dir, _n_ctx())
+            if result.note:
+                say(result.note, "warning")
+            if not result.ok:
+                return failed("no_fit", result.reason,
+                              f"The local engine stays {previous}; a smaller model (--model) or "
+                              "a smaller n_ctx may fit."
+                              + (" The llama server was stopped for the measurement; it starts "
+                                 "again with the next use of the local model." if stopped else "")
+                              + (" vLLM was stopped for the measurement; it starts again with "
+                                 "the next use of the local model." if stopped_vllm else ""),
+                              fit=result, stopped_llama=stopped, stopped_vllm=stopped_vllm)
+            say(f"{repo}: {result.reason}", "info")
+        if setting is not None and str(Config.get("vllm_model", "auto") or "") != setting:
+            # Only a change: the tray restarts a running vLLM for every vllm_ key it sees change.
             Config.set("vllm_model", setting)
         Config.set("local_engine", VLLM)
     except BaseException:
@@ -821,7 +867,8 @@ def _apply_vllm(setting, repo, install, progress, output, say) -> EngineSwitch:
         "done", "unchanged_vllm" if unchanged else "switched_vllm",
         "The local engine is vLLM." + (" (unchanged)" if unchanged else "")
         + " It starts with the next use of the local model; the first start takes minutes.",
-        VLLM, repo, fit=result, stopped_llama=stopped, previous=previous)
+        VLLM, repo, fit=result, stopped_llama=stopped, stopped_vllm=stopped_vllm,
+        previous=previous)
 
 
 def uninstall_vllm() -> Dict[str, Any]:
@@ -845,6 +892,12 @@ def uninstall_vllm() -> Dict[str, Any]:
                                      "it to finish first.")
         return out
     try:
+        # Again under the lock: a switch to vLLM can finish between the check above and the
+        # lock, and removing its environment then would leave the engine without one.
+        if is_vllm():
+            out.update(code="engine_active", text="vLLM is the local engine: switch back first "
+                                                  "(`vaf engine llama`), then uninstall.")
+            return out
         if vllm_server.installed_version() is None and not vllm_server.venv_dir().exists():
             out.update(ok=True, code="not_installed", text="vLLM is not installed.")
             return out

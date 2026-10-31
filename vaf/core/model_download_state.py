@@ -18,6 +18,10 @@ from __future__ import annotations
 import threading
 
 
+class DownloadCancelled(InterruptedError):
+    """A download ended by ``MODEL_DOWNLOAD.request_cancel`` (the banner's Cancel)."""
+
+
 class _ModelDownloadState:
     """Thread-safe snapshot of the current model download (at most one at a time, serialized by the
     download filelock). All access goes through the internal lock."""
@@ -30,6 +34,7 @@ class _ModelDownloadState:
         self._bytes_done = 0
         self._bytes_total = 0
         self._cancel = False
+        self._cancels = 0
 
     def start(self, repo: str, filename: str) -> None:
         with self._lock:
@@ -49,6 +54,8 @@ class _ModelDownloadState:
     def finish(self) -> None:
         with self._lock:
             self._active = False
+            # A request belongs to the download it was made for; none outlives it.
+            self._cancel = False
 
     @property
     def active(self) -> bool:
@@ -56,10 +63,11 @@ class _ModelDownloadState:
             return self._active
 
     def request_cancel(self) -> bool:
-        """Ask the running download to end (its progress hook raises at the next tick). False,
-        and nothing remembered, when none runs: a request must not end the next download. The
-        flag stays set after the download ended, so its caller can tell a cancel from a
-        failure; the next ``start`` clears it."""
+        """Ask the running download to end (its progress hook raises ``DownloadCancelled`` at
+        the next tick). False, and nothing remembered, when none runs: a request must not end
+        the next download. A caller that wants to know whether ITS download was cancelled
+        compares ``cancels`` before and after it, so a cancel of an earlier download never
+        answers for a later failure."""
         with self._lock:
             if not self._active:
                 return False
@@ -70,6 +78,17 @@ class _ModelDownloadState:
     def cancel_requested(self) -> bool:
         with self._lock:
             return self._cancel
+
+    def note_cancelled(self) -> None:
+        """Count a cancel the progress hook honoured (it raises right after)."""
+        with self._lock:
+            self._cancels += 1
+
+    @property
+    def cancels(self) -> int:
+        """How many downloads a cancel has ended in this process."""
+        with self._lock:
+            return self._cancels
 
     def snapshot(self) -> dict:
         """A consistent copy for readers (the worker status push, load_model's wait loop, the WS layer)."""
@@ -113,7 +132,8 @@ def make_state_tqdm(should_abort=None):
             if should_abort is not None:
                 should_abort()
             if state.cancel_requested:
-                raise InterruptedError("The download was cancelled.")
+                state.note_cancelled()
+                raise DownloadCancelled("The download was cancelled.")
             res = super().update(n)
             try:
                 state.update(self.n, self.total or 0)

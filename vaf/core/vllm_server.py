@@ -306,8 +306,9 @@ def ensure_model(repo_id: str) -> str:
     """The model's directory, downloaded from Hugging Face when it is not in the cache yet.
     "" under the ``api`` profile (nothing is downloaded), for a value that is no repo id, or
     when the download failed or was cancelled (``MODEL_DOWNLOAD.request_cancel``: the
-    caller tells the two apart by ``cancel_requested``). The download runs inside
-    ``web_interface.model_download_broadcast``: the download banner of every open page shows
+    caller tells the two apart by ``MODEL_DOWNLOAD.cancels`` before and after the call).
+    The download runs inside ``web_interface.model_download_broadcast``: the download banner
+    of every open page shows
     its bytes and closes on its end, with no model list in the closing frame (the GGUF list
     is not affected by a vLLM model)."""
     from vaf.core import inference_profile, local_engine
@@ -322,7 +323,7 @@ def ensure_model(repo_id: str) -> str:
         return found
     from filelock import FileLock
 
-    from vaf.core.model_download_state import MODEL_DOWNLOAD, make_state_tqdm
+    from vaf.core.model_download_state import DownloadCancelled, make_state_tqdm
     lock_dir = venv_dir().parent
     lock_dir.mkdir(parents=True, exist_ok=True)
     with FileLock(str(lock_dir / "download.lock")):
@@ -341,7 +342,7 @@ def ensure_model(repo_id: str) -> str:
                     repo_id, allow_patterns=MODEL_PATTERNS, ignore_patterns=CODE_PATTERNS,
                     tqdm_class=make_state_tqdm(inference_profile.download_guard()))
             except Exception as e:      # noqa: BLE001 - reported, and the caller sees ""
-                if MODEL_DOWNLOAD.cancel_requested:
+                if isinstance(e, DownloadCancelled):
                     _ui().event("System", f"Download of {repo_id} cancelled.", style="warning")
                 else:
                     _ui().error(f"Download of {repo_id} failed: {e}")

@@ -43,7 +43,8 @@ _LOCALES = ("de", "en", "ja", "ko", "th", "tr", "zh")
 
 
 def _src(path: Path) -> str:
-    return path.read_bytes().decode("utf-8")
+    # Text mode: the needles below hold newlines, and a CRLF checkout must read as LF.
+    return path.read_text(encoding="utf-8")
 
 
 def _between(src: str, start: str, end: str) -> str:
@@ -240,3 +241,44 @@ def test_pickers_boundary_gone():
     doc = _src(_ROOT / "docs" / "llm" / "VLLM_ENGINE.md")
     assert "three model pickers do not know the engine" not in doc
     assert "**The pickers:**" not in doc
+
+
+def test_review_round_layout_fixes():
+    """The progress bar moves by transform only (DESIGN.md motion rule); the banner's phase
+    wraps on a phone; the cards keep their own height; the download row stacks on a phone;
+    the wizard's engine choice sits above the button that takes the local path."""
+    body = _src(_SECTION)
+    assert "transition-[width]" not in body and "scaleX(" in body and "origin-left" in body
+    page = _src(_PAGE)
+    banner = _between(page, "{maintenanceStatus && (", "{/* Token Stats")
+    assert 'className="truncate max-md:whitespace-normal"' in banner
+    assert "items-start max-md:grid-cols-1" in _src(_CHOICE)
+    modal = _src(_MODAL)
+    row = modal[modal.index("tAi('downloadModelFromHf')") - 500:modal.index("tAi('downloadModelFromHf')")]
+    assert "max-md:flex-col max-md:items-stretch" in row
+    login = _src(_LOGIN)
+    assert login.index("data-wizard-engine") < login.index("t('veylloSkipApi') : t('veylloSkip')")
+
+
+def test_sizes_read_in_gb():
+    """The confirm says GB, so the fit and the download bytes do too."""
+    body = _src(_SECTION)
+    assert "need: gb(fit.need_mb), budget: gb(fit.budget_mb)" in body
+    assert "GB / ${num(downloadModelStatus.bytes_total / 1024 ** 3, 2)} GB" in body
+    assert "t('stoppedVllm')" in body
+
+
+@pytest.mark.parametrize("locale", _LOCALES)
+def test_round_one_wording(locale):
+    cat = json.loads((_MESSAGES / f"{locale}.json").read_bytes())
+    le_cat = cat["localEngine"]
+    assert "vaf models config vllm_tool_call_parser" in le_cat["result"]["parser_unknown"]
+    assert le_cat["stoppedVllm"].strip()
+    for path, value in _flat(le_cat):
+        assert "<" not in value and ">" not in value, (locale, path, "tags in a message")
+    for key in ("too_big", "share_above_free", "fits"):
+        assert "MiB" not in le_cat["fit"][key] and "GB" in le_cat["fit"][key], (locale, key)
+    assert "\u2013" not in cat["main"]["maintenanceFailed"]
+    if locale == "de":
+        assert le_cat["modelOtherPlaceholder"] == "owner/name"
+        assert "ließ sich nicht anhalten" in le_cat["result"]["llama_stop_failed"]

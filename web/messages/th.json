@@ -2781,13 +2781,13 @@
       "no_gpu": "ไม่พบ GPU: แบ็กเอนด์ CPU ของ vLLM มีความสามารถพื้นฐาน และ llama.cpp เป็นเอนจินที่เหมาะกับ CPU มากกว่า",
       "amd": "vLLM รองรับ AMD GPU บางรุ่นผ่าน ROCm และมีเฉพาะบิลด์ Python 3.12 เท่านั้น VAF ยังไม่จัดการให้",
       "intel": "vLLM รองรับ Intel GPU ในระดับพื้นฐานและต้องใช้ Python 3.12 VAF ยังไม่จัดการให้",
-      "nvidia_unknown": "VAF อ่านค่า compute capability ของ GPU นี้ไม่ได้ ไดรเวอร์ NVIDIA อาจเก่าเกินไปสำหรับ vLLM",
+      "nvidia_unknown": "VAF อ่านค่า compute capability ของ GPU นี้ไม่ได้ ไดรเวอร์ NVIDIA อาจเก่าเกินไปสำหรับ vLLM ให้อัปเดตไดรเวอร์ NVIDIA แล้วเริ่ม VAF ใหม่",
       "nvidia_too_old": "vLLM ต้องใช้ NVIDIA GPU ที่มี compute capability 7.5 ขึ้นไป (Turing ขึ้นไป) แต่ GPU นี้เก่ากว่านั้น",
-      "python": "vLLM ต้องใช้ Python 3.11 ถึง 3.14 แต่ VAF ที่นี่ทำงานบนเวอร์ชันอื่น"
+      "python": "vLLM ต้องใช้ Python 3.11 ถึง 3.14 แต่ VAF ที่นี่ทำงานบนเวอร์ชันอื่น ให้ติดตั้ง VAF บนเวอร์ชันใดเวอร์ชันหนึ่งเหล่านั้นเพื่อใช้ vLLM"
     },
     "model": "โมเดล vLLM",
-    "modelAuto": "อัตโนมัติสำหรับ GPU นี้: {repo} ({gb} GB)",
-    "modelAutoNoSize": "อัตโนมัติสำหรับ GPU นี้: {repo}",
+    "modelAuto": "อัตโนมัติ: {repo} ({gb} GB)",
+    "modelAutoNoSize": "อัตโนมัติ: {repo}",
     "modelCurated": "{repo} ({gb} GB)",
     "modelOther": "โมเดล Hugging Face อื่น…",
     "modelOtherLabel": "โมเดล Hugging Face",
@@ -2819,6 +2819,7 @@
     "automatic": "อัตโนมัติ",
     "stepOf": "ขั้นที่ {step} จาก {steps}",
     "stoppedLlama": "เซิร์ฟเวอร์ llama.cpp ถูกหยุดเพื่อการวัดผล และจะเริ่มทำงานอีกครั้งเมื่อมีข้อความถัดไป",
+    "stoppedVllm": "vLLM ถูกหยุดเพื่อการวัดผล และจะเริ่มทำงานอีกครั้งเมื่อมีข้อความถัดไป",
     "logHint": "รายละเอียด: {path}",
     "failed": "ติดตามการสลับไม่สำเร็จ ลองตรวจสถานะเอนจินอีกครั้ง",
     "server": {
@@ -2827,20 +2828,20 @@
       "idle": "ติดตั้ง vLLM {version} แล้ว และจะเริ่มทำงานเมื่อมีข้อความถัดไป"
     },
     "phase": {
-      "install_env": "กำลังสร้างสภาพแวดล้อม vLLM",
-      "install_vllm": "กำลังติดตั้ง vLLM (หลาย GB ใช้เวลาหลายนาที)",
-      "install_kernels": "กำลังดึงเคอร์เนลที่สร้างไว้ล่วงหน้าของ vLLM",
+      "install_env": "กำลังสร้างสภาพแวดล้อม",
+      "install_vllm": "กำลังติดตั้งแพ็กเกจ (หลาย GB ใช้เวลาหลายนาที)",
+      "install_kernels": "กำลังดึงเคอร์เนลที่สร้างไว้ล่วงหน้า",
       "install_probe": "กำลังตรวจว่า PyTorch มองเห็น GPU หรือไม่",
       "download_model": "กำลังดาวน์โหลดโมเดล",
-      "handover": "กำลังหยุดเซิร์ฟเวอร์ llama.cpp",
+      "handover": "กำลังหยุดเซิร์ฟเวอร์โมเดลที่กำลังทำงานอยู่",
       "fit_check": "กำลังตรวจว่าโมเดลใส่ได้พอดีหรือไม่",
-      "stop_vllm": "กำลังหยุด vLLM"
+      "stop_vllm": "กำลังหยุดเซิร์ฟเวอร์ vLLM"
     },
     "result": {
       "unknown_engine": "ไม่รู้จักเอนจินนี้",
       "bad_repo": "โมเดล Hugging Face ต้องระบุในรูปแบบ owner/name",
       "profile_api": "การติดตั้งนี้ทำงานโดยไม่มีโมเดลในเครื่อง (โปรไฟล์ แบบเบา (API)) จึงไม่ใช้ vLLM ที่นี่",
-      "parser_unknown": "VAF ไม่รู้จักตัวแยกวิเคราะห์การเรียกใช้เครื่องมือของ {model} ให้ตั้ง vllm_tool_call_parser ในการกำหนดค่าเป็นชื่อที่ vLLM ระบุสำหรับโมเดลตระกูลนี้ VAF ต้องใช้การเรียกใช้เครื่องมือ",
+      "parser_unknown": "VAF ไม่รู้จักตัวแยกวิเคราะห์การเรียกใช้เครื่องมือของ {model} จึงยังรันบน vLLM ไม่ได้ ให้เลือกโมเดลอื่น หรือตั้งตัวแยกวิเคราะห์ในเทอร์มินัลด้วยคำสั่ง vaf models config vllm_tool_call_parser ตามด้วยชื่อที่ vLLM ระบุสำหรับโมเดลตระกูลนี้",
       "parser_bad": "ชื่อตัวแยกวิเคราะห์ที่กำหนดไว้ไม่ถูกต้อง: ใช้ตัวอักษรพิมพ์เล็ก ตัวเลข และ _",
       "busy": "กำลังสลับเอนจินในเครื่องอีกครั้งอยู่ โปรดรอให้เสร็จก่อน",
       "needs_install": "ยังไม่ได้ติดตั้ง vLLM",
@@ -2861,9 +2862,9 @@
       "removed": "ถอด vLLM ออกแล้ว"
     },
     "fit": {
-      "fits": "ใส่ได้พอดี: ใช้ประมาณ {need} จาก {budget} MiB (คอนเท็กซ์ {ctx}, KV cache {kv})",
-      "too_big": "ต้องใช้ประมาณ {need} MiB (น้ำหนักโมเดล {weights}, KV cache {kvMb} สำหรับ {ctx} โทเคน) แต่ vLLM ได้ {budget} จาก {total} MiB",
-      "share_above_free": "vLLM จะใช้ GPU {budget} MiB แต่มีเหลือว่างเพียง {free} MiB",
+      "fits": "ใส่ได้พอดี: ใช้ประมาณ {need} จาก {budget} GB (คอนเท็กซ์ {ctx}, KV cache {kv})",
+      "too_big": "โมเดลนี้ต้องใช้หน่วยความจำ GPU ประมาณ {need} GB แต่ vLLM ได้ใช้เพียง {budget} GB ที่นี่ ให้เลือกโมเดลที่เล็กลงหรือคอนเท็กซ์ที่เล็กลง",
+      "share_above_free": "โปรแกรมอื่นกำลังใช้ GPU อยู่ vLLM ต้องใช้ {budget} GB แต่มีที่ว่างเพียง {free} GB ให้ปิดโปรแกรมเหล่านั้นแล้วลองอีกครั้ง",
       "no_shape": "config.json ของโมเดลไม่ได้ระบุโครงสร้างของโมเดล",
       "no_gpu_memory": "nvidia-smi ไม่รายงานหน่วยความจำของ GPU"
     },

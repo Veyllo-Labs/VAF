@@ -1383,19 +1383,12 @@ export default function LoginPage() {
                                             <>{t('veylloSave')} <ArrowRight size={18} /></>
                                         )}
                                     </button>
-                                    <button
-                                        type="button"
-                                        onClick={() => { setStep('setup_2fa'); handleStartSetup2FA(); }}
-                                        disabled={veylloTesting}
-                                        className="w-full mt-3 py-2 text-sm text-gray-500 hover:text-gray-800 transition-colors disabled:opacity-50"
-                                    >
-                                        {setupProfile === 'api' ? t('veylloSkipApi') : t('veylloSkip')}
-                                    </button>
-                                    {/* The local step's whole engine choice: the wizard has no model list,
+                                    {/* The local step's whole engine choice, above the button that takes the local path
+                                        (below it, it read as part of a finished form): the wizard has no model list,
                                         so the engine is all it asks. vLLM only on a supported verdict;
                                         otherwise its reason stays visible. Not under the api profile. */}
                                     {setupProfile !== 'api' && setupVllm && (
-                                        <div className="mt-5 text-left" data-wizard-engine>
+                                        <div className="mt-5 pt-4 border-t border-gray-100 text-left" data-wizard-engine>
                                             <div className="text-sm font-medium text-gray-700 ml-1 mb-1.5">{tEngine('label')}</div>
                                             <EngineChoice
                                                 label={tEngine('label')}
@@ -1420,6 +1413,14 @@ export default function LoginPage() {
                                             )}
                                         </div>
                                     )}
+                                    <button
+                                        type="button"
+                                        onClick={() => { setStep('setup_2fa'); handleStartSetup2FA(); }}
+                                        disabled={veylloTesting}
+                                        className="w-full mt-3 py-2 text-sm text-gray-500 hover:text-gray-800 transition-colors disabled:opacity-50"
+                                    >
+                                        {setupProfile === 'api' ? t('veylloSkipApi') : t('veylloSkip')}
+                                    </button>
                                     <p className="text-xs text-gray-400 text-center mt-4 leading-relaxed">{t(setupProfile === 'api' ? 'veylloOtherProvidersApi' : 'veylloOtherProviders')}</p>
                                 </div>
                             </div>

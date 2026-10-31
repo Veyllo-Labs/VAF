@@ -2781,13 +2781,13 @@
       "no_gpu": "GPUが見つかりません。vLLMのCPUバックエンドは基本的な機能にとどまり、CPUではllama.cppのほうが適しています。",
       "amd": "vLLMはROCm経由で一部のAMD GPUに対応しますが、Python 3.12のビルドのみです。VAFはまだ管理に対応していません。",
       "intel": "vLLMのIntel GPU対応は基本的なもので、Python 3.12が必要です。VAFはまだ管理に対応していません。",
-      "nvidia_unknown": "VAFはこのGPUのコンピュートキャパビリティを読み取れませんでした。NVIDIAドライバーがvLLMには古い可能性があります。",
+      "nvidia_unknown": "VAFはこのGPUのコンピュートキャパビリティを読み取れませんでした。NVIDIAドライバーがvLLMには古い可能性があります。NVIDIAドライバーを更新して、VAFを再起動してください。",
       "nvidia_too_old": "vLLMにはコンピュートキャパビリティ7.5以上のNVIDIA GPU（Turing以降）が必要です。このGPUはそれより古いものです。",
-      "python": "vLLMにはPython 3.11から3.14が必要ですが、ここでVAFは別のバージョンで動いています。"
+      "python": "vLLMにはPython 3.11から3.14が必要ですが、ここでVAFは別のバージョンで動いています。vLLMを使うには、そのいずれかのバージョンにVAFをインストールしてください。"
     },
     "model": "vLLMモデル",
-    "modelAuto": "このGPUに合わせて自動：{repo}（{gb} GB）",
-    "modelAutoNoSize": "このGPUに合わせて自動：{repo}",
+    "modelAuto": "自動：{repo}（{gb} GB）",
+    "modelAutoNoSize": "自動：{repo}",
     "modelCurated": "{repo}（{gb} GB）",
     "modelOther": "その他のHugging Faceモデル…",
     "modelOtherLabel": "Hugging Faceモデル",
@@ -2819,6 +2819,7 @@
     "automatic": "自動",
     "stepOf": "ステップ{step}/{steps}",
     "stoppedLlama": "計測のためllama.cppサーバーを停止しました。次のメッセージで再び起動します。",
+    "stoppedVllm": "計測のためvLLMを停止しました。次のメッセージで再び起動します。",
     "logHint": "詳細：{path}",
     "failed": "切り替えの状況を追跡できませんでした。もう一度エンジンの状態を確認してください。",
     "server": {
@@ -2827,20 +2828,20 @@
       "idle": "vLLM {version}はインストール済みで、次のメッセージで起動します。"
     },
     "phase": {
-      "install_env": "vLLM環境を作成しています",
-      "install_vllm": "vLLMをインストールしています（数GB、数分かかります）",
-      "install_kernels": "vLLMのビルド済みカーネルを取得しています",
+      "install_env": "環境を作成しています",
+      "install_vllm": "パッケージをインストールしています（数GB、数分かかります）",
+      "install_kernels": "ビルド済みカーネルを取得しています",
       "install_probe": "PyTorchがGPUを認識しているか確認しています",
       "download_model": "モデルをダウンロードしています",
-      "handover": "llama.cppサーバーを停止しています",
+      "handover": "実行中のモデルサーバーを停止しています",
       "fit_check": "モデルが収まるか確認しています",
-      "stop_vllm": "vLLMを停止しています"
+      "stop_vllm": "vLLMサーバーを停止しています"
     },
     "result": {
       "unknown_engine": "不明なエンジンです。",
       "bad_repo": "Hugging Faceモデルはowner/nameの形式で入力します。",
       "profile_api": "この環境はローカルモデルなしで動作しているため（軽量（API）プロファイル）、ここではvLLMは使われません。",
-      "parser_unknown": "VAFは{model}のツール呼び出しパーサーを把握していません。設定のvllm_tool_call_parserに、このモデルファミリーについてvLLMが示す名前を指定してください。VAFにはツール呼び出しが必要です。",
+      "parser_unknown": "VAFは{model}のツール呼び出しパーサーを把握していないため、まだvLLMでは実行できません。別のモデルを選ぶか、ターミナルでvaf models config vllm_tool_call_parserを実行し、このモデルファミリー向けにvLLMが示すパーサー名を指定してください。",
       "parser_bad": "設定されたパーサー名が正しくありません。英小文字、数字、_ を使ってください。",
       "busy": "ローカルエンジンの別の切り替えが実行中です。完了までお待ちください。",
       "needs_install": "vLLMはまだインストールされていません。",
@@ -2861,9 +2862,9 @@
       "removed": "vLLMを削除しました。"
     },
     "fit": {
-      "fits": "収まります：{budget} MiBのうち約{need} MiB（コンテキスト{ctx}、KVキャッシュ{kv}）。",
-      "too_big": "約{need} MiBが必要です（重み{weights}、{ctx}トークン分のKVキャッシュ{kvMb}）が、vLLMに割り当てられるのは{total} MiBのうち{budget} MiBです。",
-      "share_above_free": "vLLMはGPUの{budget} MiBを使用しようとしますが、空きは{free} MiBしかありません。",
+      "fits": "収まります：{budget} GBのうち約{need} GB（コンテキスト{ctx}、KVキャッシュ{kv}）。",
+      "too_big": "このモデルには約{need} GBのGPUメモリが必要ですが、ここでvLLMが使えるのは{budget} GBです。より小さいモデルか、より小さいコンテキストを選んでください。",
+      "share_above_free": "ほかのプログラムがGPUを使用しています。vLLMには{budget} GB必要ですが、空きは{free} GBしかありません。それらを閉じてからもう一度お試しください。",
       "no_shape": "モデルのconfig.jsonに構造が記載されていません。",
       "no_gpu_memory": "nvidia-smiがGPUのメモリを報告しません。"
     },

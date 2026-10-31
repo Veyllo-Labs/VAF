@@ -53,7 +53,7 @@ export default function EngineChoice({ label, value, options, onChange, idPrefix
     };
 
     return (
-        <div role="radiogroup" aria-label={label} className="grid grid-cols-2 gap-3 max-md:grid-cols-1">
+        <div role="radiogroup" aria-label={label} className="grid grid-cols-2 gap-3 items-start max-md:grid-cols-1">
             {options.map((opt) => {
                 const checked = opt.id === value;
                 const noteId = opt.note ? `${idPrefix}-${opt.id}-note` : undefined;

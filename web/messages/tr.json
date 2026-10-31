@@ -2781,13 +2781,13 @@
       "no_gpu": "GPU bulunamadı: vLLM'nin CPU arka ucu temel düzeydedir, CPU için daha iyi motor llama.cpp'dir.",
       "amd": "vLLM, ROCm üzerinden bazı AMD GPU'ları destekler ve yalnızca Python 3.12 sürümleri vardır; VAF bunu henüz yönetmiyor.",
       "intel": "vLLM'nin Intel GPU desteği temel düzeydedir ve Python 3.12 gerektirir; VAF bunu henüz yönetmiyor.",
-      "nvidia_unknown": "VAF bu GPU'nun işlem yeteneğini okuyamadı; NVIDIA sürücüsü vLLM için fazla eski olabilir.",
+      "nvidia_unknown": "VAF bu GPU'nun işlem yeteneğini okuyamadı; NVIDIA sürücüsü vLLM için fazla eski olabilir. NVIDIA sürücüsünü güncelleyin ve VAF'ı yeniden başlatın.",
       "nvidia_too_old": "vLLM, işlem yeteneği 7.5 veya üzeri bir NVIDIA GPU gerektirir (Turing ve sonrası); bu GPU daha eski.",
-      "python": "vLLM, Python 3.11 ile 3.14 arasını gerektirir; VAF burada başka bir sürümle çalışıyor."
+      "python": "vLLM, Python 3.11 ile 3.14 arasını gerektirir; VAF burada başka bir sürümle çalışıyor. vLLM'yi kullanmak için VAF'ı bu sürümlerden birine kurun."
     },
     "model": "vLLM modeli",
-    "modelAuto": "Bu GPU için otomatik: {repo} ({gb} GB)",
-    "modelAutoNoSize": "Bu GPU için otomatik: {repo}",
+    "modelAuto": "Otomatik: {repo} ({gb} GB)",
+    "modelAutoNoSize": "Otomatik: {repo}",
     "modelCurated": "{repo} ({gb} GB)",
     "modelOther": "Başka bir Hugging Face modeli…",
     "modelOtherLabel": "Hugging Face modeli",
@@ -2819,6 +2819,7 @@
     "automatic": "otomatik",
     "stepOf": "Adım {step} / {steps}",
     "stoppedLlama": "llama.cpp sunucusu ölçüm için durduruldu; sonraki iletiyle yeniden başlar.",
+    "stoppedVllm": "vLLM ölçüm için durduruldu; sonraki iletiyle yeniden başlar.",
     "logHint": "Ayrıntılar: {path}",
     "failed": "Geçiş izlenemedi. Motor durumunu yeniden denetleyin.",
     "server": {
@@ -2827,20 +2828,20 @@
       "idle": "vLLM {version} yüklü ve sonraki iletiyle başlar."
     },
     "phase": {
-      "install_env": "vLLM ortamı oluşturuluyor",
-      "install_vllm": "vLLM yükleniyor (birkaç GB, dakikalar sürer)",
-      "install_kernels": "vLLM'nin hazır çekirdekleri alınıyor",
+      "install_env": "Ortam oluşturuluyor",
+      "install_vllm": "Paketler yükleniyor (birkaç GB, dakikalar sürer)",
+      "install_kernels": "Hazır çekirdekler alınıyor",
       "install_probe": "PyTorch'un GPU'yu görüp görmediği denetleniyor",
       "download_model": "Model indiriliyor",
-      "handover": "llama.cpp sunucusu durduruluyor",
+      "handover": "Çalışan model sunucusu durduruluyor",
       "fit_check": "Modelin sığıp sığmadığı denetleniyor",
-      "stop_vllm": "vLLM durduruluyor"
+      "stop_vllm": "vLLM sunucusu durduruluyor"
     },
     "result": {
       "unknown_engine": "Bilinmeyen motor.",
       "bad_repo": "Hugging Face modeli owner/name biçiminde yazılır.",
       "profile_api": "Bu kurulum yerel model olmadan çalışıyor (Hafif (API) profili), bu yüzden burada vLLM kullanılmaz.",
-      "parser_unknown": "VAF, {model} için araç çağrısı ayrıştırıcısını bilmiyor. Yapılandırmada vllm_tool_call_parser değerini, vLLM'nin bu model ailesi için belirttiği ada ayarlayın; VAF'ın araç çağrılarına ihtiyacı var.",
+      "parser_unknown": "VAF, {model} için araç çağrısı ayrıştırıcısını bilmiyor; bu yüzden model henüz vLLM üzerinde çalışamaz. Başka bir model seçin ya da terminalde vaf models config vllm_tool_call_parser komutuyla, vLLM'nin bu model ailesi için belirttiği ayrıştırıcı adını ayarlayın.",
       "parser_bad": "Yapılandırılan ayrıştırıcı adı geçerli değil: küçük harf, rakam ve _ kullanın.",
       "busy": "Yerel motorun başka bir geçişi sürüyor; bitmesini bekleyin.",
       "needs_install": "vLLM henüz yüklü değil.",
@@ -2861,9 +2862,9 @@
       "removed": "vLLM kaldırıldı."
     },
     "fit": {
-      "fits": "Sığıyor: {budget} MiB içinden yaklaşık {need} (bağlam {ctx}, KV önbelleği {kv}).",
-      "too_big": "Yaklaşık {need} MiB gerekir (ağırlıklar {weights}, {ctx} belirteç için KV önbelleği {kvMb}), ancak vLLM {total} MiB içinden {budget} MiB alıyor.",
-      "share_above_free": "vLLM, GPU'dan {budget} MiB alacaktı, ancak yalnızca {free} MiB boş.",
+      "fits": "Sığıyor: {budget} GB içinden yaklaşık {need} GB (bağlam {ctx}, KV önbelleği {kv}).",
+      "too_big": "Model yaklaşık {need} GB GPU belleği gerektiriyor, ancak vLLM burada yalnızca {budget} GB alıyor. Daha küçük bir model ya da daha küçük bir bağlam seçin.",
+      "share_above_free": "Diğer programlar GPU'yu kullanıyor: vLLM'nin {budget} GB'a ihtiyacı var, ancak yalnızca {free} GB boş. Onları kapatıp yeniden deneyin.",
       "no_shape": "Modelin config.json dosyası yapısını belirtmiyor.",
       "no_gpu_memory": "nvidia-smi GPU belleğini bildirmiyor."
     },

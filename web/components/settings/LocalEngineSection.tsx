@@ -36,6 +36,7 @@ interface SwitchResult {
     model: string;
     fit: FitData | null;
     stopped_llama: boolean;
+    stopped_vllm?: boolean;
     note: string;
     params: Record<string, string>;
 }
@@ -110,7 +111,8 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
     const t = useTranslations('localEngine');
     const format = useFormatter();
     // Sizes in the reader's notation (2,67 GB in German).
-    const num = (value: number, digits: number) => format.number(value, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+    const num = useCallback((value: number, digits: number) =>
+        format.number(value, { minimumFractionDigits: digits, maximumFractionDigits: digits }), [format]);
     const apiBase = typeof window !== 'undefined' ? (document.location.origin || '') : '';
     const [data, setData] = useState<EngineState | null>(null);
     const [loadFailed, setLoadFailed] = useState(false);
@@ -198,15 +200,18 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
         const lines = [coded(ns, r.code, params, r.text)];
         const fit = r.fit;
         if (fit && fit.code) {
+            // GB, like the sizes everywhere else in the section (the core counts MiB).
+            const gb = (mib: number) => num((mib || 0) / 1024, 1);
             lines.push(coded('fit', fit.code, {
-                need: fit.need_mb, budget: fit.budget_mb, ctx: fit.max_model_len, kv: fit.kv_dtype,
-                weights: fit.weights_mb, kvMb: fit.kv_mb, total: fit.total_mb, free: fit.free_mb,
+                need: gb(fit.need_mb), budget: gb(fit.budget_mb), ctx: fit.max_model_len, kv: fit.kv_dtype,
+                free: gb(fit.free_mb),
             }, fit.reason));
         }
         if (r.code === 'no_fit' && r.stopped_llama) lines.push(t('stoppedLlama'));
+        if (r.code === 'no_fit' && r.stopped_vllm) lines.push(t('stoppedVllm'));
         if (r.code === 'install_failed' || r.code === 'cuda_probe_failed') lines.push(t('logHint', { path: INSTALL_LOG }));
         return { lines, tone: r.status === 'done' ? 'ok' : 'error' };
-    }, [coded, t]);
+    }, [coded, t, num]);
 
     const follow = useCallback(async () => {
         if (following.current) return;
@@ -489,14 +494,16 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
                         {progress.steps > 0 && <span className="shrink-0 text-gray-500">{t('stepOf', { step: Math.min(progress.step + 1, progress.steps), steps: progress.steps })}</span>}
                     </div>
                     <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                        <div className="h-full bg-gray-900 dark:bg-[#ececec] rounded-full transition-[width] duration-300"
-                            style={{ width: `${progress.steps ? Math.round((progress.step / progress.steps) * 100) : 0}%` }} />
+                        {/* A full-width fill scaled from the left: only transform moves (a width
+                            transition repaints the bar every frame, DESIGN.md motion rule). */}
+                        <div className="h-full w-full origin-left bg-gray-900 dark:bg-[#ececec] rounded-full transition-transform duration-300"
+                            style={{ transform: `scaleX(${progress.steps ? progress.step / progress.steps : 0})` }} />
                     </div>
                     {downloading && (
                         <div className="flex items-center justify-between text-xs text-gray-500">
                             <span>
                                 {downloadModelStatus?.bytes_done != null && downloadModelStatus?.bytes_total
-                                    ? `${num(downloadModelStatus.bytes_done / (1024 * 1024), 0)} MB / ${num(downloadModelStatus.bytes_total / (1024 * 1024), 0)} MB`
+                                    ? `${num(downloadModelStatus.bytes_done / 1024 ** 3, 2)} GB / ${num(downloadModelStatus.bytes_total / 1024 ** 3, 2)} GB`
                                     : downloadModelStatus?.progress_pct != null ? `${Math.round(downloadModelStatus.progress_pct)}%` : ''}
                             </span>
                             {downloadModelStatus?.speed_str && <span>{downloadModelStatus.speed_str}</span>}

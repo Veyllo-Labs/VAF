@@ -10757,7 +10757,8 @@ function VAFDashboardContent() {
                                         <div className="flex-1 min-w-0 flex items-center gap-3 px-4 py-2.5 rounded-xl border border-gray-200 bg-white shadow-sm">
                                             <div className="flex-1 min-w-0">
                                                 <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
-                                                    <span className="truncate">
+                                                    {/* Two lines on a phone: the engine switch's phase is a sentence. */}
+                                                    <span className="truncate max-md:whitespace-normal">
                                                         {maintenanceStatus.kind === 'vllm_engine'
                                                             // The engine switch (local_engine.apply): its phase is a code.
                                                             ? (maintenanceStatus.error

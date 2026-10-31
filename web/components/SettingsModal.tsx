@@ -4005,7 +4005,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 
                                         {onRequestModelPreview && (
                                             <div className="mb-4">
-                                                <div className="flex gap-2 items-end">
+                                                {/* Stacked on a phone: side by side the button's label overflowed it. */}
+                                                <div className="flex gap-2 items-end max-md:flex-col max-md:items-stretch">
                                                     <div className="flex-1">
                                                         <Input
                                                             label={tAi('downloadModelFromHf')}

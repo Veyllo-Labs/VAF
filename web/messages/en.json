@@ -234,8 +234,8 @@
     "maintenanceGenericTitle": "Maintenance running",
     "maintenanceDone": "Migration complete",
     "maintenanceWait": "Please do nothing and wait.",
-    "maintenanceFailed": "Migration incomplete – see the log",
-    "maintenanceVllmTitle": "Setting up vLLM: {phase}",
+    "maintenanceFailed": "Migration incomplete, see the log",
+    "maintenanceVllmTitle": "vLLM setup: {phase}",
     "maintenanceVllmFailed": "vLLM setup stopped",
     "maintenanceVllmDone": "vLLM setup finished",
     "learningEnded": "Learning “{name}” ended: {phase}",
@@ -2781,13 +2781,13 @@
       "no_gpu": "No GPU found: vLLM's CPU backend is basic, and llama.cpp is the better engine for a CPU.",
       "amd": "vLLM supports some AMD GPUs through ROCm, with Python 3.12 builds only; VAF does not manage that yet.",
       "intel": "vLLM's support for Intel GPUs is basic and needs Python 3.12; VAF does not manage it yet.",
-      "nvidia_unknown": "VAF could not read this GPU's compute capability; the NVIDIA driver may be too old for vLLM.",
+      "nvidia_unknown": "VAF could not read this GPU's compute capability; the NVIDIA driver may be too old for vLLM. Update the NVIDIA driver and restart VAF.",
       "nvidia_too_old": "vLLM needs an NVIDIA GPU with compute capability 7.5 or newer (Turing or later); this one is older.",
-      "python": "vLLM needs Python 3.11 to 3.14, and VAF runs on another version here."
+      "python": "vLLM needs Python 3.11 to 3.14, and VAF runs on another version here. Install VAF on one of those versions to use vLLM."
     },
     "model": "vLLM model",
-    "modelAuto": "Automatic for this GPU: {repo} ({gb} GB)",
-    "modelAutoNoSize": "Automatic for this GPU: {repo}",
+    "modelAuto": "Automatic: {repo} ({gb} GB)",
+    "modelAutoNoSize": "Automatic: {repo}",
     "modelCurated": "{repo} ({gb} GB)",
     "modelOther": "Other Hugging Face model…",
     "modelOtherLabel": "Hugging Face model",
@@ -2819,6 +2819,7 @@
     "automatic": "automatic",
     "stepOf": "Step {step} of {steps}",
     "stoppedLlama": "The llama.cpp server was stopped for the measurement; it starts again with the next message.",
+    "stoppedVllm": "vLLM was stopped for the measurement; it starts again with the next message.",
     "logHint": "Details: {path}",
     "failed": "The switch could not be followed. Check the engine state again.",
     "server": {
@@ -2827,20 +2828,20 @@
       "idle": "vLLM {version} is installed and starts with the next message."
     },
     "phase": {
-      "install_env": "Creating the vLLM environment",
-      "install_vllm": "Installing vLLM (several GB, this takes minutes)",
-      "install_kernels": "Fetching vLLM's prebuilt kernels",
+      "install_env": "Creating the environment",
+      "install_vllm": "Installing the packages (several GB, this takes minutes)",
+      "install_kernels": "Fetching the prebuilt kernels",
       "install_probe": "Checking that PyTorch sees the GPU",
       "download_model": "Downloading the model",
-      "handover": "Stopping the llama.cpp server",
+      "handover": "Stopping the running model server",
       "fit_check": "Checking that the model fits",
-      "stop_vllm": "Stopping vLLM"
+      "stop_vllm": "Stopping the vLLM server"
     },
     "result": {
       "unknown_engine": "Unknown engine.",
       "bad_repo": "A Hugging Face model is written as owner/name.",
       "profile_api": "This installation runs without local models (Lean profile), so vLLM is not used here.",
-      "parser_unknown": "VAF does not know the tool-call parser for {model}. Set vllm_tool_call_parser in the configuration to the one vLLM names for this model family; VAF needs tool calls.",
+      "parser_unknown": "VAF does not know the tool-call parser for {model}, so it cannot run on vLLM yet. Choose another model, or set the parser in a terminal: vaf models config vllm_tool_call_parser, followed by the parser vLLM names for this model family.",
       "parser_bad": "The configured parser name is not valid: use lowercase letters, digits and _.",
       "busy": "Another switch of the local engine is running; wait for it to finish.",
       "needs_install": "vLLM is not installed yet.",
@@ -2861,9 +2862,9 @@
       "removed": "vLLM was removed."
     },
     "fit": {
-      "fits": "Fits: about {need} of {budget} MiB (context {ctx}, KV cache {kv}).",
-      "too_big": "Needs about {need} MiB (weights {weights}, KV cache {kvMb} for {ctx} tokens), but vLLM gets {budget} of {total} MiB.",
-      "share_above_free": "vLLM would take {budget} MiB of the GPU, but only {free} MiB are free.",
+      "fits": "Fits: about {need} of {budget} GB (context {ctx}, KV cache {kv}).",
+      "too_big": "The model needs about {need} GB of GPU memory, but vLLM gets {budget} GB here. Choose a smaller model or a smaller context.",
+      "share_above_free": "Other programs use the GPU: vLLM would need {budget} GB, but only {free} GB are free. Close them and try again.",
       "no_shape": "The model's config.json does not say its shape.",
       "no_gpu_memory": "nvidia-smi does not report the GPU's memory."
     },

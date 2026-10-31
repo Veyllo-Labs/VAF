@@ -23,6 +23,7 @@ import { useLocaleStore } from '@/lib/localeStore';
 import { veylloDashboardUrl } from '@/lib/veyllo';
 import { useThemeStore } from '@/lib/themeStore';
 import { languages } from '@/lib/languages';
+import EngineChoice, { type EngineId } from '@/components/settings/EngineChoice';
 
 // On the 2FA step, the agent "wakes up" (materialises + the eye opens) where the logo would be, then
 // settles into the patient `waiting` loop. `lite` keeps it leak-safe (no border-radius morph).
@@ -85,6 +86,23 @@ export default function LoginPage() {
     // inference_profile from /needs-setup: "api" means skipping the key leaves no local
     // model to fall back on (vaf/core/inference_profile.py).
     const [setupProfile, setSetupProfile] = useState<string>('local');
+    // The vLLM verdict's class from /needs-setup (level and code, no GPU name) and the engine
+    // the person picked on the Veyllo step. Kept in sessionStorage for a resumed onboarding:
+    // /needs-setup stops answering once the admin exists.
+    const [setupVllm, setSetupVllm] = useState<{ level: string; code: string } | null>(null);
+    const [engineChoice, setEngineChoiceState] = useState<EngineId>('llama');
+    const setEngineChoice = (engine: EngineId) => {
+        setEngineChoiceState(engine);
+        try { sessionStorage.setItem('vaf_onboarding_engine', engine); } catch { /* private mode */ }
+    };
+    // After the first render (sessionStorage is the browser's): a resumed onboarding keeps them.
+    useEffect(() => {
+        try {
+            const kept = JSON.parse(sessionStorage.getItem('vaf_onboarding_vllm') || 'null');
+            if (kept && typeof kept.level === 'string') setSetupVllm(kept);
+            if (sessionStorage.getItem('vaf_onboarding_engine') === 'vllm') setEngineChoiceState('vllm');
+        } catch { /* nothing kept */ }
+    }, []);
     const [pendingSoul, setPendingSoul] = useState<string | null>(null);
     const [onboardingConfig, setOnboardingConfig] = useState<Record<string, unknown>>({});
     const [backendUnreachable, setBackendUnreachable] = useState(false);
@@ -92,6 +110,7 @@ export default function LoginPage() {
     const [veylloTesting, setVeylloTesting] = useState(false);
     const [veylloError, setVeylloError] = useState<string | null>(null);
     const t = useTranslations('onboarding');
+    const tEngine = useTranslations('localEngine');
     // The login and boot surfaces are their own namespace: they render before a
     // language has been chosen and long after onboarding is over.
     const tAuth = useTranslations('auth');
@@ -199,6 +218,11 @@ export default function LoginPage() {
                                     setSetupProfile(data.inference_profile);
                                     // Kept for a resumed onboarding whose profile request fails.
                                     sessionStorage.setItem('vaf_onboarding_profile', data.inference_profile);
+                                }
+                                if (data?.vllm_support && typeof data.vllm_support.level === 'string') {
+                                    const verdict = { level: String(data.vllm_support.level), code: String(data.vllm_support.code || '') };
+                                    setSetupVllm(verdict);
+                                    sessionStorage.setItem('vaf_onboarding_vllm', JSON.stringify(verdict));
                                 }
                                 sessionStorage.setItem('vaf_onboarding', 'true');
                                 setStep('language');
@@ -490,6 +514,18 @@ export default function LoginPage() {
                 }).catch(() => {});
             }
 
+            // 3b. vLLM chosen on the Veyllo step: start the engine switch (install and model) as
+            //     the admin this session now is. It runs as a job on the server; its progress
+            //     shows in the main page's banners, and llama.cpp answers until it is done.
+            if (engineChoice === 'vllm' && setupProfile !== 'api' && setupVllm?.level === 'supported') {
+                await fetch(`${getApiBase()}/api/system/local-engine`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ engine: 'vllm', install: true }),
+                }).catch(() => {});
+            }
+
             // 4. Fetch the 2FA QR code with the step token, as the sign-in does.
             if (stepToken) {
                 try {
@@ -533,6 +569,8 @@ export default function LoginPage() {
                 sessionStorage.removeItem('vaf_onboarding');
                 sessionStorage.removeItem('vaf_onboarding_step');
                 sessionStorage.removeItem('vaf_onboarding_profile');
+                sessionStorage.removeItem('vaf_onboarding_vllm');
+                sessionStorage.removeItem('vaf_onboarding_engine');
             }
             window.location.replace(`${window.location.origin}/`);
             return;
@@ -1353,6 +1391,35 @@ export default function LoginPage() {
                                     >
                                         {setupProfile === 'api' ? t('veylloSkipApi') : t('veylloSkip')}
                                     </button>
+                                    {/* The local step's whole engine choice: the wizard has no model list,
+                                        so the engine is all it asks. vLLM only on a supported verdict;
+                                        otherwise its reason stays visible. Not under the api profile. */}
+                                    {setupProfile !== 'api' && setupVllm && (
+                                        <div className="mt-5 text-left" data-wizard-engine>
+                                            <div className="text-sm font-medium text-gray-700 ml-1 mb-1.5">{tEngine('label')}</div>
+                                            <EngineChoice
+                                                label={tEngine('label')}
+                                                idPrefix="wizard-engine"
+                                                value={engineChoice}
+                                                onChange={setEngineChoice}
+                                                options={[
+                                                    { id: 'llama', name: tEngine('llamaName'), line: tEngine('llamaLine') },
+                                                    {
+                                                        id: 'vllm', name: tEngine('vllmName'), line: tEngine('vllmLine'),
+                                                        disabled: setupVllm.level !== 'supported',
+                                                        note: setupVllm.level === 'supported' ? tEngine('wizardSupported')
+                                                            : (tEngine.has(`support.${setupVllm.code}`) && setupVllm.code !== 'supported'
+                                                                ? tEngine(`support.${setupVllm.code}`) : ''),
+                                                        noteTone: setupVllm.level === 'supported' ? 'muted' : 'amber',
+                                                        noteWord: setupVllm.level === 'later' ? tEngine('levelLater') : tEngine('levelUnsupported'),
+                                                    },
+                                                ]}
+                                            />
+                                            {engineChoice === 'vllm' && (
+                                                <p className="text-xs text-gray-500 mt-2 ml-1">{tEngine('wizardAfterSetup')}</p>
+                                            )}
+                                        </div>
+                                    )}
                                     <p className="text-xs text-gray-400 text-center mt-4 leading-relaxed">{t(setupProfile === 'api' ? 'veylloOtherProvidersApi' : 'veylloOtherProviders')}</p>
                                 </div>
                             </div>

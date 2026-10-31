@@ -685,7 +685,9 @@ def test_no_english_words_are_built_into_the_shared_controls():
     assert "label={tAi('providerModel', { provider: chatApiProvider.label })}" in block
     for english in (" Model`", "(Default)", "(Current)"):
         assert english not in block, english
-    select = src[src.index("const Select = ("):]
+    # The Select of the Settings window lives in its own file, shared with the sections.
+    fields = _src(_ROOT / "web" / "components" / "settings" / "SettingsFields.tsx")
+    select = fields[fields.index("export const Select = ("):]
     select = select[:select.index("\n};")]
     assert "(Current)" not in select and "tCommon('currentOption', { value })" in select
     assert "(Default)" not in src and "(Current)" not in src

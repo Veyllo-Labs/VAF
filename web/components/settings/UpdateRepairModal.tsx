@@ -62,6 +62,20 @@ export interface BrowserPoolRow {
     reason?: string;
 }
 
+/** The local engine (vaf/core/local_engine.py status_row): llama.cpp or vLLM, and its server.
+ *  Not a container and never an issue to repair: the repair cannot install an engine. Amber
+ *  when vLLM is chosen but not installed or not supported here, which is changed under AI &
+ *  Model. */
+export interface LocalEngineRow {
+    engine: 'llama' | 'vllm' | string;
+    state: 'ok' | 'loading' | 'idle' | 'degraded' | 'off' | 'unknown' | string;
+    code: string;
+    params?: Record<string, string>;
+    text: string;
+    version?: string;
+    model?: string;
+}
+
 interface ServicesSnapshot {
     docker: { available: boolean; reason?: string; detail?: string };
     stack_root?: string | null;
@@ -72,6 +86,7 @@ interface ServicesSnapshot {
     services: ServiceRow[];
     sandbox?: SandboxRow | null;
     browser_pool?: BrowserPoolRow | null;
+    local_engine?: LocalEngineRow | null;
     /** Something is inside its own start window: repairing it now would only
      *  restart a container that is already on its way up. */
     starting?: boolean;
@@ -187,6 +202,7 @@ function mmss(seconds: number): string {
 
 export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepairModalProps) {
     const tM = useTranslations('modals.updateRepair');
+    const tEngine = useTranslations('localEngine');
     const tCommon = useTranslations('common');
     const isDark = useThemeStore((st: any) => st.theme) === 'dark';
     const isAdmin = currentUser?.role === 'admin';
@@ -598,6 +614,7 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
     const rows = useMemo(() => services?.services ?? [], [services]);
     const sandbox = services?.sandbox ?? null;
     const browserPool = services?.browser_pool ?? null;
+    const localEngine = services?.local_engine ?? null;
     const issues = useMemo(() => rows.filter((s) => s.state !== 'off' && healthOf(s) !== 'ok'), [rows]);
     issuesRef.current = issues;
     // The host's forwarding switch is a finding of its own, above the containers:
@@ -662,7 +679,7 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
         const ROW = 96;
         // The hub sits at the middle of the column on the right: the services, then
         // the sandbox and the personal browsers when the snapshot carries them.
-        const sideNodes = (sandbox ? 1 : 0) + (browserPool ? 1 : 0);
+        const sideNodes = (sandbox ? 1 : 0) + (browserPool ? 1 : 0) + (localEngine ? 1 : 0);
         const height = (rows.length + sideNodes - 1) * ROW;
         const hub = {
             id: 'vaf',
@@ -795,7 +812,46 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                 ),
             },
         }] : [];
-        setNodes([hub, ...serviceNodes, ...sandboxNodes, ...poolNodes] as any);
+        // The local engine below the personal browsers: green while its server runs, amber when
+        // vLLM is chosen but cannot run (changed under AI & Model, not by a repair), grey
+        // otherwise. Never in the issues list: the repair cannot install an engine.
+        const engineHealth: Health = localEngine?.state === 'ok' ? 'ok'
+            : localEngine?.state === 'degraded' ? 'degraded' : 'idle';
+        const engineText = localEngine
+            ? (localEngine.code && tEngine.has(`status.${localEngine.code}`)
+                ? tEngine(`status.${localEngine.code}`, { version: '', model: '', ...(localEngine.params || {}) })
+                : localEngine.text)
+            : '';
+        const engineNodes = localEngine ? [{
+            id: 'local-engine',
+            type: 'output',
+            position: { x: 380, y: (rows.length + (sandbox ? 1 : 0) + (browserPool ? 1 : 0)) * ROW },
+            targetPosition: Position.Left,
+            draggable: false,
+            style: { border: 'none', background: 'transparent', width: 'auto' },
+            data: {
+                label: (
+                    <div
+                        className="px-3 py-2 rounded-xl bg-white border border-gray-200 shadow-sm min-w-[210px] max-w-[280px] text-left"
+                        style={{ borderLeft: `4px solid ${COLOR[engineHealth]}` }}
+                    >
+                        <div className="flex items-center gap-2">
+                            <span className="w-2 h-2 rounded-full shrink-0" style={{ background: COLOR[engineHealth] }} />
+                            <span className="text-sm font-medium text-gray-800 truncate">{tEngine('node')}</span>
+                            <span className="text-[10px] text-gray-400 font-mono">{localEngine.engine === 'vllm' ? 'vLLM' : 'llama.cpp'}</span>
+                        </div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">{engineText}</div>
+                        {localEngine.engine === 'vllm' && localEngine.model && localEngine.state !== 'degraded' && (
+                            <div className="text-[10px] text-gray-400 font-mono mt-0.5 truncate">{localEngine.model}</div>
+                        )}
+                        {engineHealth === 'degraded' && (
+                            <div className="text-[10px] text-amber-700 mt-0.5">{tEngine('nodeChange')}</div>
+                        )}
+                    </div>
+                ),
+            },
+        }] : [];
+        setNodes([hub, ...serviceNodes, ...sandboxNodes, ...poolNodes, ...engineNodes] as any);
         const targets = new Set(repairTargets ?? []);
         setEdges([...rows.map((svc) => {
             const h = healthOf(svc);
@@ -839,8 +895,18 @@ export default function UpdateRepairModal({ currentUser, onClose }: UpdateRepair
                 opacity: 0.6,
                 ...(poolHealth === 'ok' ? {} : { strokeDasharray: '4 4' }),
             },
+        }] : []), ...(localEngine ? [{
+            id: 'e-local-engine',
+            source: 'vaf',
+            target: 'local-engine',
+            style: {
+                stroke: COLOR[engineHealth],
+                strokeWidth: 1.5,
+                opacity: 0.6,
+                ...(engineHealth === 'ok' ? {} : { strokeDasharray: '4 4' }),
+            },
         }] : [])] as any);
-    }, [rows, sandbox, browserPool, repairBusy, repairTargets, repairFinished, repairButton, version, statusLabel, tM, setNodes, setEdges]);
+    }, [rows, sandbox, browserPool, localEngine, repairBusy, repairTargets, repairFinished, repairButton, version, statusLabel, tM, tEngine, setNodes, setEdges]);
 
     // ─── render ──────────────────────────────────────────────────────────────
 

@@ -2647,6 +2647,7 @@ function VAFDashboardContent() {
     const tAuth = useTranslations('auth');
     const tStatus = useTranslations('status');
     const tMain = useTranslations('main');
+    const tLocalEngine = useTranslations('localEngine');
     const tNav = useTranslations('nav');
     const tCommon = useTranslations('common');
     const [authChecking, setAuthChecking] = useState(true);
@@ -7012,7 +7013,9 @@ function VAFDashboardContent() {
                     }));
                 }
                 else if (data.type === 'model_download_done') {
-                    setAvailableModels(data.models || []);
+                    // A vLLM model's closing frame carries no model list (it is no GGUF): the
+                    // list on the page stays as it was instead of being emptied.
+                    if (Array.isArray(data.models)) setAvailableModels(data.models);
                     setDownloadModelStatus(data.success ? { status: 'done' } : { status: 'error', message: data.error || 'Download failed' });
                     setDownloadToast({ show: true, message: data.success ? 'Model downloaded.' : (data.error || 'Download failed'), success: data.success });
                     setTimeout(() => setDownloadToast(prev => ({ ...prev, show: false })), 4000);
@@ -10730,13 +10733,17 @@ function VAFDashboardContent() {
                                                     />
                                                 </div>
                                             </div>
-                                            <button
-                                                type="button"
-                                                onClick={cancelModelDownload}
-                                                className="text-xs font-medium text-red-600 hover:text-red-700 shrink-0"
-                                            >
-                                                Cancel
-                                            </button>
+                                            {/* A download this page did not start (the automatic one, a vLLM
+                                                model) is the machine's: only an admin's Cancel ends it. */}
+                                            {currentUser?.role === 'admin' && (
+                                                <button
+                                                    type="button"
+                                                    onClick={cancelModelDownload}
+                                                    className="text-xs font-medium text-red-600 hover:text-red-700 shrink-0"
+                                                >
+                                                    Cancel
+                                                </button>
+                                            )}
                                         </div>
                                     </div>
                                 )}
@@ -10751,13 +10758,24 @@ function VAFDashboardContent() {
                                             <div className="flex-1 min-w-0">
                                                 <div className="flex items-center justify-between text-xs text-gray-600 mb-1">
                                                     <span className="truncate">
-                                                        {maintenanceStatus.error
-                                                            ? tMain('maintenanceFailed')
-                                                            : maintenanceStatus.active
-                                                                ? (maintenanceStatus.kind === 'memory_reembed'
-                                                                    ? tMain('maintenanceReembedTitle')
-                                                                    : tMain('maintenanceGenericTitle'))
-                                                                : tMain('maintenanceDone')}
+                                                        {maintenanceStatus.kind === 'vllm_engine'
+                                                            // The engine switch (local_engine.apply): its phase is a code.
+                                                            ? (maintenanceStatus.error
+                                                                ? tMain('maintenanceVllmFailed')
+                                                                : maintenanceStatus.active
+                                                                    ? tMain('maintenanceVllmTitle', {
+                                                                        phase: tLocalEngine.has(`phase.${maintenanceStatus.phase}`)
+                                                                            ? tLocalEngine(`phase.${maintenanceStatus.phase}`)
+                                                                            : maintenanceStatus.phase,
+                                                                    })
+                                                                    : tMain('maintenanceVllmDone'))
+                                                            : maintenanceStatus.error
+                                                                ? tMain('maintenanceFailed')
+                                                                : maintenanceStatus.active
+                                                                    ? (maintenanceStatus.kind === 'memory_reembed'
+                                                                        ? tMain('maintenanceReembedTitle')
+                                                                        : tMain('maintenanceGenericTitle'))
+                                                                    : tMain('maintenanceDone')}
                                                     </span>
                                                     {maintenanceStatus.total > 0 && (
                                                         <span className="shrink-0 ml-2">{maintenanceStatus.done}/{maintenanceStatus.total}</span>
@@ -10775,7 +10793,9 @@ function VAFDashboardContent() {
                                                         style={{ width: `${maintenanceStatus.active ? (maintenanceStatus.pct ?? 0) : 100}%` }}
                                                     />
                                                 </div>
-                                                {maintenanceStatus.active && (
+                                                {/* Not during an engine switch: llama.cpp keeps answering until
+                                                    the switch is done, so there is nothing to wait for. */}
+                                                {maintenanceStatus.active && maintenanceStatus.kind !== 'vllm_engine' && (
                                                     <div className="mt-1 text-xs font-medium text-amber-500">
                                                         {tMain('maintenanceWait')}
                                                     </div>

@@ -44,6 +44,8 @@ import SandboxSection from './settings/SandboxSection';
 import RemoteAccessSection from './settings/RemoteAccessSection';
 import CertificateSection from './settings/CertificateSection';
 import StandingGrantsSection from './settings/StandingGrantsSection';
+import { Input, Select } from './settings/SettingsFields';
+import LocalEngineSection from './settings/LocalEngineSection';
 import { PickerSelect } from '@/components/ui/PickerDialog';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Skeleton, { SkeletonBar, SkeletonRows } from '@/components/ui/Skeleton';
@@ -565,6 +567,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const tVoice = useTranslations('settings.voice');
     const tInterface = useTranslations('settings.interface');
     const tAdvanced = useTranslations('settings.advanced');
+    const tLocalEngine = useTranslations('localEngine');
     const tLocalNet = useTranslations('settings.localNetwork');
     const tAutomations = useTranslations('settings.automations');
     const tAbout = useTranslations('settings.about');
@@ -2942,7 +2945,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             value={localConfig.provider || 'local'}
             onChange={(v: string) => handleChange('provider', v)}
             options={[
-                { value: 'local', label: leanProfile ? tAi('localLlamaUnavailable') : tAi('localLlama'), disabled: leanProfile },
+                { value: 'local', label: leanProfile ? tAi('localLlamaUnavailable') : tAi('localProvider'), disabled: leanProfile },
                 { value: 'veyllo', label: 'Veyllo' },
                 ...PROVIDERS.filter(p => p.id !== 'veyllo').map(p => ({ value: p.id, label: p.label }))
             ]}
@@ -2969,6 +2972,21 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
             >
                 <RefreshCw size={18} />
             </button>
+        </div>
+    );
+
+    // Under the vLLM engine every local lane rides the one vLLM model (vaf/core/model_roles.py
+    // _local_model): a GGUF picked in one of them would be stored and never run, so those
+    // fields show this line instead. The engine is not a draft value: it changes through the
+    // engine switch (LocalEngineSection), never with Save changes.
+    const vllmEngine = localConfig.local_engine === 'vllm';
+    const vllmModelName = localConfig.vllm_model && localConfig.vllm_model !== 'auto'
+        ? String(localConfig.vllm_model) : tLocalEngine('automatic');
+    const vllmModelLine = (label: string, extra?: React.ReactNode) => (
+        <div data-vllm-line className="flex flex-col gap-1.5 w-full">
+            <span className="text-sm font-medium text-gray-700 ml-1">{label}</span>
+            <p className="text-sm text-gray-600 ml-1">{tLocalEngine('runsOnVllm', { model: vllmModelName })}</p>
+            {extra}
         </div>
     );
 
@@ -3182,6 +3200,7 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         const tp = localConfig.thinking_provider;
         if (!tp || tp === 'inherit') return null;
         const isLocal = tp === 'local';
+        if (isLocal && vllmEngine) return vllmModelLine(tAdvanced('thinkerModel'));
         const defaultModel = isLocal
             ? (availableModels?.[0] ?? '')
             : (() => { const p = PROVIDERS.find(pr => pr.id === tp); return p ? (localConfig[`api_model_${p.id}`] || p.defaultModel) : ''; })();
@@ -3234,6 +3253,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
         // the empty "" option = the recommended Gemma default, which is fetched on save (see
         // voice_model + web_server save_config trigger). A previously-saved HF ref stays
         // selectable via Select's current-value fallback.
+        if (vChoice === 'local' && vllmEngine) return vllmModelLine(tVoice('agentLlmLocalFile'),
+            (localConfig.provider || 'local') !== 'local'
+                ? <p className="text-xs text-amber-700 ml-1">{tAi('roleReason.vllm_voice_api_main')}</p>
+                : undefined);
         if (vChoice === 'local') return (
             <Select
                 label={tVoice('agentLlmLocalFile')}
@@ -3499,7 +3522,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const roleChoice = (row: ModelRoleRow): React.ReactNode => {
         switch (row.role) {
             case 'chat':
-                return <>{chatProviderSelect}{chatApiModelField ?? (!leanProfile && (!localConfig.provider || localConfig.provider === 'local') ? localModelField : null)}</>;
+                return <>{chatProviderSelect}{chatApiModelField ?? (!leanProfile && (!localConfig.provider || localConfig.provider === 'local')
+                    ? (vllmEngine ? vllmModelLine(tAi('localModelFile')) : localModelField) : null)}</>;
             case 'vision':
                 return <>{visionProviderSelect}{visionModelField ?? (visionChoice ? null : followsMainModel(tAi('visionModelLabel')))}</>;
             case 'ocr':
@@ -3961,8 +3985,21 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                     )}
                                 </Section>
 
-                                {!leanProfile && (!localConfig.provider || localConfig.provider === 'local') && (
+                                {(!localConfig.provider || localConfig.provider === 'local') && (
                                     <Section title={tAi('localModelSettings')}>
+                                        {/* The engine first, then the model picker of that engine: the GGUF picker and its
+                                            download box are llama.cpp's and render only under it. Under Lean both engines
+                                            show disabled with the profile's sentence, and no picker. */}
+                                        <LocalEngineSection
+                                            currentEngine={localConfig.local_engine || 'llama'}
+                                            downloadModelStatus={downloadModelStatus}
+                                            onChanged={({ engine, vllm_model }) => {
+                                                // A config refresh resets the draft: with unsaved edits only these keys
+                                                // are taken over, never the rest.
+                                                setLocalConfig((prev: any) => ({ ...prev, local_engine: engine, vllm_model }));
+                                                if (!changed) onRefreshConfig?.();
+                                            }}
+                                        >
                                         {localModelField}
                                         <p className="text-xs text-gray-400 mt-1 mb-4">{tAi('modelsDir')}</p>
 
@@ -4030,6 +4067,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             </div>
                                         )}
 
+                                        </LocalEngineSection>
+
+                                        {!leanProfile && (<>
                                         <div className="grid grid-cols-2 gap-4 mt-4 max-md:grid-cols-1">
                                             <Input
                                                 label={tAi('contextWindow')}
@@ -4037,15 +4077,16 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                 onChange={(v: string) => handleChange('n_ctx', parseInt(v))}
                                                 type="number"
                                             />
-                                            <Input
+                                            {/* GPU layers and the prompt cache are llama.cpp's; vLLM sizes itself (fit check). */}
+                                            {!vllmEngine && <Input
                                                 label={tAi('gpuLayers')}
                                                 value={localConfig.gpu_layers ?? -1}
                                                 onChange={(v: string) => handleChange('gpu_layers', parseInt(v))}
                                                 type="number"
-                                            />
+                                            />}
                                         </div>
 
-                                        <div className="mt-4">
+                                        {!vllmEngine && <div className="mt-4">
                                             <Switch
                                                 label={tAi('promptCacheAuto')}
                                                 description={tAi('promptCacheAutoDesc')}
@@ -4069,7 +4110,8 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                             {localConfig.llama_cache_ram === -1 && (
                                                 <p className="text-xs text-gray-400 mt-2">{tAi('promptCacheAutoInfo')}</p>
                                             )}
-                                        </div>
+                                        </div>}
+                                        </>)}
                                     </Section>
                                 )}
 
@@ -4220,6 +4262,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         // picker says so instead of the generic current-value entry.
                                         const ignored = !!toolModel && toolModelFits === false;
                                         const spLabel = p ? p.label : (isLocal ? 'Local' : sp);
+                                        if (isLocal && vllmEngine) {
+                                            return <div className="mt-3">{vllmModelLine(tAdvanced('toolWorkflowModel'))}</div>;
+                                        }
                                         return (
                                             <div className="mt-3">
                                                 <Select
@@ -5604,7 +5649,10 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                                         {failoverBackupModelSelect}
                                                     </div>
                                                 )}
-                                                {showLocal && (
+                                                {showLocal && vllmEngine && (
+                                                    <div className="mt-3">{vllmModelLine(tAdvanced('failoverLocalModel'))}</div>
+                                                )}
+                                                {showLocal && !vllmEngine && (
                                                     <div className="mt-3">
                                                         <Select
                                                             label={tAdvanced('failoverLocalModel')}
@@ -8954,19 +9002,6 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
 }
 
 // UI Components with explicit types
-interface InputProps {
-    label: string;
-    value: any;
-    onChange: (value: string) => void;
-    type?: string;
-    placeholder?: string;
-    disabled?: boolean;
-    link?: string;
-    // Rendered in the LABEL row, after the provider link. For state that belongs to the
-    // field but must not cost it a row of its own - nine API-key fields each carrying a
-    // status line below the box turns the panel into a list of three-line blocks.
-    labelExtra?: React.ReactNode;
-}
 
 // browser_pool_max is "auto" or a count. The server reads anything that is not an
 // integer as auto (vaf/core/browser_pool.py _pool_setting), so the switch does too.
@@ -8975,34 +9010,6 @@ function browserPoolIsAuto(value: unknown): boolean {
     return !/^\s*-?\d+\s*$/.test(String(value ?? ''));
 }
 
-const Input = ({ label, value, onChange, type = "text", placeholder, disabled, link, labelExtra }: InputProps) => (
-    <div className="flex flex-col gap-1.5 w-full">
-        <div className="flex items-center gap-1.5 ml-1 max-md:flex-wrap">
-            <label className="text-sm font-medium text-gray-700">{label}</label>
-            {link && (
-                <a
-                    href={link}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={(e) => e.stopPropagation()}
-                    className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-gray-100 hover:bg-indigo-100 text-gray-400 hover:text-indigo-600 transition-colors"
-                    title={`Get API key → ${link}`}
-                >
-                    <ExternalLink size={9} />
-                </a>
-            )}
-            {labelExtra}
-        </div>
-        <input
-            type={type}
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder={placeholder}
-            disabled={disabled}
-            className="px-4 h-10 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all placeholder:text-gray-400 disabled:opacity-60 disabled:cursor-not-allowed"
-        />
-    </div>
-);
 
 // Centered empty state for the management panels (Skills / Tools / Workflows / MCP).
 // Absolutely centered in its (relative) panel body, with the panel's own accent color.
@@ -9024,47 +9031,7 @@ function PanelEmptyState({ icon, title, hint, accentBg, accentText }: {
     );
 }
 
-interface SelectProps {
-    label: string;
-    value: any;
-    onChange: (value: string) => void;
-    options: { value: string; label: string; disabled?: boolean }[];
-    disabled?: boolean;
-}
 
-const Select = ({ label, value, onChange, options, disabled }: SelectProps) => {
-    const tCommon = useTranslations('common');
-    const uniqueOptions = options.filter((option, index) => {
-        return options.findIndex((candidate) => candidate.value === option.value) === index;
-    });
-
-    return (
-        <div className="flex flex-col gap-1.5 w-full">
-            <label className="text-sm font-medium text-gray-700 ml-1">{label}</label>
-            <div className="relative">
-                <select
-                    value={value}
-                    onChange={(e) => onChange(e.target.value)}
-                    disabled={disabled}
-                    // A half-width select cuts a long option; the full text stays one hover away.
-                    title={uniqueOptions.find(o => o.value === value)?.label || value || undefined}
-                    className={cn("w-full h-10 appearance-none px-4 bg-white border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gray-400 focus:border-gray-500 transition-all text-gray-700 pr-10", disabled && "cursor-not-allowed text-gray-400")}
-                >
-                    {/* Default option if current value is not in options (e.g. custom input previously saved) */}
-                    {!uniqueOptions.some(o => o.value === value) && value && (
-                        <option value={value}>{tCommon('currentOption', { value })}</option>
-                    )}
-                    {uniqueOptions.map((o) => (
-                        <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}</option>
-                    ))}
-                </select>
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
-                    <ChevronRight size={16} className="rotate-90" />
-                </div>
-            </div>
-        </div>
-    );
-};
 
 interface SwitchProps {
     label: string;

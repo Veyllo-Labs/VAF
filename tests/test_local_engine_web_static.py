@@ -282,3 +282,11 @@ def test_round_one_wording(locale):
     if locale == "de":
         assert le_cat["modelOtherPlaceholder"] == "owner/name"
         assert "ließ sich nicht anhalten" in le_cat["result"]["llama_stop_failed"]
+
+
+def test_automatic_option_fits_a_phone():
+    """A native option cannot wrap: the automatic one names the model without owner or size
+    (the curated options below carry both)."""
+    body = _src(_SECTION)
+    assert "t('modelAutoNoSize', { repo: data.vllm.auto_model.split('/').pop()" in body
+    assert "t('modelAuto'," not in body

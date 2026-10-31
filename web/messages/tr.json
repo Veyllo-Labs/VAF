@@ -2786,7 +2786,6 @@
       "python": "vLLM, Python 3.11 ile 3.14 arasını gerektirir; VAF burada başka bir sürümle çalışıyor. vLLM'yi kullanmak için VAF'ı bu sürümlerden birine kurun."
     },
     "model": "vLLM modeli",
-    "modelAuto": "Otomatik: {repo} ({gb} GB)",
     "modelAutoNoSize": "Otomatik: {repo}",
     "modelCurated": "{repo} ({gb} GB)",
     "modelOther": "Başka bir Hugging Face modeli…",

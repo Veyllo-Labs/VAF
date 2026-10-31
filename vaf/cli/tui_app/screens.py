@@ -545,7 +545,7 @@ class SettingsScreen(ModalScreen[None]):
         name, line = self.ENGINE_LINES[engine]
         marker = "▍" if active else " "
         in_use = "  [$success]in use[/]" if active else ""
-        wrapped = textwrap.fill(line, width=58, initial_indent="   ", subsequent_indent="   ")
+        wrapped = textwrap.fill(line, width=50, initial_indent="   ", subsequent_indent="   ")
         return (f"[$primary]{marker}[/][$text]{name}[/]{in_use}\n"
                 f"[$vaf-muted]{_esc(wrapped)}[/]")
 
@@ -571,9 +571,14 @@ class SettingsScreen(ModalScreen[None]):
             rows.append(("engine_pick", "vllm", self._engine_line("vllm", engine == "vllm")))
             rows.append(("note", None, str(support.get("reason") or "")))
         else:
+            import textwrap
             word = "not yet" if support.get("level") == "later" else "not available"
-            rows.append(("note", None, f"vLLM  {self.ENGINE_LINES['vllm'][1]} - {word}: "
-                                       f"{support.get('reason') or ''}"))
+            body = "\n".join(textwrap.fill(text, width=50, initial_indent="   ",
+                                            subsequent_indent="   ")
+                             for text in (self.ENGINE_LINES["vllm"][1],
+                                          str(support.get("reason") or "")) if text)
+            # Laid out like the selectable rows: the name, then the indented lines below it.
+            rows.append(("note", None, f" vLLM  {word}\n{body}"))
         return rows + [("sep", None, ""), ("back", None, "Back")]
 
     def _vllm_model_rows(self) -> list:

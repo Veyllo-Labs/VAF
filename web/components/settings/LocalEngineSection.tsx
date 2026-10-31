@@ -360,9 +360,10 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
     const sizeLine = sizeGb
         ? t('sizeLine', { pin: data.vllm.pin, gb: num(data.vllm.download_gb_at_least, 1), modelGb: num(sizeGb, 2) })
         : t('sizeLineNoSize', { pin: data.vllm.pin, gb: num(data.vllm.download_gb_at_least, 1) });
-    const autoGb = gbOf(data.vllm.auto_model);
     const modelOptions = [
-        { value: 'auto', label: autoGb ? t('modelAuto', { repo: data.vllm.auto_model, gb: num(autoGb, 2) }) : t('modelAutoNoSize', { repo: data.vllm.auto_model }) },
+        // The model's name without its owner and size: a native option cannot wrap, and the
+        // longer line was cut on a phone. The full id and size are the curated options below.
+        { value: 'auto', label: t('modelAutoNoSize', { repo: data.vllm.auto_model.split('/').pop() || data.vllm.auto_model }) },
         ...curated.map((c) => ({ value: c.repo, label: t('modelCurated', { repo: c.repo, gb: num(c.weights_gb, 2) }) })),
         ...(setting !== 'auto' && !gbOf(setting) ? [{ value: setting, label: setting }] : []),
         { value: OTHER, label: t('modelOther') },

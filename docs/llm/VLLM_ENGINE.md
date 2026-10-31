@@ -1,6 +1,7 @@
 # The vLLM Engine
 
-VAF runs a local model on one of two engines, chosen per installation with `vaf engine`:
+VAF runs a local model on one of two engines, chosen per installation in Settings > AI & Model,
+in the full-screen TUI's settings or with `vaf engine`:
 
 - **llama.cpp** (`local_engine = llama`, the default): `llama-server` with a GGUF from
   `models/`. Light, starts in seconds, runs on every platform VAF supports, CPU included.
@@ -8,10 +9,15 @@ VAF runs a local model on one of two engines, chosen per installation with `vaf 
   safetensors form. Heavier to install and slower to start, built for NVIDIA GPUs.
 
 The code: `vaf/core/local_engine.py` (the choice, the platform verdicts, the parsers, the
-two wire-format differences; its module docstring holds the named boundaries),
+two wire-format differences, and the switch itself: `validate`, `apply`, `uninstall_vllm`,
+`state`, `status_row`; its module docstring holds the named boundaries),
 `vaf/core/vllm_server.py` (install, model, fit, start, stop), the engine branch in
-`ServerManager.start_server` / `stop_server` and `Agent.load_model`, `vaf/cli/cmd/engine.py`
-and the `engine` row of `vaf health`.
+`ServerManager.start_server` / `stop_server` and `Agent.load_model`, and the three callers of
+the switch: `vaf/cli/cmd/engine.py`, the routes `/api/system/local-engine`
+(`vaf/api/system_routes.py`) behind `web/components/settings/LocalEngineSection.tsx`, and the
+full-screen TUI (`vaf/cli/tui_app/agent_bridge.py` `apply_engine`, the Engine row in
+`screens.py`). The `engine` row of `vaf health` and the Local engine node of Update and Repair
+read `local_engine.status_row`.
 
 ## Why an engine of `local`, not a provider
 
@@ -66,9 +72,10 @@ that never comes up within that budget is stopped and replaced.
 
 ## Install
 
-Only on request, never on a start: `vaf engine vllm` shows the size and asks (or `--yes`).
-A start that finds `local_engine = vllm` and nothing installed refuses with a message that
-names the command.
+Only on request, never on a start: `vaf engine vllm` shows the size and asks (or `--yes`),
+Settings asks in a confirmation that names the size, the TUI in its confirm screen. A start
+that finds `local_engine = vllm` and nothing installed refuses with a message that names the
+command.
 
 - **Where:** `bin/vllm/venv/`, next to the llama-server binary (`bin/` is gitignored). A
   fresh environment made with VAF's own Python (vLLM 0.32.0 accepts 3.11 to 3.14).
@@ -85,7 +92,8 @@ names the command.
 - **Pinned, not hash-locked** (named boundary): pip resolves the tree over TLS; the
   llama.cpp asset is SHA-256 pinned, the vLLM tree is not. Bumping `PIN` is a release step
   ([RELEASING.md](../setup/RELEASING.md)).
-- **Uninstall:** `vaf engine vllm --uninstall` (refused while vLLM is the engine) removes
+- **Uninstall:** `vaf engine vllm --uninstall` or "Remove vLLM" in Settings (refused while vLLM
+  is the engine) removes
   only `bin/vllm/venv`; the models stay in the Hugging Face cache and the command says
   where and how large.
 - A failed install leaves no half environment behind and the engine unchanged.
@@ -93,7 +101,10 @@ names the command.
 ## Model
 
 `vllm_model` is a Hugging Face repo id (`owner/name`), free entry. `auto` (the default) is
-chosen by the GPU's total memory:
+chosen by the GPU's total memory; the pickers (Settings, the TUI) offer Automatic, the two
+models of this table with their weights (`local_engine.CURATED_MODELS`), a stored repo of
+its own and a free field, and `vaf engine vllm --model auto` goes back to the automatic
+choice:
 
 | Total VRAM | Model | Weights |
 |---|---|---|
@@ -229,12 +240,6 @@ and quick starts.
   or VPN network only ([USER_ISOLATION.md](../security/USER_ISOLATION.md), section 3).
 - **Concurrency:** vLLM batches concurrent requests, but `max_parallel_local_workers` and
   every `provider != "local"` gate stay until that is measured.
-- **The pickers:** three model pickers do not know the engine yet and still list GGUFs: the
-  web Settings (AI & Model), the first-run wizard and the full-screen TUI. Under vLLM a GGUF
-  picked there writes `model`, which only the llama engine reads, and the tray does not
-  restart vLLM for it. One picker knows it: the terminal's classic settings menu
-  (`vaf/cli/cmd/settings.py`) shows the vLLM model and the `vaf engine vllm --model` command
-  instead of a GGUF list.
 - **Start time and idle unload:** a vLLM start takes minutes, not seconds. The desktop tray
   unloads the local model when nobody uses it, so the first message after idle waits for a
   full start; `server_persistence_enabled` keeps it loaded.
@@ -244,17 +249,90 @@ and quick starts.
   agents cannot run it on two engines at once. An `Agent(config={"local_engine": ...})`
   override does not switch it.
 
+## In Settings, the wizard and the TUI
+
+**Settings > AI & Model.** With provider "Local (this machine)" the "Local model" section
+starts with the Engine choice, two cards: llama.cpp ("GGUF models, runs on almost any
+hardware, starts in seconds") and vLLM ("Hugging Face models, fast with many requests, needs a
+supported GPU, starts in minutes"), with this machine's verdict under vLLM. A verdict other
+than `supported` disables the vLLM card and keeps its reason visible. Below the choice is the
+model picker of the engine: the GGUF picker and the GGUF download box under llama.cpp, the
+vLLM model picker (with the parsers of the chosen repo, or the refusal of an unknown family,
+before anything installs) under vLLM. Under the `api` profile both cards are disabled with the
+profile's sentence and no picker shows. The other local pickers (the Thinker, the sub-agents'
+Tool / Workflow model, the voice call and the failover's local link) show one read-only line
+"Runs on the vLLM model (...)" under vLLM instead of a GGUF list, since every local lane rides
+the one vLLM model.
+
+**Applies right away, never with Save changes.** A switch installs, downloads, stops a server
+and checks the fit, and a save sends the whole page: a page opened before a switch would write
+the old engine back. Both save lanes (the WebSocket `save_config` and `PATCH /api/config`) drop
+`local_engine` and every `vllm_` key (`local_engine.without_engine_keys`); the engine changes
+only through `local_engine.apply`.
+
+**The routes** (admin-only): `GET /api/system/local-engine[?model=owner/name]` is
+`local_engine.state()` plus the job; `POST /api/system/local-engine {engine, model?, install?}`
+refuses a wrong request with 400 and its code (`validate`), then runs `apply` as a job (202,
+GET follows `job`), because pip plus a model download outlasts any proxy; `DELETE
+/api/system/local-engine/vllm` is `uninstall_vllm`. The switch claims the container job slot
+(`container_jobs.ENGINE_SWITCH`): not beside a repair, a profile switch (Lean halfway would
+refuse the install mid-way), a backup or an update. Across processes (`vaf engine` in a
+terminal while the web switch runs) `apply` holds `bin/vllm/switch.lock` without waiting and
+refuses with `busy`.
+
+**Progress.** The steps go to the machine's maintenance banner (`MAINTENANCE`, kind
+`vllm_engine`, done/total = finished steps of 7 with the install, 3 without; no "please wait"
+line, llama.cpp keeps answering until the switch is done) and to the section's own step bar;
+the model download to the download banner (`web_interface.model_download_broadcast`, its
+closing frame without a model list, so the GGUF list stays). pip has no progress figure: the
+install step shows its name for minutes. pip's output goes to `logs/vllm_install.log` in the
+web server and the TUI (`install(output=...)`); the terminal keeps printing it. The banner's
+Cancel ends a vLLM model download for an admin (`MODEL_DOWNLOAD.request_cancel`); the switch
+ends with `download_cancelled` and the engine stays. The pip step has no cancel, as in the
+terminal.
+
+**Every outcome has a code** (the verdicts, the fit, the conflicts, each result of `apply` and
+`uninstall_vllm`, the phases, the status row): the UI shows the catalogue text in the reader's
+language; the English sentence stays for `vaf engine`, `vaf health` and the logs. After a
+switch the live agents of the process recompute their model identity
+(`agent.refresh_local_identity_all`), so the tool-call parser follows the new engine's model.
+
+**The first-run wizard.** On the Veyllo step, under "Skip, I'll run locally", for the `local`
+profile only: the same Engine choice, llama.cpp preselected, vLLM enabled only for a
+`supported` verdict. `needs-setup` sends the verdict's level and code only (no GPU name: it
+needs no session). Choosing vLLM says that VAF installs it and its model after the setup; once
+the account exists, the wizard starts the switch with the install, and its progress shows in
+the main page's banners while llama.cpp answers.
+
+**The full-screen TUI.** An "Engine: llama.cpp" or "Engine: vLLM" row above "Select Active
+Model" opens both engines with their lines and the verdict (vLLM a note with its reason where
+it cannot run, both notes under `api`). An install asks first with its size; under vLLM the
+model submenu lists Automatic, the curated repos, a stored repo and "Other Hugging Face
+model..." instead of GGUFs, and a GGUF pick writes nothing. `vaf models set` under vLLM warns
+that the GGUF applies to llama.cpp only.
+
+**Update and Repair** shows a "Local engine" node: llama.cpp running or idle, vLLM with its
+version and model running, loading or idle, amber when vLLM is chosen but not installed or not
+supported here ("Change it under AI & Model"), grey under `api`. Never a repair target.
+
+**Measured limits.** A message sent while the switch runs restarts llama.cpp on its next use,
+which can take the memory the fit check measures; the fit then refuses with its numbers and
+the engine stays. A chat answer in flight on llama.cpp is cut when the switch stops it for the
+fit check (no streamed text is erased).
+
 ## Switching
 
 ```bash
 vaf engine                       # the engine, this machine's verdict, the install, model, parsers
 vaf engine vllm                  # hardware check, install (asks), model, fit, switch
 vaf engine vllm --model Qwen/Qwen3-8B-AWQ
+vaf engine vllm --model auto     # back to the automatic choice by GPU memory
 vaf engine llama                 # back to llama.cpp; a running vLLM is stopped
 vaf engine vllm --uninstall      # removes bin/vllm/venv (models stay in the HF cache)
 ```
 
-Exit codes like `vaf profile`: 0 done, 1 not complete, 2 refused. The switch writes the
+Exit codes like `vaf profile`: 0 done, 1 not complete, 2 refused. Settings > AI & Model and
+the full-screen TUI run the same switch (`local_engine.apply`). The switch writes the
 key; the server starts with the next use of the local model. A running desktop tray picks a
 switch made in a terminal up within 25 seconds (its config poll watches `local_engine` and
 the `vllm_` keys) and restarts the local engine; it restarts only for a key the running
@@ -265,5 +343,8 @@ engine reads. Under the `api` inference profile neither engine installs or runs.
 - `logs/vllm_server.log`: the server's output of the last start (the start before it in
   `vllm_server.prev.log`); "Application startup complete" marks the end of a start.
 - `~/.vaf/vllm.pid`: the pid of the managed server (the leader of its process group).
+- `logs/vllm_install.log`: pip's output of an install started from Settings or the TUI.
+- `bin/vllm/switch.lock`: held while a switch runs; a second switch (another process) is
+  refused with `busy` instead of waiting.
 - `vaf engine`, `vaf health` (the `engine` row): installed version, model, server running
   or idle, and what contradicts the choice.

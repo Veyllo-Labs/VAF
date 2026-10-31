@@ -572,7 +572,7 @@ and two failures leave every container healthy while VAF stops working: the disk
 | `disk` | free space on the fullest disk among the data folders, the backup folder and Docker's root directory (named in `docker info`, when it is a path on this machine) | less than 1 GB free | less than 5 GB free |
 | `backup` | the scheduled backups (`backup_schedule.backup_check`) | never | the last scheduled run failed, or the newest backup is older than its interval and a day |
 | `agent` | the agent loops of the server process (`headless_runner.worker_status`) | none is left | some have stopped |
-| `engine` | only while vLLM is the local engine (`local_engine = vllm`): the platform verdict, the managed install, the model, whether its server runs ([VLLM_ENGINE.md](../llm/VLLM_ENGINE.md)) | never | vLLM cannot run on this machine, or it is not installed |
+| `engine` | only while vLLM is the local engine (`local_engine = vllm`): the platform verdict, the managed install, the model, whether its server runs, read from `local_engine.status_row`, the row Update and Repair draws ([VLLM_ENGINE.md](../llm/VLLM_ENGINE.md)) | never | vLLM cannot run on this machine, or it is not installed |
 
 The verdict is the worst check. `vaf health` asks the running VAF, because the agent loop
 can only be seen inside it; when nothing answers, "VAF is not running" is the first finding

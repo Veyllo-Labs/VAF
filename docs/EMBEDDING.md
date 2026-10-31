@@ -2434,7 +2434,8 @@ usable from an embedded engine too, documented in their own pages:
 
 With `provider="local"` the main agent manages its own local server on
 `127.0.0.1:8080`, on one of two engines chosen by the installation's config key
-`local_engine` (written by `vaf engine`): llama.cpp with a GGUF (`"llama"`, the
+`local_engine` (written by `vaf engine` or Settings > AI & Model, both through
+`local_engine.apply`): llama.cpp with a GGUF (`"llama"`, the
 default) or a VAF-managed vLLM with a Hugging Face model (`"vllm"`, see
 [VLLM_ENGINE.md](llm/VLLM_ENGINE.md)). The API-backend consumers (browser agent,
 local vision, cloud-to-local failover) follow it through the same address.

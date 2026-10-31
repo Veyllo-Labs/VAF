@@ -106,6 +106,9 @@ Form-field grids must go single-column on a phone:
   (a 4-stop selector can use `max-md:grid-cols-2`).
 - Grids that already carry `sm:/md:/lg:grid-cols-*` already collapse below their
   breakpoint - leave them.
+- Two option cards side by side (the local engine's `EngineChoice`, llama.cpp and vLLM, in
+  Settings and the first-run wizard) follow the same rule: `grid-cols-2 max-md:grid-cols-1`, so
+  each card keeps its one-line description readable on a phone.
 
 ### Compact header (app-like)
 

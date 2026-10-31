@@ -168,13 +168,15 @@ These are sent only on the local path; cloud APIs ignore them.
 
 ## Local engine (llama.cpp or vLLM)
 
-Which engine runs the local model; switched with `vaf engine`. See
+Which engine runs the local model; switched with `vaf engine`, in Settings > AI & Model or in
+the full-screen TUI, all through `local_engine.apply`, never by a Settings save: both save
+lanes drop `local_engine` and every `vllm_` key (`local_engine.without_engine_keys`). See
 [VLLM_ENGINE.md](../llm/VLLM_ENGINE.md).
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `local_engine` | `"llama"` | Engine for `provider = local`: `llama` (llama.cpp with a GGUF from `models/`) or `vllm` (the VAF-managed vLLM with a Hugging Face model, installed with `vaf engine vllm`). Compared after trimming and ignoring case; anything else means `llama`. Admin-only. |
-| `vllm_model` | `"auto"` | Hugging Face repo id (`owner/name`) the vLLM engine runs; `auto` = by the GPU's total memory (`Qwen/Qwen3-4B-AWQ` below 11.5 GB, `Qwen/Qwen3-8B-AWQ` from there up). Admin-only (`vllm_` prefix). |
+| `local_engine` | `"llama"` | Engine for `provider = local`: `llama` (llama.cpp with a GGUF from `models/`) or `vllm` (the VAF-managed vLLM with a Hugging Face model, installed with `vaf engine vllm`). Compared after trimming and ignoring case; anything else means `llama`. Changed by `vaf engine` or Settings > AI & Model (`local_engine.apply`), never by a Settings save. Admin-only. |
+| `vllm_model` | `"auto"` | Hugging Face repo id (`owner/name`) the vLLM engine runs; `auto` = by the GPU's total memory (`Qwen/Qwen3-4B-AWQ` below 11.5 GB, `Qwen/Qwen3-8B-AWQ` from there up). Changed by `vaf engine vllm --model` or the vLLM model picker in Settings (`local_engine.apply`), never by a Settings save. Admin-only (`vllm_` prefix). |
 | `vllm_tool_call_parser` | `""` | vLLM `--tool-call-parser`; empty = derived from the model family (Qwen and Hermes `hermes`, Mistral `mistral`, gpt-oss `openai`). A family VAF does not know needs it set, or the start is refused. Admin-only. |
 | `vllm_reasoning_parser` | `""` | vLLM `--reasoning-parser`; empty = derived from the model family (Qwen3 `qwen3`, QwQ `deepseek_r1`), `none` = off. Admin-only. |
 | `vllm_gpu_memory_utilization` | `0` | Share of the GPU's memory vLLM may take (0 to 1); `0` = computed at each launch from the free memory, (free - 512 MiB) / total within 0.50..0.92. Admin-only. |

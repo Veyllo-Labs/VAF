@@ -108,7 +108,9 @@ each, not by checks spread over the code:
   voice lane, which otherwise asks past the provider gate, and for both local engines
   (llama.cpp and the managed vLLM, [VLLM_ENGINE.md](../llm/VLLM_ENGINE.md)). The vLLM install
   (`vaf engine vllm`, `vllm_server.install`) and its model download (`vllm_server.ensure_model`)
-  refuse as well, so under `api` neither engine installs or runs. A start that was waiting for a
+  refuse as well, so under `api` neither engine installs or runs. Settings > AI & Model shows the
+  Engine choice with both engines disabled and the profile's sentence, the full-screen TUI both
+  as notes, and the first-run wizard no engine choice. A start that was waiting for a
   server still loading its model ends when the profile changes, instead of waiting out the
   readiness budget.
 - `Agent.load_model` loads no local model; a chat turn that has no provider says so in the

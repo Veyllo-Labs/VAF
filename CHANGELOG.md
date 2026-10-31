@@ -21,6 +21,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   with an NVIDIA GPU of compute capability 7.5 or newer; on AMD, Intel, Apple Silicon and
   Windows `vaf engine` says why not yet and llama.cpp keeps running. llama.cpp stays the
   default. `vaf health` shows an `engine` row while vLLM is the engine.
+  Settings > AI & Model now has an Engine choice for the local model, llama.cpp or vLLM, right
+  above the model picker: it says whether this machine can run vLLM and why not, installs vLLM
+  on request with its size and progress, picks a Hugging Face model (automatic by GPU memory or
+  any repo), checks that it fits and switches back or removes vLLM. The first-run wizard and the
+  terminal's full-screen settings offer the same choice, and Update and Repair shows the local
+  engine. The provider is now called "Local (this machine)". A Settings page opened before a
+  switch no longer writes the old engine back when saved, a vLLM model download shows in the
+  download banner, and the banner's Cancel now also stops a download the page did not start.
 - **`vaf providers` shows which provider and model handles each job**: chat, images, text
   recognition, the browser agent, sub-agents, background thinking, voice calls, speech and
   failover, with how each was decided (the main provider, followed, set by hand, off, or not

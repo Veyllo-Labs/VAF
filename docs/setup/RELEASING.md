@@ -145,7 +145,8 @@ waiting for a stable `X.Y.Z`.
    pip-tools==7.5.3, Python 3.13): edit the `vllm==` line of
    `vaf/core/vllm_requirements.in`, run `pip-compile --allow-unsafe --generate-hashes
    --output-file=vaf/core/vllm_requirements.lock vaf/core/vllm_requirements.in`
-   (it resolves metadata and hashes only, nothing is installed), then
+   (it resolves metadata and hashes only, nothing is installed; the lock's header then
+   shows `--no-index`, which pip-tools 7.5.3 writes itself, as in `requirements.lock`), then
    `venv/bin/python scripts/check_vllm_lock.py`, which must report 0 problems for
    every supported target; a conflict it reports goes into the input as a constraint
    (the `numpy<2.4` cap is one). `tests/test_vllm_lock.py` refuses a lock whose vllm

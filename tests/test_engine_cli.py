@@ -83,9 +83,15 @@ def test_show(config, monkeypatch):
     monkeypatch.setattr(vs, "installed_version", lambda: "0.32.0")
     monkeypatch.setattr(vs, "is_installed", lambda: True)
     monkeypatch.setattr(vs, "running_pid", lambda: None)
+    monkeypatch.setattr(vs, "is_current", lambda: True)
     config["local_engine"] = "vllm"
     out = _invoke().output
     assert "Engine: vllm" in out and "0.32.0" in out and "not running" in out
+    assert "earlier VAF" not in out
+    # Installed by an earlier VAF: never shown as simply installed.
+    monkeypatch.setattr(vs, "is_current", lambda: False)
+    out = _invoke().output
+    assert "vLLM installed: 0.32.0, set up by an earlier VAF" in out and "vaf engine vllm" in out
 
 
 def test_unsupported_exit_2(config, monkeypatch):

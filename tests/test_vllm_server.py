@@ -412,8 +412,10 @@ def test_a_failed_probe_names_its_cause(config, monkeypatch, home, probe_code, c
     assert "12.9" not in reason
     if cause == "no_cuda":
         assert "13.0" in reason and "580" in reason and "CUDA_VISIBLE_DEVICES" in reason
+        assert "update the NVIDIA driver and try again" in reason, "no next step"
     else:
         assert "CUDA libraries" in reason and "cannot start" in reason
+        assert "Run `vaf engine vllm` again" in reason and "llama.cpp keeps running" in reason
     assert not vs.recipe_path().exists(), "a failed probe left a recipe record"
     assert not vs.is_current()
 

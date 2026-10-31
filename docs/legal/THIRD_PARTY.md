@@ -299,8 +299,8 @@ weights carry their own license independent of the code that loads them.
 | tinyproxy (in that image; runs the registries proxy) | Debian package | GPL-2.0-or-later | Copyright tinyproxy contributors - https://tinyproxy.github.io |
 | chromium-headless-shell (in that image; takes screenshots) | Debian package | BSD-3-Clause (plus the licences of Chromium's bundled components) | The Chromium Authors - https://www.chromium.org |
 
-| vLLM (the optional second local engine) | installed only on request (`vaf engine vllm`) from PyPI into its own environment `bin/vllm/venv`, version-pinned in `vaf/core/vllm_server.py`; never shipped with VAF | Apache-2.0 | The vLLM project - https://github.com/vllm-project/vllm |
-| PyTorch and its NVIDIA CUDA libraries (vLLM's dependencies) | pulled into the same environment by pip as vLLM's dependency tree | PyTorch: BSD-3-Clause; the NVIDIA wheels under NVIDIA's own licence terms, named in their PyPI packages | https://pytorch.org |
+| vLLM (the optional second local engine) | installed only on request (`vaf engine vllm`) from PyPI into its own environment `bin/vllm/venv`, from the hash-locked list `vaf/core/vllm_requirements.lock` (every package pinned, every file hashed); never shipped with VAF | Apache-2.0 | The vLLM project - https://github.com/vllm-project/vllm |
+| PyTorch and its NVIDIA CUDA libraries (vLLM's dependencies) | installed into the same environment from the same lock, pinned and hashed like vLLM; FlashInfer's prebuilt kernels (`flashinfer-cubin`, `flashinfer-jit-cache`) come from FlashInfer's own index through `vllm download-kernels`, outside the lock | PyTorch: BSD-3-Clause; FlashInfer: Apache-2.0; the NVIDIA wheels under NVIDIA's own licence terms, named in their PyPI packages | https://pytorch.org |
 | Qwen3-4B-AWQ and Qwen3-8B-AWQ model weights (the vLLM engine's `auto` default) | downloaded at first use into the user's Hugging Face cache by `vaf/core/vllm_server.py` | Apache-2.0 | Alibaba Cloud, Qwen team - https://huggingface.co/Qwen/Qwen3-4B-AWQ, https://huggingface.co/Qwen/Qwen3-8B-AWQ |
 
 The vLLM environment is like the sandbox image in that VAF never distributes it: the user's

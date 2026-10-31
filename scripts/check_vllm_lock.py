@@ -6,7 +6,8 @@
 pip-compile resolves for the interpreter and platform it runs on, but the managed vLLM
 environment installs this one lock with ``--require-hashes --no-deps --only-binary=:all:`` on
 Linux x86_64 and aarch64 with Python 3.11 to 3.14 (``local_engine.PYTHON_RANGE``). For each
-of those targets this script reads, from PyPI, the core metadata (PEP 658) of the very wheel
+of those targets, at the oldest glibc the verdict accepts (``local_engine.MIN_GLIBC``; a wheel
+is counted only when pip would install it there), this script reads, from PyPI, the core metadata (PEP 658) of the very wheel
 pip would pick for every pinned release, evaluates its requirements' markers for that target
 and checks that each requirement is in the lock, at a version that satisfies it, with the
 extras it asks for. It also checks that the lock carries the hash of every file PyPI
@@ -52,10 +53,31 @@ def parse_lock(text: str):
 
 
 def _targets():
+    """(arch, python major, python minor, glibc floor): the machines the support verdict calls
+    supported, at the oldest glibc it accepts (local_engine.MIN_GLIBC)."""
     sys.path.insert(0, str(ROOT))
-    from vaf.core.local_engine import PYTHON_RANGE
+    from vaf.core.local_engine import MIN_GLIBC, PYTHON_RANGE
     (major, low), (_, high) = PYTHON_RANGE
-    return [(arch, major, minor) for arch in ARCHES for minor in range(low, high)]
+    return [(arch, major, minor, MIN_GLIBC[arch]) for arch in ARCHES for minor in range(low, high)]
+
+
+# The legacy manylinux names and the glibc each one stands for (PEP 600).
+_LEGACY_MANYLINUX = {"manylinux1": (2, 5), "manylinux2010": (2, 12), "manylinux2014": (2, 17)}
+
+
+def _platform_fits(platform: str, arch: str, glibc) -> bool:
+    """True for a platform tag pip installs on Linux ``arch`` with glibc ``glibc``: ``any`` or
+    a manylinux tag at or below that glibc. musllinux and a bare ``linux_*`` tag never fit (pip
+    installs neither from PyPI on a glibc system)."""
+    if platform == "any":
+        return True
+    if not platform.endswith("_" + arch):
+        return False
+    stem = platform[:-len(arch) - 1]
+    if stem in _LEGACY_MANYLINUX:
+        return _LEGACY_MANYLINUX[stem] <= tuple(glibc)
+    m = re.fullmatch(r"manylinux_(\d+)_(\d+)", stem)
+    return bool(m) and (int(m.group(1)), int(m.group(2))) <= tuple(glibc)
 
 
 def _get_json(url: str, accept: str = "application/json"):
@@ -64,14 +86,14 @@ def _get_json(url: str, accept: str = "application/json"):
         return json.load(r)
 
 
-def _fits(filename: str, arch: str, major: int, minor: int) -> bool:
+def _fits(filename: str, arch: str, major: int, minor: int, glibc) -> bool:
     try:
         _, _, _, tags = parse_wheel_filename(filename)
     except Exception:
         return False
     cp = f"cp{major}{minor}"
     for t in tags:
-        if not (t.platform == "any" or (t.platform.endswith("_" + arch) and "linux" in t.platform)):
+        if not _platform_fits(t.platform, arch, glibc):
             continue
         if t.abi == "none" and (t.interpreter.startswith(f"py{major}") or t.interpreter == cp):
             return True
@@ -99,9 +121,9 @@ def _check(name, entry, entries, targets, meta_cache):
     missing_hashes = sorted(fn for h, fn in published.items() if h not in hashes)
     if missing_hashes:
         out.append(f"{name}=={version}: no hash in the lock for {missing_hashes[:3]}")
-    for arch, major, minor in targets:
-        where = f"{arch} cp{major}{minor}"
-        wheels = [f for f in files if _fits(f["filename"], arch, major, minor)]
+    for arch, major, minor, glibc in targets:
+        where = f"{arch} cp{major}{minor} glibc {glibc[0]}.{glibc[1]}"
+        wheels = [f for f in files if _fits(f["filename"], arch, major, minor, glibc)]
         if not wheels:
             out.append(f"{name}=={version}: no wheel for {where}")
             continue
@@ -149,7 +171,7 @@ def main(argv=None) -> int:
             problems += fut.result()
     for line in sorted(set(problems)):
         print(line)
-    names = ", ".join(f"{a} cp{ma}{mi}" for a, ma, mi in targets)
+    names = ", ".join(f"{a} cp{ma}{mi} glibc {g[0]}.{g[1]}" for a, ma, mi, g in targets)
     print(f"{len(entries)} pinned releases checked for {names}: "
           f"{len(set(problems))} problem(s).")
     return 1 if problems else 0

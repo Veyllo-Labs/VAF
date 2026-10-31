@@ -533,6 +533,11 @@ def test_health_engine_check_states(monkeypatch, values):
     assert row["status"] == health.DEGRADED and "vaf engine vllm" in row["reason"]
     monkeypatch.setattr(vs, "installed_version", lambda: "0.32.0")
     monkeypatch.setattr(vs, "running_pid", lambda: None)
+    # Installed by an earlier VAF: a start refuses it, so health never calls it idle.
+    monkeypatch.setattr(vs, "is_current", lambda: False)
+    row = health.engine_check()
+    assert row["status"] == health.DEGRADED and "earlier VAF" in row["reason"]
+    monkeypatch.setattr(vs, "is_current", lambda: True)
     row = health.engine_check()
     assert row["status"] == health.OK and "idle" in row["reason"] and REPO in row["reason"]
     monkeypatch.setattr(vs, "running_pid", lambda: 12)

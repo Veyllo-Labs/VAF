@@ -17,14 +17,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   hardware, installs a pinned vLLM into its own environment (it asks first; at least 2.8 GB to
   download), downloads a model (`Qwen3-4B-AWQ` or `Qwen3-8B-AWQ` by GPU memory, or any
   Hugging Face repo with `--model`), checks that it fits and switches the local engine;
-  `vaf engine llama` switches back, `vaf engine` shows what this machine can run. It needs Linux
-  with an NVIDIA GPU of compute capability 7.5 or newer and an NVIDIA driver 580 or newer
-  (vLLM's CUDA 13.0 build); an earlier vLLM install that cannot start is rebuilt by the next
-  `vaf engine vllm`. vLLM and its whole dependency tree are installed from a hash-locked list
-  shipped with VAF, so pip installs exactly the files VAF was released with and nothing newer.
-  On AMD, Intel, Apple Silicon and
-  Windows `vaf engine` says why not yet and llama.cpp keeps running. llama.cpp stays the
-  default. `vaf health` shows an `engine` row while vLLM is the engine.
+  `vaf engine llama` switches back, `vaf engine` shows what this machine can run. llama.cpp
+  stays the default. `vaf health` shows an `engine` row while vLLM is the engine.
+  vLLM needs Linux with an NVIDIA GPU (Turing or newer), an NVIDIA driver 580 or newer and a
+  recent distribution (for example Ubuntu 20.04 on a PC, Ubuntu 22.04 on ARM). VAF checks
+  this first and tells you what to update. On AMD, Intel, Apple Silicon and Windows
+  `vaf engine` says why not yet, and llama.cpp keeps running.
+  The install uses a fixed list of package files shipped with VAF, so a new release of one of
+  vLLM's dependencies can neither break nor change it.
   Settings > AI & Model now has an Engine choice for the local model, llama.cpp or vLLM, right
   above the model picker: it says whether this machine can run vLLM and why not, installs vLLM
   on request with its size and progress, picks a Hugging Face model (automatic by GPU memory or
@@ -82,10 +82,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
-- On Windows with an NVIDIA GPU, llama.cpp started from the desktop tray ran without the GPU:
-  the tray hides the GPU from VAF's own in-process PyTorch, and the llama server inherited
-  that. The local engines VAF starts now get the GPU back; a `CUDA_VISIBLE_DEVICES` you set
-  yourself is still passed on unchanged.
+- On Windows with an NVIDIA GPU, a local model started from the tray ran on the CPU. It now
+  uses the GPU.
 - Settings showed a few words only in English whatever the language: the main provider's
   "Model" field, "(Default)" after a provider's default model and "(Current)" after a stored
   value that is not in the list. On a phone the failover level picker keeps its four steps

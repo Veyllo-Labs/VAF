@@ -220,6 +220,9 @@ def test_an_environment_of_the_earlier_recipe_needs_install(config, monkeypatch,
     assert le.needs_install()
     result = le.apply("vllm")
     assert result.code == "needs_install"
+    # The question says the old environment is replaced, not that nothing is installed.
+    assert result.text.startswith(f"vLLM {vs.PIN} in ") and "earlier VAF" in result.text
+    assert "it is replaced" in result.text and result.params["replaces"] == vs.PIN
     vs.recipe_path().write_bytes(vs.RECIPE_FORMAT.encode("utf-8"))
     assert not le.needs_install()
 

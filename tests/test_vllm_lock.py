@@ -12,7 +12,9 @@ MUTATIONS, each turns the named test red:
 - change the vllm pin in the lock -> test_the_lock_pins_the_codes_vllm;
 - delete one --hash line of a pinned entry, or add an unpinned line ->
   test_every_entry_is_pinned_and_hashed;
-- drop the numpy cap from the input -> test_the_input_carries_the_numpy_cap.
+- drop the numpy cap from the input -> test_the_input_carries_the_numpy_cap;
+- let a wheel above the target's glibc floor, a musllinux or a bare linux wheel count, or
+  check every target at one floor -> test_the_checker_counts_only_installable_wheels.
 """
 import re
 from pathlib import Path
@@ -74,3 +76,37 @@ def test_the_input_carries_the_numpy_cap():
     assert "numpy<2.4" in infile
     numpy = {name: version for name, version, _ in _entries()}["numpy"]
     assert tuple(int(p) for p in numpy.split(".")[:2]) < (2, 4), numpy
+
+
+def _checker():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("check_vllm_lock",
+                                                  _ROOT / "scripts" / "check_vllm_lock.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_checker_counts_only_installable_wheels():
+    """The release check counts a wheel for a target only when pip would install it there:
+    the right processor, Python, and a manylinux tag at or below the target's glibc floor
+    (local_engine.MIN_GLIBC, measured per arch)."""
+    from vaf.core import local_engine as le
+    check = _checker()
+    x86, arm = le.MIN_GLIBC["x86_64"], le.MIN_GLIBC["aarch64"]
+    assert (x86, arm) == ((2, 31), (2, 34))
+    llg = "llguidance-1.7.6-cp39-abi3-manylinux_2_31_x86_64.whl"
+    assert check._fits(llg, "x86_64", 3, 13, x86)
+    assert not check._fits(llg, "x86_64", 3, 13, (2, 28)), "a wheel above the floor counted"
+    assert not check._fits(llg, "aarch64", 3, 13, arm), "another processor's wheel counted"
+    legacy = "z3_solver-4.15.4.0-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+    assert check._fits(legacy, "x86_64", 3, 11, x86)
+    assert not check._fits("z3_solver-4.15.4.0-py3-none-manylinux_2_34_aarch64.whl",
+                           "aarch64", 3, 13, (2, 33))
+    assert not check._fits("x-1.0-cp313-cp313-musllinux_1_2_x86_64.whl", "x86_64", 3, 13, x86)
+    assert not check._fits("x-1.0-cp313-cp313-linux_x86_64.whl", "x86_64", 3, 13, x86)
+    assert not check._fits("x-1.0-cp312-cp312-manylinux_2_28_x86_64.whl", "x86_64", 3, 13, x86)
+    assert check._fits("x-1.0-py3-none-any.whl", "aarch64", 3, 14, arm)
+    targets = check._targets()
+    assert {(a, g) for a, _, _, g in targets} == {("x86_64", x86), ("aarch64", arm)}
+    assert len(targets) == 8

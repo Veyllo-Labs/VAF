@@ -45,8 +45,12 @@ def _show() -> None:
                           else "llama (llama.cpp, GGUF)"))
     UI.info(f"vLLM on this machine: {state['support']['level']}. {state['support']['reason']}")
     version = vllm["installed_version"]
-    UI.info(f"vLLM installed: {version}" if version
-            else f"vLLM installed: no (VAF installs {vllm['pin']} with `vaf engine vllm`)")
+    if version and vllm["needs_install"]:
+        UI.info(f"vLLM installed: {version}, set up by an earlier VAF; it cannot start until "
+                "`vaf engine vllm` rebuilds it")
+    else:
+        UI.info(f"vLLM installed: {version}" if version
+                else f"vLLM installed: no (VAF installs {vllm['pin']} with `vaf engine vllm`)")
     parsers = vllm["parsers"]
     UI.info(f"vLLM model: {vllm['model']}; tool-call parser {parsers['tool'] or 'unknown'}, "
             f"reasoning parser {parsers['reasoning'] or 'none'}")

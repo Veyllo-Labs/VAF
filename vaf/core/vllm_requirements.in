@@ -4,6 +4,8 @@
 #   pip-compile --allow-unsafe --generate-hashes \
 #     --output-file=vaf/core/vllm_requirements.lock vaf/core/vllm_requirements.in
 # then run scripts/check_vllm_lock.py, which checks the lock for every supported target.
+# The header of the generated lock shows --no-index although the command does not pass it:
+# pip-tools 7.5.3 writes it there itself, as in VAF's own requirements.lock.
 vllm==0.32.0
 # mistral-common requires numpy<2.4 on Python 3.12 and older; a resolution on 3.13 picks
 # numpy 2.4.x, which would make the one lock untrue for Python 3.11 and 3.12. numpy 2.3.x

@@ -631,7 +631,11 @@ class SettingsScreen(ModalScreen[None]):
                 vllm.get("auto_model") if model == "auto" else vllm.get("model"))
             gb = {c["repo"]: c["weights_gb"] for c in vllm.get("curated") or []}.get(repo)
             size = f" ({gb:.2f} GB)" if gb else ""
-            question = (f"Install vLLM {vllm.get('pin')}: at least "
+            old = vllm.get("installed_version")
+            # An environment of an earlier VAF that cannot start is replaced: say so.
+            replaces = (f"vLLM {old} was set up by an earlier VAF and cannot start; it is "
+                        "replaced. ") if old else ""
+            question = (f"{replaces}Install vLLM {vllm.get('pin')}: at least "
                         f"{float(vllm.get('download_gb_at_least') or 0):.1f} GB to download, "
                         f"more on disk, plus {repo}{size}?")
 

@@ -360,6 +360,11 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
     const sizeLine = sizeGb
         ? t('sizeLine', { pin: data.vllm.pin, gb: num(data.vllm.download_gb_at_least, 1), modelGb: num(sizeGb, 2) })
         : t('sizeLineNoSize', { pin: data.vllm.pin, gb: num(data.vllm.download_gb_at_least, 1) });
+    // An environment that exists but needs the install (an earlier VAF set it up, a start
+    // refuses it) is replaced by it: the size line says so first.
+    const replaceNote = needsInstall && data.vllm.installed_version
+        ? t('replaceNote', { version: data.vllm.installed_version })
+        : null;
     const modelOptions = [
         // The model's name without its owner and size: a native option cannot wrap, and the
         // longer line was cut on a phone. The full id and size are the curated options below.
@@ -439,6 +444,9 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
             {/* Switching to vLLM from llama.cpp: what it costs, then the button. */}
             {!lean && pending === 'vllm' && !progress && (
                 <div className="mt-3 space-y-1">
+                    {replaceNote && (
+                        <p className="text-xs text-amber-700 ml-1">{replaceNote}</p>
+                    )}
                     {needsInstall && (
                         <p className="text-xs text-gray-700 ml-1">{sizeLine}</p>
                     )}
@@ -456,7 +464,7 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
             {/* Under vLLM: its server, a changed model, the way back. */}
             {!lean && data.engine === 'vllm' && pending === null && !progress && (
                 <div className="mt-3 space-y-1">
-                    {data.vllm.installed_version && (
+                    {data.vllm.installed_version && !needsInstall && (
                         <p className="text-xs text-gray-600 ml-1">{t(`server.${data.vllm.server}`, { version: data.vllm.installed_version })}</p>
                     )}
                     {data.conflicts.map((c) => (
@@ -539,6 +547,7 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
                 open={confirming === 'install'}
                 title={t('installConfirmTitle')}
                 body={<>
+                    {replaceNote && <p>{replaceNote}</p>}
                     <p>{sizeLine}</p>
                     <p>{t('fitNote')}</p>
                     <p>{t('restartNote')}</p>

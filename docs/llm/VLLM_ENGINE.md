@@ -137,6 +137,14 @@ command.
   already malicious on PyPI when the lock was generated is locked in with it; the lock stops
   anything newer or different. Bumping `PIN` regenerates it as a release step
   ([RELEASING.md](../setup/RELEASING.md)).
+  Second named boundary, the prebuilt kernels: `vllm download-kernels` runs FlashInfer's own
+  `python -m flashinfer download-kernels`, which pip-installs `flashinfer-cubin` from
+  `https://flashinfer.ai/whl` and `flashinfer-jit-cache` from `https://flashinfer.ai/whl/cu130`
+  (`--upgrade --no-deps --index-url`), version-pinned to the installed FlashInfer but not
+  hashed, and not from PyPI: compiled GPU code from outside the lock. The step is soft;
+  without it FlashInfer compiles its kernels at the first start (several minutes). Read in the
+  source of vLLM 0.32.0 (`vllm/entrypoints/cli/download_kernels.py`) and FlashInfer
+  0.7.0.post1 (`flashinfer/__main__.py`).
 - **Uninstall:** `vaf engine vllm --uninstall` or "Remove vLLM" in Settings (refused while vLLM
   is the engine) removes
   only `bin/vllm/venv`; the models stay in the Hugging Face cache and the command says
@@ -242,7 +250,8 @@ a driver that is too old). From vLLM's installation guide
 
 | Machine | Verdict | Why |
 |---|---|---|
-| Linux x86_64 or aarch64, NVIDIA, compute capability 7.5 or newer, driver 580 or newer | supported | the PyPI wheel is the CUDA 13.0 build and installs into VAF's Python |
+| Linux x86_64 or aarch64, NVIDIA, compute capability 7.5 or newer, driver 580 or newer, glibc 2.31 or newer (x86_64) or 2.34 or newer (aarch64) | supported | the PyPI wheel is the CUDA 13.0 build and installs into VAF's Python |
+| Linux with an older glibc, or without glibc (musl) | unsupported | pip cannot install the locked tree there (`glibc_old`): vllm and torch are `manylinux_2_28` wheels, but `llguidance` 1.7.6 ships `manylinux_2_31` only, and on aarch64 `z3-solver`, `tilelang` and `pynvvideocodec` ship `manylinux_2_34` only; there are no musl wheels. `local_engine.MIN_GLIBC` holds the floors, and `scripts/check_vllm_lock.py` checks the lock at exactly them |
 | Linux, NVIDIA below 7.5 (Pascal, Volta) | unsupported | vLLM needs 7.5 or newer |
 | Linux, NVIDIA, driver below 580 | unsupported | the CUDA 13.0 build needs driver 580 or newer ("CUDA 13.x >= 580", NVIDIA's CUDA compatibility guide); VAF installs one recipe, not the CUDA 12.9 wheel that exists only as a release asset |
 | Linux, NVIDIA whose compute capability nvidia-smi does not report | unsupported | a driver too old to report it is too old for the CUDA 13.0 build |
@@ -384,8 +393,11 @@ model..." instead of GGUFs, and a GGUF pick writes nothing. `vaf models set` und
 that the GGUF applies to llama.cpp only.
 
 **Update and Repair** shows a "Local engine" node: llama.cpp running or idle, vLLM with its
-version and model running, loading or idle, amber when vLLM is chosen but not installed or not
-supported here ("Change it under AI & Model"), grey under `api`. Never a repair target.
+version and model running, loading or idle, amber when vLLM is chosen but not installed, set up
+by an earlier VAF so that a start refuses it (`outdated`), or not supported here ("Change it
+under AI & Model"), grey under `api`. Never a repair target. `vaf health`, `vaf engine` and the
+Settings section name the `outdated` state the same way: such an environment is never shown as
+installed and idle, and the install that replaces it says so first.
 
 **Measured limits.** A message sent while the switch runs restarts llama.cpp on its next use,
 which can take the memory the fit check measures; the fit then refuses with its numbers and

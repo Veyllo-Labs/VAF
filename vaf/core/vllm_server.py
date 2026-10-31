@@ -287,6 +287,8 @@ def _install_steps(say, run, step, env, root, streams, where, outcome) -> str:
             uninstall()
             return f"{label} failed (exit {getattr(result, 'returncode', '?')}); {where}."
     step("install_kernels")
+    # Outside the lock (named boundary, docs/llm/VLLM_ENGINE.md): FlashInfer pip-installs
+    # flashinfer-cubin and flashinfer-jit-cache from its own index, version-pinned, unhashed.
     say("Fetching vLLM's prebuilt kernels...")
     try:
         kernels = run([str(vllm_exe()), "download-kernels"], env=env, **streams)
@@ -315,10 +317,12 @@ def _install_steps(say, run, step, env, root, streams, where, outcome) -> str:
         from vaf.core.local_engine import MIN_DRIVER
         return (f"vLLM was installed, but PyTorch in its environment sees no CUDA GPU. vLLM "
                 f"{PIN} needs an NVIDIA driver for CUDA {CUDA_VERSION} (version {MIN_DRIVER[0]} "
-                f"or newer), and CUDA_VISIBLE_DEVICES must not hide the GPU.")
+                "or newer): update the NVIDIA driver and try again, and make sure "
+                "CUDA_VISIBLE_DEVICES does not hide the GPU.")
     outcome["probe"] = "libs"
     return ("vLLM was installed, but its CUDA libraries do not load in its environment, so it "
-            f"cannot start; {where}.")
+            "cannot start. Run `vaf engine vllm` again: it rebuilds the environment, and "
+            f"llama.cpp keeps running meanwhile. If it fails again, {where} for why.")
 
 
 def uninstall() -> str:

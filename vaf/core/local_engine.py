@@ -30,8 +30,9 @@ and its process has exited, before the chosen one is spawned.
 
 Platform verdicts (``support()``), from the vLLM documentation:
 
-- Linux on x86_64 or aarch64 with an NVIDIA GPU of compute capability 7.5 or newer and an
-  NVIDIA driver 580 or newer: supported. vLLM's PyPI wheel is its CUDA 13.0 build (the
+- Linux on x86_64 or aarch64 with an NVIDIA GPU of compute capability 7.5 or newer, an
+  NVIDIA driver 580 or newer and glibc 2.31 (x86_64) or 2.34 (aarch64) or newer
+  (``MIN_GLIBC``; an older glibc or musl gets ``glibc_old``): supported. vLLM's PyPI wheel is its CUDA 13.0 build (the
   release table of v0.32.0) and installs into a fresh environment of VAF's own Python (vLLM
   0.32.0 accepts 3.11 to 3.14).
   https://docs.vllm.ai/en/latest/getting_started/installation/gpu/
@@ -81,10 +82,14 @@ Named boundaries, each deliberate:
   from ``vllm_requirements.lock`` (pinned, SHA-256 of every file, wheels only), the same
   practice as VAF's own ``requirements.lock``. Not checked beyond PyPI's own files: a release
   that was already malicious when the lock was generated is locked in with it; the lock
-  only stops anything newer or different from being installed.
+  only stops anything newer or different from being installed. And not the prebuilt kernels:
+  ``vllm download-kernels`` lets FlashInfer pip-install flashinfer-cubin and
+  flashinfer-jit-cache from its own index (flashinfer.ai), version-pinned but unhashed; the
+  step is soft, and without it FlashInfer compiles its kernels at the first start.
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 import threading
@@ -103,6 +108,15 @@ UNSUPPORTED = "unsupported"
 
 # The oldest NVIDIA architecture vLLM's CUDA build runs on (Turing).
 MIN_COMPUTE_CAPABILITY = (7, 5)
+# The oldest glibc on which pip can install every pinned release of vllm_requirements.lock,
+# per architecture, measured from the wheels on PyPI: vllm and torch are manylinux_2_28, but
+# llguidance 1.7.6 ships manylinux_2_31 only, and on aarch64 z3-solver, tilelang and
+# pynvvideocodec (cp313, cp314) ship manylinux_2_34 only. scripts/check_vllm_lock.py checks
+# the lock at exactly these floors. musl has no wheel at all.
+MIN_GLIBC = {"x86_64": (2, 31), "aarch64": (2, 34)}
+# Example distributions at each floor, for the sentence that says what runs it.
+_GLIBC_EXAMPLES = {"x86_64": "Ubuntu 20.04, Debian 11 or RHEL 9 and later",
+                   "aarch64": "Ubuntu 22.04, Debian 12 or RHEL 9 and later"}
 # The oldest NVIDIA driver for the CUDA 13.0 build of the pinned release
 # (vllm_server.CUDA_VERSION): "CUDA 13.x >= 580" in NVIDIA's CUDA compatibility guide
 # (docs.nvidia.com/deploy/cuda-compatibility); 580.65.06 shipped with CUDA 13.0.
@@ -189,6 +203,19 @@ def _parse_driver(text: str) -> Optional[Tuple[int, int, int]]:
     return tuple(parts + [0] * (3 - len(parts)))  # type: ignore[return-value]
 
 
+def host_glibc() -> Optional[str]:
+    """This host's glibc version ("2.39"), "" on a Linux without glibc (musl), None when the
+    host is not Linux (nothing to say). Read where pip reads it for its manylinux check."""
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        text = os.confstr("CS_GNU_LIBC_VERSION") or ""
+    except (AttributeError, OSError, ValueError):
+        return ""
+    m = re.fullmatch(r"\s*glibc\s+(\d+\.\d+)\S*\s*", text)
+    return m.group(1) if m else ""
+
+
 def _parse_capability(text: str) -> Optional[Tuple[int, int]]:
     m = re.fullmatch(r"\s*(\d+)\.(\d+)\s*", str(text or ""))
     return (int(m.group(1)), int(m.group(2))) if m else None
@@ -198,14 +225,17 @@ _DETECT = object()
 
 
 def support(gpu: Any = _DETECT, system: Optional[str] = None, machine: Optional[str] = None,
-            python: Optional[Tuple[int, int]] = None) -> EngineSupport:
+            python: Optional[Tuple[int, int]] = None, glibc: Any = _DETECT) -> EngineSupport:
     """Whether VAF can run vLLM on this machine, with the sentence that says why (the
     platform table in the module docstring). ``gpu`` is a ``gpu_detection.GPUInfo`` or None
-    for no GPU; left out, the primary GPU is detected."""
+    for no GPU; left out, the primary GPU is detected. ``glibc`` as ``host_glibc`` gives it
+    ("2.39", "" for none, None for unknown); left out, this host's is read."""
     import platform as _platform
     system = system if system is not None else _platform.system()
     machine = (machine if machine is not None else _platform.machine()).lower()
     python = python if python is not None else (sys.version_info[0], sys.version_info[1])
+    if glibc is _DETECT:
+        glibc = host_glibc()
     if gpu is _DETECT:
         try:
             from vaf.core.gpu_detection import get_primary_gpu
@@ -264,6 +294,19 @@ def support(gpu: Any = _DETECT, system: Optional[str] = None, machine: Optional[
                                           f"one is {driver}. Update the NVIDIA driver and "
                                           "restart VAF. llama.cpp runs here.",
                              "nvidia_driver_old", {"driver": driver})
+    if glibc is not None:
+        arch = "aarch64" if machine in ("aarch64", "arm64") else "x86_64"
+        found = _parse_capability(str(glibc)) if glibc else None
+        if found is None or found < MIN_GLIBC[arch]:
+            # pip could not install the locked tree here: refused before minutes of pip.
+            from vaf.core.vllm_server import PIN
+            floor = f"{MIN_GLIBC[arch][0]}.{MIN_GLIBC[arch][1]}"
+            this = f"glibc {glibc}" if glibc else "no glibc (musl, for example)"
+            return EngineSupport(UNSUPPORTED, f"vLLM {PIN} needs glibc {floor} or newer on this "
+                                              f"processor; this system has {this}. A newer Linux "
+                                              f"runs it ({_GLIBC_EXAMPLES[arch]}). llama.cpp runs "
+                                              "here.", "glibc_old",
+                                 {"glibc": str(glibc or ""), "min_glibc": floor})
     low, high = PYTHON_RANGE
     if not (low <= tuple(python) < high):
         version = f"{python[0]}.{python[1]}"
@@ -328,7 +371,7 @@ def support_class() -> Optional[Tuple[str, str]]:
 
 # Every code ``support`` gives, for the catalogues (a guard test reads this tuple).
 SUPPORT_CODES = ("supported", "windows", "apple", "no_build", "no_build_gpu", "no_gpu", "amd",
-                 "intel", "nvidia_unknown", "nvidia_too_old", "nvidia_driver_old", "python")
+                 "intel", "nvidia_unknown", "nvidia_too_old", "nvidia_driver_old", "glibc_old", "python")
 
 
 def default_vllm_model(vram_gb: Optional[float] = None) -> str:
@@ -528,6 +571,9 @@ def conflict_items(config: Optional[Dict] = None) -> List[Tuple[str, str]]:
         if not vllm_server.is_installed():
             out.append(("not_installed", "vLLM is the local engine but is not installed: run "
                                          "`vaf engine vllm`."))
+        elif not vllm_server.is_current():
+            # Installed, but a start refuses it (no recipe record, or another version).
+            out.append(("outdated", OUTDATED_TEXT))
     except Exception:
         pass
     if _v("voice_agent_provider") == "local" and _v("provider", "local") != "local":
@@ -547,8 +593,12 @@ def conflict_items(config: Optional[Dict] = None) -> List[Tuple[str, str]]:
     return out
 
 
-CONFLICT_CODES = ("unsupported", "not_installed", "voice_api_main", "vision_local",
+CONFLICT_CODES = ("unsupported", "not_installed", "outdated", "voice_api_main", "vision_local",
                   "voice_model_unused")
+# The environment exists but a start refuses it (vllm_server.is_current): built by an earlier
+# VAF or at another version. Not "not installed": its version is on disk.
+OUTDATED_TEXT = ("vLLM is the local engine, but its environment was set up by an earlier VAF "
+                 "and cannot start: run `vaf engine vllm` to rebuild it.")
 
 
 def conflicts(config: Optional[Dict] = None) -> List[str]:
@@ -838,11 +888,15 @@ def _apply_vllm(setting, repo, install, progress, output, say) -> EngineSwitch:
     missing = needs_install()
     if missing and not install:
         gb = f"{vllm_server.DOWNLOAD_GB_AT_LEAST:.1f}"
+        old = vllm_server.installed_version()
+        # An environment that exists but cannot start is replaced, and the question says so.
+        replaces = (f"vLLM {old} in {vllm_server.venv_dir()} was set up by an earlier VAF and "
+                    "cannot start; it is replaced. ") if old else ""
         return EngineSwitch(
             "needs_install", "needs_install",
-            f"This installs vLLM {vllm_server.PIN} (about {gb} GB or more to download, more on "
-            f"disk) into {vllm_server.venv_dir()}.", VLLM, repo,
-            params={"pin": vllm_server.PIN, "download_gb": gb})
+            f"{replaces}This installs vLLM {vllm_server.PIN} (about {gb} GB or more to download, "
+            f"more on disk) into {vllm_server.venv_dir()}.", VLLM, repo,
+            params={"pin": vllm_server.PIN, "download_gb": gb, "replaces": old or ""})
     steps = _Steps(7 if missing else 3, progress)
     previous = current()
 
@@ -1035,7 +1089,7 @@ def state(model: Optional[str] = None) -> Dict[str, Any]:
 
 # The states of ``status_row``, for the catalogues.
 STATUS_CODES = ("profile_api", "llama_running", "llama_idle", "unsupported", "not_installed",
-                "vllm_running", "vllm_loading", "vllm_idle")
+                "outdated", "vllm_running", "vllm_loading", "vllm_idle")
 
 
 def _vllm_row(cfg: Dict, probe_health: bool = True) -> Dict[str, Any]:
@@ -1050,6 +1104,9 @@ def _vllm_row(cfg: Dict, probe_health: bool = True) -> Dict[str, Any]:
     if version is None:
         return {**row, "state": "degraded", "code": "not_installed",
                 "text": "vLLM is the local engine but is not installed: run `vaf engine vllm`."}
+    if not vllm_server.is_current():
+        return {**row, "state": "degraded", "code": "outdated", "version": version,
+                "params": {"version": version}, "text": OUTDATED_TEXT}
     repo = resolve_vllm_model(cfg)
     server = _server_state(probe_health)
     shown = "server idle" if server == "idle" else "server running"

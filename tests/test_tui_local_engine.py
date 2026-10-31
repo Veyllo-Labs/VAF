@@ -132,6 +132,7 @@ def test_install_asks_first(monkeypatch):
     assert isinstance(screen, ConfirmScreen)
     assert "0.32.0" in screen._question and f"{vs.DOWNLOAD_GB_AT_LEAST:.1f} GB" in screen._question
     assert "Qwen/Qwen3-4B-AWQ (2.67 GB)" in screen._question
+    assert "earlier VAF" not in screen._question
     callback(False)
     assert calls == []
     callback(True)
@@ -141,6 +142,22 @@ def test_install_asks_first(monkeypatch):
     s._stack, s._rows = ["main", "engine"], s._menu_rows("engine")
     s._activate([r[1] for r in s._rows].index("llama"))
     assert calls[-1] == ("llama", None, False)
+
+
+def test_install_question_says_an_old_environment_is_replaced(monkeypatch):
+    """An environment an earlier VAF set up is replaced, and the question says so first.
+    MUTATION: drop the replace sentence from the question - red."""
+    state = _state(needs_install=True)
+    state["vllm"]["installed_version"] = "0.32.0"
+    s, calls, pushed, _ = _screen(monkeypatch, state=state)
+    s._stack = ["main", "engine"]
+    s._load_engine_state()
+    s._rows = s._menu_rows("engine")
+    s._activate([r[1] for r in s._rows].index("vllm"))
+    question = pushed[-1][0]._question
+    assert question.startswith("vLLM 0.32.0 was set up by an earlier VAF and cannot start; it "
+                               "is replaced. Install vLLM 0.32.0"), question
+    assert calls == []
 
 
 def test_vllm_model_rows(monkeypatch):

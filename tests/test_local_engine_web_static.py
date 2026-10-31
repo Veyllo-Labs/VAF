@@ -307,9 +307,28 @@ def test_cuda_facts_and_size_follow_the_core(locale):
     for key in ("cuda_probe_failed",):
         assert vs.CUDA_VERSION in cat["result"][key] and "580" in cat["result"][key], locale
     assert vs.CUDA_VERSION in cat["support"]["nvidia_driver_old"] and "580" in cat["support"]["nvidia_driver_old"]
+    # The probe verdicts name what to do, in every language: the GPU must not be hidden.
+    assert "CUDA_VISIBLE_DEVICES" in cat["result"]["cuda_probe_failed"], locale
+    floors = [f"{v[0]}.{v[1]}" for v in le.MIN_GLIBC.values()]
+    assert all(f in cat["support"]["glibc_old"] for f in floors), (locale, floors)
+    assert "{" not in cat["support"]["glibc_old"]
+    assert "{version}" in cat["replaceNote"] and "{version}" in cat["status"]["outdated"]
+    assert "{" not in cat["conflict"]["outdated"]
     assert "{" not in cat["support"]["nvidia_driver_old"], "the wizard renders support codes without params"
 
 
 def test_libs_failure_gets_the_log_hint():
     body = _src(_SECTION)
     assert "r.code === 'vllm_libs_failed') lines.push(t('logHint'" in body
+
+
+def test_an_outdated_environment_is_shown_as_such():
+    """An environment a start refuses is never shown as installed and ready: the server line
+    needs a current one, and the install says it replaces the old one. MUTATION: show the
+    server line for every installed version - red."""
+    body = _src(_SECTION)
+    assert "{data.vllm.installed_version && !needsInstall && (" in body
+    assert "const replaceNote = needsInstall && data.vllm.installed_version" in body
+    assert body.count("{replaceNote && ") == 2, "the panel and the confirmation both say it"
+    en = json.loads((_MESSAGES / "en.json").read_bytes())["localEngine"]
+    assert "not installed yet" not in en["result"]["needs_install"]

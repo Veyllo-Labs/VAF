@@ -13,6 +13,9 @@ MUTATIONS, each turns the named test red:
   test_support_matrix / test_detect_nvidia_reads_compute_cap;
 - lower MIN_DRIVER to (575, 0, 0), or drop driver_version from the nvidia-smi query ->
   test_support_matrix[driver-575] / test_detect_nvidia_reads_compute_cap;
+- lower an arch's MIN_GLIBC, use the x86_64 floor for aarch64, or let "" (musl) pass ->
+  test_glibc_floor_per_arch; read glibc through platform.libc_ver only, or answer "" on a
+  host that is not Linux -> test_host_glibc_reads_where_pip_reads;
 - drop the two-field retry for an old driver -> test_an_old_driver_still_finds_the_gpu;
 - remove the profile check in `vllm_server.ensure_model` (or `install`) ->
   test_api_profile_refuses_install_model_and_start;
@@ -92,15 +95,48 @@ def _nv(cc="8.6", vram=10240, model="NVIDIA GeForce RTX 3080", driver=""):
 def test_support_matrix(gpu, system, machine, level, words):
     """Exactly Linux x86_64/aarch64 with NVIDIA >= 7.5 is supported; every other row gets its
     level and a sentence that names the reason and what runs instead."""
-    verdict = le.support(gpu=gpu, system=system, machine=machine, python=(3, 13))
+    verdict = le.support(gpu=gpu, system=system, machine=machine, python=(3, 13), glibc="2.39")
     assert verdict.level == level, verdict
     for word in words:
         assert word in verdict.reason, (word, verdict.reason)
     assert verdict.supported is (level == le.SUPPORTED)
 
 
+@pytest.mark.parametrize("machine, glibc, code", [
+    ("x86_64", "2.30", "glibc_old"), ("x86_64", "2.31", "supported"),
+    ("x86_64", "2.39", "supported"), ("aarch64", "2.33", "glibc_old"),
+    ("aarch64", "2.34", "supported"), ("arm64", "2.31", "glibc_old"),
+    ("x86_64", "", "glibc_old"), ("aarch64", None, "supported"),
+])
+def test_glibc_floor_per_arch(machine, glibc, code):
+    """pip can install the locked tree only at or above the arch's glibc floor (measured from
+    the wheels on PyPI); no glibc at all (musl) is refused, an unknown one is not."""
+    verdict = le.support(gpu=_nv(), system="Linux", machine=machine, python=(3, 13), glibc=glibc)
+    assert verdict.code == code, verdict
+    if code == "glibc_old":
+        floor = "2.34" if machine in ("aarch64", "arm64") else "2.31"
+        assert verdict.params == {"glibc": glibc, "min_glibc": floor}
+        assert f"glibc {floor} or newer" in verdict.reason and "llama.cpp runs here" in verdict.reason
+        assert ("musl" in verdict.reason) is (glibc == "")
+
+
+def test_host_glibc_reads_where_pip_reads(monkeypatch):
+    import os
+    monkeypatch.setattr(le.sys, "platform", "linux")
+    monkeypatch.setattr(os, "confstr", lambda name: "glibc 2.27", raising=False)
+    assert le.host_glibc() == "2.27"
+    assert le.support(gpu=_nv(), system="Linux", machine="x86_64", python=(3, 13)).code == "glibc_old"
+
+    def musl(name):
+        raise ValueError("unrecognized configuration name")
+    monkeypatch.setattr(os, "confstr", musl, raising=False)
+    assert le.host_glibc() == ""
+    monkeypatch.setattr(le.sys, "platform", "win32")
+    assert le.host_glibc() is None, "a host that is not Linux has nothing to say about glibc"
+
+
 def test_support_names_a_python_outside_vllms_range():
-    verdict = le.support(gpu=_nv(), system="Linux", machine="x86_64", python=(3, 10))
+    verdict = le.support(gpu=_nv(), system="Linux", machine="x86_64", python=(3, 10), glibc="2.39")
     assert verdict.level == le.UNSUPPORTED and "3.10" in verdict.reason
 
 
@@ -376,6 +412,9 @@ _REASONS = {
     "nvidia_driver_old": "vLLM 0.32.0 is built for CUDA 13.0 and needs NVIDIA driver 580 or "
                          "newer; this one is 575.57.08. Update the NVIDIA driver and restart "
                          "VAF. llama.cpp runs here.",
+    "glibc_old": "vLLM 0.32.0 needs glibc 2.31 or newer on this processor; this system has glibc "
+                 "2.28. A newer Linux runs it (Ubuntu 20.04, Debian 11 or RHEL 9 and later). "
+                 "llama.cpp runs here.",
     "nvidia_unknown": "VAF could not read this GPU's compute capability from nvidia-smi (the "
                       "driver may be too old for vLLM's CUDA build). llama.cpp runs here.",
     "amd": "vLLM supports some AMD GPUs through ROCm 6.3+, with Python 3.12 builds only; VAF "
@@ -401,6 +440,8 @@ _REASONS = {
     (_nv(cc=""), "Linux", "x86_64", (3, 13), le.UNSUPPORTED, "nvidia_unknown", {}),
     (_nv(driver="575.57.08"), "Linux", "x86_64", (3, 13), le.UNSUPPORTED, "nvidia_driver_old",
      {"driver": "575.57.08"}),
+    (_nv(), "Linux", "x86_64", (3, 13), le.UNSUPPORTED, "glibc_old",
+     {"glibc": "2.28", "min_glibc": "2.31"}),
     (GPUInfo("amd", "Radeon RX 7900", 24576), "Linux", "x86_64", (3, 13), le.LATER, "amd", {}),
     (GPUInfo("intel", "Arc A770", 16384), "Linux", "x86_64", (3, 13), le.LATER, "intel", {}),
     (None, "Linux", "x86_64", (3, 13), le.UNSUPPORTED, "no_gpu", {}),
@@ -415,7 +456,8 @@ def test_support_codes_and_unchanged_reasons(gpu, system, machine, python, level
     """Every row of the platform table keeps its level and its sentence byte for byte and
     gains a code with its parameters. MUTATION: swap the codes amd/intel, or change one
     sentence - red."""
-    verdict = le.support(gpu=gpu, system=system, machine=machine, python=python)
+    glibc = "2.28" if code == "glibc_old" else "2.39"
+    verdict = le.support(gpu=gpu, system=system, machine=machine, python=python, glibc=glibc)
     assert (verdict.level, verdict.code, dict(verdict.params)) == (level, code, params)
     assert verdict.reason == _REASONS[code]
     assert code in le.SUPPORT_CODES
@@ -426,11 +468,14 @@ def vllm_box(monkeypatch, tmp_path, config):
     from vaf.core import backend
     from vaf.core import vllm_server as vs
     monkeypatch.setattr(vs, "venv_dir", lambda: tmp_path / "bin" / "vllm" / "venv")
-    box = {"supported": True, "version": "0.32.0", "pid": None, "health": None, "loaded": None}
+    box = {"supported": True, "version": "0.32.0", "pid": None, "health": None, "loaded": None,
+           "current": True}
     monkeypatch.setattr(le, "support", lambda **kw: le.EngineSupport(
         le.SUPPORTED, "vLLM runs here.", "supported") if box["supported"] else le.EngineSupport(
         le.LATER, "AMD here.", "amd", {}))
     monkeypatch.setattr(vs, "installed_version", lambda: box["version"])
+    monkeypatch.setattr(vs, "is_installed", lambda: box["version"] is not None)
+    monkeypatch.setattr(vs, "is_current", lambda: box["version"] is not None and box["current"])
     monkeypatch.setattr(vs, "running_pid", lambda: box["pid"])
     monkeypatch.setattr(vs, "health_status", lambda port=8080, timeout=1.0: box["health"])
     monkeypatch.setattr(backend, "get_loaded_model_id", lambda port=8080, timeout=2.0: box["loaded"])
@@ -454,6 +499,13 @@ def test_status_row_states(config, vllm_box):
     assert (row["state"], row["code"]) == ("loading", "vllm_loading")
     vllm_box["pid"] = None
     assert le.status_row(dict(config))["code"] == "vllm_idle"
+    # Installed, but a start refuses it (an earlier VAF set it up): never "idle".
+    vllm_box["current"] = False
+    row = le.status_row(dict(config))
+    assert (row["state"], row["code"], row["params"]) == ("degraded", "outdated",
+                                                          {"version": "0.32.0"})
+    assert "outdated" in le.STATUS_CODES
+    vllm_box["current"] = True
     vllm_box["version"] = None
     row = le.status_row(dict(config))
     assert (row["state"], row["code"]) == ("degraded", "not_installed")
@@ -476,6 +528,11 @@ def test_engine_check_text_unchanged(config, vllm_box):
                               "vLLM 0.32.0 installed, model Qwen/Qwen3-4B-AWQ, server idle."}
     vllm_box["pid"] = 4242
     assert engine_check()["reason"] == "vLLM 0.32.0 installed, model Qwen/Qwen3-4B-AWQ, server running."
+    vllm_box["current"] = False
+    assert engine_check() == {"name": "engine", "status": "degraded", "reason":
+                              "vLLM is the local engine, but its environment was set up by an "
+                              "earlier VAF and cannot start: run `vaf engine vllm` to rebuild it."}
+    vllm_box["current"] = True
     vllm_box["version"] = None
     assert engine_check() == {"name": "engine", "status": "degraded", "reason":
                               "vLLM is the local engine but is not installed: run `vaf engine vllm`."}
@@ -493,9 +550,17 @@ def test_conflict_codes_keep_their_sentences(config, monkeypatch):
     config.update(local_engine="vllm", provider="openai", voice_agent_provider="local",
                   vision_provider="local", voice_agent_model="voice.gguf")
     items = le.conflict_items()
-    assert [code for code, _ in items] == list(le.CONFLICT_CODES)
+    # not_installed and outdated exclude each other: one environment is either missing or not.
+    assert [code for code, _ in items] == [c for c in le.CONFLICT_CODES if c != "outdated"]
     assert le.conflicts() == [text for _, text in items]
     assert items[0][1] == 'local_engine is "vllm", but: AMD here.'
+    monkeypatch.setattr(vs, "is_installed", lambda: True)
+    monkeypatch.setattr(vs, "is_current", lambda: False)
+    items = le.conflict_items()
+    assert [code for code, _ in items] == [c for c in le.CONFLICT_CODES if c != "not_installed"]
+    assert dict(items)["outdated"] == le.OUTDATED_TEXT and "vaf engine vllm" in le.OUTDATED_TEXT
+    monkeypatch.setattr(vs, "is_current", lambda: True)
+    assert "outdated" not in dict(le.conflict_items()), "a current environment is no conflict"
 
 
 def test_without_engine_keys():

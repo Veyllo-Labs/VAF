@@ -294,12 +294,20 @@ the model download to the download banner (`web_interface.model_download_broadca
 closing frame without a model list, so the GGUF list stays). pip has no progress figure: the
 install step shows its name for minutes. pip's output goes to `logs/vllm_install.log` in the
 web server and the TUI (`install(output=...)`); the terminal keeps printing it. The banner's
-Cancel ends a vLLM model download for an admin (`MODEL_DOWNLOAD.request_cancel`); the switch
-ends with `download_cancelled` and the engine stays. Whether a download was cancelled is read
-from its own exception (`model_download_state.was_cancelled`): a GGUF and a vLLM model can
-download at once, each on its own file lock, and a cancel of one must not read as the cause
-of the other's failure (the GGUF download keeps its fallback to the default model then). The pip step has no cancel, as in the
-terminal.
+Cancel, for an admin, ends every model download running at that moment
+(`MODEL_DOWNLOAD.request_cancel`): the vLLM model of a switch, which then ends with
+`download_cancelled` while the engine stays, and a GGUF download running beside it, since a
+GGUF and a vLLM model can download at once (each on its own file lock) and share the one
+download slot and its one cancel flag. Each download reads its own exception
+(`model_download_state.was_cancelled`), so one that failed for another reason is not taken
+for a cancel and the GGUF download keeps its fallback to the default model then. The pip step
+has no cancel, as in the terminal.
+
+Named boundary, one Cancel for every download running: there is no cancel token per download.
+The banner shows one slot and one Cancel, and an overlap needs a GGUF download a chat started
+while an admin's engine switch downloads the vLLM model; the `start` of one download also
+clears a request still pending for the other. A measured overlap in practice is what would
+earn per-download tokens.
 
 **Every outcome has a code** (the verdicts, the fit, the conflicts, each result of `apply` and
 `uninstall_vllm`, the phases, the status row): the UI shows the catalogue text in the reader's

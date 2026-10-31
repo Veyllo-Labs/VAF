@@ -612,3 +612,32 @@ def test_broadcast_stop_waits_for_its_thread(monkeypatch, starter, name):
     finally:
         MODEL_DOWNLOAD.finish()
         MAINTENANCE.clear()
+
+
+def test_support_class_does_not_queue_callers_behind_a_running_probe(monkeypatch):
+    """The unauthenticated needs-setup route must not hold one thread per caller while a probe
+    runs into its timeouts: a second caller gets the answer known so far (None) at once."""
+    import threading
+    import time
+
+    import vaf.core.gpu_detection as gd
+    monkeypatch.setattr(le, "_SUPPORT_CLASS", None)
+    monkeypatch.setattr(le, "_SUPPORT_RETRY_AT", 0.0)
+    probing, release = threading.Event(), threading.Event()
+
+    def slow_probe():
+        probing.set()
+        release.wait(5)
+        return None
+    monkeypatch.setattr(gd, "get_primary_gpu", slow_probe)
+    first = threading.Thread(target=le.support_class, daemon=True)
+    first.start()
+    try:
+        assert probing.wait(2)
+        started = time.monotonic()
+        assert le.support_class() is None
+        assert time.monotonic() - started < 0.5, "a second caller waited for the probe"
+    finally:
+        release.set()
+        first.join(5)
+    assert not le._SUPPORT_LOCK.locked(), "the lock was not given back"

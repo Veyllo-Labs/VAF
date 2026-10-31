@@ -9,8 +9,10 @@ start a server against a not-yet-downloaded file. This tiny thread-safe singleto
 thread tell that a download is underway (and read its progress) instead of racing it.
 
 Cross-PROCESS integrity (two VAF processes, e.g. tray + `vaf run`) is handled separately by a
-``filelock`` around the actual download in ``vaf.core.backend.ensure_model_available``; this object is
-only the in-process coordination/progress signal.
+``filelock`` around each actual download: ``models/.download.lock`` for a GGUF
+(``vaf.core.backend.ensure_model_available``), ``bin/vllm/download.lock`` for a vLLM model
+(``vaf.core.vllm_server.ensure_model``). The two locks are separate, so a GGUF and a vLLM model can
+download at the same time; this object is only the in-process coordination/progress signal.
 """
 
 from __future__ import annotations
@@ -38,8 +40,18 @@ def was_cancelled(exc: BaseException) -> bool:
 
 
 class _ModelDownloadState:
-    """Thread-safe snapshot of the current model download (at most one at a time, serialized by the
-    download filelock). All access goes through the internal lock."""
+    """Thread-safe snapshot of the current model download. All access goes through the internal
+    lock.
+
+    ONE slot for every download running: two downloads can run at once (a GGUF and a vLLM model,
+    each on its own file lock), and they share the slot, so the banner shows whichever wrote last.
+    They share the cancel flag too: ``request_cancel`` ends every model download running at that
+    moment, and the ``start`` of one download clears a request still pending for another. Each
+    download then reads its own exception (``was_cancelled``), so a download that failed for
+    another reason is never taken for a cancelled one. Named boundary, why there is no cancel
+    token per download: the banner shows one slot and one Cancel, and an overlap needs a GGUF
+    download a chat started while an admin's engine switch downloads the vLLM model; a measured
+    overlap in practice is what would earn per-download tokens."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -91,7 +103,6 @@ class _ModelDownloadState:
     def cancel_requested(self) -> bool:
         with self._lock:
             return self._cancel
-
 
     def snapshot(self) -> dict:
         """A consistent copy for readers (the worker status push, load_model's wait loop, the WS layer)."""

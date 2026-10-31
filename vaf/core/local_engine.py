@@ -268,9 +268,15 @@ def support_class() -> Optional[Tuple[str, str]]:
     timeout or a driver still loading and reports no GPU, gpu_detection.detect_nvidia_gpu).
     Kept, that would leave the wizard saying vLLM cannot run until a restart. It is tried
     again after ``SUPPORT_RETRY_SECONDS``, and None comes back meanwhile, so the probes still
-    run at most once a minute."""
+    run at most once a minute.
+
+    A caller that finds a detection already running gets None at once instead of waiting for
+    it: the route answers without a session, and a probe can run into its timeouts (5 s each),
+    which would hold every waiting caller's thread for that long."""
     global _SUPPORT_CLASS, _SUPPORT_RETRY_AT
-    with _SUPPORT_LOCK:
+    if not _SUPPORT_LOCK.acquire(blocking=False):
+        return _SUPPORT_CLASS
+    try:
         if _SUPPORT_CLASS is not None:
             return _SUPPORT_CLASS
         now = time.monotonic()
@@ -287,6 +293,8 @@ def support_class() -> Optional[Tuple[str, str]]:
             return None
         _SUPPORT_CLASS = (str(verdict.level), str(verdict.code))
         return _SUPPORT_CLASS
+    finally:
+        _SUPPORT_LOCK.release()
 
 
 # Every code ``support`` gives, for the catalogues (a guard test reads this tuple).

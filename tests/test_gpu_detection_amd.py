@@ -14,7 +14,8 @@ MUTATIONS, each turns the named test red:
   test_detect_amd_prefers_the_largest_vram;
 - return (used, total) or total twice -> test_amd_vram_free_is_total_minus_used;
 - read .info/version unparsed, look only in /opt/rocm, or name a distribution directory for
-  LD_LIBRARY_PATH -> test_rocm_runtime_finds_lib_and_version.
+  LD_LIBRARY_PATH -> test_rocm_runtime_finds_lib_and_version;
+- take a relative $ROCM_PATH as it is -> test_a_relative_rocm_path_is_named_absolute.
 """
 import subprocess
 from pathlib import Path
@@ -130,3 +131,15 @@ def test_rocm_runtime_finds_lib_and_version(tmp_path):
     (old / "opt" / "rocm" / "lib").mkdir(parents=True)
     (old / "opt" / "rocm" / "lib" / "libamdhip64.so.6").write_bytes(b"")
     assert gd.rocm_runtime(env={}, root=str(old)) == (False, "")
+
+
+def test_a_relative_rocm_path_is_named_absolute(tmp_path, monkeypatch):
+    """A relative $ROCM_PATH is named as an absolute directory: LD_LIBRARY_PATH of the server
+    would read a relative entry against the server's own working directory."""
+    custom = tmp_path / "rel-rocm"
+    (custom / "lib").mkdir(parents=True)
+    (custom / "lib" / gd.HIP_RUNTIME).write_bytes(b"")
+    monkeypatch.chdir(tmp_path)
+    found = gd.rocm_library_dir(env={"ROCM_PATH": "rel-rocm"}, root=str(tmp_path / "none"))
+    assert Path(found).is_absolute(), found
+    assert Path(found) == (custom / "lib").resolve() or Path(found) == custom / "lib"

@@ -317,7 +317,9 @@ def _find_rocm(env: Optional[Mapping[str, str]], root: str) -> Tuple[Optional[Pa
     base = Path(root)
     roots: List[Path] = []
     if source.get("ROCM_PATH"):
-        roots.append(Path(str(source["ROCM_PATH"])))
+        # Absolute: the directory goes onto LD_LIBRARY_PATH of the install steps and the
+        # server, where a relative entry would be read against their working directory.
+        roots.append(Path(os.path.abspath(str(source["ROCM_PATH"]))))
     roots.append(base / "opt" / "rocm")
     try:
         roots += sorted((p for p in (base / "opt").glob("rocm-*") if p.is_dir()),

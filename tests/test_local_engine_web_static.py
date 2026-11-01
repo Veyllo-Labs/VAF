@@ -474,8 +474,11 @@ def test_gpu_share_slider():
     assert "memory.steps.find(" in slider, "the fit is read from the server's steps"
     for key in ("autoNow", "autoLater", "reserve", "reserveUnknown", "noDisplay", "fits",
                 "tooSmall", "tooSmallAll", "aboveFree", "leaves", "leavesLow", "afterDownload",
-                "withSwitch", "outOfRange"):
+                "withSwitch", "outOfRange", "whyMax"):
         assert f"t('{key}'" in slider, key
+    # The status line keeps two lines, so the text below does not jump on a phone.
+    status = _between(slider, "<div className=\"min-h-[2rem] space-y-1.5\" data-share-status>", "</div>")
+    assert "t('fits'" in status and "t('tooSmall'" in status and "t('aboveFree'" in status
     section = _src(_SECTION)
     picker = _between(section, "{showVllmPicker && (", "{/* Switching to vLLM from llama.cpp")
     assert "<GpuShareSlider" in picker and section.count("<GpuShareSlider") == 1
@@ -485,6 +488,9 @@ def test_gpu_share_slider():
     assert "gpu_share: share })}" in section and "t('share.apply')" in section
     assert "t('share.restart')" in section
     assert "body: JSON.stringify(body)," in section
+    # A preview answers for the repo it was asked for, never for a later pick.
+    assert "setPreview({ repo: chosenRepo, vllm: state.vllm })" in section
+    assert "preview && preview.repo === chosenRepo ? preview.vllm : null) ?? data.vllm" in section
     assert "vllm_gpu_memory_utilization" not in _src(_MODAL), "a Settings save writes the share"
     assert "reserve: gb(fit.reserve_mb ?? 0), min: pct(fit.min_share ?? 0), left: gb(fit.leaves_mb ?? 0)," in section
 
@@ -528,3 +534,5 @@ def test_balanced_cards_and_share_texts(locale):
                                     "aus, belegt nur so viel Speicher, wie es braucht, und startet "
                                     "in Sekunden")
         assert cat["share"]["label"] == "GPU-Speicher für vLLM"
+        assert cat["share"]["leaves"].startswith("Es bleiben {left} GB")
+        assert cat["share"]["leavesLow"].startswith("Es bleiben nur {left} GB")

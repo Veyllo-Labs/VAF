@@ -313,8 +313,9 @@ argument.
   / total from `nvidia-smi`, within 0.50..0.92, then at most (total - 3328 MiB) / total when
   the GPU drives a display or that cannot be read (the desktop reserve, see below), floored
   to 0.01 (`vllm_server.auto_share`, `floor_share`), unless `vllm_gpu_memory_utilization`
-  sets it. The floor keeps the launch argument equal to the share the fit checked: the
-  two-decimal format rounds, and 0.675 printed as 0.68 (51 MiB more than checked on 10 GB).
+  sets it. The floor keeps the launch argument equal to the share the fit checked: a
+  computed 0.675 is fitted and launched as 0.67. Without it the fit checked 0.675 while the
+  two-decimal launch argument rounded it to 0.68, 51 MiB more on 10 GB.
   A share set by hand (the slider, `--gpu-share`, the TUI: 0.30 to 0.95,
   `vllm_server.SHARE_RANGE`) is taken as it is and never capped by the reserve; one that
   leaves less than the reserve on a display GPU is marked `below_reserve`, and `vaf engine

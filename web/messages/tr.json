@@ -2834,6 +2834,7 @@
       "aboveFree": "Şu anda boş olandan fazla: {free} GB boş.",
       "leaves": "Ekran ve diğer programlar için {left} GB kalır.",
       "leavesLow": "Ekran ve diğer programlar için yalnızca {left} GB kalır; {reserve} GB'ın altında ekran donabilir.",
+      "whyMax": "En fazla {max}: kartın geri kalanı sürücüsü ve diğer programlar için kalır.",
       "afterDownload": "Modelin bu değerde sığıp sığmadığını VAF indirmeden sonra kontrol eder.",
       "withSwitch": "Geçişle birlikte uygulanır.",
       "restart": "vLLM çalışırken belleğini değiştiremez: uygulandığında VAF onu durdurur, modelin sığıp sığmadığını kontrol eder ve bir kez yeniden başlatır (bir iki dakika).",

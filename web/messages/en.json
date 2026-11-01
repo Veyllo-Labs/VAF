@@ -2834,6 +2834,7 @@
       "aboveFree": "More than is free right now: {free} GB are free.",
       "leaves": "Leaves {left} GB for the screen and other programs.",
       "leavesLow": "Leaves only {left} GB for the screen and other programs; below {reserve} GB the screen can freeze.",
+      "whyMax": "At most {max}: the rest of the card stays for its driver and other programs.",
       "afterDownload": "Whether the model fits at this value is checked after the download.",
       "withSwitch": "Applies with the switch.",
       "restart": "vLLM cannot change its memory while it runs: applying stops it, checks the fit and starts it once (one to two minutes).",

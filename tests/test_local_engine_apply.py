@@ -825,7 +825,8 @@ def test_a_new_share_restarts_the_running_vllm(config, monkeypatch):
 
 @pytest.mark.parametrize("engine, share", [
     ("vllm", 0.2), ("vllm", 0.97), ("vllm", float("nan")), ("vllm", "x"), ("vllm", "0.7"),
-    ("vllm", True), ("vllm", 1.0), ("vllm", -0.5), ("llama", 0.7), ("llama", 0)])
+    ("vllm", True), ("vllm", 1.0), ("vllm", -0.5), ("llama", 0.7), ("llama", 0),
+    ("vllm", 10 ** 400), ("vllm", float("inf"))])
 def test_a_bad_share_is_refused_before_anything_runs(config, monkeypatch, engine, share):
     """Outside 0.30 to 0.95, NaN, a non-number or any share with llama.cpp: ``bad_share``,
     before the verdict, the install or a write. MUTATION: widen the range check - red."""
@@ -846,3 +847,14 @@ def test_a_share_in_the_range_is_rounded(config, monkeypatch, share, stored):
     assert le.validate("vllm", gpu_share=share) == "vllm"
     assert le.apply("vllm", gpu_share=share).status == "done"
     assert config.get("vllm_gpu_memory_utilization", 0) == stored
+
+
+def test_a_share_too_long_to_print_is_refused_too(config, monkeypatch):
+    """An int beyond Python's int-to-str digit limit can neither become a float nor be
+    printed: still ``bad_share``, with a short sentence. MUTATION: echo the value with
+    ``repr`` uncut - red."""
+    _fakes(monkeypatch, config, installed=True)
+    result = le.apply("vllm", gpu_share=10 ** 5000)
+    assert (result.status, result.code) == ("refused", "bad_share")
+    assert len(result.text) < 200 and "too long to show" in result.text
+    assert le._shown(10 ** 400).endswith("...") and len(le._shown(10 ** 400)) == 43

@@ -834,24 +834,39 @@ def _model_setting(model: Optional[str]) -> Tuple[Optional[str], str]:
     return value, value
 
 
+def _shown(value: Any, limit: int = 40) -> str:
+    """``value`` for a refusal sentence, cut to ``limit`` characters: the value comes from a
+    request, and an int beyond Python's int-to-str digit limit cannot even be printed."""
+    try:
+        text = repr(value)
+    except ValueError:
+        return f"<a {type(value).__name__} too long to show>"
+    return text if len(text) <= limit else text[:limit] + "..."
+
+
 def _share(gpu_share: Any, engine: str) -> Optional[float]:
     """The GPU share of a switch: None keeps the stored one, 0 is automatic, anything else a
     number within ``vllm_server.SHARE_RANGE``, rounded to 0.01. ``bad_share`` for a value out
-    of the range, NaN, a non-number (a string, a bool) or any share with llama.cpp, which
-    reserves no share."""
+    of the range, NaN, an int too large for a float, a non-number (a string, a bool) or any
+    share with llama.cpp, which reserves no share. Never another exception: the web route
+    answers every wrong value with 400 and this code."""
     if gpu_share is None:
         return None
     from vaf.core.vllm_server import SHARE_RANGE
     low, high = SHARE_RANGE
     params = {"min": f"{low:.2f}", "max": f"{high:.2f}"}
     text = (f"The GPU memory share of vLLM is a number from {low:.2f} to {high:.2f}, or "
-            f"automatic (0, or `vaf engine vllm --gpu-share auto`), not {gpu_share!r}.")
+            f"automatic (0, or `vaf engine vllm --gpu-share auto`), not {_shown(gpu_share)}.")
     if engine == LLAMA:
         raise EngineRefusal("bad_share", "The GPU memory share goes with vLLM; llama.cpp takes "
                                          "only the memory it needs.", params)
     if isinstance(gpu_share, bool) or not isinstance(gpu_share, (int, float)):
         raise EngineRefusal("bad_share", text, params)
-    value = float(gpu_share)
+    try:
+        value = float(gpu_share)
+    except (OverflowError, ValueError, TypeError):
+        # An int too large for a float (JSON integers have no bound).
+        raise EngineRefusal("bad_share", text, params) from None
     if value != value:      # NaN
         raise EngineRefusal("bad_share", text, params)
     if value == 0:

@@ -116,7 +116,10 @@ def _finish(result) -> None:
     """Print what ``local_engine.apply`` did and exit like `vaf profile`: 0 done, 1 not
     complete, 2 refused."""
     fit = result.fit
-    if fit is not None and fit.ok and getattr(fit, "below_reserve", False):
+    # Only for a share that was applied: a first start that failed carries its passing fit,
+    # and the stored share stayed as it was.
+    if (result.status == "done" and fit is not None and fit.ok
+            and getattr(fit, "below_reserve", False)):
         from vaf.core.vllm_server import DESKTOP_RESERVE_MB
         UI.warning(f"The GPU share {fit.utilization:.2f} leaves {gb_of_mib(fit.leaves_mb)} GB for "
                    f"the screen and other programs, less than the {gb_of_mib(DESKTOP_RESERVE_MB)} "

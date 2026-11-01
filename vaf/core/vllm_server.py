@@ -1356,7 +1356,9 @@ def start_signature(repo_id: str, n_ctx: int, plan: Optional[KvPlan] = None,
     """What a start depends on besides the free memory: the model, the requested context,
     the GPU share (``utilization``, the override of a switch, else the configured one), the
     parsers, the pin, the recipe and the plan. A change of any of them is a new start, not
-    the failed one again."""
+    the failed one again. Not in it: the display state and its desktop reserve. A fit refusal
+    is measured again after ``FIT_RETRY_SECONDS`` anyway; a remembered crash or timeout
+    survives a monitor plugged in or out until a switch or a restart of VAF."""
     from vaf.core import local_engine
     plan = plan or launch_plan()
     return (str(repo_id), max(int(n_ctx or 0), MIN_CONTEXT), _share_or_configured(utilization),

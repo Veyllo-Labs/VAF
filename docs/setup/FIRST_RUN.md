@@ -145,8 +145,9 @@ servers and high-end PCs that answer many requests at once", then "Runs Hugging 
 a supported NVIDIA or AMD GPU, reserves its share of GPU memory up front and starts in one to
 two minutes", with this machine's verdict as its note)
 ([VLLM_ENGINE.md](../llm/VLLM_ENGINE.md)). The wizard has no GPU memory slider: vLLM starts on
-the automatic share, which keeps memory free for a screen; the slider is in Settings > AI &
-Model. vLLM can be chosen only where it runs; elsewhere
+the automatic share, which keeps about 3.3 GB free for the screen when the GPU drives a
+display or VAF cannot tell (a GPU known to drive none keeps nothing back); the slider is in
+Settings > AI & Model. vLLM can be chosen only where it runs; elsewhere
 its card is disabled and says why. With NVIDIA it needs Linux, a GPU of compute capability 7.5 or newer, an NVIDIA driver 580 or newer
 and glibc 2.31 or newer (2.34 on ARM). With AMD it needs Linux on x86_64, a Radeon RX 7900 or
 RX 9000, Ryzen AI 300 or MAX, or Instinct MI200, MI300 or MI350 GPU, ROCm 7.2 or newer, a

@@ -2834,6 +2834,7 @@
       "aboveFree": "超过了当前的空闲显存：现在空闲 {free} GB。",
       "leaves": "为屏幕和其他程序留下 {left} GB。",
       "leavesLow": "只为屏幕和其他程序留下 {left} GB；低于 {reserve} GB 时屏幕可能会卡死。",
+      "whyMax": "最多 {max}：其余显存留给驱动和其他程序。",
       "afterDownload": "模型在这个值下是否放得下，VAF 会在下载后检查。",
       "withSwitch": "切换时一并生效。",
       "restart": "vLLM 运行时无法更改显存：应用时 VAF 会先停止它，检查模型是否放得下，再重新启动一次（一到两分钟）。",

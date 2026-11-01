@@ -337,10 +337,13 @@ def test_the_gpu_share_rides_the_switch(client, monkeypatch):
     monkeypatch.setattr(le, "apply", lambda *a, **k: pytest.fail("a wrong request reached apply"))
     for body in ({"engine": "vllm", "gpu_share": 0.2}, {"engine": "vllm", "gpu_share": 0.97},
                  {"engine": "vllm", "gpu_share": "x"}, {"engine": "llama", "gpu_share": 0.7},
-                 {"engine": "vllm", "gpu_share": [0.5]}):
+                 {"engine": "vllm", "gpu_share": [0.5]},
+                 # An int too large for a float: OverflowError, which was a 500.
+                 {"engine": "vllm", "gpu_share": 10 ** 400}):
         answer = client.post("/api/system/local-engine", json=body)
         assert answer.status_code == 400 and answer.json()["code"] == "bad_share", (body, answer.json())
         assert answer.json()["params"] == {"min": "0.30", "max": "0.95"}
+        assert len(answer.json()["detail"]) < 200, "the refusal echoes a long value whole"
     assert sr._engine_state["running"] is False
     monkeypatch.setattr(le, "validate", lambda engine, model=None, gpu_share=None:
                         seen.append(("validate", gpu_share)) or "vllm")

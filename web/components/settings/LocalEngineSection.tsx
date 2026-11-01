@@ -133,7 +133,8 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
     const [pending, setPending] = useState<EngineId | null>(null);
     const [modelChoice, setModelChoice] = useState<string>('auto');
     const [otherRepo, setOtherRepo] = useState('');
-    const [preview, setPreview] = useState<EngineState['vllm'] | null>(null);
+    // The state of another repo than the stored one, with the repo it was asked for.
+    const [preview, setPreview] = useState<{ repo: string; vllm: EngineState['vllm'] } | null>(null);
     const [confirming, setConfirming] = useState<'install' | 'remove' | null>(null);
     const [busy, setBusy] = useState(false);
     // vLLM's GPU memory share in the slider: 0 = automatic (vllm_gpu_memory_utilization).
@@ -212,7 +213,7 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
                 const res = await fetch(`${apiBase}/api/system/local-engine?model=${encodeURIComponent(chosenRepo)}`, { credentials: 'include' });
                 if (!res.ok || cancelled) return;
                 const state: EngineState = await res.json();
-                if (!cancelled) setPreview(state.vllm);
+                if (!cancelled) setPreview({ repo: chosenRepo, vllm: state.vllm });
             } catch { /* the line falls back to the stored model's */ }
         }, 400);
         return () => { cancelled = true; window.clearTimeout(timer); };
@@ -394,7 +395,10 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
             noteWord: lean ? undefined : data.support.level === 'later' ? t('levelLater') : t('levelUnsupported'),
         },
     ];
-    const vllmInfo = preview ?? data.vllm;
+    // Only the preview of the repo in the picker: one asked for an earlier pick would show that
+    // model's parsers and fit while the new answer is pending, and for good if it never comes.
+    // Without one the stored model's state stands in, as before.
+    const vllmInfo = (preview && preview.repo === chosenRepo ? preview.vllm : null) ?? data.vllm;
     const needsInstall = data.vllm.needs_install;
     const sizeGb = gbOf(runningRepo);
     // A free repo's size is not known before its download.

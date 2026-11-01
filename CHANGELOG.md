@@ -37,7 +37,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   desktop no longer freezes when vLLM fills the card. Settings > AI & Model has a GPU memory
   slider for vLLM (automatic by default, in percent with the size in GB, and whether the model
   fits at that value), also as `vaf engine vllm --gpu-share` and in the terminal's full-screen
-  settings; applying it restarts vLLM.
+  settings. Applying a new value starts vLLM once to check that it runs; the desktop tray
+  then restarts vLLM with it right away, otherwise it takes effect with the next use of the
+  local model.
 - **vLLM engine on AMD GPUs.** `vaf engine vllm` and Settings now install vLLM's ROCm build on
   Linux with a Radeon RX 7900 or RX 9000, Ryzen AI 300 or MAX, or Instinct MI200, MI300 or
   MI350 GPU (ROCm 7.2 or newer, Python 3.12, glibc 2.39 or newer, for example Ubuntu 24.04),

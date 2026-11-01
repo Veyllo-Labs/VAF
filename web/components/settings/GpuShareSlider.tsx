@@ -141,21 +141,27 @@ export default function GpuShareSlider({ memory, value, onChange, disabled, mode
                     {storedOutside && (
                         <p className={amber}>{t('outOfRange', { pct: pct(stored), min: pct(low), max: pct(high) })}</p>
                     )}
-                    {!step ? (
-                        <p className={muted}>{t('afterDownload')}</p>
-                    ) : step.ok ? (
-                        <p className={muted}>{t('fits', { ctx: step.max_model_len, need: gb(step.need_mb), budget: gb(step.budget_mb) })}</p>
-                    ) : memory.min_share != null ? (
-                        <p className={amber}>{t('tooSmall', { need: gb(step.need_mb), ctx: step.max_model_len, min: pct(memory.min_share) })}</p>
-                    ) : (
-                        <p className={amber}>{t('tooSmallAll', { max: pct(high) })}</p>
-                    )}
-                    {step && memory.free_mb != null && step.budget_mb > memory.free_mb && (
-                        <p className={amber}>{t('aboveFree', { free: gb(memory.free_mb) })}</p>
-                    )}
+                    {/* Two lines kept for the status: the fits line wraps on a phone where the
+                        too-small one does not, and the text below must not jump while the slider
+                        moves across the share where the model starts to fit. */}
+                    <div className="min-h-[2rem] space-y-1.5" data-share-status>
+                        {!step ? (
+                            <p className={muted}>{t('afterDownload')}</p>
+                        ) : step.ok ? (
+                            <p className={muted}>{t('fits', { ctx: step.max_model_len, need: gb(step.need_mb), budget: gb(step.budget_mb) })}</p>
+                        ) : memory.min_share != null ? (
+                            <p className={amber}>{t('tooSmall', { need: gb(step.need_mb), ctx: step.max_model_len, min: pct(memory.min_share) })}</p>
+                        ) : (
+                            <p className={amber}>{t('tooSmallAll', { max: pct(high) })}</p>
+                        )}
+                        {step && memory.free_mb != null && step.budget_mb > memory.free_mb && (
+                            <p className={amber}>{t('aboveFree', { free: gb(memory.free_mb) })}</p>
+                        )}
+                    </div>
                     <p className={leavesLow ? amber : muted}>
                         {leavesLow ? t('leavesLow', { left: gb(left), reserve: gb(memory.reserve_mb) }) : t('leaves', { left: gb(left) })}
                     </p>
+                    <p className={muted}>{t('whyMax', { max: pct(high) })}</p>
                 </>
             )}
             {automatic && <p className={muted}>{reserveLine}</p>}

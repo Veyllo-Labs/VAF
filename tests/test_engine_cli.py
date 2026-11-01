@@ -384,3 +384,16 @@ def test_a_switch_below_the_reserve_warns(config, monkeypatch):
         "done", "unchanged_vllm", "The local engine is vLLM.", "vllm",
         fit=vs.FitResult(True, 40960, 0.6, "int8_per_token_head", 6000, 6144, "Fits.")))
     assert "screen can freeze" not in _invoke("vllm", "--gpu-share", "0.6").output
+
+
+def test_no_below_reserve_warning_for_a_switch_that_failed(config, monkeypatch):
+    """A first start that failed carries its passing fit, and the stored share is unchanged:
+    no warning about a share that was not applied. MUTATION: drop the status check - red."""
+    fit = vs.FitResult(True, 40960, 0.78, "int8_per_token_head", 7407, 7987, "Fits.", code="fits",
+                       leaves_mb=2253, below_reserve=True)
+    monkeypatch.setattr(le, "apply", lambda engine, **kw: le.EngineSwitch(
+        "failed", "start_failed", "vLLM did not start: it stopped during its start.", "vllm",
+        fit=fit, detail="The local engine stays llama."))
+    result = _invoke("vllm", "--gpu-share", "0.78")
+    assert result.exit_code == 1
+    assert "screen can freeze" not in result.output and "did not start" in result.output

@@ -50,7 +50,7 @@ Persistent workflow files
 --------------------------
   Written to ~/.vaf/workflows/{workflow_id}.py.
   First line: # created_by: agent
-  Content: WORKFLOW = { ... }   (JSON-serialised — valid Python syntax)
+  Content: WORKFLOW = { ... }   (a Python literal, templates.write_workflow_file)
   The agent may only edit/delete files it created (first-line check).
 """
 
@@ -1007,6 +1007,10 @@ class AgentWorkflowBuilderTool(BaseTool):
             )
         if not name:
             return "Error: 'name' is required for action='create'."
+        from vaf.workflows.templates import workflow_text_problem, write_workflow_file
+        _text_problem = workflow_text_problem("'name'", name)
+        if _text_problem:
+            return f"Error: {_text_problem}"
         if not raw_steps:
             return "Error: 'steps' is required for action='create'. Provide at least one step."
 
@@ -1055,15 +1059,8 @@ class AgentWorkflowBuilderTool(BaseTool):
                 "Use action='delete' first, or choose a different workflow_id."
             )
 
-        content = (
-            f"# created_by: agent\n"
-            f"# Workflow: {name}\n"
-            f"WORKFLOW = {json.dumps(wf_dict, indent=4, ensure_ascii=False)}\n"
-        )
-        tmp = wf_path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(content)
-        os.replace(tmp, wf_path)
+        # The first line is the marker is_agent_created reads.
+        write_workflow_file(wf_path, wf_dict, ["created_by: agent", f"Workflow: {name}"])
 
         try:
             from vaf.workflows.templates import reload_workflows, list_templates

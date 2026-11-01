@@ -315,7 +315,7 @@ All three write operations are **admin-only** - the server checks the session's 
 
 ### Storage
 
-User workflows are stored as `.py` files in `~/.vaf/workflows/`. Agent-created workflows carry a `# created_by: agent` marker on the first line (so the agent can only edit/delete its own). The `list_templates()` function sets `is_custom: True` for any workflow whose file exists in the user directory. After every write, `reload_workflows()` is called so the router and `execute_workflow` tool see the change immediately.
+User workflows are stored as `.py` files in `~/.vaf/workflows/`. Agent-created workflows carry a `# created_by: agent` marker on the first line (so the agent can only edit/delete its own). The `list_templates()` function sets `is_custom: True` for any workflow whose file exists in the user directory. Every writer (the agent's `create`, the web UI's create and update) goes through `templates.write_workflow_file`, which writes the dict as a Python literal and refuses a name that is not a single line, since the file is executed when it loads; update and delete accept a workflow id only as a single file name (`vaf.safe_entry_name`). After every write, `reload_workflows()` is called so the router and `execute_workflow` tool see the change immediately.
 
 ## Workflow Execution Logging
 

@@ -7271,10 +7271,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         })
                     else:
                         try:
-                            import json as _json_wf
                             import os as _os_wf
                             import re as _re_wf
-                            from vaf.workflows.templates import reload_workflows, list_templates
+                            from vaf.workflows.templates import (list_templates, reload_workflows,
+                                                                 workflow_text_problem,
+                                                                 write_workflow_file)
 
                             _wf_id       = str(cmd.get("workflow_id") or "").strip()
                             _wf_name     = str(cmd.get("name") or "").strip()
@@ -7286,6 +7287,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 raise ValueError(f"workflow_id must be lowercase snake_case, got '{_wf_id}'")
                             if not _wf_name:
                                 raise ValueError("name is required")
+                            if workflow_text_problem("name", _wf_name):
+                                raise ValueError(workflow_text_problem("name", _wf_name))
                             if not _wf_steps:
                                 raise ValueError("at least one step is required")
 
@@ -7305,14 +7308,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 "triggers": _wf_triggers,
                                 "steps": _wf_steps,
                             }
-                            _wf_content = (
-                                f"# User-created workflow: {_wf_name}\n"
-                                f"WORKFLOW = {_json_wf.dumps(_wf_dict, indent=4, ensure_ascii=False)}\n"
-                            )
-                            _wf_tmp = _wf_path + ".tmp"
-                            with open(_wf_tmp, "w", encoding="utf-8") as _f:
-                                _f.write(_wf_content)
-                            _os_wf.replace(_wf_tmp, _wf_path)
+                            write_workflow_file(_wf_path, _wf_dict,
+                                                [f"User-created workflow: {_wf_name}"])
 
                             reload_workflows()
                             await websocket.send_json({"type": "workflow_created", "workflow_id": _wf_id})
@@ -7331,9 +7328,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         })
                     else:
                         try:
-                            import json as _json_wf
                             import os as _os_wf
-                            from vaf.workflows.templates import reload_workflows, list_templates
+                            from vaf.workflows.templates import (list_templates, reload_workflows,
+                                                                 workflow_text_problem,
+                                                                 write_workflow_file)
 
                             _wf_id       = str(cmd.get("workflow_id") or "").strip()
                             _wf_name     = str(cmd.get("name") or "").strip()
@@ -7341,8 +7339,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             _wf_triggers = [str(t) for t in (cmd.get("triggers") or []) if str(t).strip()]
                             _wf_steps    = cmd.get("steps") or []
 
+                            # The id becomes a file name: one entry, never a path
+                            # (PathEscape is a ValueError and answers as workflow_error).
+                            from vaf.core.path_jail import safe_entry_name
+                            safe_entry_name(f"{_wf_id}.py")
                             if not _wf_name:
                                 raise ValueError("name is required")
+                            if workflow_text_problem("name", _wf_name):
+                                raise ValueError(workflow_text_problem("name", _wf_name))
                             if not _wf_steps:
                                 raise ValueError("at least one step is required")
 
@@ -7360,14 +7364,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 "triggers": _wf_triggers,
                                 "steps": _wf_steps,
                             }
-                            _wf_content = (
-                                f"# User-created workflow: {_wf_name}\n"
-                                f"WORKFLOW = {_json_wf.dumps(_wf_dict, indent=4, ensure_ascii=False)}\n"
-                            )
-                            _wf_tmp = _wf_path + ".tmp"
-                            with open(_wf_tmp, "w", encoding="utf-8") as _f:
-                                _f.write(_wf_content)
-                            _os_wf.replace(_wf_tmp, _wf_path)
+                            write_workflow_file(_wf_path, _wf_dict,
+                                                [f"User-created workflow: {_wf_name}"])
 
                             reload_workflows()
                             await websocket.send_json({"type": "workflow_updated", "workflow_id": _wf_id})
@@ -7390,6 +7388,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             from vaf.workflows.templates import reload_workflows, list_templates
 
                             _wf_id = str(cmd.get("workflow_id") or "").strip()
+                            # One entry, never a path (PathEscape answers as workflow_error).
+                            from vaf.core.path_jail import safe_entry_name
+                            safe_entry_name(f"{_wf_id}.py")
                             _user_wf_dir = _os_wf.path.expanduser("~/.vaf/workflows")
                             _wf_path = _os_wf.path.join(_user_wf_dir, f"{_wf_id}.py")
 

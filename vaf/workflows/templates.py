@@ -24,6 +24,43 @@ from typing import Dict, Any, List
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# WRITING A USER WORKFLOW FILE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def workflow_text_problem(label: str, value: Any) -> str:
+    """Why a workflow's name or description cannot be saved, or "".
+
+    A workflow file is Python that the loader executes, and these texts reach its comment
+    header; a line break or another control character there would end the comment. Refused
+    rather than cleaned, so the saved name is the name that was asked for."""
+    text = str(value or "")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in text):
+        return f"{label} must be a single line without control characters."
+    return ""
+
+
+def write_workflow_file(path: str, workflow: Dict[str, Any], header_lines: List[str]) -> None:
+    """Write one user workflow file: comment header lines, then ``WORKFLOW = <literal>``.
+
+    The one writer for ~/.vaf/workflows/*.py (the agent's create action and the web UI's
+    create and update). The dict is written as a Python literal (``pprint.pformat``), never
+    as JSON: JSON's true/false/null are not Python, so a step with ``optional: true`` made
+    the file unloadable. A header line must be a single line (`workflow_text_problem`);
+    raises ValueError otherwise. Atomic: written to a temporary file, then replaced."""
+    import os
+    import pprint
+    for line in header_lines:
+        if workflow_text_problem("A header line", line):
+            raise ValueError(workflow_text_problem("A header line", line))
+    literal = pprint.pformat(workflow, indent=4, width=100, sort_dicts=False)
+    content = "".join(f"# {line}\n" for line in header_lines) + f"WORKFLOW = {literal}\n"
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(content)
+    os.replace(tmp, path)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # AUTOMATIC WORKFLOW LOADING
 # ═══════════════════════════════════════════════════════════════════════════════
 

@@ -472,7 +472,7 @@ create_agent_workflow(
 )
 ```
 
-- Saves to `~/.vaf/workflows/{workflow_id}.py` with a `# created_by: agent` marker.
+- Saves to `~/.vaf/workflows/{workflow_id}.py` with a `# created_by: agent` marker, through `templates.write_workflow_file`: the workflow dict is written as a Python literal (a step with `optional: true` loads), and a `name` with a line break or another control character is refused, because the file is Python the loader executes and the name sits in its comment header.
 - Immediately reloads `WORKFLOW_TEMPLATES` - available via `execute_workflow()` and visible in the WebUI Workflows tab.
 - Agent can only delete workflows it created itself (ownership enforced by first-line marker).
 - Requires an **admin session** (same gate as `create_agent_tool`).

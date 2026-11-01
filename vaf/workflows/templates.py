@@ -136,14 +136,14 @@ def _load_workflow_literal(file_path: Path) -> tuple[str, Dict[str, Any]]:
     A file in ~/.vaf/workflows is written by `write_workflow_file` (the agent's create, the
     web UI) and is a plain literal; the loader does not run it, so a file dropped there by any
     other means - a write_file into the folder, a PEP 263 encoding line in a string - cannot
-    run code. The bytes are decoded as UTF-8 here, so a source-encoding declaration in the
-    file is ignored. The built-in templates shipped in the package keep their Python loader
+    run code. The bytes are decoded as UTF-8 here (a leading BOM is tolerated), so a
+    source-encoding declaration in the file is ignored. The built-in templates shipped in the package keep their Python loader
     (`_load_workflow_from_file`); they are code VAF ships, not user data.
 
     Raises ValueError when the file is not exactly a module docstring (optional), comments and
     one ``WORKFLOW`` literal assignment."""
     workflow_id = file_path.stem
-    source = file_path.read_bytes().decode("utf-8")
+    source = file_path.read_bytes().decode("utf-8-sig")  # a BOM from a hand editor is fine
     module = ast.parse(source)
     assign = None
     for node in module.body:

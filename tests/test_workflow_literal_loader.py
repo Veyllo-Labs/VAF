@@ -15,7 +15,8 @@ MUTATIONS, each turns the named tests red:
 - the user directory back on the exec loader (`_discover_workflows` without literal_only)
   -> test_a_user_file_is_not_executed, test_the_encoding_name_runs_nothing;
 - the header line back to carrying the name -> test_the_encoding_name_runs_nothing;
-- the literal loader accepting more than one statement -> test_a_user_file_is_not_executed.
+- the literal loader accepting more than one statement -> test_a_user_file_is_not_executed;
+- the loader decoding without "utf-8-sig" -> test_a_file_with_a_bom_loads.
 """
 from pathlib import Path
 from types import SimpleNamespace
@@ -96,3 +97,12 @@ def test_the_builtin_templates_still_load():
     names = set(templates.get_workflow_templates())
     for built_in in ("deep_research", "research_and_document", "youtube_summary"):
         assert built_in in names, built_in
+
+
+def test_a_file_with_a_bom_loads(home):
+    """A hand editor on Windows may save with a byte order mark; the file is still data."""
+    (home / ".vaf" / "workflows" / "bom.py").write_bytes(
+        "\ufeff".encode("utf-8") +
+        b'WORKFLOW = {"name": "B", "description": "d", "triggers": [], "steps": []}\n')
+    templates.reload_workflows()
+    assert "bom" in templates.get_workflow_templates()

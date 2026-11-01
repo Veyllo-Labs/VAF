@@ -150,7 +150,19 @@ waiting for a stable `X.Y.Z`.
    `venv/bin/python scripts/check_vllm_lock.py`, which must report 0 problems for
    every supported target; a conflict it reports goes into the input as a constraint
    (the `numpy<2.4` cap is one). `tests/test_vllm_lock.py` refuses a lock whose vllm
-   is not `PIN`.
+   is not `PIN`. The ROCm build (AMD GPUs) is pinned with it: read the variant on
+   `https://wheels.vllm.ai/rocm/<PIN>/` and keep `ROCM_VARIANT` and `ROCM_VERSION` in
+   `vaf/core/vllm_server.py` true, `ROCM_GFX` in `vaf/core/local_engine.py` from
+   `PYTORCH_ROCM_ARCH` in `docker/Dockerfile.rocm_base` at the tag, `MIN_GLIBC_ROCM` from
+   the manylinux tags of the index's wheels, `MIN_ROCM` from the build image, and the
+   extensions `_PROBE_ROCM` imports (`vllm/platforms/rocm.py`). Regenerate
+   `vaf/core/vllm_requirements_rocm.lock` with uv in a throwaway venv (`uv==0.13.6`, about
+   3.4 GB of downloads to hash; delete the uv cache afterwards): edit the `vllm==` line of
+   `vaf/core/vllm_requirements_rocm.in` and run the command written there, then
+   `venv/bin/python scripts/check_vllm_lock.py vaf/core/vllm_requirements_rocm.lock`, which
+   must report 0 problems for `x86_64 cp312 glibc 2.39`. Both checker runs belong to the
+   release; `tests/test_vllm_lock.py` refuses a ROCm lock whose vllm is not
+   `PIN+ROCM_VARIANT` and any index option inside a lock.
 3. In `CHANGELOG.md`, move the relevant `[Unreleased]` notes into a new
    `## [X.Y.Z] - YYYY-MM-DD` section.
 4. Commit (on request) and push to `main`.

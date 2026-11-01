@@ -140,7 +140,7 @@ On either profile you can add this or other providers later under **Settings →
 On the Full profile the step also shows **Engine**, the engine of the local model, above the
 skip button: llama.cpp (preselected) and vLLM, with this machine's verdict
 ([VLLM_ENGINE.md](../llm/VLLM_ENGINE.md)). vLLM can be chosen only where it runs (Linux with an
-NVIDIA GPU of compute capability 7.5 or newer, an NVIDIA driver 580 or newer and glibc 2.31 or newer, 2.34 on ARM); elsewhere its card is disabled and says why.
+NVIDIA GPU of compute capability 7.5 or newer, an NVIDIA driver 580 or newer and glibc 2.31 or newer, 2.34 on ARM; or on x86_64 with a Radeon RX 7900 or RX 9000, Ryzen AI 300 or MAX, or Instinct MI200, MI300 or MI350 GPU, ROCm 7.2 or newer, a Python 3.12 and glibc 2.39 or newer); elsewhere its card is disabled and says why.
 Choosing it says that VAF installs vLLM (at least 2.8 GB) and its model after the setup, and
 that llama.cpp answers until it is ready: once the account exists, the wizard starts the
 engine switch, and its progress shows in the main page's banners. The Lean profile shows no

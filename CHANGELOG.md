@@ -21,7 +21,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   stays the default. `vaf health` shows an `engine` row while vLLM is the engine.
   vLLM needs Linux with an NVIDIA GPU (Turing or newer), an NVIDIA driver 580 or newer and a
   recent distribution (for example Ubuntu 20.04 on a PC, Ubuntu 22.04 on ARM). VAF checks
-  this first and tells you what to update. On AMD, Intel, Apple Silicon and Windows
+  this first and tells you what to update. On Intel, Apple Silicon and Windows
   `vaf engine` says why not yet, and llama.cpp keeps running.
   The install uses a fixed list of package files shipped with VAF, so a new release of one of
   vLLM's dependencies can neither break nor change it.
@@ -33,6 +33,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   engine. The provider is now called "Local (this machine)". A Settings page opened before a
   switch no longer writes the old engine back when saved, a vLLM model download shows in the
   download banner, and the banner's Cancel now also stops a download the page did not start.
+- **vLLM engine on AMD GPUs.** `vaf engine vllm` and Settings now install vLLM's ROCm build on
+  Linux with a Radeon RX 7900 or RX 9000, Ryzen AI 300 or MAX, or Instinct MI200, MI300 or
+  MI350 GPU (ROCm 7.2 or newer, Python 3.12, glibc 2.39 or newer, for example Ubuntu 24.04),
+  from a fixed, hash-checked list of package files like the NVIDIA build (at least 3.3 GB to
+  download). Other AMD cards, a missing or older ROCm, an account outside the render and video
+  groups and a missing Python 3.12 each get a sentence that says what to do.
 - **`vaf providers` shows which provider and model handles each job**: chat, images, text
   recognition, the browser agent, sub-agents, background thinking, voice calls, speech and
   failover, with how each was decided (the main provider, followed, set by hand, off, or not
@@ -82,6 +88,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **AMD GPU memory is read from the driver.** On Linux with ROCm, VAF now reads an AMD GPU's
+  memory and architecture from the amdgpu driver; rocm-smi prints the memory in bytes, which
+  VAF did not read, so it saw 0. The default model and the fit check now see the real VRAM. With the real figure,
+  `model: auto` may now pick a larger GGUF on such machines.
 - On Windows with an NVIDIA GPU, a local model started from the tray ran on the CPU. It now
   uses the GPU.
 - Settings showed a few words only in English whatever the language: the main provider's

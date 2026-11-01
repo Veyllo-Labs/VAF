@@ -6,7 +6,8 @@ in the full-screen TUI's settings or with `vaf engine`:
 - **llama.cpp** (`local_engine = llama`, the default): `llama-server` with a GGUF from
   `models/`. Light, starts in seconds, runs on every platform VAF supports, CPU included.
 - **vLLM** (`local_engine = vllm`): a VAF-managed vLLM server with a Hugging Face model in
-  safetensors form. Heavier to install and slower to start, built for NVIDIA GPUs.
+  safetensors form. Heavier to install and slower to start, built for NVIDIA GPUs and,
+  through vLLM's ROCm build, for selected AMD GPUs on Linux.
 
 The code: `vaf/core/local_engine.py` (the choice, the platform verdicts, the parsers, the
 two wire-format differences, and the switch itself: `validate`, `apply`, `uninstall_vllm`,
@@ -78,8 +79,13 @@ that finds `local_engine = vllm` and nothing installed refuses with a message th
 command.
 
 - **Where:** `bin/vllm/venv/`, next to the llama-server binary (`bin/` is gitignored). A
-  fresh environment made with VAF's own Python (vLLM 0.32.0 accepts 3.11 to 3.14).
-- **What:** vLLM 0.32.0 from PyPI only, the build the release names (the table "Release
+  fresh environment made with VAF's own Python (vLLM 0.32.0 accepts 3.11 to 3.14); on an
+  AMD GPU with a Python 3.12 (see "The ROCm build" below).
+- **Which build:** `vllm_server.backend()` is `rocm` when the primary GPU is an AMD one and
+  `cuda` otherwise (NVIDIA first, the order of `gpu_detection.get_primary_gpu`). Each build
+  has its own lock, probe and recipe tag; everything else (the model, the fit, the start,
+  the stop) is shared.
+- **What (NVIDIA):** vLLM 0.32.0 from PyPI only, the build the release names (the table "Release
   Artifacts" of vLLM v0.32.0 lists `PyPI (CUDA 13.0) | pip install vllm`), installed from
   its hash-locked tree: `pip install --require-hashes --no-deps --only-binary=:all: -r
   vaf/core/vllm_requirements.lock` (see "Hash-locked" below). That wheel
@@ -91,14 +97,17 @@ command.
   torch, vLLM's extension then cannot load `libcudart.so.13`, and vLLM cannot start at all
   (measured; `vllm download-kernels` already died on that ImportError). vLLM is never
   imported into VAF's process; its version is read from the package metadata.
-- **Check:** a probe in that environment must pass two things: PyTorch sees a CUDA GPU
+- **Check (NVIDIA):** a probe in that environment must pass two things: PyTorch sees a CUDA GPU
   (exit 3 otherwise: `cuda_probe_failed`, the NVIDIA driver for CUDA 13.0 or a hidden GPU is
   the cause), AND `import vllm._C_stable_libtorch` works, the CUDA extension vLLM's platform
   module imports at its first start (exit 4 or any other failure: `vllm_libs_failed`, the
   CUDA libraries of the environment do not load). Either failure leaves the local engine as
   it was.
 - **Recipe record:** only a passing probe writes `bin/vllm/venv/vaf_recipe`, holding the
-  recipe's format tag (`vllm_server.RECIPE_FORMAT`). An environment without it (built by an
+  recipe's format tag (`vllm_server.RECIPE_FORMAT`, on the ROCm build
+  `vllm_server.RECIPE_FORMAT_ROCM`). An environment of the other build (a machine whose GPU
+  changed vendor) is not current either: its tag and its version (`0.32.0` against
+  `0.32.0+rocm723`) are not this build's, so the next install rebuilds it. An environment without it (built by an
   earlier VAF with the cu129 index, or one whose probe failed) counts as not installed:
   `vaf engine vllm` and Settings offer the install again, and the install removes it and
   builds it fresh; a start refuses it before any launch with "installed by an earlier VAF and
@@ -112,7 +121,7 @@ command.
   `CUDA_VISIBLE_DEVICES` you set yourself is passed on unchanged. Before this, the probe ran
   under the tray with the hidden GPU and reported "no CUDA GPU" on a machine whose GPU was
   fine.
-- **Size:** measured lower bound of the download about 2.8 GB, from PyPI's file sizes (the
+- **Size (NVIDIA):** measured lower bound of the download about 2.8 GB, from PyPI's file sizes (the
   vllm wheel 327 MB, torch 527 MB, the CUDA 13 NVIDIA wheels about 1990 MB: the cuda-toolkit
   13.0.3 components 1189 MB, cudnn-cu13 366, nccl-cu13 206, cusparselt-cu13 170, nvshmem-cu13
   60), before the rest of the dependency tree. The installed size is recorded with the first
@@ -154,6 +163,43 @@ command.
   because refusing it can break those GPUs; `FLASHINFER_NO_DOWNLOAD=1` in VAF's environment
   refuses it (the server inherits it), and `FLASHINFER_CUBIN_CHECKSUM_DISABLED` must never be
   set, since it turns the check off.
+- **The ROCm build (AMD GPUs):** vLLM publishes no ROCm wheel on PyPI. The pinned release's
+  ROCm build is on vLLM's versioned wheel index,
+  `https://wheels.vllm.ai/rocm/0.32.0/rocm723` (`vllm_server.ROCM_INDEX`; the only variant
+  there, "ROCm commit 5df63a7...", `rocm700` is 404). Its wheels are cp312, x86_64 and
+  `manylinux_2_39` only (not the glibc 2.35 vLLM's documentation states), and vllm's
+  METADATA pins the whole ROCm tree to builds of the same index: `torch==2.13.0+git733fca1`,
+  `triton==3.8.0+git669b31ac`, `torchvision`, `torchaudio`, `amdsmi`, `flash-attn` and
+  `amd-aiter`. So the environment is made with a Python 3.12 (`vllm_server.rocm_python`:
+  VAF's own when it runs on 3.12, else `python3.12` on PATH; VAF's own Python range does not
+  apply, because vLLM is never imported into VAF's process), and installed with
+  `pip install --require-hashes --no-deps --only-binary=:all: --extra-index-url
+  https://wheels.vllm.ai/rocm/0.32.0/rocm723 -r vaf/core/vllm_requirements_rocm.lock`. The
+  index is an EXTRA one on the command line, never in the lock (pip honours index options
+  inside a requirements file; `tests/test_vllm_lock.py` refuses any in either lock); the
+  primary index stays pip's own, as for CUDA, and `--require-hashes` makes the second index
+  safe, since a file of the same name from another index has another hash.
+  The wheels do NOT bundle the ROCm runtime: `torch/lib/libc10_hip.so` and
+  `vllm/_rocm_C.abi3.so` NEED `libamdhip64.so.7` (RUNPATH `/opt/rocm/lib` and
+  `/opt/rocm-7.2.3/lib`, read with readelf on the wheels), and the build image is
+  `rocm/dev-ubuntu-22.04:7.2.3-complete`. The host needs ROCm 7.2 or newer installed; a
+  distribution's packages in `/usr/lib64` or `/usr/lib/x86_64-linux-gnu` count, the linker
+  finds them without a RUNPATH. The ROCm lock (219 pinned releases) is generated with uv
+  (`uv==0.13.6` in a throwaway venv, the command is in `vllm_requirements_rocm.in`):
+  pip-compile resolves only for the interpreter it runs on, and this lock is for cp312 x86_64
+  glibc 2.39. uv is a release-time tool only, never a runtime dependency. The ROCm index
+  publishes no digests, so each of its eight packages carries exactly one hash, the one file
+  it serves (pip verifies it at install time); `scripts/check_vllm_lock.py
+  vaf/core/vllm_requirements_rocm.lock` checks the lock at its one target, reading those
+  packages' metadata from the index by HTTP range reads. The probe checks the same two
+  things as on CUDA: PyTorch sees a GPU (HIP answers through `torch.cuda`; exit 3:
+  `rocm_probe_failed`, the cause is ROCm missing or too old, the account outside the render
+  and video groups, or `HIP_VISIBLE_DEVICES`, `ROCR_VISIBLE_DEVICES` or
+  `CUDA_VISIBLE_DEVICES` hiding the GPU), AND `import vllm._C_stable_libtorch, vllm._rocm_C`
+  works, the extensions vLLM's ROCm platform module imports at its first start (exit 4:
+  `vllm_libs_failed`). Download lower bound about 3.3 GB: the ROCm-index files sum to 2.73 GB
+  (torch 1349 MB, amd-aiter 532, triton 425, vllm 301, flash-attn 125), the PyPI part of the
+  tree at least 0.62 GB.
 - **Uninstall:** `vaf engine vllm --uninstall` or "Remove vLLM" in Settings (refused while vLLM
   is the engine) removes
   only `bin/vllm/venv`; the models stay in the Hugging Face cache and the command says
@@ -220,7 +266,11 @@ argument.
   dtype), and the process remembers it when `auto` came up, so later starts skip the doomed
   attempt.
 - **GPU share:** `--gpu-memory-utilization` = (free - 512 MiB) / total from `nvidia-smi`,
-  within 0.50..0.92, unless `vllm_gpu_memory_utilization` sets it.
+  within 0.50..0.92, unless `vllm_gpu_memory_utilization` sets it. On an AMD GPU free and
+  total come from the amdgpu driver (`/sys/class/drm/renderD<n>/device/mem_info_vram_total`
+  and `mem_info_vram_used`, `gpu_detection.amd_vram_mb`), never from nvidia-smi. The fp8 KV
+  cache first and the one fallback to `auto` are the same on both builds; whether fp8 KV
+  starts on an RDNA3 card is not measured yet (a failed start costs one wasted launch).
 - **Fit check before the launch:** weights (the safetensors size) + KV cache (layers x KV
   heads x head dim x 2 x bytes x context, from the model's `config.json`) + 1.2 GiB
   overhead, against that share; a share larger than the free memory counts as not fitting
@@ -264,12 +314,29 @@ a driver that is too old). From vLLM's installation guide
 | Linux, NVIDIA below 7.5 (Pascal, Volta) | unsupported | vLLM needs 7.5 or newer |
 | Linux, NVIDIA, driver below 580 | unsupported | the CUDA 13.0 build needs driver 580 or newer ("CUDA 13.x >= 580", NVIDIA's CUDA compatibility guide); VAF installs one recipe, not the CUDA 12.9 wheel that exists only as a release asset |
 | Linux, NVIDIA whose compute capability nvidia-smi does not report | unsupported | a driver too old to report it is too old for the CUDA 13.0 build |
-| Linux, AMD GPU | later | ROCm 6.3+ on selected Instinct and Radeon cards, prebuilt for Python 3.12 only |
+| Linux x86_64, AMD GPU with gfx90a, gfx942, gfx950 (Instinct MI200, MI300, MI350), gfx1100, gfx1101 (Radeon RX 7900), gfx1200, gfx1201 (RX 9000), gfx1150, gfx1151 (Ryzen AI 300, MAX), ROCm 7.2 or newer, /dev/kfd open to the account, glibc 2.39 or newer, a Python 3.12 | supported | vLLM's ROCm build of the pin installs into an environment of that Python 3.12 (see Install) |
+| Linux, AMD GPU on aarch64 | unsupported | the ROCm build is x86_64 only (`no_build_gpu`) |
+| Linux, AMD GPU whose architecture KFD does not report | unsupported | `amd_unknown`: the architecture comes from `/sys/class/kfd/kfd/topology/nodes/*/properties` (`gfx_target_version`) |
+| Linux, AMD GPU of another architecture (for example gfx1030, RX 6800) | unsupported | `amd_gfx`: the build has no kernels for it (`PYTORCH_ROCM_ARCH` in `docker/Dockerfile.rocm_base` at v0.32.0, `local_engine.ROCM_GFX`) |
+| Linux, AMD, no `libamdhip64.so.7` | unsupported | `amd_rocm_missing`: the wheels link the host's ROCm 7 runtime |
+| Linux, AMD, ROCm below 7.2 | unsupported | `amd_rocm_old`: the build image is ROCm 7.2.3; a version VAF cannot read (`<rocm>/.info/version`, missing in a distribution install) is not refused, the probe judges it |
+| Linux, AMD, /dev/kfd not open to the account | unsupported | `amd_no_access`: ROCm's prerequisite is membership in the render and video groups |
+| Linux, AMD, glibc below 2.39, unknown, or musl | unsupported | `amd_glibc_old`: vllm, torch, amd-aiter and flash-attn of the ROCm index are `manylinux_2_39` wheels (Ubuntu 24.04, Debian 13, Fedora 40, RHEL 10 and later); `local_engine.MIN_GLIBC_ROCM` |
+| Linux, AMD, no Python 3.12 | unsupported | `amd_python`: the ROCm wheels are cp312 only; Ubuntu 24.04 and Fedora 40 ship it as their default Python, Debian 13 does not ship it at all |
 | Linux, Intel GPU | later | "basic model inference and serving", needs Python 3.12 |
 | Linux, no GPU | unsupported | the CPU backend is basic, no 4-bit GGUF-style quantization; llama.cpp is the better CPU engine |
 | macOS, Apple Silicon | later | the GPU path is vLLM-Metal, "a community-maintained hardware plugin" on MLX; the CPU build is experimental, from source |
 | Windows | later | "vLLM does not support Windows natively" (WSL only) |
 | Python outside 3.11 to 3.14, Intel Macs, other machines | unsupported | no build |
+
+vLLM's quantization table marks AWQ unsupported on AMD, but the code of 0.32.0 accepts it:
+`vllm/platforms/rocm.py` lists `awq`, `auto_awq` and `awq_marlin` in its supported
+quantizations and turns on `VLLM_USE_TRITON_AWQ=1` itself for AWQ on ROCm, and the
+mixed-precision kernel table has Triton and RDNA3 W4A16 kernels for ROCm. So the AWQ default
+models stay on AMD. FP8 weights would need CDNA or RDNA4 (`supports_fp8`), which would
+exclude the RX 7900 and Ryzen AI. Named boundary: no AWQ start on AMD hardware has been
+measured yet; if the live run fails, the unquantized `Qwen/Qwen3-4B` (about 8 GB of weights)
+is the fallback for AMD.
 
 The differences in performance and install effort are large: on a supported NVIDIA card
 vLLM batches concurrent requests and runs AWQ/FP8 checkpoints efficiently, but it installs
@@ -312,6 +379,19 @@ and quick starts.
 - **Start time and idle unload:** a vLLM start takes minutes, not seconds. The desktop tray
   unloads the local model when nobody uses it, so the first message after idle waits for a
   full start; `server_persistence_enabled` keeps it loaded.
+- **AMD detection needs ROCm's tools:** `gpu_detection.detect_amd_gpu` finds an AMD GPU on
+  Linux only while `rocm-smi` or `amd-smi` is on PATH; a runtime-only ROCm install without
+  either reads as no GPU (`no_gpu`). Widening the gate to the KFD topology alone would make
+  every AMD APU laptop without ROCm count as an AMD GPU for the llama.cpp paths too
+  (`backend.py`, `agent.py`, `vaf info`), which is a change of its own. The product name
+  still comes from rocm-smi; architecture and VRAM come from KFD.
+- **No `HSA_OVERRIDE_GFX_VERSION`:** the community trick that makes gfx1030 or gfx1102 cards
+  load gfx1100 kernels is not honoured. VAF reads the real architecture and refuses a card
+  the build has no kernels for.
+- **One AMD GPU:** the fit reads the KFD node with the most VRAM (a discrete GPU before an
+  APU's carve-out); whether vLLM uses that same device on a machine with an APU and a
+  discrete GPU (HIP's device order) is not measured. On a Ryzen AI MAX with shared memory,
+  which figure KFD reports (the BIOS carve-out or more) is not measured either.
 - **Not on the facade, and not per agent:** the engine is the installation's, like
   `inference_profile`: the server start reads it from the installation's config, which
   `vaf engine` writes, because the one local server on the port is the machine's and two
@@ -437,9 +517,10 @@ engine reads. Under the `api` inference profile neither engine installs or runs.
   `vllm_server.prev.log`); "Application startup complete" marks the end of a start.
 - `~/.vaf/vllm.pid`: the pid of the managed server (the leader of its process group).
 - `logs/vllm_install.log`: pip's output of an install started from Settings or the TUI, and
-  the probe's error (the ImportError of vLLM's CUDA extension) when it fails.
-- `bin/vllm/venv/vaf_recipe`: the recipe record; missing means the next install rebuilds the
-  environment.
+  the probe's error (the ImportError of vLLM's CUDA or ROCm extension) when it fails.
+- `bin/vllm/venv/vaf_recipe`: the recipe record (`vllmenv-1-18dfb7` for the CUDA build,
+  `vllmrocm-1-a69536` for the ROCm build); missing, or the other build's, means the next
+  install rebuilds the environment.
 - `bin/vllm/switch.lock`: held while a switch runs; a second switch (another process) is
   refused with `busy` instead of waiting.
 - `vaf engine`, `vaf health` (the `engine` row): installed version, model, server running

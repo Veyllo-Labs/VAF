@@ -55,8 +55,8 @@ including what `debug_logs_enabled` does and does not silence, is in
 **Can I run the main agent on Ollama/vLLM/LM Studio?**
 On vLLM, yes: `vaf engine vllm` checks the hardware, installs a pinned vLLM that
 VAF manages, downloads a model and switches the local engine (Linux with an
-NVIDIA GPU of compute capability 7.5 or newer; other platforms get a verdict
-that says why not yet). See [VLLM_ENGINE.md](llm/VLLM_ENGINE.md). A server VAF
+NVIDIA GPU of compute capability 7.5 or newer, or a supported AMD GPU with
+ROCm 7.2 or newer; other platforms get a verdict that says why not yet). See [VLLM_ENGINE.md](llm/VLLM_ENGINE.md). A server VAF
 does not manage (your own Ollama, vLLM or LM Studio) is not supported for the
 main chat loop; the `local_api_url` key redirects only the API-backend
 consumers (browser agent, local vision, cloud-to-local failover). See

@@ -420,6 +420,16 @@ command is confined by the **kernel**:
   whose output shows a missing network (an unresolved host, a failed artifact transfer) says so
   in its result.
 
+**In a workflow step** the same jailed shell runs in the run's project folder, which the
+engine assigns as the workspace (`_inject_workflow_paths` in `vaf/workflows/engine.py`); a
+step's own `base_dir` is dropped. The folder is the run's own: a `workflow_project_path` that
+arrives through the workflow's variables (a model writes those for a temporary workflow) is
+accepted only when `vaf.contained_path` puts it below the run's
+`Documents/VAF_Projects[/<uid8>]` folder, as the resume lane hands it back; anything else gets
+a fresh folder, so a plan cannot root the jail in `~/.vaf`, `~/.ssh` or another account's
+projects. The temporary-file cleanup after a temporary workflow walks only a folder below
+`Documents/VAF_Projects`.
+
 **Docker is refused in the coder shell.** The host docker socket is host-root-equivalent
 (a container can `--privileged` / `-v /:/host` / `--pid=host` its way to the whole host
 filesystem, outside this jail's mount namespace) and cannot be safely policed by inspecting the

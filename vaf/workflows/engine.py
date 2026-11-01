@@ -12,6 +12,7 @@ import os
 import re
 import time
 import uuid
+from pathlib import Path
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Callable
@@ -290,6 +291,32 @@ _INTERMEDIATE_EXTS = frozenset({
 })
 
 
+def _projects_root() -> str:
+    """Where every workflow and coder project folder lives: Documents/VAF_Projects."""
+    from vaf.core.platform import Platform
+    return os.path.join(str(Platform.documents_dir()), "VAF_Projects")
+
+
+def _strictly_inside(root: str, candidate: str) -> bool:
+    """Whether ``candidate`` resolves to a folder BELOW ``root`` (never ``root`` itself).
+
+    Decided by `vaf.contained_path` on resolved paths, so a symlink that sits inside the
+    root and points out of it is outside. A path on another drive is outside too."""
+    from vaf.core.path_jail import PathEscape, contained_path
+    try:
+        root_r = Path(root).resolve()
+        rel = os.path.relpath(Path(os.path.expanduser(str(candidate))).resolve(), root_r)
+    except (ValueError, OSError):
+        return False
+    if rel in (".", "") or rel.startswith(".."):
+        return False
+    try:
+        contained_path(root_r, rel)
+    except PathEscape:
+        return False
+    return True
+
+
 def remove_temp_intermediates(project_path: str, *, keep_files=(), final_output=None) -> int:
     """After a temporary workflow: remove the throwaway scripts and scratch it created in its
     shared project path, KEEP the deliverable, and return how many files went.
@@ -299,9 +326,18 @@ def remove_temp_intermediates(project_path: str, *, keep_files=(), final_output=
     a bare path), so keying "keep" off final_output would wipe the very report the person
     asked for. `keep_files` are kept whatever their extension, and so is the final output
     when it IS a file path (write_file). Emptied directories go, the project directory only
-    when nothing is left in it (a pure script-only run). Never raises."""
+    when nothing is left in it (a pure script-only run). Never raises.
+
+    Only a folder below Documents/VAF_Projects is cleaned. The value comes from the run's
+    outputs, which the engine checks against the run's own prefix (`execute`); this second
+    check keeps a recursive delete from ever walking a folder somewhere else."""
     import os
     if not project_path or not os.path.isdir(project_path):
+        return 0
+    try:
+        if not _strictly_inside(_projects_root(), project_path):
+            return 0
+    except Exception:
         return 0
     keep = set()
     for path in keep_files or ():
@@ -738,47 +774,55 @@ class WorkflowEngine:
         # create its own scattered directory. document_writer receives the arg too
         # but ignores it (its run() writes into the session workspace itself).
         # Also exposed as {workflow_project_path} for use in step templates.
+        #
+        # A value handed in through `variables` is accepted only when it lies below this
+        # run's own Documents/VAF_Projects[/<uid8>] folder: the resume lane hands back the
+        # folder of the run it continues, but the variables of a model-built workflow are
+        # written by the model, and the folder becomes bash's workspace and the place the
+        # temporary-file cleanup walks. Anything else is replaced by a fresh folder; if no
+        # folder can be made, there is none (bash then refuses rather than run elsewhere).
         _workflow_project_path: Optional[str] = None
-        if "workflow_project_path" not in outputs:
+        _supplied_path = outputs.pop("workflow_project_path", None)
+        try:
+            import re as _re
+            _docs = os.path.dirname(_projects_root())
+
+            # User-scope prefix + per-chat folder, the same logic as
+            # coder._generate_project_directory
+            _user_prefix = ""
+            _session_folder = ""
             try:
-                import re as _re
-                from vaf.core.platform import Platform as _Platform
-                _docs = _Platform.documents_dir()
+                from vaf.core.subagent_ipc import get_current_session_id as _get_sid2
+                _sid2 = _get_sid2()
+                if _sid2:
+                    _session_folder = _re.sub(r'[^a-zA-Z0-9_-]', '', _sid2)[:32]
+                    from vaf.core.session import SessionManager as _SM2
+                    _s2 = _SM2().load(_sid2)
+                    _uid2 = (_s2.metadata or {}).get("user_scope_id", "")
+                    if _uid2:
+                        _user_prefix = _uid2[:8]
+            except Exception:
+                pass
+            if not _user_prefix and self.user_scope_id:
+                _user_prefix = self.user_scope_id[:8]
 
-                # User-scope prefix + per-chat folder — same logic as
-                # coder._generate_project_directory
-                _user_prefix = ""
-                _session_folder = ""
-                try:
-                    from vaf.core.subagent_ipc import get_current_session_id as _get_sid2
-                    _sid2 = _get_sid2()
-                    if _sid2:
-                        _session_folder = _re.sub(r'[^a-zA-Z0-9_-]', '', _sid2)[:32]
-                        from vaf.core.session import SessionManager as _SM2
-                        _s2 = _SM2().load(_sid2)
-                        _uid2 = (_s2.metadata or {}).get("user_scope_id", "")
-                        if _uid2:
-                            _user_prefix = _uid2[:8]
-                except Exception:
-                    pass
-                if not _user_prefix and self.user_scope_id:
-                    _user_prefix = self.user_scope_id[:8]
-
-                _proj_root = os.path.join(
-                    _docs, "VAF_Projects",
-                    *(p for p in (_user_prefix, _session_folder) if p)
-                )
-
+            _user_root = os.path.join(_docs, "VAF_Projects", *(p for p in (_user_prefix,) if p))
+            if (isinstance(_supplied_path, str) and _supplied_path.strip()
+                    and _strictly_inside(_user_root, _supplied_path)):
+                _workflow_project_path = str(Path(os.path.expanduser(_supplied_path)).resolve())
+            else:
+                if _supplied_path:
+                    UI.event("Workflow", "  [INFO] Ignoring a workflow_project_path outside this "
+                             "run's project folder; using a fresh one.", style="dim")
+                _proj_root = os.path.join(_user_root, *(p for p in (_session_folder,) if p))
                 # Derive a clean directory name from the workflow name
                 _wf_label = getattr(self, "_workflow_name", "") or "Workflow"
                 _wf_dir = _re.sub(r'[^a-zA-Z0-9 _-]', '', _wf_label).strip()[:40] or "Workflow"
                 _workflow_project_path = os.path.join(_proj_root, _wf_dir)
-                os.makedirs(_workflow_project_path, exist_ok=True)
-                outputs["workflow_project_path"] = _workflow_project_path
-            except Exception:
-                pass
-        else:
-            _workflow_project_path = outputs["workflow_project_path"]
+            os.makedirs(_workflow_project_path, exist_ok=True)
+            outputs["workflow_project_path"] = _workflow_project_path
+        except Exception:
+            _workflow_project_path = None
 
         # Don't show "Starting workflow" message - will show Step 1/N instead
         

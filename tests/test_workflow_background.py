@@ -295,8 +295,10 @@ def test_the_child_runs_the_plan_with_its_checks_and_reports_once(rig, monkeypat
     import vaf.cli.cmd.workflow as wf_cmd
     import vaf.workflows.engine as engine_mod
     ipc, _ = rig
-    proj = tmp_path / "proj"
-    proj.mkdir()
+    # The cleanup walks only a folder below Documents/VAF_Projects.
+    monkeypatch.setattr("vaf.core.platform.Platform.documents_dir", staticmethod(lambda: tmp_path))
+    proj = tmp_path / "VAF_Projects" / "ab12cd34" / "proj"
+    proj.mkdir(parents=True)
     (proj / "scratch.py").write_text("x")
     (proj / "Bericht.docx").write_text("x")
     seen = {}
@@ -363,14 +365,17 @@ def test_the_step_validator_is_one_function():
     assert "validate_step_output(" in body and "You are a strict validator" not in body
 
 
-def test_the_temp_cleanup_keeps_every_deliverable(tmp_path):
+def test_the_temp_cleanup_keeps_every_deliverable(tmp_path, monkeypatch):
     from vaf.workflows.engine import remove_temp_intermediates
-    (tmp_path / "a.py").write_text("x")
-    (tmp_path / "keep.sh").write_text("x")
-    (tmp_path / "Report.pdf").write_text("x")
-    sub = tmp_path / "sub"
+    monkeypatch.setattr("vaf.core.platform.Platform.documents_dir", staticmethod(lambda: tmp_path))
+    proj = tmp_path / "VAF_Projects" / "Workflow"
+    proj.mkdir(parents=True)
+    (proj / "a.py").write_text("x")
+    (proj / "keep.sh").write_text("x")
+    (proj / "Report.pdf").write_text("x")
+    sub = proj / "sub"
     sub.mkdir()
     (sub / "b.tmp").write_text("x")
-    assert remove_temp_intermediates(str(tmp_path), keep_files=[str(tmp_path / "keep.sh")]) == 2
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["Report.pdf", "keep.sh"]
+    assert remove_temp_intermediates(str(proj), keep_files=[str(proj / "keep.sh")]) == 2
+    assert sorted(p.name for p in proj.iterdir()) == ["Report.pdf", "keep.sh"]
     assert remove_temp_intermediates("", keep_files=[]) == 0

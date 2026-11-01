@@ -173,7 +173,7 @@ def test_busy_lock(config, monkeypatch):
 
 @pytest.mark.parametrize("failure, code", [
     ("install", "install_failed"), ("probe", "cuda_probe_failed"), ("libs", "vllm_libs_failed"),
-    ("probe_last_step", "install_failed"),
+    ("rocm_probe", "rocm_probe_failed"), ("probe_last_step", "install_failed"),
     ("download", "download_failed"), ("cancelled", "download_cancelled"),
     ("llama_stop", "llama_stop_failed"), ("no_fit", "no_fit")])
 def test_failed_steps_keep_engine(config, monkeypatch, failure, code):
@@ -184,6 +184,9 @@ def test_failed_steps_keep_engine(config, monkeypatch, failure, code):
     elif failure == "probe":
         kwargs = {"fail_step": "install_probe", "install_reason": "PyTorch sees no CUDA GPU.",
                   "probe": "no_cuda"}
+    elif failure == "rocm_probe":
+        kwargs = {"fail_step": "install_probe", "install_reason": "PyTorch sees no ROCm GPU.",
+                  "probe": "no_rocm"}
     elif failure == "libs":
         kwargs = {"fail_step": "install_probe", "probe": "libs",
                   "install_reason": "vLLM's CUDA libraries do not load."}

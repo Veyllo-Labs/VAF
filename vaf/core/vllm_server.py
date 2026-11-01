@@ -19,13 +19,21 @@ WHEN (handover, reuse, waiting for a server that is loading); this module does t
   is rebuilt by the next install and refused by ``start``. Every step runs without VAF's GPU
   hide for in-process torch (``gpu_detection.gpu_child_env``). vLLM is never imported into
   VAF's process.
+  On an AMD GPU (``backend()`` is ``rocm``) the same steps install vLLM's ROCm build: an
+  environment of a Python 3.12 (``rocm_python``; the ROCm wheels are cp312 only), the
+  hash-locked ``vllm_requirements_rocm.lock`` with ``ROCM_INDEX`` as an extra index on the
+  command line, a probe that also loads ``vllm._rocm_C``, and its own record
+  (``RECIPE_FORMAT_ROCM``). An environment of the other build is not current, so a GPU that
+  changed vendor gets a fresh one. The ROCm runtime itself is the host's (ROCm 7.2 or newer):
+  the wheels link against ``libamdhip64.so.7`` without bundling it.
 - **Model** (``ensure_model``): a Hugging Face repo in safetensors form, in the standard
   Hugging Face cache, which vLLM reads itself; no code file of the repo is fetched
   (``CODE_PATTERNS`` are ignored), and a sharded download counts only when every shard of
   its index is there.
 - **Fit** (``fit``): weights + KV cache for the context + an overhead, against the memory
   share vLLM gets, before the launch, so a model that cannot fit is refused with numbers
-  instead of a crash a minute later.
+  instead of a crash a minute later. The GPU's memory comes from nvidia-smi, or on ROCm from
+  the amdgpu driver in /sys (``gpu_detection.amd_vram_mb``).
 - **Start** (``start``): on the local inference port with ``--enable-auto-tool-choice`` and
   the family's parsers, in a new session (the API server and its EngineCore children are
   one process group), model-name validation off (every consumer of the local server sends
@@ -91,6 +99,47 @@ _PROBE = (
     "    sys.exit(4)\n"
 )
 
+# The two builds of PIN: ``cuda`` (the PyPI wheel, NVIDIA) and ``rocm`` (vLLM's ROCm build
+# from its versioned wheel index, AMD).
+CUDA = "cuda"
+ROCM = "rocm"
+# The ROCm build of PIN: wheels.vllm.ai/rocm/<PIN>/ lists one variant, rocm723 ("ROCm commit
+# 5df63a7..."); rocm700 is 404 there. Its wheels are cp312, x86_64, manylinux_2_39 only, and
+# vllm's METADATA pins torch, triton, torchvision, torchaudio, amdsmi, flash-attn and
+# amd-aiter to the builds of the same index. They do not bundle the ROCm runtime: the host
+# needs ROCm 7.x (local_engine.MIN_ROCM). Re-read on every PIN bump (docs/setup/RELEASING.md).
+ROCM_VARIANT = "rocm723"
+ROCM_VERSION = "7.2.3"
+# Passed as an EXTRA index on pip's command line, never written into the lock: pip honours
+# index options inside a requirements file, and tests/test_vllm_lock.py refuses any there.
+# --require-hashes makes the second index safe: a file of the same name from another index
+# has another hash and is refused.
+ROCM_INDEX = f"https://wheels.vllm.ai/rocm/{PIN}/{ROCM_VARIANT}"
+# Generated with uv for cp312 x86_64 manylinux_2_39 (pip-compile resolves only for its own
+# interpreter); the command is in vllm_requirements_rocm.in.
+LOCK_PATH_ROCM = Path(__file__).with_name("vllm_requirements_rocm.lock")
+# Measured lower bound: the ROCm-index files sum to 2.73 GB (torch 1349 MB, amd-aiter 532,
+# triton 425, vllm 301, flash-attn 125), the PyPI part of the tree at least 0.62 GB.
+DOWNLOAD_GB_AT_LEAST_ROCM = 3.3
+# The recipe record of the ROCm build: its own tag, so a CUDA environment on a machine that
+# now has an AMD GPU (or the reverse) is not current and is rebuilt.
+RECIPE_FORMAT_ROCM = "vllmrocm-1-a69536"
+# The ROCm probe: HIP answers through torch's cuda API; vLLM's ROCm platform module imports
+# vllm._C_stable_libtorch and vllm._rocm_C at its first start (vllm/platforms/rocm.py in
+# 0.32.0); a PIN bump re-checks the names (RELEASING.md).
+_PROBE_ROCM = (
+    "import sys\n"
+    "import torch\n"
+    "if not torch.cuda.is_available():\n"
+    "    sys.exit(3)\n"
+    "try:\n"
+    "    import vllm._C_stable_libtorch\n"
+    "    import vllm._rocm_C\n"
+    "except ImportError as e:\n"
+    "    print(e, file=sys.stderr)\n"
+    "    sys.exit(4)\n"
+)
+
 # What the fit check counts besides weights and KV cache: CUDA context, activations and
 # the graphs vLLM captures.
 OVERHEAD_BYTES = int(1.2 * 1024 ** 3)
@@ -113,6 +162,55 @@ _child: Optional[subprocess.Popen] = None
 # attempt (the counterpart of the llama server's V-cache memo).
 _kv_fp8_failed = False
 _lock = threading.Lock()
+# The build of this machine, once a GPU was found (see backend).
+_backend: Optional[str] = None
+
+
+def backend() -> str:
+    """``rocm`` when the primary GPU is an AMD one, else ``cuda`` (also without a GPU: the
+    verdict refuses that machine before anything installs). The primary GPU follows
+    ``gpu_detection.get_primary_gpu`` (NVIDIA before AMD), without its Intel and Apple probes,
+    which cannot change the answer. Kept for the process once a GPU was found: the hardware
+    does not change while VAF runs; not kept without one (a driver still loading)."""
+    global _backend
+    if _backend is not None:
+        return _backend
+    try:
+        from vaf.core.gpu_detection import detect_amd_gpu, detect_nvidia_gpu
+        if detect_nvidia_gpu() is not None:
+            _backend = CUDA
+        elif detect_amd_gpu() is not None:
+            _backend = ROCM
+    except Exception:
+        return CUDA
+    return _backend or CUDA
+
+
+def expected_version(build: Optional[str] = None) -> str:
+    """The version an environment of ``build`` reports: PIN, with the local label of the ROCm
+    build (``0.32.0+rocm723``)."""
+    return f"{PIN}+{ROCM_VARIANT}" if (build or backend()) == ROCM else PIN
+
+
+def lock_path(build: Optional[str] = None) -> Path:
+    return LOCK_PATH_ROCM if (build or backend()) == ROCM else LOCK_PATH
+
+
+def recipe_format(build: Optional[str] = None) -> str:
+    return RECIPE_FORMAT_ROCM if (build or backend()) == ROCM else RECIPE_FORMAT
+
+
+def download_gb_at_least(build: Optional[str] = None) -> float:
+    return DOWNLOAD_GB_AT_LEAST_ROCM if (build or backend()) == ROCM else DOWNLOAD_GB_AT_LEAST
+
+
+def rocm_python() -> str:
+    """The Python 3.12 the ROCm environment is made with (its wheels are cp312 only): VAF's
+    own when it runs on 3.12, else ``python3.12`` on PATH; "" when there is none."""
+    from vaf.core.local_engine import ROCM_PYTHON
+    if tuple(sys.version_info[:2]) == ROCM_PYTHON:
+        return sys.executable
+    return shutil.which(f"python{ROCM_PYTHON[0]}.{ROCM_PYTHON[1]}") or ""
 
 
 def _ui():
@@ -179,18 +277,20 @@ def recipe_path() -> Path:
 
 
 def recipe_current() -> bool:
-    """True when the environment carries this version's recipe record (``RECIPE_FORMAT``)."""
+    """True when the environment carries this version's recipe record for this machine's
+    build (``RECIPE_FORMAT`` or ``RECIPE_FORMAT_ROCM``)."""
     try:
-        return recipe_path().read_bytes().decode("utf-8", errors="replace").strip() == RECIPE_FORMAT
+        text = recipe_path().read_bytes().decode("utf-8", errors="replace").strip()
     except OSError:
         return False
+    return text == recipe_format()
 
 
 def is_current() -> bool:
-    """Installed at the pin AND built by this version's recipe, with a passing probe. An
-    environment that is installed but not current cannot be trusted to start (the earlier
-    recipe's could not) and is rebuilt by ``install``."""
-    return is_installed() and installed_version() == PIN and recipe_current()
+    """Installed at the pin of this machine's build AND built by its recipe, with a passing
+    probe. An environment that is installed but not current cannot be trusted to start (the
+    earlier recipe's could not, nor can the other build's) and is rebuilt by ``install``."""
+    return is_installed() and installed_version() == expected_version() and recipe_current()
 
 
 # ── install ──────────────────────────────────────────────────────────────────────
@@ -215,7 +315,12 @@ def install(log: Optional[Callable[[str], None]] = None, run: Optional[Runner] =
     the full-screen TUI have no terminal to print pip's output on); without it the steps
     inherit the terminal. ``on_step(code)`` runs before each step (``INSTALL_STEPS``).
     ``outcome``: a failed probe sets ``outcome["probe"]`` to ``"no_cuda"`` (PyTorch sees no
-    CUDA GPU) or ``"libs"`` (vLLM's CUDA extension does not load, or the probe did not run)."""
+    CUDA GPU), ``"no_rocm"`` (the ROCm build's PyTorch sees no ROCm GPU) or ``"libs"`` (vLLM's
+    GPU extensions do not load, or the probe did not run).
+
+    The build follows ``backend()``: ``cuda`` installs ``LOCK_PATH`` from PyPI into an
+    environment of VAF's own Python, ``rocm`` installs ``LOCK_PATH_ROCM`` with ``ROCM_INDEX``
+    as an extra index into an environment of ``rocm_python()``."""
     from vaf.core import inference_profile, local_engine
     say = log or (lambda text: None)
     run = run or subprocess.run
@@ -227,9 +332,11 @@ def install(log: Optional[Callable[[str], None]] = None, run: Optional[Runner] =
         return verdict.reason
     if is_current():
         return ""
-    if not LOCK_PATH.is_file():
+    build = backend()
+    lock = lock_path(build)
+    if not lock.is_file():
         # Checked before the old environment is removed: without the lock nothing installs.
-        return (f"The hash-locked vLLM tree {LOCK_PATH} is missing from this VAF installation; "
+        return (f"The hash-locked vLLM tree {lock} is missing from this VAF installation; "
                 "reinstall VAF.")
     from vaf.core.gpu_detection import gpu_child_env
     # Without VAF's GPU hide for in-process torch: the probe must see the GPU vLLM will use.
@@ -255,7 +362,7 @@ def install(log: Optional[Callable[[str], None]] = None, run: Optional[Runner] =
     where = f"see {output}" if sink is not None else "see the output above"
     try:
         return _install_steps(say, run, step, env, root, streams, where,
-                              outcome if outcome is not None else {})
+                              outcome if outcome is not None else {}, build)
     finally:
         if sink is not None:
             try:
@@ -264,14 +371,23 @@ def install(log: Optional[Callable[[str], None]] = None, run: Optional[Runner] =
                 pass
 
 
-def _install_steps(say, run, step, env, root, streams, where, outcome) -> str:
+def _install_steps(say, run, step, env, root, streams, where, outcome, build=CUDA) -> str:
     from vaf.core import inference_profile
-    steps = [
-        ("install_env", "Creating the environment", [sys.executable, "-m", "venv", str(root)]),
-        ("install_vllm", f"Installing vLLM {PIN} (at least {DOWNLOAD_GB_AT_LEAST:.1f} GB to download)",
-         [str(venv_python()), "-m", "pip", "install", "--require-hashes", "--no-deps",
-          "--only-binary=:all:", "-r", str(LOCK_PATH)]),
-    ]
+    if build == ROCM:
+        steps = [
+            ("install_env", "Creating the environment", [rocm_python(), "-m", "venv", str(root)]),
+            ("install_vllm", f"Installing vLLM {PIN} for ROCm {ROCM_VERSION} (at least "
+                             f"{DOWNLOAD_GB_AT_LEAST_ROCM:.1f} GB to download)",
+             [str(venv_python()), "-m", "pip", "install", "--require-hashes", "--no-deps",
+              "--only-binary=:all:", "--extra-index-url", ROCM_INDEX, "-r", str(LOCK_PATH_ROCM)]),
+        ]
+    else:
+        steps = [
+            ("install_env", "Creating the environment", [sys.executable, "-m", "venv", str(root)]),
+            ("install_vllm", f"Installing vLLM {PIN} (at least {DOWNLOAD_GB_AT_LEAST:.1f} GB to download)",
+             [str(venv_python()), "-m", "pip", "install", "--require-hashes", "--no-deps",
+              "--only-binary=:all:", "-r", str(LOCK_PATH)]),
+        ]
     for code, label, argv in steps:
         if not inference_profile.local_inference_allowed():
             uninstall()
@@ -285,7 +401,12 @@ def _install_steps(say, run, step, env, root, streams, where, outcome) -> str:
             return f"{label} failed: {e}"
         if getattr(result, "returncode", 1) != 0:
             uninstall()
-            return f"{label} failed (exit {getattr(result, 'returncode', '?')}); {where}."
+            hint = ""
+            if build == ROCM and code == "install_env":
+                # Debian and Ubuntu split ensurepip out of the interpreter package.
+                hint = (" Python 3.12 needs its venv module (on Debian and Ubuntu the package "
+                        "python3.12-venv).")
+            return f"{label} failed (exit {getattr(result, 'returncode', '?')}); {where}.{hint}"
     # Deliberately no `vllm download-kernels`: it lets FlashInfer pip-install flashinfer-cubin and
     # flashinfer-jit-cache from its own index, version-pinned but unhashed, the only compiled
     # package that would bypass the lock. Without them FlashInfer builds the kernels it needs at
@@ -294,17 +415,31 @@ def _install_steps(say, run, step, env, root, streams, where, outcome) -> str:
     step("install_probe")
     say("Checking that vLLM loads on the GPU...")
     try:
-        probe = run([str(venv_python()), "-c", _PROBE], env=env, **streams)
+        probe = run([str(venv_python()), "-c", _PROBE_ROCM if build == ROCM else _PROBE],
+                    env=env, **streams)
         code = getattr(probe, "returncode", 1)
     except Exception:
         code = None
     if code == 0:
         try:
-            recipe_path().write_bytes(RECIPE_FORMAT.encode("utf-8"))
+            recipe_path().write_bytes(recipe_format(build).encode("utf-8"))
         except OSError as e:
             return f"vLLM was installed, but its recipe record could not be written: {e}"
         return ""
     # No record: the next install rebuilds this environment, and start() refuses it.
+    if build == ROCM:
+        if code == 3:
+            outcome["probe"] = "no_rocm"
+            from vaf.core.local_engine import MIN_ROCM
+            return (f"vLLM was installed, but PyTorch in its environment sees no ROCm GPU. vLLM "
+                    f"{PIN}'s ROCm build needs ROCm {MIN_ROCM[0]}.{MIN_ROCM[1]} or newer "
+                    "installed, this account in the render and video groups, and no "
+                    "HIP_VISIBLE_DEVICES, ROCR_VISIBLE_DEVICES or CUDA_VISIBLE_DEVICES that "
+                    "hides the GPU: fix that and try again.")
+        outcome["probe"] = "libs"
+        return ("vLLM was installed, but its ROCm libraries do not load in its environment, so "
+                "it cannot start. Run `vaf engine vllm` again: it rebuilds the environment, and "
+                f"llama.cpp keeps running meanwhile. If it fails again, {where} for why.")
     if code == 3:
         outcome["probe"] = "no_cuda"
         from vaf.core.local_engine import MIN_DRIVER
@@ -553,7 +688,11 @@ def fit(shape: ModelShape, n_ctx: int, free_mb: int, total_mb: int, *,
 
 
 def _gpu_memory() -> tuple:
-    """(free_mb, total_mb) of the first NVIDIA GPU; (0, 0) when unknown."""
+    """(free_mb, total_mb) of the GPU of this machine's build: the first NVIDIA GPU from
+    nvidia-smi, or the AMD GPU from the amdgpu driver (``amd_vram_mb``); (0, 0) when unknown."""
+    if backend() == ROCM:
+        from vaf.core.gpu_detection import amd_vram_mb
+        return amd_vram_mb()
     from vaf.core.gpu_detection import detect_nvidia_gpu, nvidia_free_vram_mb
     gpu = detect_nvidia_gpu()
     total = int(getattr(gpu, "vram_mb", 0) or 0) if gpu else 0
@@ -578,8 +717,10 @@ def plan_fit(model_dir: str, n_ctx: int, kv_dtype: Optional[str] = None) -> FitR
                          code="no_shape")
     free_mb, total_mb = _gpu_memory()
     if not total_mb or not free_mb:
-        return FitResult(False, int(n_ctx), 0.0, kv_dtype or "fp8", 0, 0,
-                         "nvidia-smi does not report the GPU's memory.", code="no_gpu_memory")
+        source = ("The amdgpu driver does not report the GPU's memory (/sys/class/drm)."
+                  if backend() == ROCM else "nvidia-smi does not report the GPU's memory.")
+        return FitResult(False, int(n_ctx), 0.0, kv_dtype or "fp8", 0, 0, source,
+                         code="no_gpu_memory")
     return fit(shape, n_ctx, free_mb, total_mb, kv_dtype=kv_dtype,
                utilization=_configured_utilization())
 

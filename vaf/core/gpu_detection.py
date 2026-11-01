@@ -76,7 +76,7 @@ class GPUInfo:
     """Information about a detected GPU."""
     def __init__(self, vendor: str, model: str = "", vram_mb: int = 0, 
                  driver_available: bool = False, compute_available: bool = False,
-                 compute_capability: str = "", driver_version: str = ""):
+                 compute_capability: str = "", driver_version: str = "", gfx_arch: str = ""):
         self.vendor = vendor  # "nvidia", "amd", "intel", "apple"
         self.model = model
         self.vram_mb = vram_mb
@@ -88,7 +88,11 @@ class GPUInfo:
         # NVIDIA driver version as nvidia-smi prints it ("580.65.06"); "" when unknown. vLLM's
         # CUDA 13.0 build needs driver 580 or newer (vaf/core/local_engine.py).
         self.driver_version = driver_version
-    
+        # AMD GPU architecture as the amdgpu driver's KFD topology names it ("gfx1100"); ""
+        # when unknown or not an AMD GPU. vLLM's ROCm build has kernels for a fixed list
+        # (vaf/core/local_engine.py ROCM_GFX).
+        self.gfx_arch = gfx_arch
+
     def __repr__(self):
         return f"GPUInfo(vendor={self.vendor}, model={self.model}, vram={self.vram_mb}MB, compute={self.compute_available})"
 
@@ -167,8 +171,8 @@ def detect_nvidia_gpu() -> Optional[GPUInfo]:
 def nvidia_free_vram_mb() -> int:
     """Free memory of the first NVIDIA GPU in MiB, from nvidia-smi; 0 when it cannot be read.
 
-    The one reader of the free figure: the llama server sizes its context with it, the vLLM
-    engine its memory share and its fit check."""
+    The NVIDIA reader of the free figure: the llama server sizes its context with it, the vLLM
+    engine its memory share and its fit check (``amd_vram_mb`` is the AMD reader)."""
     try:
         _r = subprocess.run(
             ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
@@ -216,47 +220,173 @@ def _check_cuda_available() -> bool:
     return False
 
 
-def detect_amd_gpu() -> Optional[GPUInfo]:
-    """Detect AMD GPU via rocm-smi or Windows WMI/DXGI."""
+# The vendor id of AMD in the KFD topology (PCI 0x1002).
+_AMD_VENDOR_ID = 4098
+
+
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_bytes().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _read_int(path: Path) -> int:
+    try:
+        return int(_read_text(path).strip() or 0)
+    except ValueError:
+        return 0
+
+
+def _gfx_name(target_version: int) -> str:
+    """KFD's ``gfx_target_version`` as the gfx name: 110000 -> gfx1100, 90010 -> gfx90a,
+    110501 -> gfx1151. The minor and the stepping are hex digits of the name."""
+    if target_version <= 0:
+        return ""
+    major, minor, step = target_version // 10000, (target_version // 100) % 100, target_version % 100
+    return f"gfx{major}{minor:x}{step:x}"
+
+
+def amd_kfd_gpus(sys_root: str = "/sys") -> List[dict]:
+    """Every AMD GPU the amdgpu driver's KFD topology lists, in node order:
+    ``{"gfx", "render_minor", "vram_total_mb", "vram_used_mb"}``. Read from world-readable
+    sysfs files, no subprocess and no root: ``class/kfd/kfd/topology/nodes/*/properties``
+    (CPU nodes have ``simd_count 0``) and the render node's ``mem_info_vram_total`` and
+    ``mem_info_vram_used`` in bytes (0 when unreadable). ``[]`` without KFD (no amdgpu driver,
+    or not Linux). Never raises."""
+    out: List[dict] = []
+    try:
+        nodes = Path(sys_root) / "class" / "kfd" / "kfd" / "topology" / "nodes"
+        if not nodes.is_dir():
+            return out
+        entries = sorted((p for p in nodes.iterdir() if p.name.isdigit()), key=lambda p: int(p.name))
+        for node in entries:
+            props: Dict[str, int] = {}
+            for line in _read_text(node / "properties").splitlines():
+                parts = line.split()
+                if len(parts) == 2 and parts[1].lstrip("-").isdigit():
+                    props[parts[0]] = int(parts[1])
+            if props.get("simd_count", 0) <= 0 or props.get("vendor_id") != _AMD_VENDOR_ID:
+                continue
+            minor = props.get("drm_render_minor", -1)
+            device = Path(sys_root) / "class" / "drm" / f"renderD{minor}" / "device"
+            out.append({"gfx": _gfx_name(props.get("gfx_target_version", 0)),
+                        "render_minor": minor,
+                        "vram_total_mb": _read_int(device / "mem_info_vram_total") // (1024 * 1024),
+                        "vram_used_mb": _read_int(device / "mem_info_vram_used") // (1024 * 1024)})
+    except Exception:
+        return out
+    return out
+
+
+def _largest_amd_gpu(sys_root: str = "/sys") -> Optional[dict]:
+    """The KFD node with the most VRAM: a discrete GPU before an APU's carve-out."""
+    nodes = amd_kfd_gpus(sys_root)
+    return max(nodes, key=lambda n: n["vram_total_mb"]) if nodes else None
+
+
+def amd_vram_mb(sys_root: str = "/sys") -> Tuple[int, int]:
+    """(free, total) MiB of the AMD GPU ``detect_amd_gpu`` reports (the KFD node with the most
+    VRAM), from the amdgpu driver; ``(0, 0)`` when unknown. The AMD counterpart of
+    ``nvidia_free_vram_mb``: the vLLM engine's memory share and its fit check read it."""
+    node = _largest_amd_gpu(sys_root)
+    if not node or node["vram_total_mb"] <= 0:
+        return 0, 0
+    total = node["vram_total_mb"]
+    return max(0, total - node["vram_used_mb"]), total
+
+
+# Where a distribution's ROCm packages put the HIP runtime: the linker finds it there without
+# a RUNPATH. ROCm's own installer uses /opt/rocm[-<version>].
+_DISTRO_LIB_DIRS = ("usr/lib64", "usr/lib/x86_64-linux-gnu", "usr/lib")
+# The HIP runtime vLLM's ROCm build links against (torch's libc10_hip.so and vLLM's
+# _rocm_C.abi3.so NEED it; the wheels do not bundle it).
+HIP_RUNTIME = "libamdhip64.so.7"
+
+
+def _rocm_version(rocm_root: Path) -> str:
+    """"7.2.3" from ``<rocm>/.info/version`` ("7.2.3-123"); "" when unreadable."""
+    m = re.match(r"\s*(\d+\.\d+(?:\.\d+)?)", _read_text(rocm_root / ".info" / "version"))
+    return m.group(1) if m else ""
+
+
+def rocm_runtime(env: Optional[Mapping[str, str]] = None, root: str = "/") -> Tuple[bool, str]:
+    """(the HIP runtime ``libamdhip64.so.7`` is installed, ROCm's version or ""). Looked for in
+    ``$ROCM_PATH/lib``, ``/opt/rocm/lib``, ``/opt/rocm-*/lib`` (newest first) and the
+    distribution library directories; the version is read from that ROCm root's
+    ``.info/version`` ("" for a distribution install, which has none). ``root`` prefixes the
+    fixed paths (tests). No subprocess."""
+    source = os.environ if env is None else env
+    base = Path(root)
+    roots: List[Path] = []
+    if source.get("ROCM_PATH"):
+        roots.append(Path(str(source["ROCM_PATH"])))
+    roots.append(base / "opt" / "rocm")
+    try:
+        roots += sorted((p for p in (base / "opt").glob("rocm-*") if p.is_dir()),
+                        key=lambda p: p.name, reverse=True)
+    except OSError:
+        pass
+    for rocm in roots:
+        if (rocm / "lib" / HIP_RUNTIME).exists():
+            return True, _rocm_version(rocm)
+    for lib in _DISTRO_LIB_DIRS:
+        if (base / lib / HIP_RUNTIME).exists():
+            return True, ""
+    return False, ""
+
+
+def _amd_smi_on_path() -> bool:
+    """rocm-smi or its successor amd-smi (ROCm 7) is installed: the sign that ROCm is."""
+    return bool(shutil.which("rocm-smi") or shutil.which("amd-smi"))
+
+
+def detect_amd_gpu(sys_root: str = "/sys") -> Optional[GPUInfo]:
+    """Detect AMD GPU via rocm-smi/amd-smi plus the KFD topology, or Windows WMI/DXGI.
+
+    On Linux the gate is rocm-smi or amd-smi on PATH (ROCm is installed). The product name
+    comes from rocm-smi when it is there; the architecture and the VRAM come from the KFD node
+    with the most VRAM (``amd_kfd_gpus``), and rocm-smi's VRAM line is only the fallback when
+    KFD gives none (rocm-smi prints bytes, which its parser does not read)."""
     system = platform.system()
-    
-    # Linux: Check rocm-smi
-    if system == "Linux" and shutil.which("rocm-smi"):
+
+    if system == "Linux" and _amd_smi_on_path():
         try:
-            result = subprocess.run(
-                ["rocm-smi", "--showid", "--showproductname", "--showmeminfo", "vram"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                **_get_subprocess_kwargs()
-            )
-            
-            if result.returncode == 0:
-                # Parse output
-                model = "AMD GPU"
-                vram_mb = 0
-                
-                for line in result.stdout.splitlines():
-                    if "Card series" in line or "Card model" in line:
-                        model = line.split(":")[-1].strip()
-                    elif "vram" in line.lower() and "total" in line.lower():
-                        # Extract memory value
-                        parts = line.split()
-                        for i, part in enumerate(parts):
-                            if "MiB" in part or "MB" in part:
-                                try:
-                                    vram_mb = int(parts[i-1])
-                                except (ValueError, IndexError):
-                                    pass
-                
-                rocm_available = _check_rocm_available()
-                
+            model = "AMD GPU"
+            vram_mb = 0
+            smi_ok = False
+            if shutil.which("rocm-smi"):
+                result = subprocess.run(
+                    ["rocm-smi", "--showid", "--showproductname", "--showmeminfo", "vram"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    **_get_subprocess_kwargs()
+                )
+                if result.returncode == 0:
+                    smi_ok = True
+                    for line in result.stdout.splitlines():
+                        if "Card series" in line or "Card model" in line:
+                            model = line.split(":")[-1].strip()
+                        elif "vram" in line.lower() and "total" in line.lower():
+                            parts = line.split()
+                            for i, part in enumerate(parts):
+                                if "MiB" in part or "MB" in part:
+                                    try:
+                                        vram_mb = int(parts[i-1])
+                                    except (ValueError, IndexError):
+                                        pass
+            node = _largest_amd_gpu(sys_root)
+            if smi_ok or node is not None:
+                if node is not None and node["vram_total_mb"] > 0:
+                    vram_mb = node["vram_total_mb"]
                 return GPUInfo(
                     vendor="amd",
                     model=model,
                     vram_mb=vram_mb,
                     driver_available=True,
-                    compute_available=rocm_available
+                    compute_available=_check_rocm_available(),
+                    gfx_arch=node["gfx"] if node is not None else "",
                 )
         except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
             pass
@@ -449,6 +579,7 @@ def _check_rocm_available() -> bool:
     rocm_paths = [
         "/opt/rocm/lib/libhip_hcc.so",
         "/opt/rocm/lib/libamdhip64.so",
+        "/opt/rocm/lib/" + HIP_RUNTIME,
     ]
     
     for path in rocm_paths:

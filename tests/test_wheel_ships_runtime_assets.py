@@ -104,6 +104,7 @@ def test_the_built_wheel_carries_every_runtime_asset(tmp_path):
     assert any(n.endswith("vaf/core/llama_server_pin.json") for n in names)
     # The hash-locked vLLM tree: without it the vLLM install refuses (vllm_server.py).
     assert any(n.endswith("vaf/core/vllm_requirements.lock") for n in names)
+    assert any(n.endswith("vaf/core/vllm_requirements_rocm.lock") for n in names)
     assert any(n.endswith("vaf/auth/data/common_passwords.txt") for n in names)
     # And the shipped A2A skill: an installed VAF that lost it would route "work
     # with another agent" straight past the feature that exists for it.

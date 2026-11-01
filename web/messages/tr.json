@@ -2779,7 +2779,13 @@
       "no_build": "vLLM'nin bu makine için bir sürümü yok.",
       "no_build_gpu": "vLLM'nin bu GPU için bir sürümü yok.",
       "no_gpu": "GPU bulunamadı: vLLM'nin CPU arka ucu temel düzeydedir, CPU için daha iyi motor llama.cpp'dir.",
-      "amd": "vLLM, ROCm üzerinden bazı AMD GPU'ları destekler ve yalnızca Python 3.12 sürümleri vardır; VAF bunu henüz yönetmiyor.",
+      "amd_unknown": "VAF bu AMD GPU'nun mimarisini okuyamadı (amdgpu sürücüsünün /sys içindeki KFD topolojisi).",
+      "amd_gfx": "vLLM'nin ROCm sürümünde bu AMD GPU için çekirdek yok; Instinct MI200, MI300 ve MI350, Radeon RX 7900 ve RX 9000 ile Ryzen AI 300 ve MAX üzerinde çalışır.",
+      "amd_rocm_missing": "vLLM, AMD'de ROCm 7.2 veya üzerini gerektirir ve burada yüklü değil. ROCm'u yükleyip VAF'ı yeniden başlatın.",
+      "amd_rocm_old": "vLLM, AMD'de ROCm 7.2 veya üzerini gerektirir; yüklü olan daha eski. ROCm'u güncelleyip VAF'ı yeniden başlatın.",
+      "amd_no_access": "Bu hesap GPU'yu /dev/kfd üzerinden kullanamıyor: hesabı render ve video gruplarına ekleyin, yeniden oturum açın ve VAF'ı yeniden başlatın.",
+      "amd_glibc_old": "vLLM, AMD'de daha yeni bir Linux gerektirir (glibc 2.39 veya üzeri; örneğin Ubuntu 24.04, Debian 13 ya da Fedora 40). vLLM'yi kullanmak için sistemi güncelleyin; llama.cpp burada çalışır.",
+      "amd_python": "vLLM, AMD'de venv modülüyle birlikte Python 3.12 gerektirir (Ubuntu'da python3.12-venv paketi). Yükleyip VAF'ı yeniden başlatın.",
       "intel": "vLLM'nin Intel GPU desteği temel düzeydedir ve Python 3.12 gerektirir; VAF bunu henüz yönetmiyor.",
       "nvidia_unknown": "VAF bu GPU'nun işlem yeteneğini okuyamadı; NVIDIA sürücüsü vLLM için fazla eski olabilir. NVIDIA sürücüsünü güncelleyin ve VAF'ı yeniden başlatın.",
       "nvidia_too_old": "vLLM, işlem yeteneği 7.5 veya üzeri bir NVIDIA GPU gerektirir (Turing ve sonrası); bu GPU daha eski.",
@@ -2852,7 +2858,8 @@
       "unchanged_llama": "Yerel motor llama.cpp olarak kalıyor.",
       "install_failed": "vLLM yüklenemedi; yerel motor değişmedi.",
       "cuda_probe_failed": "vLLM yüklendi, ancak PyTorch CUDA destekli bir GPU görmüyor. vLLM, CUDA 13.0 için bir NVIDIA sürücüsü gerektirir (sürüm 580 veya üzeri): NVIDIA sürücüsünü güncelleyip yeniden deneyin ve CUDA_VISIBLE_DEVICES'in GPU'yu gizlemediğinden emin olun. Yerel motor değişmedi.",
-      "vllm_libs_failed": "vLLM yüklendi, ancak CUDA kitaplıkları kendi ortamında yüklenemiyor, bu yüzden başlatılamıyor. Ortamı yeniden kurmak için vLLM'yi tekrar seçin; bu sırada llama.cpp çalışmaya devam eder. Yine başarısız olursa nedeni aşağıdaki günlükte yazar.",
+      "rocm_probe_failed": "vLLM yüklendi, ancak PyTorch ROCm destekli bir GPU görmüyor. vLLM, AMD'de ROCm 7.2 veya üzerini gerektirir ve bu hesabın render ve video gruplarında olması gerekir; HIP_VISIBLE_DEVICES, ROCR_VISIBLE_DEVICES ve CUDA_VISIBLE_DEVICES'in GPU'yu gizlemediğinden emin olup yeniden deneyin. Yerel motor değişmedi.",
+      "vllm_libs_failed": "vLLM yüklendi, ancak GPU kitaplıkları kendi ortamında yüklenemiyor, bu yüzden başlatılamıyor. Ortamı yeniden kurmak için vLLM'yi tekrar seçin; bu sırada llama.cpp çalışmaya devam eder. Yine başarısız olursa nedeni aşağıdaki günlükte yazar.",
       "download_failed": "{model} modeli indirilemedi; yerel motor değişmedi.",
       "download_cancelled": "İndirme iptal edildi; yerel motor değişmedi.",
       "llama_stop_failed": "llama.cpp sunucusu durmadı; yerel motor değişmedi.",
@@ -2868,7 +2875,7 @@
       "too_big": "Model yaklaşık {need} GB GPU belleği gerektiriyor, ancak vLLM burada yalnızca {budget} GB alıyor. Daha küçük bir model ya da daha küçük bir bağlam seçin.",
       "share_above_free": "Diğer programlar GPU'yu kullanıyor: vLLM'nin {budget} GB'a ihtiyacı var, ancak yalnızca {free} GB boş. Onları kapatıp yeniden deneyin.",
       "no_shape": "Modelin config.json dosyası yapısını belirtmiyor.",
-      "no_gpu_memory": "nvidia-smi GPU belleğini bildirmiyor."
+      "no_gpu_memory": "GPU sürücüsü GPU belleğini bildirmiyor."
     },
     "conflict": {
       "unsupported": "vLLM seçili, ancak bu makine onu çalıştıramıyor.",

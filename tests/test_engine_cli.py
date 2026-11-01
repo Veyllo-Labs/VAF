@@ -36,6 +36,8 @@ def config(monkeypatch, tmp_path):
     monkeypatch.setattr(vs, "pid_file", lambda: tmp_path / "vllm.pid")
     monkeypatch.setattr(vs, "venv_dir", lambda: tmp_path / "bin" / "vllm" / "venv")
     monkeypatch.setattr(le, "_stop_llama", lambda say: (False, ""))
+    # The NVIDIA build unless a test says otherwise: the build follows this machine's GPU.
+    monkeypatch.setattr(vs, "backend", lambda: vs.CUDA)
     return values
 
 
@@ -252,3 +254,27 @@ def test_models_config_refuses_the_switch_keys(config, key):
     assert config.get("local_engine") is None and config["vllm_model"] == REPO
     result = CliRunner().invoke(models_mod.app, ["config", "vllm_tool_call_parser", "hermes"])
     assert result.exit_code == 0 and config["vllm_tool_call_parser"] == "hermes"
+
+
+def test_engine_on_an_amd_gpu(config, monkeypatch):
+    """On a supported AMD GPU `vaf engine` prints the ROCm verdict, and the install question
+    names the ROCm build's size; both come from the core, the CLI adds nothing of its own.
+    MUTATION: the CLI or the core printing the CUDA size - red."""
+    from vaf.core.gpu_detection import GPUInfo
+    verdict = le.support(gpu=GPUInfo("amd", "AMD Radeon RX 7900 XTX", 24560, True, True,
+                                     gfx_arch="gfx1100"),
+                         system="Linux", machine="x86_64", glibc="2.39", rocm=(True, "7.2.3"),
+                         python312="/usr/bin/python3.12", kfd_access=True)
+    monkeypatch.setattr(le, "support", lambda **kw: verdict)
+    monkeypatch.setattr(vs, "backend", lambda: vs.ROCM)
+    monkeypatch.setattr(vs, "installed_version", lambda: None)
+    monkeypatch.setattr(le, "default_vllm_model", lambda vram_gb=None: REPO)
+    out = " ".join(_invoke().output.split())      # the console wraps long lines
+    assert "vLLM runs here (AMD Radeon RX 7900 XTX, 24 GB)" in out, out
+    calls = []
+    monkeypatch.setattr(vs, "install", lambda **kw: calls.append("install") or "")
+    result = _invoke("vllm", input="n\n")
+    assert result.exit_code == 1 and calls == []
+    out = " ".join(result.output.split())
+    assert "about 3.3 GB or more to download" in out, out
+    assert "2.8 GB" not in out

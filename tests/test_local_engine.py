@@ -24,7 +24,14 @@ MUTATIONS, each turns the named test red:
 - read only `tokens` in `local_token_count` -> test_local_token_count_shapes;
 - read only `reasoning_content` in `reasoning_text` -> test_reasoning_text_both_fields;
 - swap the two default models -> test_default_vllm_model_by_vram;
-- remove `vllm_` from the admin-only prefixes -> test_engine_keys_admin_only.
+- remove `vllm_` from the admin-only prefixes -> test_engine_keys_admin_only;
+- drop the "AMD " strip, or route AMD past its branch -> test_amd_supported_verdict;
+- check the ROCm runtime before the architecture, refuse an unreadable ROCm version, or
+  remove gfx1151 from ROCM_GFX -> test_amd_verdict_rows;
+- keep `amd` in SUPPORT_CODES -> test_amd_is_no_longer_a_later_code;
+- drop rocm-smi/amd-smi from support_class's inconclusive check ->
+  test_support_class_amd_no_gpu_is_inconclusive;
+- state() or the install question reading the CUDA size -> test_download_size_follows_the_backend.
 """
 import subprocess
 import sys
@@ -80,8 +87,6 @@ def _nv(cc="8.6", vram=10240, model="NVIDIA GeForce RTX 3080", driver=""):
                  id="driver-590"),
     pytest.param(_nv(driver="[N/A]"), "Linux", "x86_64", le.SUPPORTED, ["vLLM runs here"],
                  id="driver-unreadable"),
-    (GPUInfo("amd", "Radeon RX 7900", 24576), "Linux", "x86_64", le.LATER,
-     ["ROCm", "Python 3.12", "llama.cpp (Vulkan) runs here"]),
     (GPUInfo("intel", "Arc A770", 16384), "Linux", "x86_64", le.LATER,
      ["Intel", "Python 3.12", "llama.cpp runs here"]),
     (None, "Linux", "x86_64", le.UNSUPPORTED, ["CPU", "llama.cpp"]),
@@ -417,8 +422,6 @@ _REASONS = {
                  "llama.cpp runs here.",
     "nvidia_unknown": "VAF could not read this GPU's compute capability from nvidia-smi (the "
                       "driver may be too old for vLLM's CUDA build). llama.cpp runs here.",
-    "amd": "vLLM supports some AMD GPUs through ROCm 6.3+, with Python 3.12 builds only; VAF "
-           "does not manage that yet. llama.cpp (Vulkan) runs here.",
     "intel": "vLLM's Intel GPU support is basic and needs Python 3.12; VAF does not manage it "
              "yet. llama.cpp runs here.",
     "no_gpu": "vLLM's CPU backend is basic (no 4-bit GGUF-style quantization); llama.cpp is the "
@@ -442,7 +445,6 @@ _REASONS = {
      {"driver": "575.57.08"}),
     (_nv(), "Linux", "x86_64", (3, 13), le.UNSUPPORTED, "glibc_old",
      {"glibc": "2.28", "min_glibc": "2.31"}),
-    (GPUInfo("amd", "Radeon RX 7900", 24576), "Linux", "x86_64", (3, 13), le.LATER, "amd", {}),
     (GPUInfo("intel", "Arc A770", 16384), "Linux", "x86_64", (3, 13), le.LATER, "intel", {}),
     (None, "Linux", "x86_64", (3, 13), le.UNSUPPORTED, "no_gpu", {}),
     (GPUInfo("apple", "M2", 10240), "Darwin", "arm64", (3, 13), le.LATER, "apple", {}),
@@ -454,7 +456,7 @@ _REASONS = {
 ])
 def test_support_codes_and_unchanged_reasons(gpu, system, machine, python, level, code, params):
     """Every row of the platform table keeps its level and its sentence byte for byte and
-    gains a code with its parameters. MUTATION: swap the codes amd/intel, or change one
+    gains a code with its parameters. MUTATION: swap the codes intel/apple, or change one
     sentence - red."""
     glibc = "2.28" if code == "glibc_old" else "2.39"
     verdict = le.support(gpu=gpu, system=system, machine=machine, python=python, glibc=glibc)
@@ -468,6 +470,7 @@ def vllm_box(monkeypatch, tmp_path, config):
     from vaf.core import backend
     from vaf.core import vllm_server as vs
     monkeypatch.setattr(vs, "venv_dir", lambda: tmp_path / "bin" / "vllm" / "venv")
+    monkeypatch.setattr(vs, "backend", lambda: vs.CUDA)
     box = {"supported": True, "version": "0.32.0", "pid": None, "health": None, "loaded": None,
            "current": True}
     monkeypatch.setattr(le, "support", lambda **kw: le.EngineSupport(
@@ -569,3 +572,139 @@ def test_without_engine_keys():
     assert le.without_engine_keys(payload) == {"model": "x.gguf", "provider": "local"}
     same = {"model": "x.gguf"}
     assert le.without_engine_keys(same) is same
+
+
+# ── AMD: vLLM's ROCm build ─────────────────────────────────────────────────────────
+
+def _amd(gfx="gfx1100", vram=24560, model="AMD Radeon RX 7900 XTX"):
+    return GPUInfo("amd", model, vram, True, True, gfx_arch=gfx)
+
+
+# Every fact of a machine the ROCm build runs on; a row of the table below changes one.
+_AMD_OK = {"gpu": _amd(), "system": "Linux", "machine": "x86_64", "python": (3, 13),
+           "glibc": "2.39", "rocm": (True, "7.2.3"), "python312": "/usr/bin/python3.12",
+           "kfd_access": True}
+
+
+def test_amd_supported_verdict():
+    """A Radeon RX 7900 XTX on Ubuntu 24.04 with ROCm 7.2.3: supported, named once as AMD.
+    MUTATION: drop the "AMD " strip, or route AMD to the NVIDIA branch - red."""
+    verdict = le.support(**_AMD_OK)
+    assert (verdict.level, verdict.code) == (le.SUPPORTED, "supported")
+    assert dict(verdict.params) == {"gpu": "Radeon RX 7900 XTX", "vram_gb": "24"}
+    assert verdict.reason == ("vLLM runs here (AMD Radeon RX 7900 XTX, 24 GB). llama.cpp stays "
+                              "the lighter choice for small GPUs and quick starts.")
+    # VAF's own Python range is not the ROCm build's: vLLM runs in its 3.12 environment.
+    assert le.support(**{**_AMD_OK, "python": (3, 10)}).code == "supported"
+
+
+@pytest.mark.parametrize("change, code, params, words", [
+    pytest.param({"machine": "aarch64"}, "no_build_gpu", {}, ["no build for this GPU"],
+                 id="aarch64"),
+    pytest.param({"gpu": _amd(gfx="")}, "amd_unknown", {}, ["architecture", "/sys"],
+                 id="no-gfx"),
+    pytest.param({"gpu": _amd(gfx="gfx1030")}, "amd_gfx", {"gfx": "gfx1030"},
+                 ["gfx1030", "RX 7900", "MI300"], id="gfx1030"),
+    pytest.param({"gpu": _amd(gfx="gfx1030"), "rocm": (False, "")}, "amd_gfx",
+                 {"gfx": "gfx1030"}, ["gfx1030"], id="gfx-before-rocm"),
+    pytest.param({"rocm": (False, "")}, "amd_rocm_missing", {},
+                 ["ROCm 7.2 or newer", "libamdhip64.so.7"], id="no-rocm"),
+    pytest.param({"rocm": (True, "7.1.1")}, "amd_rocm_old", {"rocm": "7.1.1"},
+                 ["ROCm 7.2 or newer", "7.1.1", "Update ROCm"], id="rocm-7.1"),
+    pytest.param({"rocm": (True, "6.4.0"), "kfd_access": False}, "amd_rocm_old",
+                 {"rocm": "6.4.0"}, ["6.4.0"], id="rocm-before-kfd"),
+    pytest.param({"rocm": (True, "")}, "supported", {"gpu": "Radeon RX 7900 XTX", "vram_gb": "24"},
+                 ["vLLM runs here"], id="rocm-version-unreadable"),
+    pytest.param({"rocm": (True, "7.10.0")}, "supported",
+                 {"gpu": "Radeon RX 7900 XTX", "vram_gb": "24"}, ["vLLM runs here"],
+                 id="rocm-7.10"),
+    pytest.param({"kfd_access": False}, "amd_no_access", {}, ["/dev/kfd", "render and video"],
+                 id="no-kfd"),
+    pytest.param({"kfd_access": False, "glibc": "2.35"}, "amd_no_access", {}, ["/dev/kfd"],
+                 id="kfd-before-glibc"),
+    pytest.param({"glibc": "2.38"}, "amd_glibc_old", {"glibc": "2.38", "min_glibc": "2.39"},
+                 ["glibc 2.39 or newer", "glibc 2.38", "Ubuntu 24.04"], id="glibc-2.38"),
+    pytest.param({"glibc": ""}, "amd_glibc_old", {"glibc": "", "min_glibc": "2.39"},
+                 ["musl"], id="musl"),
+    pytest.param({"glibc": "2.38", "python312": ""}, "amd_glibc_old",
+                 {"glibc": "2.38", "min_glibc": "2.39"}, ["2.38"], id="glibc-before-python"),
+    pytest.param({"python312": ""}, "amd_python", {}, ["Python 3.12", "python3.12-venv"],
+                 id="no-python312"),
+    pytest.param({"gpu": _amd(gfx="gfx1151", vram=98304, model="AMD Radeon 8060S")},
+                 "supported", {"gpu": "Radeon 8060S", "vram_gb": "96"}, ["AMD Radeon 8060S"],
+                 id="ryzen-ai-max"),
+    pytest.param({"gpu": _amd(gfx="gfx90a", model="AMD Instinct MI210")}, "supported",
+                 {"gpu": "Instinct MI210", "vram_gb": "24"}, ["MI210"], id="mi210"),
+])
+def test_amd_verdict_rows(change, code, params, words):
+    """One row per check of the ROCm verdict, in its order of precedence (the first failing
+    check wins); every refusal ends with what runs instead. MUTATION: swap the order of
+    amd_rocm_missing and amd_gfx; refuse an unreadable ROCm version; remove gfx1151 from
+    ROCM_GFX - red."""
+    verdict = le.support(**{**_AMD_OK, **change})
+    assert (verdict.code, dict(verdict.params)) == (code, params), verdict
+    assert verdict.level == (le.SUPPORTED if code == "supported" else le.UNSUPPORTED)
+    for word in words:
+        assert word in verdict.reason, (word, verdict.reason)
+    if code != "supported":
+        assert verdict.reason.endswith("llama.cpp runs here."), verdict.reason
+    assert code in le.SUPPORT_CODES
+
+
+def test_amd_is_no_longer_a_later_code():
+    """The `amd` later verdict is gone from the codes and from every catalogue."""
+    import json
+    from pathlib import Path
+    assert "amd" not in le.SUPPORT_CODES
+    messages = Path(__file__).resolve().parents[1] / "web" / "messages"
+    for path in sorted(messages.glob("*.json")):
+        support = json.loads(path.read_bytes())["localEngine"]["support"]
+        assert "amd" not in support, path.name
+
+
+def test_amd_facts_are_detected_when_left_out(monkeypatch):
+    """Left out, the ROCm runtime, the Python 3.12 and the /dev/kfd access are read from this
+    host (gpu_detection.rocm_runtime, vllm_server.rocm_python, os.access)."""
+    import os
+
+    from vaf.core import gpu_detection, vllm_server
+    seen = []
+    monkeypatch.setattr(gpu_detection, "rocm_runtime", lambda: seen.append("rocm") or (True, "7.2.3"))
+    monkeypatch.setattr(vllm_server, "rocm_python", lambda: seen.append("py") or "/x/python3.12")
+    monkeypatch.setattr(os, "access", lambda path, mode: seen.append(path) or True)
+    verdict = le.support(gpu=_amd(), system="Linux", machine="x86_64", glibc="2.39")
+    assert verdict.code == "supported" and seen == ["rocm", "/dev/kfd", "py"]
+
+
+def test_support_class_amd_no_gpu_is_inconclusive(monkeypatch):
+    """"No GPU" while rocm-smi or amd-smi is installed is not kept: rocm-smi's probe reports a
+    timeout as no GPU, like nvidia-smi's. MUTATION: drop the rocm-smi/amd-smi clause - red."""
+    import shutil
+
+    import vaf.core.gpu_detection as gd
+    monkeypatch.setattr(gd, "get_primary_gpu", lambda: None)
+    for tool in ("rocm-smi", "amd-smi"):
+        monkeypatch.setattr(le, "_SUPPORT_CLASS", None)
+        monkeypatch.setattr(le, "_SUPPORT_RETRY_AT", 0.0)
+        monkeypatch.setattr(shutil, "which", lambda name, tool=tool: f"/usr/bin/{tool}"
+                            if name == tool else None)
+        assert le.support_class() is None, tool
+    monkeypatch.setattr(le, "_SUPPORT_CLASS", None)
+    monkeypatch.setattr(le, "_SUPPORT_RETRY_AT", 0.0)
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    assert le.support_class() == (le.UNSUPPORTED, "no_gpu")
+
+
+@pytest.mark.parametrize("build, gb", [("cuda", "2.8"), ("rocm", "3.3")])
+def test_download_size_follows_the_backend(vllm_box, monkeypatch, build, gb):
+    """The picker's size and the install question are the build's own lower bound.
+    MUTATION: state() reading the CUDA constant - red."""
+    from vaf.core import vllm_server as vs
+    monkeypatch.setattr(vs, "backend", lambda: build)
+    monkeypatch.setattr(vs, "local_snapshot", lambda repo: "")
+    monkeypatch.setattr(le, "default_vllm_model", lambda vram_gb=None: "Qwen/Qwen3-4B-AWQ")
+    vllm_box["version"] = None
+    assert f"{le.state()['vllm']['download_gb_at_least']:.1f}" == gb
+    result = le.apply("vllm")
+    assert (result.status, result.params["download_gb"]) == ("needs_install", gb)
+    assert f"about {gb} GB" in result.text

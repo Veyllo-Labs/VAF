@@ -40,9 +40,21 @@ Platform verdicts (``support()``), from the vLLM documentation:
 - NVIDIA driver below 580: unsupported, CUDA 13.x needs 580 or newer (NVIDIA's CUDA
   compatibility guide); VAF installs one recipe, the release's PyPI build, not a CUDA 12.9
   wheel from the release assets for older drivers.
-- AMD (ROCm 6.3+, selected Instinct and Radeon cards) and Intel GPUs (XPU, "basic model
-  inference and serving"): vLLM supports them with builds for Python 3.12 only, which is
-  not the Python VAF runs on; VAF does not manage them yet (later).
+- Linux on x86_64 with an AMD GPU whose architecture vLLM's ROCm build has kernels for
+  (``ROCM_GFX``: Instinct MI200/MI300/MI350, Radeon RX 7900 and RX 9000, Ryzen AI 300/MAX),
+  ROCm 7.2 or newer installed (``MIN_ROCM``; its HIP runtime ``libamdhip64.so.7``), this
+  account allowed to open /dev/kfd (the render and video groups), glibc 2.39 or newer
+  (``MIN_GLIBC_ROCM``) and a Python 3.12 (``vllm_server.rocm_python``): supported, the first
+  failing check names itself (``amd_unknown``, ``amd_gfx``, ``amd_rocm_missing``,
+  ``amd_rocm_old``, ``amd_no_access``, ``amd_glibc_old``, ``amd_python``). The ROCm build of
+  the pinned release comes from vLLM's versioned wheel index (cp312, x86_64,
+  manylinux_2_39 only) and does not bundle the ROCm runtime. VAF's own Python range does not
+  apply: the environment is made with that Python 3.12, and vLLM is never imported into
+  VAF's process. An unreadable ROCm version is not refused (the probe still catches it).
+  The architecture is read as it is: ``HSA_OVERRIDE_GFX_VERSION`` (the community trick for
+  gfx1030 and gfx1102 cards) is not honoured, those cards are refused.
+- Intel GPUs (XPU, "basic model inference and serving"): vLLM supports them with builds for
+  Python 3.12 only; VAF does not manage them yet (later).
 - Apple Silicon: the GPU path is vLLM-Metal, "a community-maintained hardware plugin" on
   MLX; the CPU build on macOS is experimental and built from source (later).
   https://docs.vllm.ai/en/latest/getting_started/installation/cpu/
@@ -78,9 +90,11 @@ Named boundaries, each deliberate:
   the model only through an API ``vision_provider``.
 - **Concurrency**: vLLM batches concurrent requests, but the local worker clamp
   (``max_parallel_local_workers``) stays as it is until that is measured.
-- **The install is hash-locked to one tree**: ``vllm==<PIN>`` and every package of its tree
-  from ``vllm_requirements.lock`` (pinned, SHA-256 of every file, wheels only), the same
-  practice as VAF's own ``requirements.lock``. Not checked beyond PyPI's own files: a release
+- **The install is hash-locked to one tree per build**: ``vllm==<PIN>`` and every package of
+  its tree from ``vllm_requirements.lock`` (pinned, SHA-256 of every file, wheels only), the
+  same practice as VAF's own ``requirements.lock``; on AMD ``vllm==<PIN>+rocm723`` from
+  ``vllm_requirements_rocm.lock``, with vLLM's ROCm index as an extra index on pip's command
+  line. Not checked beyond PyPI's own files: a release
   that was already malicious when the lock was generated is locked in with it; the lock
   only stops anything newer or different from being installed. FlashInfer's prebuilt
   kernels are deliberately not fetched (``vllm download-kernels`` would pip-install them
@@ -126,6 +140,20 @@ _GLIBC_EXAMPLES = {"x86_64": "Ubuntu 20.04, Debian 11 or RHEL 9 and later",
 MIN_DRIVER = (580, 0, 0)
 # The Python range of the pinned vLLM release (its requires_python: >=3.11,<3.15).
 PYTHON_RANGE = ((3, 11), (3, 15))
+
+# vLLM's ROCm build of the pinned release (vllm_server.ROCM_INDEX). The architectures its
+# kernels are built for: PYTORCH_ROCM_ARCH in docker/Dockerfile.rocm_base at v0.32.0
+# (Instinct MI200, MI300, MI350; Radeon RX 7900 and RX 9000; Ryzen AI 300 and MAX).
+ROCM_GFX = ("gfx90a", "gfx942", "gfx950", "gfx1100", "gfx1101", "gfx1200", "gfx1201",
+            "gfx1150", "gfx1151")
+# The build image is ROCm 7.2.3 and its extensions NEED libamdhip64.so.7 (readelf on the
+# wheels); 7.2.x patch releases are assumed ABI compatible, the probe judges the rest.
+MIN_ROCM = (7, 2)
+# vllm, torch, amd-aiter and flash-attn of the ROCm index are manylinux_2_39 wheels only.
+MIN_GLIBC_ROCM = (2, 39)
+# The ROCm index has cp312 wheels only: the environment is made with a Python 3.12, which
+# need not be the Python VAF runs on (vLLM is never imported into VAF's process).
+ROCM_PYTHON = (3, 12)
 
 # The default model of ``vllm_model = "auto"``: total VRAM below the threshold gets the
 # 4B (2.67 GB of weights), from it up the 8B (6.10 GB). Both AWQ 4-bit, Apache-2.0, not
@@ -227,12 +255,85 @@ def _parse_capability(text: str) -> Optional[Tuple[int, int]]:
 _DETECT = object()
 
 
+def _amd_support(gpu: Any, machine: str, glibc: Any, rocm: Any, python312: Any,
+                 kfd_access: Any) -> EngineSupport:
+    """The verdict for an AMD GPU on Linux (vLLM's ROCm build), first failing check wins."""
+    from vaf.core.vllm_server import PIN
+    if machine not in ("x86_64", "amd64"):
+        return EngineSupport(UNSUPPORTED, "vLLM has no build for this GPU. llama.cpp runs here.",
+                             "no_build_gpu")
+    gfx = str(getattr(gpu, "gfx_arch", "") or "").strip()
+    if not gfx:
+        return EngineSupport(UNSUPPORTED, "VAF could not read this AMD GPU's architecture (the "
+                                          "amdgpu driver's KFD topology in /sys). llama.cpp "
+                                          "runs here.", "amd_unknown")
+    if gfx not in ROCM_GFX:
+        return EngineSupport(UNSUPPORTED, f"vLLM's ROCm build has no kernels for {gfx}; it runs "
+                                          "on Instinct MI200, MI300 and MI350, Radeon RX 7900 "
+                                          "and RX 9000 and Ryzen AI 300 and MAX GPUs. llama.cpp "
+                                          "runs here.", "amd_gfx", {"gfx": gfx})
+    if rocm is _DETECT:
+        from vaf.core.gpu_detection import rocm_runtime
+        rocm = rocm_runtime()
+    found, version = rocm
+    floor = f"{MIN_ROCM[0]}.{MIN_ROCM[1]}"
+    if not found:
+        return EngineSupport(UNSUPPORTED, f"vLLM on AMD needs ROCm {floor} or newer installed "
+                                          "(libamdhip64.so.7 not found). Install ROCm and "
+                                          "restart VAF. llama.cpp runs here.", "amd_rocm_missing")
+    parsed = _parse_capability(".".join(str(version).split(".")[:2])) if version else None
+    if parsed is not None and parsed < MIN_ROCM:
+        # An unreadable version (a distribution install has no .info/version) is not refused:
+        # the install's probe still catches a ROCm that is too old.
+        return EngineSupport(UNSUPPORTED, f"vLLM {PIN}'s ROCm build needs ROCm {floor} or newer; "
+                                          f"this system has ROCm {version}. Update ROCm and "
+                                          "restart VAF. llama.cpp runs here.", "amd_rocm_old",
+                             {"rocm": str(version)})
+    if kfd_access is _DETECT:
+        kfd_access = os.access("/dev/kfd", os.R_OK | os.W_OK)
+    if not kfd_access:
+        return EngineSupport(UNSUPPORTED, "This account cannot open /dev/kfd: add it to the "
+                                          "render and video groups, log in again and restart "
+                                          "VAF. llama.cpp runs here.", "amd_no_access")
+    found_glibc = _parse_capability(str(glibc)) if glibc else None
+    if found_glibc is None or found_glibc < MIN_GLIBC_ROCM:
+        low = f"{MIN_GLIBC_ROCM[0]}.{MIN_GLIBC_ROCM[1]}"
+        # Unlike the NVIDIA check an unknown glibc is refused too: pip cannot install a
+        # manylinux_2_39 wheel on a system whose glibc it cannot read either.
+        this = (f"glibc {glibc}" if glibc else
+                "no glibc (musl, for example)" if glibc == "" else "a glibc VAF cannot read")
+        return EngineSupport(UNSUPPORTED, f"vLLM {PIN}'s ROCm build needs glibc {low} or newer; "
+                                          f"this system has {this}. A newer Linux runs it "
+                                          "(Ubuntu 24.04, Debian 13, Fedora 40 or RHEL 10 and "
+                                          "later). llama.cpp runs here.", "amd_glibc_old",
+                             {"glibc": str(glibc or ""), "min_glibc": low})
+    if python312 is _DETECT:
+        from vaf.core.vllm_server import rocm_python
+        python312 = rocm_python()
+    if not python312:
+        return EngineSupport(UNSUPPORTED, "vLLM's ROCm build needs Python 3.12: install it with "
+                                          "its venv module (on Ubuntu python3.12-venv) and "
+                                          "restart VAF. llama.cpp runs here.", "amd_python")
+    vram_gb = (int(getattr(gpu, "vram_mb", 0) or 0)) / 1024
+    model = str(getattr(gpu, "model", "") or "").strip() or "GPU"
+    name = model[4:] if model.startswith("AMD ") else model
+    return EngineSupport(SUPPORTED, f"vLLM runs here (AMD {name}, {vram_gb:.0f} GB). llama.cpp "
+                                    "stays the lighter choice for small GPUs and quick starts.",
+                         "supported", {"gpu": name, "vram_gb": f"{vram_gb:.0f}"})
+
+
 def support(gpu: Any = _DETECT, system: Optional[str] = None, machine: Optional[str] = None,
-            python: Optional[Tuple[int, int]] = None, glibc: Any = _DETECT) -> EngineSupport:
+            python: Optional[Tuple[int, int]] = None, glibc: Any = _DETECT, *,
+            rocm: Any = _DETECT, python312: Any = _DETECT,
+            kfd_access: Any = _DETECT) -> EngineSupport:
     """Whether VAF can run vLLM on this machine, with the sentence that says why (the
     platform table in the module docstring). ``gpu`` is a ``gpu_detection.GPUInfo`` or None
     for no GPU; left out, the primary GPU is detected. ``glibc`` as ``host_glibc`` gives it
-    ("2.39", "" for none, None for unknown); left out, this host's is read."""
+    ("2.39", "" for none, None for unknown); left out, this host's is read. The AMD checks
+    read three more facts, each detected when left out: ``rocm`` as
+    ``gpu_detection.rocm_runtime`` gives it ((found, version)), ``python312`` the interpreter
+    ``vllm_server.rocm_python`` finds ("" for none) and ``kfd_access`` whether this account
+    may open /dev/kfd."""
     import platform as _platform
     system = system if system is not None else _platform.system()
     machine = (machine if machine is not None else _platform.machine()).lower()
@@ -265,9 +366,7 @@ def support(gpu: Any = _DETECT, system: Optional[str] = None, machine: Optional[
                                           "quantization); llama.cpp is the better engine for "
                                           "a CPU.", "no_gpu")
     if vendor == "amd":
-        return EngineSupport(LATER, "vLLM supports some AMD GPUs through ROCm 6.3+, with "
-                                    "Python 3.12 builds only; VAF does not manage that yet. "
-                                    "llama.cpp (Vulkan) runs here.", "amd")
+        return _amd_support(gpu, machine, glibc, rocm, python312, kfd_access)
     if vendor == "intel":
         return EngineSupport(LATER, "vLLM's Intel GPU support is basic and needs Python 3.12; "
                                     "VAF does not manage it yet. llama.cpp runs here.", "intel")
@@ -364,7 +463,9 @@ def support_class() -> Optional[Tuple[str, str]]:
         except Exception:
             return None
         import shutil
-        if verdict.code == "no_gpu" and shutil.which("nvidia-smi"):
+        if verdict.code == "no_gpu" and any(shutil.which(tool) for tool in
+                                            ("nvidia-smi", "rocm-smi", "amd-smi")):
+            # rocm-smi swallows a timeout the same way (gpu_detection.detect_amd_gpu).
             return None
         _SUPPORT_CLASS = (str(verdict.level), str(verdict.code))
         return _SUPPORT_CLASS
@@ -373,8 +474,10 @@ def support_class() -> Optional[Tuple[str, str]]:
 
 
 # Every code ``support`` gives, for the catalogues (a guard test reads this tuple).
-SUPPORT_CODES = ("supported", "windows", "apple", "no_build", "no_build_gpu", "no_gpu", "amd",
-                 "intel", "nvidia_unknown", "nvidia_too_old", "nvidia_driver_old", "glibc_old", "python")
+SUPPORT_CODES = ("supported", "windows", "apple", "no_build", "no_build_gpu", "no_gpu",
+                 "intel", "nvidia_unknown", "nvidia_too_old", "nvidia_driver_old", "glibc_old", "python",
+                 "amd_unknown", "amd_gfx", "amd_rocm_missing", "amd_rocm_old", "amd_no_access",
+                 "amd_glibc_old", "amd_python")
 
 
 def default_vllm_model(vram_gb: Optional[float] = None) -> str:
@@ -654,7 +757,8 @@ class EngineSwitch:
 # support codes (a refusal on the verdict carries the verdict's own code), for the catalogues.
 SWITCH_CODES = ("unknown_engine", "bad_repo", "profile_api", "parser_unknown", "parser_bad",
                 "busy", "needs_install", "switched_vllm", "unchanged_vllm", "switched_llama",
-                "unchanged_llama", "install_failed", "cuda_probe_failed", "vllm_libs_failed",
+                "unchanged_llama", "install_failed", "cuda_probe_failed", "rocm_probe_failed",
+                "vllm_libs_failed",
                 "download_failed",
                 "download_cancelled", "llama_stop_failed", "no_fit", "vllm_stop_failed",
                 "engine_active", "not_installed", "uninstall_failed", "removed")
@@ -890,7 +994,7 @@ def _apply_vllm(setting, repo, install, progress, output, say) -> EngineSwitch:
     from vaf.core.config import Config
     missing = needs_install()
     if missing and not install:
-        gb = f"{vllm_server.DOWNLOAD_GB_AT_LEAST:.1f}"
+        gb = f"{vllm_server.download_gb_at_least():.1f}"
         old = vllm_server.installed_version()
         # An environment that exists but cannot start is replaced, and the question says so.
         replaces = (f"vLLM {old} in {vllm_server.venv_dir()} was set up by an earlier VAF and "
@@ -915,8 +1019,8 @@ def _apply_vllm(setting, repo, install, progress, output, say) -> EngineSwitch:
             reason = vllm_server.install(log=lambda text: say(text, "info"), output=output,
                                          on_step=steps.begin, outcome=probe)
             if reason:
-                code = {"libs": "vllm_libs_failed",
-                        "no_cuda": "cuda_probe_failed"}.get(probe.get("probe", ""),
+                code = {"libs": "vllm_libs_failed", "no_cuda": "cuda_probe_failed",
+                        "no_rocm": "rocm_probe_failed"}.get(probe.get("probe", ""),
                                                             "install_failed")
                 return failed(code, reason, "The local engine is unchanged.")
             say(f"vLLM {vllm_server.installed_version() or vllm_server.PIN} is installed.",
@@ -1075,7 +1179,7 @@ def state(model: Optional[str] = None) -> Dict[str, Any]:
             "pin": vllm_server.PIN,
             "installed_version": installed,
             "needs_install": needs_install(),
-            "download_gb_at_least": vllm_server.DOWNLOAD_GB_AT_LEAST,
+            "download_gb_at_least": vllm_server.download_gb_at_least(),
             "model_setting": setting,
             "model": resolved,
             "auto_model": auto_model,

@@ -320,6 +320,31 @@ def test_cuda_facts_and_size_follow_the_core(locale):
 def test_libs_failure_gets_the_log_hint():
     body = _src(_SECTION)
     assert "r.code === 'vllm_libs_failed') lines.push(t('logHint'" in body
+    # The ROCm probe's failure points at the same log. MUTATION: remove it - red.
+    hint = body[body.index("lines.push(t('logHint'") - 200:body.index("lines.push(t('logHint'")]
+    assert "r.code === 'rocm_probe_failed'" in hint and "r.code === 'cuda_probe_failed'" in hint
+
+
+@pytest.mark.parametrize("locale", _LOCALES)
+def test_rocm_facts_follow_the_core(locale):
+    """The AMD sentences name the core's floors; the wizard renders support codes without
+    params, so none but `supported` carries a placeholder; the shared failures name no NVIDIA
+    tool. MUTATION: leave one locale without amd_python; put {gfx} into support.amd_gfx - red."""
+    cat = json.loads((_MESSAGES / f"{locale}.json").read_bytes())["localEngine"]
+    floor = f"{le.MIN_GLIBC_ROCM[0]}.{le.MIN_GLIBC_ROCM[1]}"
+    assert floor in cat["support"]["amd_glibc_old"], locale
+    rocm = f"{le.MIN_ROCM[0]}.{le.MIN_ROCM[1]}"
+    for key in ("amd_rocm_missing", "amd_rocm_old"):
+        assert f"ROCm {rocm}" in cat["support"][key], (locale, key)
+    assert "3.12" in cat["support"]["amd_python"] and "python3.12-venv" in cat["support"]["amd_python"]
+    assert "/dev/kfd" in cat["support"]["amd_no_access"]
+    for word in ("HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES", f"ROCm {rocm}"):
+        assert word in cat["result"]["rocm_probe_failed"], (locale, word)
+    for code, sentence in cat["support"].items():
+        if code != "supported":
+            assert "{" not in sentence, (locale, code)
+    assert "nvidia-smi" not in cat["fit"]["no_gpu_memory"], locale
+    assert "CUDA" not in cat["result"]["vllm_libs_failed"], locale
 
 
 def test_an_outdated_environment_is_shown_as_such():

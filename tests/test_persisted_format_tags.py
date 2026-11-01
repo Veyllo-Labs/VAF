@@ -128,6 +128,8 @@ def test_format_identities_are_pinned_literals():
     assert JAR_FORMAT == "browserjar-1-6e0d93"
     from vaf.core.vllm_server import RECIPE_FORMAT
     assert RECIPE_FORMAT == "vllmenv-1-18dfb7"
+    from vaf.core.vllm_server import RECIPE_FORMAT_ROCM
+    assert RECIPE_FORMAT_ROCM == "vllmrocm-1-a69536"
 
 
 def test_chain_with_versioned_seed_verifies():

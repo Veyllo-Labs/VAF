@@ -2779,7 +2779,13 @@
       "no_build": "vLLM ไม่มีบิลด์สำหรับเครื่องนี้",
       "no_build_gpu": "vLLM ไม่มีบิลด์สำหรับ GPU นี้",
       "no_gpu": "ไม่พบ GPU: แบ็กเอนด์ CPU ของ vLLM มีความสามารถพื้นฐาน และ llama.cpp เป็นเอนจินที่เหมาะกับ CPU มากกว่า",
-      "amd": "vLLM รองรับ AMD GPU บางรุ่นผ่าน ROCm และมีเฉพาะบิลด์ Python 3.12 เท่านั้น VAF ยังไม่จัดการให้",
+      "amd_unknown": "VAF อ่านสถาปัตยกรรมของ AMD GPU นี้ไม่ได้ (KFD topology ของไดรเวอร์ amdgpu ใน /sys)",
+      "amd_gfx": "บิลด์ ROCm ของ vLLM ไม่มีเคอร์เนลสำหรับ AMD GPU นี้ โดยรองรับ Instinct MI200, MI300 และ MI350, Radeon RX 7900 และ RX 9000 รวมถึง Ryzen AI 300 และ MAX",
+      "amd_rocm_missing": "vLLM บน AMD ต้องใช้ ROCm 7.2 ขึ้นไป แต่เครื่องนี้ยังไม่ได้ติดตั้ง ให้ติดตั้ง ROCm แล้วรีสตาร์ท VAF",
+      "amd_rocm_old": "vLLM บน AMD ต้องใช้ ROCm 7.2 ขึ้นไป แต่เวอร์ชันที่ติดตั้งไว้เก่ากว่านั้น ให้อัปเดต ROCm แล้วรีสตาร์ท VAF",
+      "amd_no_access": "บัญชีนี้ใช้ GPU ผ่าน /dev/kfd ไม่ได้ ให้เพิ่มบัญชีเข้ากลุ่ม render และ video ล็อกอินใหม่ แล้วรีสตาร์ท VAF",
+      "amd_glibc_old": "vLLM บน AMD ต้องใช้ Linux ที่ใหม่กว่านี้ (glibc 2.39 ขึ้นไป เช่น Ubuntu 24.04, Debian 13 หรือ Fedora 40) ให้อัปเดตระบบเพื่อใช้ vLLM ส่วน llama.cpp ใช้งานได้ที่นี่",
+      "amd_python": "vLLM บน AMD ต้องใช้ Python 3.12 พร้อมโมดูล venv (บน Ubuntu คือแพ็กเกจ python3.12-venv) ให้ติดตั้งแล้วรีสตาร์ท VAF",
       "intel": "vLLM รองรับ Intel GPU ในระดับพื้นฐานและต้องใช้ Python 3.12 VAF ยังไม่จัดการให้",
       "nvidia_unknown": "VAF อ่านค่า compute capability ของ GPU นี้ไม่ได้ ไดรเวอร์ NVIDIA อาจเก่าเกินไปสำหรับ vLLM ให้อัปเดตไดรเวอร์ NVIDIA แล้วเริ่ม VAF ใหม่",
       "nvidia_too_old": "vLLM ต้องใช้ NVIDIA GPU ที่มี compute capability 7.5 ขึ้นไป (Turing ขึ้นไป) แต่ GPU นี้เก่ากว่านั้น",
@@ -2852,7 +2858,8 @@
       "unchanged_llama": "เอนจินในเครื่องยังเป็น llama.cpp",
       "install_failed": "ติดตั้ง vLLM ไม่สำเร็จ เอนจินในเครื่องไม่เปลี่ยนแปลง",
       "cuda_probe_failed": "ติดตั้ง vLLM แล้ว แต่ PyTorch มองไม่เห็น GPU ที่รองรับ CUDA vLLM ต้องใช้ไดรเวอร์ NVIDIA ที่รองรับ CUDA 13.0 (เวอร์ชัน 580 ขึ้นไป) ให้อัปเดตไดรเวอร์ NVIDIA แล้วลองอีกครั้ง และตรวจสอบว่า CUDA_VISIBLE_DEVICES ไม่ได้ซ่อน GPU ไว้ เอนจินในเครื่องไม่เปลี่ยนแปลง",
-      "vllm_libs_failed": "ติดตั้ง vLLM แล้ว แต่โหลดไลบรารี CUDA ในสภาพแวดล้อมของ vLLM ไม่ได้ จึงเริ่มทำงานไม่ได้ ให้เลือก vLLM อีกครั้งเพื่อสร้างสภาพแวดล้อมใหม่ ระหว่างนั้น llama.cpp ยังทำงานต่อ หากยังล้มเหลว ดูสาเหตุได้ในบันทึกด้านล่าง",
+      "rocm_probe_failed": "ติดตั้ง vLLM แล้ว แต่ PyTorch มองไม่เห็น GPU ที่รองรับ ROCm vLLM บน AMD ต้องใช้ ROCm 7.2 ขึ้นไป และบัญชีนี้ต้องอยู่ในกลุ่ม render และ video ตรวจสอบว่า HIP_VISIBLE_DEVICES, ROCR_VISIBLE_DEVICES และ CUDA_VISIBLE_DEVICES ไม่ได้ซ่อน GPU ไว้ แล้วลองอีกครั้ง เอนจินในเครื่องไม่เปลี่ยนแปลง",
+      "vllm_libs_failed": "ติดตั้ง vLLM แล้ว แต่โหลดไลบรารี GPU ในสภาพแวดล้อมของ vLLM ไม่ได้ จึงเริ่มทำงานไม่ได้ ให้เลือก vLLM อีกครั้งเพื่อสร้างสภาพแวดล้อมใหม่ ระหว่างนั้น llama.cpp ยังทำงานต่อ หากยังล้มเหลว ดูสาเหตุได้ในบันทึกด้านล่าง",
       "download_failed": "ดาวน์โหลดโมเดล {model} ไม่สำเร็จ เอนจินในเครื่องไม่เปลี่ยนแปลง",
       "download_cancelled": "ยกเลิกการดาวน์โหลดแล้ว เอนจินในเครื่องไม่เปลี่ยนแปลง",
       "llama_stop_failed": "เซิร์ฟเวอร์ llama.cpp ไม่หยุดทำงาน เอนจินในเครื่องไม่เปลี่ยนแปลง",
@@ -2868,7 +2875,7 @@
       "too_big": "โมเดลนี้ต้องใช้หน่วยความจำ GPU ประมาณ {need} GB แต่ vLLM ได้ใช้เพียง {budget} GB ที่นี่ ให้เลือกโมเดลที่เล็กลงหรือคอนเท็กซ์ที่เล็กลง",
       "share_above_free": "โปรแกรมอื่นกำลังใช้ GPU อยู่ vLLM ต้องใช้ {budget} GB แต่มีที่ว่างเพียง {free} GB ให้ปิดโปรแกรมเหล่านั้นแล้วลองอีกครั้ง",
       "no_shape": "config.json ของโมเดลไม่ได้ระบุโครงสร้างของโมเดล",
-      "no_gpu_memory": "nvidia-smi ไม่รายงานหน่วยความจำของ GPU"
+      "no_gpu_memory": "ไดรเวอร์ GPU ไม่รายงานหน่วยความจำของ GPU"
     },
     "conflict": {
       "unsupported": "เลือก vLLM ไว้ แต่เครื่องนี้รันไม่ได้",

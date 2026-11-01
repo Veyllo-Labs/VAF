@@ -2779,7 +2779,13 @@
       "no_build": "このマシン向けのvLLMビルドはありません。",
       "no_build_gpu": "このGPU向けのvLLMビルドはありません。",
       "no_gpu": "GPUが見つかりません。vLLMのCPUバックエンドは基本的な機能にとどまり、CPUではllama.cppのほうが適しています。",
-      "amd": "vLLMはROCm経由で一部のAMD GPUに対応しますが、Python 3.12のビルドのみです。VAFはまだ管理に対応していません。",
+      "amd_unknown": "このAMD GPUのアーキテクチャを読み取れませんでした（/sysにあるamdgpuドライバーのKFDトポロジー）。",
+      "amd_gfx": "vLLMのROCmビルドにはこのAMD GPU用のカーネルがありません。対応するのはInstinct MI200、MI300、MI350、Radeon RX 7900とRX 9000、Ryzen AI 300とMAXです。",
+      "amd_rocm_missing": "AMDでvLLMを使うにはROCm 7.2以降が必要ですが、インストールされていません。ROCmをインストールしてVAFを再起動してください。",
+      "amd_rocm_old": "AMDでvLLMを使うにはROCm 7.2以降が必要ですが、インストールされているものはそれより古いバージョンです。ROCmを更新してVAFを再起動してください。",
+      "amd_no_access": "このアカウントは/dev/kfd経由でGPUを使えません。アカウントをrenderグループとvideoグループに追加し、ログインし直してVAFを再起動してください。",
+      "amd_glibc_old": "AMDでvLLMを使うには新しいLinuxが必要です（glibc 2.39以降。例: Ubuntu 24.04、Debian 13、Fedora 40）。vLLMを使うにはシステムを更新してください。llama.cppはここで動作します。",
+      "amd_python": "AMDでvLLMを使うにはvenvモジュール付きのPython 3.12が必要です（Ubuntuではpython3.12-venvパッケージ）。インストールしてVAFを再起動してください。",
       "intel": "vLLMのIntel GPU対応は基本的なもので、Python 3.12が必要です。VAFはまだ管理に対応していません。",
       "nvidia_unknown": "VAFはこのGPUのコンピュートキャパビリティを読み取れませんでした。NVIDIAドライバーがvLLMには古い可能性があります。NVIDIAドライバーを更新して、VAFを再起動してください。",
       "nvidia_too_old": "vLLMにはコンピュートキャパビリティ7.5以上のNVIDIA GPU（Turing以降）が必要です。このGPUはそれより古いものです。",
@@ -2852,7 +2858,8 @@
       "unchanged_llama": "ローカルエンジンはllama.cppのままです。",
       "install_failed": "vLLMのインストールに失敗しました。ローカルエンジンは変更されていません。",
       "cuda_probe_failed": "vLLMはインストールされましたが、PyTorchがCUDA対応のGPUを認識していません。vLLMにはCUDA 13.0対応のNVIDIAドライバー（バージョン580以降）が必要です。NVIDIAドライバーを更新してもう一度お試しください。また、CUDA_VISIBLE_DEVICESでGPUが隠されていないことを確認してください。ローカルエンジンは変更されていません。",
-      "vllm_libs_failed": "vLLMはインストールされましたが、その環境でCUDAライブラリを読み込めないため起動できません。もう一度vLLMを選ぶと環境が作り直されます。その間もllama.cppは動作します。再び失敗した場合は、下のログに理由が記録されています。",
+      "rocm_probe_failed": "vLLMはインストールされましたが、PyTorchがROCm対応のGPUを認識していません。AMDでvLLMを使うにはROCm 7.2以降と、このアカウントがrenderグループとvideoグループに属していることが必要です。HIP_VISIBLE_DEVICES、ROCR_VISIBLE_DEVICES、CUDA_VISIBLE_DEVICESでGPUが隠されていないことを確認して、もう一度お試しください。ローカルエンジンは変更されていません。",
+      "vllm_libs_failed": "vLLMはインストールされましたが、その環境でGPUライブラリを読み込めないため起動できません。もう一度vLLMを選ぶと環境が作り直されます。その間もllama.cppは動作します。再び失敗した場合は、下のログに理由が記録されています。",
       "download_failed": "モデル{model}をダウンロードできませんでした。ローカルエンジンは変更されていません。",
       "download_cancelled": "ダウンロードをキャンセルしました。ローカルエンジンは変更されていません。",
       "llama_stop_failed": "llama.cppサーバーが停止しませんでした。ローカルエンジンは変更されていません。",
@@ -2868,7 +2875,7 @@
       "too_big": "このモデルには約{need} GBのGPUメモリが必要ですが、ここでvLLMが使えるのは{budget} GBです。より小さいモデルか、より小さいコンテキストを選んでください。",
       "share_above_free": "ほかのプログラムがGPUを使用しています。vLLMには{budget} GB必要ですが、空きは{free} GBしかありません。それらを閉じてからもう一度お試しください。",
       "no_shape": "モデルのconfig.jsonに構造が記載されていません。",
-      "no_gpu_memory": "nvidia-smiがGPUのメモリを報告しません。"
+      "no_gpu_memory": "GPUドライバーがGPUのメモリを報告しません。"
     },
     "conflict": {
       "unsupported": "vLLMが選択されていますが、このマシンでは実行できません。",

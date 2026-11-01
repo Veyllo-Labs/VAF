@@ -1,0 +1,15 @@
+# The input of vllm_requirements_rocm.lock, the hash-locked tree of the managed vLLM
+# environment on AMD GPUs (vaf/core/vllm_server.py installs the lock with --require-hashes
+# and --extra-index-url ROCM_INDEX, never this file).
+# vLLM's ROCm build is cp312, x86_64 and manylinux_2_39 only, and pip-compile resolves only
+# for the interpreter it runs on, so this lock is generated with uv, which resolves for a
+# foreign target. Regenerate from the repository root in a throwaway venv with uv==0.13.6
+# (docs/setup/RELEASING.md):
+#   uv pip compile vaf/core/vllm_requirements_rocm.in --generate-hashes \
+#     --python-version 3.12 --python-platform x86_64-manylinux_2_39 \
+#     --extra-index-url https://wheels.vllm.ai/rocm/0.32.0/rocm723 --no-build \
+#     -o vaf/core/vllm_requirements_rocm.lock
+# then run scripts/check_vllm_lock.py vaf/core/vllm_requirements_rocm.lock.
+# The index URL stays on the command line: pip honours index options inside a requirements
+# file, and tests/test_vllm_lock.py refuses any in a lock.
+vllm==0.32.0+rocm723

@@ -2779,7 +2779,13 @@
       "no_build": "没有适用于这台设备的 vLLM 构建版本。",
       "no_build_gpu": "没有适用于这块 GPU 的 vLLM 构建版本。",
       "no_gpu": "未找到 GPU：vLLM 的 CPU 后端功能有限，CPU 上更适合用 llama.cpp。",
-      "amd": "vLLM 通过 ROCm 支持部分 AMD GPU，且仅有 Python 3.12 的构建；VAF 暂不管理。",
+      "amd_unknown": "VAF 无法读取这块 AMD GPU 的架构（/sys 中 amdgpu 驱动的 KFD 拓扑）。",
+      "amd_gfx": "vLLM 的 ROCm 构建没有适用于这块 AMD GPU 的内核；它支持 Instinct MI200、MI300 和 MI350，Radeon RX 7900 和 RX 9000，以及 Ryzen AI 300 和 MAX。",
+      "amd_rocm_missing": "在 AMD 上运行 vLLM 需要 ROCm 7.2 或更高版本，但这里没有安装。请安装 ROCm 后重启 VAF。",
+      "amd_rocm_old": "在 AMD 上运行 vLLM 需要 ROCm 7.2 或更高版本，而已安装的版本较旧。请更新 ROCm 后重启 VAF。",
+      "amd_no_access": "此账户无法通过 /dev/kfd 使用 GPU：请将其加入 render 和 video 用户组，重新登录后重启 VAF。",
+      "amd_glibc_old": "在 AMD 上运行 vLLM 需要更新的 Linux（glibc 2.39 或更高；例如 Ubuntu 24.04、Debian 13 或 Fedora 40）。请更新系统以使用 vLLM；llama.cpp 可在此运行。",
+      "amd_python": "在 AMD 上运行 vLLM 需要带 venv 模块的 Python 3.12（Ubuntu 上为 python3.12-venv 软件包）。请安装后重启 VAF。",
       "intel": "vLLM 对 Intel GPU 的支持比较基础，并且需要 Python 3.12；VAF 暂不管理。",
       "nvidia_unknown": "VAF 无法读取这块 GPU 的计算能力，NVIDIA 驱动对 vLLM 来说可能过旧。请更新 NVIDIA 驱动并重启 VAF。",
       "nvidia_too_old": "vLLM 需要计算能力为 7.5 或更高的 NVIDIA GPU（Turing 及更新）；这块 GPU 更旧。",
@@ -2852,7 +2858,8 @@
       "unchanged_llama": "本地引擎仍是 llama.cpp。",
       "install_failed": "vLLM 安装失败；本地引擎保持不变。",
       "cuda_probe_failed": "vLLM 已安装，但 PyTorch 看不到支持 CUDA 的 GPU。vLLM 需要支持 CUDA 13.0 的 NVIDIA 驱动（580 或更高版本）：请更新 NVIDIA 驱动后重试，并确认 CUDA_VISIBLE_DEVICES 没有隐藏 GPU。本地引擎保持不变。",
-      "vllm_libs_failed": "vLLM 已安装，但其环境中的 CUDA 库无法加载，因此无法启动。请再次选择 vLLM 以重建环境；在此期间 llama.cpp 会继续运行。如果再次失败，下方日志中会写明原因。",
+      "rocm_probe_failed": "vLLM 已安装，但 PyTorch 看不到支持 ROCm 的 GPU。在 AMD 上运行 vLLM 需要 ROCm 7.2 或更高版本，并且此账户需在 render 和 video 用户组中；请确认 HIP_VISIBLE_DEVICES、ROCR_VISIBLE_DEVICES 和 CUDA_VISIBLE_DEVICES 没有隐藏 GPU，然后重试。本地引擎保持不变。",
+      "vllm_libs_failed": "vLLM 已安装，但其环境中的 GPU 库无法加载，因此无法启动。请再次选择 vLLM 以重建环境；在此期间 llama.cpp 会继续运行。如果再次失败，下方日志中会写明原因。",
       "download_failed": "无法下载模型 {model}；本地引擎保持不变。",
       "download_cancelled": "下载已取消；本地引擎保持不变。",
       "llama_stop_failed": "llama.cpp 服务器没有停止；本地引擎保持不变。",
@@ -2868,7 +2875,7 @@
       "too_big": "该模型约需 {need} GB 的 GPU 显存，但 vLLM 在这里只能使用 {budget} GB。请选择更小的模型或更小的上下文。",
       "share_above_free": "其他程序正在占用 GPU：vLLM 需要 {budget} GB，但只有 {free} GB 空闲。请关闭这些程序后重试。",
       "no_shape": "模型的 config.json 没有说明其结构。",
-      "no_gpu_memory": "nvidia-smi 没有报告 GPU 的显存。"
+      "no_gpu_memory": "GPU 驱动没有报告 GPU 的显存。"
     },
     "conflict": {
       "unsupported": "已选择 vLLM，但这台设备无法运行它。",

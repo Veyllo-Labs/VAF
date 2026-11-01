@@ -194,9 +194,10 @@ vaf = [
     # The llama.cpp build the release ships with and the digest of every asset the
     # launcher may download (scripts/pin_llama_cpp.py writes it).
     "core/llama_server_pin.json",
-    # The hash-locked tree of the managed vLLM environment (vllm_server.LOCK_PATH): without
-    # it the vLLM install refuses.
+    # The hash-locked trees of the managed vLLM environment (vllm_server.LOCK_PATH and, for
+    # AMD GPUs, LOCK_PATH_ROCM): without them the vLLM install refuses.
     "core/vllm_requirements.lock",
+    "core/vllm_requirements_rocm.lock",
     # The coder's project scaffolds (TemplateManager reads them from disk).
     "tools/coder_templates/**/*",
     # Seeded tool-usage knowledge cards for the learning system.

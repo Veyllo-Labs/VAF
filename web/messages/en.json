@@ -2779,7 +2779,13 @@
       "no_build": "vLLM has no build for this machine.",
       "no_build_gpu": "vLLM has no build for this GPU.",
       "no_gpu": "No GPU found: vLLM's CPU backend is basic, and llama.cpp is the better engine for a CPU.",
-      "amd": "vLLM supports some AMD GPUs through ROCm, with Python 3.12 builds only; VAF does not manage that yet.",
+      "amd_unknown": "VAF could not read this AMD GPU's architecture (the amdgpu driver's KFD topology in /sys).",
+      "amd_gfx": "vLLM's ROCm build has no kernels for this AMD GPU; it runs on Instinct MI200, MI300 and MI350, Radeon RX 7900 and RX 9000 and Ryzen AI 300 and MAX.",
+      "amd_rocm_missing": "vLLM on AMD needs ROCm 7.2 or newer, and it is not installed here. Install ROCm and restart VAF.",
+      "amd_rocm_old": "vLLM on AMD needs ROCm 7.2 or newer, and this one is older. Update ROCm and restart VAF.",
+      "amd_no_access": "This account cannot use the GPU through /dev/kfd: add it to the render and video groups, log in again and restart VAF.",
+      "amd_glibc_old": "vLLM on AMD needs a newer Linux (glibc 2.39 or newer; for example Ubuntu 24.04, Debian 13 or Fedora 40). Update the system to use vLLM; llama.cpp runs here.",
+      "amd_python": "vLLM on AMD needs Python 3.12 with its venv module (on Ubuntu the package python3.12-venv). Install it and restart VAF.",
       "intel": "vLLM's support for Intel GPUs is basic and needs Python 3.12; VAF does not manage it yet.",
       "nvidia_unknown": "VAF could not read this GPU's compute capability; the NVIDIA driver may be too old for vLLM. Update the NVIDIA driver and restart VAF.",
       "nvidia_too_old": "vLLM needs an NVIDIA GPU with compute capability 7.5 or newer (Turing or later); this one is older.",
@@ -2852,7 +2858,8 @@
       "unchanged_llama": "llama.cpp stays the local engine.",
       "install_failed": "The vLLM install failed; the local engine is unchanged.",
       "cuda_probe_failed": "vLLM was installed, but PyTorch sees no CUDA GPU. vLLM needs an NVIDIA driver for CUDA 13.0 (version 580 or newer): update the NVIDIA driver and try again, and make sure CUDA_VISIBLE_DEVICES does not hide the GPU. The local engine is unchanged.",
-      "vllm_libs_failed": "vLLM was installed, but its CUDA libraries do not load in its environment, so it cannot start. Choose vLLM again to rebuild the environment; llama.cpp keeps running meanwhile. If it fails again, the log below says why.",
+      "rocm_probe_failed": "vLLM was installed, but PyTorch sees no ROCm GPU. vLLM on AMD needs ROCm 7.2 or newer and this account in the render and video groups; make sure HIP_VISIBLE_DEVICES, ROCR_VISIBLE_DEVICES and CUDA_VISIBLE_DEVICES do not hide the GPU, then try again. The local engine is unchanged.",
+      "vllm_libs_failed": "vLLM was installed, but its GPU libraries do not load in its environment, so it cannot start. Choose vLLM again to rebuild the environment; llama.cpp keeps running meanwhile. If it fails again, the log below says why.",
       "download_failed": "The model {model} could not be downloaded; the local engine is unchanged.",
       "download_cancelled": "The download was cancelled; the local engine is unchanged.",
       "llama_stop_failed": "The llama.cpp server did not stop; the local engine is unchanged.",
@@ -2868,7 +2875,7 @@
       "too_big": "The model needs about {need} GB of GPU memory, but vLLM gets {budget} GB here. Choose a smaller model or a smaller context.",
       "share_above_free": "Other programs use the GPU: vLLM would need {budget} GB, but only {free} GB are free. Close them and try again.",
       "no_shape": "The model's config.json does not say its shape.",
-      "no_gpu_memory": "nvidia-smi does not report the GPU's memory."
+      "no_gpu_memory": "The GPU driver does not report the GPU's memory."
     },
     "conflict": {
       "unsupported": "vLLM is chosen, but this machine cannot run it.",

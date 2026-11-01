@@ -39,7 +39,14 @@ MUTATIONS, each turns the named test red:
 - start() checking only `is_installed()` -> test_start_refuses_an_environment_of_the_earlier_recipe;
 - drop `--require-hashes` or `--only-binary=:all:` from the pip step -> test_install_steps;
 - drop the lock check before the uninstall -> test_a_missing_lock_refuses_before_anything_changes;
-- run `vllm download-kernels` again -> test_install_steps.
+- run `vllm download-kernels` again -> test_install_steps;
+- drop `--extra-index-url` from the ROCm pip step, write the CUDA tag on ROCm, or make the
+  ROCm environment with sys.executable -> test_rocm_install_steps;
+- let recipe_current accept either build's tag -> test_a_cuda_environment_is_rebuilt_on_rocm;
+- drop `vllm._rocm_C` from the ROCm probe -> test_the_rocm_probe_maps_its_causes;
+- map the ROCm probe's exit 3 to no_cuda -> test_a_failed_rocm_probe_names_its_cause;
+- read the GPU memory from nvidia-smi on ROCm -> test_rocm_fit_reads_amd_memory;
+- keep the no-GPU answer of backend() for the process -> test_the_backend_follows_the_gpu.
 """
 import json
 import os
@@ -69,6 +76,13 @@ def config(monkeypatch):
     monkeypatch.setattr(Config, "set", staticmethod(lambda key, value: values.__setitem__(key, value)))
     monkeypatch.setattr(Config, "load", staticmethod(lambda: dict(values)))
     return values
+
+
+@pytest.fixture(autouse=True)
+def cuda_build(monkeypatch):
+    """The NVIDIA build unless a test says otherwise: the build follows this machine's GPU,
+    and the tests must not."""
+    monkeypatch.setattr(vs, "backend", lambda: vs.CUDA)
 
 
 @pytest.fixture
@@ -306,7 +320,10 @@ def _supported(monkeypatch):
     monkeypatch.setattr(le, "support", lambda **kw: le.EngineSupport(le.SUPPORTED, "ok"))
 
 
-def _fake_installing_run(home, calls, pip_code=0, probe_code=0, envs=None, records=None):
+def _fake_installing_run(home, calls, pip_code=0, probe_code=0, envs=None, records=None,
+                         version=None):
+    version = version or vs.PIN
+
     def run(argv, env=None, **kw):
         assert isinstance(argv, list) and "shell" not in kw
         calls.append(argv)
@@ -317,9 +334,9 @@ def _fake_installing_run(home, calls, pip_code=0, probe_code=0, envs=None, recor
         if argv[1:3] == ["-m", "venv"]:
             vs.venv_python().parent.mkdir(parents=True, exist_ok=True)
         elif "pip" in argv and pip_code == 0:
-            site = vs.venv_dir() / "lib" / "python3.13" / "site-packages" / f"vllm-{vs.PIN}.dist-info"
+            site = vs.venv_dir() / "lib" / "python3.13" / "site-packages" / f"vllm-{version}.dist-info"
             site.mkdir(parents=True)
-            (site / "METADATA").write_text(f"Name: vllm\nVersion: {vs.PIN}\n", encoding="utf-8")
+            (site / "METADATA").write_text(f"Name: vllm\nVersion: {version}\n", encoding="utf-8")
             vs.vllm_exe().write_text("#!/bin/sh\n", encoding="utf-8")
         code = pip_code if "pip" in argv else (probe_code if "-c" in argv else 0)
         return subprocess.CompletedProcess(argv, code)
@@ -789,3 +806,193 @@ def test_ensure_model_reports_only_its_own_cancel(config, monkeypatch, home, rai
     outcome = {}
     assert vs.ensure_model("Qwen/Qwen3-4B-AWQ", outcome=outcome) == ""
     assert outcome.get("cancelled", False) is cancelled
+
+
+# ── the ROCm build (AMD) ─────────────────────────────────────────────────────────
+
+ROCM_VERSION = f"{vs.PIN}+{vs.ROCM_VARIANT}"
+
+
+@pytest.fixture
+def rocm(monkeypatch):
+    """This machine's build is ROCm, with a Python 3.12 of its own."""
+    monkeypatch.setattr(vs, "backend", lambda: vs.ROCM)
+    monkeypatch.setattr(vs, "rocm_python", lambda: "/usr/bin/python3.12")
+
+
+def _environment(version, tag):
+    """An installed environment: vllm's METADATA, the exe and a recipe record."""
+    site = vs.venv_dir() / "lib" / "python3.12" / "site-packages" / f"vllm-{version}.dist-info"
+    site.mkdir(parents=True)
+    (site / "METADATA").write_text(f"Name: vllm\nVersion: {version}\n", encoding="utf-8")
+    vs.vllm_exe().parent.mkdir(parents=True, exist_ok=True)
+    vs.vllm_exe().write_text("#!/bin/sh\n", encoding="utf-8")
+    vs.recipe_path().write_bytes(tag.encode("utf-8"))
+
+
+def test_rocm_install_steps(config, monkeypatch, home, rocm):
+    """On AMD: an environment of Python 3.12, the ROCm lock with vLLM's ROCm index as an extra
+    index (hashes required, no deps, wheels only), the ROCm probe, then its own recipe tag.
+    MUTATION: drop --extra-index-url; write the CUDA tag; make the venv with sys.executable
+    - red."""
+    _supported(monkeypatch)
+    calls, records = [], []
+    run = _fake_installing_run(home, calls, records=records, version=ROCM_VERSION)
+    assert vs.install(run=run) == ""
+    assert calls[0] == ["/usr/bin/python3.12", "-m", "venv", str(vs.venv_dir())]
+    assert calls[1] == [str(vs.venv_python()), "-m", "pip", "install", "--require-hashes",
+                        "--no-deps", "--only-binary=:all:", "--extra-index-url",
+                        "https://wheels.vllm.ai/rocm/0.32.0/rocm723", "-r", str(vs.LOCK_PATH_ROCM)]
+    assert vs.LOCK_PATH_ROCM == Path(vs.__file__).with_name("vllm_requirements_rocm.lock")
+    assert calls[2][:2] == [str(vs.venv_python()), "-c"] and calls[2][2] == vs._PROBE_ROCM
+    assert len(calls) == 3 and records == [False, False, False]
+    assert vs.recipe_path().read_bytes() == b"vllmrocm-1-a69536"
+    assert vs.installed_version() == "0.32.0+rocm723" and vs.is_current()
+    calls.clear()
+    assert vs.install(run=run) == "" and calls == [], "an installed ROCm build installs nothing"
+
+
+def test_rocm_install_says_its_size_and_the_venv_package(config, monkeypatch, home, rocm):
+    _supported(monkeypatch)
+    said = []
+    run = _fake_installing_run(home, [], version=ROCM_VERSION)
+    assert vs.install(log=said.append, run=run) == ""
+    assert "Installing vLLM 0.32.0 for ROCm 7.2.3 (at least 3.3 GB to download)..." in said
+
+    def no_venv(argv, env=None, **kw):
+        return subprocess.CompletedProcess(argv, 1)
+    vs.uninstall()
+    reason = vs.install(run=no_venv)
+    assert "Creating the environment failed (exit 1)" in reason and "python3.12-venv" in reason
+    assert not vs.venv_dir().exists()
+
+
+@pytest.mark.parametrize("build, other_version, other_tag", [
+    (vs.ROCM, vs.PIN, "vllmenv-1-18dfb7"),
+    (vs.CUDA, ROCM_VERSION, "vllmrocm-1-a69536"),
+])
+def test_a_cuda_environment_is_rebuilt_on_rocm(config, monkeypatch, home, build, other_version,
+                                               other_tag):
+    """The other build's environment, complete with its own record, is not current on this
+    machine (a GPU that changed vendor): the install removes it and runs every step.
+    MUTATION: recipe_current accepting either tag - red."""
+    monkeypatch.setattr(vs, "backend", lambda: build)
+    monkeypatch.setattr(vs, "rocm_python", lambda: "/usr/bin/python3.12")
+    _supported(monkeypatch)
+    _environment(other_version, other_tag)
+    assert vs.is_installed() and not vs.is_current() and le.needs_install()
+    # Even at this build's version, the other build's record does not pass.
+    vs.uninstall()
+    _environment(vs.expected_version(build), other_tag)
+    assert not vs.recipe_current() and not vs.is_current()
+    calls = []
+    run = _fake_installing_run(home, calls, version=vs.expected_version(build))
+    assert vs.install(run=run) == ""
+    assert len(calls) == 3 and vs.is_current()
+    assert vs.recipe_path().read_bytes().decode() == vs.recipe_format(build)
+
+
+@pytest.mark.parametrize("build, other_version, other_tag", [
+    (vs.ROCM, vs.PIN, "vllmenv-1-18dfb7"),
+    (vs.CUDA, ROCM_VERSION, "vllmrocm-1-a69536"),
+])
+def test_start_refuses_the_other_backends_environment(config, monkeypatch, home, build,
+                                                      other_version, other_tag):
+    from vaf.cli.ui import UI
+    monkeypatch.setattr(vs, "backend", lambda: build)
+    _environment(other_version, other_tag)
+    said = []
+    monkeypatch.setattr(UI, "error", staticmethod(lambda text, *a, **k: said.append(text)))
+    spawned = []
+
+    def popen(*a, **k):
+        spawned.append(a)
+        raise RuntimeError("launched")
+    assert vs.start("Qwen/Qwen3-4B-AWQ", 32768, popen=popen) is False
+    assert spawned == [] and said and "`vaf engine vllm`" in said[-1]
+
+
+def test_the_rocm_probe_maps_its_causes(tmp_path):
+    """The ROCm probe really exits 3 when torch sees no GPU, 4 when vLLM's ROCm extension does
+    not load, 0 when both do (stand-in packages). MUTATION: probe importing only
+    _C_stable_libtorch - red."""
+    import textwrap
+    for gpu, rocm_ok, expected in [(False, True, 3), (True, False, 4), (True, True, 0)]:
+        pkgs = tmp_path / f"p{int(gpu)}{int(rocm_ok)}"
+        (pkgs / "torch").mkdir(parents=True)
+        (pkgs / "torch" / "__init__.py").write_text(textwrap.dedent(f"""
+            class cuda:
+                @staticmethod
+                def is_available():
+                    return {gpu}
+        """), encoding="utf-8")
+        (pkgs / "vllm").mkdir()
+        (pkgs / "vllm" / "__init__.py").write_text("", encoding="utf-8")
+        (pkgs / "vllm" / "_C_stable_libtorch.py").write_text("", encoding="utf-8")
+        (pkgs / "vllm" / "_rocm_C.py").write_text(
+            "" if rocm_ok else "raise ImportError('libamdhip64.so.7: cannot open shared object file')",
+            encoding="utf-8")
+        out = subprocess.run([sys.executable, "-c", vs._PROBE_ROCM], capture_output=True,
+                             text=True, timeout=60, env={**os.environ, "PYTHONPATH": str(pkgs)})
+        assert out.returncode == expected, (gpu, rocm_ok, out.stderr)
+        if expected == 4:
+            assert "libamdhip64.so.7" in out.stderr
+
+
+@pytest.mark.parametrize("probe_code, cause", [(3, "no_rocm"), (4, "libs"), (1, "libs")])
+def test_a_failed_rocm_probe_names_its_cause(config, monkeypatch, home, rocm, probe_code, cause):
+    """MUTATION: map exit 3 to no_cuda - red."""
+    _supported(monkeypatch)
+    outcome = {}
+    run = _fake_installing_run(home, [], probe_code=probe_code, version=ROCM_VERSION)
+    reason = vs.install(run=run, outcome=outcome)
+    assert outcome == {"probe": cause}
+    assert "CUDA libraries" not in reason and "NVIDIA" not in reason
+    if cause == "no_rocm":
+        for word in ("ROCm 7.2 or newer", "render and video groups", "HIP_VISIBLE_DEVICES",
+                     "ROCR_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES"):
+            assert word in reason, word
+    else:
+        assert "ROCm libraries" in reason and "Run `vaf engine vllm` again" in reason
+    assert not vs.recipe_path().exists() and not vs.is_current()
+
+
+def test_rocm_fit_reads_amd_memory(monkeypatch, tmp_path):
+    """On ROCm the fit reads the amdgpu driver's figures; nvidia-smi is never asked.
+    MUTATION: _gpu_memory without the dispatch - red."""
+    from vaf.core import gpu_detection as gd
+    monkeypatch.setattr(vs, "backend", lambda: vs.ROCM)
+
+    def no_nvidia(*a, **k):
+        raise AssertionError("nvidia-smi was asked on ROCm")
+    monkeypatch.setattr(gd, "nvidia_free_vram_mb", no_nvidia)
+    monkeypatch.setattr(gd, "detect_nvidia_gpu", no_nvidia)
+    monkeypatch.setattr(vs.ModelShape, "from_dir", classmethod(lambda cls, d: SHAPE_4B))
+    monkeypatch.setattr(gd, "amd_vram_mb", lambda: (20000, 24560))
+    result = vs.plan_fit(str(tmp_path), 32768)
+    assert result.ok and result.total_mb == 24560 and result.free_mb == 20000
+    monkeypatch.setattr(gd, "amd_vram_mb", lambda: (0, 0))
+    result = vs.plan_fit(str(tmp_path), 32768)
+    assert (result.ok, result.code) == (False, "no_gpu_memory")
+    assert result.reason == "The amdgpu driver does not report the GPU's memory (/sys/class/drm)."
+
+
+def test_the_backend_follows_the_gpu(monkeypatch):
+    """NVIDIA first (the primary GPU's order), AMD then; kept once a GPU was found, not kept
+    without one. MUTATION: memoize the no-GPU answer - red."""
+    from vaf.core import gpu_detection as gd
+    monkeypatch.undo()       # lifts the autouse cuda pin for this test
+    monkeypatch.setattr(vs, "_backend", None)
+    found = {"nvidia": None, "amd": None}
+    monkeypatch.setattr(gd, "detect_nvidia_gpu", lambda: found["nvidia"])
+    monkeypatch.setattr(gd, "detect_amd_gpu", lambda: found["amd"])
+    assert vs.backend() == vs.CUDA and vs._backend is None
+    found["amd"] = object()
+    assert vs.backend() == vs.ROCM and vs._backend == vs.ROCM
+    found["amd"] = None
+    assert vs.backend() == vs.ROCM, "kept for the process once found"
+    monkeypatch.setattr(vs, "_backend", None)
+    found["nvidia"], found["amd"] = object(), object()
+    assert vs.backend() == vs.CUDA
+    assert vs.download_gb_at_least(vs.ROCM) == 3.3 and vs.download_gb_at_least(vs.CUDA) == 2.8
+    assert vs.ROCM_INDEX.endswith(f"/{vs.PIN}/{vs.ROCM_VARIANT}")

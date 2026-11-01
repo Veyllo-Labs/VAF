@@ -668,7 +668,7 @@ _GROUNDING_NOTE = {
           "信用しないでください。",
     "ko": "참고: 위에 쓴 내용은 도구 결과로 확인되지 않았어요. 확인하기 전에는 그대로 믿지 마세요.",
     "th": "หมายเหตุ: สิ่งที่ฉันเขียนไว้ด้านบนไม่มีผลลัพธ์จากเครื่องมือยืนยัน โปรดตรวจสอบก่อนนำไปใช้",
-    "tr": "Not: Yukarıda yazdıklarım araçlarımın sonuçlarıyla doğrulanmıyor. Lütfen kontrol "
+    "tr": "Not: Yukarıda yazdıklarım araçlarımın sonuçlarıyla doğrulanamadı. Lütfen kontrol "
           "etmeden buna güvenme.",
     "zh": "注意：我上面写的内容没有得到工具结果的支持。请先核实，不要直接依赖。",
 }

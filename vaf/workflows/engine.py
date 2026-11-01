@@ -341,8 +341,26 @@ def _strictly_inside(root: str, candidate: str) -> bool:
     return True
 
 
+def snapshot_intermediates(project_path: Optional[str]) -> tuple:
+    """The script/scratch files (the cleanup's extensions) already in ``project_path``, as
+    resolved paths. Taken at the start of a run so the cleanup afterwards removes only what the
+    run created, never a file the user already had there. Cheap: one walk, names only."""
+    import os
+    out = set()
+    if not project_path or not os.path.isdir(project_path):
+        return ()
+    try:
+        for root, _dirs, files in os.walk(project_path):
+            for fn in files:
+                if os.path.splitext(fn)[1].lower() in _INTERMEDIATE_EXTS:
+                    out.add(os.path.realpath(os.path.join(root, fn)))
+    except Exception:
+        return ()
+    return tuple(out)
+
+
 def remove_temp_intermediates(project_path: str, *, keep_files=(), final_output=None,
-                              user_scope_id: Optional[str] = None) -> int:
+                              user_scope_id: Optional[str] = None, preexisting=()) -> int:
     """After a temporary workflow: remove the throwaway scripts and scratch it created in its
     shared project path, KEEP the deliverable, and return how many files went.
 
@@ -358,6 +376,10 @@ def remove_temp_intermediates(project_path: str, *, keep_files=(), final_output=
     checked against the run's prefix in `execute`) and the identity of the run, so a
     recursive delete never walks another account's folder or a folder elsewhere.
 
+    ``preexisting`` are files that were already in the folder when the run started
+    (``snapshot_intermediates``): they are kept, so a run pointed at an existing project
+    deletes only the scratch it created.
+
     NAMED BOUNDARY: without a ``user_scope_id`` (an unscoped local run, the single-user
     machine owner) the bound is the whole Documents/VAF_Projects, the same area that owner
     reaches with every other tool."""
@@ -372,7 +394,7 @@ def remove_temp_intermediates(project_path: str, *, keep_files=(), final_output=
             return 0
     except Exception:
         return 0
-    keep = set()
+    keep = set(preexisting or ())
     for path in keep_files or ():
         path = str(path).strip()
         if path:
@@ -563,6 +585,9 @@ class WorkflowResult:
     project_path: Optional[str] = None
     # True when the caller handed in a workflow_project_path the engine did not accept.
     supplied_path_refused: bool = False
+    # Script/scratch files already in the project folder when the run started: the cleanup
+    # keeps them, so a run pointed at an existing project does not delete the user's own code.
+    preexisting_files: tuple = ()
 
 
 def _temporal_builtins(username: Optional[str] = None) -> Dict[str, str]:
@@ -732,6 +757,7 @@ class WorkflowEngine:
         stop_on_error: bool = True,
         check_stop: Optional[Callable[[], bool]] = None,
         wait_for_subagents: bool = False,
+        _preexisting: Optional[tuple] = None,
     ) -> WorkflowResult:
         """
         Execute a workflow with the given steps.
@@ -876,6 +902,13 @@ class WorkflowEngine:
             outputs["workflow_project_path"] = _workflow_project_path
         except Exception:
             _workflow_project_path = None
+
+        # The script/scratch files already here when the run starts: kept by the cleanup, so a
+        # run pointed at an existing project does not delete the user's own code. A resumed run
+        # carries the snapshot of its FIRST start (``_preexisting``), not a fresh one over the
+        # files the pre-pause steps wrote.
+        _preexisting_files = (tuple(_preexisting) if _preexisting is not None
+                              else snapshot_intermediates(_workflow_project_path))
 
         # Don't show "Starting workflow" message - will show Step 1/N instead
         
@@ -1583,6 +1616,7 @@ class WorkflowEngine:
                         template_id=getattr(self, '_template_id', '') or '',
                         ui_workflow_id=getattr(self, '_ui_workflow_id', '') or '',
                         awaiting_agent_type=agent_type,
+                        preexisting_files=list(_preexisting_files),
                     )
                     
                     ipc = get_ipc()
@@ -1601,6 +1635,7 @@ class WorkflowEngine:
                         waiting_for_task=task_id,
                         waiting_for_agent=agent_type,
                         project_path=_workflow_project_path,
+                        preexisting_files=_preexisting_files,
                     )
                 
                 # A bounded-run timeout/stop returns a sentinel string. Treat it as a hard
@@ -1829,6 +1864,7 @@ class WorkflowEngine:
             error=error,
             project_path=_workflow_project_path,
             supplied_path_refused=_supplied_refused,
+            preexisting_files=_preexisting_files,
         )
 
     def _await_subagent(self, spawn_output, tool_name: str, check_stop, timeout: float, poll: float):
@@ -2022,6 +2058,11 @@ class WorkflowEngine:
         # Continue with remaining steps
         remaining_steps = steps[paused_wf.current_step_index + 1:]
         
+        # The project folder and the pre-run file snapshot of the FIRST start, carried across
+        # the pause so the cleanup still skips the user's own pre-existing files.
+        _project_path = outputs.get("workflow_project_path")
+        _preexisting = tuple(getattr(paused_wf, "preexisting_files", None) or ())
+
         if not remaining_steps:
             # Workflow is complete
             UI.event("Workflow", "Completed!", style="success")
@@ -2031,7 +2072,9 @@ class WorkflowEngine:
                 final_output=subagent_result,
                 steps=steps,
                 total_duration=0.0,  # Can't track across pause
-                error=None
+                error=None,
+                project_path=_project_path,
+                preexisting_files=_preexisting,
             )
         
         # Execute remaining steps
@@ -2041,7 +2084,8 @@ class WorkflowEngine:
         remaining_result = self.execute(
             remaining_steps,
             variables=outputs,  # Use all outputs as variables
-            stop_on_error=True
+            stop_on_error=True,
+            _preexisting=_preexisting,
         )
         
         # If remaining steps also paused, propagate that
@@ -2060,6 +2104,7 @@ class WorkflowEngine:
             total_duration=remaining_result.total_duration,
             error=remaining_result.error,
             project_path=remaining_result.project_path,
+            preexisting_files=remaining_result.preexisting_files,
         )
     
     def _resolve_template(self, template: str, variables: Dict[str, Any], defaults: Dict[str, Any] = None) -> str:

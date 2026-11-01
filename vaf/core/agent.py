@@ -9799,7 +9799,9 @@ class Agent:
         genuinely needed since. Grows only, never shrinks and never reorders, so
         the agent converges on a stable array after the first few turns. An engine
         cache, shared by every chat the agent serves: the callable set inside it is
-        still the turn's own (`_tools_and_choice`)."""
+        still the turn's own (`_tools_and_choice`). A count with include_tools=True reads this
+        array through `_tools_and_choice`, so counting may add a routed tool to the resident
+        set one turn before a request would; harmless, the set only ever grows."""
         resident = getattr(self, "_resident_tools", None)
         if resident is None:
             resident = [t for t in self.STABLE_TOOL_CORE if t in self.tools]

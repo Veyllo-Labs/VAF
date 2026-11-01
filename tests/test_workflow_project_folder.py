@@ -27,7 +27,9 @@ MUTATIONS, each turns the named tests red:
 - `execute()` without the engine-owned output check -> test_the_engine_refuses_its_own_output_name;
 - the preflight without it -> test_run_temp_refuses_the_engine_output_name;
 - the cleanup without the caller's uid8 -> test_the_cleanup_stays_in_the_callers_folder;
-- the refused-folder note dropped -> test_the_model_is_told_where_the_files_are.
+- the refused-folder note dropped -> test_the_model_is_told_where_the_files_are;
+- the cleanup without the pre-existing snapshot -> test_the_cleanup_keeps_pre_existing_files;
+- resume dropping project_path or the snapshot on its early return -> test_resume_carries_the_folder.
 """
 from pathlib import Path
 from types import SimpleNamespace
@@ -247,3 +249,61 @@ def test_the_model_is_told_where_the_files_are(home):
     assert result.project_path in note and "was not used" in note
     _, kept = _run({"workflow_project_path": str(_own_root(home) / "green123456" / "Probe")})
     assert project_folder_note(kept) == ""
+
+
+def test_the_cleanup_keeps_pre_existing_files(home):
+    from vaf.tools.agent_workflow_builder import AgentWorkflowBuilderTool
+    from vaf.workflows.engine import snapshot_intermediates
+    project = _own_root(home) / "green123456" / "Site"
+    project.mkdir(parents=True)
+    (project / "app.py").write_text("print('mine')")  # the user's own code
+    before = snapshot_intermediates(str(project))
+    shell = _Shell()
+    agent = SimpleNamespace(tools={"bash": shell}, visible_tools=lambda: {}, current_session_id=None,
+                            _current_user_role="user", _current_user_scope_id=OWN_SCOPE,
+                            _current_username="alice")
+
+    class _Engine:
+        def __init__(self, *a, **k):
+            pass
+
+        def execute(self, steps, **kw):
+            (project / "scratch.py").write_text("tmp")  # a script the run creates
+            return SimpleNamespace(success=True, paused=False, error="", final_output="done",
+                                   steps=steps, outputs={}, project_path=str(project),
+                                   supplied_path_refused=False, preexisting_files=before)
+    import vaf.workflows.engine as engine_module
+    import unittest.mock as _m
+    with _m.patch.object(engine_module, "WorkflowEngine", _Engine):
+        out = AgentWorkflowBuilderTool().run(
+            action="run_temp", name="Site", _agent=agent, skip_validation=True,
+            steps=[{"tool": "bash", "args": {"command": "ls"}},
+                   {"tool": "bash", "args": {"command": "pwd"}}])
+    assert "completed" in out, out
+    assert (project / "app.py").exists(), "the run deleted the user's own code"
+    assert not (project / "scratch.py").exists(), "the run's own scratch was kept"
+
+
+def test_resume_carries_the_folder(home):
+    """resume_workflow's no-remaining-steps return carries the run's folder and the pre-run
+    snapshot, so the cleanup after a resumed run still skips the user's pre-existing files."""
+    from vaf.core.subagent_ipc import PausedWorkflow
+    import vaf.workflows.engine as engine_module
+    own = _own_root(home) / "green123456" / "Resumed"
+    own.mkdir(parents=True)
+    pre = (str((own / "mine.py").resolve()),)
+    paused = PausedWorkflow(
+        workflow_id="wf-1", waiting_for_task_id="t1", current_step_index=0,
+        outputs={"workflow_project_path": str(own), "a": "done"}, variables={},
+        steps_data=[{"tool": "web_search", "input_template": "x", "output_name": "a",
+                     "status": "running"}],
+        workflow_name="Resumed", created_at="2026-01-01T00:00:00",
+        user_scope_id=OWN_SCOPE, preexisting_files=list(pre))
+    engine = engine_module.WorkflowEngine(tools={}, callback=lambda *a, **k: None,
+                                          user_scope_id=OWN_SCOPE)
+    import unittest.mock as _m
+    with _m.patch("vaf.core.subagent_ipc.get_ipc", return_value=_m.MagicMock()):
+        result = engine.resume_workflow(paused, "the sub-agent result")
+    assert result.success and not result.paused
+    assert result.project_path == str(own)
+    assert result.preexisting_files == pre

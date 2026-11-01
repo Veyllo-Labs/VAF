@@ -289,8 +289,9 @@ class AgentWorkflowBuilderTool(BaseTool):
         "DO NOT use action='execute' — that does not exist. "
         "To run something NOW use action='run_temp'. "
         "To run a previously saved workflow use the separate execute_workflow tool.\n\n"
-        "AUTOMATIC CLEANUP (run_temp only): throwaway scripts/scratch created during the run "
-        "(.py, .sh, .js, .tmp, …) are deleted after completion; the actual deliverable "
+        "AUTOMATIC CLEANUP (run_temp only): throwaway scripts/scratch the run CREATES "
+        "(.py, .sh, .js, .tmp, …) are deleted after completion (a file already in the project "
+        "folder before the run is left as it was); the actual deliverable "
         "(documents, reports, data, images) is kept. To keep an extra file explicitly, pass "
         "keep_files=[\"/path/to/file\"]. Use write_file/document steps for the FINAL deliverable, "
         "and plain scripts for intermediate work.\n\n"
@@ -942,7 +943,8 @@ class AgentWorkflowBuilderTool(BaseTool):
         remove_temp_intermediates(getattr(result, "project_path", None) or "",
                                   keep_files=kwargs.get("keep_files") or [],
                                   final_output=result.final_output,
-                                  user_scope_id=user_scope_id)
+                                  user_scope_id=user_scope_id,
+                                  preexisting=getattr(result, "preexisting_files", None) or ())
 
         if result.success:
             # Per-step summary so a weird FINAL step can never hide the real

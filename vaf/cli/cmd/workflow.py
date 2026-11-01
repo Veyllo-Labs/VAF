@@ -381,7 +381,8 @@ def run_workflow(
                 remove_temp_intermediates(getattr(result, "project_path", None) or "",
                                           keep_files=plan.get("keep_files") or [],
                                           final_output=result.final_output,
-                                          user_scope_id=getattr(engine, "user_scope_id", None))
+                                          user_scope_id=getattr(engine, "user_scope_id", None),
+                                          preexisting=getattr(result, "preexisting_files", None) or ())
                 _steps_summary = summarize_run_steps(steps)
                 final_summary = (
                     f"Temporary workflow '{template['name']}' completed.\n"

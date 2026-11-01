@@ -14,6 +14,7 @@ window included, back into the live context manager.
 MUTATIONS, each turns the named tests red:
 - `_counted_tool_schemas` ignores `include_tools` -> the server-count, estimate, broadcast
   and purge-before-routing tests;
+- the estimate leaves the schema out on an API backend again -> the API-session test;
 - chat_step drops `include_tools=not _will_route` from a pre-routing call -> the chat_step test;
 - the purge without the anchor insertion -> the purge test;
 - the broadcast back on `SessionManager(state_registry=...).load(session_id)` -> the broadcast
@@ -24,6 +25,7 @@ MUTATIONS, each turns the named tests red:
 import ast
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -87,6 +89,19 @@ def test_the_server_count_leaves_the_schema_out_only_when_asked(server_agent):
 def test_the_estimate_leaves_the_schema_out_only_when_asked(server_agent):
     with_tools, _ = server_agent._estimate_token_usage()
     without, _ = server_agent._estimate_token_usage(include_tools=False)
+    assert with_tools - without == int(len(json.dumps(_SCHEMA)) / 3.0)
+
+
+def test_an_api_session_without_a_request_counts_the_routed_schema(server_agent):
+    """An API request carries its tool array as input tokens. Until the provider reported a
+    request's usage, the estimate is all there is, so it must count the schema too."""
+    server_agent.use_server = False
+    server_agent.api_backend = SimpleNamespace(last_request_usage={},
+                                               get_model_context_window=lambda model=None: 128000)
+    server_agent.provider = "openai"
+    with_tools, window = server_agent.get_token_usage()
+    without, _ = server_agent.get_token_usage(include_tools=False)
+    assert window == 128000
     assert with_tools - without == int(len(json.dumps(_SCHEMA)) / 3.0)
 
 

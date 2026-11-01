@@ -6651,9 +6651,11 @@ class Agent:
             msg_tokens = int((len(content) + len(role)) / ratio) + 5
             total_tokens += msg_tokens
 
-        # 2. Estimate tool schema tokens — only for local/server mode.
-        # API backends handle schemas server-side.
-        _schemas = self._counted_tool_schemas(include_tools) if not self.api_backend else []
+        # 2. Estimate tool schema tokens. An API request carries its tool array as input
+        # tokens too: the provider's reported usage (get_token_usage) includes it after the
+        # first request, and without it here a session with no request yet counted the
+        # history alone after routing.
+        _schemas = self._counted_tool_schemas(include_tools)
         if _schemas:
             try:
                 schema_str = json_module.dumps(_schemas)

@@ -66,7 +66,10 @@ count reads: the estimate, the server's `/tokenize`, the local tokenizer and the
 breakdown in the broadcast). Counting the full schema there made every turn of a long local
 chat an overflow and purged it. The request itself is still guarded after
 routing, with the routed schema counted (the proactive compression and the core
-tool subset of the local server lane). When the purge does fire, it keeps the
+tool subset of the local server lane). The router's own "context tight" safety net
+(`_select_turn_tools`, the core tool subset when the router chose nothing) reads that
+first, schema-free count as well, so it judges the history alone; the routed request is
+still checked after it. When the purge does fire, it keeps the
 system prompt, the turn's request (`turn_anchor_index`, for the same reason the
 compression keeps it: inside a tool loop it lies more than six messages back)
 and the last six messages; the compression right after it rebuilds the summary

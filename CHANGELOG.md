@@ -108,7 +108,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   If the cleanup does run, it keeps your request. The summary of the conversation no longer
   falls back to an older one in the middle of a reply. When a reply claims a result the tools
   did not deliver, VAF now asks the model once to correct it and then adds a short note that
-  the claim is unconfirmed, instead of a third rewrite.
+  the claim is unconfirmed, instead of a third rewrite. A temporary workflow with a shell step
+  now runs that step in the shell instead of failing inside the Python sandbox, and a plan that
+  cannot run (a missing parameter, an unknown tool, a download in the offline shell, a host
+  command that would need your OK) is answered at once with what to fix, before anything
+  starts.
 - **vLLM now starts on NVIDIA GPUs without the CUDA developer tools** (such as an RTX 3080),
   where it used to crash a minute into its start. Switching to vLLM now starts it once as a
   test and only switches when it answers.

@@ -60,7 +60,17 @@ def _inject_workflow_paths(step_tool: str, args: Dict[str, Any], workflow_projec
     relative path that ALREADY points at an existing file - that is an in-place update
     of a real user file (e.g. a code_review step that read the same relative path),
     which must stay cwd-relative so the read and the write agree.
+
+    - bash runs in the run's project directory. The key is ASSIGNED, never defaulted, and a
+      step's own `base_dir` is dropped first, with or without a project directory: BashTool
+      takes `base_dir` as its workspace, so a model-written value would choose where the
+      jailed shell may write. Without a project directory bash keeps its own refusal.
     """
+    if step_tool == "bash":
+        args.pop("base_dir", None)
+        if workflow_project_path:
+            args["base_dir"] = workflow_project_path
+        return
     if not workflow_project_path:
         return
     if step_tool in ("coding_agent", "document_writer"):
@@ -87,8 +97,8 @@ def _inject_workflow_paths(step_tool: str, args: Dict[str, Any], workflow_projec
         args[_arg] = os.path.join(workflow_project_path, p)
 
 
-# Primary instruction parameter per tool - shared by _infer_args (input-only
-# steps) and the input-into-args merge (steps with input + PARTIAL args).
+# Primary instruction parameter per tool - shared by input-only steps and the
+# input-into-args merge (steps with input + PARTIAL args), both in build_step_args.
 _PRIMARY_ARG_BY_TOOL = {
     "web_search": "query",
     "webfetch": "url",
@@ -104,6 +114,66 @@ _PRIMARY_ARG_BY_TOOL = {
     "list_files": "path",
     "move_file": "source",
 }
+
+
+def _infer_step_args(tool_name: str, value: str) -> Dict[str, Any]:
+    """The args of an input-only step: the text goes into the tool's primary parameter."""
+    args = {_PRIMARY_ARG_BY_TOOL.get(tool_name, "input"): value}
+    # In workflow context, disable per-result LLM synthesis for web_search.
+    # deep=True triggers a query_llm() call per result which blocks on DeepSeek latency.
+    if tool_name == "web_search":
+        args["deep"] = False
+    return args
+
+
+def build_step_args(tool_name: str, input_template: str, args_template: Optional[Dict[str, Any]],
+                    resolve: Callable[[str], str],
+                    trace: Optional[Callable[[str, str, str], None]] = None) -> Dict[str, Any]:
+    """The call args of one workflow step: the one place they are built.
+
+    `resolve` fills the `{placeholders}` of one string (the engine passes its template
+    resolver, which may raise KeyError; a planner checking a step before it runs passes the
+    identity, so the placeholders stay literal). `trace(key, before, after)` sees every
+    resolved string value of `args_template`.
+
+    - `args_template` given: its string values resolved, other values as they are, and the
+      step's `input` merged into the tool's primary parameter when the args lack it. A step
+      with input + PARTIAL args (web_search with only max_results) used to silently DROP its
+      input, and web_search ran query-less ("Error: No query provided", live incident)
+      although the author had supplied the query as input, in exactly the shape the tool
+      schema teaches. Steps whose args already carry the primary parameter (every saved
+      template) are unchanged; their input stays what it always was, a display label.
+    - otherwise the resolved input: a JSON object is the args, any other text goes into
+      the tool's primary parameter.
+    """
+    if args_template is not None:
+        args: Dict[str, Any] = {}
+        for k, v in args_template.items():
+            if isinstance(v, str):
+                resolved = resolve(v)
+                if trace is not None:
+                    trace(k, v, resolved)
+                args[k] = resolved
+            else:
+                args[k] = v
+        primary = _PRIMARY_ARG_BY_TOOL.get(tool_name, "input")
+        if str(input_template or "").strip() and primary not in args:
+            args[primary] = resolve(input_template)
+            if tool_name == "web_search":
+                # Parity with an input-only step: no per-result LLM synthesis inside workflows.
+                args.setdefault("deep", False)
+        return args
+    resolved_input = resolve(input_template)
+    text = resolved_input.strip()
+    if text.startswith("{") and text.endswith("}"):
+        import json
+        try:
+            parsed = json.loads(resolved_input)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass  # not valid JSON: the text is the step's single argument
+    return _infer_step_args(tool_name, resolved_input)
 
 
 def summarize_run_steps(steps) -> str:
@@ -853,58 +923,30 @@ class WorkflowEngine:
             # Get defaults from workflow template if available
             defaults = getattr(self, '_workflow_defaults', {})
             try:
-                if step.args_template is not None:
-                    args: Dict[str, Any] = {}
-                    # Debug: Prepare variable info for coding_agent
-                    available_vars = list(outputs.keys()) if step.tool == "coding_agent" else []
-                    
-                    for k, v in step.args_template.items():
-                        if isinstance(v, str):
-                            # Debug: Show variable resolution for coding_agent
-                            if step.tool == "coding_agent" and k == "task":
-                                UI.event("System", f"Resolving variables in {step.tool} task parameter...", style="dim")
-                                if available_vars:
-                                    UI.event("System", f"Available variables: {', '.join(available_vars)}", style="dim")
-                                # Show template before resolution
-                                template_preview = v[:200] + "..." if len(v) > 200 else v
-                                UI.event("System", f"Template (before): {template_preview}", style="dim")
-                            
-                            resolved_value = self._resolve_template(v, outputs, defaults)
-                            args[k] = resolved_value
-                            
-                            # Debug: Show resolved value for coding_agent
-                            if step.tool == "coding_agent" and k == "task":
-                                resolved_preview = resolved_value[:300] + "..." if len(resolved_value) > 300 else resolved_value
-                                UI.event("System", f"Resolved task (first 300 chars): {resolved_preview}", style="dim")
-                                # Show variable sizes
-                                if available_vars:
-                                    for var_name in available_vars:
-                                        var_value = str(outputs.get(var_name, ""))
-                                        var_size = len(var_value)
-                                        UI.event("System", f"  Variable '{var_name}': {var_size} chars", style="dim")
-                        else:
-                            args[k] = v
-                    # Merge the step's input into the missing PRIMARY parameter.
-                    # A step with input + PARTIAL args (e.g. web_search with
-                    # only max_results) used to silently DROP its input - the
-                    # args path ignored it entirely and web_search ran
-                    # query-less ("Error: No query provided", live incident)
-                    # although the author had supplied the query as input, in
-                    # exactly the shape the tool schema teaches (args for the
-                    # extra parameters). Steps whose args already carry the
-                    # primary parameter (every saved template) are unchanged;
-                    # their input stays what it always was, a display label.
-                    _primary = _PRIMARY_ARG_BY_TOOL.get(step.tool, "input")
-                    if str(step.input_template or "").strip() and _primary not in args:
-                        args[_primary] = self._resolve_template(
-                            step.input_template, outputs, defaults
-                        )
-                        if step.tool == "web_search":
-                            # Parity with _infer_args: no per-result LLM
-                            # synthesis inside workflows.
-                            args.setdefault("deep", False)
-                else:
-                    resolved_input = self._resolve_template(step.input_template, outputs, defaults)
+                _trace = None
+                if step.tool == "coding_agent":
+                    available_vars = list(outputs.keys())
+
+                    def _trace(key, before, after, _vars=available_vars):
+                        # Debug: show the variable resolution of coding_agent's task
+                        if key != "task":
+                            return
+                        UI.event("System", f"Resolving variables in {step.tool} task parameter...", style="dim")
+                        if _vars:
+                            UI.event("System", f"Available variables: {', '.join(_vars)}", style="dim")
+                        template_preview = before[:200] + "..." if len(before) > 200 else before
+                        UI.event("System", f"Template (before): {template_preview}", style="dim")
+                        resolved_preview = after[:300] + "..." if len(after) > 300 else after
+                        UI.event("System", f"Resolved task (first 300 chars): {resolved_preview}", style="dim")
+                        for var_name in _vars:
+                            var_size = len(str(outputs.get(var_name, "")))
+                            UI.event("System", f"  Variable '{var_name}': {var_size} chars", style="dim")
+
+                args = build_step_args(
+                    step.tool, step.input_template, step.args_template,
+                    lambda text: self._resolve_template(text, outputs, defaults),
+                    trace=_trace,
+                )
             except KeyError as e:
                 step.status = StepStatus.FAILED
                 step.error = f"Missing variable: {e}"
@@ -920,18 +962,6 @@ class WorkflowEngine:
             try:
                 tool = self.tools[step.tool]
 
-                # Parse input - could be explicit args_template, JSON dict, or simple string
-                if step.args_template is None:
-                    if resolved_input.strip().startswith("{") and resolved_input.strip().endswith("}"):
-                        import json
-                        try:
-                            args = json.loads(resolved_input)
-                        except json.JSONDecodeError:
-                            # Not valid JSON, treat as single argument
-                            args = self._infer_args(step.tool, resolved_input)
-                    else:
-                        args = self._infer_args(step.tool, resolved_input)
-                
                 # ═══════════════════════════════════════════════════════════════
                 # CONTEXT MANAGEMENT: Truncate large inputs before passing to tools
                 # ═══════════════════════════════════════════════════════════════
@@ -1979,19 +2009,6 @@ class WorkflowEngine:
                 return "{" + key + "}"
         
         return re.sub(r"\{([^}]+)\}", replacer, template)
-    
-    def _infer_args(self, tool_name: str, value: str) -> Dict[str, Any]:
-        """
-        Infer the argument name for a tool based on its expected parameters.
-        """
-        # Shared primary-arg mapping (also used by the input-into-args merge).
-        arg_name = _PRIMARY_ARG_BY_TOOL.get(tool_name, "input")
-        args = {arg_name: value}
-        # In workflow context, disable per-result LLM synthesis for web_search.
-        # deep=True triggers a query_llm() call per result which blocks on DeepSeek latency.
-        if tool_name == "web_search":
-            args["deep"] = False
-        return args
     
     # ─── Branching helpers ──────────────────────────────────────────────────────
 

@@ -44,7 +44,8 @@ def test_runners_share_the_single_source():
     from pathlib import Path
     import vaf.tools.workflow_executor as ex_mod
     import vaf.cli.cmd.workflow as cli_mod
-    for mod in (ex_mod, cli_mod):
+    import vaf.tools.agent_workflow_builder as builder_mod
+    for mod in (ex_mod, cli_mod, builder_mod):
         src = Path(mod.__file__).read_text(encoding="utf-8")
         assert "workflow_primitives" in src, f"{mod.__name__} no longer uses the shared overlay"
 

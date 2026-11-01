@@ -26,6 +26,11 @@ from typing import Any
 # the payload (e.g. write_file.content, python_exec.code / python_sandbox.code).
 PROTECTED_FIELDS = frozenset({"content", "code"})
 
+# How every missing-required error line starts. A caller that must tell "a field is absent"
+# apart from a shape problem (a workflow planner checking steps whose values are still
+# {placeholders}) matches this prefix, so the two cannot drift apart.
+MISSING_REQUIRED = "missing required"
+
 
 def _type_set(prop: dict) -> set:
     t = prop.get("type")
@@ -57,8 +62,8 @@ def _localize(err) -> str:
         if hints:
             noun = "fields" if len(hints) > 1 else "field"
             it = "them" if len(hints) > 1 else "it"
-            return f"missing required {noun}: {'; '.join(hints)}. Retry the SAME call and include {it}."
-        return err.message
+            return f"{MISSING_REQUIRED} {noun}: {'; '.join(hints)}. Retry the SAME call and include {it}."
+        return f"{MISSING_REQUIRED} field: {err.message}"
     path = ".".join(str(p) for p in err.absolute_path)
     # The expects/got wording ONLY fits actual type failures. Rendering every
     # field error this way turned e.g. an enum violation on a valid string into

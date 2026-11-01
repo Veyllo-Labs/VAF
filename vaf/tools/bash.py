@@ -37,6 +37,88 @@ _NO_NETWORK_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Commands that download by what they ARE, judged before they run (the regex above reads the
+# output after a failure). Executable -> the subcommands that fetch; an empty set means the
+# bare command already does (`yarn` installs). `classify_command` already names the plain
+# fetchers (curl, wget, ...) as network_fetch; these are the package managers and git.
+_DOWNLOADING_SUBCOMMANDS = {
+    "pip": {"install", "download"},
+    "npm": {"install", "i", "add", "ci"},
+    "pnpm": {"install", "i", "add"},
+    "yarn": set(),
+    "git": {"clone", "fetch", "pull", "push"},
+    "apt": {"install"},
+    "apt-get": {"install"},
+    "dnf": {"install"},
+    "yum": {"install"},
+    "zypper": {"install", "in"},
+    "apk": {"add"},
+    "brew": {"install"},
+}
+_PIP_RE = re.compile(r"^pip(\d+(\.\d+)?)?$")
+_PYTHON_RE = re.compile(r"^python(\d+(\.\d+)?)?$")
+_YARN_OFFLINE = {"run", "test", "build", "lint", "--version", "-v", "help", "--help"}
+
+
+def _downloads(tokens) -> bool:
+    """One command's tokens (leading `VAR=x`, `sudo` and `env` stripped): does it fetch?"""
+    while tokens and (re.match(r"^\w+=", tokens[0]) or tokens[0] in ("sudo", "env")):
+        tokens = tokens[1:]
+    if not tokens:
+        return False
+    exe, rest = os.path.basename(tokens[0]).lower(), tokens[1:]
+    if _PYTHON_RE.match(exe) and rest[:2] == ["-m", "pip"]:
+        exe, rest = "pip", rest[2:]
+    elif exe == "uv" and rest[:1] == ["pip"]:
+        exe, rest = "pip", rest[1:]
+    elif _PIP_RE.match(exe):
+        exe = "pip"
+    if exe not in _DOWNLOADING_SUBCOMMANDS:
+        return False
+    sub = ""
+    skip = False
+    for tok in rest:
+        if skip:
+            skip = False
+            continue
+        if exe == "git" and tok in ("-C", "-c"):
+            skip = True  # an option with a value of its own
+            continue
+        if tok.startswith("-") and not (exe == "yarn" and tok in _YARN_OFFLINE):
+            continue
+        sub = tok
+        break
+    wanted = _DOWNLOADING_SUBCOMMANDS[exe]
+    if exe == "yarn":
+        return sub not in _YARN_OFFLINE
+    return sub in wanted
+
+
+def command_needs_network(command: str) -> bool:
+    """Whether a shell command downloads, judged from its text before it runs.
+
+    The workflow shell (this tool) has no network, and the networked one (host_bash) asks a
+    person, so a planner refuses such a step while the model can still change course,
+    instead of letting it fail later where nobody reads the error. True for what
+    `classify_command` already calls a network fetch, and for a segment that installs or
+    fetches with pip (also `python -m pip`, `uv pip`), npm, pnpm, yarn, git (clone, fetch,
+    pull, push) or a system package manager. A list, so it can miss a downloader: such a
+    command then fails at run time with the no-network hint above, as before.
+    """
+    import shlex as _shlex
+    from vaf.core.command_policy import classify_command
+    verdict = classify_command(command or "", profile="jailed")
+    if "network_fetch" in verdict.categories:
+        return True
+    for seg in verdict.segments:
+        try:
+            tokens = _shlex.split(seg, posix=True)
+        except ValueError:
+            tokens = seg.split()
+        if _downloads(tokens):
+            return True
+    return False
+
 
 class BashTool(BaseTool):
     """Execute shell commands on the system."""

@@ -37,9 +37,11 @@ This gives the tool access to:
 run_temp execution
 -------------------
   1. Build WorkflowStep objects from the step dicts the agent provides.
-  2. Collect tools from self._agent.tools (the full live registry).
-  3. Run WorkflowEngine.execute() synchronously.
-  4. Return the result string.
+  2. Collect the registry: the workflow primitives with self._agent.tools on top.
+  3. Check every step before anything starts (_preflight_steps): one refusal
+     naming all steps that cannot run, in the same turn.
+  4. Run in the background, or WorkflowEngine.execute() synchronously.
+  5. Return the result string.
 
 Nothing is written to disk. The in-memory WORKFLOW_TEMPLATES dict is not
 modified either — the engine receives the steps directly.
@@ -100,6 +102,107 @@ def _repair_raw_step(s: dict) -> dict:
             if isinstance(out.get("args"), dict) and out["args"]:
                 out["input"] = f"Run {out.get('tool') or 'coding_agent'}"
     return out
+
+
+# Step tool names a model writes that are not tools, or are tools a workflow should not
+# run, mapped to the tool that takes the SAME arguments (tests/test_workflow_step_preflight.py
+# checks that for every real source tool). python_exec takes `code` like python_sandbox, and
+# the sandbox is the lane a workflow may run without asking, while python_exec refuses there
+# without the user's grant. `bash` is not here: it is a workflow tool of its own, and
+# mapping it to the sandbox kept its `command` for a tool that needs `code`, so every such
+# step failed in the background (live incident).
+_STEP_TOOL_ALIASES = {
+    "python_exec": "python_sandbox",
+    "python":      "python_sandbox",
+    "search":      "web_search",
+    "write":       "write_file",
+    "read":        "read_file",
+}
+
+
+def _resolve_step_tool(tool_val: Any) -> str:
+    """The tool a step names, with the aliases above applied; coding_agent when it names none."""
+    tool_str = str(tool_val or "").strip() or "coding_agent"
+    return _STEP_TOOL_ALIASES.get(tool_str.lower(), tool_str)
+
+
+def _preflight_steps(normalised: List[dict], tools: Dict[str, Any],
+                     visible: Optional[set] = None) -> Optional[str]:
+    """Check a plan before anything runs; the refusal for ALL broken steps, or None.
+
+    A run_temp workflow usually runs in the background, so a step that cannot run used to
+    fail there after the turn had ended, and the model learned of it a turn later and
+    invented the results (live incident). The questions asked are the dispatcher's own: the
+    step's args are built the way the engine builds them (`build_step_args`, with the
+    `{placeholders}` left literal) and checked against the tool's schema the way dispatch
+    checks them (`repair_tool_input`), so a step is refused here only for what would refuse
+    it at run time anyway. Only a MISSING required field refuses: a placeholder can fail a
+    type check that its value passes once resolved.
+
+    Refused as well, because no repair makes them runnable: a tool that does not exist; a
+    `bash` step that downloads (the workflow shell has no network, and the networked shell
+    asks a person); and a `host_bash` step, because this lane runs its steps without asking
+    the user while host_bash in chat asks for every command.
+
+    NAMED BOUNDARY: a private helper, not on the facade. Measured: this module (its two
+    actions) is the only planner that checks steps before they run; the facade's ToolCaller
+    applies the same schema check at dispatch, so an embedder's own plan fails there with the
+    same words. A second planner is the trigger for a public primitive.
+    """
+    from vaf.core.tool_dispatch import unknown_tool_hint
+    from vaf.core.tool_input_repair import MISSING_REQUIRED, repair_tool_input
+    from vaf.tools.bash import command_needs_network
+    from vaf.workflows.engine import build_step_args
+
+    visible = set(tools) if visible is None else visible
+    problems: List[str] = []
+    for i, step in enumerate(normalised, 1):
+        name = step.get("tool") or ""
+        label = f"step {i} ({name})"
+        if name == "host_bash":
+            problems.append(
+                f"{label}: a workflow runs its steps without asking the user, and host_bash "
+                "needs the user's OK for every command. Call host_bash directly in the chat "
+                "instead, one call per command (the user confirms each).")
+            continue
+        tool = tools.get(name)
+        if tool is None:
+            hint = unknown_tool_hint(name, tools)
+            problems.append(f"{label}: Unknown tool '{name}'." + (f" {hint}" if hint else ""))
+            continue
+        try:
+            args = build_step_args(name, str(step.get("input") or ""), step.get("args"),
+                                   lambda text: text)
+        except Exception:
+            continue  # the engine reports a step it cannot build on its own
+        try:
+            _, _, errors = repair_tool_input(getattr(tool, "parameters", None), dict(args),
+                                             getattr(tool, "input_aliases", None))
+        except Exception:
+            errors = []
+        missing = [e for e in errors if str(e).startswith(MISSING_REQUIRED)]
+        if missing:
+            problems.append(f"{label}: " + " ".join(missing))
+            continue
+        command = args.get("command") if name == "bash" else None
+        if isinstance(command, str) and command_needs_network(command):
+            if "host_bash" in visible:
+                problems.append(
+                    f"{label}: the workflow shell has no network, so `{command}` cannot run "
+                    "there. Run it with host_bash yourself, one call per command, outside the "
+                    "workflow (it asks the user first): host_bash(command=\""
+                    + command.replace('"', '\\"') + '").')
+            else:
+                problems.append(
+                    f"{label}: the workflow shell has no network, so `{command}` cannot run "
+                    "there. For Python packages your code needs, use a python_sandbox step "
+                    "with args.packages; a download onto the user's disk is not possible "
+                    "from here, so tell the user.")
+    if not problems:
+        return None
+    return ("Error: nothing ran, the workflow plan has steps that cannot run:\n"
+            + "\n".join(f"- {p}" for p in problems)
+            + "\nFix these steps and call create_agent_workflow again.")
 
 
 class AgentWorkflowBuilderTool(BaseTool):
@@ -418,7 +521,7 @@ class AgentWorkflowBuilderTool(BaseTool):
             # Weak-model field-shape repair first (tool <- action/agent_id,
             # input <- task/prompt/description/..., args-only steps).
             s = _repair_raw_step(s)
-            tool_val = s.get("tool") or "coding_agent"
+            tool_val = s.get("tool")
             raw_input = s.get("input") or ""
             if isinstance(raw_input, dict):
                 raw_input = json.dumps(raw_input, ensure_ascii=False)
@@ -429,17 +532,7 @@ class AgentWorkflowBuilderTool(BaseTool):
                     f"'input' (the prompt/instruction for its tool), or 'args' with the "
                     f"tool's parameters."
                 )
-            # Normalise tool aliases the LLM sometimes emits
-            _tool_aliases = {
-                "python_exec": "python_sandbox",
-                "python":      "python_sandbox",
-                "bash":        "python_sandbox",
-                "search":      "web_search",
-                "write":       "write_file",
-                "read":        "read_file",
-            }
-            tool_str = str(tool_val).strip() or "coding_agent"
-            tool_str = _tool_aliases.get(tool_str.lower(), tool_str)
+            tool_str = _resolve_step_tool(tool_val)
             step_dict: dict = {
                 "input":       raw_input,
                 "tool":        tool_str,
@@ -469,6 +562,14 @@ class AgentWorkflowBuilderTool(BaseTool):
                 "step's output feeds the next). The only valid single-step case is scheduling an "
                 "automation via the 'create_automation' tool."
             )
+
+        # The run's registry, collected before anything starts: the preflight checks every
+        # step against it, and the engine (inline) runs on it.
+        tools = self._collect_tools()
+        _refusal = _preflight_steps(normalised, tools, self._visible_tool_names(tools))
+        if _refusal:
+            self.log(f"[RUN_TEMP] refused before running: {_refusal[:400]}")
+            return _refusal
 
         # Build WorkflowStep objects directly (no WORKFLOW_TEMPLATES mutation)
         try:
@@ -513,8 +614,6 @@ class AgentWorkflowBuilderTool(BaseTool):
                 _auto_validated.append(s.tool)
             self.log(f"[RUN_TEMP] auto-enabled output validation for steps: {sorted(set(_auto_validated))}")
 
-        # Tool registry: prefer agent's live tools (full set), fall back to stubs
-        tools = self._collect_tools()
         if not tools:
             return "Error: no tools available for workflow execution."
 
@@ -800,32 +899,27 @@ class AgentWorkflowBuilderTool(BaseTool):
         return f"Error: Temporary workflow '{name}' failed: {result.error}"
 
     def _collect_tools(self) -> Dict[str, Any]:
-        """
-        Return the agent's live tool registry.  If _agent is not injected
-        (e.g. in tests), fall back to instantiating a minimal set.
-        """
+        """The run's tool registry: the workflow primitives with the agent's live registry on
+        top, the way execute_workflow builds it (vaf/workflows/tool_overlay.py). The main
+        agent does not register the primitives it hides from chat (`bash`, `move_file`), so
+        its registry alone left a run_temp step on them with "Tool not found"."""
+        from vaf.workflows.tool_overlay import workflow_primitives
+        tools = workflow_primitives()
         agent = self._agent
-        if agent is not None and hasattr(agent, "tools") and agent.tools:
-            return dict(agent.tools)
-
-        # Minimal fallback for test / offline environments
-        tools: Dict[str, Any] = {}
-        _optional_imports = [
-            ("vaf.tools.search",     "WebSearchTool",      "web_search"),
-            ("vaf.tools.coder",      "CodingAgentTool",    "coding_agent"),
-            ("vaf.tools.research",   "ResearchAgentTool",  "research_agent"),
-            ("vaf.tools.filesystem", "WriteFileTool",      "write_file"),
-            ("vaf.tools.filesystem", "ReadFileTool",       "read_file"),
-        ]
-        for module_path, class_name, tool_name in _optional_imports:
-            try:
-                import importlib
-                mod = importlib.import_module(module_path)
-                cls = getattr(mod, class_name)
-                tools[tool_name] = cls()
-            except Exception:
-                pass
+        if agent is not None and getattr(agent, "tools", None):
+            tools.update(dict(agent.tools))
         return tools
+
+    def _visible_tool_names(self, tools: Dict[str, Any]) -> set:
+        """The tool names the model may call in chat (Agent.visible_tools), for the advice a
+        refusal gives; the run's registry when there is no agent to ask."""
+        agent = self._agent
+        try:
+            if agent is not None and hasattr(agent, "visible_tools"):
+                return set(agent.visible_tools())
+        except Exception:
+            pass
+        return set(tools)
 
     # ─── create (persistent) ──────────────────────────────────────────────────
 
@@ -861,7 +955,7 @@ class AgentWorkflowBuilderTool(BaseTool):
                 return f"Error: step {i + 1} missing non-empty 'input' field."
             step_dict2: dict = {
                 "input":       s["input"],
-                "tool":        s.get("tool", "coding_agent"),
+                "tool":        _resolve_step_tool(s.get("tool")),
                 "output":      s.get("output") or f"step_{i + 1}_output",
                 "description": s.get("description") or f"Step {i + 1}",
             }
@@ -870,6 +964,13 @@ class AgentWorkflowBuilderTool(BaseTool):
                 if _f in s:
                     step_dict2[_f] = s[_f]
             normalised.append(step_dict2)
+
+        # The same check as run_temp, before anything is written: a saved plan that cannot
+        # run fails each time it is started, where nobody can fix it.
+        _tools = self._collect_tools()
+        _refusal = _preflight_steps(normalised, _tools, self._visible_tool_names(_tools))
+        if _refusal:
+            return _refusal
 
         wf_dict = {
             "name":        name,

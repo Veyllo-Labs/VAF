@@ -244,7 +244,7 @@ create_agent_workflow(
 - No file is written to disk. Nothing is saved after execution.
 - Ideal for complex one-off tasks: the agent designs a multi-step plan, executes it, and returns the result.
 - Available to the agent in **any session** (not admin-only).
-- It runs in the background when it can (see "Where a workflow runs" above); otherwise the `WorkflowEngine` runs inline in the turn, using the agent's **full live tool registry** - all tools currently loaded, including custom ones. Non-spawn steps run through the shared dispatch pipeline: the same `admin_only` block, account tool allowlist and embedder authorizer as chat (confirmation gate excepted - see [TOOL_ROUTER_ARCHITECTURE.md](TOOL_ROUTER_ARCHITECTURE.md)).
+- It runs in the background when it can (see "Where a workflow runs" above); otherwise the `WorkflowEngine` runs inline in the turn, on the workflow primitives (`tool_overlay.workflow_primitives`, which include `bash` and `move_file`) with the agent's **full live tool registry** on top - all tools currently loaded, including custom ones - the same registry `execute_workflow` builds. Non-spawn steps run through the shared dispatch pipeline: the same `admin_only` block, account tool allowlist and embedder authorizer as chat (confirmation gate excepted - see [TOOL_ROUTER_ARCHITECTURE.md](TOOL_ROUTER_ARCHITECTURE.md)).
 - Each step's `output` is available as `{variable}` in subsequent steps.
 - **Weak-model step repair (`_repair_raw_step`):** the canonical step shape is `input` + `tool`,
   but a weak model reliably mangles the FIELD NAMES while getting the plan right - live incident:
@@ -286,6 +286,37 @@ create_agent_workflow(
   it next to "completed successfully", concluded the run produced nothing, and redid all the work
   manually (live incident; see also the removed librarian completion-message anti-pattern in the
   templates).
+- **Step tool aliases.** A step may name `python_exec` or `python` (run as `python_sandbox`),
+  `search` (`web_search`), `write` (`write_file`) or `read` (`read_file`); `_STEP_TOOL_ALIASES`
+  in the builder, applied in `run_temp` AND `create`. An alias keeps the step's args, so the
+  target must take every argument the source tool requires (`python_exec` and `python_sandbox`
+  both take `code`; the sandbox is the lane a workflow may run without asking).
+  `tests/test_workflow_step_preflight.py` guards that. `bash` is not an alias: it is a workflow
+  tool of its own, and mapping it to the sandbox kept its `command` for a tool that needs
+  `code`, so every such step failed in the background (live incident).
+- **Checked before anything runs (`_preflight_steps`, `run_temp` AND `create`).** A temporary
+  workflow usually runs in the background, so a step that cannot run used to fail there after
+  the turn had ended. Every step is now checked in the same call: its args are built the way
+  the engine builds them (`engine.build_step_args`, the one place that happens, with the
+  `{placeholders}` left literal) and checked against the tool's schema the way dispatch checks
+  them. Refused: a missing required field (a type mismatch alone never refuses, because a
+  placeholder resolves at run time), a tool that does not exist (with `unknown_tool_hint`'s
+  suggestion), a `bash` step that downloads (`bash.command_needs_network`: pip, npm, pnpm,
+  yarn, git clone/fetch/pull/push, a system package manager, curl/wget), and any `host_bash`
+  step. All problems of all steps come back as ONE `Error:` result that says nothing ran, one
+  line per step, so a single retry can fix everything; a refused `create` writes nothing. A
+  download is answered with the way that works: `host_bash(command="...")` called directly,
+  one call per command, when the agent has host_bash (it asks the user first), otherwise
+  `python_sandbox` with `args.packages` for packages the code needs. A `host_bash` step is
+  refused because this lane runs its steps without the confirmation gate, while host_bash in
+  chat asks for every command. NAMED BOUNDARY: the check is a private helper of the builder,
+  the only planner that checks steps before they run; the facade's `ToolCaller` applies the
+  same schema check at dispatch.
+- **`bash` steps run in the workflow folder, without network.** The engine assigns the run's
+  project directory as the shell's workspace (`_inject_workflow_paths`) and drops a
+  step's own `base_dir` first, because the shell takes `base_dir` as the folder it may write;
+  without a project directory, bash refuses. The jailed shell has no network, which is why
+  the check above refuses a download there.
 - **Minimum two steps.** A single-step `run_temp` is rejected with an error - a lone step has no output to chain and gains nothing from the engine, so the agent should call that tool directly instead. The only exception is a single `create_automation` step (scheduling a task, as the built-in "Create Scheduled Task" workflow does), which is allowed.
 
 ##### Step fields
@@ -319,7 +350,7 @@ create_agent_workflow(
 
 **Rule:** Use `research_agent` for patent/market/technical research needing many sources. Use `coding_agent` for file generation and scripts.
 
-The table above lists the common ones, but a step can call **any tool the user has in chat - and may use there**: non-spawn steps pass the same hard policy, account allowlist and authorizer as a chat turn (confirmation gate excepted), and saved templates additionally pass the per-user workflow START gate - `search_tools`, `list_tools`, calendar/memory/GitHub tools, custom tools, etc. Both `run_temp` and **saved** workflows (`execute_workflow`) run on the agent's full live registry, plus the workflow primitives (`bash`, `move_file`) that the Main Agent normally delegates to sub-agents (`write_file` is registered to the Main Agent directly as well). (Saved workflows previously used a fixed subset, which is why a step like `search_tools` could report "Tool not found" - they now overlay the same live registry as `run_temp`.)
+The table above lists the common ones, but a step can call **any tool the user has in chat - and may use there**: non-spawn steps pass the same hard policy, account allowlist and authorizer as a chat turn (confirmation gate excepted), and saved templates additionally pass the per-user workflow START gate - `search_tools`, `list_tools`, calendar/memory/GitHub tools, custom tools, etc. Both `run_temp` and **saved** workflows (`execute_workflow`) run on the agent's full live registry, plus the workflow primitives (`bash`, `move_file`) that the Main Agent normally delegates to sub-agents (`write_file` is registered to the Main Agent directly as well); both build it the same way, `workflow_primitives()` with the live registry on top. A step the model writes itself cannot name `host_bash` (refused before the run, see above). (Saved workflows previously used a fixed subset, which is why a step like `search_tools` could report "Tool not found" - they now overlay the same live registry as `run_temp`.)
 
 ##### Shared project path (`{workflow_project_path}`)
 

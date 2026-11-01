@@ -356,8 +356,10 @@ non-spawn workflow step therefore gets the `admin_only` block, the channel check
 account allowlist, the embedder's authorizer, argument repair and declared identity -
 the same answers as a chat turn. What stays off, each deliberately: the confirmation
 gate (deliberate: a workflow runs unattended and a dialog would stall it, so gated tools
-such as `host_bash` run in a workflow step without being asked - including in a
-`run_temp` workflow the model builds itself; with the gate off, an authorizer's `ask()`
+such as `host_bash` run in a workflow step without being asked; a `run_temp` or `create`
+workflow the model builds itself is refused before it runs when a step names `host_bash`, and
+the refusal points the model at calling host_bash directly in chat, where every command is
+confirmed (`_preflight_steps` in `vaf/tools/agent_workflow_builder.py`); with the gate off, an authorizer's `ask()`
 degrades to no opinion here, only `deny()` binds), `tool_start`/`tool_end` events (the lane reports
 through its own step callback protocol), and result truncation (`None`). What stays off
 by BRANCH: spawn-mode sub-agent steps (`wait_for_subagents=True`, e.g. every heavy step

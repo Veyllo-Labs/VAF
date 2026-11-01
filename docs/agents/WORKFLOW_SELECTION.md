@@ -304,7 +304,7 @@ create_agent_workflow(
   suggestion; `create` saves such a step and says so in its answer instead, because a saved
   workflow may run in a lane whose registry has the tool, such as the automation lane's
   channel tools), a `bash` step that downloads (`bash.command_needs_network`: pip, npm, pnpm,
-  yarn when bare or with a fetching subcommand, so a package script such as `yarn dev` runs,
+  yarn when bare or with a fetching subcommand, so a package script such as `yarn dev` runs, the value of an option such as `--cwd app` never counting as the subcommand,
   git clone/fetch/pull/push, a system package manager, curl/wget), and any `host_bash`
   step. All problems of all steps come back as ONE `Error:` result that says nothing ran, one
   line per step, so a single retry can fix everything; a refused `create` writes nothing. A

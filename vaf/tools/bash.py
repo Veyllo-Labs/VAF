@@ -61,6 +61,19 @@ _PIP_RE = re.compile(r"^pip(\d+(\.\d+)?)?$")
 _PYTHON_RE = re.compile(r"^python(\d+(\.\d+)?)?$")
 # Flags that ARE the yarn command (`yarn --version`), not options in front of one.
 _YARN_COMMAND_FLAGS = {"--version", "-v", "--help", "-h"}
+# Options in front of the subcommand that take the NEXT token as their value, per executable
+# (`yarn --cwd app install`: `app` is the folder, `install` the subcommand). `--opt=value`
+# is one token and needs no entry.
+_VALUE_OPTIONS = {
+    "git": {"-C", "-c", "--git-dir", "--work-tree", "--namespace"},
+    "yarn": {"--cwd", "--cache-folder", "--modules-folder", "--global-folder", "--link-folder",
+             "--mutex", "--network-timeout", "--network-concurrency", "--registry", "--proxy",
+             "--https-proxy", "--use-yarnrc", "--preferred-cache-folder", "--otp"},
+    "npm": {"--prefix", "-C", "--workspace", "-w", "--registry", "--cache", "--userconfig"},
+    "pnpm": {"--dir", "-C", "--filter", "-F", "--registry", "--store-dir"},
+    "pip": {"--cache-dir", "--log", "--proxy", "--timeout", "--retries", "--exists-action",
+            "--cert", "--client-cert", "--python"},
+}
 
 
 def _downloads(tokens) -> bool:
@@ -84,7 +97,7 @@ def _downloads(tokens) -> bool:
         if skip:
             skip = False
             continue
-        if exe == "git" and tok in ("-C", "-c"):
+        if tok in _VALUE_OPTIONS.get(exe, ()):
             skip = True  # an option with a value of its own
             continue
         if tok.startswith("-") and not (exe == "yarn" and tok in _YARN_COMMAND_FLAGS):

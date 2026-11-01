@@ -24,7 +24,7 @@ MUTATIONS, each turns the named tests red:
   test_network_bash_step_refused;
 - remove the host_bash check -> test_host_bash_step_refused;
 - yarn back to "every subcommand but a short list downloads" -> the yarn rows of
-  test_command_needs_network;
+  test_command_needs_network; option values no longer skipped -> its option rows;
 - no de-duplication, or the "Retry the SAME call" sentence kept -> the missing-field test;
 - `create` refusing an unknown tool -> test_create_saves_a_plan_with_a_tool_of_another_lane;
 - the execute_workflow check removed -> the saved-workflow test; the `@workflow_id` check or
@@ -256,6 +256,12 @@ def test_create_refuses_without_writing(run, tmp_path):
     ("yarn install", True), ("yarn add left-pad", True), ("yarn dlx create-vite", True),
     ("yarn upgrade", True), ("yarn start", False), ("yarn dev", False), ("yarn tsc", False),
     ("yarn format", False), ("yarn --version", False),
+    # an option's value is not the subcommand
+    ("yarn --cwd app install", True), ("yarn --cwd app dev", False),
+    ("yarn --cwd=app add x", True), ("yarn --network-timeout 60000 install", True),
+    ("npm --prefix web install", True), ("npm --prefix web run build", False),
+    ("pnpm --dir web add x", True), ("pip --cache-dir /tmp/c install x", True),
+    ("git -C repo status", False), ("git --git-dir .git fetch", True),
 ])
 def test_command_needs_network(command, downloads):
     from vaf.tools.bash import command_needs_network

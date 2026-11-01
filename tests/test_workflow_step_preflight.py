@@ -383,6 +383,22 @@ def test_the_workflow_command_refuses_it_too(run, tmp_path, monkeypatch):
     assert not _FakeEngine.runs, "an engine was built for a refused workflow"
 
 
+def test_delete_refuses_a_path_id(run, tmp_path, monkeypatch):
+    """The agent's delete joins the id into a file name; a path escapes nothing."""
+    from types import SimpleNamespace as _NS
+    from vaf.tools.agent_workflow_builder import AgentWorkflowBuilderTool
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    victim = tmp_path / "secret.py"
+    victim.write_text("keep me")
+    agent = _NS(tools={}, visible_tools=lambda: {}, current_session_id=None,
+                _current_user_role="admin", _current_user_scope_id=None, _current_username="a")
+    out = AgentWorkflowBuilderTool().run(action="delete", _agent=agent,
+                                         workflow_id="../secret")
+    assert out.startswith("Error:") and "valid workflow id" in out, out
+    assert victim.exists(), "delete escaped the workflows directory"
+
+
 def test_create_saves_a_plan_that_can_run(run, tmp_path):
     out = run([{"tool": "web_search", "input": "x", "output": "w"},
                {"tool": "write_file", "args": {"path": "a.md", "content": "{w}"}}],

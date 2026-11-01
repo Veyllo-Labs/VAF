@@ -28,7 +28,7 @@ These are distinct layers; the terms are easy to confuse.
 | Layer | What it is | Loaded how | Authored as |
 |-------|-----------|-----------|-------------|
 | **Tool** | A single capability the model can call (`web_search`, `coding_agent`, …). | Scoped per turn by the tool router. | Python `BaseTool` subclass. |
-| **Workflow** | A fixed, multi-step pipeline of tool calls that runs deterministically on the `WorkflowEngine`. | Matched by the router; executed via `execute_workflow`. | `WORKFLOW` dict (`~/.vaf/workflows/<id>.py`). |
+| **Workflow** | A fixed, multi-step pipeline of tool calls that runs deterministically on the `WorkflowEngine`. | Matched by the router; executed via `execute_workflow`. | `WORKFLOW` dict literal (`~/.vaf/workflows/<id>.py`), read as data, never executed. |
 | **Skill** | Expert *instructions* the agent reads and then follows flexibly using its own tools. | Matched by name+description; body loaded on demand via `use_skill`. | `SKILL.md` folder (`~/.vaf/skills/<id>/`). |
 | **Whare Wananga** | Per-tool know-how the agent *learns* about how to call one tool correctly. | Injected into a tool's description when scoped. | Learned, not authored. See [WHARE_WANANGA.md](../memory/WHARE_WANANGA.md). |
 

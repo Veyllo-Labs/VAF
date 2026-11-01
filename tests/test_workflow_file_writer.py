@@ -32,9 +32,9 @@ WORKFLOW = {"name": "Brief", "description": "Morgens, mit Umlauten: äöü", "tr
 
 def test_the_literal_round_trips(tmp_path):
     path = tmp_path / "brief.py"
-    write_workflow_file(str(path), WORKFLOW, ["created_by: agent", "Workflow: Brief"])
+    write_workflow_file(str(path), WORKFLOW, ["created_by: agent"])
     text = path.read_text(encoding="utf-8")
-    assert text.startswith("# created_by: agent\n# Workflow: Brief\nWORKFLOW = ")
+    assert text.startswith("# created_by: agent\nWORKFLOW = ")
     assert ast.literal_eval(text.split("WORKFLOW = ", 1)[1]) == WORKFLOW
     assert not (tmp_path / "brief.py.tmp").exists()
 
@@ -53,6 +53,20 @@ def test_a_header_line_is_one_line(tmp_path, text):
         write_workflow_file(str(tmp_path / "x.py"), WORKFLOW, [f"Workflow: {text}"])
     assert not (tmp_path / "x.py").exists()
     assert workflow_text_problem("name", "Morgen-Briefing (DE) äöü") == ""
+
+
+def test_a_header_line_cannot_be_an_encoding_declaration(tmp_path):
+    with pytest.raises(ValueError):
+        write_workflow_file(str(tmp_path / "x.py"), WORKFLOW, ["coding: utf-7"])
+    assert not (tmp_path / "x.py").exists()
+
+
+def test_a_non_finite_number_is_refused(tmp_path):
+    bad = {"name": "n", "description": "d", "triggers": [],
+           "steps": [{"tool": "web_search", "input": "x", "timeout": float("nan")}]}
+    with pytest.raises(ValueError):
+        write_workflow_file(str(tmp_path / "x.py"), bad, ["created_by: agent"])
+    assert not (tmp_path / "x.py").exists()
 
 
 @pytest.fixture
@@ -91,3 +105,6 @@ def test_one_writer_for_workflow_files():
     assert writers == ["vaf/workflows/templates.py"], f"hand-built workflow file writers: {writers}"
     server = (_REPO / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
     assert server.count("write_workflow_file(") == 2
+    # No writer puts the name (or any model text) into a header line.
+    assert 'f"Workflow: {name}"' not in (_REPO / "vaf" / "tools" / "agent_workflow_builder.py").read_text(encoding="utf-8")
+    assert 'User-created workflow: {_wf_name}' not in server

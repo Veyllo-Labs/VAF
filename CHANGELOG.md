@@ -169,9 +169,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   can point the folder its steps write to, and its shell steps work in, at another place (for
   example VAF's settings folder or another account's projects), and the cleanup of temporary
   files after a workflow only ever removes files in your own projects folder.
-- **Saving a workflow can no longer run code.** A workflow name with a line break became code
-  in the saved workflow file, which runs when the file loads. Such a name is now refused, and
-  a saved workflow with a step marked optional now loads instead of being skipped.
+- **A saved workflow is data, not code.** Your saved workflows (`~/.vaf/workflows`) are now
+  read as data: VAF takes the workflow out of the file without running the file, so a workflow
+  whose name or text was crafted to run code on load cannot. A workflow with a step marked
+  optional now loads instead of being quietly skipped.
 - **The background agent no longer changes how everybody else's chats run.** While the
   background agent (Thinking mode) worked for one person, everything else VAF did at the
   same time was treated as part of that run: with DeepSeek Auto every chat of every account

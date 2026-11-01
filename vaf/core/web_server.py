@@ -7309,7 +7309,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 "steps": _wf_steps,
                             }
                             write_workflow_file(_wf_path, _wf_dict,
-                                                [f"User-created workflow: {_wf_name}"])
+                                                ["User-created workflow"])
 
                             reload_workflows()
                             await websocket.send_json({"type": "workflow_created", "workflow_id": _wf_id})
@@ -7365,7 +7365,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 "steps": _wf_steps,
                             }
                             write_workflow_file(_wf_path, _wf_dict,
-                                                [f"User-created workflow: {_wf_name}"])
+                                                ["User-created workflow"])
 
                             reload_workflows()
                             await websocket.send_json({"type": "workflow_updated", "workflow_id": _wf_id})

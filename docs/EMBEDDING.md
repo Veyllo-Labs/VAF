@@ -2407,8 +2407,10 @@ order, which is the bug this exists to remove.
 Beyond tools, the product loads three other user-extensible artifact kinds -
 usable from an embedded engine too, documented in their own pages:
 
-- **Custom workflows** - Python files with a module-level `WORKFLOW` dict,
-  dropped in `~/.vaf/workflows/`, see
+- **Custom workflows** - a file in `~/.vaf/workflows/` holding a module-level `WORKFLOW`
+  dict written as a plain literal. These files are read as DATA (`ast.literal_eval` of the
+  `WORKFLOW = {...}` value, never executed), so the dict must be a literal, not computed; a
+  file that is not is skipped with a log line. See
   [WORKFLOW_SELECTION.md](agents/WORKFLOW_SELECTION.md).
 - **Skills** - reusable prompt/procedure packages, see [SKILLS.md](agents/SKILLS.md).
 - **MCP servers** - register external MCP tool servers in `mcp_servers.json`,

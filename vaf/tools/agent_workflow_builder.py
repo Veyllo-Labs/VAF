@@ -1062,8 +1062,9 @@ class AgentWorkflowBuilderTool(BaseTool):
                 "Use action='delete' first, or choose a different workflow_id."
             )
 
-        # The first line is the marker is_agent_created reads.
-        write_workflow_file(wf_path, wf_dict, ["created_by: agent", f"Workflow: {name}"])
+        # The ONLY header line is the marker is_agent_created reads; the name lives inside the
+        # literal, never in a comment (a comment line can carry a source-encoding declaration).
+        write_workflow_file(wf_path, wf_dict, ["created_by: agent"])
 
         try:
             from vaf.workflows.templates import reload_workflows, list_templates
@@ -1180,7 +1181,13 @@ class AgentWorkflowBuilderTool(BaseTool):
             return "Error: 'workflow_id' is required for action='delete'."
 
         user_dir = os.path.expanduser("~/.vaf/workflows")
-        wf_path  = os.path.join(user_dir, f"{workflow_id}.py")
+        # The id becomes a file name: one entry, never a path (the web handlers do the same).
+        from vaf.core.path_jail import PathEscape, safe_entry_name
+        try:
+            wf_file = safe_entry_name(f"{workflow_id}.py")
+        except PathEscape:
+            return f"Error: '{workflow_id}' is not a valid workflow id."
+        wf_path  = os.path.join(user_dir, wf_file)
 
         if not os.path.exists(wf_path):
             return (

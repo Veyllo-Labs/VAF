@@ -33,6 +33,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   engine. The provider is now called "Local (this machine)". A Settings page opened before a
   switch no longer writes the old engine back when saved, a vLLM model download shows in the
   download banner, and the banner's Cancel now also stops a download the page did not start.
+  vLLM keeps about 3.3 GB of GPU memory free for the screen when the GPU drives a display, so a
+  desktop no longer freezes when vLLM fills the card. Settings > AI & Model has a GPU memory
+  slider for vLLM (automatic by default, in percent with the size in GB, and whether the model
+  fits at that value), also as `vaf engine vllm --gpu-share` and in the terminal's full-screen
+  settings; applying it restarts vLLM.
 - **vLLM engine on AMD GPUs.** `vaf engine vllm` and Settings now install vLLM's ROCm build on
   Linux with a Radeon RX 7900 or RX 9000, Ryzen AI 300 or MAX, or Instinct MI200, MI300 or
   MI350 GPU (ROCm 7.2 or newer, Python 3.12, glibc 2.39 or newer, for example Ubuntu 24.04),
@@ -57,9 +62,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
-- **The engine cards recommend llama.cpp for edge devices and single users, vLLM for servers
-  and high-end setups**, in Settings > AI & Model, the first-run wizard and the terminal's
-  full-screen settings.
+- **The llama.cpp and vLLM cards now say in the same way whom each engine is for, what it
+  needs and how long it takes to start**: llama.cpp for everyday tasks on personal PCs, laptops
+  and edge devices, vLLM for servers and high-end PCs that answer many requests at once, in
+  Settings > AI & Model, the first-run wizard and the terminal's full-screen settings.
 - **Standing grants moved to Settings > Account**, below your signed-in devices and tokens: what
   you allowed "always" or for a chat, and your trusted folders, sit with the rest of your own
   account instead of between the connections. The settings search now finds them, and the

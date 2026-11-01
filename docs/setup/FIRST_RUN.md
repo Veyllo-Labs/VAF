@@ -138,9 +138,15 @@ What **Skip** does depends on the installation profile
 On either profile you can add this or other providers later under **Settings → AI & Model**.
 
 On the Full profile the step also shows **Engine**, the engine of the local model, above the
-skip button: llama.cpp (preselected, recommended for edge devices and single users) and vLLM
-(recommended for servers and high-end setups), with this machine's verdict
-([VLLM_ENGINE.md](../llm/VLLM_ENGINE.md)). vLLM can be chosen only where it runs; elsewhere
+skip button: llama.cpp (preselected; "For everyday tasks on personal PCs, laptops and edge
+devices", then "Runs GGUF models on almost any GPU or on the CPU alone, takes only the memory
+it needs and starts in seconds", and the note "llama.cpp runs on this machine.") and vLLM ("For
+servers and high-end PCs that answer many requests at once", then "Runs Hugging Face models on
+a supported NVIDIA or AMD GPU, reserves its share of GPU memory up front and starts in one to
+two minutes", with this machine's verdict as its note)
+([VLLM_ENGINE.md](../llm/VLLM_ENGINE.md)). The wizard has no GPU memory slider: vLLM starts on
+the automatic share, which keeps memory free for a screen; the slider is in Settings > AI &
+Model. vLLM can be chosen only where it runs; elsewhere
 its card is disabled and says why. With NVIDIA it needs Linux, a GPU of compute capability 7.5 or newer, an NVIDIA driver 580 or newer
 and glibc 2.31 or newer (2.34 on ARM). With AMD it needs Linux on x86_64, a Radeon RX 7900 or
 RX 9000, Ryzen AI 300 or MAX, or Instinct MI200, MI300 or MI350 GPU, ROCm 7.2 or newer, a

@@ -308,8 +308,22 @@ argument.
   counterpart of llama.cpp's quantized KV cache. A launch that dies with it is retried once
   with `auto` (the model's own 16-bit dtype), and the process remembers which attempt came
   up, so later starts of the same signature begin there.
-- **GPU share:** `--gpu-memory-utilization` = (free - 512 MiB) / total from `nvidia-smi`,
-  within 0.50..0.92, unless `vllm_gpu_memory_utilization` sets it. On an AMD GPU free and
+- **GPU share:** vLLM preallocates its whole share at launch (the weights, then KV blocks up
+  to the share, whatever `--max-model-len` is). `--gpu-memory-utilization` = (free - 512 MiB)
+  / total from `nvidia-smi`, within 0.50..0.92, then at most (total - 3328 MiB) / total when
+  the GPU drives a display or that cannot be read (the desktop reserve, see below), floored
+  to 0.01 (`vllm_server.auto_share`, `floor_share`), unless `vllm_gpu_memory_utilization`
+  sets it. The floor keeps the launch argument equal to the share the fit checked: the
+  two-decimal format rounds, and 0.675 printed as 0.68 (51 MiB more than checked on 10 GB).
+  A share set by hand (the slider, `--gpu-share`, the TUI: 0.30 to 0.95,
+  `vllm_server.SHARE_RANGE`) is taken as it is and never capped by the reserve; one that
+  leaves less than the reserve on a display GPU is marked `below_reserve`, and `vaf engine
+  vllm` warns. Whether the GPU drives a display is read without root:
+  `gpu_detection.nvidia_display_active` (nvidia-smi `display_active`: `Enabled`, `Disabled`,
+  anything else unknown; `display_mode` answers "deprecated" on a current driver), and on AMD
+  `gpu_detection.amd_display_active` (the DRM connectors of the KFD node's render device,
+  `/sys/class/drm/renderD<n>/device/drm/card*/card*-*/status` and `enabled`).
+  On an AMD GPU free and
   total come from the amdgpu driver (`/sys/class/drm/renderD<n>/device/mem_info_vram_total`
   and `mem_info_vram_used`, `gpu_detection.amd_vram_mb`), never from nvidia-smi. The fp8 KV
   cache first and the one fallback to `auto` are the same on both builds (the attention plan
@@ -327,7 +341,11 @@ argument.
   memory and what other programs hold, to close programs that use the GPU and try again,
   that the local engine stays as it was (llama.cpp can move part of the model to the
   CPU), and a smaller model only when the chosen one is not the smallest default (never a smaller
-  context: the floor is VAF's own need, and `n_ctx` is shared with llama.cpp). `vaf engine
+  context: the floor is VAF's own need, and `n_ctx` is shared with llama.cpp). A model that
+  fits only without the desktop reserve gets its own refusal, `too_big_reserve`: the reserve
+  and the display, the smallest share that fits (`min_share`, in 0.01 steps), `vaf engine vllm
+  --gpu-share <min>` and Settings > AI & Model, the smaller model where it applies, that the
+  screen can freeze below the reserve, and that the engine stays as it was. `vaf engine
   vllm` prints the same check and does not switch when it fails; it stops a running llama server first, whose memory vLLM needs, and
   a running managed vLLM serving another model too: measured against its own share of the
   GPU, a model change was refused although it fits (820 of 10240 MiB free with the old
@@ -338,6 +356,48 @@ needs about 6744 MiB with fp8 KV (2304 MiB of it the KV cache) and fits in the 7
 share; with 16-bit KV it needs about 9048 MiB and does not. With `int8_per_token_head` the KV
 cache at 32768 tokens is 2376 MiB. With desktop programs holding 4018 MiB (6222 MiB free) the
 4B does not fit at the floor with any KV cache, and the refusal names that memory.
+
+With a display (the desktop reserve), `Qwen3-4B-AWQ` (2542 MiB of weights in the cached
+config) with `int8_per_token_head`: on the 10240 MiB card with 8500 MiB free the automatic
+share is 0.67 (6860 MiB) and the context 32768 (6813 MiB needed); without a display it stays
+0.78 with 40960. On an 8192 MiB card with 7500 MiB free the share is capped at 0.59, the 4B
+needs 6813 MiB at the floor and is refused with `too_big_reserve` and a share by hand of at
+least 0.84. On a 12288 MiB card the automatic `Qwen3-8B-AWQ` needs 10087 MiB and gets 8847
+(0.72): `too_big_reserve`, naming the 4B and the share by hand. The automatic model choice
+stays by total memory: a display-aware threshold would change the model with a docked
+monitor.
+
+**Desktop reserve.** The free figure at launch covers only what the desktop holds at that
+moment, and vLLM keeps its whole share for as long as it runs. Measured on an RTX 3080
+(10240 MiB, KDE Plasma on Wayland): desktop programs hold 3.1 to 3.6 GB of GPU memory. A start
+at share 0.78 (about 7987 MiB for vLLM, 2253 MiB left) froze the screen during a long coder
+turn: the desktop window's GPU context was lost (Skia out of memory), the compositor could
+not allocate a buffer (`DRM_IOCTL_MODE_CREATE_DUMB failed: Cannot allocate memory`) and the
+shell aborted, while system memory was fine. Starts at 0.66 to 0.68 (3482 to 3277 MiB left)
+stayed alive. So an automatic share leaves `vllm_server.DESKTOP_RESERVE_MB` = 3328 MiB free
+on a GPU that drives a display, and on one whose display state cannot be read: a reserve too
+many costs context, which the slider gives back, one too few freezes the desktop. A GPU known
+to drive no display (a server, a second card) keeps the share computed from the free memory.
+
+| share (10240 MiB, 4B, int8 KV) | fits | context | vLLM gets (MiB) | left for the rest (MiB) |
+|---|---|---|---|---|
+| 0.66 | no | - | 6758 | 3482 |
+| 0.67 | yes | 32768 | 6860 | 3380 |
+| 0.68 | yes | 34816 | 6963 | 3277 |
+| 0.70 | yes | 36864 | 7168 | 3072 |
+| 0.78 | yes | 40960 | 7987 | 2253 (froze) |
+
+**GPU memory slider.** `vllm_server.share_table` (in `local_engine.state()["vllm"]["memory"]`)
+carries the card, the display and its reserve, the stored share, the automatic share now (none
+while a local server holds memory: measured at the next start) and one fit per share from 0.30
+to 0.95 in 0.01 steps, without the free-memory refusal, which is the start's. Settings, the
+TUI and `vaf engine` only read it; there is no second fit formula. A share reaches
+`vllm_gpu_memory_utilization` only through the switch (`local_engine.apply(...,
+gpu_share=...)`): vLLM cannot change its share while it runs, so the switch stops a running
+vLLM of the same model for a changed share, fits and test-starts the new share
+(`plan_fit(..., utilization=)`, `first_start(..., utilization=)`), and writes the key only
+after both passed; a failure leaves it as it was. A running desktop tray then restarts vLLM
+with it (the key is in `local_engine.ENGINE_KEYS`).
 
 ## Privacy and execution
 
@@ -454,6 +514,20 @@ and quick starts.
   ([RELEASING.md](../setup/RELEASING.md)). `int8_per_token_head` is checked for coherent
   answers and tool calls, not benchmarked against fp8; Triton's prefill is slower than
   FlashAttention's, and machines where FlashInfer can build keep the earlier command.
+- **The desktop reserve is a constant, not a key:** `DESKTOP_RESERVE_MB` is measured on one
+  desktop (KDE Plasma on Wayland, an RTX 3080); the slider is the override, and a second key
+  would be a second way to say the same. Not measured on another desktop or driver.
+- **The display reading on AMD is not measured on an AMD card:** the DRM connector layout is
+  the same on nvidia-drm, where it was read; an AMD GPU whose connectors cannot be read keeps
+  the reserve (unknown).
+- **The first NVIDIA GPU:** the display state, like the free memory, is nvidia-smi's first
+  GPU; on a machine with several, CUDA's device order can differ.
+- **llama.cpp keeps its own headroom:** its VRAM-adaptive context cap
+  (`vaf/core/backend.py`) sizes the context to free - weights - 400 MiB and takes no share of
+  the card, so it has no slider and no desktop reserve; no freeze under llama.cpp has been
+  measured. A measured one would earn the reserve there too.
+- **The wizard has no slider:** it runs before an account exists, and the automatic share
+  with the reserve is the safe default; the slider is in Settings.
 - **Not on the facade, and not per agent:** the engine is the installation's, like
   `inference_profile`: the server start reads it from the installation's config, which
   `vaf engine` writes, because the one local server on the port is the machine's and two
@@ -463,12 +537,19 @@ and quick starts.
 ## In Settings, the wizard and the TUI
 
 **Settings > AI & Model.** With provider "Local (this machine)" the "Local model" section
-starts with the Engine choice, two cards: llama.cpp ("Recommended for edge devices and single
-users", then "GGUF models, runs on almost any hardware, starts in seconds") and vLLM
-("Recommended for servers and high-end setups", then "Hugging Face models, fast with many
-concurrent requests, needs a supported GPU, starts in minutes"), with this machine's verdict
-under vLLM. The wizard shows the same cards, and the TUI's engine rows the same English
-lines (`screens.ENGINE_LINES`, kept equal to en.json by a test). A verdict other
+starts with the Engine choice, two cards built the same way: whom the engine is for, then
+what it runs on, how it takes memory and how long it starts, then a note about this machine.
+llama.cpp: "For everyday tasks on personal PCs, laptops and edge devices", then "Runs GGUF
+models on almost any GPU or on the CPU alone, takes only the memory it needs and starts in
+seconds", and "llama.cpp runs on this machine." vLLM: "For servers and high-end PCs that
+answer many requests at once", then "Runs Hugging Face models on a supported NVIDIA or AMD
+GPU, reserves its share of GPU memory up front and starts in one to two minutes" (the
+measured 50 s warm and 90 s cold, see Switching), and this machine's verdict. In every
+language the two cards carry about the same text (a test keeps the ratio within 0.8 to 1.25).
+The wizard shows the same cards, and the TUI's engine rows the same English
+lines (`screens.ENGINE_LINES`, kept equal to en.json by a test). Under the vLLM model picker
+is the GPU memory slider (see "GPU memory slider" above; [WEB_UI.md](../web-ui/WEB_UI.md)
+describes the screen); the wizard has none and starts on the automatic share. A verdict other
 than `supported` disables the vLLM card and keeps its reason visible. Below the choice is the
 model picker of the engine: the GGUF picker and the GGUF download box under llama.cpp, the
 vLLM model picker (with the parsers of the chosen repo, or the refusal of an unknown family,
@@ -480,7 +561,10 @@ the one vLLM model.
 
 **Never by another write.** `vaf models config` refuses `local_engine` and `vllm_model`
 (`local_engine.SWITCH_KEYS`) with the `vaf engine` command to use; the parser and GPU-share
-keys stay writable there, which is where the refusal of an unknown model family points.
+keys stay writable there, which is where the refusal of an unknown model family points. The
+GPU share's own lane is the switch (the slider, `--gpu-share`, the TUI), which fits and
+test-starts a new share before it writes it; a value written with `vaf models config` is
+checked by the next start's fit.
 
 **Applies right away, never with Save changes.** A switch installs, downloads, stops a server
 and checks the fit, and a save sends the whole page: a page opened before a switch would write
@@ -489,8 +573,9 @@ the old engine back. Both save lanes (the WebSocket `save_config` and `PATCH /ap
 only through `local_engine.apply`.
 
 **The routes** (admin-only): `GET /api/system/local-engine[?model=owner/name]` is
-`local_engine.state()` plus the job; `POST /api/system/local-engine {engine, model?, install?}`
-refuses a wrong request with 400 and its code (`validate`), then runs `apply` as a job (202,
+`local_engine.state()` plus the job; `POST /api/system/local-engine {engine, model?, install?,
+gpu_share?}` (`gpu_share` 0 = automatic, 0.30 to 0.95 by hand, vLLM only; any other value is
+`bad_share`) refuses a wrong request with 400 and its code (`validate`), then runs `apply` as a job (202,
 GET follows `job`), because pip plus a model download outlasts any proxy; `DELETE
 /api/system/local-engine/vllm` is `uninstall_vllm`. The switch claims the container job slot
 (`container_jobs.ENGINE_SWITCH`): not beside a repair, a profile switch (Lean halfway would
@@ -544,7 +629,11 @@ the main page's banners while llama.cpp answers.
 Model" opens both engines with their lines and the verdict (vLLM a note with its reason where
 it cannot run, both notes under `api`). An install asks first with its size; under vLLM the
 model submenu lists Automatic, the curated repos, a stored repo and "Other Hugging Face
-model..." instead of GGUFs, and a GGUF pick writes nothing. `vaf models set` under vLLM warns
+model..." instead of GGUFs, and a GGUF pick writes nothing. Under vLLM the engine menu has a
+"GPU memory: Automatic" (or "GPU memory: 68%") row: Automatic with the share now, 30% to 95%
+in steps of 5 and a stored value off that grid, each with its size and "fits, context N" or
+"too small" from the share table, under the note that vLLM restarts to apply it; a pick is the
+switch with that share. `vaf models set` under vLLM warns
 that the GGUF applies to llama.cpp only.
 
 **Update and Repair** shows a "Local engine" node: llama.cpp running or idle, vLLM with its
@@ -577,6 +666,8 @@ vaf engine                       # the engine, this machine's verdict, the insta
 vaf engine vllm                  # hardware check, install (asks), model, fit, switch
 vaf engine vllm --model Qwen/Qwen3-8B-AWQ
 vaf engine vllm --model auto     # back to the automatic choice by GPU memory
+vaf engine vllm --gpu-share 0.70 # vLLM's share of the GPU memory (0.30 to 0.95); restarts it
+vaf engine vllm --gpu-share auto # back to the automatic share (with the desktop reserve)
 vaf engine llama                 # back to llama.cpp; a running vLLM is stopped
 vaf engine vllm --uninstall      # removes bin/vllm/venv (models stay in the HF cache)
 ```
@@ -616,7 +707,9 @@ engine reads. Under the `api` inference profile neither engine installs or runs.
 
 A start that died, timed out or was refused by the fit is remembered in the process
 (`vllm_server.remembered_failure`), for its signature: the model, the requested context, the
-configured GPU share, the parsers, the pin, the recipe and the attention plan. The same start
+GPU share (the share a switch is testing, else the configured one, so a switch that failed
+with a new share does not block the configured start), the parsers, the pin, the recipe and
+the attention plan. The same start
 again returns at once without a launch, and `ServerManager._start_vllm_locked` does not stop
 the llama server for it. Before this, the desktop tray's activity loop and the headless
 runner's lazy load started a failing vLLM again on every tick or turn (measured: four starts

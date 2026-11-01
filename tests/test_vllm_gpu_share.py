@@ -18,6 +18,8 @@ MUTATIONS, each turns the named test red:
 - ``round`` instead of the floor, or drop the epsilon -> test_the_share_is_floored;
 - cap a share set by hand with the reserve -> test_a_share_by_hand_is_never_capped;
 - return ``too_big`` for every refusal -> test_a_model_that_fits_only_without_the_reserve;
+- drop the f prefix of a segment of the reserve refusal ->
+  test_the_reserve_refusal_reads_its_numbers;
 - treat ``Disabled`` as True, or None as no reserve -> test_nvidia_display_reader /
   test_desktop_reserve_follows_the_display;
 - read a connector of another card, or count ``disconnected`` -> test_amd_display_reader;
@@ -108,6 +110,20 @@ def test_a_model_that_fits_only_without_the_reserve():
     r = vs.fit(SHAPE_8B, 40960, 7000, 8192, kv_dtype=vs.INT8_KV, reserve_mb=3328, model=LARGE)
     assert r.code == "too_big"
     assert "too_big_reserve" in vs.FIT_CODES
+
+
+def test_the_reserve_refusal_reads_its_numbers():
+    """The English refusal is built from f-string segments: every placeholder is filled (the
+    smallest share both in the sentence and in the command), and it says what the reserve is,
+    room on the card outside vLLM, not memory that stays free. MUTATION: drop the f prefix of
+    the "at least" segment - red."""
+    r = vs.fit(SHAPE_4B, 40960, 7500, 8192, kv_dtype=vs.INT8_KV, reserve_mb=3328, model=SMALL)
+    assert r.code == "too_big_reserve"
+    least = f"{r.min_share:.2f}"
+    assert f"at least {least} (`vaf engine vllm --gpu-share {least}`" in r.reason
+    assert "{" not in r.reason and "}" not in r.reason, r.reason
+    assert "3328 MiB of the card outside vLLM for the screen" in r.reason
+    assert "stay free" not in r.reason
 
 
 def _run(stdout, returncode=0):

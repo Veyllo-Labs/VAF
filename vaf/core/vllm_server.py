@@ -36,10 +36,9 @@ WHEN (handover, reuse, waiting for a server that is loading); this module does t
   that does above ``MIN_CONTEXT``. The GPU's memory comes from nvidia-smi, or on ROCm from
   the amdgpu driver in /sys (``gpu_detection.amd_vram_mb``). An automatic share keeps
   ``DESKTOP_RESERVE_MB`` of the card's total outside vLLM when the GPU drives a display or
-  that cannot be read
-  (``desktop_reserve_mb``), and is floored to 0.01, so the launch argument is the share the
-  fit checked; a share set by hand (``SHARE_RANGE``) is never capped. ``share_table`` is the
-  GPU memory slider's table.
+  that cannot be read (``desktop_reserve_mb``), and is floored to 0.01, so the launch
+  argument is the share the fit checked; a share set by hand (``SHARE_RANGE``) is never
+  capped. ``share_table`` is the GPU memory slider's table.
 - **Attention plan** (``launch_plan``, CUDA build only): where FlashInfer cannot build its
   kernels (no CUDA toolkit, ``flashinfer_buildable``), the launch names an attention backend
   and KV cache that need no build and turns FlashInfer's sampler off (``attention_plan``);
@@ -739,11 +738,11 @@ def fit(shape: ModelShape, n_ctx: int, free_mb: int, total_mb: int, *,
     (``auto`` = the model's own 16-bit dtype). ``utilization`` 0 = computed from the free
     memory (``auto_share``): ``(free - 512 MiB) / total`` within 0.50..0.92, capped so that
     ``reserve_mb`` of the total stays outside the share (the desktop reserve of a GPU that
-    drives a display), floored
-    to 0.01. A share set by hand is taken as it is (two decimals) and never capped by the
-    reserve; one that leaves less than ``reserve_mb`` is marked ``below_reserve``. vLLM
-    refuses to start when its share is more than what is free, so that counts as not fitting
-    too, unless ``check_free`` is False (the share table of the slider).
+    drives a display), floored to 0.01. A share set by hand is taken as it is (two decimals)
+    and never capped by the reserve; one that leaves less than ``reserve_mb`` is marked
+    ``below_reserve``. vLLM refuses to start when its share is more than what is free, so
+    that counts as not fitting too, unless ``check_free`` is False (the share table of the
+    slider).
 
     When the context does not fit, the largest one that does (a multiple of
     ``CONTEXT_STEP``) is taken, never below ``MIN_CONTEXT``, with a note; only a model that
@@ -806,7 +805,8 @@ def fit(shape: ModelShape, n_ctx: int, free_mb: int, total_mb: int, *,
                              f"The model needs about {need_mb} MiB, but vLLM gets {budget_mb} "
                              f"MiB ({share:.2f} of {total_mb} MiB): the automatic share keeps "
                              f"{capped_by} MiB of the card outside vLLM for the screen, because "
-                             "this GPU drives a display (or VAF cannot tell). Set the GPU memory by hand to at least {least:.2f} "
+                             "this GPU drives a display (or VAF cannot tell). Set the GPU "
+                             f"memory by hand to at least {least:.2f} "
                              f"(`vaf engine vllm --gpu-share {least:.2f}`, or Settings > AI & "
                              f"Model){smaller_too}; below the reserve the screen can freeze "
                              "when its memory runs out. The local engine stays as it was.",

@@ -622,10 +622,12 @@ class SettingsScreen(ModalScreen[None]):
         auto = memory.get("auto_share")
         reserve = memory.get("reserve_mb") or 0
         auto_text = ("Automatic (measured at the next start)" if auto is None
-                     else f"Automatic ({round(auto * 100)}% now, {gb(int(auto * total))} of {gb(total)})")
+                     else f"Automatic ({round(auto * 100)}% now, "
+                          f"{gb(int(auto * total))} of {gb(total)})")
         if reserve:
             auto_text += f", {gb(reserve)} of the card kept outside it for the screen"
-        rows = [("note", None, "vLLM restarts to apply it (one to two minutes)."), row(0.0, auto_text)]
+        rows = [("note", None, "vLLM restarts to apply it (one to two minutes)."),
+                row(0.0, auto_text)]
         values = list(self.GPU_SHARE_GRID)
         if configured and all(abs(configured - v) > 1e-9 for v in values):
             values = sorted(values + [configured])

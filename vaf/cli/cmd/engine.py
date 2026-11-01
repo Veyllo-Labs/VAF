@@ -73,7 +73,8 @@ def memory_line(memory: Optional[dict]) -> str:
                  f"{gb_of_mib(total)} GB)")
     if display is False:
         return f"{text}; no display on this GPU, so nothing is kept for a screen"
-    why = "this GPU drives a display" if display else "VAF cannot tell whether this GPU drives a display"
+    why = ("this GPU drives a display" if display
+           else "VAF cannot tell whether this GPU drives a display")
     return f"{text}; {gb_of_mib(reserve)} GB of the card stay outside it for the screen ({why})"
 
 

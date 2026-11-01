@@ -601,7 +601,7 @@ def test_amd_supported_verdict():
 @pytest.mark.parametrize("change, code, params, words", [
     pytest.param({"machine": "aarch64"}, "no_build_gpu", {}, ["no build for this GPU"],
                  id="aarch64"),
-    pytest.param({"gpu": _amd(gfx="")}, "amd_unknown", {}, ["architecture", "/sys"],
+    pytest.param({"gpu": _amd(gfx="")}, "amd_unknown", {}, ["architecture", "/sys", "amdgpu driver is loaded"],
                  id="no-gfx"),
     pytest.param({"gpu": _amd(gfx="gfx1030")}, "amd_gfx", {"gfx": "gfx1030"},
                  ["gfx1030", "RX 7900", "MI300"], id="gfx1030"),
@@ -628,7 +628,7 @@ def test_amd_supported_verdict():
                  ["musl"], id="musl"),
     pytest.param({"glibc": "2.38", "python312": ""}, "amd_glibc_old",
                  {"glibc": "2.38", "min_glibc": "2.39"}, ["2.38"], id="glibc-before-python"),
-    pytest.param({"python312": ""}, "amd_python", {}, ["Python 3.12", "python3.12-venv"],
+    pytest.param({"python312": ""}, "amd_python", {}, ["Python 3.12", "python3.12-venv", "pyenv"],
                  id="no-python312"),
     pytest.param({"gpu": _amd(gfx="gfx1151", vram=98304, model="AMD Radeon 8060S")},
                  "supported", {"gpu": "Radeon 8060S", "vram_gb": "96"}, ["AMD Radeon 8060S"],

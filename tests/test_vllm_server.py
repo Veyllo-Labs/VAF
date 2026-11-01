@@ -46,7 +46,9 @@ MUTATIONS, each turns the named test red:
 - drop `vllm._rocm_C` from the ROCm probe -> test_the_rocm_probe_maps_its_causes;
 - map the ROCm probe's exit 3 to no_cuda -> test_a_failed_rocm_probe_names_its_cause;
 - read the GPU memory from nvidia-smi on ROCm -> test_rocm_fit_reads_amd_memory;
-- keep the no-GPU answer of backend() for the process -> test_the_backend_follows_the_gpu.
+- keep the no-GPU answer of backend() for the process -> test_the_backend_follows_the_gpu;
+- install or start without with_rocm_library ->
+  test_a_rocm_off_the_wheels_runpath_reaches_probe_and_server.
 """
 import json
 import os
@@ -996,3 +998,27 @@ def test_the_backend_follows_the_gpu(monkeypatch):
     assert vs.backend() == vs.CUDA
     assert vs.download_gb_at_least(vs.ROCM) == 3.3 and vs.download_gb_at_least(vs.CUDA) == 2.8
     assert vs.ROCM_INDEX.endswith(f"/{vs.PIN}/{vs.ROCM_VARIANT}")
+
+
+def test_a_rocm_off_the_wheels_runpath_reaches_probe_and_server(config, monkeypatch, home,
+                                                                 rocm, tmp_path):
+    """A ROCm under $ROCM_PATH (or another /opt/rocm-<version>) is not on the wheels' RUNPATH
+    (/opt/rocm/lib in torch): every install step, the probe and the server get its lib
+    directory first on LD_LIBRARY_PATH, on the ROCm build only. MUTATION: install without
+    with_rocm_library - red."""
+    custom = tmp_path / "rocm-7.2.1"
+    (custom / "lib").mkdir(parents=True)
+    (custom / "lib" / "libamdhip64.so.7").write_bytes(b"")
+    monkeypatch.setenv("ROCM_PATH", str(custom))
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/usr/local/lib")
+    _supported(monkeypatch)
+    envs = []
+    run = _fake_installing_run(home, [], envs=envs, version=ROCM_VERSION)
+    assert vs.install(run=run) == ""
+    lib = str(custom / "lib")
+    assert len(envs) == 3
+    for env in envs:
+        assert env["LD_LIBRARY_PATH"] == os.pathsep.join([lib, "/usr/local/lib"]), env.get("LD_LIBRARY_PATH")
+    assert vs.child_env()["LD_LIBRARY_PATH"].split(os.pathsep)[0] == lib
+    monkeypatch.setattr(vs, "backend", lambda: vs.CUDA)
+    assert vs.child_env()["LD_LIBRARY_PATH"] == "/usr/local/lib", "the CUDA build is untouched"

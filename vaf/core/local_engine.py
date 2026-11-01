@@ -265,7 +265,8 @@ def _amd_support(gpu: Any, machine: str, glibc: Any, rocm: Any, python312: Any,
     gfx = str(getattr(gpu, "gfx_arch", "") or "").strip()
     if not gfx:
         return EngineSupport(UNSUPPORTED, "VAF could not read this AMD GPU's architecture (the "
-                                          "amdgpu driver's KFD topology in /sys). llama.cpp "
+                                          "amdgpu driver's KFD topology in /sys): check that the "
+                                          "amdgpu driver is loaded and restart VAF. llama.cpp "
                                           "runs here.", "amd_unknown")
     if gfx not in ROCM_GFX:
         return EngineSupport(UNSUPPORTED, f"vLLM's ROCm build has no kernels for {gfx}; it runs "
@@ -304,16 +305,18 @@ def _amd_support(gpu: Any, machine: str, glibc: Any, rocm: Any, python312: Any,
                 "no glibc (musl, for example)" if glibc == "" else "a glibc VAF cannot read")
         return EngineSupport(UNSUPPORTED, f"vLLM {PIN}'s ROCm build needs glibc {low} or newer; "
                                           f"this system has {this}. A newer Linux runs it "
-                                          "(Ubuntu 24.04, Debian 13, Fedora 40 or RHEL 10 and "
-                                          "later). llama.cpp runs here.", "amd_glibc_old",
+                                          "(Ubuntu 24.04, Fedora 40 or RHEL 10 and later). "
+                                          "llama.cpp runs here.", "amd_glibc_old",
                              {"glibc": str(glibc or ""), "min_glibc": low})
     if python312 is _DETECT:
         from vaf.core.vllm_server import rocm_python
         python312 = rocm_python()
     if not python312:
         return EngineSupport(UNSUPPORTED, "vLLM's ROCm build needs Python 3.12: install it with "
-                                          "its venv module (on Ubuntu python3.12-venv) and "
-                                          "restart VAF. llama.cpp runs here.", "amd_python")
+                                          "its venv module (on Ubuntu python3.12-venv; where the "
+                                          "distribution ships none, pyenv installs one) so that "
+                                          "python3.12 is on PATH, and restart VAF. llama.cpp "
+                                          "runs here.", "amd_python")
     vram_gb = (int(getattr(gpu, "vram_mb", 0) or 0)) / 1024
     model = str(getattr(gpu, "model", "") or "").strip() or "GPU"
     name = model[4:] if model.startswith("AMD ") else model

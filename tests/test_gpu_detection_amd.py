@@ -13,8 +13,8 @@ MUTATIONS, each turns the named test red:
 - pick the first node instead of the one with the most VRAM ->
   test_detect_amd_prefers_the_largest_vram;
 - return (used, total) or total twice -> test_amd_vram_free_is_total_minus_used;
-- read .info/version unparsed, or look only in /opt/rocm ->
-  test_rocm_runtime_finds_lib_and_version.
+- read .info/version unparsed, look only in /opt/rocm, or name a distribution directory for
+  LD_LIBRARY_PATH -> test_rocm_runtime_finds_lib_and_version.
 """
 import subprocess
 from pathlib import Path
@@ -120,6 +120,11 @@ def test_rocm_runtime_finds_lib_and_version(tmp_path):
     (distro / "usr" / "lib64").mkdir(parents=True)
     (distro / "usr" / "lib64" / gd.HIP_RUNTIME).write_bytes(b"")
     assert gd.rocm_runtime(env={}, root=str(distro)) == (True, "")
+    # Only a ROCm the linker does not find by itself is named for LD_LIBRARY_PATH.
+    assert gd.rocm_library_dir(env={}, root=str(distro)) == ""
+    assert gd.rocm_library_dir(env={}, root=str(root)) == str(versioned / "lib")
+    assert gd.rocm_library_dir(env={"ROCM_PATH": str(custom)}, root=str(root)) == str(custom / "lib")
+    assert gd.rocm_library_dir(env={}, root=str(tmp_path / "none")) == ""
     # The unversioned name of ROCm 6 is not the runtime the ROCm build links against.
     old = tmp_path / "old"
     (old / "opt" / "rocm" / "lib").mkdir(parents=True)

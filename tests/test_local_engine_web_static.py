@@ -337,6 +337,13 @@ def test_rocm_facts_follow_the_core(locale):
     for key in ("amd_rocm_missing", "amd_rocm_old"):
         assert f"ROCm {rocm}" in cat["support"][key], (locale, key)
     assert "3.12" in cat["support"]["amd_python"] and "python3.12-venv" in cat["support"]["amd_python"]
+    # A distribution without Python 3.12 still has a way forward, and none is named as
+    # running the ROCm build without shipping one (Debian 13 has no Python 3.12).
+    assert "pyenv" in cat["support"]["amd_python"], locale
+    assert "Debian" not in cat["support"]["amd_glibc_old"], locale
+    # The two refusals without a fix on this machine say what keeps running.
+    for key in ("amd_unknown", "amd_gfx"):
+        assert "llama.cpp" in cat["support"][key], (locale, key)
     assert "/dev/kfd" in cat["support"]["amd_no_access"]
     for word in ("HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES", f"ROCm {rocm}"):
         assert word in cat["result"]["rocm_probe_failed"], (locale, word)

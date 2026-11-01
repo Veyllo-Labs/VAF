@@ -310,12 +310,9 @@ def _rocm_version(rocm_root: Path) -> str:
     return m.group(1) if m else ""
 
 
-def rocm_runtime(env: Optional[Mapping[str, str]] = None, root: str = "/") -> Tuple[bool, str]:
-    """(the HIP runtime ``libamdhip64.so.7`` is installed, ROCm's version or ""). Looked for in
-    ``$ROCM_PATH/lib``, ``/opt/rocm/lib``, ``/opt/rocm-*/lib`` (newest first) and the
-    distribution library directories; the version is read from that ROCm root's
-    ``.info/version`` ("" for a distribution install, which has none). ``root`` prefixes the
-    fixed paths (tests). No subprocess."""
+def _find_rocm(env: Optional[Mapping[str, str]], root: str) -> Tuple[Optional[Path], str, bool]:
+    """(the directory holding ``libamdhip64.so.7`` or None, ROCm's version or "", whether that
+    directory is a distribution's library directory the linker searches by itself)."""
     source = os.environ if env is None else env
     base = Path(root)
     roots: List[Path] = []
@@ -329,11 +326,32 @@ def rocm_runtime(env: Optional[Mapping[str, str]] = None, root: str = "/") -> Tu
         pass
     for rocm in roots:
         if (rocm / "lib" / HIP_RUNTIME).exists():
-            return True, _rocm_version(rocm)
+            return rocm / "lib", _rocm_version(rocm), False
     for lib in _DISTRO_LIB_DIRS:
         if (base / lib / HIP_RUNTIME).exists():
-            return True, ""
-    return False, ""
+            return base / lib, "", True
+    return None, "", False
+
+
+def rocm_runtime(env: Optional[Mapping[str, str]] = None, root: str = "/") -> Tuple[bool, str]:
+    """(the HIP runtime ``libamdhip64.so.7`` is installed, ROCm's version or ""). Looked for in
+    ``$ROCM_PATH/lib``, ``/opt/rocm/lib``, ``/opt/rocm-*/lib`` (newest first) and the
+    distribution library directories; the version is read from that ROCm root's
+    ``.info/version`` ("" for a distribution install, which has none). ``root`` prefixes the
+    fixed paths (tests). No subprocess."""
+    lib, version, _distro = _find_rocm(env, root)
+    return lib is not None, version
+
+
+def rocm_library_dir(env: Optional[Mapping[str, str]] = None, root: str = "/") -> str:
+    """The ROCm library directory a process must be told about, or "". vLLM's ROCm wheels
+    find the HIP runtime only through their RUNPATH (``/opt/rocm/lib`` in torch,
+    ``/opt/rocm-7.2.3/lib`` in vLLM's extension) or the linker's own directories; a ROCm
+    found under ``$ROCM_PATH`` or another ``/opt/rocm-<version>`` is on neither, so the
+    install's probe and the server get it on ``LD_LIBRARY_PATH``. "" for a distribution
+    install (the linker finds it) and when there is none."""
+    lib, _version, distro = _find_rocm(env, root)
+    return "" if lib is None or distro else str(lib)
 
 
 def _amd_smi_on_path() -> bool:

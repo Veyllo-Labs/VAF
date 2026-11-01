@@ -341,6 +341,7 @@ def install(log: Optional[Callable[[str], None]] = None, run: Optional[Runner] =
     from vaf.core.gpu_detection import gpu_child_env
     # Without VAF's GPU hide for in-process torch: the probe must see the GPU vLLM will use.
     env = gpu_child_env()
+    env = with_rocm_library(env)
     env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
     root = venv_dir()
     if root.exists():
@@ -748,6 +749,21 @@ def build_command(model_dir: str, repo_id: str, port: int, result: FitResult,
 _PINNED_OFF = ("VLLM_SERVER_DEV_MODE", "VLLM_ALLOW_RUNTIME_LORA_UPDATING")
 
 
+def with_rocm_library(env: Dict[str, str]) -> Dict[str, str]:
+    """``env`` with the found ROCm library directory first on ``LD_LIBRARY_PATH`` on the ROCm
+    build (``gpu_detection.rocm_library_dir``: a ROCm under ``$ROCM_PATH`` or another
+    ``/opt/rocm-<version>`` is not on the wheels' RUNPATH). Unchanged on CUDA and when the
+    linker finds the runtime by itself."""
+    if backend() != ROCM:
+        return env
+    from vaf.core.gpu_detection import rocm_library_dir
+    lib = rocm_library_dir(env)
+    if lib:
+        rest = [p for p in str(env.get("LD_LIBRARY_PATH", "") or "").split(os.pathsep) if p and p != lib]
+        env["LD_LIBRARY_PATH"] = os.pathsep.join([lib] + rest)
+    return env
+
+
 def child_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     """The server's environment: VAF's environment without any VLLM_ variable of its own,
     plus the switches below. A VLLM_ variable is a launch decision like a command-line flag
@@ -765,7 +781,7 @@ def child_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     # The model is in the cache before the launch (ensure_model), so vLLM never needs to
     # reach Hugging Face on a start.
     env["HF_HUB_OFFLINE"] = "1"
-    return env
+    return with_rocm_library(env)
 
 
 def _looks_like_vllm_server(pid: int) -> bool:

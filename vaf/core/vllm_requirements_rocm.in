@@ -8,7 +8,10 @@
 #   uv pip compile vaf/core/vllm_requirements_rocm.in --generate-hashes \
 #     --python-version 3.12 --python-platform x86_64-manylinux_2_39 \
 #     --extra-index-url https://wheels.vllm.ai/rocm/0.32.0/rocm723 --no-build \
-#     -o vaf/core/vllm_requirements_rocm.lock
+#     -o vaf/core/vllm_requirements_rocm.lock \
+#     --custom-compile-command "<the same command on one line, without this option>"
+# uv leaves index URLs out of the header it writes; --custom-compile-command makes the lock's
+# header name the whole command, the extra index included.
 # then run scripts/check_vllm_lock.py vaf/core/vllm_requirements_rocm.lock.
 # The index URL stays on the command line: pip honours index options inside a requirements
 # file, and tests/test_vllm_lock.py refuses any in a lock.

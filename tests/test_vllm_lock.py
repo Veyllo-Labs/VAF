@@ -153,6 +153,9 @@ def test_the_rocm_lock_pins_the_codes_vllm():
     head = "\n".join(_lock_lines(vs.LOCK_PATH_ROCM)[:3])
     assert "uv pip compile vaf/core/vllm_requirements_rocm.in --generate-hashes" in head
     assert "--python-version 3.12 --python-platform x86_64-manylinux_2_39" in head
+    # The header names where the ROCm packages come from (uv leaves the index out unless
+    # --custom-compile-command names the whole command).
+    assert f"--extra-index-url {vs.ROCM_INDEX} --no-build" in head
 
 
 def test_the_checker_reads_the_rocm_target():

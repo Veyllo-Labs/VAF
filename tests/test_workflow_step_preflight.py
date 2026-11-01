@@ -27,7 +27,8 @@ MUTATIONS, each turns the named tests red:
   test_command_needs_network;
 - no de-duplication, or the "Retry the SAME call" sentence kept -> the missing-field test;
 - `create` refusing an unknown tool -> test_create_saves_a_plan_with_a_tool_of_another_lane;
-- the execute_workflow check removed -> the saved-workflow test.
+- the execute_workflow check removed -> the saved-workflow test; the `@workflow_id` check or
+  the `vaf workflow run` check removed -> the two lane tests after it.
 """
 import ast
 import importlib
@@ -327,11 +328,53 @@ def test_a_saved_model_workflow_with_host_bash_is_refused_at_start(run, tmp_path
     assert "directly in the chat" in refusal
     assert agent_workflow_refusal("own_plan", get_template("own_plan")) is None
 
+    assert refusal.count("Call host_bash directly") == 1, "one closing instruction"
     started = []
     monkeypatch.setattr(engine_module, "create_workflow",
                         lambda template: started.append(template) or [])
     out = ExecuteWorkflowTool().run(workflow_id="old_plan")
     assert out == refusal and not started, out
+
+
+def test_the_at_workflow_lane_refuses_it_too(run, tmp_path, monkeypatch):
+    """`@old_plan` in the chat starts the saved workflow without execute_workflow."""
+    from vaf.core.agent import Agent
+    from vaf.core.platform import Platform
+    _saved_workflow(tmp_path, "old_plan", marker=True)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path / "data"))
+    agent = Agent(register_signals=False, run_kind="chat",
+                  config_overrides={"provider": "openai", "api_key_openai": "sk-test"})
+    monkeypatch.delenv("VAF_IN_AUTOMATION", raising=False)
+    built = []
+    monkeypatch.setattr(engine_module, "create_workflow",
+                        lambda template: built.append(template) or [])
+    streamed = []
+    out = agent._try_workflow("@old_plan", streamed.append, route_input="@old_plan")
+    assert out and out.startswith("Error: nothing ran") and "step 1 (host_bash)" in out, out
+    assert not built, "the workflow's steps were built"
+    assert "".join(streamed) == out
+
+
+def test_the_workflow_command_refuses_it_too(run, tmp_path, monkeypatch):
+    """`vaf workflow run old_plan`: the person's command and the background child of both
+    chat lanes."""
+    from typer.testing import CliRunner
+
+    import vaf.cli.cmd.workflow as wf_cmd
+    _saved_workflow(tmp_path, "old_plan", marker=True)
+
+    class _Ended(BaseException):
+        """What finish_terminal does for real: sys.exit, past every `except Exception`."""
+
+    def _finish(**kw):
+        raise _Ended(kw)
+    monkeypatch.setattr(wf_cmd, "finish_terminal", _finish)
+    monkeypatch.delenv("VAF_SESSION_ID", raising=False)
+    with pytest.raises(_Ended) as ended:
+        CliRunner().invoke(wf_cmd.app, ["run", "old_plan"])
+    assert ended.value.args[0].get("success") is False
+    assert not _FakeEngine.runs, "an engine was built for a refused workflow"
 
 
 def test_create_saves_a_plan_that_can_run(run, tmp_path):

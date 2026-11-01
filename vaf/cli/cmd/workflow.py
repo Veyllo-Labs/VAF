@@ -185,6 +185,17 @@ def run_workflow(
                 ipc.fail_task(task_id, error_msg)
             finish_terminal(success=False, no_auto_close=no_auto_close)
 
+        # A model-written saved workflow holding a host_bash step runs nothing: every lane
+        # runs its steps without the confirmation gate (vaf/tools/agent_workflow_builder.py).
+        if not plan:
+            from vaf.tools.agent_workflow_builder import agent_workflow_refusal
+            _refused = agent_workflow_refusal(workflow_id, template)
+            if _refused:
+                UI.error(_refused)
+                if ipc and task_id:
+                    ipc.fail_task(task_id, _refused)
+                finish_terminal(success=False, no_auto_close=no_auto_close)
+
         if debug_logger:
             debug_logger.event("workflow_template_loaded", workflow_name=template.get('name'),
                               num_steps=len(template.get('steps', [])))

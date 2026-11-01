@@ -8239,6 +8239,16 @@ class Agent:
                 UI.event("Workflow", f"Suggested: {template.get('name', workflow_id)} (agent will decide)", style="dim")
                 return None  # Agent runs with [WORKFLOW SUGGESTION] injected
 
+            # A model-written saved workflow holding a host_bash step runs nothing: this lane,
+            # like every workflow lane, runs its steps without the confirmation gate.
+            from vaf.tools.agent_workflow_builder import agent_workflow_refusal
+            _refused = agent_workflow_refusal(workflow_id, template)
+            if _refused:
+                UI.error(_refused)
+                if stream_callback:
+                    stream_callback(_refused)
+                return _refused
+
             # Build workflow steps from template (explicit @workflow_id path only)
             from vaf.workflows.engine import create_workflow as build_steps
             steps = build_steps(template)

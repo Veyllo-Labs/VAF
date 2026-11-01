@@ -126,10 +126,11 @@ def _resolve_step_tool(tool_val: Any) -> str:
     return _STEP_TOOL_ALIASES.get(tool_str.lower(), tool_str)
 
 
-_HOST_BASH_STEP = (
-    "a workflow runs its steps without asking the user, and host_bash needs the user's OK "
-    "for every command. Call host_bash directly in the chat instead, one call per command "
-    "(the user confirms each).")
+_HOST_BASH_REASON = ("a workflow runs its steps without asking the user, and host_bash needs "
+                     "the user's OK for every command.")
+_HOST_BASH_INSTEAD = ("Call host_bash directly in the chat instead, one call per command (the "
+                      "user confirms each).")
+_HOST_BASH_STEP = f"{_HOST_BASH_REASON} {_HOST_BASH_INSTEAD}"
 
 
 def _refusal(problems: List[str]) -> str:
@@ -255,14 +256,14 @@ def agent_workflow_refusal(workflow_id: str, template: Dict[str, Any]) -> Option
     file (no marker) and the built-in templates are not touched."""
     if not is_agent_created(workflow_id):
         return None
-    problems = [f"step {i} (host_bash): {_HOST_BASH_STEP}"
+    problems = [f"step {i} (host_bash): {_HOST_BASH_REASON}"
                 for i, step in enumerate((template or {}).get("steps") or [], 1)
                 if isinstance(step, dict) and str(step.get("tool") or "").strip() == "host_bash"]
     if not problems:
         return None
     return ("Error: nothing ran, the saved workflow '" + workflow_id + "' has steps that cannot "
             "run:\n" + "\n".join(f"- {p}" for p in problems)
-            + "\nRun those commands with host_bash yourself, or save the workflow again without them.")
+            + f"\n{_HOST_BASH_INSTEAD}")
 
 
 class AgentWorkflowBuilderTool(BaseTool):

@@ -19,7 +19,12 @@ MUTATIONS, each turns the named test red:
 - return "" for every local turn in `turn_refusal_reason` ->
   test_turn_refusal_reason_names_vllm_failure;
 - drop the guard in the tray's `start_model_async` ->
-  test_tray_start_model_async_skips_remembered_failure.
+  test_tray_start_model_async_skips_remembered_failure;
+- remember a fallback's fit refusal over the crash before it ->
+  test_crash_then_fit_refusal_is_not_relaunched;
+- drop the BaseException stop in `start` or in `first_start` ->
+  test_an_interrupt_in_the_ready_wait_stops_the_server /
+  test_an_interrupt_in_the_test_request_stops_the_server.
 """
 import time
 from types import SimpleNamespace
@@ -235,3 +240,48 @@ def test_tray_start_model_async_skips_remembered_failure(home, monkeypatch):
     body = inspect.getsource(tray.check_activity_loop)
     starter = body[body.index("def start_model_async"):body.index("def emit_model_state")]
     assert starter.index("_engine_start_refusal()") < starter.index("server_mgr.start_server(")
+
+
+
+def test_crash_then_fit_refusal_is_not_relaunched(home, monkeypatch):
+    """The quantized attempt dies, its 16-bit fallback does not fit: the crash stays
+    remembered without a retry time. Remembered as a fit refusal, the dying attempt was
+    launched again 61 s later (the loop this memory exists against)."""
+    monkeypatch.setattr(vs, "_gpu_memory", lambda: (8000, 10240))
+    now = [1000.0]
+    monkeypatch.setattr(vs.time, "monotonic", lambda: now[0])
+    calls = []
+    assert vs.start(REPO, 32768, popen=_counting_popen(calls)) is False
+    assert len(calls) == 1, "int8 launched, auto refused by the fit"
+    failure = vs.start_failure()
+    assert failure.cause == "kernels" and failure.retry_at == 0.0, failure
+    now[0] += vs.FIT_RETRY_SECONDS + 1
+    assert vs.start(REPO, 32768, popen=_counting_popen(calls)) is False
+    assert len(calls) == 1, "the crashing attempt was launched again"
+
+
+def test_an_interrupt_in_the_ready_wait_stops_the_server(home, monkeypatch):
+    """Ctrl+C while vLLM loads: the server leads its own session, so start() stops it before
+    the interrupt goes on."""
+    stopped = []
+    monkeypatch.setattr(vs, "stop", lambda wait=15.0: stopped.append(1) or "")
+
+    def wait_ready(proc, port):
+        raise KeyboardInterrupt
+    monkeypatch.setattr(vs, "_wait_ready", wait_ready)
+    with pytest.raises(KeyboardInterrupt):
+        vs.start(REPO, 32768, popen=_counting_popen([], dies=False))
+    assert stopped == [1]
+    assert vs._loading_pid is None
+
+
+def test_an_interrupt_in_the_test_request_stops_the_server(home, monkeypatch):
+    stopped = []
+    monkeypatch.setattr(vs, "stop", lambda wait=15.0: stopped.append(1) or "")
+    monkeypatch.setattr(vs, "start", lambda repo, n_ctx, port=8080, popen=None: True)
+
+    def post(url, json=None, timeout=None):
+        raise KeyboardInterrupt
+    with pytest.raises(KeyboardInterrupt):
+        vs.first_start(REPO, 32768, post=post)
+    assert stopped == [1], "the server of the switch was left running"

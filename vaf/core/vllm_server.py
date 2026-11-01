@@ -735,8 +735,8 @@ def fit(shape: ModelShape, n_ctx: int, free_mb: int, total_mb: int, *,
                          f"tokens in {dtype}, overhead {_mb(OVERHEAD_BYTES)}), but vLLM gets "
                          f"{budget_mb} MiB ({share:.2f} of {total_mb} MiB): {free_mb} MiB are "
                          f"free, other programs hold {other_mb} MiB. Close programs that use "
-                         f"the GPU and try again{smaller}; until then llama.cpp, which can move "
-                         "part of the model to the CPU, stays the engine.",
+                         f"the GPU and try again{smaller}. The local engine stays as it was; "
+                         "llama.cpp can move part of the model to the CPU.",
                          note, "too_big", smaller_model=smaller_helps, **numbers)
     return FitResult(True, max_len, share, dtype, need_mb, budget_mb,
                      f"Fits: about {need_mb} of {budget_mb} MiB (context {max_len}, KV cache "
@@ -1300,13 +1300,22 @@ def start(repo_id: str, n_ctx: int, port: int = 8080,
         return False
     first = _came_up[1] if _came_up and _came_up[0] == signature else 0
     attempts = list(zip(plan.kv_dtypes, plan.backends))[first:]
+    # The log of an attempt that died, when the next one is tried: a fallback the fit refuses
+    # must not turn that crash into a fit refusal measured again in 60 s.
+    crashed_tail: Optional[str] = None
     for attempt, (dtype, _backend_name) in enumerate(attempts, start=1):
         result = plan_fit(model_dir, n_ctx, kv_dtype=dtype, model=repo_id)
         if result.note:
             UI.event("System", result.note, style="warning")
         if not result.ok:
             UI.error("vLLM is not started: " + result.reason)
-            _remember(signature, "fit", result.reason.rstrip("."), retry=True)
+            if crashed_tail is not None:
+                # The quantized attempt died and its fallback does not fit: the crash is what
+                # stays remembered (no retry time), or the dying attempt runs again in 60 s.
+                cause = classify_start_log(crashed_tail)
+                _remember(signature, cause, cause_text(cause))
+            else:
+                _remember(signature, "fit", result.reason.rstrip("."), retry=True)
             return False
         argv = build_command(model_dir, repo_id, port, result, tool, reasoning)
         if not inference_profile.local_inference_allowed():
@@ -1347,6 +1356,17 @@ def start(repo_id: str, n_ctx: int, port: int = 8080,
         _loading_pid = proc.pid
         try:
             outcome = _wait_ready(proc, port)
+        except BaseException:
+            # Ctrl+C in a terminal (or any exit through here): the server leads its own
+            # session and would keep the GPU after VAF is gone.
+            _loading_pid = None
+            if log_handle is not None:
+                try:
+                    log_handle.close()
+                except Exception:
+                    pass
+            stop()
+            raise
         finally:
             _loading_pid = None
         if log_handle is not None:
@@ -1393,6 +1413,7 @@ def start(repo_id: str, n_ctx: int, port: int = 8080,
         if attempt < len(attempts):
             UI.event("Server", f"vLLM died with the {dtype} KV cache - retrying with the model's "
                                "own KV dtype...", style="yellow")
+            crashed_tail = tail
             continue
         cause = classify_start_log(tail)
         UI.error(f"vLLM failed to start ({cause_text(cause)}). Check {log_file_path}\n"
@@ -1448,6 +1469,22 @@ def first_start(repo_id: str, n_ctx: int, port: int = 8080,
     or does not answer is classified from its log (``START_CAUSES``); one interrupted by
     another start of the local model in this process is ``interrupted`` and not
     remembered."""
+    try:
+        return _first_start(repo_id, n_ctx, port, popen, post)
+    except BaseException:
+        # Ctrl+C during `vaf engine vllm` (the ready wait, the test request): the server of
+        # this switch is stopped before the interrupt goes on; it leads its own session and
+        # would hold the GPU after the terminal is gone.
+        try:
+            stop()
+        except Exception:
+            pass
+        raise
+
+
+def _first_start(repo_id: str, n_ctx: int, port: int,
+                 popen: Optional[Callable[..., subprocess.Popen]],
+                 post: Optional[Callable[..., object]]) -> FirstStart:
     if not start(repo_id, n_ctx, port=port, popen=popen):
         # start() leaves no server of its own behind on any of its False paths.
         if _last_interrupted:

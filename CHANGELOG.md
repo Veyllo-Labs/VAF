@@ -21,8 +21,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   stays the default. `vaf health` shows an `engine` row while vLLM is the engine.
   With an NVIDIA GPU, vLLM needs Linux, a Turing or newer card, an NVIDIA driver 580 or newer
   and a recent distribution (for example Ubuntu 20.04 on a PC, Ubuntu 22.04 on ARM); AMD GPUs
-  are supported too (see below). VAF checks this first and tells you what to update. On Intel, Apple Silicon and Windows
-  `vaf engine` says why not yet, and llama.cpp keeps running.
+  are supported too (see below). VAF checks this first and tells you what to update. On
+  Intel, Apple Silicon and Windows `vaf engine` says why not yet, and llama.cpp keeps running.
   The install uses a fixed list of package files shipped with VAF, so a new release of one of
   vLLM's dependencies can neither break nor change it.
   Settings > AI & Model now has an Engine choice for the local model, llama.cpp or vLLM, right
@@ -57,6 +57,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- **The engine cards recommend llama.cpp for edge devices and single users, vLLM for servers
+  and high-end setups**, in Settings > AI & Model, the first-run wizard and the terminal's
+  full-screen settings.
 - **Standing grants moved to Settings > Account**, below your signed-in devices and tokens: what
   you allowed "always" or for a chat, and your trusted folders, sit with the rest of your own
   account instead of between the connections. The settings search now finds them, and the
@@ -88,6 +91,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **vLLM now starts on NVIDIA GPUs without a CUDA toolkit** (such as an RTX 3080): VAF picks
+  an attention backend and KV cache that need no kernel build, tests the first start before
+  it switches, stops retrying a start that failed and tells you why in the chat and in
+  Settings. The fit check suggests what actually helps (closing programs that hold GPU
+  memory) instead of a smaller context, takes a smaller context by itself where one above
+  VAF's 32768-token floor fits, and the setup banner shows why a switch stopped. Reloading
+  the page after a switch no longer brings back its finished banner.
 - **VAF now sees how much memory an AMD GPU has** (Linux with ROCm). It read 0 before, so the
   automatic model choice treated the card as having none; it may now pick a larger model.
 - On Windows with an NVIDIA GPU, a local model started from the tray ran on the CPU. It now

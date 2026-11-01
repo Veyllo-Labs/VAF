@@ -107,8 +107,9 @@ command.
   recipe's format tag (`vllm_server.RECIPE_FORMAT`, on the ROCm build
   `vllm_server.RECIPE_FORMAT_ROCM`). An environment of the other build (a machine whose GPU
   changed vendor) is not current either: its tag and its version (`0.32.0` against
-  `0.32.0+rocm723`) are not this build's, so the next install rebuilds it. An environment without it (built by an
-  earlier VAF with the cu129 index, or one whose probe failed) counts as not installed:
+  `0.32.0+rocm723`) are not this build's, so the next install rebuilds it. An environment
+  without it (built by an earlier VAF with the cu129 index, or one whose probe failed) counts
+  as not installed:
   `vaf engine vllm` and Settings offer the install again, and the install removes it and
   builds it fresh; a start refuses it before any launch with "installed by an earlier VAF and
   cannot start" and the command to rebuild it.
@@ -150,10 +151,35 @@ command.
   `https://flashinfer.ai/whl/cu130`, version-pinned but not hashed and not from PyPI: the
   only compiled code that would bypass the lock (read in the source of vLLM 0.32.0,
   `vllm/entrypoints/cli/download_kernels.py`, and FlashInfer 0.7.0.post1,
-  `flashinfer/__main__.py`). Without them FlashInfer builds the kernels it needs at the first
-  start, so the first start takes longer; vLLM's own warning about missing kernels fires only
-  on compute capability 9.0 and newer. A measured first start that is too slow would earn
-  hash-locking `flashinfer-cubin` and `flashinfer-jit-cache` in the lock.
+  `flashinfer/__main__.py`). Without them FlashInfer can only JIT-compile its kernels, which
+  needs a CUDA toolkit (`nvcc`) and `ninja`. Measured on an RTX 3080 (compute capability
+  8.6) without a toolkit: vLLM 0.32.0 logged "FlashInfer kernels are disabled" and still
+  picked FlashInfer as the attention backend for the fp8 KV cache, and its top-p/top-k
+  sampler is FlashInfer's by default; both died on "Could not find nvcc". So the launch reads
+  whether FlashInfer can build in the server's environment (`vllm_server.flashinfer_buildable`,
+  vLLM's own check without importing anything: `flashinfer_cubin` installed, or nvcc through
+  `CUDA_HOME`, `CUDA_PATH`, PATH or `/usr/local/cuda` and `ninja` on PATH). Where it can, the
+  command is as before. Where it cannot, VAF names an attention backend and KV cache that need
+  no build (`vllm_server.attention_plan`, CUDA build only) and starts the server with
+  `VLLM_USE_FLASHINFER_SAMPLER=0`:
+
+  | Compute capability | Quantized attempt | Fallback (`auto` KV) |
+  |---|---|---|
+  | 7.5 | `int8_per_token_head`, `TRITON_ATTN` | `TRITON_ATTN` |
+  | 8.0, 8.6, 8.7 | `int8_per_token_head`, `TRITON_ATTN` (measured on 8.6) | `FLASH_ATTN` |
+  | 8.9, 10.x, 12.x | `fp8`, `TRITON_ATTN` | `FLASH_ATTN` |
+  | 9.x | `fp8`, `FLASH_ATTN` (FA3) | `FLASH_ATTN` |
+
+  Below 8.9 there is no fp8 KV cache without FlashInfer: Triton's fp8 needs 8.9 (measured
+  refusal on 8.6: "native FP8 (fp8e4nv) requires SM89+", for `fp8_e5m2` too) and
+  FlashAttention takes fp8 only as FA3 on 9.x. `int8_per_token_head` is vLLM's quantized
+  KV cache for the Triton backend: one byte per element plus a float32 scale per token and
+  head. Measured on the RTX 3080: it starts, answers with top-p/top-k, parses a tool call and
+  serves a 23,827-token prompt in 15.4 s; without the sampler switch the server died in its
+  warmup. Only the 8.6 row is measured; the others are read from vLLM 0.32.0's sources
+  (`platforms/cuda.py`, `triton_attn.py`, `flash_attn.py`), and the switch's first start
+  refuses a row that does not start before the engine changes. A measured speed gap of the
+  Triton backend would earn hash-locking `flashinfer-cubin` and `flashinfer-jit-cache`.
   On compute capability 9.0 and newer, the locked FlashInfer itself downloads some prebuilt
   kernels at runtime (DeepGEMM, the TensorRT-LLM generated kernels, the CuTe DSL attention
   kernels) from NVIDIA's artifact server when they are not in its cache
@@ -193,8 +219,10 @@ command.
   finds them without a RUNPATH. A ROCm under `$ROCM_PATH` or another `/opt/rocm-<version>`
   (no `/opt/rocm` link) is on neither, so every install step, the probe and the server get
   its library directory first on `LD_LIBRARY_PATH` (`gpu_detection.rocm_library_dir`,
-  `vllm_server.with_rocm_library`); the CUDA build's environment is untouched. The ROCm lock (219 pinned releases) is generated with uv
-  (`uv==0.13.6` in a throwaway venv, the command is in `vllm_requirements_rocm.in`):
+  `vllm_server.with_rocm_library`; a relative `$ROCM_PATH` is named as an absolute path);
+  the CUDA build's environment is untouched. The ROCm lock (219 pinned releases) is
+  generated with uv (`uv==0.13.6` in a throwaway venv, the command is in
+  `vllm_requirements_rocm.in`):
   pip-compile resolves only for the interpreter it runs on, and this lock is for cp312 x86_64
   glibc 2.39. uv is a release-time tool only, never a runtime dependency. The ROCm index
   publishes no digests, so each of its eight packages carries exactly one hash, the one file
@@ -269,30 +297,47 @@ argument.
 ## Context, KV cache and memory
 
 - **Context:** `n_ctx` is the engine's `--max-model-len`, with the same 32768 floor VAF's own
-  request needs, clamped to the model's `max_position_embeddings` (with a message).
-- **KV cache:** `--kv-cache-dtype fp8` first (the counterpart of llama.cpp's quantized KV
-  cache). A launch that dies with it is retried once with `auto` (the model's own 16-bit
-  dtype), and the process remembers it when `auto` came up, so later starts skip the doomed
-  attempt.
+  request needs, clamped to the model's `max_position_embeddings` (with a message). When it
+  does not fit, the fit takes the largest context that does, in steps of 1024 and never
+  below the floor, and says so ("The context is reduced to N tokens so the model fits.");
+  only a model that does not fit at 32768 is refused. The context can then differ between
+  starts as free memory changes; the agent follows it, because it reads `max_model_len` from
+  `/v1/models`.
+- **KV cache:** the quantized attempt of the attention plan first (fp8 where FlashInfer can
+  build or the GPU has native fp8, `int8_per_token_head` otherwise, see Install), the
+  counterpart of llama.cpp's quantized KV cache. A launch that dies with it is retried once
+  with `auto` (the model's own 16-bit dtype), and the process remembers which attempt came
+  up, so later starts of the same signature begin there.
 - **GPU share:** `--gpu-memory-utilization` = (free - 512 MiB) / total from `nvidia-smi`,
   within 0.50..0.92, unless `vllm_gpu_memory_utilization` sets it. On an AMD GPU free and
   total come from the amdgpu driver (`/sys/class/drm/renderD<n>/device/mem_info_vram_total`
   and `mem_info_vram_used`, `gpu_detection.amd_vram_mb`), never from nvidia-smi. The fp8 KV
-  cache first and the one fallback to `auto` are the same on both builds; whether fp8 KV
-  starts on an RDNA3 card is not measured yet (a failed start costs one wasted launch).
+  cache first and the one fallback to `auto` are the same on both builds (the attention plan
+  is the CUDA build's only); whether fp8 KV starts on an RDNA3 card is not measured yet (the
+  switch's first start refuses it before the engine changes).
 - **Fit check before the launch:** weights (the safetensors size) + KV cache (layers x KV
-  heads x head dim x 2 x bytes x context, from the model's `config.json`) + 1.2 GiB
-  overhead, against that share; a share larger than the free memory counts as not fitting
-  too (vLLM refuses to start then). A model that does not fit is refused with the numbers
-  instead of a crash a minute later. `vaf engine vllm` prints the same check and does not
-  switch when it fails; it stops a running llama server first, whose memory vLLM needs, and
+  heads x 2 x (head dim x bytes, plus 4 bytes of scale for `int8_per_token_head`) x context,
+  from the model's `config.json`) + 1.85 GiB overhead, against that share; a share larger
+  than the free memory counts as not fitting too (vLLM refuses to start then). The overhead
+  is the measured cold start (RTX 3080, Qwen3-4B-AWQ, share 0.62: the first torch.compile;
+  about 1.2 GiB once the compile cache is warm), because the first start of a switch is the
+  one that must not fail. The share is computed again at every launch: a desktop's free
+  memory moved by about 1 GB within minutes. A model that does not fit is refused with the
+  numbers instead of a crash a minute later, and the refusal says what helps: the free
+  memory and what other programs hold, to close programs that use the GPU and try again,
+  that llama.cpp (which can move part of the model to the CPU) stays until then, and a
+  smaller model only when the chosen one is not the smallest default (never a smaller
+  context: the floor is VAF's own need, and `n_ctx` is shared with llama.cpp). `vaf engine
+  vllm` prints the same check and does not switch when it fails; it stops a running llama server first, whose memory vLLM needs, and
   a running managed vLLM serving another model too: measured against its own share of the
   GPU, a model change was refused although it fits (820 of 10240 MiB free with the old
   server up). A vLLM that already serves the wanted model is neither stopped nor measured.
 
-Measured case (RTX 3080, 10240 MiB, 8500 MiB free): `Qwen3-4B-AWQ` at 32768 tokens needs
-about 6079 MiB with fp8 KV and fits in the 7988 MiB share; with 16-bit KV it needs about
-8383 MiB and does not.
+Measured cases (RTX 3080, 10240 MiB): with 8500 MiB free, `Qwen3-4B-AWQ` at 32768 tokens
+needs about 6744 MiB with fp8 KV (2304 MiB of it the KV cache) and fits in the 7988 MiB
+share; with 16-bit KV it needs about 9048 MiB and does not. With `int8_per_token_head` the KV
+cache at 32768 tokens is 2376 MiB. With desktop programs holding 4018 MiB (6222 MiB free) the
+4B does not fit at the floor with any KV cache, and the refusal names that memory.
 
 ## Privacy and execution
 
@@ -301,8 +346,9 @@ The server's environment is VAF's environment (without VAF's own GPU hide, see I
 `VLLM_SKIP_MODEL_NAME_VALIDATION=1`. Every other `VLLM_` variable of VAF's environment is left
 out (development endpoints, runtime LoRA loading, plugins imported at start are launch
 decisions like flags), and `VLLM_SERVER_DEV_MODE` and `VLLM_ALLOW_RUNTIME_LORA_UPDATING` are
-pinned to `0`. A stop signals a process only when its command line carries the managed
-`vllm` executable followed by `serve`. `--trust-remote-code` is never passed: it would execute
+pinned to `0`. Where FlashInfer cannot build its kernels, `VLLM_USE_FLASHINFER_SAMPLER=0` is
+set too (see "No prebuilt kernels" under Install). A stop signals a process only when its
+command line carries the managed `vllm` executable followed by `serve`. `--trust-remote-code` is never passed: it would execute
 code from the model repo. There is no free-form extra-arguments setting: a launch argument
 is an execution decision. Every `vllm_` key and `local_engine` are admin-only.
 
@@ -401,6 +447,13 @@ and quick starts.
   APU's carve-out); whether vLLM uses that same device on a machine with an APU and a
   discrete GPU (HIP's device order) is not measured. On a Ryzen AI MAX with shared memory,
   which figure KFD reports (the BIOS carve-out or more) is not measured either.
+- **The attention plan is measured on compute capability 8.6 only** (an RTX 3080): the rows
+  for 7.5, 8.0, 8.9, 9.x, 10.x and 12.x are read from vLLM 0.32.0's sources, and the
+  switch's first start turns a wrong row into a refused switch, not a broken chat. Every
+  `PIN` bump re-reads the Triton backend's fp8 check and the attention selector
+  ([RELEASING.md](../setup/RELEASING.md)). `int8_per_token_head` is checked for coherent
+  answers and tool calls, not benchmarked against fp8; Triton's prefill is slower than
+  FlashAttention's, and machines where FlashInfer can build keep the earlier command.
 - **Not on the facade, and not per agent:** the engine is the installation's, like
   `inference_profile`: the server start reads it from the installation's config, which
   `vaf engine` writes, because the one local server on the port is the machine's and two
@@ -410,9 +463,12 @@ and quick starts.
 ## In Settings, the wizard and the TUI
 
 **Settings > AI & Model.** With provider "Local (this machine)" the "Local model" section
-starts with the Engine choice, two cards: llama.cpp ("GGUF models, runs on almost any
-hardware, starts in seconds") and vLLM ("Hugging Face models, fast with many requests, needs a
-supported GPU, starts in minutes"), with this machine's verdict under vLLM. A verdict other
+starts with the Engine choice, two cards: llama.cpp ("Recommended for edge devices and single
+users", then "GGUF models, runs on almost any hardware, starts in seconds") and vLLM
+("Recommended for servers and high-end setups", then "Hugging Face models, fast with many
+concurrent requests, needs a supported GPU, starts in minutes"), with this machine's verdict
+under vLLM. The wizard shows the same cards, and the TUI's engine rows the same English
+lines (`screens.ENGINE_LINES`, kept equal to en.json by a test). A verdict other
 than `supported` disables the vLLM card and keeps its reason visible. Below the choice is the
 model picker of the engine: the GGUF picker and the GGUF download box under llama.cpp, the
 vLLM model picker (with the parsers of the chosen repo, or the refusal of an unknown family,
@@ -443,8 +499,9 @@ terminal while the web switch runs) `apply` holds `bin/vllm/switch.lock` without
 refuses with `busy`.
 
 **Progress.** The steps go to the machine's maintenance banner (`MAINTENANCE`, kind
-`vllm_engine`, done/total = finished steps of 6 with the install, 3 without; no "please wait"
-line, llama.cpp keeps answering until the switch is done) and to the section's own step bar;
+`vllm_engine`, done/total = finished steps of 7 with the install, 4 without, the last being
+the first start; no "please wait" line, llama.cpp keeps answering until the switch is done)
+and to the section's own step bar;
 the model download to the download banner (`web_interface.model_download_broadcast`, its
 closing frame without a model list, so the GGUF list stays). pip has no progress figure: the
 install step shows its name for minutes. pip's output goes to `logs/vllm_install.log` in the
@@ -497,10 +554,21 @@ under AI & Model"), grey under `api`. Never a repair target. `vaf health`, `vaf 
 Settings section name the `outdated` state the same way: such an environment is never shown as
 installed and idle, and the install that replaces it says so first.
 
+A switch that stopped shows its reason under the banner's title (`localEngine.banner.<code>`,
+one line per `local_engine.FAILURE_CODES`) and, for an admin, a Details button that opens
+Settings on AI & Model, where the whole result is. A page that connects after the end gets no
+banner (`web_interface.maintenance_snapshot_frame` answers "no job" for a finished one). The
+full-screen TUI announces the end as "vLLM setup finished" or "vLLM setup stopped: <code>",
+not as a database migration.
+
 **Measured limits.** A message sent while the switch runs restarts llama.cpp on its next use,
 which can take the memory the fit check measures; the fit then refuses with its numbers and
 the engine stays. A chat answer in flight on llama.cpp is cut when the switch stops it for the
-fit check (no streamed text is erased).
+fit check (no streamed text is erased). The same message during the first start stops the
+vLLM that is loading (the llama start hands the port back): the switch then ends with
+`start_failed`, cause `interrupted`, and nothing is remembered, so switching again is the
+retry. A stop from another VAF process (a terminal) is not told apart and reads as cause
+`other`.
 
 ## Switching
 
@@ -514,8 +582,14 @@ vaf engine vllm --uninstall      # removes bin/vllm/venv (models stay in the HF 
 ```
 
 Exit codes like `vaf profile`: 0 done, 1 not complete, 2 refused. Settings > AI & Model and
-the full-screen TUI run the same switch (`local_engine.apply`). The switch writes the
-key; the server starts with the next use of the local model. A running desktop tray picks a
+the full-screen TUI run the same switch (`local_engine.apply`). Before it writes the key, the
+switch starts vLLM once on the local port, sends it one chat completion with `top_p` and
+`top_k` (the sampler path that killed a server on its first chat) and stops it again
+(`vllm_server.first_start`, the step "first start", one to two minutes; skipped when vLLM
+already serves the wanted model). A start that dies, does not come up or does not answer ends
+the switch with `start_failed` and the engine unchanged, before any chat could reach it. The
+server then starts with the next use of the local model (a warm start, the compile cache
+filled: measured 50 s on an RTX 3080, against 90 s cold). A running desktop tray picks a
 switch made in a terminal up within 25 seconds (its config poll watches `local_engine` and
 the `vllm_` keys) and restarts the local engine; it restarts only for a key the running
 engine reads. Under the `api` inference profile neither engine installs or runs.
@@ -533,4 +607,34 @@ engine reads. Under the `api` inference profile neither engine installs or runs.
 - `bin/vllm/switch.lock`: held while a switch runs; a second switch (another process) is
   refused with `busy` instead of waiting.
 - `vaf engine`, `vaf health` (the `engine` row): installed version, model, server running
-  or idle, and what contradicts the choice.
+  or idle, a start that failed (`vllm_failed`, with its cause), and what contradicts the
+  choice.
+- `start_failed` (a switch's result): the first start did not pass; its cause (`kernels`,
+  `memory`, `timeout`, `fit`, `interrupted`, `other`) is read from `logs/vllm_server.log`.
+
+## When a start fails
+
+A start that died, timed out or was refused by the fit is remembered in the process
+(`vllm_server.remembered_failure`), for its signature: the model, the requested context, the
+configured GPU share, the parsers, the pin, the recipe and the attention plan. The same start
+again returns at once without a launch, and `ServerManager._start_vllm_locked` does not stop
+the llama server for it. Before this, the desktop tray's activity loop and the headless
+runner's lazy load started a failing vLLM again on every tick or turn (measured: four starts
+in three minutes, each about 40 s of load and compile).
+
+- **What clears it:** every switch (`local_engine.apply`, also choosing vLLM again while it is
+  the engine: Settings' **Try vLLM again**, `vaf engine vllm`), a change of the signature (a
+  config change), and a restart of VAF. A fit refusal is measured again after 60 seconds, since
+  the memory other programs hold changes when they close. A port held by another program and
+  a start interrupted by another start are not remembered.
+- **The chat:** a local turn under vLLM gets "vLLM could not start: <cause>. Details in
+  logs/vllm_server.log. Switch to llama.cpp in Settings > AI & Model or with `vaf engine
+  llama`, or switch to vLLM again to retry." through the runner's turn refusal
+  (`headless_runner.turn_refusal_reason`), shown and stored with the message; a messenger
+  turn is only logged.
+- **The tray** starts nothing while the failure is remembered and logs it once.
+- **The status:** `local_engine.status_row` gives `degraded` with code `vllm_failed` and the
+  cause (`vaf health`, Update and Repair), `state()["vllm"]["start_failure"]` carries it to
+  Settings, and `vaf engine` prints it.
+- **Named boundary:** the memory lives in the process, not in a file (a file would be a
+  persisted format of its own); a `vaf chat` in another terminal tries once more by design.

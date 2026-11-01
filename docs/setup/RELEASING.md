@@ -166,7 +166,14 @@ waiting for a stable `X.Y.Z`.
    least one small wheel of that index (amdsmi or torchaudio) and compare its `sha256sum`
    with the lock by hand. Both checker runs belong to the
    release; `tests/test_vllm_lock.py` refuses a ROCm lock whose vllm is not
-   `PIN+ROCM_VARIANT` and any index option inside a lock.
+   `PIN+ROCM_VARIANT` and any index option inside a lock. The attention plan
+   (`attention_plan` in `vaf/core/vllm_server.py`) is read from the pinned sources too:
+   re-read the attention selector's priority list (`vllm/platforms/cuda.py`), the Triton
+   backend's fp8 check and its quantized KV dtypes
+   (`vllm/v1/attention/backends/triton_attn.py`), FlashAttention's fp8 condition, vLLM's
+   `has_flashinfer` (`vllm/utils/flashinfer.py`, mirrored by `flashinfer_buildable`) and the
+   default of `VLLM_USE_FLASHINFER_SAMPLER` (`vllm/envs.py`), and on a machine without a CUDA
+   toolkit switch to vLLM once: the first start must pass.
 3. In `CHANGELOG.md`, move the relevant `[Unreleased]` notes into a new
    `## [X.Y.Z] - YYYY-MM-DD` section.
 4. Commit (on request) and push to `main`.

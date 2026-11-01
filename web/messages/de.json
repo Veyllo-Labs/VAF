@@ -2832,7 +2832,7 @@
     "stepOf": "Schritt {step} von {steps}",
     "stoppedLlama": "Der llama.cpp-Server wurde für die Messung angehalten; er startet mit der nächsten Nachricht wieder.",
     "stoppedVllm": "vLLM wurde für die Messung angehalten; es startet mit der nächsten Nachricht wieder.",
-    "logHint": "Details: {path}",
+    "logHint": "Protokoll: {path}",
     "failed": "Der Wechsel ließ sich nicht weiterverfolgen. Lade den Zustand der Engine neu.",
     "server": {
       "running": "vLLM {version} läuft.",
@@ -2869,7 +2869,7 @@
       "download_cancelled": "Der Download wurde abgebrochen; die lokale Engine bleibt, wie sie war.",
       "llama_stop_failed": "Der llama.cpp-Server ließ sich nicht anhalten; die lokale Engine bleibt, wie sie war.",
       "no_fit": "Das Modell passt nicht auf diese GPU; die lokale Engine bleibt, wie sie war.",
-      "start_failed": "vLLM ist auf dieser GPU nicht gestartet; die lokale Engine bleibt, wie sie war.",
+      "start_failed": "vLLM ließ sich auf dieser GPU nicht starten; die lokale Engine bleibt, wie sie war.",
       "vllm_stop_failed": "Die lokale Engine ist jetzt llama.cpp, aber vLLM ließ sich nicht anhalten.",
       "engine_active": "vLLM ist die lokale Engine: Wechsle erst zu llama.cpp und entferne es dann.",
       "not_installed": "vLLM ist nicht installiert.",
@@ -2878,7 +2878,7 @@
     },
     "fit": {
       "fits": "Passt: etwa {need} von {budget} GB (Kontext {ctx}, KV-Cache {kv}).",
-      "too_big": "Das Modell braucht etwa {need} GB GPU-Speicher, frei sind {free} GB, andere Programme belegen {other} GB. Schließ Programme, die die GPU nutzen, und versuch es noch einmal; bis dahin bleibt llama.cpp, das einen Teil des Modells auf die CPU auslagern kann.",
+      "too_big": "Das Modell braucht etwa {need} GB GPU-Speicher, frei sind {free} GB, andere Programme belegen {other} GB. Schließ Programme, die die GPU nutzen, und versuch es noch einmal. Die lokale Engine bleibt, wie sie war; llama.cpp kann einen Teil des Modells auf die CPU auslagern.",
       "share_above_free": "Andere Programme belegen die GPU: vLLM bräuchte {budget} GB, frei sind aber nur {free} GB. Schließ sie und versuch es noch einmal.",
       "no_shape": "Die config.json des Modells nennt seine Form nicht.",
       "no_gpu_memory": "Der GPU-Treiber meldet den Speicher der GPU nicht."
@@ -2905,7 +2905,7 @@
       "unknown": "Zustand unbekannt"
     },
     "startCause": {
-      "kernels": "vLLM braucht GPU-Kernel, die sich auf diesem Rechner nicht bauen lassen.",
+      "kernels": "vLLM braucht GPU-Kernel, die sich auf diesem Rechner nicht bauen lassen. Wechsle zu llama.cpp, das hier läuft.",
       "memory": "Für das Modell und seinen Kontext ist auf der GPU nicht genug Speicher frei. Schließ Programme, die die GPU nutzen, und versuch es noch einmal.",
       "timeout": "vLLM war nicht rechtzeitig bereit.",
       "fit": "Das Modell passt nicht in den freien GPU-Speicher.",
@@ -2921,7 +2921,7 @@
       "download_cancelled": "Der Download wurde abgebrochen.",
       "llama_stop_failed": "Der llama.cpp-Server ließ sich nicht anhalten.",
       "no_fit": "Das Modell passt nicht in den freien GPU-Speicher.",
-      "start_failed": "vLLM ist auf dieser GPU nicht gestartet.",
+      "start_failed": "vLLM ließ sich auf dieser GPU nicht starten.",
       "vllm_stop_failed": "vLLM ließ sich nicht anhalten.",
       "failed": "Ein Schritt ist fehlgeschlagen."
     },

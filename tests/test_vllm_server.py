@@ -1126,7 +1126,8 @@ def test_buildable_flashinfer_keeps_the_old_command(config, monkeypatch, home, t
     _tool(tools, "ninja")
     path = os.pathsep.join([str(cuda), str(tools)])
     assert vs.flashinfer_buildable({"PATH": path}) is True
-    assert vs.flashinfer_buildable({"PATH": str(tools)}) is False, "no nvcc"
+    no_cuda = str(tmp_path / "no-cuda")
+    assert vs.flashinfer_buildable({"PATH": str(tools), "CUDA_HOME": no_cuda}) is False, "no nvcc"
     assert vs.flashinfer_buildable({"PATH": str(cuda)}) is False, "no ninja"
     assert vs.flashinfer_buildable({"PATH": str(tools),
                                     "CUDA_HOME": str(tmp_path / "cuda")}) is True
@@ -1135,6 +1136,8 @@ def test_buildable_flashinfer_keeps_the_old_command(config, monkeypatch, home, t
     assert vs.flashinfer_buildable({"PATH": ""}) is True, "the prebuilt kernels need no JIT"
     import shutil as _shutil
     _shutil.rmtree(site)
+    monkeypatch.delenv("CUDA_HOME", raising=False)
+    monkeypatch.delenv("CUDA_PATH", raising=False)
     monkeypatch.setenv("PATH", path)
     _ready_to_launch(monkeypatch, home)
     spawned = []
@@ -1191,6 +1194,7 @@ def test_too_big_reason_names_other_programs():
     small = vs.fit(SHAPE_4B, 40960, 6222, 10240, kv_dtype=vs.INT8_KV, model=le.DEFAULT_MODEL_SMALL)
     assert "6222 MiB are free" in small.reason and "other programs hold 4018 MiB" in small.reason
     assert "Close programs that use the GPU" in small.reason and "llama.cpp" in small.reason
+    assert "stays as it was" in small.reason and "stays the engine" not in small.reason
     assert "context" not in small.reason.split("),", 1)[1], small.reason
     assert "smaller model" not in small.reason and small.smaller_model is False
     large = vs.fit(SHAPE_4B, 40960, 6222, 10240, kv_dtype=vs.INT8_KV, model=le.DEFAULT_MODEL_LARGE)

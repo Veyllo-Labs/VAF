@@ -391,12 +391,18 @@ def test_too_big_names_other_programs_and_no_context(locale):
                      "更小的上下文"):
             assert word not in text, (locale, key, word)
     assert cat["fitSmallerModel"].strip() and cat["retryVllm"].strip()
+    # Engine-neutral: under vLLM a model that does not fit leaves vLLM the engine.
+    assert "{" not in cat["startCause"]["kernels"] and "llama.cpp" in cat["startCause"]["kernels"]
+    # The section's log line is not a second "Details" beside the banner's Details button.
+    assert cat["logHint"].split("{path}")[0].strip(" :：") != cat["bannerDetails"], locale
     assert cat["bannerDetails"].strip() and "{version}" in cat["status"]["vllm_failed"]
     if locale == "de":
         assert too_big == ("Das Modell braucht etwa {need} GB GPU-Speicher, frei sind {free} GB, "
                            "andere Programme belegen {other} GB. Schließ Programme, die die GPU "
-                           "nutzen, und versuch es noch einmal; bis dahin bleibt llama.cpp, das "
-                           "einen Teil des Modells auf die CPU auslagern kann.")
+                           "nutzen, und versuch es noch einmal. Die lokale Engine bleibt, wie sie "
+                           "war; llama.cpp kann einen Teil des Modells auf die CPU auslagern.")
+        assert cat["result"]["start_failed"].startswith("vLLM ließ sich auf dieser GPU nicht starten")
+        assert cat["banner"]["start_failed"] == "vLLM ließ sich auf dieser GPU nicht starten."
         assert cat["llamaFor"] == "Empfohlen für Edge-Geräte und einzelne Nutzer"
         assert cat["vllmFor"] == "Empfohlen für Server und High-End-Systeme"
         assert "gleichzeitigen Anfragen" in cat["vllmLine"]

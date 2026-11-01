@@ -91,13 +91,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
-- **vLLM now starts on NVIDIA GPUs without a CUDA toolkit** (such as an RTX 3080): VAF picks
-  an attention backend and KV cache that need no kernel build, tests the first start before
-  it switches, stops retrying a start that failed and tells you why in the chat and in
-  Settings. The fit check suggests what actually helps (closing programs that hold GPU
-  memory) instead of a smaller context, takes a smaller context by itself where one above
-  VAF's 32768-token floor fits, and the setup banner shows why a switch stopped. Reloading
-  the page after a switch no longer brings back its finished banner.
+- **vLLM now starts on NVIDIA GPUs without the CUDA developer tools** (such as an RTX 3080),
+  where it used to crash a minute into its start. Switching to vLLM now starts it once as a
+  test and only switches when it answers.
+- **A vLLM start that failed is not retried over and over.** The chat and Settings say why it
+  failed and how to try again or go back to llama.cpp.
+- **When the model does not fit in GPU memory, VAF says how much other programs use** and to
+  close them, instead of suggesting a smaller context. Where a slightly smaller context fits,
+  it takes that by itself.
+- **The setup banner says why a vLLM switch stopped**, and reloading the page no longer
+  brings back a finished banner.
 - **VAF now sees how much memory an AMD GPU has** (Linux with ROCm). It read 0 before, so the
   automatic model choice treated the card as having none; it may now pick a larger model.
 - On Windows with an NVIDIA GPU, a local model started from the tray ran on the CPU. It now

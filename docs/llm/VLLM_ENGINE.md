@@ -325,8 +325,8 @@ argument.
   memory moved by about 1 GB within minutes. A model that does not fit is refused with the
   numbers instead of a crash a minute later, and the refusal says what helps: the free
   memory and what other programs hold, to close programs that use the GPU and try again,
-  that llama.cpp (which can move part of the model to the CPU) stays until then, and a
-  smaller model only when the chosen one is not the smallest default (never a smaller
+  that the local engine stays as it was (llama.cpp can move part of the model to the
+  CPU), and a smaller model only when the chosen one is not the smallest default (never a smaller
   context: the floor is VAF's own need, and `n_ctx` is shared with llama.cpp). `vaf engine
   vllm` prints the same check and does not switch when it fails; it stops a running llama server first, whose memory vLLM needs, and
   a running managed vLLM serving another model too: measured against its own share of the

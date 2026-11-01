@@ -2832,7 +2832,7 @@
     "stepOf": "Adım {step} / {steps}",
     "stoppedLlama": "llama.cpp sunucusu ölçüm için durduruldu; sonraki iletiyle yeniden başlar.",
     "stoppedVllm": "vLLM ölçüm için durduruldu; sonraki iletiyle yeniden başlar.",
-    "logHint": "Ayrıntılar: {path}",
+    "logHint": "Günlük: {path}",
     "failed": "Geçiş izlenemedi. Motor durumunu yeniden denetleyin.",
     "server": {
       "running": "vLLM {version} çalışıyor.",
@@ -2878,7 +2878,7 @@
     },
     "fit": {
       "fits": "Sığıyor: {budget} GB içinden yaklaşık {need} GB (bağlam {ctx}, KV önbelleği {kv}).",
-      "too_big": "Model yaklaşık {need} GB GPU belleği gerektiriyor; {free} GB boş, diğer programlar {other} GB kullanıyor. GPU kullanan programları kapatıp yeniden deneyin; o zamana kadar modelin bir kısmını CPU'ya taşıyabilen llama.cpp kullanılmaya devam eder.",
+      "too_big": "Model yaklaşık {need} GB GPU belleği gerektiriyor; {free} GB boş, diğer programlar {other} GB kullanıyor. GPU kullanan programları kapatıp yeniden deneyin. Yerel motor olduğu gibi kalır; llama.cpp modelin bir kısmını CPU'ya taşıyabilir.",
       "share_above_free": "Diğer programlar GPU'yu kullanıyor: vLLM'nin {budget} GB'a ihtiyacı var, ancak yalnızca {free} GB boş. Onları kapatıp yeniden deneyin.",
       "no_shape": "Modelin config.json dosyası yapısını belirtmiyor.",
       "no_gpu_memory": "GPU sürücüsü GPU belleğini bildirmiyor."
@@ -2905,7 +2905,7 @@
       "unknown": "Durum bilinmiyor"
     },
     "startCause": {
-      "kernels": "vLLM'nin ihtiyaç duyduğu GPU çekirdekleri bu makinede derlenemiyor.",
+      "kernels": "vLLM'nin ihtiyaç duyduğu GPU çekirdekleri bu makinede derlenemiyor. Burada çalışan llama.cpp'ye geçin.",
       "memory": "GPU'da model ve bağlamı için yeterli boş bellek yok. GPU kullanan programları kapatıp yeniden deneyin.",
       "timeout": "vLLM zamanında hazır olmadı.",
       "fit": "Model boş GPU belleğine sığmıyor.",

@@ -2832,7 +2832,7 @@
     "stepOf": "第 {step} 步，共 {steps} 步",
     "stoppedLlama": "为了测量，llama.cpp 服务器已停止；它会在下一条消息时重新启动。",
     "stoppedVllm": "为了测量，vLLM 已停止；它会在下一条消息时重新启动。",
-    "logHint": "详情：{path}",
+    "logHint": "日志：{path}",
     "failed": "无法跟踪这次切换。请再次检查引擎状态。",
     "server": {
       "running": "vLLM {version} 正在运行。",
@@ -2878,7 +2878,7 @@
     },
     "fit": {
       "fits": "放得下：约需 {need} GB，预算 {budget} GB（上下文 {ctx}，KV 缓存 {kv}）。",
-      "too_big": "该模型约需 {need} GB 的 GPU 显存，目前空闲 {free} GB，其他程序占用 {other} GB。请关闭使用 GPU 的程序后重试；在此之前继续使用 llama.cpp，它可以把模型的一部分放到 CPU 上运行。",
+      "too_big": "该模型约需 {need} GB 的 GPU 显存，目前空闲 {free} GB，其他程序占用 {other} GB。请关闭使用 GPU 的程序后重试。本地引擎保持不变；llama.cpp 可以把模型的一部分放到 CPU 上运行。",
       "share_above_free": "其他程序正在占用 GPU：vLLM 需要 {budget} GB，但只有 {free} GB 空闲。请关闭这些程序后重试。",
       "no_shape": "模型的 config.json 没有说明其结构。",
       "no_gpu_memory": "GPU 驱动没有报告 GPU 的显存。"
@@ -2905,7 +2905,7 @@
       "unknown": "状态未知"
     },
     "startCause": {
-      "kernels": "vLLM 需要的 GPU 内核无法在这台机器上构建。",
+      "kernels": "vLLM 需要的 GPU 内核无法在这台机器上构建。请切换到可在这台机器上运行的 llama.cpp。",
       "memory": "GPU 的空闲显存不足以容纳模型及其上下文。请关闭使用 GPU 的程序后重试。",
       "timeout": "vLLM 未能及时就绪。",
       "fit": "模型放不进空闲的 GPU 显存。",

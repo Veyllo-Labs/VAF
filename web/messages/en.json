@@ -2832,7 +2832,7 @@
     "stepOf": "Step {step} of {steps}",
     "stoppedLlama": "The llama.cpp server was stopped for the measurement; it starts again with the next message.",
     "stoppedVllm": "vLLM was stopped for the measurement; it starts again with the next message.",
-    "logHint": "Details: {path}",
+    "logHint": "Log: {path}",
     "failed": "The switch could not be followed. Check the engine state again.",
     "server": {
       "running": "vLLM {version} is running.",
@@ -2878,7 +2878,7 @@
     },
     "fit": {
       "fits": "Fits: about {need} of {budget} GB (context {ctx}, KV cache {kv}).",
-      "too_big": "The model needs about {need} GB of GPU memory; {free} GB are free and other programs hold {other} GB. Close programs that use the GPU and try again; until then llama.cpp stays, which can move part of the model to the CPU.",
+      "too_big": "The model needs about {need} GB of GPU memory; {free} GB are free and other programs hold {other} GB. Close programs that use the GPU and try again. The local engine stays as it was; llama.cpp can move part of the model to the CPU.",
       "share_above_free": "Other programs use the GPU: vLLM would need {budget} GB, but only {free} GB are free. Close them and try again.",
       "no_shape": "The model's config.json does not say its shape.",
       "no_gpu_memory": "The GPU driver does not report the GPU's memory."
@@ -2905,7 +2905,7 @@
       "unknown": "State unknown"
     },
     "startCause": {
-      "kernels": "vLLM needs GPU kernels that cannot be built on this machine.",
+      "kernels": "vLLM needs GPU kernels that cannot be built on this machine. Switch to llama.cpp, which runs here.",
       "memory": "The GPU does not have enough free memory for the model and its context. Close programs that use the GPU and try again.",
       "timeout": "vLLM was not ready in time.",
       "fit": "The model does not fit in the free GPU memory.",

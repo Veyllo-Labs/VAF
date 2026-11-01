@@ -2832,7 +2832,7 @@
     "stepOf": "ステップ{step}/{steps}",
     "stoppedLlama": "計測のためllama.cppサーバーを停止しました。次のメッセージで再び起動します。",
     "stoppedVllm": "計測のためvLLMを停止しました。次のメッセージで再び起動します。",
-    "logHint": "詳細：{path}",
+    "logHint": "ログ：{path}",
     "failed": "切り替えの状況を追跡できませんでした。もう一度エンジンの状態を確認してください。",
     "server": {
       "running": "vLLM {version}が稼働中です。",
@@ -2878,7 +2878,7 @@
     },
     "fit": {
       "fits": "収まります：{budget} GBのうち約{need} GB（コンテキスト{ctx}、KVキャッシュ{kv}）。",
-      "too_big": "このモデルには約{need} GBのGPUメモリが必要です。空きは{free} GBで、ほかのプログラムが{other} GBを使用しています。GPUを使うプログラムを閉じてからもう一度お試しください。それまではllama.cppのままです。llama.cppはモデルの一部をCPUに移せます。",
+      "too_big": "このモデルには約{need} GBのGPUメモリが必要です。空きは{free} GBで、ほかのプログラムが{other} GBを使用しています。GPUを使うプログラムを閉じてからもう一度お試しください。ローカルエンジンは変更されません。llama.cppならモデルの一部をCPUに移せます。",
       "share_above_free": "ほかのプログラムがGPUを使用しています。vLLMには{budget} GB必要ですが、空きは{free} GBしかありません。それらを閉じてからもう一度お試しください。",
       "no_shape": "モデルのconfig.jsonに構造が記載されていません。",
       "no_gpu_memory": "GPUドライバーがGPUのメモリを報告しません。"
@@ -2905,7 +2905,7 @@
       "unknown": "状態不明"
     },
     "startCause": {
-      "kernels": "vLLMに必要なGPUカーネルを、このマシンではビルドできません。",
+      "kernels": "vLLMに必要なGPUカーネルを、このマシンではビルドできません。このマシンで動作するllama.cppに切り替えてください。",
       "memory": "モデルとそのコンテキストに必要な空きGPUメモリが足りません。GPUを使うプログラムを閉じてからもう一度お試しください。",
       "timeout": "vLLMの準備が時間内に終わりませんでした。",
       "fit": "モデルが空きGPUメモリに収まりません。",

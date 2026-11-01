@@ -36,7 +36,8 @@ export interface ShareTable {
     free_mb: number | null;
     /** Whether this GPU drives a display; null when that cannot be read. */
     display: boolean | null;
-    /** What an automatic share leaves free for the screen (0 without a display). */
+    /** What an automatic share keeps of the card outside vLLM for the screen (0 without a
+     *  display); room on the card, not memory that is free whatever else runs. */
     reserve_mb: number;
     /** The stored share, 0 = automatic. */
     configured: number;

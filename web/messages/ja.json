@@ -2824,8 +2824,8 @@
       "auto": "自動",
       "autoNow": "自動：{pct}（{total} GB中{gb} GB）、起動のたびに測り直します",
       "autoLater": "自動：次の起動時に空きメモリから計算します",
-      "reserve": "このGPUはディスプレイを駆動しているため、画面用に{reserve} GBを空けておきます。",
-      "reserveUnknown": "このGPUがディスプレイを駆動しているかVAFでは判別できないため、画面用に{reserve} GBを空けておきます。",
+      "reserve": "このGPUはディスプレイを駆動しているため、自動の割り当てではカードの{reserve} GBを画面用としてvLLMの外に残します。",
+      "reserveUnknown": "このGPUがディスプレイを駆動しているかVAFでは判別できないため、自動の割り当てではカードの{reserve} GBを画面用としてvLLMの外に残します。",
       "noDisplay": "このGPUにはディスプレイが接続されていないため、画面用のメモリは確保しません。",
       "of": "{total} GB中{gb} GB",
       "fits": "モデルは収まります：コンテキスト{ctx}トークン、{budget} GB中約{need} GB。",
@@ -2903,7 +2903,7 @@
     "fit": {
       "fits": "収まります：{budget} GBのうち約{need} GB（コンテキスト{ctx}、KVキャッシュ{kv}）。",
       "too_big": "このモデルには約{need} GBのGPUメモリが必要です。空きは{free} GBで、ほかのプログラムが{other} GBを使用しています。GPUを使うプログラムを閉じてからもう一度お試しください。ローカルエンジンは変更されません。llama.cppならモデルの一部をCPUに移せます。",
-      "too_big_reserve": "このモデルには約{need} GBが必要ですが、vLLMに割り当てられるのは{budget} GBです。このGPUはディスプレイを駆動しているため、画面用に{reserve} GBを空けています。vLLMに多く割り当てるにはGPUメモリを手動で{min}以上に設定するか（画面用のメモリが足りなくなると画面がフリーズすることがあります）、llama.cppのままにしてください。",
+      "too_big_reserve": "このモデルには約{need} GBが必要ですが、vLLMに割り当てられるのは{budget} GBです。このGPUはディスプレイを駆動しているため、自動の割り当てではカードの{reserve} GBを画面用としてvLLMの外に残しています。vLLMに多く割り当てるにはGPUメモリを手動で{min}以上に設定するか（画面用のメモリが足りなくなると画面がフリーズすることがあります）、llama.cppのままにしてください。",
       "share_above_free": "ほかのプログラムがGPUを使用しています。vLLMには{budget} GB必要ですが、空きは{free} GBしかありません。それらを閉じてからもう一度お試しください。",
       "no_shape": "モデルのconfig.jsonに構造が記載されていません。",
       "no_gpu_memory": "GPUドライバーがGPUのメモリを報告しません。"

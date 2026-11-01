@@ -33,8 +33,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   engine. The provider is now called "Local (this machine)". A Settings page opened before a
   switch no longer writes the old engine back when saved, a vLLM model download shows in the
   download banner, and the banner's Cancel now also stops a download the page did not start.
-  vLLM keeps about 3.3 GB of GPU memory free for the screen when the GPU drives a display, so a
-  desktop no longer freezes when vLLM fills the card. Settings > AI & Model has a GPU memory
+  vLLM's automatic memory share now keeps about 3.3 GB of the card outside vLLM when the GPU
+  drives a display, room for the screen and the programs already on it, so a desktop no longer
+  freezes when vLLM fills the card. Settings > AI & Model has a GPU memory
   slider for vLLM (automatic by default, in percent with the size in GB, and whether the model
   fits at that value), also as `vaf engine vllm --gpu-share` and in the terminal's full-screen
   settings. Applying a new value starts vLLM once to check that it runs; the desktop tray

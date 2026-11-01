@@ -2824,8 +2824,8 @@
       "auto": "Otomatik",
       "autoNow": "Otomatik: {pct} ({gb} / {total} GB), her başlatmada yeniden ölçülür",
       "autoLater": "Otomatik: bir sonraki başlatmada boş bellekten hesaplanır",
-      "reserve": "Bu GPU bir ekranı sürdüğü için ekrana {reserve} GB boş bırakılır.",
-      "reserveUnknown": "VAF bu GPU'nun bir ekranı sürüp sürmediğini anlayamıyor, bu yüzden ekrana {reserve} GB boş bırakılır.",
+      "reserve": "Bu GPU bir ekranı sürdüğü için otomatik pay, kartın {reserve} GB'ını ekran için vLLM'in dışında bırakır.",
+      "reserveUnknown": "VAF bu GPU'nun bir ekranı sürüp sürmediğini anlayamıyor, bu yüzden otomatik pay kartın {reserve} GB'ını ekran için vLLM'in dışında bırakır.",
       "noDisplay": "Bu GPU'ya bağlı bir ekran yok, bu yüzden ekran için bellek ayrılmaz.",
       "of": "{gb} / {total} GB",
       "fits": "Model sığıyor: bağlam {ctx} token, yaklaşık {need} / {budget} GB.",
@@ -2903,7 +2903,7 @@
     "fit": {
       "fits": "Sığıyor: {budget} GB içinden yaklaşık {need} GB (bağlam {ctx}, KV önbelleği {kv}).",
       "too_big": "Model yaklaşık {need} GB GPU belleği gerektiriyor; {free} GB boş, diğer programlar {other} GB kullanıyor. GPU kullanan programları kapatıp yeniden deneyin. Yerel motor olduğu gibi kalır; llama.cpp modelin bir kısmını CPU'ya taşıyabilir.",
-      "too_big_reserve": "Model yaklaşık {need} GB gerektiriyor, ancak vLLM {budget} GB alıyor: bu GPU bir ekranı sürdüğü için ekrana {reserve} GB boş bırakılıyor. vLLM'e daha fazla vermek için GPU belleğini elle en az {min} olarak ayarlayın (belleği biterse ekran donabilir) ya da llama.cpp'de kalın.",
+      "too_big_reserve": "Model yaklaşık {need} GB gerektiriyor, ancak vLLM {budget} GB alıyor: bu GPU bir ekranı sürdüğü için otomatik pay kartın {reserve} GB'ını ekran için vLLM'in dışında bırakıyor. vLLM'e daha fazla vermek için GPU belleğini elle en az {min} olarak ayarlayın (belleği biterse ekran donabilir) ya da llama.cpp'de kalın.",
       "share_above_free": "Diğer programlar GPU'yu kullanıyor: vLLM'nin {budget} GB'a ihtiyacı var, ancak yalnızca {free} GB boş. Onları kapatıp yeniden deneyin.",
       "no_shape": "Modelin config.json dosyası yapısını belirtmiyor.",
       "no_gpu_memory": "GPU sürücüsü GPU belleğini bildirmiyor."

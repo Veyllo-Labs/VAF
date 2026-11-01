@@ -50,7 +50,8 @@ def gb_of_mib(mib: float) -> str:
 
 def memory_line(memory: Optional[dict]) -> str:
     """The vLLM GPU memory line of `vaf engine` (``state()["vllm"]["memory"]``): the share,
-    automatic or set by hand, its size, and what stays free for a screen."""
+    automatic or set by hand, its size, and how much of the card it keeps outside vLLM for a
+    screen."""
     if not memory or not memory.get("total_mb"):
         return ""
     total = memory["total_mb"]
@@ -73,7 +74,7 @@ def memory_line(memory: Optional[dict]) -> str:
     if display is False:
         return f"{text}; no display on this GPU, so nothing is kept for a screen"
     why = "this GPU drives a display" if display else "VAF cannot tell whether this GPU drives a display"
-    return f"{text}; {gb_of_mib(reserve)} GB stay free for the screen ({why})"
+    return f"{text}; {gb_of_mib(reserve)} GB of the card stay outside it for the screen ({why})"
 
 
 def _show() -> None:

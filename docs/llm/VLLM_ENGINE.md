@@ -375,9 +375,13 @@ at share 0.78 (about 7987 MiB for vLLM, 2253 MiB left) froze the screen during a
 turn: the desktop window's GPU context was lost (Skia out of memory), the compositor could
 not allocate a buffer (`DRM_IOCTL_MODE_CREATE_DUMB failed: Cannot allocate memory`) and the
 shell aborted, while system memory was fine. Starts at 0.66 to 0.68 (3482 to 3277 MiB left)
-stayed alive. So an automatic share leaves `vllm_server.DESKTOP_RESERVE_MB` = 3328 MiB free
-on a GPU that drives a display, and on one whose display state cannot be read: a reserve too
-many costs context, which the slider gives back, one too few freezes the desktop. A GPU known
+stayed alive. So an automatic share keeps `vllm_server.DESKTOP_RESERVE_MB` = 3328 MiB of the
+card's total outside vLLM (the share is at most (total - 3328 MiB) / total) on a GPU that
+drives a display, and on one whose display state cannot be read: a reserve too many costs
+context, which the slider gives back, one too few freezes the desktop. It is room on the
+card, not a promise of free memory: what other programs already hold counts against it, and
+when little is free the share from the free figure, (free - 512 MiB) / total, is the smaller
+one and only about 512 MiB stays free after the launch. A GPU known
 to drive no display (a server, a second card) keeps the share computed from the free memory.
 
 | share (10240 MiB, 4B, int8 KV) | fits | context | vLLM gets (MiB) | left for the rest (MiB) |

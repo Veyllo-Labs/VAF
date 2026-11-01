@@ -408,7 +408,7 @@ def test_a_gpu_share_pick_is_a_switch(monkeypatch):
     assert rows[0][0] == "note" and "restarts" in rows[0][2]
     values = [arg for kind, arg, _ in rows if kind == "gpu_share"]
     assert values[0] == 0.0 and "Automatic (67% now, 6.7 GB of 10.0 GB)" in rows[1][2]
-    assert "3.3 GB stay free for the screen" in rows[1][2]
+    assert "3.3 GB of the card kept outside it for the screen" in rows[1][2]
     assert values[1:] == sorted([p / 100 for p in range(30, 96, 5)] + [0.68])
     text = {arg: label for kind, arg, label in rows if kind == "gpu_share"}
     assert "too small" in text[0.65] and "fits, context 32768" in text[0.7]

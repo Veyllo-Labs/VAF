@@ -349,14 +349,14 @@ def test_a_bad_gpu_share_exits_2(config, monkeypatch):
 
 
 def test_show_prints_the_gpu_memory_line(config, monkeypatch):
-    """`vaf engine` says vLLM's share, automatic or by hand, its size and what stays free for
-    the screen. MUTATION: drop the line - red."""
+    """`vaf engine` says vLLM's share, automatic or by hand, its size and how much of the card
+    it keeps outside vLLM for the screen. MUTATION: drop the line - red."""
     _supported(monkeypatch)
     monkeypatch.setattr(vs, "installed_version", lambda: None)
     monkeypatch.setattr(le, "_memory_table", lambda repo, server: _table())
     out = " ".join(_invoke().output.split())
-    assert ("vLLM GPU memory: automatic, 0.67 now (6.7 of 10.0 GB); 3.3 GB stay free for the "
-            "screen (this GPU drives a display)") in out, out
+    assert ("vLLM GPU memory: automatic, 0.67 now (6.7 of 10.0 GB); 3.3 GB of the card stay "
+            "outside it for the screen (this GPU drives a display)") in out, out
     monkeypatch.setattr(le, "_memory_table", lambda repo, server: _table(configured=0.78))
     out = " ".join(_invoke().output.split())
     assert ("vLLM GPU memory: 0.78, set by hand (7.8 of 10.0 GB); leaves 2.2 GB, less than the "

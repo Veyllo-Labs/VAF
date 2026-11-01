@@ -34,8 +34,9 @@ WHEN (handover, reuse, waiting for a server that is loading); this module does t
   share vLLM gets, before the launch, so a model that cannot fit is refused with numbers
   instead of a crash a minute later; a context that does not fit is reduced to the largest
   that does above ``MIN_CONTEXT``. The GPU's memory comes from nvidia-smi, or on ROCm from
-  the amdgpu driver in /sys (``gpu_detection.amd_vram_mb``). An automatic share leaves
-  ``DESKTOP_RESERVE_MB`` free when the GPU drives a display or that cannot be read
+  the amdgpu driver in /sys (``gpu_detection.amd_vram_mb``). An automatic share keeps
+  ``DESKTOP_RESERVE_MB`` of the card's total outside vLLM when the GPU drives a display or
+  that cannot be read
   (``desktop_reserve_mb``), and is floored to 0.01, so the launch argument is the share the
   fit checked; a share set by hand (``SHARE_RANGE``) is never capped. ``share_table`` is the
   GPU memory slider's table.
@@ -169,9 +170,12 @@ UTILIZATION_RANGE = (0.50, 0.92)
 # below 0.30 not even the 4B default fits on a 10 GB card, while a large card can still give
 # vLLM a small part.
 SHARE_RANGE = (0.30, 0.95)
-# GPU memory an automatic share leaves free when the GPU drives a display (or when that cannot
-# be read). vLLM preallocates its whole share up front, and the free figure at launch covers
-# only what the desktop holds at that moment. Measured on an RTX 3080 (10240 MiB, KDE Plasma
+# GPU memory of the card's total that an automatic share keeps outside vLLM when the GPU drives
+# a display (or when that cannot be read): the share is at most (total - reserve) / total. It
+# is room for the screen and other programs, not a promise of free memory: what they already
+# hold counts against it, and the share from the free figure can be smaller. vLLM
+# preallocates its whole share up front, and the free figure at launch covers only what the
+# desktop holds at that moment. Measured on an RTX 3080 (10240 MiB, KDE Plasma
 # on Wayland): desktop programs hold 3.1 to 3.6 GB of GPU memory; at share 0.78 (2253 MiB
 # left) the compositor failed to allocate a buffer during a long turn and the screen froze;
 # at 0.66 to 0.68 (3277 to 3482 MiB left) it stayed alive. 3328 MiB puts the automatic share
@@ -734,7 +738,8 @@ def fit(shape: ModelShape, n_ctx: int, free_mb: int, total_mb: int, *,
     clamped to the model's maximum. The KV cache is fp8 unless ``kv_dtype`` says otherwise
     (``auto`` = the model's own 16-bit dtype). ``utilization`` 0 = computed from the free
     memory (``auto_share``): ``(free - 512 MiB) / total`` within 0.50..0.92, capped so that
-    ``reserve_mb`` stays free (the desktop reserve of a GPU that drives a display), floored
+    ``reserve_mb`` of the total stays outside the share (the desktop reserve of a GPU that
+    drives a display), floored
     to 0.01. A share set by hand is taken as it is (two decimals) and never capped by the
     reserve; one that leaves less than ``reserve_mb`` is marked ``below_reserve``. vLLM
     refuses to start when its share is more than what is free, so that counts as not fitting
@@ -799,9 +804,9 @@ def fit(shape: ModelShape, n_ctx: int, free_mb: int, total_mb: int, *,
             smaller_too = " or choose a smaller model" if smaller_helps else ""
             return FitResult(False, max_len, share, dtype, need_mb, budget_mb,
                              f"The model needs about {need_mb} MiB, but vLLM gets {budget_mb} "
-                             f"MiB ({share:.2f} of {total_mb} MiB): {capped_by} MiB stay free "
-                             "for the screen, because this GPU drives a display (or VAF cannot "
-                             f"tell). Set the GPU memory by hand to at least {least:.2f} "
+                             f"MiB ({share:.2f} of {total_mb} MiB): the automatic share keeps "
+                             f"{capped_by} MiB of the card outside vLLM for the screen, because "
+                             "this GPU drives a display (or VAF cannot tell). Set the GPU memory by hand to at least {least:.2f} "
                              f"(`vaf engine vllm --gpu-share {least:.2f}`, or Settings > AI & "
                              f"Model){smaller_too}; below the reserve the screen can freeze "
                              "when its memory runs out. The local engine stays as it was.",
@@ -845,7 +850,8 @@ def _display_active() -> Optional[bool]:
 
 
 def desktop_reserve_mb(display: object = ...) -> int:
-    """The GPU memory an automatic share leaves free: ``DESKTOP_RESERVE_MB`` when the GPU
+    """The GPU memory of the card an automatic share keeps outside vLLM:
+    ``DESKTOP_RESERVE_MB`` when the GPU
     drives a display AND when that cannot be read (a reserve too many costs context, which
     the slider gives back; one too few freezes the desktop), 0 only when it is known not
     to. ``display`` is a value already read (``_display_active``)."""

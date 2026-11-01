@@ -2824,8 +2824,8 @@
       "auto": "Automatisch",
       "autoNow": "Automatisch: {pct} ({gb} von {total} GB), bei jedem Start neu gemessen",
       "autoLater": "Automatisch: wird beim nächsten Start aus dem freien Speicher berechnet",
-      "reserve": "{reserve} GB bleiben für den Bildschirm frei, weil diese GPU ein Display ansteuert.",
-      "reserveUnknown": "VAF kann nicht erkennen, ob diese GPU ein Display ansteuert, deshalb bleiben {reserve} GB für den Bildschirm frei.",
+      "reserve": "Der automatische Anteil spart {reserve} GB der Karte für den Bildschirm aus, weil diese GPU ein Display ansteuert.",
+      "reserveUnknown": "VAF kann nicht erkennen, ob diese GPU ein Display ansteuert, deshalb spart der automatische Anteil {reserve} GB der Karte für den Bildschirm aus.",
       "noDisplay": "An dieser GPU hängt kein Display, deshalb wird kein Speicher für einen Bildschirm freigehalten.",
       "of": "{gb} von {total} GB",
       "fits": "Das Modell passt: Kontext {ctx} Tokens, etwa {need} von {budget} GB.",
@@ -2903,7 +2903,7 @@
     "fit": {
       "fits": "Passt: etwa {need} von {budget} GB (Kontext {ctx}, KV-Cache {kv}).",
       "too_big": "Das Modell braucht etwa {need} GB GPU-Speicher, frei sind {free} GB, andere Programme belegen {other} GB. Schließ Programme, die die GPU nutzen, und versuch es noch einmal. Die lokale Engine bleibt, wie sie war; llama.cpp kann einen Teil des Modells auf die CPU auslagern.",
-      "too_big_reserve": "Das Modell braucht etwa {need} GB, vLLM bekommt aber {budget} GB: {reserve} GB bleiben für den Bildschirm frei, weil diese GPU ein Display ansteuert. Stell den GPU-Speicher von Hand auf mindestens {min}, um vLLM mehr zu geben (der Bildschirm kann einfrieren, wenn sein Speicher ausgeht), oder bleib bei llama.cpp.",
+      "too_big_reserve": "Das Modell braucht etwa {need} GB, vLLM bekommt aber {budget} GB: Der automatische Anteil spart {reserve} GB der Karte für den Bildschirm aus, weil diese GPU ein Display ansteuert. Stell den GPU-Speicher von Hand auf mindestens {min}, um vLLM mehr zu geben (der Bildschirm kann einfrieren, wenn sein Speicher ausgeht), oder bleib bei llama.cpp.",
       "share_above_free": "Andere Programme belegen die GPU: vLLM bräuchte {budget} GB, frei sind aber nur {free} GB. Schließ sie und versuch es noch einmal.",
       "no_shape": "Die config.json des Modells nennt seine Form nicht.",
       "no_gpu_memory": "Der GPU-Treiber meldet den Speicher der GPU nicht."

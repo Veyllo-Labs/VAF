@@ -6637,10 +6637,20 @@ class Agent:
         while the request that is sent carries only the routed set. Measured on the main agent's
         registry: 137 schemas, about 40k tokens of a 32k local window, so every turn of a long
         chat read as an overflow and was purged before routing. The real request is guarded
-        after routing with the routed schema counted (the post-routing check in chat_step)."""
+        after routing with the routed schema counted (the post-routing check in chat_step).
+        After routing, chat_step passes ``include_tools=not disable_tools``: a request that
+        goes out without tools (a forced text turn) carries no schema to count."""
         if not include_tools:
             return []
-        return getattr(self, "TOOLS", None) or []
+        # The array the request builder sends (_tools_and_choice): on a provider with
+        # `allowed_tools` that is the larger resident array, not the routed set. A count must
+        # not have its own idea of it. An agent without the request machinery (a bare test
+        # double) counts TOOLS, which is what the builder returns everywhere else.
+        try:
+            tools, _choice = self._tools_and_choice(False)
+            return tools or []
+        except Exception:
+            return getattr(self, "TOOLS", None) or []
 
     def _estimate_token_usage(self, *, include_tools: bool = True):
         """
@@ -6806,7 +6816,10 @@ class Agent:
             
             # Real total is the maximum of last request or current estimate
             # (Last request might be smaller if we just compressed, but current history is what counts)
-            total = max(last_total, current_est)
+            # Without tools, the estimate alone: the provider's figure includes the previous
+            # request's tool array and its output, so a count meant to leave the schema out (the
+            # router's "context tight" safety net, the pre-routing compression) would carry it.
+            total = max(last_total, current_est) if include_tools else current_est
 
             # Use the model's real context window, not the local n_ctx config value
             # (n_ctx is enforced at ≥ 32 768 for local models but is meaningless for API).
@@ -10804,7 +10817,7 @@ class Agent:
 
             # 1. Prepare Request
             # Recalculate token usage at the start of each retry attempt
-            current_tokens, max_tokens = self.get_token_usage()
+            current_tokens, max_tokens = self.get_token_usage(include_tools=not disable_tools)
 
             full_response = ""     # Reset for this turn
             full_content = ""      # Reset for this turn
@@ -11107,10 +11120,10 @@ class Agent:
                 
                 if current_tokens > safe_limit:
                     UI.event("Context", f"Proactive compression ({current_tokens}/{max_tokens}, buffer={response_buffer})", style="warning")
-                    self.manage_context()
+                    self.manage_context(include_tools=not disable_tools)
                     
                     # Double-check after compression
-                    current_tokens, _ = self.get_token_usage()
+                    current_tokens, _ = self.get_token_usage(include_tools=not disable_tools)
                     if current_tokens > safe_limit:
                         # Still too big - aggressive pruning needed
                         UI.event("Context", "Standard compression insufficient. Pruning aggressively...", style="warning")
@@ -11125,7 +11138,7 @@ class Agent:
                              self._active_tools = [t for t in CORE_FALLBACK if t in self.tools]
                              self._ensure_thinking_exit_tools()
                              # Re-calculate after tool reduction
-                             current_tokens, _ = self.get_token_usage()
+                             current_tokens, _ = self.get_token_usage(include_tools=not disable_tools)
 
                         if current_tokens > safe_limit:
                             # Keep only system + fewer messages for small context
@@ -11135,7 +11148,7 @@ class Agent:
                                 self.history = system_msg + self.history[-keep_count:]
                                 UI.event("Context", f"Aggressive reduction: kept system + {keep_count} recent messages", style="info")
                                 # Notify UI
-                                self._broadcast_context_status()
+                                self._broadcast_context_status(include_tools=not disable_tools)
                 
                 # Retry loop for 503 (Model Loading), 500 (Context Overflow), and 400 (Context Size Error)
                 response = None
@@ -11259,7 +11272,7 @@ class Agent:
                             if "context" in error_text.lower() or "exceed" in error_text.lower():
                                 UI.event("Context", "Context overflow detected (500). Compressing history...", style="warning")
                                 # 1. Standard Compression
-                                self.manage_context()
+                                self.manage_context(include_tools=not disable_tools)
                                 
                                 # 2. Aggressive Content Truncation (if Standard wasn't enough)
                                 is_small = max_tokens <= 20000
@@ -11312,7 +11325,7 @@ class Agent:
                                 if "exceed_context_size" in error_msg.lower() or "exceed" in error_msg.lower():
                                     UI.event("Context", "Context size exceeded. Compressing history...", style="warning")
                                     # 1. Standard Compression
-                                    self.manage_context()
+                                    self.manage_context(include_tools=not disable_tools)
                                     
                                     # 2. Aggressive Content Truncation
                                     is_small = max_tokens <= 20000
@@ -11371,7 +11384,7 @@ class Agent:
                             )
                             if _attempt < 3 and _is_size_400:
                                 UI.event("Context", "Request rejected (400). Compressing context...", style="warning")
-                                self.manage_context()
+                                self.manage_context(include_tools=not disable_tools)
                                 is_small = max_tokens <= 20000
                                 user_trunc = 4000 if is_small else 8000
                                 for msg in reversed(self.history):
@@ -12895,7 +12908,7 @@ class Agent:
                     # Context Management: Check after each tool response to prevent overflow
                     # Tool responses can be large (e.g., web_search results, file contents)
                     # Compress if we're approaching the limit
-                    self.manage_context()
+                    self.manage_context(include_tools=not disable_tools)
 
                 # Flush deferred messages (error nudges, doc-agent hints) now that ALL
                 # tool results are in history — safe to insert non-tool messages here.
@@ -13226,7 +13239,7 @@ class Agent:
                 _proactive_clear_at = 2 if _is_thinking_mode else 8
                 if empty_retry_count == _proactive_clear_at:
                     # Calculate tokens before
-                    tokens_before, _ = self.get_token_usage()
+                    tokens_before, _ = self.get_token_usage(include_tools=not disable_tools)
                     
                     UI.event("System", f"Early Warning ({empty_retry_count}) - Aggressive Context Clearing...", style="dim")
                     
@@ -13237,7 +13250,7 @@ class Agent:
                         self.history = kept_history
                         
                         # Calculate tokens after (estimate)
-                        tokens_after, _ = self.get_token_usage()
+                        tokens_after, _ = self.get_token_usage(include_tools=not disable_tools)
                         UI.event("Context", f"Cleared: {tokens_before} -> {tokens_after} Tokens | Snapshot preserved", style="dim")
                     else:
                          UI.event("Context", "History already minimal - skipping clear.", style="dim")
@@ -13253,7 +13266,7 @@ class Agent:
 
                 if empty_retry_count == MAX_RETRIES_BEFORE_EMERGENCY:
                     UI.event("System", f"High retry count ({empty_retry_count}) - Triggering Emergency Context Clearing", style="bold yellow")
-                    self.manage_context()
+                    self.manage_context(include_tools=not disable_tools)
 
                 elif empty_retry_count >= HARD_LIMIT:
                     UI.event("Emergency", f"Model not responding after {empty_retry_count} retries - stopping", style="warning")
@@ -13424,7 +13437,7 @@ class Agent:
                 append_domain_log("backend", "before_manage_context")
             except Exception:
                 pass
-            self.manage_context()
+            self.manage_context(include_tools=not disable_tools)
             try:
                 append_domain_log("backend", "after_manage_context")
             except Exception:

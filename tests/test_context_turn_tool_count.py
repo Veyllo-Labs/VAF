@@ -15,6 +15,10 @@ MUTATIONS, each turns the named tests red:
 - `_counted_tool_schemas` ignores `include_tools` -> the server-count, estimate, broadcast
   and purge-before-routing tests;
 - the estimate leaves the schema out on an API backend again -> the API-session test;
+- `_counted_tool_schemas` back on TOOLS instead of `_tools_and_choice` -> the resident-array
+  test; a post-routing count without `not disable_tools` -> the disable_tools case of the
+  chat_step test;
+- the API count without tools back on the provider's last figure -> the before-routing test;
 - chat_step drops `include_tools=not _will_route` from a pre-routing call -> the chat_step test;
 - the purge without the anchor insertion -> the purge test;
 - the broadcast back on `SessionManager(state_registry=...).load(session_id)` -> the broadcast
@@ -105,6 +109,21 @@ def test_an_api_session_without_a_request_counts_the_routed_schema(server_agent)
     assert with_tools - without == int(len(json.dumps(_SCHEMA)) / 3.0)
 
 
+def test_the_count_before_routing_ignores_the_providers_last_figure(server_agent):
+    """The reported usage of the last request includes its tool array and its output; a count
+    that leaves the schema out must not take it, or the router's safety net reads a short
+    history as tight."""
+    server_agent.use_server = False
+    server_agent.api_backend = SimpleNamespace(
+        last_request_usage={"input_tokens": 90000, "output_tokens": 500},
+        get_model_context_window=lambda model=None: 128000)
+    server_agent.provider = "openai"
+    without, _ = server_agent.get_token_usage(include_tools=False)
+    with_tools, _ = server_agent.get_token_usage()
+    assert without < 1000, without
+    assert with_tools == 90500
+
+
 def test_the_broadcast_counts_the_tools_the_call_counts(server_agent, monkeypatch):
     import vaf.core.agent as agent_module
     import vaf.core.web_interface as web_interface
@@ -176,9 +195,12 @@ class _Stop(BaseException):
     """Ends the turn at its first post-routing count; BaseException so no handler eats it."""
 
 
-def test_chat_step_counts_without_the_schema_only_before_routing(monkeypatch, tmp_path):
+@pytest.mark.parametrize("disable_tools", [False, True])
+def test_chat_step_counts_without_the_schema_only_before_routing(monkeypatch, tmp_path,
+                                                                  disable_tools):
     """Every count chat_step takes before routing leaves the schema out; once the turn's
-    tools are chosen, the counts include them again."""
+    tools are chosen, the counts include them again, unless the request goes out without
+    tools (disable_tools), which sends no schema to count."""
     from vaf.core.platform import Platform
 
     monkeypatch.chdir(tmp_path)
@@ -204,13 +226,24 @@ def test_chat_step_counts_without_the_schema_only_before_routing(monkeypatch, tm
     monkeypatch.setattr(a, "_select_turn_tools", lambda *args, **kw: routed.append(1))
 
     with pytest.raises(_Stop):
-        a.chat_step(user_input="Hallo", raw_user_input="Hallo", stream_callback=lambda t: None)
+        a.chat_step(user_input="Hallo", raw_user_input="Hallo", stream_callback=lambda t: None,
+                    disable_tools=disable_tools)
 
     before = [s for s in seen if not s[2]]
     after = [s for s in seen if s[2]]
     assert {s[0] for s in before} == {"get_token_usage", "manage_context", "_broadcast_context_status"}
     assert all(s[1] is False for s in before), before
-    assert after and all(s[1] is True for s in after), after
+    assert after and all(s[1] is (not disable_tools) for s in after), after
+
+
+def test_the_count_reads_the_array_the_request_sends(server_agent):
+    """On a provider with `allowed_tools` the request sends the resident array, which can be
+    larger than the routed set: the count asks the request builder, not TOOLS."""
+    resident = _SCHEMA + _SCHEMA
+    server_agent._tools_and_choice = lambda disable_tools: (resident, {"type": "allowed_tools"})
+    with_tools, _ = server_agent.get_token_usage()
+    without, _ = server_agent.get_token_usage(include_tools=False)
+    assert with_tools - without == len(json.dumps(resident)) // 4
 
 
 def test_the_broadcast_does_not_restore_the_saved_snapshot(server_agent, monkeypatch, tmp_path):

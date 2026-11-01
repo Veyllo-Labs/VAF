@@ -69,7 +69,11 @@ routing, with the routed schema counted (the proactive compression and the core
 tool subset of the local server lane). The router's own "context tight" safety net
 (`_select_turn_tools`, the core tool subset when the router chose nothing) reads that
 first, schema-free count as well, so it judges the history alone; the routed request is
-still checked after it. When the purge does fire, it keeps the
+still checked after it. On an API backend a count without tools is the history estimate
+alone, never the provider's reported usage of the last request, which includes that
+request's tool array and its output. After routing, the counts read the array the request
+builder sends (`_tools_and_choice`: the resident array on a provider with `allowed_tools`)
+and none for a request that goes out without tools (`disable_tools`, a forced text turn). When the purge does fire, it keeps the
 system prompt, the turn's request (`turn_anchor_index`, for the same reason the
 compression keeps it: inside a tool loop it lies more than six messages back)
 and the last six messages; the compression right after it rebuilds the summary

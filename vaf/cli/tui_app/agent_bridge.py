@@ -969,12 +969,14 @@ class AgentBridge:
         from vaf.core import local_engine
         return local_engine.state(model)
 
-    def apply_engine(self, engine: str, model=None, install: bool = False) -> None:
+    def apply_engine(self, engine: str, model=None, install: bool = False,
+                     gpu_share=None) -> None:
         """Switch the local engine (``local_engine.apply``) on the lane: an install and a
         model download take minutes, and a running turn refuses it like a model swap. pip's
         output goes to ``logs/vllm_install.log`` (the alternate screen has no room for it);
         each phase is a note in the transcript. A running local agent is moved onto the new
-        engine's model afterwards (``reload_local_model``)."""
+        engine's model afterwards (``reload_local_model``). ``gpu_share`` is vLLM's GPU memory
+        share (0 = automatic, None keeps the stored one)."""
         def _run():
             from vaf.core import local_engine
             from vaf.core.log_helper import get_app_log_dir
@@ -986,6 +988,7 @@ class AgentBridge:
                 "download_model": "downloading the model",
                 "handover": "stopping the llama server",
                 "fit_check": "checking that the model fits",
+                "first_start": "starting vLLM once to check that it runs",
                 "stop_vllm": "stopping vLLM",
             }
 
@@ -997,7 +1000,8 @@ class AgentBridge:
                                   f"{labels.get(phase, phase)}", "info")
             try:
                 result = local_engine.apply(engine, model=model, install=install,
-                                            progress=progress, output=output)
+                                            gpu_share=gpu_share, progress=progress,
+                                            output=output)
             except Exception as exc:
                 self.events.event_note("Engine", f"engine switch failed: {exc}", "error")
                 return

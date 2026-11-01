@@ -9,6 +9,7 @@ import { Loader2 } from 'lucide-react';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Skeleton, { SkeletonBar } from '@/components/ui/Skeleton';
 import EngineChoice, { type EngineId, type EngineOption } from './EngineChoice';
+import GpuShareSlider, { clampShare, type ShareTable } from './GpuShareSlider';
 import { Input, Select } from './SettingsFields';
 
 /** The fit of a switch (vaf/core/vllm_server.py FitResult, as data). */
@@ -25,6 +26,12 @@ interface FitData {
     total_mb: number;
     other_mb?: number;
     smaller_model?: boolean;
+    /** The desktop reserve that capped an automatic share (too_big_reserve). */
+    reserve_mb?: number;
+    leaves_mb?: number;
+    below_reserve?: boolean;
+    /** On too_big_reserve: the smallest share at which the model fits. */
+    min_share?: number;
     reason: string;
 }
 
@@ -73,6 +80,8 @@ export interface EngineState {
         server: 'running' | 'loading' | 'idle';
         /** A start of vLLM that failed and is not run again until a switch (vllm_server's start memory). */
         start_failure?: { code: string; text: string } | null;
+        /** The GPU memory slider's table (vllm_server.share_table); null where vLLM cannot run. */
+        memory?: ShareTable | null;
     };
     llama: { model: string };
     conflicts: { code: string; text: string }[];
@@ -127,6 +136,8 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
     const [preview, setPreview] = useState<EngineState['vllm'] | null>(null);
     const [confirming, setConfirming] = useState<'install' | 'remove' | null>(null);
     const [busy, setBusy] = useState(false);
+    // vLLM's GPU memory share in the slider: 0 = automatic (vllm_gpu_memory_utilization).
+    const [share, setShare] = useState(0);
     const [note, setNote] = useState<{ lines: string[]; tone: 'ok' | 'error' } | null>(null);
     const closed = useRef(false);
     const following = useRef(false);
@@ -171,6 +182,18 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
     // The model picker starts on the stored setting whenever a new state arrives.
     const setting = data?.vllm.model_setting || 'auto';
     useEffect(() => { setModelChoice(setting); setOtherRepo(''); }, [setting]);
+    // The slider starts on the stored share too; one outside the range is shown clamped.
+    const storedShare = data?.vllm.memory?.configured ?? 0;
+    // The range's two numbers, not its array: every reload brings a new array, and the slider
+    // must not jump back to the stored value under the reader's hand.
+    const shareLow = data?.vllm.memory?.range?.[0] ?? 0.3;
+    const shareHigh = data?.vllm.memory?.range?.[1] ?? 0.95;
+    useEffect(() => {
+        setShare(storedShare ? clampShare(storedShare, [shareLow, shareHigh]) : 0);
+    }, [storedShare, shareLow, shareHigh]);
+    /** A share as the reader writes a percentage ("68 %" in German). */
+    const pct = useCallback((value: number) =>
+        format.number(value, { style: 'percent', maximumFractionDigits: 0 }), [format]);
 
     const curated = useMemo(() => data?.vllm.curated ?? [], [data]);
     const gbOf = useCallback((repo: string) => curated.find((c) => c.repo === repo)?.weights_gb, [curated]);
@@ -210,8 +233,9 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
             lines.push(coded('fit', fit.code, {
                 need: gb(fit.need_mb), budget: gb(fit.budget_mb), ctx: fit.max_model_len, kv: fit.kv_dtype,
                 free: gb(fit.free_mb), other: gb(fit.other_mb ?? Math.max((fit.total_mb || 0) - (fit.free_mb || 0), 0)),
+                reserve: gb(fit.reserve_mb ?? 0), min: pct(fit.min_share ?? 0), left: gb(fit.leaves_mb ?? 0),
             }, fit.reason));
-            if (fit.code === 'too_big' && fit.smaller_model) lines.push(t('fitSmallerModel'));
+            if ((fit.code === 'too_big' || fit.code === 'too_big_reserve') && fit.smaller_model) lines.push(t('fitSmallerModel'));
         }
         if (r.code === 'no_fit' && r.stopped_llama) lines.push(t('stoppedLlama'));
         if (r.code === 'no_fit' && r.stopped_vllm) lines.push(t('stoppedVllm'));
@@ -222,7 +246,7 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
             lines.push(t('logHint', { path: SERVER_LOG }));
         }
         return { lines, tone: r.status === 'done' ? 'ok' : 'error' };
-    }, [coded, t, num]);
+    }, [coded, t, num, pct]);
 
     const follow = useCallback(async () => {
         if (following.current) return;
@@ -268,7 +292,7 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
         }
     }, [data, currentEngine]);
 
-    const start = async (body: { engine: EngineId; model?: string; install?: boolean }) => {
+    const start = async (body: { engine: EngineId; model?: string; install?: boolean; gpu_share?: number }) => {
         setConfirming(null);
         setNote(null);
         setBusy(true);
@@ -286,7 +310,13 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
                 const answer = await res.json().catch(() => ({}));
                 const code = String(answer.code || '');
                 const ns = code && t.has(`support.${code}`) ? 'support' : 'result';
-                setNote({ lines: [coded(ns, code, { model: runningRepo, ...(answer.params || {}) }, String(answer.detail || t('failed')))], tone: 'error' });
+                const params: Record<string, string | number> = { model: runningRepo, ...(answer.params || {}) };
+                // The range of a GPU share comes as 0.30 and 0.95; the reader sees percentages.
+                if (code === 'bad_share') {
+                    params.min = pct(Number(answer.params?.min ?? 0.3));
+                    params.max = pct(Number(answer.params?.max ?? 0.95));
+                }
+                setNote({ lines: [coded(ns, code, params, String(answer.detail || t('failed')))], tone: 'error' });
             }
         } catch {
             setNote({ lines: [t('failed')], tone: 'error' });
@@ -356,7 +386,7 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
     const vllmNote = lean ? t('profileApi')
         : coded('support', data.support.code, data.support.params, data.support.reason);
     const options: EngineOption[] = [
-        { id: 'llama', name: t('llamaName'), recommended: t('llamaFor'), line: t('llamaLine'), disabled: lean },
+        { id: 'llama', name: t('llamaName'), recommended: t('llamaFor'), line: t('llamaLine'), disabled: lean, note: lean ? undefined : t('llamaNote') },
         {
             id: 'vllm', name: t('vllmName'), recommended: t('vllmFor'), line: t('vllmLine'), disabled: lean || !supported,
             note: vllmNote,
@@ -386,6 +416,11 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
     ];
     const showVllmPicker = !lean && (shown === 'vllm');
     const modelChanged = chosenRepo !== setting;
+    // The slider's table follows the model in the picker (the preview's, for another repo).
+    const memory = vllmInfo.memory ?? null;
+    const shareChanged = Math.abs(share - storedShare) > 1e-9;
+    // The share goes with a switch only when it differs from the stored one (0 = automatic).
+    const shareBody = shareChanged ? { gpu_share: share } : {};
     const refusal = vllmInfo.parser_refusal;
     // A start that failed is not run again until a switch: the section says why and offers it.
     const startFailure = data.vllm.start_failure ?? null;
@@ -399,7 +434,7 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
     const vllmAction = () => {
         if (!repoValid || refusal) return;
         if (needsInstall) { setConfirming('install'); return; }
-        void start({ engine: 'vllm', model: chosenRepo });
+        void start({ engine: 'vllm', model: chosenRepo, ...shareBody });
     };
 
     return (
@@ -451,6 +486,15 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
                             {' '}{vllmInfo.model_downloaded ? t('downloaded') : t('notDownloaded')}
                         </p>
                     ) : null)}
+                    {memory && memory.total_mb && !jobRunning && (
+                        <GpuShareSlider
+                            memory={memory}
+                            value={share}
+                            onChange={setShare}
+                            disabled={jobRunning}
+                            mode={data.engine === 'vllm' ? 'running' : 'switch'}
+                        />
+                    )}
                 </div>
             )}
 
@@ -490,13 +534,22 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
                     {data.conflicts.map((c) => (
                         <p key={c.code} className="text-xs text-amber-700 ml-1">{coded('conflict', c.code, {}, c.text)}</p>
                     ))}
+                    {shareChanged && !needsInstall && (
+                        <p className="text-xs text-gray-500 ml-1">{t('share.restart')}</p>
+                    )}
                     <div className="flex flex-wrap items-center gap-2 pt-2">
+                        {shareChanged && !modelChanged && !needsInstall && (
+                            <button type="button" className={primary} disabled={jobRunning || !repoValid || !!refusal}
+                                onClick={() => void start({ engine: 'vllm', model: chosenRepo, gpu_share: share })}>
+                                {t('share.apply')}
+                            </button>
+                        )}
                         {(modelChanged || needsInstall) && (
                             <button type="button" className={primary} disabled={jobRunning || !repoValid || !!refusal} onClick={vllmAction}>
                                 {needsInstall ? t('installAndSwitch') : t('useModel')}
                             </button>
                         )}
-                        {startFailure && !modelChanged && !needsInstall && (
+                        {startFailure && !modelChanged && !shareChanged && !needsInstall && (
                             <button type="button" className={primary} disabled={jobRunning || !repoValid || !!refusal} onClick={vllmAction}>
                                 {t('retryVllm')}
                             </button>
@@ -579,7 +632,7 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
                 </>}
                 confirmLabel={t('installConfirm')}
                 cancelLabel={t('cancel')}
-                onConfirm={() => void start({ engine: 'vllm', model: chosenRepo, install: true })}
+                onConfirm={() => void start({ engine: 'vllm', model: chosenRepo, install: true, ...shareBody })}
                 onCancel={() => setConfirming(null)}
             />
             <ConfirmDialog

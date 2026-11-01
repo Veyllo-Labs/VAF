@@ -84,6 +84,14 @@ SHAPE_4B = vs.ModelShape(weights_bytes=int(2.67e9), layers=36, kv_heads=8, head_
 POSIX_ONLY = pytest.mark.skipif(sys.platform == "win32", reason="POSIX process groups")
 
 
+@pytest.fixture(autouse=True)
+def no_display(monkeypatch):
+    """The display state is pinned: this machine drives a display and a CI runner does not,
+    and the desktop reserve follows it (vllm_server.desktop_reserve_mb)."""
+    from vaf.core import vllm_server
+    monkeypatch.setattr(vllm_server, "_display_active", lambda: False)
+
+
 @pytest.fixture
 def config(monkeypatch):
     from vaf.core.config import Config
@@ -225,7 +233,7 @@ def test_fit_measured_case():
     assert result.ok, result.reason
     assert result.kv_dtype == "fp8" and result.max_model_len == 32768
     assert 0.50 <= result.utilization <= 0.92
-    assert abs(result.utilization - (8500 - 512) / 10240) < 1e-9
+    assert result.utilization == vs.floor_share((8500 - 512) / 10240) == 0.78
     fp16 = vs.fit(SHAPE_4B, 32768, 8500, 10240, kv_dtype="auto")
     assert not fp16.ok
     for number in (str(fp16.need_mb), str(fp16.budget_mb), "10240", "8500", "32768"):

@@ -34,7 +34,11 @@ WHEN (handover, reuse, waiting for a server that is loading); this module does t
   share vLLM gets, before the launch, so a model that cannot fit is refused with numbers
   instead of a crash a minute later; a context that does not fit is reduced to the largest
   that does above ``MIN_CONTEXT``. The GPU's memory comes from nvidia-smi, or on ROCm from
-  the amdgpu driver in /sys (``gpu_detection.amd_vram_mb``).
+  the amdgpu driver in /sys (``gpu_detection.amd_vram_mb``). An automatic share leaves
+  ``DESKTOP_RESERVE_MB`` free when the GPU drives a display or that cannot be read
+  (``desktop_reserve_mb``), and is floored to 0.01, so the launch argument is the share the
+  fit checked; a share set by hand (``SHARE_RANGE``) is never capped. ``share_table`` is the
+  GPU memory slider's table.
 - **Attention plan** (``launch_plan``, CUDA build only): where FlashInfer cannot build its
   kernels (no CUDA toolkit, ``flashinfer_buildable``), the launch names an attention backend
   and KV cache that need no build and turns FlashInfer's sampler off (``attention_plan``);
@@ -158,7 +162,22 @@ _PROBE_ROCM = (
 OVERHEAD_BYTES = int(1.85 * 1024 ** 3)
 # Headroom left free on the GPU when the memory share is computed from the free figure.
 FREE_HEADROOM_MB = 512
+# The clamp of a share computed from the free memory.
 UTILIZATION_RANGE = (0.50, 0.92)
+# The range of a share set by hand (the Settings slider, `vaf engine vllm --gpu-share`, the
+# TUI). Not up to 1.0: above 0.95 nothing is left for any other GPU context on the card;
+# below 0.30 not even the 4B default fits on a 10 GB card, while a large card can still give
+# vLLM a small part.
+SHARE_RANGE = (0.30, 0.95)
+# GPU memory an automatic share leaves free when the GPU drives a display (or when that cannot
+# be read). vLLM preallocates its whole share up front, and the free figure at launch covers
+# only what the desktop holds at that moment. Measured on an RTX 3080 (10240 MiB, KDE Plasma
+# on Wayland): desktop programs hold 3.1 to 3.6 GB of GPU memory; at share 0.78 (2253 MiB
+# left) the compositor failed to allocate a buffer during a long turn and the screen froze;
+# at 0.66 to 0.68 (3277 to 3482 MiB left) it stayed alive. 3328 MiB puts the automatic share
+# of that card at 0.67, inside the band that worked, where the 4B default still fits at the
+# 32768 floor. A share set by hand is never capped by it: the slider is the override.
+DESKTOP_RESERVE_MB = 3328
 # VAF's own request (system prompt and routed tools) needs this much context.
 MIN_CONTEXT = 32768
 # A context reduced to fit is a multiple of this.
@@ -635,7 +654,7 @@ class ModelShape:
 class FitResult:
     """The fit, with the English ``reason`` (`vaf engine`, the start's error) and the numbers
     and ``code`` a translated sentence is built from: ``fits``, ``too_big``,
-    ``share_above_free``, ``no_shape``, ``no_gpu_memory``."""
+    ``too_big_reserve``, ``share_above_free``, ``no_shape``, ``no_gpu_memory``."""
     ok: bool
     max_model_len: int
     utilization: float
@@ -654,13 +673,33 @@ class FitResult:
     attention_backend: str = ""
     # A refusal for a model larger than the smallest default: a smaller model may fit.
     smaller_model: bool = False
+    # The desktop reserve that capped an automatic share (0 when it did not cap it).
+    reserve_mb: int = 0
+    # Whether the GPU drives a display (None: unknown), as the fit was planned.
+    display: Optional[bool] = None
+    # What the share leaves on the GPU for everything else (total - budget).
+    leaves_mb: int = 0
+    # A share set by hand that leaves less than the desktop reserve on a GPU that drives a
+    # display (or whose display state is unknown): the screen can freeze.
+    below_reserve: bool = False
+    # On ``too_big_reserve``: the smallest share (0.01 steps) at which the model fits.
+    min_share: float = 0.0
 
 
-FIT_CODES = ("fits", "too_big", "share_above_free", "no_shape", "no_gpu_memory")
+FIT_CODES = ("fits", "too_big", "too_big_reserve", "share_above_free", "no_shape",
+             "no_gpu_memory")
 
 
 def _mb(value: float) -> int:
     return int(round(value / 1024 ** 2))
+
+
+def floor_share(value: float) -> float:
+    """``value`` floored to 0.01. The launch argument carries two decimals, and a rounded one
+    could hand vLLM up to half a percent more than the fit checked (0.675 prints as 0.68).
+    The epsilon keeps a product like ``0.57 * 100 = 56.99999999999999`` at 0.57."""
+    import math
+    return math.floor(float(value) * 100 + 1e-6) / 100
 
 
 def kv_bytes_per_token(shape: ModelShape, kv_dtype: str) -> int:
@@ -678,19 +717,35 @@ def kv_bytes_per_token(shape: ModelShape, kv_dtype: str) -> int:
     return 2 * shape.layers * shape.kv_heads * per_head
 
 
+def auto_share(free_mb: int, total_mb: int, reserve_mb: int = 0) -> float:
+    """The share computed from the free memory: ``(free - 512 MiB) / total`` within
+    0.50..0.92, then at most ``(total - reserve) / total``, floored to 0.01."""
+    low, high = UTILIZATION_RANGE
+    share = min(high, max(low, (free_mb - FREE_HEADROOM_MB) / total_mb)) if total_mb else low
+    if reserve_mb and total_mb:
+        share = min(share, (total_mb - reserve_mb) / total_mb)
+    return floor_share(share)
+
+
 def fit(shape: ModelShape, n_ctx: int, free_mb: int, total_mb: int, *,
         kv_dtype: Optional[str] = None, utilization: float = 0.0,
-        model: str = "") -> FitResult:
+        model: str = "", reserve_mb: int = 0, check_free: bool = True) -> FitResult:
     """Does the model fit, and with what? ``n_ctx`` is the context (``--max-model-len``),
     clamped to the model's maximum. The KV cache is fp8 unless ``kv_dtype`` says otherwise
     (``auto`` = the model's own 16-bit dtype). ``utilization`` 0 = computed from the free
-    memory: ``(free - 512 MiB) / total`` within 0.50..0.92. vLLM refuses to start when its
-    share is more than what is free, so that counts as not fitting too.
+    memory (``auto_share``): ``(free - 512 MiB) / total`` within 0.50..0.92, capped so that
+    ``reserve_mb`` stays free (the desktop reserve of a GPU that drives a display), floored
+    to 0.01. A share set by hand is taken as it is (two decimals) and never capped by the
+    reserve; one that leaves less than ``reserve_mb`` is marked ``below_reserve``. vLLM
+    refuses to start when its share is more than what is free, so that counts as not fitting
+    too, unless ``check_free`` is False (the share table of the slider).
 
     When the context does not fit, the largest one that does (a multiple of
     ``CONTEXT_STEP``) is taken, never below ``MIN_CONTEXT``, with a note; only a model that
-    does not fit at ``MIN_CONTEXT`` is refused. ``model`` (the repo id) decides whether the
-    refusal names a smaller model: not for the smallest default."""
+    does not fit at ``MIN_CONTEXT`` is refused. A refusal where the reserve capped the share
+    and the uncapped share would fit is ``too_big_reserve``, with ``min_share``. ``model``
+    (the repo id) decides whether the refusal names a smaller model: not for the smallest
+    default."""
     note = ""
     max_len = int(n_ctx)
     if shape.max_position and max_len > shape.max_position:
@@ -699,12 +754,16 @@ def fit(shape: ModelShape, n_ctx: int, free_mb: int, total_mb: int, *,
         max_len = shape.max_position
     dtype = kv_dtype or "fp8"
     per_token = kv_bytes_per_token(shape, dtype)
-    if utilization and 0 < float(utilization) <= 1:
-        share = float(utilization)
+    manual = bool(utilization) and 0 < float(utilization) <= 1
+    capped_by = 0
+    if manual:
+        share = round(float(utilization), 2)
     else:
-        low, high = UTILIZATION_RANGE
-        share = min(high, max(low, (free_mb - FREE_HEADROOM_MB) / total_mb)) if total_mb else low
+        share = auto_share(free_mb, total_mb, reserve_mb)
+        if reserve_mb and share < auto_share(free_mb, total_mb):
+            capped_by = int(reserve_mb)
     budget_mb = int(share * total_mb)
+    leaves_mb = max(int(total_mb) - budget_mb, 0)
     rest = budget_mb * 1024 ** 2 - shape.weights_bytes - OVERHEAD_BYTES
     if per_token * max_len > rest and max_len > MIN_CONTEXT:
         fits_len = (max(rest, 0) // per_token) // CONTEXT_STEP * CONTEXT_STEP
@@ -719,8 +778,10 @@ def fit(shape: ModelShape, n_ctx: int, free_mb: int, total_mb: int, *,
     other_mb = max(int(total_mb) - int(free_mb), 0)
     numbers = {"weights_mb": _mb(shape.weights_bytes), "kv_mb": _mb(kv_total),
                "free_mb": int(free_mb), "total_mb": int(total_mb),
-               "overhead_mb": _mb(OVERHEAD_BYTES), "other_mb": other_mb}
-    if budget_mb > free_mb:
+               "overhead_mb": _mb(OVERHEAD_BYTES), "other_mb": other_mb,
+               "reserve_mb": capped_by, "leaves_mb": leaves_mb,
+               "below_reserve": manual and bool(reserve_mb) and leaves_mb < int(reserve_mb)}
+    if check_free and budget_mb > free_mb:
         return FitResult(False, max_len, share, dtype, need_mb, budget_mb,
                          f"vLLM would take {budget_mb} MiB of the GPU ({share:.2f} of "
                          f"{total_mb} MiB), but only {free_mb} MiB are free.", note,
@@ -729,6 +790,23 @@ def fit(shape: ModelShape, n_ctx: int, free_mb: int, total_mb: int, *,
         from vaf.core.local_engine import DEFAULT_MODEL_SMALL
         smaller_helps = bool(model) and model.lower() != DEFAULT_MODEL_SMALL.lower()
         smaller = " or choose a smaller model" if smaller_helps else ""
+        if capped_by and fit(shape, n_ctx, free_mb, total_mb, kv_dtype=dtype, model=model,
+                             check_free=check_free).ok:
+            # The model fits once the reserve is not kept: say so, with the share that does.
+            least = floor_share(need_mb / total_mb) if total_mb else 0.0
+            while total_mb and int(least * total_mb) < need_mb:
+                least = round(least + 0.01, 2)
+            smaller_too = " or choose a smaller model" if smaller_helps else ""
+            return FitResult(False, max_len, share, dtype, need_mb, budget_mb,
+                             f"The model needs about {need_mb} MiB, but vLLM gets {budget_mb} "
+                             f"MiB ({share:.2f} of {total_mb} MiB): {capped_by} MiB stay free "
+                             "for the screen, because this GPU drives a display (or VAF cannot "
+                             f"tell). Set the GPU memory by hand to at least {least:.2f} "
+                             f"(`vaf engine vllm --gpu-share {least:.2f}`, or Settings > AI & "
+                             f"Model){smaller_too}; below the reserve the screen can freeze "
+                             "when its memory runs out. The local engine stays as it was.",
+                             note, "too_big_reserve", smaller_model=smaller_helps,
+                             min_share=least, **numbers)
         return FitResult(False, max_len, share, dtype, need_mb, budget_mb,
                          f"The model needs about {need_mb} MiB (weights "
                          f"{_mb(shape.weights_bytes)}, KV cache {_mb(kv_total)} for {max_len} "
@@ -755,6 +833,27 @@ def _gpu_memory() -> tuple:
     return nvidia_free_vram_mb(), total
 
 
+def _display_active() -> Optional[bool]:
+    """Whether the GPU of this machine's build drives a display: nvidia-smi's
+    ``display_active`` for the first NVIDIA GPU (the one ``_gpu_memory`` reads), or the DRM
+    connectors of the AMD GPU's render device; None when unknown."""
+    if backend() == ROCM:
+        from vaf.core.gpu_detection import amd_display_active
+        return amd_display_active()
+    from vaf.core.gpu_detection import nvidia_display_active
+    return nvidia_display_active()
+
+
+def desktop_reserve_mb(display: object = ...) -> int:
+    """The GPU memory an automatic share leaves free: ``DESKTOP_RESERVE_MB`` when the GPU
+    drives a display AND when that cannot be read (a reserve too many costs context, which
+    the slider gives back; one too few freezes the desktop), 0 only when it is known not
+    to. ``display`` is a value already read (``_display_active``)."""
+    if display is ...:
+        display = _display_active()
+    return 0 if display is False else DESKTOP_RESERVE_MB
+
+
 def _configured_utilization() -> float:
     try:
         from vaf.core.config import Config
@@ -764,10 +863,24 @@ def _configured_utilization() -> float:
     return value if 0 < value <= 1 else 0.0
 
 
+def _share_or_configured(utilization: Optional[float]) -> float:
+    """An override (``0`` = automatic) or, with None, the configured share."""
+    if utilization is None:
+        return _configured_utilization()
+    try:
+        value = float(utilization)
+    except (TypeError, ValueError):
+        return 0.0
+    return value if 0 < value <= 1 else 0.0
+
+
 def plan_fit(model_dir: str, n_ctx: int, kv_dtype: Optional[str] = None,
-             model: str = "") -> FitResult:
+             model: str = "", utilization: Optional[float] = None) -> FitResult:
     """The fit for the model on this GPU now (`vaf engine vllm` prints it, the start obeys).
-    Without ``kv_dtype`` it is the first attempt of this machine's ``launch_plan``."""
+    Without ``kv_dtype`` it is the first attempt of this machine's ``launch_plan``.
+    ``utilization`` overrides the configured share (``0`` = automatic; a switch fits the
+    share it is about to write); None reads ``vllm_gpu_memory_utilization``. The desktop
+    reserve applies when the GPU drives a display or that is unknown (``desktop_reserve_mb``)."""
     plan = launch_plan()
     dtype = kv_dtype or plan.kv_dtypes[0]
     shape = ModelShape.from_dir(model_dir)
@@ -781,10 +894,61 @@ def plan_fit(model_dir: str, n_ctx: int, kv_dtype: Optional[str] = None,
                   if backend() == ROCM else "nvidia-smi does not report the GPU's memory.")
         return FitResult(False, int(n_ctx), 0.0, dtype, 0, 0, source,
                          code="no_gpu_memory")
+    display = _display_active()
     result = fit(shape, n_ctx, free_mb, total_mb, kv_dtype=dtype,
-                 utilization=_configured_utilization(), model=model)
+                 utilization=_share_or_configured(utilization), model=model,
+                 reserve_mb=desktop_reserve_mb(display))
+    result = replace(result, display=display)
     backend_name = plan.backend_for(dtype)
     return replace(result, attention_backend=backend_name) if backend_name else result
+
+
+def share_table(model_dir: Optional[str], n_ctx: int, *, model: str = "",
+                local_server_running: bool = False) -> Dict[str, object]:
+    """What the GPU memory slider shows (Settings, the TUI, `vaf engine`): the card, the
+    display and its reserve, the configured share, the automatic share now, and one fit per
+    share of ``SHARE_RANGE`` in 0.01 steps (``steps``: share, budget_mb, ok, max_model_len,
+    need_mb; checked without the free-memory refusal, which is the start's). ``steps`` is
+    empty when the model is not downloaded or its shape is unknown. While a local server runs
+    its memory is not free, so ``free_mb`` and ``auto_share`` are None (measured at the next
+    start). The one implementation of the numbers: a client only reads them."""
+    free_mb, total_mb = _gpu_memory()
+    display = _display_active()
+    reserve = desktop_reserve_mb(display)
+    try:
+        dtype = launch_plan().kv_dtypes[0]
+    except Exception:
+        dtype = "fp8"
+    free_known = bool(total_mb) and bool(free_mb) and not local_server_running
+    auto = auto_share(free_mb, total_mb, reserve) if free_known else None
+    out: Dict[str, object] = {
+        "total_mb": int(total_mb or 0) or None,
+        "free_mb": int(free_mb) if free_known else None,
+        "display": display,
+        "reserve_mb": reserve,
+        "configured": _configured_utilization(),
+        "auto_share": auto,
+        "auto_reserved": bool(free_known and reserve and auto is not None
+                              and auto < auto_share(free_mb, total_mb)),
+        "kv_dtype": dtype,
+        "range": list(SHARE_RANGE),
+        "min_share": None,
+        "steps": [],
+    }
+    shape = ModelShape.from_dir(model_dir) if model_dir else None
+    if shape is None or not total_mb:
+        return out
+    low, high = (int(round(v * 100)) for v in SHARE_RANGE)
+    steps = []
+    for pct in range(low, high + 1):
+        share = pct / 100
+        result = fit(shape, n_ctx, free_mb or total_mb, total_mb, kv_dtype=dtype,
+                     utilization=share, model=model, check_free=False)
+        steps.append({"share": share, "budget_mb": result.budget_mb, "ok": result.ok,
+                      "max_model_len": result.max_model_len, "need_mb": result.need_mb})
+    out["steps"] = steps
+    out["min_share"] = next((s["share"] for s in steps if s["ok"]), None)
+    return out
 
 
 # ── attention backend and KV cache ───────────────────────────────────────────────
@@ -1187,13 +1351,15 @@ _logged_failure: Optional[StartFailure] = None
 _last_interrupted = False
 
 
-def start_signature(repo_id: str, n_ctx: int, plan: Optional[KvPlan] = None) -> tuple:
+def start_signature(repo_id: str, n_ctx: int, plan: Optional[KvPlan] = None,
+                    utilization: Optional[float] = None) -> tuple:
     """What a start depends on besides the free memory: the model, the requested context,
-    the configured GPU share, the parsers, the pin, the recipe and the plan. A change of any
-    of them is a new start, not the failed one again."""
+    the GPU share (``utilization``, the override of a switch, else the configured one), the
+    parsers, the pin, the recipe and the plan. A change of any of them is a new start, not
+    the failed one again."""
     from vaf.core import local_engine
     plan = plan or launch_plan()
-    return (str(repo_id), max(int(n_ctx or 0), MIN_CONTEXT), _configured_utilization(),
+    return (str(repo_id), max(int(n_ctx or 0), MIN_CONTEXT), _share_or_configured(utilization),
             tuple(local_engine.parsers_for(repo_id)), PIN, recipe_current(),
             tuple(plan.kv_dtypes), tuple(plan.backends))
 
@@ -1221,7 +1387,8 @@ def _remember(signature: tuple, cause: str, text: str, retry: bool = False) -> N
 
 
 def remembered_failure(repo_id: Optional[str] = None,
-                       n_ctx: Optional[int] = None) -> Optional[StartFailure]:
+                       n_ctx: Optional[int] = None,
+                       utilization: Optional[float] = None) -> Optional[StartFailure]:
     """The remembered failure when the next start would be the failed one again: the same
     signature, and for a fit refusal not yet ``FIT_RETRY_SECONDS`` old. ``repo_id`` and
     ``n_ctx`` default to the configuration's. A failure of another signature is kept (a
@@ -1235,7 +1402,7 @@ def remembered_failure(repo_id: Optional[str] = None,
         repo_id = local_engine.resolve_vllm_model()
     if n_ctx is None:
         n_ctx = local_engine._n_ctx()
-    if start_signature(repo_id, n_ctx) != failure.signature:
+    if start_signature(repo_id, n_ctx, utilization=utilization) != failure.signature:
         return None
     if failure.retry_at and time.monotonic() >= failure.retry_at:
         return None
@@ -1250,7 +1417,8 @@ def failure_sentence(failure: StartFailure) -> str:
 
 
 def start(repo_id: str, n_ctx: int, port: int = 8080,
-          popen: Optional[Callable[..., subprocess.Popen]] = None) -> bool:
+          popen: Optional[Callable[..., subprocess.Popen]] = None,
+          utilization: Optional[float] = None) -> bool:
     """Launch vLLM for ``repo_id`` and wait until ``/health`` answers 200. False, with the
     reason said, when it is refused (profile, not installed, model missing, unknown parser,
     does not fit) or does not come up. The attempts are this machine's ``launch_plan``: the
@@ -1260,7 +1428,9 @@ def start(repo_id: str, n_ctx: int, port: int = 8080,
     A start that died or timed out, or that the fit refused, is remembered for its signature
     (``start_signature``): the same start again returns False at once without a launch (a fit
     refusal is measured again after ``FIT_RETRY_SECONDS``), until ``clear_start_failure``
-    (every switch, ``local_engine.apply``), a changed signature or a restart of VAF."""
+    (every switch, ``local_engine.apply``), a changed signature or a restart of VAF.
+    ``utilization`` overrides the configured GPU share (the first start of a switch, which
+    writes the share only once it passed); None reads ``vllm_gpu_memory_utilization``."""
     global _child, _came_up, _logged_failure, _last_interrupted, _loading_pid
     from vaf.core import inference_profile, local_engine
     UI = _ui()
@@ -1290,8 +1460,8 @@ def start(repo_id: str, n_ctx: int, port: int = 8080,
         return False
     n_ctx = max(int(n_ctx or 0), MIN_CONTEXT)
     plan = launch_plan()
-    signature = start_signature(repo_id, n_ctx, plan)
-    failure = remembered_failure(repo_id, n_ctx)
+    signature = start_signature(repo_id, n_ctx, plan, utilization)
+    failure = remembered_failure(repo_id, n_ctx, utilization)
     if failure is not None:
         if _logged_failure is not failure:
             _logged_failure = failure
@@ -1304,7 +1474,8 @@ def start(repo_id: str, n_ctx: int, port: int = 8080,
     # must not turn that crash into a fit refusal measured again in 60 s.
     crashed_tail: Optional[str] = None
     for attempt, (dtype, _backend_name) in enumerate(attempts, start=1):
-        result = plan_fit(model_dir, n_ctx, kv_dtype=dtype, model=repo_id)
+        result = plan_fit(model_dir, n_ctx, kv_dtype=dtype, model=repo_id,
+                          utilization=utilization)
         if result.note:
             UI.event("System", result.note, style="warning")
         if not result.ok:
@@ -1460,7 +1631,8 @@ def _test_completion(repo_id: str, port: int, post: Optional[Callable[..., objec
 
 def first_start(repo_id: str, n_ctx: int, port: int = 8080,
                 popen: Optional[Callable[..., subprocess.Popen]] = None,
-                post: Optional[Callable[..., object]] = None) -> FirstStart:
+                post: Optional[Callable[..., object]] = None,
+                utilization: Optional[float] = None) -> FirstStart:
     """The first start of a switch to vLLM (``local_engine.apply``, after the fit check):
     the real start path on the local port, one chat completion with top_p and top_k, then
     the server is stopped again, so the engine changes only for a model that starts AND
@@ -1468,9 +1640,10 @@ def first_start(repo_id: str, n_ctx: int, port: int = 8080,
     compile cache filled: measured 50 s on an RTX 3080). A start that dies, does not come up
     or does not answer is classified from its log (``START_CAUSES``); one interrupted by
     another start of the local model in this process is ``interrupted`` and not
-    remembered."""
+    remembered. ``utilization`` is the GPU share the switch is about to write (None: the
+    configured one); a failure is remembered for it, not for the configured share."""
     try:
-        return _first_start(repo_id, n_ctx, port, popen, post)
+        return _first_start(repo_id, n_ctx, port, popen, post, utilization)
     except BaseException:
         # Ctrl+C during `vaf engine vllm` (the ready wait, the test request): the server of
         # this switch is stopped before the interrupt goes on; it leads its own session and
@@ -1484,8 +1657,9 @@ def first_start(repo_id: str, n_ctx: int, port: int = 8080,
 
 def _first_start(repo_id: str, n_ctx: int, port: int,
                  popen: Optional[Callable[..., subprocess.Popen]],
-                 post: Optional[Callable[..., object]]) -> FirstStart:
-    if not start(repo_id, n_ctx, port=port, popen=popen):
+                 post: Optional[Callable[..., object]],
+                 utilization: Optional[float] = None) -> FirstStart:
+    if not start(repo_id, n_ctx, port=port, popen=popen, utilization=utilization):
         # start() leaves no server of its own behind on any of its False paths.
         if _last_interrupted:
             return FirstStart(False, "interrupted", cause_text("interrupted"))
@@ -1499,7 +1673,7 @@ def _first_start(repo_id: str, n_ctx: int, port: int,
         tail = _read_log_tail(log_path(), chars=20000)
         cause = classify_start_log(tail)
         text = cause_text(cause) + (f" ({why})" if why else "")
-        signature = start_signature(repo_id, n_ctx)
+        signature = start_signature(repo_id, n_ctx, utilization=utilization)
         stop()
         _remember(signature, cause, text)
         return FirstStart(False, cause, text)

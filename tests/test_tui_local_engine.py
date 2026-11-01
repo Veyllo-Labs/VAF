@@ -13,7 +13,9 @@ MUTATIONS, each turns the named test red:
 - call `apply_engine` before the confirm -> test_install_asks_first;
 - list GGUFs under vLLM -> test_vllm_model_rows;
 - write `model` under vLLM in `apply_local_model` -> test_gguf_pick_refused_under_vllm;
-- change RenameScreen's default title -> test_rename_screen_default_unchanged.
+- change RenameScreen's default title -> test_rename_screen_default_unchanged;
+- show the GPU memory row under llama.cpp -> test_gpu_memory_row_only_under_vllm;
+- omit `gpu_share` in the bridge's call of apply -> test_a_gpu_share_pick_is_a_switch.
 """
 import asyncio
 from types import SimpleNamespace
@@ -23,6 +25,14 @@ import pytest
 from vaf.cli.tui_app.screens import ConfirmScreen, RenameScreen, SettingsScreen
 from vaf.core import local_engine as le
 from vaf.core import vllm_server as vs
+
+
+@pytest.fixture(autouse=True)
+def no_display(monkeypatch):
+    """The display state is pinned: this machine drives a display and a CI runner does not,
+    and the desktop reserve follows it (vllm_server.desktop_reserve_mb)."""
+    from vaf.core import vllm_server
+    monkeypatch.setattr(vllm_server, "_display_active", lambda: False)
 
 
 def _state(engine="llama", level="supported", profile="local", needs_install=False,
@@ -45,7 +55,8 @@ def _screen(monkeypatch, *, engine="llama", state=None):
     calls, pushed, notified = [], [], []
     bridge = SimpleNamespace(
         engine_state=lambda model=None: state,
-        apply_engine=lambda engine, model=None, install=False: calls.append((engine, model, install)),
+        apply_engine=lambda engine, model=None, install=False, gpu_share=None: calls.append(
+            (engine, model, install) if gpu_share is None else (engine, model, install, gpu_share)),
         list_local_models=lambda: (["a.gguf", "b.gguf"], "a.gguf"),
     )
     fake_app = SimpleNamespace(
@@ -90,10 +101,12 @@ def test_engine_submenu_lists_both_with_their_lines(monkeypatch):
     picks = [(arg, text) for kind, arg, text in rows if kind == "engine_pick"]
     assert [a for a, _ in picks] == ["llama", "vllm"]
     flat = [" ".join(text.split()) for _, text in picks]
-    assert "GGUF models, runs on almost any hardware, starts in seconds" in flat[0]
-    assert "Recommended for edge devices and single users." in flat[0]
-    assert ("Recommended for servers and high-end setups. Hugging Face models, fast with many "
-            "concurrent requests, needs a supported GPU, starts in minutes") in flat[1]
+    assert ("Runs GGUF models on almost any GPU or on the CPU alone, takes only the memory it "
+            "needs and starts in seconds") in flat[0]
+    assert "For everyday tasks on personal PCs, laptops and edge devices." in flat[0]
+    assert ("For servers and high-end PCs that answer many requests at once. Runs Hugging Face "
+            "models on a supported NVIDIA or AMD GPU, reserves its share of GPU memory up front "
+            "and starts in one to two minutes") in flat[1]
     assert "▍" in picks[0][1] and "▍" not in picks[1][1], "the active engine is marked"
     assert "in use" in picks[0][1] and "in use" not in picks[1][1], "the active engine is named"
     assert [kind for kind, _, _ in rows][-2:] == ["sep", "back"], "a gap before Back"
@@ -240,7 +253,7 @@ def test_apply_engine_runs_on_the_lane_and_reloads(monkeypatch, tmp_path):
     monkeypatch.setattr(log_helper, "get_app_log_dir", lambda: tmp_path)
     seen, reloads, notes, lane = [], [], [], []
 
-    def apply(engine, model=None, install=False, progress=None, output=None):
+    def apply(engine, model=None, install=False, gpu_share=None, progress=None, output=None):
         seen.append((engine, model, install, output))
         progress({"phase": "install_vllm", "step": 1, "steps": 6, "error": ""})
         return le.EngineSwitch("done", "switched_vllm", "The local engine is vLLM.", "vllm")
@@ -274,7 +287,7 @@ def test_install_failures_name_the_install_log(monkeypatch, tmp_path, code):
     monkeypatch.setattr(log_helper, "get_app_log_dir", lambda: tmp_path)
     notes, lane = [], []
 
-    def apply(engine, model=None, install=False, progress=None, output=None):
+    def apply(engine, model=None, install=False, gpu_share=None, progress=None, output=None):
         progress({"phase": "install_probe", "step": 2, "steps": 6, "error": ""})
         return le.EngineSwitch("failed", code, "vLLM was installed, but it cannot start.", "vllm",
                                detail="The local engine is unchanged.")
@@ -348,3 +361,80 @@ def test_engine_lines_match_catalogue():
     lines = SettingsScreen.ENGINE_LINES
     assert lines["llama"] == (en["llamaName"], f"{en['llamaFor']}. {en['llamaLine']}")
     assert lines["vllm"] == (en["vllmName"], f"{en['vllmFor']}. {en['vllmLine']}")
+
+
+def _memory(configured=0.0):
+    steps = [{"share": p / 100, "budget_mb": int(p / 100 * 10240), "ok": p >= 67,
+              "max_model_len": 40960 if p >= 78 else 32768, "need_mb": 6813}
+             for p in range(30, 96)]
+    return {"total_mb": 10240, "free_mb": 8500, "display": True, "reserve_mb": 3328,
+            "configured": configured, "auto_share": 0.67, "auto_reserved": True,
+            "kv_dtype": "int8_per_token_head", "range": [0.30, 0.95], "min_share": 0.67,
+            "steps": steps}
+
+
+def _with_memory(engine, configured=0.0):
+    state = _state(engine=engine)
+    state["vllm"]["memory"] = _memory(configured)
+    return state
+
+
+def test_gpu_memory_row_only_under_vllm(monkeypatch):
+    """vLLM's share has a row in the engine menu while vLLM is the engine; llama.cpp reserves
+    no share, so there is none under it."""
+    s, *_ = _screen(monkeypatch, engine="vllm", state=_with_memory("vllm"))
+    s._load_engine_state()
+    rows = s._menu_rows("engine")
+    assert ("submenu", "gpu_share", "GPU memory: Automatic") in rows
+    s, *_ = _screen(monkeypatch, engine="vllm", state=_with_memory("vllm", 0.68))
+    s._load_engine_state()
+    assert ("submenu", "gpu_share", "GPU memory: 68%") in s._menu_rows("engine")
+    s, *_ = _screen(monkeypatch, state=_with_memory("llama"))
+    s._load_engine_state()
+    assert not [r for r in s._menu_rows("engine") if r[1] == "gpu_share"]
+
+
+def test_a_gpu_share_pick_is_a_switch(monkeypatch):
+    """The list: the restart note, Automatic, 30 to 95 in fives and a stored value off that
+    grid, each with its size and the fit from the table; a pick switches with ``gpu_share``.
+    MUTATION: omit gpu_share in the bridge's call of apply - red (test below)."""
+    s, calls, *_ = _screen(monkeypatch, engine="vllm", state=_with_memory("vllm", 0.68))
+    s._load_engine_state()
+    s._stack = ["main", "engine"]
+    s._rows = s._menu_rows("engine")
+    s._activate([r[1] for r in s._rows].index("gpu_share"))
+    assert s._stack == ["main", "engine", "gpu_share"]
+    rows = s._rows
+    assert rows[0][0] == "note" and "restarts" in rows[0][2]
+    values = [arg for kind, arg, _ in rows if kind == "gpu_share"]
+    assert values[0] == 0.0 and "Automatic (67% now, 6.7 GB of 10.0 GB)" in rows[1][2]
+    assert "3.3 GB stay free for the screen" in rows[1][2]
+    assert values[1:] == sorted([p / 100 for p in range(30, 96, 5)] + [0.68])
+    text = {arg: label for kind, arg, label in rows if kind == "gpu_share"}
+    assert "too small" in text[0.65] and "fits, context 32768" in text[0.7]
+    assert "fits, context 40960" in text[0.8] and "▍" in text[0.68] and "▍" not in text[0.0]
+    s._activate([r[1] for r in rows].index(0.7))
+    assert calls == [("vllm", None, False, 0.7)]
+    assert s._stack == ["main"]
+
+
+def test_the_bridge_passes_the_share(monkeypatch, tmp_path):
+    from vaf.cli.tui_app.agent_bridge import AgentBridge
+    from vaf.core import log_helper
+    monkeypatch.setattr(log_helper, "get_app_log_dir", lambda: tmp_path)
+    seen, lane = [], []
+
+    def apply(engine, model=None, install=False, gpu_share=None, progress=None, output=None):
+        seen.append((engine, gpu_share))
+        return le.EngineSwitch("done", "unchanged_vllm", "vLLM.", "vllm")
+    monkeypatch.setattr(le, "apply", apply)
+    bridge = AgentBridge.__new__(AgentBridge)
+    bridge.agent = SimpleNamespace(provider="api", reload_local_model=lambda: None)
+    bridge.events = SimpleNamespace(event_note=lambda *a: None, system_note=lambda *a: None)
+    bridge._emit = lambda *a: None
+    bridge._refresh_context = lambda: None
+    bridge._busy = False
+    bridge._submit = lane.append
+    bridge.apply_engine("vllm", gpu_share=0.7)
+    lane[0]()
+    assert seen == [("vllm", 0.7)]

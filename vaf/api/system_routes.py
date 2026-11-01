@@ -283,6 +283,10 @@ class _EngineSwitch(BaseModel):
     engine: str
     model: Optional[str] = None
     install: bool = False
+    # vLLM's GPU memory share: 0 = automatic, else 0.30..0.95; None keeps the stored one. Any
+    # JSON value is taken here and judged by local_engine.validate, so a wrong one answers 400
+    # with its code (bad_share) like every other refusal, not a schema error.
+    gpu_share: Optional[Any] = None
 
 
 def _install_log() -> str:
@@ -290,7 +294,8 @@ def _install_log() -> str:
     return str(get_app_log_dir() / "vllm_install.log")
 
 
-def _run_engine_switch(engine: str, model: Optional[str], install: bool) -> None:
+def _run_engine_switch(engine: str, model: Optional[str], install: bool,
+                       gpu_share: Optional[float] = None) -> None:
     from vaf.core import local_engine
 
     def progress(step: Dict[str, Any]) -> None:
@@ -298,8 +303,8 @@ def _run_engine_switch(engine: str, model: Optional[str], install: bool) -> None
                              steps=step.get("steps", 0))
 
     try:
-        result = local_engine.apply(engine, model=model, install=install, progress=progress,
-                                    output=_install_log())
+        result = local_engine.apply(engine, model=model, install=install, gpu_share=gpu_share,
+                                    progress=progress, output=_install_log())
         _engine_state["result"] = result.to_dict()
     except Exception as e:      # a switch must never take the server with it
         _engine_state["error"] = str(e)[:300]
@@ -324,7 +329,7 @@ def set_local_engine(body: _EngineSwitch, _: Dict[str, Any] = Depends(require_ad
     update stops this process mid-pip."""
     from vaf.core import local_engine
     try:
-        wanted = local_engine.validate(body.engine, body.model)
+        wanted = local_engine.validate(body.engine, body.model, body.gpu_share)
     except local_engine.EngineRefusal as e:
         return _refused(400, e.code, str(e), e.params)
     _claim_or_409(container_jobs.ENGINE_SWITCH)
@@ -340,7 +345,8 @@ def set_local_engine(body: _EngineSwitch, _: Dict[str, Any] = Depends(require_ad
         "result": None,
         "error": None,
     })
-    _start_job(_run_engine_switch, (wanted, body.model, body.install), "vaf-api-engine",
+    _start_job(_run_engine_switch, (wanted, body.model, body.install, body.gpu_share),
+               "vaf-api-engine",
                container_jobs.ENGINE_SWITCH, _engine_state)
     return {"started": True, "engine": wanted, "started_at": _engine_state["started_at"]}
 

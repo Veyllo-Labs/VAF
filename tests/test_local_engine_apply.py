@@ -45,6 +45,14 @@ REPO = "Qwen/Qwen3-4B-AWQ"
 REAL_ENSURE_MODEL = vs.ensure_model
 
 
+@pytest.fixture(autouse=True)
+def no_display(monkeypatch):
+    """The display state is pinned: this machine drives a display and a CI runner does not,
+    and the desktop reserve follows it (vllm_server.desktop_reserve_mb)."""
+    from vaf.core import vllm_server
+    monkeypatch.setattr(vllm_server, "_display_active", lambda: False)
+
+
 @pytest.fixture
 def config(monkeypatch, tmp_path):
     from vaf.core.config import Config
@@ -92,14 +100,16 @@ def _fakes(monkeypatch, config, *, installed=False, install_reason="", fail_step
     monkeypatch.setattr(vs, "install", install)
     monkeypatch.setattr(vs, "ensure_model", lambda repo, outcome=None: events.append(("model", repo)) or model_dir)
 
-    def plan_fit(d, n, kv_dtype=None, model=""):
+    def plan_fit(d, n, kv_dtype=None, model="", utilization=None):
         events.append(("fit",))
+        config.setdefault("_shares", []).append(("fit", utilization))
         return vs.FitResult(fits, n, 0.78, "fp8", 6076 if fits else 9000, 7987,
                             "Fits." if fits else "Needs 9000 MiB.", code="fits" if fits else "too_big")
     monkeypatch.setattr(vs, "plan_fit", plan_fit)
 
-    def first_start(repo, n_ctx, port=8080, popen=None, post=None):
+    def first_start(repo, n_ctx, port=8080, popen=None, post=None, utilization=None):
         events.append(("first_start", config.get("local_engine")))
+        config.setdefault("_shares", []).append(("first_start", utilization))
         if starts:
             return vs.FirstStart(True)
         return vs.FirstStart(False, "kernels", vs.cause_text("kernels"))
@@ -455,7 +465,7 @@ def test_model_change_stops_running_vllm_before_fit(config, monkeypatch):
     monkeypatch.setattr(vs, "stop", lambda wait=15.0: events.append(("stop_vllm",))
                         or running.__setitem__("pid", None) or "")
 
-    def plan_fit(d, n, kv_dtype=None, model=""):
+    def plan_fit(d, n, kv_dtype=None, model="", utilization=None):
         events.append(("fit",))
         fits = running["pid"] is None
         return vs.FitResult(fits, n, 0.5, "fp8", 6000, 5120, "x",
@@ -749,3 +759,90 @@ def test_every_failure_code_is_listed():
     codes |= {"install_failed", "cuda_probe_failed", "rocm_probe_failed", "vllm_libs_failed"}
     assert codes and codes <= set(le.FAILURE_CODES), codes - set(le.FAILURE_CODES)
     assert set(le.FAILURE_CODES) - {"failed"} <= set(le.SWITCH_CODES)
+
+
+def test_a_new_share_is_fitted_and_started_before_it_is_written(config, monkeypatch):
+    """A switch with ``gpu_share`` fits and test-starts THAT share, and writes it only after
+    both passed; a refused fit or a first start that fails leaves the stored share as it was.
+    MUTATION: write vllm_gpu_memory_utilization before the fit - red."""
+    events = _fakes(monkeypatch, config, installed=True)
+    result = le.apply("vllm", gpu_share=0.70)
+    assert result.status == "done", result
+    assert config["_shares"] == [("fit", 0.70), ("first_start", 0.70)]
+    names = [e[0] if e[0] != "set" else f"set:{e[1]}" for e in events]
+    assert names.index("first_start") < names.index("set:vllm_gpu_memory_utilization") \
+        < names.index("set:local_engine")
+    assert config["vllm_gpu_memory_utilization"] == 0.70
+    # The stored share again: nothing to write.
+    events.clear()
+    assert le.apply("vllm", gpu_share=0.7).status == "done"
+    assert not [e for e in events if e[:2] == ("set", "vllm_gpu_memory_utilization")]
+    # 0 is automatic, and None keeps the stored share.
+    events.clear()
+    config["_shares"].clear()
+    assert le.apply("vllm").status == "done"
+    assert config["_shares"] == [("fit", None), ("first_start", None)]
+    assert config["vllm_gpu_memory_utilization"] == 0.70
+    assert le.apply("vllm", gpu_share=0).status == "done"
+    assert config["vllm_gpu_memory_utilization"] == 0.0
+
+
+@pytest.mark.parametrize("step", ["no_fit", "start_failed"])
+def test_a_failed_share_switch_keeps_the_stored_share(config, monkeypatch, step):
+    config["vllm_gpu_memory_utilization"] = 0.6
+    events = _fakes(monkeypatch, config, installed=True, fits=step != "no_fit",
+                    starts=step != "start_failed")
+    result = le.apply("vllm", gpu_share=0.85)
+    assert (result.status, result.code) == ("failed", step), result
+    assert config["vllm_gpu_memory_utilization"] == 0.6
+    assert not [e for e in events if e[0] == "set"], "a failed switch wrote a key"
+
+
+def test_a_new_share_restarts_the_running_vllm(config, monkeypatch):
+    """vLLM takes its share at launch: a vLLM that already serves the model is stopped for a
+    new share, and the fit and the first start run, where the same share is skipped.
+    MUTATION: keep the old skip condition (served_model == repo alone) - red."""
+    config["local_engine"] = "vllm"
+    events = _fakes(monkeypatch, config, installed=True)
+    running = {"pid": 4242}
+    monkeypatch.setattr(vs, "running_pid", lambda: running["pid"])
+    monkeypatch.setattr(vs, "served_model", lambda port=8080: REPO)
+    monkeypatch.setattr(vs, "stop", lambda wait=15.0: events.append(("stop_vllm",))
+                        or running.__setitem__("pid", None) or "")
+    result = le.apply("vllm", gpu_share=0.68)
+    assert result.status == "done" and result.stopped_vllm is True, result
+    names = [e[0] for e in events]
+    assert names.index("stop_vllm") < names.index("fit") < names.index("first_start")
+    assert config["_shares"] == [("fit", 0.68), ("first_start", 0.68)]
+    assert config["vllm_gpu_memory_utilization"] == 0.68
+    # The same share again under a running vLLM: nothing stopped, nothing measured.
+    events.clear()
+    running["pid"] = 4242
+    result = le.apply("vllm", gpu_share=0.68)
+    assert result.status == "done" and result.stopped_vllm is False
+    assert not [e for e in events if e[0] in ("stop_vllm", "fit", "first_start")]
+
+
+@pytest.mark.parametrize("engine, share", [
+    ("vllm", 0.2), ("vllm", 0.97), ("vllm", float("nan")), ("vllm", "x"), ("vllm", "0.7"),
+    ("vllm", True), ("vllm", 1.0), ("vllm", -0.5), ("llama", 0.7), ("llama", 0)])
+def test_a_bad_share_is_refused_before_anything_runs(config, monkeypatch, engine, share):
+    """Outside 0.30 to 0.95, NaN, a non-number or any share with llama.cpp: ``bad_share``,
+    before the verdict, the install or a write. MUTATION: widen the range check - red."""
+    events = _fakes(monkeypatch, config, installed=True)
+    monkeypatch.setattr(le, "support", lambda **kw: pytest.fail("the verdict ran for a bad share"))
+    with pytest.raises(le.EngineRefusal) as refused:
+        le.validate(engine, gpu_share=share)
+    assert refused.value.code == "bad_share"
+    assert refused.value.params == {"min": "0.30", "max": "0.95"}
+    result = le.apply(engine, gpu_share=share)
+    assert (result.status, result.code) == ("refused", "bad_share")
+    assert events == [] and "bad_share" in le.SWITCH_CODES
+
+
+@pytest.mark.parametrize("share, stored", [(0.3, 0.3), (0.95, 0.95), (0.704, 0.7), (0, 0.0)])
+def test_a_share_in_the_range_is_rounded(config, monkeypatch, share, stored):
+    _fakes(monkeypatch, config, installed=True)
+    assert le.validate("vllm", gpu_share=share) == "vllm"
+    assert le.apply("vllm", gpu_share=share).status == "done"
+    assert config.get("vllm_gpu_memory_utilization", 0) == stored

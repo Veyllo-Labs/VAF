@@ -43,6 +43,17 @@ from vaf.core import local_engine as le
 from vaf.core.gpu_detection import GPUInfo
 
 
+@pytest.fixture(autouse=True)
+def no_display(monkeypatch):
+    """The display state is pinned: this machine drives a display and a CI runner does not,
+    and the desktop reserve follows it (vllm_server.desktop_reserve_mb). The GPU memory
+    table of state() reads no GPU either."""
+    from vaf.core import vllm_server
+    monkeypatch.setattr(vllm_server, "_display_active", lambda: False)
+    # state() builds the GPU memory table; no test asks nvidia-smi for it.
+    monkeypatch.setattr(vllm_server, "_gpu_memory", lambda: (0, 0))
+
+
 @pytest.fixture
 def config(monkeypatch):
     from vaf.core.config import Config

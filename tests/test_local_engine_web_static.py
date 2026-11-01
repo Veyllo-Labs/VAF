@@ -24,7 +24,12 @@ MUTATIONS, each turns the named test red:
   test_too_big_names_other_programs_and_no_context;
 - drop the banner's reason line or its Details button -> test_banner_reason_and_details;
 - drop `recommended` from EngineChoice, or from one caller ->
-  test_cards_show_the_recommendation.
+  test_cards_show_the_recommendation;
+- remove `gpu_share` from the switch's POST body, render the slider outside the vLLM picker,
+  or let a Settings save write the key -> test_gpu_share_slider;
+- shorten de `llamaLine` to its old text, or drop a placeholder in one locale ->
+  test_balanced_cards_and_share_texts;
+- drop the llama.cpp note from one caller -> test_both_cards_have_a_note.
 """
 import json
 import re
@@ -141,7 +146,7 @@ def test_other_local_pickers_under_vllm():
 def test_lean_disables_both():
     body = _src(_SECTION)
     assert ("{ id: 'llama', name: t('llamaName'), recommended: t('llamaFor'), line: t('llamaLine'), "
-            "disabled: lean },") in body
+            "disabled: lean, note: lean ? undefined : t('llamaNote') },") in body
     assert "const vllmNote = lean ? t('profileApi')" in body
     section = _local_model_section(_src(_MODAL))
     src = _src(_MODAL)
@@ -174,8 +179,12 @@ def test_no_bare_llama_label():
     de = json.loads((_MESSAGES / "de.json").read_bytes())
     assert en["settings"]["ai"]["localProvider"] == "Local (this machine)"
     assert de["settings"]["ai"]["localProvider"] == "Lokal (dieser Rechner)"
-    assert en["localEngine"]["llamaLine"] == "GGUF models, runs on almost any hardware, starts in seconds"
-    assert de["localEngine"]["llamaLine"] == "GGUF-Modelle, läuft auf fast jeder Hardware, startet in Sekunden"
+    assert en["localEngine"]["llamaLine"] == ("Runs GGUF models on almost any GPU or on the CPU "
+                                              "alone, takes only the memory it needs and starts "
+                                              "in seconds")
+    assert de["localEngine"]["llamaLine"] == ("Führt GGUF-Modelle auf fast jeder GPU oder allein "
+                                              "auf der CPU aus, belegt nur so viel Speicher, wie "
+                                              "es braucht, und startet in Sekunden")
     assert "tAi('localProvider')" in _src(_MODAL)
 
 
@@ -403,12 +412,13 @@ def test_too_big_names_other_programs_and_no_context(locale):
                            "war; llama.cpp kann einen Teil des Modells auf die CPU auslagern.")
         assert cat["result"]["start_failed"].startswith("vLLM ließ sich auf dieser GPU nicht starten")
         assert cat["banner"]["start_failed"] == "vLLM ließ sich auf dieser GPU nicht starten."
-        assert cat["llamaFor"] == "Empfohlen für Edge-Geräte und einzelne Nutzer"
-        assert cat["vllmFor"] == "Empfohlen für Server und High-End-Systeme"
-        assert "gleichzeitigen Anfragen" in cat["vllmLine"]
+        assert cat["llamaFor"] == "Für Alltagsaufgaben auf eigenen PCs, Laptops und Edge-Geräten"
+        assert cat["vllmFor"] == ("Für Server und High-End-PCs, die viele Anfragen gleichzeitig "
+                                  "beantworten")
+        assert "seinen Anteil am GPU-Speicher" in cat["vllmLine"]
     if locale == "en":
-        assert cat["llamaFor"] == "Recommended for edge devices and single users"
-        assert cat["vllmFor"] == "Recommended for servers and high-end setups"
+        assert cat["llamaFor"] == "For everyday tasks on personal PCs, laptops and edge devices"
+        assert cat["vllmFor"] == "For servers and high-end PCs that answer many requests at once"
 
 
 def test_banner_reason_and_details():
@@ -446,3 +456,75 @@ def test_start_failure_in_the_section():
     assert "lines.push(t('logHint', { path: SERVER_LOG }));" in body
     assert "const SERVER_LOG = 'logs/vllm_server.log';" in body
     assert f"'{vs.SERVER_LOG}'" in body
+
+
+_SLIDER = _WEB / "components" / "settings" / "GpuShareSlider.tsx"
+
+
+def test_gpu_share_slider():
+    """The slider: 30 to 95 percent in steps of 1, the failover slider's look, an Automatic
+    toggle that is a button with aria-pressed, the numbers read from the server's table, inside
+    the vLLM picker only; the share reaches the server only through the switch's POST."""
+    slider = _src(_SLIDER)
+    assert slider.startswith("// SPDX-FileCopyrightText: 2026 Veyllo GmbH")
+    assert 'type="range" min={30} max={95} step={1}' in slider
+    assert "accent-gray-900 dark:accent-[#d9d9d9]" in slider
+    assert "aria-pressed={automatic}" in slider and "aria-valuetext=" in slider
+    assert "format.number(share, { style: 'percent', maximumFractionDigits: 0 })" in slider
+    assert "memory.steps.find(" in slider, "the fit is read from the server's steps"
+    for key in ("autoNow", "autoLater", "reserve", "reserveUnknown", "noDisplay", "fits",
+                "tooSmall", "tooSmallAll", "aboveFree", "leaves", "leavesLow", "afterDownload",
+                "withSwitch", "outOfRange"):
+        assert f"t('{key}'" in slider, key
+    section = _src(_SECTION)
+    picker = _between(section, "{showVllmPicker && (", "{/* Switching to vLLM from llama.cpp")
+    assert "<GpuShareSlider" in picker and section.count("<GpuShareSlider") == 1
+    assert "const shareBody = shareChanged ? { gpu_share: share } : {};" in section
+    assert "void start({ engine: 'vllm', model: chosenRepo, ...shareBody });" in section
+    assert "install: true, ...shareBody })" in section
+    assert "gpu_share: share })}" in section and "t('share.apply')" in section
+    assert "t('share.restart')" in section
+    assert "body: JSON.stringify(body)," in section
+    assert "vllm_gpu_memory_utilization" not in _src(_MODAL), "a Settings save writes the share"
+    assert "reserve: gb(fit.reserve_mb ?? 0), min: pct(fit.min_share ?? 0), left: gb(fit.leaves_mb ?? 0)," in section
+
+
+def test_both_cards_have_a_note():
+    """Both cards carry name, recommendation, line and a note, in Settings and in the wizard;
+    not under the api profile, where both are disabled."""
+    section = _src(_SECTION)
+    assert "note: lean ? undefined : t('llamaNote')" in section
+    assert "note: tEngine('llamaNote')" in _src(_LOGIN)
+
+
+def _slots(text):
+    return sorted(set(re.findall(r"\{(\w+)\}", text)))
+
+
+@pytest.mark.parametrize("locale", _LOCALES)
+def test_balanced_cards_and_share_texts(locale):
+    """In every language the two cards carry the same weight (For + Line of llama.cpp against
+    vLLM within 0.8 to 1.25), the new sentences have en's placeholders and no em dash, and the
+    TUI's lines are en's."""
+    cat = json.loads((_MESSAGES / f"{locale}.json").read_bytes())["localEngine"]
+    en = json.loads((_MESSAGES / "en.json").read_bytes())["localEngine"]
+    llama = len(cat["llamaFor"]) + len(cat["llamaLine"])
+    vllm = len(cat["vllmFor"]) + len(cat["vllmLine"])
+    assert 0.8 <= llama / vllm <= 1.25, (locale, llama, vllm)
+    texts = {"llamaNote": (cat["llamaNote"], en["llamaNote"]),
+             "result.bad_share": (cat["result"]["bad_share"], en["result"]["bad_share"]),
+             "fit.too_big_reserve": (cat["fit"]["too_big_reserve"], en["fit"]["too_big_reserve"])}
+    assert list(cat["share"]) == list(en["share"]), locale
+    texts.update({f"share.{k}": (v, en["share"][k]) for k, v in cat["share"].items()})
+    for key in ("llamaFor", "llamaLine", "vllmFor", "vllmLine"):
+        texts[key] = (cat[key], en[key])
+    for key, (text, base) in texts.items():
+        assert text.strip(), (locale, key)
+        assert _slots(text) == _slots(base), (locale, key, text)
+        assert "\u2014" not in text, (locale, key)
+    assert "llama.cpp" in cat["llamaNote"] and "llama.cpp" in cat["fit"]["too_big_reserve"]
+    if locale == "de":
+        assert cat["llamaLine"] == ("Führt GGUF-Modelle auf fast jeder GPU oder allein auf der CPU "
+                                    "aus, belegt nur so viel Speicher, wie es braucht, und startet "
+                                    "in Sekunden")
+        assert cat["share"]["label"] == "GPU-Speicher für vLLM"

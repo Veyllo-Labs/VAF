@@ -184,6 +184,25 @@ def nvidia_free_vram_mb() -> int:
         pass
     return 0
 
+
+def nvidia_display_active() -> Optional[bool]:
+    """Does the first NVIDIA GPU (the one ``nvidia_free_vram_mb`` reads) drive a display?
+    nvidia-smi's ``display_active`` ("memory is allocated on the device for display"):
+    ``Enabled`` is True, ``Disabled`` False, anything else (``[N/A]``, an error, no
+    nvidia-smi) None. Read without root. ``display_mode`` is not used: on a current driver it
+    answers "[Requested functionality has been deprecated]" (measured)."""
+    try:
+        _r = subprocess.run(
+            ["nvidia-smi", "--query-gpu=display_active", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=5, **_get_subprocess_kwargs(),
+        )
+        if _r.returncode != 0:
+            return None
+        first = (_r.stdout.strip().splitlines() or [""])[0].strip().lower()
+    except Exception:
+        return None
+    return {"enabled": True, "disabled": False}.get(first)
+
 def _check_cuda_available() -> bool:
     """Check if CUDA runtime is actually available (not just driver)."""
     system = platform.system()
@@ -294,6 +313,35 @@ def amd_vram_mb(sys_root: str = "/sys") -> Tuple[int, int]:
         return 0, 0
     total = node["vram_total_mb"]
     return max(0, total - node["vram_used_mb"]), total
+
+
+def amd_display_active(sys_root: str = "/sys") -> Optional[bool]:
+    """Does the AMD GPU ``amd_vram_mb`` reads (the KFD node with the most VRAM) drive a
+    display? Read from the DRM connectors of its render device, world-readable sysfs, no
+    root: ``class/drm/renderD<minor>/device/drm/card*/card*-*/status`` and ``enabled``. True
+    when any connector is ``connected`` or ``enabled``, False when connectors exist and none
+    is, None without the node or without connectors. Never raises. The same layout answers
+    on nvidia-drm (measured there); not measured on an AMD card."""
+    try:
+        node = _largest_amd_gpu(sys_root)
+        if not node or int(node.get("render_minor", -1)) < 0:
+            return None
+        drm = Path(sys_root) / "class" / "drm" / f"renderD{node['render_minor']}" / "device" / "drm"
+        if not drm.is_dir():
+            return None
+        found = False
+        for card in sorted(drm.glob("card*")):
+            for connector in sorted(card.glob(f"{card.name}-*")):
+                if not connector.is_dir():
+                    continue
+                found = True
+                status = _read_text(connector / "status").strip().lower()
+                enabled = _read_text(connector / "enabled").strip().lower()
+                if status == "connected" or enabled == "enabled":
+                    return True
+        return False if found else None
+    except Exception:
+        return None
 
 
 # Where a distribution's ROCm packages put the HIP runtime: the linker finds it there without

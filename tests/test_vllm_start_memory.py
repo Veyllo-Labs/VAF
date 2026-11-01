@@ -39,6 +39,14 @@ SHAPE_4B = vs.ModelShape(weights_bytes=int(2.67e9), layers=36, kv_heads=8, head_
                          max_position=40960)
 
 
+@pytest.fixture(autouse=True)
+def no_display(monkeypatch):
+    """The display state is pinned: this machine drives a display and a CI runner does not,
+    and the desktop reserve follows it (vllm_server.desktop_reserve_mb)."""
+    from vaf.core import vllm_server
+    monkeypatch.setattr(vllm_server, "_display_active", lambda: False)
+
+
 @pytest.fixture
 def home(monkeypatch, tmp_path):
     from vaf.core.config import Config
@@ -179,7 +187,7 @@ def test_backend_skips_handover_when_remembered(home, monkeypatch):
     mgr = ServerManager(skip_cleanup=True)
     handed = []
     monkeypatch.setattr(mgr, "hand_over_from_llama", lambda port=8080, wait=15.0: handed.append(1) or "")
-    monkeypatch.setattr(vs, "start", lambda repo, n_ctx, port=8080: calls.append("start") or False)
+    monkeypatch.setattr(vs, "start", lambda repo, n_ctx, port=8080, utilization=None: calls.append("start") or False)
     assert mgr._start_vllm_locked(n_ctx=32768) is False
     assert handed == [], "the llama server was stopped for a start that does not happen"
     vs.clear_start_failure()
@@ -278,10 +286,39 @@ def test_an_interrupt_in_the_ready_wait_stops_the_server(home, monkeypatch):
 def test_an_interrupt_in_the_test_request_stops_the_server(home, monkeypatch):
     stopped = []
     monkeypatch.setattr(vs, "stop", lambda wait=15.0: stopped.append(1) or "")
-    monkeypatch.setattr(vs, "start", lambda repo, n_ctx, port=8080, popen=None: True)
+    monkeypatch.setattr(vs, "start", lambda repo, n_ctx, port=8080, popen=None, utilization=None: True)
 
     def post(url, json=None, timeout=None):
         raise KeyboardInterrupt
     with pytest.raises(KeyboardInterrupt):
         vs.first_start(REPO, 32768, post=post)
     assert stopped == [1], "the server of the switch was left running"
+
+
+def test_a_share_override_has_its_own_signature(home, monkeypatch):
+    """The first start of a switch runs with the share it is about to write: a failure is
+    remembered for THAT share, so it does not block the configured start, and the configured
+    one launches with the configured share. MUTATION: ignore the override in start_signature
+    - red."""
+    assert vs.start_signature(REPO, 32768, utilization=0.7) != vs.start_signature(REPO, 32768)
+    assert vs.start_signature(REPO, 32768, utilization=None) == vs.start_signature(REPO, 32768)
+    calls = []
+    assert vs.start(REPO, 32768, popen=_counting_popen(calls), utilization=0.7) is False
+    assert vs.remembered_failure(REPO, 32768, 0.7) is not None
+    assert vs.remembered_failure(REPO, 32768) is None, "the override's failure blocked the configured start"
+    shares = [argv[argv.index("--gpu-memory-utilization") + 1] for argv in calls]
+    assert shares == ["0.70", "0.70"], "the launch did not carry the override"
+    vs.start(REPO, 32768, popen=_counting_popen(calls))
+    assert len(calls) == 4, "the configured start was not launched"
+    assert calls[-1][calls[-1].index("--gpu-memory-utilization") + 1] != "0.70"
+
+
+def test_a_failed_first_start_is_remembered_for_its_share(home, monkeypatch):
+    """A first start whose test request fails is remembered under the override's signature."""
+    monkeypatch.setattr(vs, "start", lambda repo, n_ctx, port=8080, popen=None, utilization=None: True)
+    monkeypatch.setattr(vs, "stop", lambda wait=15.0: "")
+    monkeypatch.setattr(vs, "running_pid", lambda: 4242)
+    out = vs.first_start(REPO, 32768, post=lambda url, json=None, timeout=None:
+                         SimpleNamespace(status_code=500), utilization=0.68)
+    assert out.ok is False
+    assert vs.start_failure().signature == vs.start_signature(REPO, 32768, utilization=0.68)

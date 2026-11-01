@@ -21,7 +21,11 @@ The switch itself is ``apply`` (with ``validate``, ``state``, ``uninstall_vllm``
 ``status_row`` around it): one implementation behind `vaf engine`, the web route of Settings >
 AI & Model (vaf/api/system_routes.py) and the full-screen TUI (agent_bridge). The engine and
 its model never change through a Settings save (``without_engine_keys``): a save sends the
-whole page, and a switch installs, downloads, stops a server and checks the fit.
+whole page, and a switch installs, downloads, stops a server and checks the fit. The GPU
+memory share of vLLM rides the same switch (``apply(..., gpu_share=...)``): vLLM cannot
+change its share while it runs, so a new share is fitted and test-started before
+``vllm_gpu_memory_utilization`` is written, and ``state()["vllm"]["memory"]`` is the slider's
+table (``vllm_server.share_table``).
 
 The choke points dispatch on ``current()``: ``ServerManager.start_server``, ``stop_server``,
 ``ensure_model_present``, ``ensure_local_model``, ``stop_local_server`` and
@@ -775,7 +779,8 @@ class EngineSwitch:
 
 # Every code a refusal or a result of ``apply`` and ``uninstall_vllm`` can carry, besides the
 # support codes (a refusal on the verdict carries the verdict's own code), for the catalogues.
-SWITCH_CODES = ("unknown_engine", "bad_repo", "profile_api", "parser_unknown", "parser_bad",
+SWITCH_CODES = ("unknown_engine", "bad_repo", "bad_share", "profile_api", "parser_unknown",
+                "parser_bad",
                 "busy", "needs_install", "switched_vllm", "unchanged_vllm", "switched_llama",
                 "unchanged_llama", "install_failed", "cuda_probe_failed", "rocm_probe_failed",
                 "vllm_libs_failed",
@@ -805,7 +810,8 @@ def fit_dict(result: Any) -> Optional[Dict[str, Any]]:
         return None
     keys = ("ok", "code", "max_model_len", "utilization", "kv_dtype", "need_mb", "budget_mb",
             "weights_mb", "kv_mb", "overhead_mb", "free_mb", "total_mb", "other_mb",
-            "attention_backend", "smaller_model", "reason", "note")
+            "attention_backend", "smaller_model", "reserve_mb", "display", "leaves_mb",
+            "below_reserve", "min_share", "reason", "note")
     return {key: getattr(result, key, None) for key in keys}
 
 
@@ -828,12 +834,41 @@ def _model_setting(model: Optional[str]) -> Tuple[Optional[str], str]:
     return value, value
 
 
-def _validated(engine: str, model: Optional[str]) -> Tuple[str, Optional[str], str]:
+def _share(gpu_share: Any, engine: str) -> Optional[float]:
+    """The GPU share of a switch: None keeps the stored one, 0 is automatic, anything else a
+    number within ``vllm_server.SHARE_RANGE``, rounded to 0.01. ``bad_share`` for a value out
+    of the range, NaN, a non-number (a string, a bool) or any share with llama.cpp, which
+    reserves no share."""
+    if gpu_share is None:
+        return None
+    from vaf.core.vllm_server import SHARE_RANGE
+    low, high = SHARE_RANGE
+    params = {"min": f"{low:.2f}", "max": f"{high:.2f}"}
+    text = (f"The GPU memory share of vLLM is a number from {low:.2f} to {high:.2f}, or "
+            f"automatic (0, or `vaf engine vllm --gpu-share auto`), not {gpu_share!r}.")
+    if engine == LLAMA:
+        raise EngineRefusal("bad_share", "The GPU memory share goes with vLLM; llama.cpp takes "
+                                         "only the memory it needs.", params)
+    if isinstance(gpu_share, bool) or not isinstance(gpu_share, (int, float)):
+        raise EngineRefusal("bad_share", text, params)
+    value = float(gpu_share)
+    if value != value:      # NaN
+        raise EngineRefusal("bad_share", text, params)
+    if value == 0:
+        return 0.0
+    if not (low - 1e-9 <= value <= high + 1e-9):
+        raise EngineRefusal("bad_share", text, params)
+    return round(value, 2)
+
+
+def _validated(engine: str, model: Optional[str],
+               gpu_share: Any = None) -> Tuple[str, Optional[str], str, Optional[float]]:
     wanted = str(engine or "").strip().lower()
     if wanted not in ENGINES:
         raise EngineRefusal("unknown_engine", f"Unknown engine {engine!r}: use llama or vllm.")
+    share = _share(gpu_share, wanted)
     if wanted == LLAMA:
-        return LLAMA, None, ""
+        return LLAMA, None, "", None
     from vaf.core import inference_profile
     if not inference_profile.local_inference_allowed():
         raise EngineRefusal("profile_api", inference_profile.refusal("vLLM"))
@@ -849,16 +884,16 @@ def _validated(engine: str, model: Optional[str]) -> Tuple[str, Optional[str], s
     if refusal:
         raise EngineRefusal("parser_unknown" if not tool else "parser_bad", refusal,
                             {"model": repo})
-    return VLLM, setting, repo
+    return VLLM, setting, repo, share
 
 
-def validate(engine: str, model: Optional[str] = None) -> str:
+def validate(engine: str, model: Optional[str] = None, gpu_share: Any = None) -> str:
     """The engine ``apply`` would switch to, or ``EngineRefusal`` (a ValueError): an unknown
-    engine, the ``api`` profile, a value that is no repo id, a machine whose verdict is not
-    ``supported`` (the verdict's code), a model family without a known parser. Nothing is
-    written: a caller that runs ``apply`` in the background (the web switch) refuses a wrong
-    request here, before it starts."""
-    return _validated(engine, model)[0]
+    engine, a GPU share that is not one (``bad_share``), the ``api`` profile, a value that is
+    no repo id, a machine whose verdict is not ``supported`` (the verdict's code), a model
+    family without a known parser. Nothing is written: a caller that runs ``apply`` in the
+    background (the web switch) refuses a wrong request here, before it starts."""
+    return _validated(engine, model, gpu_share)[0]
 
 
 def _n_ctx() -> int:
@@ -955,6 +990,7 @@ def _refresh_agents() -> None:
 
 
 def apply(engine: str, *, model: Optional[str] = None, install: bool = False,
+          gpu_share: Any = None,
           progress: Optional[Callable[[Dict[str, Any]], None]] = None,
           output: Optional[str] = None,
           log: Optional[Callable[..., None]] = None) -> EngineSwitch:
@@ -967,8 +1003,12 @@ def apply(engine: str, *, model: Optional[str] = None, install: bool = False,
     the model; stop a running llama server (vLLM is measured against the memory it holds);
     check the fit; start vLLM once, send it one chat completion and stop it again
     (``vllm_server.first_start``: ``start_failed`` when it dies, does not come up or does not
-    answer); write ``vllm_model`` (when ``model`` was given) and then ``local_engine``. A
-    failed step leaves ``local_engine`` as it was. To llama.cpp: write the key, stop a
+    answer); write ``vllm_model`` (when ``model`` was given),
+    ``vllm_gpu_memory_utilization`` (when ``gpu_share`` changed it) and then ``local_engine``.
+    ``gpu_share`` None keeps the stored share, 0 is automatic, else 0.30..0.95
+    (``vllm_server.SHARE_RANGE``); the fit and the first start run with it, and a vLLM that
+    already serves the model is stopped for a changed one (it cannot change its share while
+    it runs). A failed step leaves every key as it was. To llama.cpp: write the key, stop a
     running managed vLLM. Every switch clears a remembered start failure
     (``vllm_server.clear_start_failure``). Neither leaves a server running: the next use of
     the local model starts it.
@@ -978,7 +1018,7 @@ def apply(engine: str, *, model: Optional[str] = None, install: bool = False,
     time across processes (``busy``)."""
     say = log or (lambda text, kind="info": None)
     try:
-        wanted, setting, repo = _validated(engine, model)
+        wanted, setting, repo, share = _validated(engine, model, gpu_share)
     except EngineRefusal as e:
         return EngineSwitch("refused", e.code, str(e), params=e.params)
     lock = _switch_lock()
@@ -995,7 +1035,7 @@ def apply(engine: str, *, model: Optional[str] = None, install: bool = False,
         if wanted == LLAMA:
             result = _apply_llama(progress)
         else:
-            result = _apply_vllm(setting, repo, install, progress, output, say)
+            result = _apply_vllm(setting, repo, install, progress, output, say, share)
     finally:
         lock.release()
     if result.status == "done" or result.code == "vllm_stop_failed":
@@ -1026,9 +1066,20 @@ def _apply_llama(progress) -> EngineSwitch:
                         LLAMA, previous=previous)
 
 
-def _apply_vllm(setting, repo, install, progress, output, say) -> EngineSwitch:
+def _stored_share() -> float:
+    from vaf.core.config import Config
+    try:
+        return float(Config.get("vllm_gpu_memory_utilization", 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _apply_vllm(setting, repo, install, progress, output, say, share=None) -> EngineSwitch:
     from vaf.core import vllm_server
     from vaf.core.config import Config
+    # A share that differs from the stored one: vLLM takes its share at launch, so a running
+    # server of the same model is stopped and the new share is fitted and test-started.
+    share_changed = share is not None and abs(share - _stored_share()) > 1e-9
     missing = needs_install()
     if missing and not install:
         gb = f"{vllm_server.download_gb_at_least():.1f}"
@@ -1082,13 +1133,14 @@ def _apply_vllm(setting, repo, install, progress, output, say) -> EngineSwitch:
         stopped_vllm = False
         result = None
         if vllm_server.running_pid() is not None:
-            if previous == VLLM and vllm_server.served_model() == repo:
+            if previous == VLLM and vllm_server.served_model() == repo and not share_changed:
                 # It already serves this model, so it fits: nothing to stop or measure.
                 say(f"vLLM already serves {repo}.", "info")
             else:
                 # Its own share of the GPU would be measured as taken, and the fit refused a
-                # model that fits once it is gone (measured: 820 of 10240 MiB free).
-                say("Stopping vLLM (the new model is measured against the memory it holds)...",
+                # model that fits once it is gone (measured: 820 of 10240 MiB free); a new
+                # share needs a new launch as well.
+                say("Stopping vLLM (the new setting is measured against the memory it holds)...",
                     "info")
                 reason = vllm_server.stop()
                 if reason:
@@ -1098,7 +1150,7 @@ def _apply_vllm(setting, repo, install, progress, output, say) -> EngineSwitch:
 
         if not (previous == VLLM and vllm_server.running_pid() is not None and not stopped_vllm):
             steps.begin("fit_check")
-            result = vllm_server.plan_fit(model_dir, _n_ctx(), model=repo)
+            result = vllm_server.plan_fit(model_dir, _n_ctx(), model=repo, utilization=share)
             if result.note:
                 say(result.note, "warning")
             restarts = ((" The llama server was stopped for the measurement; it starts again "
@@ -1114,7 +1166,7 @@ def _apply_vllm(setting, repo, install, progress, output, say) -> EngineSwitch:
             # (a kernel the GPU cannot build, memory) is refused now, not at the first chat.
             steps.begin("first_start")
             say("Starting vLLM once to check that it runs (about one to two minutes)...", "info")
-            first = vllm_server.first_start(repo, _n_ctx())
+            first = vllm_server.first_start(repo, _n_ctx(), utilization=share)
             if not first.ok:
                 return failed("start_failed", f"vLLM did not start: {first.text}.",
                               f"The local engine stays {previous}. Details in {first.log}."
@@ -1126,6 +1178,10 @@ def _apply_vllm(setting, repo, install, progress, output, say) -> EngineSwitch:
         if setting is not None and str(Config.get("vllm_model", "auto") or "") != setting:
             # Only a change: the tray restarts a running vLLM for every vllm_ key it sees change.
             Config.set("vllm_model", setting)
+        if share_changed:
+            # After the fit and the first start passed with it; the tray restarts a running
+            # vLLM for the changed key (ENGINE_KEYS).
+            Config.set("vllm_gpu_memory_utilization", share)
         Config.set("local_engine", VLLM)
     except BaseException:
         steps.fail("failed")
@@ -1196,12 +1252,30 @@ def _server_state(probe_health: bool = True) -> str:
     return "running" if vllm_server.health_status() == 200 else "loading"
 
 
+def _memory_table(repo: str, server: str) -> Dict[str, Any]:
+    """The GPU memory slider's table for ``repo`` (``vllm_server.share_table``). A running
+    local server (vLLM, or a llama server with its pid file and identity) holds memory that is
+    not free now, so the automatic share is measured at the next start instead."""
+    from vaf.core import vllm_server
+    running = server != "idle"
+    if not running:
+        try:
+            from vaf.core.backend import ServerManager
+            running = ServerManager(skip_cleanup=True)._llama_pid() is not None
+        except Exception:
+            running = False
+    return vllm_server.share_table(vllm_server.local_snapshot(repo) or None, _n_ctx(),
+                                   model=repo, local_server_running=running)
+
+
 def state(model: Optional[str] = None) -> Dict[str, Any]:
     """Everything a picker shows: the engine, the profile, this machine's verdict, the vLLM
     install, its model (the setting, what it resolves to, the automatic choice, the curated
     ones, whether it is downloaded, its parsers or why they are refused), the server, the
     GGUF of llama.cpp and the conflicts. ``model`` (a repo id or ``auto``) previews another
-    model's parsers and download state. No network beyond the local server's /health."""
+    model's parsers and download state. ``vllm.memory`` is the GPU memory slider's table for
+    that model (``vllm_server.share_table``), None where vLLM cannot run (a verdict other
+    than ``supported``, the ``api`` profile). No network beyond the local server's /health."""
     from vaf.core import inference_profile, vllm_server
     cfg = _cfg()
     verdict = support()
@@ -1222,6 +1296,8 @@ def state(model: Optional[str] = None) -> Dict[str, Any]:
     installed = vllm_server.installed_version()
     server = _server_state()
     failure = vllm_server.remembered_failure(resolved) if server == "idle" else None
+    memory = (_memory_table(preview, server)
+              if verdict.supported and inference_profile.local_inference_allowed(cfg) else None)
     return {
         "engine": current(cfg),
         "profile": inference_profile.current(),
@@ -1243,6 +1319,7 @@ def state(model: Optional[str] = None) -> Dict[str, Any]:
             "server": server,
             "start_failure": ({"code": failure.cause, "text": failure.text}
                               if failure is not None else None),
+            "memory": memory,
         },
         "llama": {"model": str(cfg.get("model", "") or "")},
         "conflicts": [{"code": code, "text": text} for code, text in conflict_items(cfg)],

@@ -1396,7 +1396,7 @@ export default function LoginPage() {
                                                 value={engineChoice}
                                                 onChange={setEngineChoice}
                                                 options={[
-                                                    { id: 'llama', name: tEngine('llamaName'), recommended: tEngine('llamaFor'), line: tEngine('llamaLine') },
+                                                    { id: 'llama', name: tEngine('llamaName'), recommended: tEngine('llamaFor'), line: tEngine('llamaLine'), note: tEngine('llamaNote') },
                                                     {
                                                         id: 'vllm', name: tEngine('vllmName'), recommended: tEngine('vllmFor'), line: tEngine('vllmLine'),
                                                         disabled: setupVllm.level !== 'supported',

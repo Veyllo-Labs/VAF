@@ -24,6 +24,17 @@ REPO = "Qwen/Qwen3-4B-AWQ"
 REAL_STOP_LLAMA = le._stop_llama
 
 
+@pytest.fixture(autouse=True)
+def no_display(monkeypatch):
+    """The display state is pinned: this machine drives a display and a CI runner does not,
+    and the desktop reserve follows it (vllm_server.desktop_reserve_mb). The GPU memory
+    table of state() reads no GPU either."""
+    from vaf.core import vllm_server
+    monkeypatch.setattr(vllm_server, "_display_active", lambda: False)
+    # state() builds the GPU memory table; no test asks nvidia-smi for it.
+    monkeypatch.setattr(vllm_server, "_gpu_memory", lambda: (0, 0))
+
+
 @pytest.fixture
 def config(monkeypatch, tmp_path):
     from vaf.core.config import Config
@@ -70,10 +81,10 @@ def _fake_install(monkeypatch, calls, fits=True):
         return ""
     monkeypatch.setattr(vs, "install", install)
     monkeypatch.setattr(vs, "ensure_model", lambda repo, outcome=None: calls.append(("model", repo)) or "/hf/snap")
-    monkeypatch.setattr(vs, "plan_fit", lambda d, n, kv_dtype=None, model="": vs.FitResult(
+    monkeypatch.setattr(vs, "plan_fit", lambda d, n, kv_dtype=None, model="", utilization=None: vs.FitResult(
         fits, n, 0.78, "fp8", 6076, 7987, "Fits: about 6076 of 7987 MiB." if fits else
         "The model needs about 9000 MiB, but vLLM gets 7987 MiB."))
-    monkeypatch.setattr(vs, "first_start", lambda repo, n_ctx, port=8080: vs.FirstStart(True))
+    monkeypatch.setattr(vs, "first_start", lambda repo, n_ctx, port=8080, utilization=None: vs.FirstStart(True))
     return state
 
 
@@ -299,3 +310,77 @@ def test_engine_on_an_amd_gpu(config, monkeypatch):
     out = " ".join(result.output.split())
     assert "about 3.3 GB or more to download" in out, out
     assert "2.8 GB" not in out
+
+
+def _table(configured=0.0, display=True, auto=0.67, total=10240, reserve=3328):
+    return {"total_mb": total, "free_mb": 8500, "display": display, "reserve_mb": reserve,
+            "configured": configured, "auto_share": auto, "auto_reserved": True,
+            "kv_dtype": "int8_per_token_head", "range": [0.30, 0.95], "min_share": 0.67,
+            "steps": []}
+
+
+@pytest.mark.parametrize("value, passed", [("0.68", 0.68), ("auto", 0.0), ("AUTO", 0.0),
+                                           (None, None)])
+def test_the_gpu_share_is_passed_to_the_switch(config, monkeypatch, value, passed):
+    """`--gpu-share 0.68` and `auto` reach ``apply``; no flag keeps the stored share.
+    MUTATION: not passing the flag through - red."""
+    seen = []
+    monkeypatch.setattr(le, "apply", lambda engine, **kw: seen.append((engine, kw.get("gpu_share")))
+                        or le.EngineSwitch("done", "unchanged_vllm", "The local engine is vLLM.",
+                                           "vllm"))
+    args = ["vllm"] + (["--gpu-share", value] if value is not None else [])
+    assert _invoke(*args).exit_code == 0
+    assert seen == [("vllm", passed)]
+
+
+def test_a_bad_gpu_share_exits_2(config, monkeypatch):
+    """The flag with llama, with --uninstall, or a value the switch refuses: exit 2, and
+    nothing runs."""
+    monkeypatch.setattr(le, "support", lambda **kw: pytest.fail("the verdict ran"))
+    result = _invoke("llama", "--gpu-share", "0.7")
+    assert result.exit_code == 2 and "--gpu-share goes with vllm" in result.output
+    result = _invoke("vllm", "--uninstall", "--gpu-share", "0.7")
+    assert result.exit_code == 2 and "--gpu-share" in result.output
+    for value in ("0.2", "0.97", "x", "nan"):
+        result = _invoke("vllm", "--gpu-share", value)
+        assert result.exit_code == 2, (value, result.output)
+        assert "0.30 to 0.95" in " ".join(result.output.split()), result.output
+    assert config.get("local_engine") is None and "vllm_gpu_memory_utilization" not in config
+
+
+def test_show_prints_the_gpu_memory_line(config, monkeypatch):
+    """`vaf engine` says vLLM's share, automatic or by hand, its size and what stays free for
+    the screen. MUTATION: drop the line - red."""
+    _supported(monkeypatch)
+    monkeypatch.setattr(vs, "installed_version", lambda: None)
+    monkeypatch.setattr(le, "_memory_table", lambda repo, server: _table())
+    out = " ".join(_invoke().output.split())
+    assert ("vLLM GPU memory: automatic, 0.67 now (6.7 of 10.0 GB); 3.3 GB stay free for the "
+            "screen (this GPU drives a display)") in out, out
+    monkeypatch.setattr(le, "_memory_table", lambda repo, server: _table(configured=0.78))
+    out = " ".join(_invoke().output.split())
+    assert ("vLLM GPU memory: 0.78, set by hand (7.8 of 10.0 GB); leaves 2.2 GB, less than the "
+            "3.3 GB a screen on this GPU needs") in out, out
+    monkeypatch.setattr(le, "_memory_table", lambda repo, server: _table(auto=None))
+    assert "automatic, measured at the next start" in " ".join(_invoke().output.split())
+    monkeypatch.setattr(le, "_memory_table", lambda repo, server: _table(display=False, reserve=0,
+                                                                         configured=0.78))
+    out = " ".join(_invoke().output.split())
+    assert "leaves 2.2 GB" in out and "screen on this GPU needs" not in out
+    monkeypatch.setattr(le, "_memory_table", lambda repo, server: _table(display=None))
+    assert "VAF cannot tell whether this GPU drives a display" in " ".join(_invoke().output.split())
+
+
+def test_a_switch_below_the_reserve_warns(config, monkeypatch):
+    """A share by hand that leaves less than the reserve on a display GPU is applied, with a
+    warning that the screen can freeze."""
+    fit = vs.FitResult(True, 40960, 0.78, "int8_per_token_head", 7407, 7987, "Fits.", code="fits",
+                       leaves_mb=2253, below_reserve=True)
+    monkeypatch.setattr(le, "apply", lambda engine, **kw: le.EngineSwitch(
+        "done", "unchanged_vllm", "The local engine is vLLM.", "vllm", fit=fit))
+    out = " ".join(_invoke("vllm", "--gpu-share", "0.78").output.split())
+    assert "leaves 2.2 GB" in out and "screen can freeze" in out and "3.3 GB" in out, out
+    monkeypatch.setattr(le, "apply", lambda engine, **kw: le.EngineSwitch(
+        "done", "unchanged_vllm", "The local engine is vLLM.", "vllm",
+        fit=vs.FitResult(True, 40960, 0.6, "int8_per_token_head", 6000, 6144, "Fits.")))
+    assert "screen can freeze" not in _invoke("vllm", "--gpu-share", "0.6").output

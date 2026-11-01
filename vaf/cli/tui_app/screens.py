@@ -271,6 +271,7 @@ class SettingsScreen(ModalScreen[None]):
     }
 
     TITLES = {"main": "Settings", "voice": "Settings › Voice", "engine": "Settings › Engine",
+              "gpu_share": "Settings › Engine › GPU memory",
               "local_model": "Settings › Active Model",
               "theme": "Settings › Theme", "stt_lang": "Settings › Input Language",
               "subagent_provider": "Settings › Sub-Agent Provider",
@@ -424,6 +425,8 @@ class SettingsScreen(ModalScreen[None]):
             return self._choice_rows(menu.split(":", 1)[1])
         if menu == "engine":
             return self._engine_rows()
+        if menu == "gpu_share":
+            return self._gpu_share_rows()
         if menu == "local_model" and self._engine_is_vllm():
             return self._vllm_model_rows()
         if menu == "local_model":
@@ -522,11 +525,12 @@ class SettingsScreen(ModalScreen[None]):
     # The web cards' English lines (en.json localEngine llamaFor + llamaLine, vllmFor +
     # vllmLine; tests/test_tui_local_engine.py keeps them equal).
     ENGINE_LINES = {
-        "llama": ("llama.cpp", "Recommended for edge devices and single users. GGUF models, "
-                               "runs on almost any hardware, starts in seconds"),
-        "vllm": ("vLLM", "Recommended for servers and high-end setups. Hugging Face models, "
-                         "fast with many concurrent requests, needs a supported GPU, starts "
-                         "in minutes"),
+        "llama": ("llama.cpp", "For everyday tasks on personal PCs, laptops and edge devices. "
+                               "Runs GGUF models on almost any GPU or on the CPU alone, takes "
+                               "only the memory it needs and starts in seconds"),
+        "vllm": ("vLLM", "For servers and high-end PCs that answer many requests at once. Runs "
+                         "Hugging Face models on a supported NVIDIA or AMD GPU, reserves its "
+                         "share of GPU memory up front and starts in one to two minutes"),
     }
 
     def _engine_is_vllm(self) -> bool:
@@ -574,6 +578,12 @@ class SettingsScreen(ModalScreen[None]):
         if support.get("level") == "supported":
             rows.append(("engine_pick", "vllm", self._engine_line("vllm", engine == "vllm")))
             rows.append(("note", None, str(support.get("reason") or "")))
+            memory = (state.get("vllm") or {}).get("memory")
+            if engine == "vllm" and isinstance(memory, dict) and memory.get("total_mb"):
+                # vLLM's share of the GPU; llama.cpp reserves none (it takes what it needs).
+                configured = float(memory.get("configured") or 0)
+                shown = f"{round(configured * 100)}%" if configured else "Automatic"
+                rows.append(("submenu", "gpu_share", f"GPU memory: {shown}"))
         else:
             import textwrap
             word = "not yet" if support.get("level") == "later" else "not available"
@@ -584,6 +594,47 @@ class SettingsScreen(ModalScreen[None]):
             # Laid out like the selectable rows: the name, then the indented lines below it.
             rows.append(("note", None, f" vLLM  {word}\n{body}"))
         return rows + [("sep", None, ""), ("back", None, "Back")]
+
+    # The shares the GPU memory list offers, besides Automatic and a stored value off the grid.
+    GPU_SHARE_GRID = tuple(p / 100 for p in range(30, 96, 5))
+
+    def _gpu_share_rows(self) -> list:
+        """vLLM's GPU memory share: Automatic, 30% to 95% in steps of 5 and a stored value off
+        that grid, each with its size and whether the model fits there (``memory.steps`` of
+        ``local_engine.state``, the one fit implementation). A pick is a switch."""
+        state = self._engine_state
+        memory = ((state.get("vllm") or {}).get("memory") if isinstance(state, dict) else None)
+        if not isinstance(memory, dict) or not memory.get("total_mb"):
+            return [("note", None, "GPU memory unavailable"), ("back", None, "Back")]
+        total = memory["total_mb"]
+        configured = round(float(memory.get("configured") or 0), 2)
+        steps = {round(s["share"], 2): s for s in memory.get("steps") or []}
+
+        from vaf.cli.cmd.engine import gb_of_mib
+
+        def gb(mib) -> str:
+            return f"{gb_of_mib(mib)} GB"
+
+        def row(value: float, text: str) -> tuple:
+            marker = "▍" if abs(value - configured) < 1e-9 else " "
+            return ("gpu_share", value, f"[$primary]{marker}[/][$text]{_esc(text)}[/]")
+
+        auto = memory.get("auto_share")
+        reserve = memory.get("reserve_mb") or 0
+        auto_text = ("Automatic (measured at the next start)" if auto is None
+                     else f"Automatic ({round(auto * 100)}% now, {gb(int(auto * total))} of {gb(total)})")
+        if reserve:
+            auto_text += f", {gb(reserve)} stay free for the screen"
+        rows = [("note", None, "vLLM restarts to apply it (one to two minutes)."), row(0.0, auto_text)]
+        values = list(self.GPU_SHARE_GRID)
+        if configured and all(abs(configured - v) > 1e-9 for v in values):
+            values = sorted(values + [configured])
+        for value in values:
+            step = steps.get(round(value, 2))
+            fits = ("" if step is None else
+                    f"  fits, context {step['max_model_len']}" if step["ok"] else "  too small")
+            rows.append(row(value, f"{round(value * 100)}%  {gb(int(value * total))}{fits}"))
+        return rows + [("back", None, "Back")]
 
     def _vllm_model_rows(self) -> list:
         """The vLLM model: Automatic (the GPU's default), the curated repos with their
@@ -612,8 +663,9 @@ class SettingsScreen(ModalScreen[None]):
         rows.append(("vllm_model_other", None, " Other Hugging Face model\u2026"))
         return rows + [("back", None, "Back")]
 
-    def _switch_engine(self, engine: str, model=None) -> None:
-        """Hand the switch to the bridge's lane; ask first when vLLM is to be installed."""
+    def _switch_engine(self, engine: str, model=None, gpu_share=None) -> None:
+        """Hand the switch to the bridge's lane; ask first when vLLM is to be installed.
+        ``gpu_share`` is vLLM's GPU memory share (0 = automatic, None keeps it)."""
         state = self._engine_state if isinstance(self._engine_state, dict) else {}
         vllm = state.get("vllm") or {}
 
@@ -622,7 +674,8 @@ class SettingsScreen(ModalScreen[None]):
                 # The bridge would refuse it with a note; saying "switching" would be false.
                 self.app.notify("not while a turn is running", severity="warning", timeout=2.5)
                 return
-            self.app._bridge.apply_engine(engine, model=model, install=install)
+            self.app._bridge.apply_engine(engine, model=model, install=install,
+                                          gpu_share=gpu_share)
             self.app.notify("switching the local engine - see the chat for progress",
                             timeout=2.5)
             self._engine_state = None
@@ -861,6 +914,9 @@ class SettingsScreen(ModalScreen[None]):
             return
         if kind == "vllm_model":
             self._switch_engine("vllm", model=str(arg))
+            return
+        if kind == "gpu_share":
+            self._switch_engine("vllm", gpu_share=float(arg))
             return
         if kind == "vllm_model_other":
             def _typed(value) -> None:

@@ -31,6 +31,14 @@ from vaf.core import container_jobs
 from vaf.core import local_engine as le
 
 
+@pytest.fixture(autouse=True)
+def no_display(monkeypatch):
+    """The display state is pinned: this machine drives a display and a CI runner does not,
+    and the desktop reserve follows it (vllm_server.desktop_reserve_mb)."""
+    from vaf.core import vllm_server
+    monkeypatch.setattr(vllm_server, "_display_active", lambda: False)
+
+
 def _reset():
     sr._engine_state.update({"running": False, "started_at": None, "finished_at": None,
                              "engine": None, "model": None, "phase": None, "step": 0,
@@ -91,12 +99,12 @@ def test_routes_call_the_core(client, monkeypatch):
     assert body["job"]["running"] is False
     calls = []
 
-    def apply(engine, model=None, install=False, progress=None, output=None, log=None):
+    def apply(engine, model=None, install=False, gpu_share=None, progress=None, output=None, log=None):
         calls.append((engine, model, install, output.endswith("vllm_install.log")))
         progress({"phase": "download_model", "step": 3, "steps": 6})
         return le.EngineSwitch("done", "switched_vllm", "The local engine is vLLM.", "vllm",
                                "Qwen/Qwen3-8B-AWQ")
-    monkeypatch.setattr(le, "validate", lambda engine, model=None: "vllm")
+    monkeypatch.setattr(le, "validate", lambda engine, model=None, gpu_share=None: "vllm")
     monkeypatch.setattr(le, "apply", apply)
     answer = client.post("/api/system/local-engine",
                          json={"engine": "vllm", "model": "Qwen/Qwen3-8B-AWQ", "install": True})
@@ -133,7 +141,7 @@ def test_bad_request_400_before_job(client, monkeypatch):
 def test_409_while_profile_switch(client, monkeypatch):
     """One container job at a time: not beside a profile switch, and a running switch keeps
     a second one, a repair and the uninstall out."""
-    monkeypatch.setattr(le, "validate", lambda engine, model=None: engine)
+    monkeypatch.setattr(le, "validate", lambda engine, model=None, gpu_share=None: engine)
     assert container_jobs.claim(container_jobs.PROFILE_SWITCH) is None
     answer = client.post("/api/system/local-engine", json={"engine": "llama"})
     assert answer.status_code == 409 and "profile switch" in answer.json()["detail"]
@@ -157,7 +165,7 @@ def test_409_while_profile_switch(client, monkeypatch):
 
 def test_job_follows_to_result(client, monkeypatch):
     """A crash is reported as the job's error, never swallowed, and the slot comes back."""
-    monkeypatch.setattr(le, "validate", lambda engine, model=None: engine)
+    monkeypatch.setattr(le, "validate", lambda engine, model=None, gpu_share=None: engine)
 
     def boom(engine, **kw):
         raise RuntimeError("pip exploded")
@@ -314,3 +322,30 @@ def test_a_finished_job_has_its_end_time_before_it_reads_finished():
     body = inspect.getsource(sr._run_engine_switch)
     tail = body[body.index("finally:"):]
     assert tail.index('_engine_state["finished_at"]') < tail.index('_engine_state["running"] = False')
+
+
+def test_the_gpu_share_rides_the_switch(client, monkeypatch):
+    """POST carries ``gpu_share`` to validate and apply; a wrong one is ``bad_share`` with
+    400 before a job, whatever its JSON type. MUTATION: drop gpu_share from the job's
+    arguments - red."""
+    seen = []
+
+    def apply(engine, model=None, install=False, gpu_share=None, progress=None, output=None, log=None):
+        seen.append((engine, gpu_share))
+        return le.EngineSwitch("done", "unchanged_vllm", "vLLM.", "vllm")
+    monkeypatch.setattr(le, "support", lambda **kw: pytest.fail("the verdict ran for a bad share"))
+    monkeypatch.setattr(le, "apply", lambda *a, **k: pytest.fail("a wrong request reached apply"))
+    for body in ({"engine": "vllm", "gpu_share": 0.2}, {"engine": "vllm", "gpu_share": 0.97},
+                 {"engine": "vllm", "gpu_share": "x"}, {"engine": "llama", "gpu_share": 0.7},
+                 {"engine": "vllm", "gpu_share": [0.5]}):
+        answer = client.post("/api/system/local-engine", json=body)
+        assert answer.status_code == 400 and answer.json()["code"] == "bad_share", (body, answer.json())
+        assert answer.json()["params"] == {"min": "0.30", "max": "0.95"}
+    assert sr._engine_state["running"] is False
+    monkeypatch.setattr(le, "validate", lambda engine, model=None, gpu_share=None:
+                        seen.append(("validate", gpu_share)) or "vllm")
+    monkeypatch.setattr(le, "apply", apply)
+    assert client.post("/api/system/local-engine",
+                       json={"engine": "vllm", "gpu_share": 0.68}).status_code == 202
+    _follow(client)
+    assert seen == [("validate", 0.68), ("vllm", 0.68)]

@@ -364,17 +364,21 @@ def run_workflow(
                 # A temporary plan: its throwaway files go (the deliverable stays), and the
                 # agent gets what the chat lane gives it - every step's result head next to
                 # the final output, and the order not to redo the work.
-                from vaf.workflows.engine import remove_temp_intermediates, summarize_run_steps
-                remove_temp_intermediates((result.outputs or {}).get("workflow_project_path", ""),
+                # The folder the engine decided, inside the run's own projects folder only.
+                from vaf.workflows.engine import (project_folder_note, remove_temp_intermediates,
+                                                  summarize_run_steps)
+                remove_temp_intermediates(getattr(result, "project_path", None) or "",
                                           keep_files=plan.get("keep_files") or [],
-                                          final_output=result.final_output)
+                                          final_output=result.final_output,
+                                          user_scope_id=getattr(engine, "user_scope_id", None))
                 _steps_summary = summarize_run_steps(steps)
                 final_summary = (
                     f"Temporary workflow '{template['name']}' completed.\n"
                     "THE WORK IS DONE. Do NOT redo any step, do NOT re-run searches, do NOT "
                     "rebuild files. Present the results below to the user, including any file "
                     f"path shown.\n\n{final_output[:1500]}{'...' if len(final_output) > 1500 else ''}"
-                    + (f"\n\nStep results:\n{_steps_summary}" if _steps_summary else ""))
+                    + (f"\n\nStep results:\n{_steps_summary}" if _steps_summary else "")
+                    + project_folder_note(result))
             elif output_path:
                 final_summary = f"Workflow '{template['name']}' completed successfully.\nOutput saved to: {output_path}"
             elif "written successfully" in final_output.lower() or "saved" in final_output.lower():

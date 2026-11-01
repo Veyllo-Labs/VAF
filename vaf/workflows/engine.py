@@ -291,6 +291,30 @@ _INTERMEDIATE_EXTS = frozenset({
 })
 
 
+# Output names the engine itself writes into a run's outputs. A step that named one as its
+# output would overwrite the engine's value after the engine decided it (live finding: a
+# step with "output": "workflow_project_path" pointed the temporary-file cleanup at another
+# account's folder), so a plan that names one is refused before any step runs.
+ENGINE_OUTPUT_NAMES = frozenset({"workflow_project_path"})
+
+
+def reserved_output_problem(output_name: Any) -> Optional[str]:
+    """The refusal line for a step whose output name the engine owns, or None."""
+    if str(output_name or "").strip() in ENGINE_OUTPUT_NAMES:
+        return (f"the output name '{str(output_name).strip()}' belongs to the workflow engine "
+                "(it holds the run's project folder); give the step another output name.")
+    return None
+
+
+def project_folder_note(result) -> str:
+    """One line for the model when the run did not use the folder its variables named, so it
+    looks for the files where they are; "" otherwise."""
+    if getattr(result, "supplied_path_refused", False) and getattr(result, "project_path", None):
+        return ("\n\nNote: the workflow_project_path in the variables was not this run's own "
+                f"project folder and was not used; the files are in {result.project_path}")
+    return ""
+
+
 def _projects_root() -> str:
     """Where every workflow and coder project folder lives: Documents/VAF_Projects."""
     from vaf.core.platform import Platform
@@ -317,7 +341,8 @@ def _strictly_inside(root: str, candidate: str) -> bool:
     return True
 
 
-def remove_temp_intermediates(project_path: str, *, keep_files=(), final_output=None) -> int:
+def remove_temp_intermediates(project_path: str, *, keep_files=(), final_output=None,
+                              user_scope_id: Optional[str] = None) -> int:
     """After a temporary workflow: remove the throwaway scripts and scratch it created in its
     shared project path, KEEP the deliverable, and return how many files went.
 
@@ -328,14 +353,22 @@ def remove_temp_intermediates(project_path: str, *, keep_files=(), final_output=
     when it IS a file path (write_file). Emptied directories go, the project directory only
     when nothing is left in it (a pure script-only run). Never raises.
 
-    Only a folder below Documents/VAF_Projects is cleaned. The value comes from the run's
-    outputs, which the engine checks against the run's own prefix (`execute`); this second
-    check keeps a recursive delete from ever walking a folder somewhere else."""
+    Only a folder below the caller's own Documents/VAF_Projects/<uid8> is cleaned, decided
+    on resolved paths: callers pass the folder the engine decided (WorkflowResult.project_path,
+    checked against the run's prefix in `execute`) and the identity of the run, so a
+    recursive delete never walks another account's folder or a folder elsewhere.
+
+    NAMED BOUNDARY: without a ``user_scope_id`` (an unscoped local run, the single-user
+    machine owner) the bound is the whole Documents/VAF_Projects, the same area that owner
+    reaches with every other tool."""
     import os
     if not project_path or not os.path.isdir(project_path):
         return 0
     try:
-        if not _strictly_inside(_projects_root(), project_path):
+        root = _projects_root()
+        if user_scope_id:
+            root = os.path.join(root, str(user_scope_id)[:8])
+        if not _strictly_inside(root, project_path):
             return 0
     except Exception:
         return 0
@@ -525,6 +558,11 @@ class WorkflowResult:
     workflow_id: Optional[str] = None   # ID for resuming paused workflow
     waiting_for_task: Optional[str] = None  # Task ID we're waiting for
     waiting_for_agent: str = ""         # Sub-agent the paused run handed off to
+    # The run's project folder as the engine decided it. Read this, not
+    # outputs["workflow_project_path"]: outputs is where steps write their results.
+    project_path: Optional[str] = None
+    # True when the caller handed in a workflow_project_path the engine did not accept.
+    supplied_path_refused: bool = False
 
 
 def _temporal_builtins(username: Optional[str] = None) -> Dict[str, str]:
@@ -727,6 +765,19 @@ class WorkflowEngine:
                 total_duration=0.0, error=_wf_blocked,
             )
 
+        _reserved = [f"step {i} ({getattr(s, 'tool', '?')}): {problem}"
+                     for i, s in enumerate(steps or [], 1)
+                     for problem in [reserved_output_problem(getattr(s, "output_name", ""))]
+                     if problem]
+        if _reserved:
+            _msg = "Error: nothing ran, the workflow has steps that cannot run:\n" + "\n".join(
+                f"- {line}" for line in _reserved)
+            UI.error(f"  [BLOCKED] {_msg}")
+            return WorkflowResult(
+                success=False, outputs={}, final_output=None, steps=steps,
+                total_duration=0.0, error=_msg,
+            )
+
         # Store defaults for use in template resolution (defaults not passed for automations)
         self._workflow_defaults = {}
 
@@ -782,6 +833,7 @@ class WorkflowEngine:
         # temporary-file cleanup walks. Anything else is replaced by a fresh folder; if no
         # folder can be made, there is none (bash then refuses rather than run elsewhere).
         _workflow_project_path: Optional[str] = None
+        _supplied_refused = False
         _supplied_path = outputs.pop("workflow_project_path", None)
         try:
             import re as _re
@@ -812,6 +864,7 @@ class WorkflowEngine:
                 _workflow_project_path = str(Path(os.path.expanduser(_supplied_path)).resolve())
             else:
                 if _supplied_path:
+                    _supplied_refused = True
                     UI.event("Workflow", "  [INFO] Ignoring a workflow_project_path outside this "
                              "run's project folder; using a fresh one.", style="dim")
                 _proj_root = os.path.join(_user_root, *(p for p in (_session_folder,) if p))
@@ -1547,6 +1600,7 @@ class WorkflowEngine:
                         workflow_id=workflow_id,
                         waiting_for_task=task_id,
                         waiting_for_agent=agent_type,
+                        project_path=_workflow_project_path,
                     )
                 
                 # A bounded-run timeout/stop returns a sentinel string. Treat it as a hard
@@ -1772,7 +1826,9 @@ class WorkflowEngine:
             final_output=final_output,
             steps=steps,
             total_duration=total_duration,
-            error=error
+            error=error,
+            project_path=_workflow_project_path,
+            supplied_path_refused=_supplied_refused,
         )
 
     def _await_subagent(self, spawn_output, tool_name: str, check_stop, timeout: float, poll: float):
@@ -2002,7 +2058,8 @@ class WorkflowEngine:
             final_output=remaining_result.final_output,
             steps=all_steps,
             total_duration=remaining_result.total_duration,
-            error=remaining_result.error
+            error=remaining_result.error,
+            project_path=remaining_result.project_path,
         )
     
     def _resolve_template(self, template: str, variables: Dict[str, Any], defaults: Dict[str, Any] = None) -> str:

@@ -427,8 +427,12 @@ arrives through the workflow's variables (a model writes those for a temporary w
 accepted only when `vaf.contained_path` puts it below the run's
 `Documents/VAF_Projects[/<uid8>]` folder, as the resume lane hands it back; anything else gets
 a fresh folder, so a plan cannot root the jail in `~/.vaf`, `~/.ssh` or another account's
-projects. The temporary-file cleanup after a temporary workflow walks only a folder below
-`Documents/VAF_Projects`.
+projects. A step cannot name `workflow_project_path` as its output (refused before the run,
+`engine.ENGINE_OUTPUT_NAMES`), the engine reports the folder it decided as
+`WorkflowResult.project_path`, and the temporary-file cleanup after a temporary workflow
+walks only that folder and only below the caller's own `Documents/VAF_Projects/<uid8>`
+(NAMED BOUNDARY: an unscoped local run, the single-user machine owner, is bounded by
+`Documents/VAF_Projects` alone).
 
 **Docker is refused in the coder shell.** The host docker socket is host-root-equivalent
 (a container can `--privileged` / `-v /:/host` / `--pid=host` its way to the whole host

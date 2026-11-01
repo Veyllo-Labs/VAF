@@ -155,8 +155,9 @@ def _preflight_steps(normalised: List[dict], tools: Dict[str, Any],
 
     Refused as well, because no repair makes them runnable: a tool that does not exist; a
     `bash` step that downloads (the workflow shell has no network, and the networked shell
-    asks a person); and a `host_bash` step, because this lane runs its steps without asking
-    the user while host_bash in chat asks for every command.
+    asks a person); a `host_bash` step, because this lane runs its steps without asking
+    the user while host_bash in chat asks for every command; and a step whose output name the
+    engine owns (`engine.ENGINE_OUTPUT_NAMES`), which the engine refuses as well.
 
     With an ``unknown`` list (the `create` action), a tool this registry lacks is appended
     there instead of refused: a saved workflow may run in another lane whose registry has it
@@ -171,13 +172,17 @@ def _preflight_steps(normalised: List[dict], tools: Dict[str, Any],
     from vaf.core.tool_dispatch import unknown_tool_hint
     from vaf.core.tool_input_repair import MISSING_REQUIRED, RETRY_SAME_CALL, repair_tool_input
     from vaf.tools.bash import command_needs_network
-    from vaf.workflows.engine import build_step_args
+    from vaf.workflows.engine import build_step_args, reserved_output_problem
 
     visible = set(tools) if visible is None else visible
     problems: List[str] = []
     for i, step in enumerate(normalised, 1):
         name = step.get("tool") or ""
         label = f"step {i} ({name})"
+        _reserved = reserved_output_problem(step.get("output"))
+        if _reserved:
+            problems.append(f"{label}: {_reserved}")
+            continue
         if name == "host_bash":
             problems.append(f"{label}: {_HOST_BASH_STEP}")
             continue
@@ -930,10 +935,13 @@ class AgentWorkflowBuilderTool(BaseTool):
         # ── Intermediate file cleanup for run_temp ────────────────────────────
         # Throwaway scripts/scratch out, every potential deliverable kept: one implementation,
         # shared with a temporary workflow that runs in a process of its own.
-        from vaf.workflows.engine import remove_temp_intermediates
-        remove_temp_intermediates((result.outputs or {}).get("workflow_project_path", ""),
+        # The folder the ENGINE decided (result.project_path), never the outputs entry a step
+        # can write, and only inside this caller's own projects folder.
+        from vaf.workflows.engine import project_folder_note, remove_temp_intermediates
+        remove_temp_intermediates(getattr(result, "project_path", None) or "",
                                   keep_files=kwargs.get("keep_files") or [],
-                                  final_output=result.final_output)
+                                  final_output=result.final_output,
+                                  user_scope_id=user_scope_id)
 
         if result.success:
             # Per-step summary so a weird FINAL step can never hide the real
@@ -948,6 +956,7 @@ class AgentWorkflowBuilderTool(BaseTool):
                 f"rebuild files. Read the results below and present them to the user now, "
                 f"including any file path shown.\n\n{result.final_output}"
                 + (f"\n\nStep results:\n{_summary}" if _summary else "")
+                + project_folder_note(result)
             )
         # Lead with "Error:" so the UI status heuristic flags this as a failure (red),
         # not a green success — the bubble status keys off the result prefix.

@@ -70,9 +70,10 @@ def _fake_install(monkeypatch, calls, fits=True):
         return ""
     monkeypatch.setattr(vs, "install", install)
     monkeypatch.setattr(vs, "ensure_model", lambda repo, outcome=None: calls.append(("model", repo)) or "/hf/snap")
-    monkeypatch.setattr(vs, "plan_fit", lambda d, n, kv_dtype=None: vs.FitResult(
+    monkeypatch.setattr(vs, "plan_fit", lambda d, n, kv_dtype=None, model="": vs.FitResult(
         fits, n, 0.78, "fp8", 6076, 7987, "Fits: about 6076 of 7987 MiB." if fits else
         "The model needs about 9000 MiB, but vLLM gets 7987 MiB."))
+    monkeypatch.setattr(vs, "first_start", lambda repo, n_ctx, port=8080: vs.FirstStart(True))
     return state
 
 
@@ -94,6 +95,26 @@ def test_show(config, monkeypatch):
     monkeypatch.setattr(vs, "is_current", lambda: False)
     out = _invoke().output
     assert "vLLM installed: 0.32.0, set up by an earlier VAF" in out and "vaf engine vllm" in out
+
+
+def test_show_prints_start_failure(config, monkeypatch):
+    """`vaf engine` says a remembered start failure and how to retry, instead of "it starts
+    with the next use". MUTATION: drop the branch - red."""
+    _supported(monkeypatch)
+    monkeypatch.setattr(vs, "installed_version", lambda: "0.32.0")
+    monkeypatch.setattr(vs, "is_installed", lambda: True)
+    monkeypatch.setattr(vs, "running_pid", lambda: None)
+    monkeypatch.setattr(vs, "is_current", lambda: True)
+    monkeypatch.setattr(vs, "recipe_current", lambda: True)
+    monkeypatch.setattr(vs, "compute_capability", lambda: (8, 6))
+    monkeypatch.setattr(vs, "flashinfer_buildable", lambda env=None: False)
+    config["local_engine"] = "vllm"
+    config["n_ctx"] = 32768
+    vs._remember(vs.start_signature(REPO, 32768), "memory", vs.cause_text("memory"))
+    out = " ".join(_invoke().output.split())
+    assert "could not start" in out and "enough free memory" in out, out
+    assert "vaf engine vllm" in out and "vaf engine llama" in out
+    assert "it starts with the next use" not in out
 
 
 def test_unsupported_exit_2(config, monkeypatch):

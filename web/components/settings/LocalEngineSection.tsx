@@ -23,6 +23,8 @@ interface FitData {
     kv_mb: number;
     free_mb: number;
     total_mb: number;
+    other_mb?: number;
+    smaller_model?: boolean;
     reason: string;
 }
 
@@ -69,6 +71,8 @@ export interface EngineState {
         parsers: { tool: string | null; reasoning: string };
         parser_refusal: { code: string; text: string } | null;
         server: 'running' | 'loading' | 'idle';
+        /** A start of vLLM that failed and is not run again until a switch (vllm_server's start memory). */
+        start_failure?: { code: string; text: string } | null;
     };
     llama: { model: string };
     conflicts: { code: string; text: string }[];
@@ -86,6 +90,7 @@ export interface DownloadStatus {
 const OTHER = '__other__';
 const REPO_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const INSTALL_LOG = 'logs/vllm_install.log';
+const SERVER_LOG = 'logs/vllm_server.log';
 // Polls without an answer before the section stops waiting (the profile switch's limit).
 const POLL_MISS_LIMIT = 20;
 
@@ -204,12 +209,18 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
             const gb = (mib: number) => num((mib || 0) / 1024, 1);
             lines.push(coded('fit', fit.code, {
                 need: gb(fit.need_mb), budget: gb(fit.budget_mb), ctx: fit.max_model_len, kv: fit.kv_dtype,
-                free: gb(fit.free_mb),
+                free: gb(fit.free_mb), other: gb(fit.other_mb ?? Math.max((fit.total_mb || 0) - (fit.free_mb || 0), 0)),
             }, fit.reason));
+            if (fit.code === 'too_big' && fit.smaller_model) lines.push(t('fitSmallerModel'));
         }
         if (r.code === 'no_fit' && r.stopped_llama) lines.push(t('stoppedLlama'));
         if (r.code === 'no_fit' && r.stopped_vllm) lines.push(t('stoppedVllm'));
         if (r.code === 'install_failed' || r.code === 'cuda_probe_failed' || r.code === 'rocm_probe_failed' || r.code === 'vllm_libs_failed') lines.push(t('logHint', { path: INSTALL_LOG }));
+        // A first start that failed: why, from its log, and where the log is.
+        if (r.code === 'start_failed') {
+            lines.push(coded('startCause', String(r.params?.cause || 'other'), {}, r.detail));
+            lines.push(t('logHint', { path: SERVER_LOG }));
+        }
         return { lines, tone: r.status === 'done' ? 'ok' : 'error' };
     }, [coded, t, num]);
 
@@ -345,9 +356,9 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
     const vllmNote = lean ? t('profileApi')
         : coded('support', data.support.code, data.support.params, data.support.reason);
     const options: EngineOption[] = [
-        { id: 'llama', name: t('llamaName'), line: t('llamaLine'), disabled: lean },
+        { id: 'llama', name: t('llamaName'), recommended: t('llamaFor'), line: t('llamaLine'), disabled: lean },
         {
-            id: 'vllm', name: t('vllmName'), line: t('vllmLine'), disabled: lean || !supported,
+            id: 'vllm', name: t('vllmName'), recommended: t('vllmFor'), line: t('vllmLine'), disabled: lean || !supported,
             note: vllmNote,
             noteTone: lean || !supported ? 'amber' : 'muted',
             noteWord: lean ? undefined : data.support.level === 'later' ? t('levelLater') : t('levelUnsupported'),
@@ -376,6 +387,8 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
     const showVllmPicker = !lean && (shown === 'vllm');
     const modelChanged = chosenRepo !== setting;
     const refusal = vllmInfo.parser_refusal;
+    // A start that failed is not run again until a switch: the section says why and offers it.
+    const startFailure = data.vllm.start_failure ?? null;
 
     const progress = jobRunning && data.job?.running ? data.job : null;
     const downloading = progress?.phase === 'download_model' && downloadModelStatus?.status === 'downloading';
@@ -464,8 +477,15 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
             {/* Under vLLM: its server, a changed model, the way back. */}
             {!lean && data.engine === 'vllm' && pending === null && !progress && (
                 <div className="mt-3 space-y-1">
-                    {data.vllm.installed_version && !needsInstall && (
+                    {data.vllm.installed_version && !needsInstall && !startFailure && (
                         <p className="text-xs text-gray-600 ml-1">{t(`server.${data.vllm.server}`, { version: data.vllm.installed_version })}</p>
+                    )}
+                    {startFailure && data.vllm.installed_version && (
+                        <>
+                            <p className="text-xs text-amber-700 ml-1">{t('status.vllm_failed', { version: data.vllm.installed_version })}</p>
+                            <p className="text-xs text-amber-700 ml-1">{coded('startCause', startFailure.code, {}, startFailure.text)}</p>
+                            <p className="text-xs text-gray-500 ml-1">{t('logHint', { path: SERVER_LOG })}</p>
+                        </>
                     )}
                     {data.conflicts.map((c) => (
                         <p key={c.code} className="text-xs text-amber-700 ml-1">{coded('conflict', c.code, {}, c.text)}</p>
@@ -474,6 +494,11 @@ export default function LocalEngineSection({ children, downloadModelStatus, onCh
                         {(modelChanged || needsInstall) && (
                             <button type="button" className={primary} disabled={jobRunning || !repoValid || !!refusal} onClick={vllmAction}>
                                 {needsInstall ? t('installAndSwitch') : t('useModel')}
+                            </button>
+                        )}
+                        {startFailure && !modelChanged && !needsInstall && (
+                            <button type="button" className={primary} disabled={jobRunning || !repoValid || !!refusal} onClick={vllmAction}>
+                                {t('retryVllm')}
                             </button>
                         )}
                         <button type="button" className={secondary} disabled={jobRunning} onClick={() => void start({ engine: 'llama' })}>

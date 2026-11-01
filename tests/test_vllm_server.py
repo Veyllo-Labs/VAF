@@ -25,7 +25,8 @@ MUTATIONS, each turns the named test red:
 - drop the fp8 step (KV cache always 16-bit), or raise OVERHEAD_BYTES so the 4B no longer fits
   at fp8 -> test_fit_measured_case;
 - drop the clamp to max_position_embeddings -> test_fit_clamps_to_max_position;
-- drop the retry with auto, or the memo -> test_a_dying_fp8_start_retries_once_with_auto;
+- drop the retry with auto, or the memory of the attempt that came up ->
+  test_a_dying_fp8_start_retries_once_with_auto;
 - let pip run in a shell, or keep a half environment after a failed pip ->
   test_install_steps / test_a_failed_install_leaves_nothing;
 - re-add `--extra-index-url`, drop the extension import from the probe, or write the recipe
@@ -48,7 +49,21 @@ MUTATIONS, each turns the named test red:
 - read the GPU memory from nvidia-smi on ROCm -> test_rocm_fit_reads_amd_memory;
 - keep the no-GPU answer of backend() for the process -> test_the_backend_follows_the_gpu;
 - install or start without with_rocm_library ->
-  test_a_rocm_off_the_wheels_runpath_reaches_probe_and_server.
+  test_a_rocm_off_the_wheels_runpath_reaches_probe_and_server;
+- plan fp8 for 8.6 without FlashInfer, or fp8 with TRITON_ATTN below 8.9 ->
+  test_attention_plan_without_flashinfer_build;
+- drop the VLLM_USE_FLASHINFER_SAMPLER line from child_env ->
+  test_child_env_turns_flashinfer_sampler_off;
+- make flashinfer_buildable always False -> test_buildable_flashinfer_keeps_the_old_command;
+- drop the `+ 4` of the per-token-head scale -> test_int8_per_token_head_fit_counts_scales;
+- remove the shrink of the context -> test_fit_shrinks_context_to_fit; let it go below
+  MIN_CONTEXT -> test_fit_refuses_below_min_context;
+- name a smaller context in the refusal, or a smaller model for the small default ->
+  test_too_big_reason_names_other_programs;
+- send the test request without top_p/top_k, or leave the server running after a passing
+  first start -> test_first_start_sends_a_sampled_request_and_stops;
+- restore "FlashInfer builds the kernels it needs at the first start" ->
+  test_no_tracked_file_says_flashinfer_builds_at_the_first_start.
 """
 import json
 import os
@@ -63,6 +78,7 @@ import pytest
 from vaf.core import local_engine as le
 from vaf.core import vllm_server as vs
 
+REAL_BUILDABLE = vs.flashinfer_buildable
 SHAPE_4B = vs.ModelShape(weights_bytes=int(2.67e9), layers=36, kv_heads=8, head_dim=128,
                          max_position=40960)
 POSIX_ONLY = pytest.mark.skipif(sys.platform == "win32", reason="POSIX process groups")
@@ -82,9 +98,17 @@ def config(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def cuda_build(monkeypatch):
-    """The NVIDIA build unless a test says otherwise: the build follows this machine's GPU,
-    and the tests must not."""
+    """The NVIDIA build unless a test says otherwise, on a GPU of compute capability 8.6
+    where FlashInfer can build its kernels (fp8 then auto, vLLM's own backend): the build and
+    the plan follow this machine's GPU and toolkit, and the tests must not. Every test starts
+    without a remembered start."""
     monkeypatch.setattr(vs, "backend", lambda: vs.CUDA)
+    monkeypatch.setattr(vs, "compute_capability", lambda: (8, 6))
+    monkeypatch.setattr(vs, "flashinfer_buildable", lambda env=None: True)
+    monkeypatch.setattr(vs, "_start_failure", None)
+    monkeypatch.setattr(vs, "_came_up", None)
+    monkeypatch.setattr(vs, "_logged_failure", None)
+    monkeypatch.setattr(vs, "_stopped_while_loading", set())
 
 
 @pytest.fixture
@@ -94,7 +118,6 @@ def home(monkeypatch, tmp_path):
     monkeypatch.setattr(vs, "base_dir", lambda: tmp_path)
     monkeypatch.setattr(vs, "pid_file", lambda: tmp_path / ".vaf" / "vllm.pid")
     monkeypatch.setattr(vs, "log_path", lambda: tmp_path / "logs" / "vllm_server.log")
-    monkeypatch.setattr(vs, "_kv_fp8_failed", False)
     monkeypatch.setattr(vs, "_child", None)
     return tmp_path
 
@@ -191,7 +214,7 @@ def test_a_dying_fp8_start_retries_once_with_auto(config, monkeypatch, home):
     assert vs.start("Qwen/Qwen3-4B-AWQ", 32768, popen=popen) is True
     assert spawned == ["fp8", "auto"]
     assert groups == [procs[0].pid], "what the dead API server left in its group is stopped"
-    assert vs._kv_fp8_failed is True
+    assert vs._came_up[1] == 1, "the attempt that came up is remembered"
     assert vs.start("Qwen/Qwen3-4B-AWQ", 32768, popen=popen) is True
     assert spawned == ["fp8", "auto", "auto"]
 
@@ -650,7 +673,7 @@ def test_a_failed_start_keeps_another_servers_pid_file(config, monkeypatch, home
         vs.pid_file().write_text("424242")       # another process's server, recorded now
         return real_wait(proc, port)
     monkeypatch.setattr(vs, "_wait_ready", wait_ready)
-    monkeypatch.setattr(vs, "_kv_fp8_failed", True)       # one attempt only
+    monkeypatch.setattr(vs, "launch_plan", lambda base=None: vs.KvPlan(("auto",), ("",)))
     assert vs.start("Qwen/Qwen3-4B-AWQ", 32768, popen=popen) is False
     assert vs.pid_file().read_text() == "424242"
 
@@ -687,7 +710,7 @@ def test_a_taken_port_is_no_kv_failure(config, monkeypatch, home):
         return _Proc(dies=True)
     assert vs.start("Qwen/Qwen3-4B-AWQ", 32768, popen=popen) is False
     assert spawned == ["fp8"], "a bind failure was retried as a KV-cache failure"
-    assert vs._kv_fp8_failed is False
+    assert vs.start_failure() is None, "a taken port is not the model's failure"
     assert errors and "port" in errors[-1]
 
 
@@ -1022,3 +1045,222 @@ def test_a_rocm_off_the_wheels_runpath_reaches_probe_and_server(config, monkeypa
     assert vs.child_env()["LD_LIBRARY_PATH"].split(os.pathsep)[0] == lib
     monkeypatch.setattr(vs, "backend", lambda: vs.CUDA)
     assert vs.child_env()["LD_LIBRARY_PATH"] == "/usr/local/lib", "the CUDA build is untouched"
+
+
+# ── the attention plan, the int8 fit, the first start ───────────────────────────────
+
+
+@pytest.mark.parametrize("cap, first, fallback", [
+    ((7, 5), ("int8_per_token_head", "TRITON_ATTN"), ("auto", "TRITON_ATTN")),
+    ((8, 6), ("int8_per_token_head", "TRITON_ATTN"), ("auto", "FLASH_ATTN")),
+    ((8, 9), ("fp8", "TRITON_ATTN"), ("auto", "FLASH_ATTN")),
+    ((9, 0), ("fp8", "FLASH_ATTN"), ("auto", "FLASH_ATTN")),
+    ((12, 0), ("fp8", "TRITON_ATTN"), ("auto", "FLASH_ATTN")),
+])
+def test_attention_plan_without_flashinfer_build(cap, first, fallback):
+    """Without a CUDA toolkit FlashInfer cannot build its kernels, and vLLM still picked it
+    (measured on an RTX 3080: fp8 KV fell to FlashInfer, which died on "Could not find
+    nvcc"). The plan names a backend that needs no build, per compute capability; Triton's
+    fp8 needs 8.9 (measured refusal on 8.6), and the FlashInfer sampler is off."""
+    plan = vs.attention_plan(cap, buildable=False)
+    assert list(zip(plan.kv_dtypes, plan.backends)) == [first, fallback]
+    assert plan.sampler_off is True
+    if cap < (8, 9):
+        assert not any(d.startswith("fp8") and be == vs.TRITON_ATTN
+                       for d, be in zip(plan.kv_dtypes, plan.backends))
+
+
+def test_the_plan_reaches_the_command_and_the_fallback(config, monkeypatch, home):
+    """8.6 without FlashInfer: the launch carries int8_per_token_head with TRITON_ATTN, the
+    fallback auto with FLASH_ATTN, and the server's environment turns the sampler off."""
+    _ready_to_launch(monkeypatch, home, free_mb=20000, total_mb=24576)
+    monkeypatch.setattr(vs, "flashinfer_buildable", lambda env=None: False)
+    spawned = []
+    procs = [_Proc(dies=True), _Proc()]
+
+    def popen(argv, **kw):
+        spawned.append((argv, kw["env"]))
+        return procs[len(spawned) - 1]
+    from vaf.core.platform import Platform
+    monkeypatch.setattr(Platform, "terminate_process_group", staticmethod(lambda pgid, grace=1.0: None))
+    monkeypatch.setattr(vs, "health_status",
+                        lambda port=8080, timeout=1.0: 200 if len(spawned) >= 2 else None)
+    assert vs.start("Qwen/Qwen3-4B-AWQ", 32768, popen=popen) is True
+
+    def value(argv, flag):
+        return argv[argv.index(flag) + 1]
+    assert [(value(a, "--kv-cache-dtype"), value(a, "--attention-backend")) for a, _ in spawned] \
+        == [("int8_per_token_head", "TRITON_ATTN"), ("auto", "FLASH_ATTN")]
+    assert all(env.get("VLLM_USE_FLASHINFER_SAMPLER") == "0" for _, env in spawned)
+
+
+def test_child_env_turns_flashinfer_sampler_off(monkeypatch):
+    """FlashInfer's top-p/top-k sampler JIT-compiles on the first sampled request (measured:
+    the server died in its warmup with "Could not find nvcc"), on every compute capability:
+    off whenever FlashInfer cannot build, and VAF's own VLLM_ value of it never passes."""
+    monkeypatch.setattr(vs, "flashinfer_buildable", lambda env=None: False)
+    for cap in ((8, 6), (9, 0), (12, 0)):
+        monkeypatch.setattr(vs, "compute_capability", lambda cap=cap: cap)
+        env = vs.child_env({"PATH": "/usr/bin", "VLLM_USE_FLASHINFER_SAMPLER": "1"})
+        assert env["VLLM_USE_FLASHINFER_SAMPLER"] == "0", cap
+    monkeypatch.setattr(vs, "backend", lambda: vs.ROCM)
+    assert "VLLM_USE_FLASHINFER_SAMPLER" not in vs.child_env({"PATH": "/usr/bin"}), \
+        "the ROCm launch stays as it was"
+
+
+def _tool(directory: Path, name: str) -> None:
+    """A file shutil.which finds as ``name``; never started (FlashInfer's check only looks)."""
+    directory.mkdir(parents=True, exist_ok=True)
+    exe = directory / (name + (".exe" if os.name == "nt" else ""))
+    exe.write_bytes(b"")
+    exe.chmod(0o755)
+
+
+def test_buildable_flashinfer_keeps_the_old_command(config, monkeypatch, home, tmp_path):
+    """Where FlashInfer can build (nvcc and ninja on the server's PATH, or flashinfer_cubin
+    in the environment) nothing changes: fp8 first, vLLM's own backend, no sampler switch."""
+    monkeypatch.setattr(vs, "flashinfer_buildable", REAL_BUILDABLE)
+    cuda = tmp_path / "cuda" / "bin"
+    tools = tmp_path / "tools"
+    _tool(cuda, "nvcc")
+    _tool(tools, "ninja")
+    path = os.pathsep.join([str(cuda), str(tools)])
+    assert vs.flashinfer_buildable({"PATH": path}) is True
+    assert vs.flashinfer_buildable({"PATH": str(tools)}) is False, "no nvcc"
+    assert vs.flashinfer_buildable({"PATH": str(cuda)}) is False, "no ninja"
+    assert vs.flashinfer_buildable({"PATH": str(tools),
+                                    "CUDA_HOME": str(tmp_path / "cuda")}) is True
+    site = vs.venv_dir() / "lib" / "python3.13" / "site-packages" / "flashinfer_cubin"
+    site.mkdir(parents=True)
+    assert vs.flashinfer_buildable({"PATH": ""}) is True, "the prebuilt kernels need no JIT"
+    import shutil as _shutil
+    _shutil.rmtree(site)
+    monkeypatch.setenv("PATH", path)
+    _ready_to_launch(monkeypatch, home)
+    spawned = []
+
+    def popen(argv, **kw):
+        spawned.append((argv, kw["env"]))
+        return _Proc()
+    monkeypatch.setattr(vs, "health_status", lambda port=8080, timeout=1.0: 200 if spawned else None)
+    assert vs.start("Qwen/Qwen3-4B-AWQ", 32768, popen=popen) is True
+    argv, env = spawned[0]
+    assert argv[argv.index("--kv-cache-dtype") + 1] == "fp8"
+    assert "--attention-backend" not in argv
+    assert "VLLM_USE_FLASHINFER_SAMPLER" not in env
+
+
+def test_int8_per_token_head_fit_counts_scales():
+    """int8_per_token_head stores one byte per element plus a float32 scale per token, head
+    and side: Qwen3-4B (36 layers, 8 KV heads, head dim 128) at 32768 tokens is 2376 MiB."""
+    result = vs.fit(SHAPE_4B, 32768, 20000, 24576, kv_dtype=vs.INT8_KV)
+    assert result.kv_mb == 2376, result.kv_mb
+    assert vs.fit(SHAPE_4B, 32768, 20000, 24576, kv_dtype="fp8").kv_mb == 2304
+
+
+def test_fit_shrinks_context_to_fit():
+    """The clamped context (40960) does not fit, a smaller one above the floor does: the
+    largest multiple of 1024 that fits is taken, with a note."""
+    full = vs.fit(SHAPE_4B, 40960, 10000, 10240, kv_dtype=vs.INT8_KV, utilization=0.95)
+    assert full.ok and full.max_model_len == 40960 and "reduced" not in full.note
+    result = vs.fit(SHAPE_4B, 40960, 10000, 10240, kv_dtype=vs.INT8_KV, utilization=0.70)
+    assert result.ok, result.reason
+    assert vs.MIN_CONTEXT <= result.max_model_len < 40960
+    assert result.max_model_len % vs.CONTEXT_STEP == 0
+    assert str(result.max_model_len) in result.note and "reduced" in result.note
+    assert result.need_mb <= result.budget_mb
+    # One step more would not fit.
+    over = vs.fit(SHAPE_4B, result.max_model_len + vs.CONTEXT_STEP, 10000, 10240,
+                  kv_dtype=vs.INT8_KV, utilization=0.70)
+    assert over.max_model_len == result.max_model_len
+
+
+def test_fit_refuses_below_min_context():
+    """The measured case: 6222 of 10240 MiB free (other programs held the rest). int8 at the
+    32768 floor does not fit either: refused, never launched below the floor."""
+    result = vs.fit(SHAPE_4B, 40960, 6222, 10240, kv_dtype=vs.INT8_KV)
+    assert not result.ok and result.code == "too_big"
+    assert result.max_model_len == vs.MIN_CONTEXT
+    assert result.other_mb == 10240 - 6222
+
+
+def test_too_big_reason_names_other_programs():
+    """The refusal names the free memory and what other programs hold, and the levers that
+    help: closing them, or llama.cpp. Never a smaller context; a smaller model only for a
+    model larger than the smallest default."""
+    small = vs.fit(SHAPE_4B, 40960, 6222, 10240, kv_dtype=vs.INT8_KV, model=le.DEFAULT_MODEL_SMALL)
+    assert "6222 MiB are free" in small.reason and "other programs hold 4018 MiB" in small.reason
+    assert "Close programs that use the GPU" in small.reason and "llama.cpp" in small.reason
+    assert "context" not in small.reason.split("),", 1)[1], small.reason
+    assert "smaller model" not in small.reason and small.smaller_model is False
+    large = vs.fit(SHAPE_4B, 40960, 6222, 10240, kv_dtype=vs.INT8_KV, model=le.DEFAULT_MODEL_LARGE)
+    assert "smaller model" in large.reason and large.smaller_model is True
+    data = le.fit_dict(large)
+    assert data["other_mb"] == 4018 and data["smaller_model"] is True
+
+
+class _Answer:
+    def __init__(self, status=200, body=None):
+        self.status_code = status
+        self._body = body if body is not None else {"choices": [{"message": {"content": "OK"}}]}
+
+    def json(self):
+        return self._body
+
+
+def test_first_start_sends_a_sampled_request_and_stops(config, monkeypatch, home):
+    """The first start of a switch runs the real start, one chat completion WITH top_p and
+    top_k (the sampler path that killed a server on its first chat), and stops the server
+    again. A server that dies on the request is a failure with the log's cause."""
+    _ready_to_launch(monkeypatch, home)
+    spawned, posted, stopped = [], [], []
+    monkeypatch.setattr(vs, "health_status", lambda port=8080, timeout=1.0: 200 if spawned else None)
+    monkeypatch.setattr(vs, "running_pid", lambda: 900 if spawned else None)
+    monkeypatch.setattr(vs, "stop", lambda wait=15.0: stopped.append(1) or "")
+
+    def popen(argv, **kw):
+        spawned.append(argv)
+        return _Proc()
+
+    def post(url, json=None, timeout=None):
+        posted.append((url, json))
+        return _Answer()
+    result = vs.first_start("Qwen/Qwen3-4B-AWQ", 32768, popen=popen, post=post)
+    assert result.ok, result
+    url, body = posted[0]
+    assert url.endswith("/v1/chat/completions") and body["model"] == "Qwen/Qwen3-4B-AWQ"
+    assert body["top_p"] == 0.8 and body["top_k"] == 20 and body["max_tokens"] == 8
+    assert stopped == [1], "the server is stopped after the first start"
+    # The engine dies on the sampled request: the cause comes from the log, and it is
+    # remembered for this signature.
+    spawned.clear()
+    stopped.clear()
+    vs.log_path().parent.mkdir(parents=True, exist_ok=True)
+
+    def dying_post(url, json=None, timeout=None):
+        vs.log_path().write_bytes(b"RuntimeError: Could not find nvcc and default cuda_home\n")
+        raise ConnectionError("closed")
+    result = vs.first_start("Qwen/Qwen3-4B-AWQ", 32768, popen=popen, post=dying_post)
+    assert not result.ok and result.cause == "kernels", result
+    assert stopped == [1]
+    assert vs.start_failure() is not None and vs.start_failure().cause == "kernels"
+
+
+def test_start_log_causes():
+    """A start that died is classified from its log; memory before kernels, because the
+    "kernels are disabled" warning heads every log without a toolkit."""
+    head = "FlashInfer kernels are disabled: flashinfer-cubin is not installed and nvcc\n"
+    assert vs.classify_start_log(head + "ValueError: ... (2.32 GiB KV cache is needed, which is "
+                                 "larger than the available KV cache memory") == "memory"
+    assert vs.classify_start_log(head + "RuntimeError: Could not find nvcc") == "kernels"
+    assert vs.classify_start_log(head + "Segmentation fault") == "other"
+
+
+def test_no_tracked_file_says_flashinfer_builds_at_the_first_start():
+    """Measured untrue without a CUDA toolkit: FlashInfer cannot build there, and the server
+    died. No doc or source may promise it again."""
+    root = Path(__file__).resolve().parent.parent
+    for rel in ("docs/llm/VLLM_ENGINE.md", "vaf/core/local_engine.py", "vaf/core/vllm_server.py"):
+        text = " ".join((root / rel).read_bytes().decode("utf-8").split())
+        assert "FlashInfer builds the kernels it needs at the first start" not in text, rel
+        assert "FlashInfer builds the kernels it needs at" not in text, rel

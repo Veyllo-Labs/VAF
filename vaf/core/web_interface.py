@@ -1202,9 +1202,17 @@ def start_maintenance_broadcast(poll_seconds: float = 1.0):
 
 def maintenance_snapshot_frame() -> dict:
     """The same frame the broadcast sends, for the late-joiner request lane
-    (a client connecting mid-job has missed every pushed frame)."""
+    (a client connecting mid-job has missed every pushed frame). Only a running
+    job is replayed: a finished one answers as "no job" (kind ""), because the
+    snapshot keeps the last job's kind and error, and every reload or reconnect
+    would otherwise show its closing banner again. Its end was pushed to the
+    clients that were there; the result stays readable where the job reports it
+    (Settings, the TUI)."""
     from vaf.core.maintenance_state import MAINTENANCE
     snap = MAINTENANCE.snapshot()
+    if not snap["active"]:
+        return {"type": "maintenance_progress", "kind": "", "active": False, "done": 0,
+                "total": 0, "pct": 0.0, "phase": "", "error": ""}
     return {
         "type": "maintenance_progress",
         "kind": snap["kind"],

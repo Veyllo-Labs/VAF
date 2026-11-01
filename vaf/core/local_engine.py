@@ -98,11 +98,28 @@ Named boundaries, each deliberate:
   that was already malicious when the lock was generated is locked in with it; the lock
   only stops anything newer or different from being installed. FlashInfer's prebuilt
   kernels are deliberately not fetched (``vllm download-kernels`` would pip-install them
-  from flashinfer.ai, unhashed): FlashInfer builds the kernels it needs at the first start.
-  On compute capability 9.0 and newer the locked FlashInfer also downloads some prebuilt
-  kernels at runtime from NVIDIA's artifact server, each checked against checksums pinned in
-  the locked wheel (allowed; ``FLASHINFER_NO_DOWNLOAD=1`` refuses it). A measured first
-  start that is too slow would earn hash-locking flashinfer-cubin and flashinfer-jit-cache.
+  from flashinfer.ai, unhashed). Without them FlashInfer can only JIT-compile, which needs
+  a CUDA toolkit (nvcc) and ninja; measured on an RTX 3080 without a toolkit, vLLM 0.32.0
+  picked FlashInfer anyway (for the fp8 KV cache and the top-p/top-k sampler) and the
+  server died. So the launch reads whether FlashInfer can build in the server's environment
+  (``vllm_server.flashinfer_buildable``) and, where it cannot, names an attention backend
+  and KV cache that need no build and turns FlashInfer's sampler off
+  (``vllm_server.attention_plan``, CUDA build only). On compute capability 9.0 and newer
+  the locked FlashInfer also downloads some prebuilt kernels at runtime from NVIDIA's
+  artifact server, each checked against checksums pinned in the locked wheel (allowed;
+  ``FLASHINFER_NO_DOWNLOAD=1`` refuses it). A measured speed gap of the Triton backend
+  would earn hash-locking flashinfer-cubin and flashinfer-jit-cache.
+- **Only compute capability 8.6 of the attention plan is measured** (RTX 3080:
+  ``int8_per_token_head`` with TRITON_ATTN, the sampler off). The rows for 7.5, 8.0, 8.9,
+  9.x, 10.x and 12.x are read from vLLM 0.32.0's sources (platforms/cuda.py,
+  triton_attn.py, flash_attn.py). A row that is wrong for a GPU is caught by the switch's
+  first start (``start_failed``), before the engine changes, not at the first chat.
+- **The start memory lives in the process** (``vllm_server.remembered_failure``): a start
+  that died, timed out or was refused by the fit is not run again by the tray, the
+  headless runner or ``load_model`` until a switch clears it, the configuration changes
+  its signature, or VAF restarts (a fit refusal is measured again after 60 s). A file
+  would be a persisted format of its own; a restart is a fair fresh try, and `vaf chat` in
+  another terminal tries once more by design.
 """
 from __future__ import annotations
 
@@ -763,13 +780,22 @@ SWITCH_CODES = ("unknown_engine", "bad_repo", "profile_api", "parser_unknown", "
                 "unchanged_llama", "install_failed", "cuda_probe_failed", "rocm_probe_failed",
                 "vllm_libs_failed",
                 "download_failed",
-                "download_cancelled", "llama_stop_failed", "no_fit", "vllm_stop_failed",
-                "engine_active", "not_installed", "uninstall_failed", "removed")
+                "download_cancelled", "llama_stop_failed", "no_fit", "start_failed",
+                "vllm_stop_failed", "engine_active", "not_installed", "uninstall_failed",
+                "removed")
+# The codes a switch's MAINTENANCE frame can end with (``_Steps.fail``), each with a short
+# line in the banner (the catalogues' ``banner``); ``failed`` is a step that raised.
+FAILURE_CODES = ("install_failed", "cuda_probe_failed", "rocm_probe_failed",
+                 "vllm_libs_failed", "download_failed", "download_cancelled",
+                 "llama_stop_failed", "no_fit", "start_failed", "vllm_stop_failed", "failed")
 # The phases of a switch, in order (MAINTENANCE kind ``vllm_engine``): the install steps
-# of ``vllm_server.install``, then the model, the handover and the fit; ``stop_vllm`` is the
-# one step back to llama.cpp.
+# of ``vllm_server.install``, then the model, the handover, the fit and the first start;
+# ``stop_vllm`` is the one step back to llama.cpp.
 PHASES = ("install_env", "install_vllm", "install_probe", "download_model",
-          "handover", "fit_check", "stop_vllm")
+          "handover", "fit_check", "first_start", "stop_vllm")
+# The steps of a switch to vLLM after the install's own: the model, the handover, the fit
+# and the first start.
+VLLM_STEPS = 4
 MAINTENANCE_KIND = "vllm_engine"
 
 
@@ -778,7 +804,8 @@ def fit_dict(result: Any) -> Optional[Dict[str, Any]]:
     if result is None:
         return None
     keys = ("ok", "code", "max_model_len", "utilization", "kv_dtype", "need_mb", "budget_mb",
-            "weights_mb", "kv_mb", "overhead_mb", "free_mb", "total_mb", "reason", "note")
+            "weights_mb", "kv_mb", "overhead_mb", "free_mb", "total_mb", "other_mb",
+            "attention_backend", "smaller_model", "reason", "note")
     return {key: getattr(result, key, None) for key in keys}
 
 
@@ -938,9 +965,13 @@ def apply(engine: str, *, model: Optional[str] = None, install: bool = False,
     ``validate`` refuses; install the pinned vLLM when it is missing (only with ``install``,
     else ``needs_install`` and nothing runs; ``output`` is a file for pip's output); download
     the model; stop a running llama server (vLLM is measured against the memory it holds);
-    check the fit; write ``vllm_model`` (when ``model`` was given) and then ``local_engine``.
-    A failed step leaves ``local_engine`` as it was. To llama.cpp: write the key, stop a
-    running managed vLLM. Neither starts a server: the next use of the local model does.
+    check the fit; start vLLM once, send it one chat completion and stop it again
+    (``vllm_server.first_start``: ``start_failed`` when it dies, does not come up or does not
+    answer); write ``vllm_model`` (when ``model`` was given) and then ``local_engine``. A
+    failed step leaves ``local_engine`` as it was. To llama.cpp: write the key, stop a
+    running managed vLLM. Every switch clears a remembered start failure
+    (``vllm_server.clear_start_failure``). Neither leaves a server running: the next use of
+    the local model starts it.
 
     ``log(text, kind)`` receives the English lines of the way (kind info, success or warning).
     The steps go to MAINTENANCE (kind ``vllm_engine``) and to ``progress``. One switch at a
@@ -958,6 +989,9 @@ def apply(engine: str, *, model: Optional[str] = None, install: bool = False,
         return EngineSwitch("refused", "busy", "Another switch of the local engine is running; "
                                                "wait for it to finish first.")
     try:
+        # Every switch is a fresh try: a start that failed before is attempted again.
+        from vaf.core import vllm_server
+        vllm_server.clear_start_failure()
         if wanted == LLAMA:
             result = _apply_llama(progress)
         else:
@@ -1007,8 +1041,9 @@ def _apply_vllm(setting, repo, install, progress, output, say) -> EngineSwitch:
             f"{replaces}This installs vLLM {vllm_server.PIN} (about {gb} GB or more to download, "
             f"more on disk) into {vllm_server.venv_dir()}.", VLLM, repo,
             params={"pin": vllm_server.PIN, "download_gb": gb, "replaces": old or ""})
-    # The install's own steps, then the model, the handover and the fit.
-    steps = _Steps(len(vllm_server.INSTALL_STEPS) + 3 if missing else 3, progress)
+    # The install's own steps, then the model, the handover, the fit and the first start.
+    steps = _Steps(len(vllm_server.INSTALL_STEPS) + VLLM_STEPS if missing else VLLM_STEPS,
+                   progress)
     previous = current()
 
     def failed(code: str, text: str, detail: str = "", **extra) -> EngineSwitch:
@@ -1063,19 +1098,31 @@ def _apply_vllm(setting, repo, install, progress, output, say) -> EngineSwitch:
 
         if not (previous == VLLM and vllm_server.running_pid() is not None and not stopped_vllm):
             steps.begin("fit_check")
-            result = vllm_server.plan_fit(model_dir, _n_ctx())
+            result = vllm_server.plan_fit(model_dir, _n_ctx(), model=repo)
             if result.note:
                 say(result.note, "warning")
+            restarts = ((" The llama server was stopped for the measurement; it starts again "
+                         "with the next use of the local model." if stopped else "")
+                        + (" vLLM was stopped for the measurement; it starts again with the "
+                           "next use of the local model." if stopped_vllm else ""))
             if not result.ok:
                 return failed("no_fit", result.reason,
-                              f"The local engine stays {previous}; a smaller model (--model) or "
-                              "a smaller n_ctx may fit."
-                              + (" The llama server was stopped for the measurement; it starts "
-                                 "again with the next use of the local model." if stopped else "")
-                              + (" vLLM was stopped for the measurement; it starts again with "
-                                 "the next use of the local model." if stopped_vllm else ""),
+                              f"The local engine stays {previous}." + restarts,
                               fit=result, stopped_llama=stopped, stopped_vllm=stopped_vllm)
             say(f"{repo}: {result.reason}", "info")
+            # The model starts and answers here before the engine changes: a start that dies
+            # (a kernel the GPU cannot build, memory) is refused now, not at the first chat.
+            steps.begin("first_start")
+            say("Starting vLLM once to check that it runs (about one to two minutes)...", "info")
+            first = vllm_server.first_start(repo, _n_ctx())
+            if not first.ok:
+                return failed("start_failed", f"vLLM did not start: {first.text}.",
+                              f"The local engine stays {previous}. Details in {first.log}."
+                              + restarts,
+                              fit=result, stopped_llama=stopped, stopped_vllm=stopped_vllm,
+                              params={"cause": first.cause})
+            say("vLLM started and answered; it is stopped again until the next use of the "
+                "local model.", "success")
         if setting is not None and str(Config.get("vllm_model", "auto") or "") != setting:
             # Only a change: the tray restarts a running vLLM for every vllm_ key it sees change.
             Config.set("vllm_model", setting)
@@ -1173,6 +1220,8 @@ def state(model: Optional[str] = None) -> Dict[str, Any]:
     refusal = ({"code": "parser_unknown" if not tool else "parser_bad", "text": refusal_text}
                if refusal_text else None)
     installed = vllm_server.installed_version()
+    server = _server_state()
+    failure = vllm_server.remembered_failure(resolved) if server == "idle" else None
     return {
         "engine": current(cfg),
         "profile": inference_profile.current(),
@@ -1191,7 +1240,9 @@ def state(model: Optional[str] = None) -> Dict[str, Any]:
             "model_downloaded": bool(vllm_server.local_snapshot(preview)),
             "parsers": {"tool": tool, "reasoning": reasoning},
             "parser_refusal": refusal,
-            "server": _server_state(),
+            "server": server,
+            "start_failure": ({"code": failure.cause, "text": failure.text}
+                              if failure is not None else None),
         },
         "llama": {"model": str(cfg.get("model", "") or "")},
         "conflicts": [{"code": code, "text": text} for code, text in conflict_items(cfg)],
@@ -1200,7 +1251,7 @@ def state(model: Optional[str] = None) -> Dict[str, Any]:
 
 # The states of ``status_row``, for the catalogues.
 STATUS_CODES = ("profile_api", "llama_running", "llama_idle", "unsupported", "not_installed",
-                "outdated", "vllm_running", "vllm_loading", "vllm_idle")
+                "outdated", "vllm_running", "vllm_loading", "vllm_idle", "vllm_failed")
 
 
 def _vllm_row(cfg: Dict, probe_health: bool = True) -> Dict[str, Any]:
@@ -1220,6 +1271,14 @@ def _vllm_row(cfg: Dict, probe_health: bool = True) -> Dict[str, Any]:
                 "params": {"version": version}, "text": OUTDATED_TEXT}
     repo = resolve_vllm_model(cfg)
     server = _server_state(probe_health)
+    failure = vllm_server.remembered_failure(repo) if server == "idle" else None
+    if failure is not None:
+        # Not idle: the next use does not start it (the start memory), a switch does.
+        return {**row, "state": "degraded", "code": "vllm_failed", "version": version,
+                "model": repo,
+                "params": {"version": version, "model": repo, "reason_code": failure.cause},
+                "text": f"vLLM {version} could not start: {failure.text}. Details in "
+                        f"{failure.log}; switch to vLLM again to retry, or `vaf engine llama`."}
     shown = "server idle" if server == "idle" else "server running"
     return {**row, "state": {"running": "ok", "loading": "loading"}.get(server, "idle"),
             "code": f"vllm_{server}", "version": version, "model": repo,
@@ -1230,7 +1289,8 @@ def _vllm_row(cfg: Dict, probe_health: bool = True) -> Dict[str, Any]:
 def status_row(config: Optional[Dict] = None) -> Dict[str, Any]:
     """The local engine as one row (Update and Repair, ``vaf health``): {engine, state, code,
     params, text, version, model}. ``state``: ``ok``, ``loading``, ``idle``, ``degraded``
-    (vLLM chosen but not installed or not supported here) or ``off`` (the ``api`` profile).
+    (vLLM chosen but not installed, not supported here, or its start failed and is
+    remembered: ``vllm_failed``) or ``off`` (the ``api`` profile).
     Never a repair target: the repair cannot install an engine."""
     from vaf.core import inference_profile
     cfg = config if config is not None else _cfg()

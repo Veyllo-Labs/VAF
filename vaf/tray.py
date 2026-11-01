@@ -865,6 +865,31 @@ def _work_in_flight():
     return False, ""
 
 
+# The remembered vLLM start failure the tray last logged, so it is said once, not each tick.
+_logged_engine_failure = None
+
+
+def _engine_start_refusal() -> str:
+    """Why the tray must not start the local model now, or "": the engine is vLLM and its
+    start failed this way before (``vllm_server.remembered_failure``). The activity loop asks
+    on every tick while the model is not loaded, and each start of a failing vLLM costs about
+    40 s of load and compile; a switch (Settings, `vaf engine vllm`) clears it."""
+    global _logged_engine_failure
+    try:
+        from vaf.core import local_engine, vllm_server
+        if not local_engine.is_vllm():
+            return ""
+        failure = vllm_server.remembered_failure()
+    except Exception:
+        return ""
+    if failure is None:
+        return ""
+    if _logged_engine_failure is not failure:
+        _logged_engine_failure = failure
+        log("Tray", f"Not starting vLLM again: {failure.text} (switch to vLLM again to retry).")
+    return failure.text
+
+
 def check_activity_loop(update_icon_callback):
     """Monitor activity and manage model state."""
     last_loaded = None
@@ -874,12 +899,17 @@ def check_activity_loop(update_icon_callback):
     loading_lock = threading.Lock()
     loading_in_progress = False
 
-    def start_model_async(reason: str):
+    def start_model_async(reason: str, announce: str = ""):
         nonlocal loading_in_progress
+        if _engine_start_refusal():
+            return
         with loading_lock:
             if loading_in_progress or tray_context.model_loaded:
                 return
             loading_in_progress = True
+        if announce:
+            print(announce)
+            log("Tray", announce)
 
         def _runner():
             nonlocal loading_in_progress
@@ -1024,9 +1054,7 @@ def check_activity_loop(update_icon_callback):
         
         if is_persistent:
             if not is_loaded and not is_cloud_provider:
-                print("Persistent mode enabled. Loading model...")
-                log("Tray", "Persistent mode enabled. Loading model...")
-                start_model_async("Persistent")
+                start_model_async("Persistent", "Persistent mode enabled. Loading model...")
             update_icon_callback("persistent")
         else:
             # Keep the local model warm while a thinking run is active/due (think first, then unload), OR
@@ -1041,9 +1069,7 @@ def check_activity_loop(update_icon_callback):
                 if not is_loaded and not is_cloud_provider:
                     reason = ("Thinking" if (thinking_defer and not (is_active or telegram_grace))
                               else (work_reason or "Activity") if work_busy else "Activity")
-                    print(f"{reason} detected. Loading model...")
-                    log("Tray", f"{reason} detected. Loading model...")
-                    start_model_async(reason)
+                    start_model_async(reason, f"{reason} detected. Loading model...")
                 update_icon_callback("active")
             elif is_loaded and not is_cloud_provider:
                 # Not warm and thinking has nothing to do -> consider unloading the local model.

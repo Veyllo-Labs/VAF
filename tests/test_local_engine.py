@@ -521,6 +521,35 @@ def test_status_row_states(config, vllm_box):
         assert row_code in le.STATUS_CODES
 
 
+def _remember_a_failed_start(monkeypatch, cause="kernels"):
+    from vaf.core import vllm_server as vs
+    monkeypatch.setattr(vs, "compute_capability", lambda: (8, 6))
+    monkeypatch.setattr(vs, "flashinfer_buildable", lambda env=None: False)
+    monkeypatch.setattr(vs, "recipe_current", lambda: True)
+    signature = vs.start_signature("Qwen/Qwen3-4B-AWQ", 32768)
+    vs._remember(signature, cause, vs.cause_text(cause))
+    return vs
+
+
+def test_status_row_vllm_failed(config, vllm_box, monkeypatch):
+    """A start that failed and is not run again is not "idle": degraded, vllm_failed, with
+    its cause, in the row and in state(). MUTATION: drop the branch - red."""
+    config["local_engine"] = "vllm"
+    config["n_ctx"] = 32768
+    vs = _remember_a_failed_start(monkeypatch)
+    row = le.status_row(dict(config))
+    assert (row["state"], row["code"]) == ("degraded", "vllm_failed"), row
+    assert row["params"]["reason_code"] == "kernels" and vs.SERVER_LOG in row["text"]
+    assert "vllm_failed" in le.STATUS_CODES
+    monkeypatch.setattr(le, "_cfg", lambda: dict(config))
+    monkeypatch.setattr(vs, "local_snapshot", lambda repo: "")
+    failure = le.state()["vllm"]["start_failure"]
+    assert failure == {"code": "kernels", "text": vs.cause_text("kernels")}
+    vs.clear_start_failure()
+    assert le.status_row(dict(config))["code"] == "vllm_idle"
+    assert le.state()["vllm"]["start_failure"] is None
+
+
 def test_engine_check_text_unchanged(config, vllm_box):
     """`vaf health` says what it said before it read the shared row. MUTATION: change one
     sentence - red."""

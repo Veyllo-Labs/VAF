@@ -1816,7 +1816,8 @@ class ServerManager:
         """The vLLM branch of a start (local_engine = vllm), under the start lock.
 
         Order, each step before the next: refuse when vLLM is not installed (the install is
-        the user's decision, never a side effect of a start); hand the port over (a llama
+        the user's decision, never a side effect of a start); refuse a start that already
+        failed for this signature (``vllm_server.remembered_failure``); hand the port over (a llama
         server is stopped and its process gone); reuse a vLLM that serves the configured
         model, the managed one or one VAF did not start (the loopback port is trusted as the
         local server, as the llama reuse trusts it); refuse a server VAF did not start that
@@ -1832,12 +1833,19 @@ class ServerManager:
                      "to install it, or `vaf engine llama` to go back to llama.cpp.")
             return False
 
+        repo = local_engine.resolve_vllm_model()
+        # A start that already failed this way is not run again (no handover either: the
+        # llama server it would stop is not replaced by anything). A switch clears it.
+        if vllm_server.remembered_failure(repo, n_ctx) is not None:
+            if vllm_server.health_status(port) == 200 and vllm_server.served_model(port) == repo:
+                return True             # another VAF process got it up meanwhile
+            return vllm_server.start(repo, n_ctx, port=port)
+
         reason = self.hand_over_from_llama(port)
         if reason:
             UI.error(reason + " vLLM is not started.")
             return False
 
-        repo = local_engine.resolve_vllm_model()
         vllm_pid = vllm_server.running_pid()
         status = vllm_server.health_status(port)
         if status == 200:

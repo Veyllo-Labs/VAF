@@ -10794,6 +10794,26 @@ function VAFDashboardContent() {
                                                         style={{ width: `${maintenanceStatus.active ? (maintenanceStatus.pct ?? 0) : 100}%` }}
                                                     />
                                                 </div>
+                                                {/* Why an engine switch stopped (its failure code), and for an
+                                                    admin the way to the section that has the whole result. */}
+                                                {maintenanceStatus.kind === 'vllm_engine' && maintenanceStatus.error && !maintenanceStatus.active && (
+                                                    <div className="mt-1 flex items-start justify-between gap-3 text-xs">
+                                                        <span className="text-red-600 min-w-0" data-banner-reason>
+                                                            {tLocalEngine.has(`banner.${maintenanceStatus.error}`)
+                                                                ? tLocalEngine(`banner.${maintenanceStatus.error}`)
+                                                                : tLocalEngine('banner.failed')}
+                                                        </span>
+                                                        {currentUser?.role === 'admin' && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => { setSettingsInitialTab('ai'); setIsSettingsOpen(true); }}
+                                                                className="font-medium text-gray-700 hover:text-gray-900 underline-offset-2 hover:underline shrink-0"
+                                                            >
+                                                                {tLocalEngine('bannerDetails')}
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                )}
                                                 {/* Not during an engine switch: llama.cpp keeps answering until
                                                     the switch is done, so there is nothing to wait for. */}
                                                 {maintenanceStatus.active && maintenanceStatus.kind !== 'vllm_engine' && (

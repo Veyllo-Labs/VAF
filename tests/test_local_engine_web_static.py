@@ -19,7 +19,12 @@ MUTATIONS, each turns the named test red:
 - show "Please do nothing and wait." for the engine switch -> test_banner_vllm_kind;
 - keep `data.models || []` -> test_done_frame_without_models_keeps_list;
 - delete one phase key from th.json -> test_every_code_in_all_catalogues;
-- keep the "pickers" boundary paragraph -> test_pickers_boundary_gone.
+- keep the "pickers" boundary paragraph -> test_pickers_boundary_gone;
+- restore the old de fit.too_big ("kleineren Kontext"), or drop {other} from one locale ->
+  test_too_big_names_other_programs_and_no_context;
+- drop the banner's reason line or its Details button -> test_banner_reason_and_details;
+- drop `recommended` from EngineChoice, or from one caller ->
+  test_cards_show_the_recommendation.
 """
 import json
 import re
@@ -135,7 +140,8 @@ def test_other_local_pickers_under_vllm():
 
 def test_lean_disables_both():
     body = _src(_SECTION)
-    assert "{ id: 'llama', name: t('llamaName'), line: t('llamaLine'), disabled: lean }," in body
+    assert ("{ id: 'llama', name: t('llamaName'), recommended: t('llamaFor'), line: t('llamaLine'), "
+            "disabled: lean },") in body
     assert "const vllmNote = lean ? t('profileApi')" in body
     section = _local_model_section(_src(_MODAL))
     src = _src(_MODAL)
@@ -222,6 +228,8 @@ _CODES = {
     "conflict": le.CONFLICT_CODES,
     "status": le.STATUS_CODES + ("unknown",),
     "server": ("running", "loading", "idle"),
+    "banner": le.FAILURE_CODES,
+    "startCause": vs.START_CAUSES,
 }
 
 
@@ -359,8 +367,76 @@ def test_an_outdated_environment_is_shown_as_such():
     needs a current one, and the install says it replaces the old one. MUTATION: show the
     server line for every installed version - red."""
     body = _src(_SECTION)
-    assert "{data.vllm.installed_version && !needsInstall && (" in body
+    assert "{data.vllm.installed_version && !needsInstall && !startFailure && (" in body
     assert "const replaceNote = needsInstall && data.vllm.installed_version" in body
     assert body.count("{replaceNote && ") == 2, "the panel and the confirmation both say it"
     en = json.loads((_MESSAGES / "en.json").read_bytes())["localEngine"]
     assert "not installed yet" not in en["result"]["needs_install"]
+
+
+@pytest.mark.parametrize("locale", _LOCALES)
+def test_too_big_names_other_programs_and_no_context(locale):
+    """The fit refusal names the free memory and what other programs hold, and what helps:
+    closing them, or llama.cpp. A smaller context never helps (the floor is VAF's own need,
+    and n_ctx is shared with llama.cpp), so no sentence suggests it."""
+    cat = json.loads((_MESSAGES / f"{locale}.json").read_bytes())["localEngine"]
+    too_big = cat["fit"]["too_big"]
+    for slot in ("{need}", "{free}", "{other}"):
+        assert slot in too_big, (locale, slot)
+    assert "llama.cpp" in too_big and "{budget}" not in too_big
+    for key in (("fit", "too_big"), ("result", "no_fit")):
+        text = cat[key[0]][key[1]].lower()
+        for word in ("smaller context", "kleineren kontext", "kleinerer kontext",
+                     "小さいコンテキスト", "더 작은 컨텍스트", "คอนเท็กซ์ที่เล็ก", "küçük bir bağlam",
+                     "更小的上下文"):
+            assert word not in text, (locale, key, word)
+    assert cat["fitSmallerModel"].strip() and cat["retryVllm"].strip()
+    assert cat["bannerDetails"].strip() and "{version}" in cat["status"]["vllm_failed"]
+    if locale == "de":
+        assert too_big == ("Das Modell braucht etwa {need} GB GPU-Speicher, frei sind {free} GB, "
+                           "andere Programme belegen {other} GB. Schließ Programme, die die GPU "
+                           "nutzen, und versuch es noch einmal; bis dahin bleibt llama.cpp, das "
+                           "einen Teil des Modells auf die CPU auslagern kann.")
+        assert cat["llamaFor"] == "Empfohlen für Edge-Geräte und einzelne Nutzer"
+        assert cat["vllmFor"] == "Empfohlen für Server und High-End-Systeme"
+        assert "gleichzeitigen Anfragen" in cat["vllmLine"]
+    if locale == "en":
+        assert cat["llamaFor"] == "Recommended for edge devices and single users"
+        assert cat["vllmFor"] == "Recommended for servers and high-end setups"
+
+
+def test_banner_reason_and_details():
+    """A failed engine switch says why under the banner's title (the frame's error code),
+    and an admin gets a Details button that opens Settings on AI & Model."""
+    src = _src(_PAGE)
+    banner = _between(src, "{maintenanceStatus && (", "{/* Token Stats")
+    reason = banner[banner.index("maintenanceStatus.kind === 'vllm_engine' && maintenanceStatus.error"):]
+    assert "tLocalEngine(`banner.${maintenanceStatus.error}`)" in reason
+    assert "tLocalEngine('banner.failed')" in reason
+    details = reason[reason.index("currentUser?.role === 'admin'"):]
+    assert "setSettingsInitialTab('ai'); setIsSettingsOpen(true);" in details
+    assert "tLocalEngine('bannerDetails')" in details
+
+
+def test_cards_show_the_recommendation():
+    """Both engine cards say whom they are for, in Settings and in the wizard, through the
+    one EngineChoice."""
+    choice = _src(_CHOICE)
+    assert "recommended?: string;" in choice and "{opt.recommended}" in choice
+    assert choice.index("{opt.recommended}") < choice.index("{opt.line}")
+    for src in (_src(_SECTION), _src(_LOGIN)):
+        assert "recommended: t('llamaFor')" in src or "recommended: tEngine('llamaFor')" in src
+        assert "recommended: t('vllmFor')" in src or "recommended: tEngine('vllmFor')" in src
+
+
+def test_start_failure_in_the_section():
+    """The section shows a remembered start failure with its cause and the server log, and
+    offers vLLM again; a first start that failed names its cause and the log."""
+    body = _src(_SECTION)
+    assert "const startFailure = data.vllm.start_failure ?? null;" in body
+    assert "coded('startCause', startFailure.code, {}, startFailure.text)" in body
+    assert "t('retryVllm')" in body
+    assert "if (r.code === 'start_failed') {" in body
+    assert "lines.push(t('logHint', { path: SERVER_LOG }));" in body
+    assert "const SERVER_LOG = 'logs/vllm_server.log';" in body
+    assert f"'{vs.SERVER_LOG}'" in body

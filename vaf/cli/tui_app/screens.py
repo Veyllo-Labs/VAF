@@ -519,10 +519,14 @@ class SettingsScreen(ModalScreen[None]):
             rows.append(("number", key, "Custom..."))
         return rows + [("back", None, "Back")]
 
+    # The web cards' English lines (en.json localEngine llamaFor + llamaLine, vllmFor +
+    # vllmLine; tests/test_tui_local_engine.py keeps them equal).
     ENGINE_LINES = {
-        "llama": ("llama.cpp", "GGUF models, runs on almost any hardware, starts in seconds"),
-        "vllm": ("vLLM", "Hugging Face models, fast with many requests, needs a supported "
-                         "GPU, starts in minutes"),
+        "llama": ("llama.cpp", "Recommended for edge devices and single users. GGUF models, "
+                               "runs on almost any hardware, starts in seconds"),
+        "vllm": ("vLLM", "Recommended for servers and high-end setups. Hugging Face models, "
+                         "fast with many concurrent requests, needs a supported GPU, starts "
+                         "in minutes"),
     }
 
     def _engine_is_vllm(self) -> bool:

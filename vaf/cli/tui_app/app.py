@@ -187,6 +187,25 @@ def _room_clock(ts) -> str:
     return frame_clock(ts)
 
 
+def maintenance_notice(snap: dict, *, started: bool) -> str:
+    """The notification for the start or the end of a machine-level job (MAINTENANCE), by its
+    kind: the engine switch to vLLM (``local_engine.MAINTENANCE_KIND``) or the memory
+    re-embed, the database migration."""
+    from vaf.core.local_engine import MAINTENANCE_KIND
+    counts = f"({snap.get('done', 0)}/{snap.get('total', 0)})"
+    if snap.get("kind") == MAINTENANCE_KIND:
+        if started:
+            return f"vLLM setup running in the background {counts}"
+        if snap.get("error"):
+            return (f"vLLM setup stopped: {snap['error']} - see Settings > AI & Model or "
+                    "`vaf engine`")
+        return "vLLM setup finished"
+    if started:
+        return f"database migration running in the background {counts}"
+    return ("database migration incomplete - see logs/memory.log" if snap.get("error")
+            else "database migration complete")
+
+
 class VafApp(App):
     """Assembly only: widgets render, screens overlay, the injected bridge owns
     every behavior. The chrome order (top bar / transcript / tasks line /
@@ -444,14 +463,11 @@ class VafApp(App):
                 from vaf.core.maintenance_state import MAINTENANCE
                 snap = MAINTENANCE.snapshot()
                 if snap["active"] and not maint_was_active:
-                    self.call_from_thread(
-                        self.notify,
-                        f"database migration running in the background "
-                        f"({snap['done']}/{snap['total']})", timeout=6.0)
+                    self.call_from_thread(self.notify, maintenance_notice(snap, started=True),
+                                          timeout=6.0)
                 elif maint_was_active and not snap["active"]:
-                    msg = ("database migration incomplete - see logs/memory.log"
-                           if snap["error"] else "database migration complete")
-                    self.call_from_thread(self.notify, msg, timeout=6.0)
+                    self.call_from_thread(self.notify, maintenance_notice(snap, started=False),
+                                          timeout=6.0)
                 maint_was_active = snap["active"]
             except Exception:
                 pass

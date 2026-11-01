@@ -964,14 +964,31 @@ def turn_refusal_reason(agent, task) -> str:
     an installation without local models whose chat provider is still the local one, and
     an API provider whose backend could not be built (no key, a failed setup); the wording
     is the agent's own (``Agent._no_backend_reason``). A local provider on an installation
-    with local models is no case: its model is loaded below, on first use. A messenger turn
+    with local models is no case: its model is loaded below, on first use, unless the engine
+    is vLLM and its start failed this way before (``vllm_server.remembered_failure``): the
+    turn then gets that reason instead of a relaunch that would fail again. A messenger turn
     is a case too; ``refuse_turn_without_backend`` decides that it gets no reply."""
     from vaf.core import inference_profile
     if agent.api_backend:
         return ""
     if agent.provider == "local" and inference_profile.local_inference_allowed():
-        return ""
+        return _vllm_start_refusal()
     return agent._no_backend_reason()
+
+
+def _vllm_start_refusal() -> str:
+    """The sentence for a local turn while vLLM is the engine and its start is remembered as
+    failed, else "". A server that runs (another VAF process got it up) is no case."""
+    try:
+        from vaf.core import local_engine, vllm_server
+        if not local_engine.is_vllm():
+            return ""
+        failure = vllm_server.remembered_failure()
+        if failure is None or vllm_server.running_pid() is not None:
+            return ""
+        return vllm_server.failure_sentence(failure)
+    except Exception:
+        return ""
 
 
 def refuse_turn_without_backend(task, why: str, session_mgr) -> None:

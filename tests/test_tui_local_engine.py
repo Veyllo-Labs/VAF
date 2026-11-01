@@ -91,8 +91,9 @@ def test_engine_submenu_lists_both_with_their_lines(monkeypatch):
     assert [a for a, _ in picks] == ["llama", "vllm"]
     flat = [" ".join(text.split()) for _, text in picks]
     assert "GGUF models, runs on almost any hardware, starts in seconds" in flat[0]
-    assert "Hugging Face models, fast with many requests, needs a supported GPU, starts in minutes" \
-        in flat[1]
+    assert "Recommended for edge devices and single users." in flat[0]
+    assert ("Recommended for servers and high-end setups. Hugging Face models, fast with many "
+            "concurrent requests, needs a supported GPU, starts in minutes") in flat[1]
     assert "▍" in picks[0][1] and "▍" not in picks[1][1], "the active engine is marked"
     assert "in use" in picks[0][1] and "in use" not in picks[1][1], "the active engine is named"
     assert [kind for kind, _, _ in rows][-2:] == ["sep", "back"], "a gap before Back"
@@ -320,3 +321,30 @@ def test_refresh_rebuilds_when_the_menu_changes_shape(monkeypatch):
     monkeypatch.setattr(le, "is_vllm", lambda config=None: True)
     SettingsScreen._refresh_labels(s)
     assert rebuilt == [1]
+
+
+def test_engine_switch_end_not_called_migration():
+    """The full-screen TUI announced every maintenance job's end as the database migration;
+    an engine switch is named as what it is, with its failure code. MUTATION: restore the
+    migration text for every kind - red."""
+    from vaf.cli.tui_app.app import maintenance_notice
+    snap = {"kind": "vllm_engine", "active": False, "done": 5, "total": 7, "error": "no_fit"}
+    text = maintenance_notice(snap, started=False)
+    assert "migration" not in text and "vLLM" in text and "no_fit" in text and "vaf engine" in text
+    assert maintenance_notice({**snap, "error": ""}, started=False) == "vLLM setup finished"
+    assert "migration" not in maintenance_notice({**snap, "active": True}, started=True)
+    assert "migration" in maintenance_notice({"kind": "memory_reembed", "error": ""}, started=False)
+
+
+def test_engine_lines_match_catalogue():
+    """The TUI's engine lines are the web cards' English lines: the recommendation, then the
+    description. MUTATION: change one word of a TUI line - red."""
+    import json
+    from pathlib import Path
+
+    from vaf.cli.tui_app.screens import SettingsScreen
+    en = json.loads((Path(__file__).resolve().parent.parent / "web" / "messages" / "en.json")
+                    .read_bytes())["localEngine"]
+    lines = SettingsScreen.ENGINE_LINES
+    assert lines["llama"] == (en["llamaName"], f"{en['llamaFor']}. {en['llamaLine']}")
+    assert lines["vllm"] == (en["vllmName"], f"{en['vllmFor']}. {en['vllmLine']}")

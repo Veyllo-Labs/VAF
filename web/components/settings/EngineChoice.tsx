@@ -3,8 +3,8 @@
 // Additional permissions and terms under AGPL Section 7: see LICENSING.md
 'use client';
 //
-// The local engine as a choice of two cards: llama.cpp or vLLM, each with its name and one
-// line, and under an option the line about this machine (the verdict). One component for Settings
+// The local engine as a choice of two cards: llama.cpp or vLLM, each with its name, whom it is
+// recommended for and one line, and under an option the line about this machine (the verdict). One component for Settings
 // > AI & Model and the first-run wizard, so the two never word or draw the choice differently.
 //
 // - A radiogroup of two radios (aria-checked), keyboard arrows move and choose like a native
@@ -25,6 +25,8 @@ export interface EngineOption {
     id: EngineId;
     name: string;
     line: string;
+    /** Whom the engine is recommended for, a small line of its own above `line`. */
+    recommended?: string;
     disabled?: boolean;
     /** The line under the option: this machine's verdict, or why the option is disabled. */
     note?: string;
@@ -85,6 +87,9 @@ export default function EngineChoice({ label, value, options, onChange, idPrefix
                     >
                         {checked && <Check className="w-4 h-4 text-gray-900 absolute top-2.5 right-2.5" aria-hidden="true" />}
                         <span className={cn('text-sm font-semibold text-gray-900 pr-6', opt.disabled && 'opacity-50')}>{opt.name}</span>
+                        {opt.recommended && (
+                            <span className={cn('text-xs font-medium text-gray-700 leading-snug', opt.disabled && 'opacity-50')}>{opt.recommended}</span>
+                        )}
                         <span className={cn('text-xs text-gray-600 leading-snug', opt.disabled && 'opacity-50')}>{opt.line}</span>
                         {opt.note && (
                             <span id={noteId} className={cn('text-xs leading-snug mt-1', amber ? 'text-amber-700' : 'text-gray-500')}>

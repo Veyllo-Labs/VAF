@@ -229,6 +229,27 @@ def _isolated_data_keyring(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_remembered_vllm_start():
+    """No test sees a vLLM start failure another test left in the process.
+
+    `vaf.core.vllm_server` remembers a failed start in module state (the start memory), and
+    every reader (the status row, `state`, the tray, the runner's turn refusal) answers from
+    it. A test whose fake launch died would otherwise turn a later test's idle vLLM into
+    `vllm_failed`. Only when the module is loaded: importing it here would cost every test.
+    """
+    import sys as _sys
+    vs = _sys.modules.get("vaf.core.vllm_server")
+    if vs is not None:
+        vs.clear_start_failure()
+        vs._came_up = None
+    yield
+    vs = _sys.modules.get("vaf.core.vllm_server")
+    if vs is not None:
+        vs.clear_start_failure()
+        vs._came_up = None
+
+
+@pytest.fixture(autouse=True)
 def _no_real_imap_server(monkeypatch):
     """No test dials a real IMAP server.
 

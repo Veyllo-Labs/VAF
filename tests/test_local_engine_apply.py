@@ -24,7 +24,11 @@ MUTATIONS, each turns the named test red:
 - refresh a pinned or embedded agent -> test_refresh_identity_all;
 - `needs_install` without the recipe record -> test_an_environment_of_the_earlier_recipe_needs_install;
 - `_apply_vllm` deciding the code by the last step instead of the probe outcome ->
-  test_failed_steps_keep_engine[libs] / [probe_last_step].
+  test_failed_steps_keep_engine[libs] / [probe_last_step];
+- write local_engine before first_start, or skip it ->
+  test_first_start_failure_leaves_engine_unchanged / test_first_start_pass_writes_keys;
+- replay a finished job's frame to a late joiner -> test_late_joiner_gets_no_finished_job;
+- a `failed(...)` code that is not in FAILURE_CODES -> test_every_failure_code_is_listed.
 """
 import threading
 import time
@@ -67,7 +71,7 @@ def config(monkeypatch, tmp_path):
 
 
 def _fakes(monkeypatch, config, *, installed=False, install_reason="", fail_step="",
-           model_dir="/hf/snap", fits=True, probe=""):
+           model_dir="/hf/snap", fits=True, probe="", starts=True):
     events = config["_events"]
     state = {"installed": installed}
     monkeypatch.setattr(vs, "is_installed", lambda: state["installed"])
@@ -88,11 +92,18 @@ def _fakes(monkeypatch, config, *, installed=False, install_reason="", fail_step
     monkeypatch.setattr(vs, "install", install)
     monkeypatch.setattr(vs, "ensure_model", lambda repo, outcome=None: events.append(("model", repo)) or model_dir)
 
-    def plan_fit(d, n, kv_dtype=None):
+    def plan_fit(d, n, kv_dtype=None, model=""):
         events.append(("fit",))
         return vs.FitResult(fits, n, 0.78, "fp8", 6076 if fits else 9000, 7987,
                             "Fits." if fits else "Needs 9000 MiB.", code="fits" if fits else "too_big")
     monkeypatch.setattr(vs, "plan_fit", plan_fit)
+
+    def first_start(repo, n_ctx, port=8080, popen=None, post=None):
+        events.append(("first_start", config.get("local_engine")))
+        if starts:
+            return vs.FirstStart(True)
+        return vs.FirstStart(False, "kernels", vs.cause_text("kernels"))
+    monkeypatch.setattr(vs, "first_start", first_start)
     return events
 
 
@@ -111,7 +122,8 @@ def test_switch_order(config, monkeypatch):
     result = le.apply("vllm", model="Qwen/Qwen3-8B-AWQ", install=True, output="/tmp/x.log")
     assert result.status == "done" and result.code == "switched_vllm", result
     names = [e[0] if e[0] != "set" else f"set:{e[1]}" for e in events]
-    assert names == ["install", "model", "handover", "fit", "set:vllm_model", "set:local_engine"]
+    assert names == ["install", "model", "handover", "fit", "first_start", "set:vllm_model",
+                     "set:local_engine"]
     assert events[0][1] == "/tmp/x.log", "the pip output goes to the file"
     assert config["local_engine"] == "vllm" and config["vllm_model"] == "Qwen/Qwen3-8B-AWQ"
     assert result.fit.code == "fits" and result.to_dict()["fit"]["need_mb"] == 6076
@@ -272,17 +284,18 @@ def test_maintenance_steps(config, monkeypatch):
     seen = []
     le.apply("vllm", install=True, progress=lambda p: seen.append(
         (p["phase"], p["step"], p["steps"], MAINTENANCE.snapshot()["kind"])))
-    # Six steps with the install: env, vLLM, probe, then the model, the handover and the fit.
-    assert le.PHASES[:6] == ("install_env", "install_vllm", "install_probe", "download_model",
-                             "handover", "fit_check")
-    assert [s[0] for s in seen[:6]] == list(le.PHASES[:6])
-    assert [s[1] for s in seen[:6]] == list(range(6)), "done counts the finished steps"
-    assert {s[2] for s in seen} == {6} and {s[3] for s in seen} == {"vllm_engine"}
-    assert seen[-1][1] == 6 and not MAINTENANCE.active
+    # Seven steps with the install: env, vLLM, probe, then the model, the handover, the fit
+    # and the first start.
+    assert le.PHASES[:7] == ("install_env", "install_vllm", "install_probe", "download_model",
+                             "handover", "fit_check", "first_start")
+    assert [s[0] for s in seen[:7]] == list(le.PHASES[:7])
+    assert [s[1] for s in seen[:7]] == list(range(7)), "done counts the finished steps"
+    assert {s[2] for s in seen} == {7} and {s[3] for s in seen} == {"vllm_engine"}
+    assert seen[-1][1] == 7 and not MAINTENANCE.active
     seen.clear()
     le.apply("vllm", progress=lambda p: seen.append((p["phase"], p["step"], p["steps"])))
-    assert [s[0] for s in seen[:3]] == ["download_model", "handover", "fit_check"]
-    assert {s[2] for s in seen} == {3} and seen[-1][1] == 3
+    assert [s[0] for s in seen[:4]] == ["download_model", "handover", "fit_check", "first_start"]
+    assert {s[2] for s in seen} == {4} and seen[-1][1] == 4
     assert not MAINTENANCE.active and MAINTENANCE.snapshot()["error"] == ""
 
 
@@ -442,7 +455,7 @@ def test_model_change_stops_running_vllm_before_fit(config, monkeypatch):
     monkeypatch.setattr(vs, "stop", lambda wait=15.0: events.append(("stop_vllm",))
                         or running.__setitem__("pid", None) or "")
 
-    def plan_fit(d, n, kv_dtype=None):
+    def plan_fit(d, n, kv_dtype=None, model=""):
         events.append(("fit",))
         fits = running["pid"] is None
         return vs.FitResult(fits, n, 0.5, "fp8", 6000, 5120, "x",
@@ -460,7 +473,7 @@ def test_model_change_stops_running_vllm_before_fit(config, monkeypatch):
     config["vllm_model"] = REPO
     result = le.apply("vllm", model=REPO)
     assert result.status == "done" and result.fit is None and result.stopped_vllm is False
-    assert not [e for e in events if e[0] in ("stop_vllm", "fit")]
+    assert not [e for e in events if e[0] in ("stop_vllm", "fit", "first_start")]
     assert ("set", "vllm_model", REPO) not in events
 
 
@@ -682,3 +695,57 @@ def test_support_class_does_not_queue_callers_behind_a_running_probe(monkeypatch
         release.set()
         first.join(5)
     assert not le._SUPPORT_LOCK.locked(), "the lock was not given back"
+
+
+def test_first_start_failure_leaves_engine_unchanged(config, monkeypatch):
+    """A vLLM that does not start here (measured: an RTX 3080 without a CUDA toolkit) is
+    refused at the switch, not at the first chat: start_failed, the engine and the model as
+    they were, the log named."""
+    config["local_engine"] = "llama"
+    events = _fakes(monkeypatch, config, installed=True, starts=False)
+    result = le.apply("vllm", model="Qwen/Qwen3-8B-AWQ")
+    assert result.status == "failed" and result.code == "start_failed", result
+    assert result.params["cause"] == "kernels"
+    assert vs.SERVER_LOG in result.detail and "llama" in result.detail
+    assert config["local_engine"] == "llama" and config["vllm_model"] == REPO
+    assert ("first_start", "llama") in events, "the first start ran before any write"
+    assert not [e for e in events if e[0] == "set"]
+    assert MAINTENANCE.snapshot()["error"] == "start_failed" and not MAINTENANCE.active
+
+
+def test_first_start_pass_writes_keys(config, monkeypatch):
+    config["local_engine"] = "llama"
+    events = _fakes(monkeypatch, config, installed=True)
+    result = le.apply("vllm", model="Qwen/Qwen3-8B-AWQ")
+    assert result.status == "done" and result.code == "switched_vllm", result
+    names = [e[0] if e[0] != "set" else f"set:{e[1]}" for e in events]
+    assert names.index("first_start") < names.index("set:vllm_model") < names.index("set:local_engine")
+    assert ("first_start", "llama") in events, "the engine was still llama.cpp during it"
+    assert config["local_engine"] == "vllm"
+
+
+def test_late_joiner_gets_no_finished_job(config, monkeypatch):
+    """The snapshot keeps the last job's kind and error; a page that connects after the end
+    must not show the closing banner again (measured: a WebSocket reconnect replayed the red
+    "aborted" banner minutes later). A running job is still replayed."""
+    from vaf.core.web_interface import maintenance_snapshot_frame
+    MAINTENANCE.update(kind="vllm_engine", active=False, done=5, total=7, phase="fit_check",
+                       error="no_fit")
+    frame = maintenance_snapshot_frame()
+    assert frame["type"] == "maintenance_progress"
+    assert frame["kind"] == "" and frame["active"] is False and frame["error"] == ""
+    MAINTENANCE.update(kind="vllm_engine", active=True, done=2, total=7, phase="install_probe")
+    frame = maintenance_snapshot_frame()
+    assert frame["kind"] == "vllm_engine" and frame["active"] is True and frame["done"] == 2
+
+
+def test_every_failure_code_is_listed():
+    """Every code a switch's banner can end with has its banner line (FAILURE_CODES is what
+    the catalogue test reads)."""
+    import inspect
+    import re
+    src = inspect.getsource(le._apply_vllm) + inspect.getsource(le._apply_llama)
+    codes = set(re.findall(r'failed\("([a-z_]+)"', src)) | set(re.findall(r'steps\.fail\("([a-z_]+)"', src))
+    codes |= {"install_failed", "cuda_probe_failed", "rocm_probe_failed", "vllm_libs_failed"}
+    assert codes and codes <= set(le.FAILURE_CODES), codes - set(le.FAILURE_CODES)
+    assert set(le.FAILURE_CODES) - {"failed"} <= set(le.SWITCH_CODES)

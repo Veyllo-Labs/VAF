@@ -2762,8 +2762,10 @@
     "label": "引擎",
     "llamaName": "llama.cpp",
     "llamaLine": "运行 GGUF 模型，几乎所有硬件都能用，几秒内启动",
+    "llamaFor": "推荐用于边缘设备和单个用户",
     "vllmName": "vLLM",
     "vllmLine": "运行 Hugging Face 模型，并发请求多时速度快，需要受支持的 GPU，启动需要几分钟",
+    "vllmFor": "推荐用于服务器和高端配置",
     "appliesNow": "立即生效，无需点击“保存更改”。",
     "levelLater": "暂不支持",
     "levelUnsupported": "不可用",
@@ -2809,11 +2811,13 @@
     "sizeLineNoSize": "将安装 vLLM {pin}：至少需要下载 {gb} GB，磁盘占用更多，另加模型。",
     "replaceNote": "vLLM {version} 由早期版本的 VAF 设置，无法启动；安装会替换它。",
     "fitNote": "下载完成后、切换之前，VAF 会检查模型能否放得下。",
+    "fitSmallerModel": "更小的模型需要的显存更少。",
     "restartNote": "本地模型会重新启动，正在生成的回答会中断。",
     "installAndSwitch": "安装 vLLM 并切换",
     "switchToVllm": "切换到 vLLM",
     "useModel": "使用此模型",
     "switchToLlama": "切换到 llama.cpp",
+    "retryVllm": "再次尝试 vLLM",
     "cancel": "取消",
     "installConfirmTitle": "安装 vLLM？",
     "installConfirm": "安装并切换",
@@ -2842,6 +2846,7 @@
       "download_model": "正在下载模型",
       "handover": "正在停止正在运行的模型服务器",
       "fit_check": "正在检查模型能否放得下",
+      "first_start": "正在试启动一次 vLLM，确认能够运行（一到两分钟）",
       "stop_vllm": "正在停止 vLLM 服务器"
     },
     "result": {
@@ -2863,7 +2868,8 @@
       "download_failed": "无法下载模型 {model}；本地引擎保持不变。",
       "download_cancelled": "下载已取消；本地引擎保持不变。",
       "llama_stop_failed": "llama.cpp 服务器没有停止；本地引擎保持不变。",
-      "no_fit": "该模型在这块 GPU 上放不下；本地引擎保持不变。更小的模型或更小的上下文也许可以。",
+      "no_fit": "该模型在这块 GPU 上放不下；本地引擎保持不变。",
+      "start_failed": "vLLM 未能在这块 GPU 上启动；本地引擎保持不变。",
       "vllm_stop_failed": "本地引擎现在是 llama.cpp，但 vLLM 没有停止。",
       "engine_active": "vLLM 是当前的本地引擎：请先切换到 llama.cpp，再移除它。",
       "not_installed": "vLLM 未安装。",
@@ -2872,7 +2878,7 @@
     },
     "fit": {
       "fits": "放得下：约需 {need} GB，预算 {budget} GB（上下文 {ctx}，KV 缓存 {kv}）。",
-      "too_big": "该模型约需 {need} GB 的 GPU 显存，但 vLLM 在这里只能使用 {budget} GB。请选择更小的模型或更小的上下文。",
+      "too_big": "该模型约需 {need} GB 的 GPU 显存，目前空闲 {free} GB，其他程序占用 {other} GB。请关闭使用 GPU 的程序后重试；在此之前继续使用 llama.cpp，它可以把模型的一部分放到 CPU 上运行。",
       "share_above_free": "其他程序正在占用 GPU：vLLM 需要 {budget} GB，但只有 {free} GB 空闲。请关闭这些程序后重试。",
       "no_shape": "模型的 config.json 没有说明其结构。",
       "no_gpu_memory": "GPU 驱动没有报告 GPU 的显存。"
@@ -2895,8 +2901,31 @@
       "vllm_running": "vLLM {version}，运行中",
       "vllm_loading": "vLLM {version}，加载中",
       "vllm_idle": "vLLM {version}，空闲",
+      "vllm_failed": "vLLM {version}，无法启动",
       "unknown": "状态未知"
     },
+    "startCause": {
+      "kernels": "vLLM 需要的 GPU 内核无法在这台机器上构建。",
+      "memory": "GPU 的空闲显存不足以容纳模型及其上下文。请关闭使用 GPU 的程序后重试。",
+      "timeout": "vLLM 未能及时就绪。",
+      "fit": "模型放不进空闲的 GPU 显存。",
+      "interrupted": "由于同时启动了本地模型，启动被中断；请再次切换到 vLLM。",
+      "other": "vLLM 在启动过程中停止了。"
+    },
+    "banner": {
+      "install_failed": "安装失败。",
+      "cuda_probe_failed": "PyTorch 检测不到 CUDA GPU。",
+      "rocm_probe_failed": "PyTorch 检测不到 ROCm GPU。",
+      "vllm_libs_failed": "无法加载 vLLM 的 GPU 库。",
+      "download_failed": "无法下载模型。",
+      "download_cancelled": "下载已取消。",
+      "llama_stop_failed": "llama.cpp 服务器未能停止。",
+      "no_fit": "模型放不进空闲的 GPU 显存。",
+      "start_failed": "vLLM 未能在这块 GPU 上启动。",
+      "vllm_stop_failed": "vLLM 未能停止。",
+      "failed": "某个步骤失败了。"
+    },
+    "bannerDetails": "详情",
     "node": "本地引擎",
     "nodeChange": "可在“AI 与模型”中更改"
   },

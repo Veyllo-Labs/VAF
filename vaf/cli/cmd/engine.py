@@ -7,7 +7,8 @@
                                      vLLM install, its model and parsers, the server
     vaf engine vllm [--model REPO]   checks the hardware, installs the pinned vLLM (asks
                 [--yes]              first, or --yes), downloads the model, checks that it
-                                     fits and switches the local engine to vLLM
+                                     fits, starts it once and switches the local engine to
+                                     vLLM
     vaf engine llama                 back to llama.cpp (GGUF); a running vLLM is stopped
     vaf engine vllm --uninstall      removes the vLLM environment (refused while vLLM is
                                      the engine); the models stay in the Hugging Face cache
@@ -17,8 +18,10 @@ Exit codes like `vaf profile`: 0 done, 1 not complete, 2 refused.
 Every step is ``local_engine.apply`` (and ``state``, ``uninstall_vllm``), the implementation
 Settings > AI & Model and the full-screen TUI call too; this module only prints.
 
-The switch does not start vLLM itself: the next use of the local model starts it, as it
-starts the GGUF engine. Not behind the terminal door, like `vaf profile`: what it changes
+The switch starts vLLM once, sends it one chat completion and stops it again
+(``vllm_server.first_start``), so a model that cannot start here is refused before the
+engine changes; the next use of the local model starts it for real, as it starts the GGUF
+engine. Not behind the terminal door, like `vaf profile`: what it changes
 is the machine's, not an account's data, and an account that could run it from the
 agent's shell has `host_bash`, which can install the same packages directly.
 """
@@ -57,8 +60,15 @@ def _show() -> None:
     if state["engine"] == le.VLLM:
         from vaf.core import vllm_server as vs
         pid = vs.running_pid()
-        UI.info(f"vLLM server: running (PID {pid})" if pid else "vLLM server: not running "
-                "(it starts with the next use of the local model)")
+        failure = vllm["start_failure"]
+        if pid:
+            UI.info(f"vLLM server: running (PID {pid})")
+        elif failure:
+            UI.warning(f"vLLM server: could not start: {failure['text']}. Details in "
+                       f"{vs.SERVER_LOG}; `vaf engine vllm` tries again, `vaf engine llama` "
+                       "goes back to llama.cpp.")
+        else:
+            UI.info("vLLM server: not running (it starts with the next use of the local model)")
     for conflict in state["conflicts"]:
         UI.warning(conflict["text"])
 

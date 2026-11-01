@@ -32,13 +32,23 @@ WHEN (handover, reuse, waiting for a server that is loading); this module does t
   its index is there.
 - **Fit** (``fit``): weights + KV cache for the context + an overhead, against the memory
   share vLLM gets, before the launch, so a model that cannot fit is refused with numbers
-  instead of a crash a minute later. The GPU's memory comes from nvidia-smi, or on ROCm from
+  instead of a crash a minute later; a context that does not fit is reduced to the largest
+  that does above ``MIN_CONTEXT``. The GPU's memory comes from nvidia-smi, or on ROCm from
   the amdgpu driver in /sys (``gpu_detection.amd_vram_mb``).
+- **Attention plan** (``launch_plan``, CUDA build only): where FlashInfer cannot build its
+  kernels (no CUDA toolkit, ``flashinfer_buildable``), the launch names an attention backend
+  and KV cache that need no build and turns FlashInfer's sampler off (``attention_plan``);
+  measured on compute capability 8.6, the other rows read from vLLM's sources.
 - **Start** (``start``): on the local inference port with ``--enable-auto-tool-choice`` and
   the family's parsers, in a new session (the API server and its EngineCore children are
   one process group), model-name validation off (every consumer of the local server sends
   its own model name or none), usage statistics and Hugging Face access off.
-  ``--trust-remote-code`` is never passed: it would run code from the model repo.
+  ``--trust-remote-code`` is never passed: it would run code from the model repo. A start
+  that failed is remembered for its signature and not run again until a switch clears it
+  (``remembered_failure``, ``clear_start_failure``).
+- **First start** (``first_start``): the switch to vLLM starts it once, sends one chat
+  completion with top-p/top-k and stops it again, so the engine changes only for a model
+  that runs here.
 - **Stop** (``stop``): the whole process group, SIGTERM then SIGKILL after the grace, and
   only a process whose command line names the managed environment.
 
@@ -55,7 +65,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -140,14 +150,19 @@ _PROBE_ROCM = (
     "    sys.exit(4)\n"
 )
 
-# What the fit check counts besides weights and KV cache: CUDA context, activations and
-# the graphs vLLM captures.
-OVERHEAD_BYTES = int(1.2 * 1024 ** 3)
+# What the fit check counts besides weights and KV cache: CUDA context, activations, the
+# graphs vLLM captures and torch.compile's first run. Measured on an RTX 3080 (Qwen3-4B-AWQ,
+# int8 KV, share 0.62): about 1.85 GiB on a cold start (the first torch.compile), about
+# 1.2 GiB once the compile cache is warm. The cold figure counts, because the first start of
+# a switch is the one that must not fail.
+OVERHEAD_BYTES = int(1.85 * 1024 ** 3)
 # Headroom left free on the GPU when the memory share is computed from the free figure.
 FREE_HEADROOM_MB = 512
 UTILIZATION_RANGE = (0.50, 0.92)
 # VAF's own request (system prompt and routed tools) needs this much context.
 MIN_CONTEXT = 32768
+# A context reduced to fit is a multiple of this.
+CONTEXT_STEP = 1024
 
 # The files of a model repo the engine needs. No Python file, ever: "tokenizer*" alone
 # would also match a tokenizer.py, so code files are excluded explicitly (remote code never
@@ -158,9 +173,6 @@ CODE_PATTERNS = ["*.py", "*.pyc", "*.pyo", "*.so", "*.dll", "*.dylib", "*.sh", "
 # The child of THIS process, so stop() can reap it (a killed child that is never waited for
 # stays a zombie for the life of a long-running parent).
 _child: Optional[subprocess.Popen] = None
-# The fp8 KV cache died on this machine and auto came up: later starts skip the doomed
-# attempt (the counterpart of the llama server's V-cache memo).
-_kv_fp8_failed = False
 _lock = threading.Lock()
 # The build of this machine, once a GPU was found (see backend).
 _backend: Optional[str] = None
@@ -410,9 +422,11 @@ def _install_steps(say, run, step, env, root, streams, where, outcome, build=CUD
             return f"{label} failed (exit {getattr(result, 'returncode', '?')}); {where}.{hint}"
     # Deliberately no `vllm download-kernels`: it lets FlashInfer pip-install flashinfer-cubin and
     # flashinfer-jit-cache from its own index, version-pinned but unhashed, the only compiled
-    # package that would bypass the lock. Without them FlashInfer builds the kernels it needs at
-    # the first start; on compute capability 9.0+ it also downloads some at runtime, checked
-    # against checksums pinned in the locked wheel (docs/llm/VLLM_ENGINE.md).
+    # package that would bypass the lock. Without them FlashInfer can only JIT-compile its
+    # kernels, which needs a CUDA toolkit (nvcc) and ninja; where they are missing the launch
+    # avoids FlashInfer (launch_plan). On compute capability 9.0+ the locked FlashInfer also
+    # downloads some kernels at runtime, checked against checksums pinned in the locked wheel
+    # (docs/llm/VLLM_ENGINE.md).
     step("install_probe")
     say("Checking that vLLM loads on the GPU...")
     try:
@@ -636,6 +650,10 @@ class FitResult:
     free_mb: int = 0
     total_mb: int = 0
     overhead_mb: int = 0
+    other_mb: int = 0
+    attention_backend: str = ""
+    # A refusal for a model larger than the smallest default: a smaller model may fit.
+    smaller_model: bool = False
 
 
 FIT_CODES = ("fits", "too_big", "share_above_free", "no_shape", "no_gpu_memory")
@@ -645,13 +663,34 @@ def _mb(value: float) -> int:
     return int(round(value / 1024 ** 2))
 
 
+def kv_bytes_per_token(shape: ModelShape, kv_dtype: str) -> int:
+    """The KV cache of one token, keys and values of every layer. ``fp8*`` stores one byte
+    per element, ``*_per_token_head`` (``int8_per_token_head``) one byte plus a float32 scale
+    per token, head and side (vllm/v1/attention/backends/triton_attn.py in 0.32.0), anything
+    else (``auto``) the model's 16-bit dtype."""
+    dtype = str(kv_dtype or "")
+    if dtype.endswith("_per_token_head"):
+        per_head = shape.head_dim * 1 + 4
+    elif dtype.startswith("fp8"):
+        per_head = shape.head_dim * 1
+    else:
+        per_head = shape.head_dim * 2
+    return 2 * shape.layers * shape.kv_heads * per_head
+
+
 def fit(shape: ModelShape, n_ctx: int, free_mb: int, total_mb: int, *,
-        kv_dtype: Optional[str] = None, utilization: float = 0.0) -> FitResult:
+        kv_dtype: Optional[str] = None, utilization: float = 0.0,
+        model: str = "") -> FitResult:
     """Does the model fit, and with what? ``n_ctx`` is the context (``--max-model-len``),
     clamped to the model's maximum. The KV cache is fp8 unless ``kv_dtype`` says otherwise
     (``auto`` = the model's own 16-bit dtype). ``utilization`` 0 = computed from the free
     memory: ``(free - 512 MiB) / total`` within 0.50..0.92. vLLM refuses to start when its
-    share is more than what is free, so that counts as not fitting too."""
+    share is more than what is free, so that counts as not fitting too.
+
+    When the context does not fit, the largest one that does (a multiple of
+    ``CONTEXT_STEP``) is taken, never below ``MIN_CONTEXT``, with a note; only a model that
+    does not fit at ``MIN_CONTEXT`` is refused. ``model`` (the repo id) decides whether the
+    refusal names a smaller model: not for the smallest default."""
     note = ""
     max_len = int(n_ctx)
     if shape.max_position and max_len > shape.max_position:
@@ -659,30 +698,46 @@ def fit(shape: ModelShape, n_ctx: int, free_mb: int, total_mb: int, *,
                 f"model takes; it runs with {shape.max_position}.")
         max_len = shape.max_position
     dtype = kv_dtype or "fp8"
-    kv_bytes = 1 if dtype.startswith("fp8") else 2
+    per_token = kv_bytes_per_token(shape, dtype)
     if utilization and 0 < float(utilization) <= 1:
         share = float(utilization)
     else:
         low, high = UTILIZATION_RANGE
         share = min(high, max(low, (free_mb - FREE_HEADROOM_MB) / total_mb)) if total_mb else low
     budget_mb = int(share * total_mb)
-    kv_total = 2 * shape.layers * shape.kv_heads * shape.head_dim * kv_bytes * max_len
+    rest = budget_mb * 1024 ** 2 - shape.weights_bytes - OVERHEAD_BYTES
+    if per_token * max_len > rest and max_len > MIN_CONTEXT:
+        fits_len = (max(rest, 0) // per_token) // CONTEXT_STEP * CONTEXT_STEP
+        if fits_len >= MIN_CONTEXT:
+            note = ((note + " ") if note else "") + (
+                f"The context is reduced to {fits_len} tokens so the model fits.")
+            max_len = fits_len
+        else:
+            max_len = MIN_CONTEXT
+    kv_total = per_token * max_len
     need_mb = _mb(shape.weights_bytes + kv_total + OVERHEAD_BYTES)
+    other_mb = max(int(total_mb) - int(free_mb), 0)
     numbers = {"weights_mb": _mb(shape.weights_bytes), "kv_mb": _mb(kv_total),
                "free_mb": int(free_mb), "total_mb": int(total_mb),
-               "overhead_mb": _mb(OVERHEAD_BYTES)}
+               "overhead_mb": _mb(OVERHEAD_BYTES), "other_mb": other_mb}
     if budget_mb > free_mb:
         return FitResult(False, max_len, share, dtype, need_mb, budget_mb,
                          f"vLLM would take {budget_mb} MiB of the GPU ({share:.2f} of "
                          f"{total_mb} MiB), but only {free_mb} MiB are free.", note,
                          "share_above_free", **numbers)
     if need_mb > budget_mb:
+        from vaf.core.local_engine import DEFAULT_MODEL_SMALL
+        smaller_helps = bool(model) and model.lower() != DEFAULT_MODEL_SMALL.lower()
+        smaller = " or choose a smaller model" if smaller_helps else ""
         return FitResult(False, max_len, share, dtype, need_mb, budget_mb,
                          f"The model needs about {need_mb} MiB (weights "
                          f"{_mb(shape.weights_bytes)}, KV cache {_mb(kv_total)} for {max_len} "
                          f"tokens in {dtype}, overhead {_mb(OVERHEAD_BYTES)}), but vLLM gets "
-                         f"{budget_mb} MiB ({share:.2f} of {total_mb} MiB, {free_mb} MiB free).",
-                         note, "too_big", **numbers)
+                         f"{budget_mb} MiB ({share:.2f} of {total_mb} MiB): {free_mb} MiB are "
+                         f"free, other programs hold {other_mb} MiB. Close programs that use "
+                         f"the GPU and try again{smaller}; until then llama.cpp, which can move "
+                         "part of the model to the CPU, stays the engine.",
+                         note, "too_big", smaller_model=smaller_helps, **numbers)
     return FitResult(True, max_len, share, dtype, need_mb, budget_mb,
                      f"Fits: about {need_mb} of {budget_mb} MiB (context {max_len}, KV cache "
                      f"{dtype}, GPU share {share:.2f}).", note, "fits", **numbers)
@@ -709,21 +764,145 @@ def _configured_utilization() -> float:
     return value if 0 < value <= 1 else 0.0
 
 
-def plan_fit(model_dir: str, n_ctx: int, kv_dtype: Optional[str] = None) -> FitResult:
-    """The fit for the model on this GPU now (`vaf engine vllm` prints it, the start obeys)."""
+def plan_fit(model_dir: str, n_ctx: int, kv_dtype: Optional[str] = None,
+             model: str = "") -> FitResult:
+    """The fit for the model on this GPU now (`vaf engine vllm` prints it, the start obeys).
+    Without ``kv_dtype`` it is the first attempt of this machine's ``launch_plan``."""
+    plan = launch_plan()
+    dtype = kv_dtype or plan.kv_dtypes[0]
     shape = ModelShape.from_dir(model_dir)
     if shape is None:
-        return FitResult(False, int(n_ctx), 0.0, kv_dtype or "fp8", 0, 0,
+        return FitResult(False, int(n_ctx), 0.0, dtype, 0, 0,
                          f"The model's config.json in {model_dir} does not say its shape.",
                          code="no_shape")
     free_mb, total_mb = _gpu_memory()
     if not total_mb or not free_mb:
         source = ("The amdgpu driver does not report the GPU's memory (/sys/class/drm)."
                   if backend() == ROCM else "nvidia-smi does not report the GPU's memory.")
-        return FitResult(False, int(n_ctx), 0.0, kv_dtype or "fp8", 0, 0, source,
+        return FitResult(False, int(n_ctx), 0.0, dtype, 0, 0, source,
                          code="no_gpu_memory")
-    return fit(shape, n_ctx, free_mb, total_mb, kv_dtype=kv_dtype,
-               utilization=_configured_utilization())
+    result = fit(shape, n_ctx, free_mb, total_mb, kv_dtype=dtype,
+                 utilization=_configured_utilization(), model=model)
+    backend_name = plan.backend_for(dtype)
+    return replace(result, attention_backend=backend_name) if backend_name else result
+
+
+# ── attention backend and KV cache ───────────────────────────────────────────────
+
+# vLLM's attention backends VAF names on the command line (vllm/v1/attention/backends in
+# 0.32.0): Triton (any NVIDIA GPU vLLM runs on, compiled by Triton at run time, no CUDA
+# toolkit) and FlashAttention (FA2 from compute capability 8.0, FA3 on 9.x; prebuilt in the
+# vllm wheel).
+TRITON_ATTN = "TRITON_ATTN"
+FLASH_ATTN = "FLASH_ATTN"
+# vLLM's quantized KV cache that needs neither native fp8 nor FlashInfer: one byte per
+# element plus a float32 scale per token and head, served by TRITON_ATTN only.
+INT8_KV = "int8_per_token_head"
+
+
+@dataclass(frozen=True)
+class KvPlan:
+    """The launch attempts of this machine, in order: ``kv_dtypes[i]`` with the attention
+    backend ``backends[i]`` ("" = vLLM's own choice). ``sampler_off``: the server runs with
+    ``VLLM_USE_FLASHINFER_SAMPLER=0``."""
+    kv_dtypes: tuple
+    backends: tuple
+    sampler_off: bool = False
+
+    def backend_for(self, dtype: str) -> str:
+        try:
+            return self.backends[self.kv_dtypes.index(dtype)]
+        except ValueError:
+            return ""
+
+
+def _site_packages() -> List[Path]:
+    root = venv_dir()
+    return list(root.glob("lib/python*/site-packages")) + [root / "Lib" / "site-packages"]
+
+
+def flashinfer_buildable(env: Optional[Dict[str, str]] = None) -> bool:
+    """Can FlashInfer give vLLM its kernels in the server's environment ``env``? vLLM's own
+    check (``has_flashinfer`` in vllm/utils/flashinfer.py of 0.32.0), read without importing
+    anything from the environment: ``flashinfer_cubin`` is installed in it, OR FlashInfer's
+    JIT finds nvcc (``CUDA_HOME``, ``CUDA_PATH``, ``nvcc`` on PATH, else /usr/local/cuda) AND
+    ``ninja`` is on PATH. Measured: when it is False, vLLM 0.32.0 still picks FlashInfer for
+    an fp8 KV cache below compute capability 9.0, and for its top-p/top-k sampler, and the
+    server dies on "Could not find nvcc"."""
+    if any((site / "flashinfer_cubin").is_dir() for site in _site_packages()):
+        return True
+    source = os.environ if env is None else env
+    path = source.get("PATH")
+    cuda_home = source.get("CUDA_HOME") or source.get("CUDA_PATH")
+    if not cuda_home:
+        nvcc_on_path = shutil.which("nvcc", path=path)
+        cuda_home = (os.path.dirname(os.path.dirname(nvcc_on_path)) if nvcc_on_path
+                     else os.path.join(os.sep, "usr", "local", "cuda"))
+    nvcc = shutil.which(os.path.join(cuda_home, "bin", "nvcc"))
+    return bool(nvcc) and bool(shutil.which("ninja", path=path))
+
+
+def attention_plan(capability: Optional[tuple], buildable: bool) -> KvPlan:
+    """The KV caches and attention backends to launch with, on the CUDA build.
+
+    With FlashInfer buildable: fp8 then the model's own dtype, vLLM choosing the backend
+    (the command of earlier versions). Without it, per compute capability (read in vLLM
+    0.32.0: platforms/cuda.py, triton_attn.py, flash_attn.py):
+
+    - below 8.9: ``int8_per_token_head`` with TRITON_ATTN (Triton's fp8 needs 8.9, FA3's fp8
+      needs 9.x, FlashInfer would JIT); fallback ``auto`` with FLASH_ATTN (FA2, 8.0 and up)
+      or, on 7.5, TRITON_ATTN. Measured on 8.6 (RTX 3080).
+    - 9.x: fp8 with FLASH_ATTN (FA3); fallback ``auto`` with FLASH_ATTN.
+    - 8.9, 10.x, 12.x: fp8 with TRITON_ATTN; fallback ``auto`` with FLASH_ATTN.
+
+    The backend is always named then, because vLLM's selector picks FlashInfer although its
+    own check disabled it (measured), and the FlashInfer sampler is off (it JIT-compiles on
+    the first sampled request, measured). Only the 8.6 row is measured; the first start of
+    a switch (``first_start``) refuses a row that does not start, before the engine changes."""
+    if buildable:
+        return KvPlan(("fp8", "auto"), ("", ""), False)
+    cap = tuple(capability) if capability else (8, 0)
+    if cap < (8, 9):
+        return KvPlan((INT8_KV, "auto"),
+                      (TRITON_ATTN, FLASH_ATTN if cap >= (8, 0) else TRITON_ATTN), True)
+    if cap[0] == 9:
+        return KvPlan(("fp8", "auto"), (FLASH_ATTN, FLASH_ATTN), True)
+    return KvPlan(("fp8", "auto"), (TRITON_ATTN, FLASH_ATTN), True)
+
+
+# The compute capability of the NVIDIA GPU, once read (the hardware does not change while
+# VAF runs).
+_capability: Optional[tuple] = None
+
+
+def compute_capability() -> Optional[tuple]:
+    """(major, minor) of the first NVIDIA GPU from nvidia-smi, or None."""
+    global _capability
+    if _capability is not None:
+        return _capability
+    try:
+        from vaf.core.gpu_detection import detect_nvidia_gpu
+        from vaf.core.local_engine import _parse_capability
+        gpu = detect_nvidia_gpu()
+        found = _parse_capability(getattr(gpu, "compute_capability", "")) if gpu else None
+    except Exception:
+        return None
+    if found:
+        _capability = found
+    return found
+
+
+def _plan_in(server_env: Dict[str, str]) -> KvPlan:
+    if backend() != CUDA:
+        return KvPlan(("fp8", "auto"), ("", ""), False)
+    return attention_plan(compute_capability(), flashinfer_buildable(server_env))
+
+
+def launch_plan(base: Optional[Dict[str, str]] = None) -> KvPlan:
+    """This machine's attempts, for the server's environment (``child_env`` of ``base``). The
+    ROCm build keeps fp8 then ``auto`` with vLLM's own backend choice: the plan reads NVIDIA
+    compute capabilities and FlashInfer's CUDA JIT."""
+    return _plan_in(child_env(base, plan=False))
 
 
 # ── start / stop ─────────────────────────────────────────────────────────────────
@@ -737,8 +916,10 @@ def build_command(model_dir: str, repo_id: str, port: int, result: FitResult,
             "--served-model-name", repo_id,
             "--max-model-len", str(result.max_model_len),
             "--gpu-memory-utilization", f"{result.utilization:.2f}",
-            "--kv-cache-dtype", result.kv_dtype,
-            "--enable-auto-tool-choice", "--tool-call-parser", tool_parser]
+            "--kv-cache-dtype", result.kv_dtype]
+    if result.attention_backend:
+        argv += ["--attention-backend", result.attention_backend]
+    argv += ["--enable-auto-tool-choice", "--tool-call-parser", tool_parser]
     if reasoning_parser:
         argv += ["--reasoning-parser", reasoning_parser]
     return argv
@@ -750,10 +931,10 @@ _PINNED_OFF = ("VLLM_SERVER_DEV_MODE", "VLLM_ALLOW_RUNTIME_LORA_UPDATING")
 
 
 def with_rocm_library(env: Dict[str, str]) -> Dict[str, str]:
-    """``env`` with the found ROCm library directory first on ``LD_LIBRARY_PATH`` on the ROCm
-    build (``gpu_detection.rocm_library_dir``: a ROCm under ``$ROCM_PATH`` or another
-    ``/opt/rocm-<version>`` is not on the wheels' RUNPATH). Unchanged on CUDA and when the
-    linker finds the runtime by itself."""
+    """Put the found ROCm library directory first on ``LD_LIBRARY_PATH`` of ``env`` on the
+    ROCm build (``gpu_detection.rocm_library_dir``: a ROCm under ``$ROCM_PATH`` or another
+    ``/opt/rocm-<version>`` is not on the wheels' RUNPATH). ``env`` is changed in place and
+    returned. Unchanged on CUDA and when the linker finds the runtime by itself."""
     if backend() != ROCM:
         return env
     from vaf.core.gpu_detection import rocm_library_dir
@@ -764,12 +945,14 @@ def with_rocm_library(env: Dict[str, str]) -> Dict[str, str]:
     return env
 
 
-def child_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+def child_env(base: Optional[Dict[str, str]] = None, *, plan: bool = True) -> Dict[str, str]:
     """The server's environment: VAF's environment without any VLLM_ variable of its own,
     plus the switches below. A VLLM_ variable is a launch decision like a command-line flag
     (development endpoints, runtime LoRA loading, plugins that are imported at start), and
     there is no free-form way to pass those on either. VAF's own GPU hide for in-process
-    torch is taken out (``gpu_detection.gpu_child_env``): the server needs the GPU."""
+    torch is taken out (``gpu_detection.gpu_child_env``): the server needs the GPU. Where
+    FlashInfer cannot build its kernels (``launch_plan``), its sampler is turned off: it
+    JIT-compiles on the first sampled request and kills the server without nvcc."""
     from vaf.core.gpu_detection import gpu_child_env
     # Without VAF's GPU hide for in-process torch (a user's own CUDA_VISIBLE_DEVICES stays).
     env = {k: v for k, v in gpu_child_env(base).items() if not k.upper().startswith("VLLM_")}
@@ -781,7 +964,10 @@ def child_env(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     # The model is in the cache before the launch (ensure_model), so vLLM never needs to
     # reach Hugging Face on a start.
     env["HF_HUB_OFFLINE"] = "1"
-    return with_rocm_library(env)
+    env = with_rocm_library(env)
+    if plan and _plan_in(env).sampler_off:
+        env["VLLM_USE_FLASHINFER_SAMPLER"] = "0"
+    return env
 
 
 def _looks_like_vllm_server(pid: int) -> bool:
@@ -875,6 +1061,9 @@ def stop(wait: float = 15.0) -> str:
         pid = child.pid
     from vaf.core.platform import Platform
     _ui().event("Server", f"Stopping vLLM (PID {pid})...", style="dim")
+    if pid == _loading_pid:
+        with _lock:
+            _stopped_while_loading.add(pid)
     try:
         # The API server leads its own session (start_new_session), so the group id is
         # its pid; the EngineCore children hold the GPU and are members of it.
@@ -930,17 +1119,153 @@ def _read_log_tail(path: Optional[Path], chars: int = 800) -> str:
         return ""
 
 
+# ── the start memory ─────────────────────────────────────────────────────────────
+
+# The log a start failure points at, as the UI names it (log_path() is the file).
+SERVER_LOG = "logs/vllm_server.log"
+# A start refused by the fit is measured again after this long: the memory other programs
+# hold changes when they close.
+FIT_RETRY_SECONDS = 60.0
+# The causes a failed start is classified into (the catalogues' ``startCause``).
+START_CAUSES = ("kernels", "memory", "timeout", "fit", "interrupted", "other")
+
+_CAUSE_TEXT = {
+    "kernels": "it needs GPU kernels that cannot be built on this machine",
+    "memory": "the GPU does not have enough free memory for the model and its context",
+    "timeout": "it was not ready in time",
+    "fit": "the model does not fit in the free GPU memory",
+    "interrupted": "its start was interrupted by another start of the local model",
+    "other": "it stopped during its start",
+}
+_MEMORY_LOG = re.compile(r"out of memory|no available memory for the cache blocks|"
+                         r"kv cache is needed|estimated maximum model length|"
+                         r"less than desired gpu memory utilization", re.IGNORECASE)
+_KERNELS_LOG = re.compile(r"could not find nvcc|fp8e4nv|not supported by the \w+ attention "
+                          r"backend", re.IGNORECASE)
+
+
+def classify_start_log(text: str) -> str:
+    """``memory``, ``kernels`` or ``other`` for the log of a start that died. Memory first:
+    FlashInfer's "kernels are disabled" warning stands at the top of every start without a
+    CUDA toolkit, also of one that died for want of memory."""
+    if _MEMORY_LOG.search(text or ""):
+        return "memory"
+    if _KERNELS_LOG.search(text or ""):
+        return "kernels"
+    return "other"
+
+
+def cause_text(cause: str) -> str:
+    return _CAUSE_TEXT.get(cause, _CAUSE_TEXT["other"])
+
+
+@dataclass(frozen=True)
+class StartFailure:
+    """A start that failed for this signature: ``cause`` (``START_CAUSES``), the English
+    ``text``, the log, when (``time.monotonic``) and, for a fit refusal, from when it is
+    measured again (0 = it stays until cleared)."""
+    signature: tuple
+    cause: str
+    text: str
+    log: str
+    at: float
+    retry_at: float = 0.0
+
+
+# Process memory: a restart of VAF is a fresh try, and `vaf engine vllm`, Settings and the
+# TUI clear it through local_engine.apply.
+_start_failure: Optional[StartFailure] = None
+# The attempt of the plan that came up last, for its signature: later starts begin there.
+_came_up: Optional[tuple] = None
+# The pid of a start this process stopped while it loaded (another start of the local
+# model): its death is an interruption, not a failure of the model.
+_stopped_while_loading: set = set()
+# The pid of the server this process is waiting for (``_wait_ready``).
+_loading_pid: Optional[int] = None
+_logged_failure: Optional[StartFailure] = None
+# The last start of this process ended because another start stopped it.
+_last_interrupted = False
+
+
+def start_signature(repo_id: str, n_ctx: int, plan: Optional[KvPlan] = None) -> tuple:
+    """What a start depends on besides the free memory: the model, the requested context,
+    the configured GPU share, the parsers, the pin, the recipe and the plan. A change of any
+    of them is a new start, not the failed one again."""
+    from vaf.core import local_engine
+    plan = plan or launch_plan()
+    return (str(repo_id), max(int(n_ctx or 0), MIN_CONTEXT), _configured_utilization(),
+            tuple(local_engine.parsers_for(repo_id)), PIN, recipe_current(),
+            tuple(plan.kv_dtypes), tuple(plan.backends))
+
+
+def start_failure() -> Optional[StartFailure]:
+    """The failure remembered from this process's last start, if any (whatever its
+    signature)."""
+    with _lock:
+        return _start_failure
+
+
+def clear_start_failure() -> None:
+    global _start_failure, _logged_failure
+    with _lock:
+        _start_failure = None
+        _logged_failure = None
+
+
+def _remember(signature: tuple, cause: str, text: str, retry: bool = False) -> None:
+    global _start_failure
+    now = time.monotonic()
+    with _lock:
+        _start_failure = StartFailure(signature, cause, text, SERVER_LOG, now,
+                                      now + FIT_RETRY_SECONDS if retry else 0.0)
+
+
+def remembered_failure(repo_id: Optional[str] = None,
+                       n_ctx: Optional[int] = None) -> Optional[StartFailure]:
+    """The remembered failure when the next start would be the failed one again: the same
+    signature, and for a fit refusal not yet ``FIT_RETRY_SECONDS`` old. ``repo_id`` and
+    ``n_ctx`` default to the configuration's. A failure of another signature is kept (a
+    reader asking with other defaults must not wipe it) but does not block: that start
+    launches, and its outcome replaces the memory."""
+    failure = start_failure()
+    if failure is None:
+        return None
+    from vaf.core import local_engine
+    if repo_id is None:
+        repo_id = local_engine.resolve_vllm_model()
+    if n_ctx is None:
+        n_ctx = local_engine._n_ctx()
+    if start_signature(repo_id, n_ctx) != failure.signature:
+        return None
+    if failure.retry_at and time.monotonic() >= failure.retry_at:
+        return None
+    return failure
+
+
+def failure_sentence(failure: StartFailure) -> str:
+    """The sentence a chat gets while a start failure is remembered."""
+    return (f"vLLM could not start: {failure.text}. Details in {failure.log}. Switch to "
+            "llama.cpp in Settings > AI & Model or with `vaf engine llama`, or switch to vLLM "
+            "again to retry.")
+
+
 def start(repo_id: str, n_ctx: int, port: int = 8080,
           popen: Optional[Callable[..., subprocess.Popen]] = None) -> bool:
     """Launch vLLM for ``repo_id`` and wait until ``/health`` answers 200. False, with the
     reason said, when it is refused (profile, not installed, model missing, unknown parser,
-    does not fit) or does not come up. A first launch with the fp8 KV cache that dies is
-    retried once with ``auto``. The caller holds the start lock and has handed the port
-    over (backend.ServerManager)."""
-    global _child, _kv_fp8_failed
+    does not fit) or does not come up. The attempts are this machine's ``launch_plan``: the
+    quantized KV cache first, the model's own dtype once when that launch dies. The caller
+    holds the start lock and has handed the port over (backend.ServerManager).
+
+    A start that died or timed out, or that the fit refused, is remembered for its signature
+    (``start_signature``): the same start again returns False at once without a launch (a fit
+    refusal is measured again after ``FIT_RETRY_SECONDS``), until ``clear_start_failure``
+    (every switch, ``local_engine.apply``), a changed signature or a restart of VAF."""
+    global _child, _came_up, _logged_failure, _last_interrupted, _loading_pid
     from vaf.core import inference_profile, local_engine
     UI = _ui()
     popen = popen or subprocess.Popen
+    _last_interrupted = False
     if not inference_profile.local_inference_allowed():
         UI.event("Backend", inference_profile.refuse("the local server"), style="dim")
         return False
@@ -964,22 +1289,33 @@ def start(repo_id: str, n_ctx: int, port: int = 8080,
         UI.error(refusal)
         return False
     n_ctx = max(int(n_ctx or 0), MIN_CONTEXT)
-    dtypes = ["auto"] if _kv_fp8_failed else ["fp8", "auto"]
-    for attempt, dtype in enumerate(dtypes, start=1):
-        result = plan_fit(model_dir, n_ctx, kv_dtype=dtype)
+    plan = launch_plan()
+    signature = start_signature(repo_id, n_ctx, plan)
+    failure = remembered_failure(repo_id, n_ctx)
+    if failure is not None:
+        if _logged_failure is not failure:
+            _logged_failure = failure
+            UI.error(f"vLLM is not started again: {failure.text}. Details in {failure.log}; "
+                     "switching to vLLM again (`vaf engine vllm`, Settings) retries.")
+        return False
+    first = _came_up[1] if _came_up and _came_up[0] == signature else 0
+    attempts = list(zip(plan.kv_dtypes, plan.backends))[first:]
+    for attempt, (dtype, _backend_name) in enumerate(attempts, start=1):
+        result = plan_fit(model_dir, n_ctx, kv_dtype=dtype, model=repo_id)
         if result.note:
             UI.event("System", result.note, style="warning")
         if not result.ok:
-            UI.error("vLLM is not started: " + result.reason
-                     + ("" if dtype == "fp8" else " llama.cpp (`vaf engine llama`) runs with a "
-                        "quantized KV cache that needs less memory."))
+            UI.error("vLLM is not started: " + result.reason)
+            _remember(signature, "fit", result.reason.rstrip("."), retry=True)
             return False
         argv = build_command(model_dir, repo_id, port, result, tool, reasoning)
         if not inference_profile.local_inference_allowed():
             UI.event("Backend", inference_profile.refuse("the local server"), style="dim")
             return False
+        shown = f", attention {result.attention_backend}" if result.attention_backend else ""
         UI.event("Server", f"Starting vLLM on :{port} ({repo_id}, context {result.max_model_len}, "
-                           f"KV {dtype}, GPU share {result.utilization:.2f})...", style="dim")
+                           f"KV {dtype}{shown}, GPU share {result.utilization:.2f})...",
+                 style="dim")
         with _start_lock():
             # Another process may have spawned the server since the caller looked: its pid
             # file must not be overwritten, and a second server would only die at bind.
@@ -1008,15 +1344,19 @@ def start(repo_id: str, n_ctx: int, port: int = 8080,
                 pid_file().write_bytes(str(proc.pid).encode("utf-8"))
             except OSError:
                 pass
-        outcome = _wait_ready(proc, port)
+        _loading_pid = proc.pid
+        try:
+            outcome = _wait_ready(proc, port)
+        finally:
+            _loading_pid = None
         if log_handle is not None:
             try:
                 log_handle.close()
             except Exception:
                 pass
         if outcome == "ready":
-            if dtype == "auto" and attempt > 1:
-                _kv_fp8_failed = True
+            _came_up = (signature, first + attempt - 1)
+            clear_start_failure()
             return True
         if outcome in ("switched", "timeout"):
             stop()
@@ -1025,6 +1365,8 @@ def start(repo_id: str, n_ctx: int, port: int = 8080,
             else:
                 UI.error(f"vLLM was not ready after {int(_ready_budget())}s and is stopped. For a "
                          "slow first start raise server_ready_timeout in the config.")
+                _remember(signature, "timeout",
+                          f"{cause_text('timeout')} ({int(_ready_budget())} s)")
             return False
         # The API server died; an EngineCore child it left in its group would keep the GPU.
         try:
@@ -1033,19 +1375,101 @@ def start(repo_id: str, n_ctx: int, port: int = 8080,
         except Exception:
             pass
         _remove_pid(only=proc.pid)
-        if _BIND_FAILURE.search(_read_log_tail(log_file_path, chars=20000)):
+        with _lock:
+            interrupted = proc.pid in _stopped_while_loading
+            _stopped_while_loading.discard(proc.pid)
+        if interrupted:
+            # Not the model's failure: a start of the other engine took the port and the GPU.
+            _last_interrupted = True
+            UI.event("Server", "The vLLM start was interrupted by another start of the local "
+                               "model.", style="yellow")
+            return False
+        tail = _read_log_tail(log_file_path, chars=20000)
+        if _BIND_FAILURE.search(tail):
             # The port, not the KV cache: a retry would die the same way.
             UI.error(f"vLLM could not bind 127.0.0.1:{port}: another program holds the port. "
                      "vLLM is not started.")
             return False
-        if attempt < len(dtypes):
-            UI.event("Server", "vLLM died with the fp8 KV cache - retrying with the model's own "
-                               "KV dtype...", style="yellow")
+        if attempt < len(attempts):
+            UI.event("Server", f"vLLM died with the {dtype} KV cache - retrying with the model's "
+                               "own KV dtype...", style="yellow")
             continue
-        UI.error(f"vLLM failed to start. Check {log_file_path}\n"
-                 f"{_read_log_tail(log_file_path)[-500:]}")
+        cause = classify_start_log(tail)
+        UI.error(f"vLLM failed to start ({cause_text(cause)}). Check {log_file_path}\n"
+                 f"{tail[-500:]}")
+        _remember(signature, cause, cause_text(cause))
         return False
     return False
+
+
+# The test request of the first start: short, and with top_p/top_k so the sampler path that
+# killed a server on its first chat request (FlashInfer's sampler JIT) runs before a switch.
+TEST_REQUEST = {"messages": [{"role": "user", "content": "Say OK."}], "max_tokens": 8,
+                "temperature": 0.7, "top_p": 0.8, "top_k": 20}
+TEST_REQUEST_TIMEOUT = 180.0
+
+
+@dataclass(frozen=True)
+class FirstStart:
+    """The outcome of ``first_start``: ``ok``, or the ``cause`` (``START_CAUSES``) and the
+    English ``text``, and the log of the start."""
+    ok: bool
+    cause: str = ""
+    text: str = ""
+    log: str = SERVER_LOG
+
+
+def _test_completion(repo_id: str, port: int, post: Optional[Callable[..., object]] = None) -> str:
+    """"" when the server answers one chat completion with text, else why not."""
+    if post is None:
+        import requests
+        post = requests.post
+    try:
+        r = post(f"http://127.0.0.1:{int(port)}/v1/chat/completions",
+                 json={"model": repo_id, **TEST_REQUEST}, timeout=TEST_REQUEST_TIMEOUT)
+        if getattr(r, "status_code", 0) != 200:
+            return f"the test request was answered with HTTP {getattr(r, 'status_code', '?')}"
+        choices = (r.json() or {}).get("choices") or []
+        if not choices:
+            return "the test request got no answer"
+    except Exception as e:      # noqa: BLE001 - the reason is the outcome
+        return f"the test request failed ({type(e).__name__})"
+    return ""
+
+
+def first_start(repo_id: str, n_ctx: int, port: int = 8080,
+                popen: Optional[Callable[..., subprocess.Popen]] = None,
+                post: Optional[Callable[..., object]] = None) -> FirstStart:
+    """The first start of a switch to vLLM (``local_engine.apply``, after the fit check):
+    the real start path on the local port, one chat completion with top_p and top_k, then
+    the server is stopped again, so the engine changes only for a model that starts AND
+    answers here. The tray starts it again for real after the switch (a warm start, the
+    compile cache filled: measured 50 s on an RTX 3080). A start that dies, does not come up
+    or does not answer is classified from its log (``START_CAUSES``); one interrupted by
+    another start of the local model in this process is ``interrupted`` and not
+    remembered."""
+    if not start(repo_id, n_ctx, port=port, popen=popen):
+        # start() leaves no server of its own behind on any of its False paths.
+        if _last_interrupted:
+            return FirstStart(False, "interrupted", cause_text("interrupted"))
+        failure = start_failure()
+        if failure is not None:
+            return FirstStart(False, failure.cause, failure.text, failure.log)
+        return FirstStart(False, "other", cause_text("other"))
+    why = _test_completion(repo_id, port, post)
+    alive = running_pid() is not None or (_child is not None and _child.poll() is None)
+    if why or not alive:
+        tail = _read_log_tail(log_path(), chars=20000)
+        cause = classify_start_log(tail)
+        text = cause_text(cause) + (f" ({why})" if why else "")
+        signature = start_signature(repo_id, n_ctx)
+        stop()
+        _remember(signature, cause, text)
+        return FirstStart(False, cause, text)
+    reason = stop()
+    if reason:
+        return FirstStart(False, "other", reason.rstrip("."))
+    return FirstStart(True)
 
 
 def _wait_ready(proc, port: int) -> str:

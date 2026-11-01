@@ -382,7 +382,7 @@ def run_workflow(
                                           keep_files=plan.get("keep_files") or [],
                                           final_output=result.final_output,
                                           user_scope_id=getattr(engine, "user_scope_id", None),
-                                          preexisting=getattr(result, "preexisting_files", None) or ())
+                                          preexisting=getattr(result, "preexisting_files", ()))
                 _steps_summary = summarize_run_steps(steps)
                 final_summary = (
                     f"Temporary workflow '{template['name']}' completed.\n"

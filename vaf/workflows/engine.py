@@ -341,22 +341,41 @@ def _strictly_inside(root: str, candidate: str) -> bool:
     return True
 
 
-def snapshot_intermediates(project_path: Optional[str]) -> tuple:
-    """The script/scratch files (the cleanup's extensions) already in ``project_path``, as
-    resolved paths. Taken at the start of a run so the cleanup afterwards removes only what the
-    run created, never a file the user already had there. Cheap: one walk, names only."""
+# "No snapshot handed in": execute() takes its own. None cannot mean that, because None is
+# the incomplete snapshot a resumed run carries on.
+_NO_SNAPSHOT = object()
+
+
+def _scratch_entries(base: str):
+    """(relative POSIX path, is_folder) of everything below ``base`` that is not a link and not
+    below a linked folder (`vaf.core.path_jail.walk_without_links`), or None when a folder could
+    not be listed: then nobody can tell what is in it, and the callers do nothing."""
+    from vaf.core.path_jail import walk_without_links
+    failed = []
+    entries = walk_without_links(base, onerror=failed.append)
+    return None if failed else entries
+
+
+def snapshot_intermediates(project_path: Optional[str]) -> Optional[tuple]:
+    """The script/scratch files (the cleanup's extensions) already in ``project_path``, as paths
+    RELATIVE to the resolved project folder in POSIX form - the same form the cleanup deletes
+    by. Taken at the start of a run so the cleanup afterwards removes only what the run created,
+    never a file the user already had there. Regular files only: a link is never deleted (see
+    `remove_temp_intermediates`), so it needs no entry. Cheap: one walk, names only.
+
+    None when a folder could not be read: the snapshot is incomplete, and a cleanup based on it
+    could delete a file the user had, so `remove_temp_intermediates` skips the run."""
     import os
-    out = set()
     if not project_path or not os.path.isdir(project_path):
         return ()
     try:
-        for root, _dirs, files in os.walk(project_path):
-            for fn in files:
-                if os.path.splitext(fn)[1].lower() in _INTERMEDIATE_EXTS:
-                    out.add(os.path.realpath(os.path.join(root, fn)))
+        entries = _scratch_entries(os.path.realpath(project_path))
     except Exception:
-        return ()
-    return tuple(out)
+        return None
+    if entries is None:
+        return None
+    return tuple(rel for rel, is_folder in entries
+                 if not is_folder and os.path.splitext(rel)[1].lower() in _INTERMEDIATE_EXTS)
 
 
 def remove_temp_intermediates(project_path: str, *, keep_files=(), final_output=None,
@@ -376,14 +395,26 @@ def remove_temp_intermediates(project_path: str, *, keep_files=(), final_output=
     checked against the run's prefix in `execute`) and the identity of the run, so a
     recursive delete never walks another account's folder or a folder elsewhere.
 
-    ``preexisting`` are files that were already in the folder when the run started
-    (``snapshot_intermediates``): they are kept, so a run pointed at an existing project
-    deletes only the scratch it created.
+    Links are never followed and never deleted. The walk leaves out every link and everything
+    below a linked folder, each deletion removes the entry itself (never its resolved target),
+    and right before it the entry is checked again: still not a link, and its resolved folder
+    still inside the project folder (a folder swapped for a link during the walk). A run's
+    shell can create links in its folder, and deleting what a link points at deleted files of
+    other accounts and VAF's own settings (live finding).
+
+    ``preexisting`` are the files that were already in the folder when the run started
+    (``snapshot_intermediates``, relative paths): they are kept, so a run pointed at an
+    existing project deletes only the scratch it created. ``preexisting=None`` means the
+    snapshot could not be completed: nothing is deleted.
 
     NAMED BOUNDARY: without a ``user_scope_id`` (an unscoped local run, the single-user
     machine owner) the bound is the whole Documents/VAF_Projects, the same area that owner
     reaches with every other tool."""
     import os
+    if preexisting is None:
+        UI.event("Workflow", "  [INFO] Temporary files kept: the project folder could not be "
+                 "read completely when the run started.", style="dim")
+        return 0
     if not project_path or not os.path.isdir(project_path):
         return 0
     try:
@@ -392,35 +423,57 @@ def remove_temp_intermediates(project_path: str, *, keep_files=(), final_output=
             root = os.path.join(root, str(user_scope_id)[:8])
         if not _strictly_inside(root, project_path):
             return 0
+        base = os.path.realpath(project_path)
+        entries = _scratch_entries(base)
     except Exception:
         return 0
+    if entries is None:
+        return 0
+
+    def _rel(path: str) -> Optional[str]:
+        try:
+            rel = os.path.relpath(os.path.realpath(path), base)
+        except ValueError:
+            return None
+        return None if rel.startswith("..") else Path(rel).as_posix()
+
     keep = set(preexisting or ())
     for path in keep_files or ():
         path = str(path).strip()
-        if path:
-            keep.add(os.path.realpath(path))
+        if path and _rel(path):
+            keep.add(_rel(path))
     last = str(final_output or "")
-    if last and os.path.isfile(last):
-        keep.add(os.path.realpath(last))
+    if last and os.path.isfile(last) and _rel(last):
+        keep.add(_rel(last))
+
     deleted = 0
-    for root, dirs, files in os.walk(project_path, topdown=False):
-        for fn in files:
-            fp = os.path.realpath(os.path.join(root, fn))
-            if fp in keep:
+    folders = []
+    for rel, is_folder in entries:
+        if is_folder:
+            folders.append(rel)
+            continue
+        if rel in keep or os.path.splitext(rel)[1].lower() not in _INTERMEDIATE_EXTS:
+            continue
+        entry = os.path.join(base, *rel.split("/"))
+        try:
+            if os.path.islink(entry) or not os.path.isfile(entry):
                 continue
-            if os.path.splitext(fn)[1].lower() in _INTERMEDIATE_EXTS:
-                try:
-                    os.unlink(fp)
-                    deleted += 1
-                except Exception:
-                    pass
-        for dn in dirs:
-            try:
-                os.rmdir(os.path.join(root, dn))  # only removes if it ended up empty
-            except Exception:
-                pass
+            parent = os.path.realpath(os.path.dirname(entry))
+            if parent != base and not _strictly_inside(base, parent):
+                continue
+            os.unlink(entry)
+            deleted += 1
+        except Exception:
+            pass
+    for rel in sorted(folders, key=lambda r: r.count("/"), reverse=True):
+        folder = os.path.join(base, *rel.split("/"))
+        try:
+            if not os.path.islink(folder):
+                os.rmdir(folder)  # only removes if it ended up empty
+        except Exception:
+            pass
     try:
-        os.rmdir(project_path)
+        os.rmdir(base)
     except Exception:
         pass
     return deleted
@@ -585,9 +638,11 @@ class WorkflowResult:
     project_path: Optional[str] = None
     # True when the caller handed in a workflow_project_path the engine did not accept.
     supplied_path_refused: bool = False
-    # Script/scratch files already in the project folder when the run started: the cleanup
-    # keeps them, so a run pointed at an existing project does not delete the user's own code.
-    preexisting_files: tuple = ()
+    # Script/scratch files already in the project folder when the run started (paths relative
+    # to the folder): the cleanup keeps them, so a run pointed at an existing project does not
+    # delete the user's own code. None: the folder could not be read completely, so the
+    # cleanup for this run is skipped.
+    preexisting_files: Optional[tuple] = ()
 
 
 def _temporal_builtins(username: Optional[str] = None) -> Dict[str, str]:
@@ -757,7 +812,7 @@ class WorkflowEngine:
         stop_on_error: bool = True,
         check_stop: Optional[Callable[[], bool]] = None,
         wait_for_subagents: bool = False,
-        _preexisting: Optional[tuple] = None,
+        _preexisting: Any = _NO_SNAPSHOT,
     ) -> WorkflowResult:
         """
         Execute a workflow with the given steps.
@@ -907,8 +962,13 @@ class WorkflowEngine:
         # run pointed at an existing project does not delete the user's own code. A resumed run
         # carries the snapshot of its FIRST start (``_preexisting``), not a fresh one over the
         # files the pre-pause steps wrote.
-        _preexisting_files = (tuple(_preexisting) if _preexisting is not None
-                              else snapshot_intermediates(_workflow_project_path))
+        if _preexisting is _NO_SNAPSHOT:
+            _preexisting_files = snapshot_intermediates(_workflow_project_path)
+        else:
+            _preexisting_files = None if _preexisting is None else tuple(_preexisting)
+        if _preexisting_files is None:
+            UI.event("Workflow", "  [INFO] The project folder could not be read completely; "
+                     "this run's temporary files will not be cleaned up.", style="dim")
 
         # Don't show "Starting workflow" message - will show Step 1/N instead
         
@@ -1616,7 +1676,8 @@ class WorkflowEngine:
                         template_id=getattr(self, '_template_id', '') or '',
                         ui_workflow_id=getattr(self, '_ui_workflow_id', '') or '',
                         awaiting_agent_type=agent_type,
-                        preexisting_files=list(_preexisting_files),
+                        preexisting_files=(None if _preexisting_files is None
+                                           else list(_preexisting_files)),
                     )
                     
                     ipc = get_ipc()
@@ -2059,9 +2120,14 @@ class WorkflowEngine:
         remaining_steps = steps[paused_wf.current_step_index + 1:]
         
         # The project folder and the pre-run file snapshot of the FIRST start, carried across
-        # the pause so the cleanup still skips the user's own pre-existing files.
+        # the pause. NAMED BOUNDARY: no lane runs the temporary-file cleanup after a resumed
+        # run today (the two cleanup callers handle a run's first leg only), so a resumed run
+        # is not cleaned up; the snapshot is kept for when one is. A paused record written
+        # before the snapshot existed has none (an empty list): such a run, if it were
+        # cleaned, would treat every script in its folder as its own.
         _project_path = outputs.get("workflow_project_path")
-        _preexisting = tuple(getattr(paused_wf, "preexisting_files", None) or ())
+        _stored = getattr(paused_wf, "preexisting_files", ())
+        _preexisting = None if _stored is None else tuple(_stored or ())
 
         if not remaining_steps:
             # Workflow is complete

@@ -301,6 +301,7 @@ def test_the_child_runs_the_plan_with_its_checks_and_reports_once(rig, monkeypat
     proj.mkdir(parents=True)
     (proj / "scratch.py").write_text("x")
     (proj / "Bericht.docx").write_text("x")
+    (proj / "mine.py").write_text("x")  # in the folder before the run: the snapshot lists it
     decoy = tmp_path / "VAF_Projects" / "ab12cd34" / "other"
     decoy.mkdir(parents=True)
     (decoy / "app.py").write_text("x")
@@ -319,7 +320,8 @@ def test_the_child_runs_the_plan_with_its_checks_and_reports_once(rig, monkeypat
             # the engine decided (project_path), and leave the decoy alone.
             return SimpleNamespace(success=True, paused=False, error=None, final_output="Fertig: Bericht.docx",
                                    outputs={"workflow_project_path": str(decoy)}, steps=steps,
-                                   project_path=str(proj), supplied_path_refused=False)
+                                   project_path=str(proj), supplied_path_refused=False,
+                                   preexisting_files=("mine.py",))
 
     monkeypatch.setattr(engine_mod, "WorkflowEngine", _Engine)
     monkeypatch.setattr("vaf.workflows.tool_overlay.workflow_primitives", lambda: {"web_search": object()})
@@ -335,6 +337,7 @@ def test_the_child_runs_the_plan_with_its_checks_and_reports_once(rig, monkeypat
     assert seen["validator"] is True and seen["intent"] == "Bericht über x" and seen["vars"] == {"topic": "x"}
     assert not (proj / "scratch.py").exists() and (proj / "Bericht.docx").exists()
     assert (decoy / "app.py").exists(), "the cleanup followed the outputs entry a step can write"
+    assert (proj / "mine.py").exists(), "the CLI cleanup ignored the pre-run snapshot"
     assert len(ipc.completed) == 1 and ipc.completed[0][0] == "tidX"
     assert "Temporary workflow 'Bericht' completed." in ipc.completed[0][1]
     assert "THE WORK IS DONE" in ipc.completed[0][1]

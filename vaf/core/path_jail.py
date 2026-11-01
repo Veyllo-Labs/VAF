@@ -154,16 +154,18 @@ def safe_entry_name(name: str, *, allow_hidden: bool = False) -> str:
     return raw
 
 
-def walk_without_links(root, skip=()):
+def walk_without_links(root, skip=(), *, onerror=None):
     """Every folder and regular file below `root`, as (relative POSIX path, is_folder), in a
     stable order: links are left out, and so is everything below a linked folder, and every
     entry whose name is in `skip` with all below it. For an upload that must carry this
-    folder's own contents and nothing a link points at. `Path.rglob` is not that: before
-    Python 3.13 its `**` followed linked folders, so a file under `site/linked -> ~/.ssh` was
-    neither a link itself nor skipped."""
+    folder's own contents and nothing a link points at, and for a cleanup that must delete
+    nothing a link points at. `Path.rglob` is not that: before Python 3.13 its `**` followed
+    linked folders, so a file under `site/linked -> ~/.ssh` was neither a link itself nor
+    skipped. `onerror` is handed to `os.walk`: called with the OSError of a folder that
+    could not be listed, so a caller can tell an incomplete walk from a complete one."""
     out = []
     base = Path(root)
-    for here, dirs, files in os.walk(base, followlinks=False):
+    for here, dirs, files in os.walk(base, followlinks=False, onerror=onerror):
         rel_here = Path(here).relative_to(base)
         keep = []
         for name in sorted(dirs):

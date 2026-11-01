@@ -241,9 +241,10 @@ class PausedWorkflow:
     template_id: str = ""                # Template key, e.g. "research_and_document"
     ui_workflow_id: str = ""             # Id the Web UI panel knows this run by
     awaiting_agent_type: str = ""        # Sub-agent the run is waiting for
-    # Script/scratch files already in the project folder when the run STARTED: the temp-file
-    # cleanup keeps them, so a resumed run does not delete the user's own pre-existing code.
-    preexisting_files: List[str] = field(default_factory=list)
+    # Script/scratch files already in the project folder when the run STARTED (relative paths):
+    # kept for the temp-file cleanup of a resumed run. None: the folder could not be read
+    # completely at the start. A record from before this field loads with an empty list.
+    preexisting_files: Optional[List[str]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

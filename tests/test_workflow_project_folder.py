@@ -29,7 +29,13 @@ MUTATIONS, each turns the named tests red:
 - the cleanup without the caller's uid8 -> test_the_cleanup_stays_in_the_callers_folder;
 - the refused-folder note dropped -> test_the_model_is_told_where_the_files_are;
 - the cleanup without the pre-existing snapshot -> test_the_cleanup_keeps_pre_existing_files;
-- resume dropping project_path or the snapshot on its early return -> test_resume_carries_the_folder.
+- resume dropping project_path or the snapshot on its early return -> test_resume_carries_the_folder;
+- the cleanup unlinking an entry's resolved path, or walking into a linked folder ->
+  test_the_cleanup_never_follows_a_link;
+- the re-check before each unlink dropped (still not a link; resolved folder inside the
+  project) -> test_the_cleanup_rechecks_each_entry;
+- an incomplete snapshot treated as complete -> test_an_incomplete_snapshot_skips_the_cleanup;
+- execute() without its own snapshot -> test_the_engine_takes_the_snapshot.
 """
 from pathlib import Path
 from types import SimpleNamespace
@@ -307,3 +313,93 @@ def test_resume_carries_the_folder(home):
     assert result.success and not result.paused
     assert result.project_path == str(own)
     assert result.preexisting_files == pre
+
+
+def _can_link(tmp_path):
+    probe = tmp_path / "link-probe"
+    try:
+        probe.symlink_to(tmp_path)
+    except (OSError, NotImplementedError):
+        return False
+    probe.unlink()
+    return True
+
+
+def test_the_cleanup_never_follows_a_link(home, tmp_path):
+    """A run's shell can make links in its folder. The cleanup removes entries, never what a
+    link points at, and does not walk into a linked folder."""
+    if not _can_link(tmp_path):
+        pytest.skip("no symlinks on this file system")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("x")
+    (outside / "keep.json").write_text("x")
+    (outside / "nested.py").write_text("x")
+    project = _own_root(home) / "Linked"
+    project.mkdir(parents=True)
+    (project / "scratch.py").write_text("x")
+    (project / "a.tmp").symlink_to(outside / "keep.txt")
+    (project / "b.lock").symlink_to(outside / "keep.json")
+    (project / "sub").symlink_to(outside, target_is_directory=True)
+
+    deleted = remove_temp_intermediates(str(project), user_scope_id=OWN_SCOPE, preexisting=())
+
+    assert deleted == 1 and not (project / "scratch.py").exists()
+    for target in ("keep.txt", "keep.json", "nested.py"):
+        assert (outside / target).exists(), f"the cleanup deleted {target} through a link"
+
+
+def test_an_incomplete_snapshot_skips_the_cleanup(home, monkeypatch):
+    import vaf.core.path_jail as path_jail
+    from vaf.workflows.engine import snapshot_intermediates
+    project = _own_root(home) / "Unreadable"
+    project.mkdir(parents=True)
+    (project / "scratch.py").write_text("x")
+    real_walk = path_jail.os.walk
+
+    def _walk(top, *args, onerror=None, **kw):
+        if onerror:
+            onerror(OSError("a folder could not be listed"))
+        yield from real_walk(top, *args, **kw)
+    monkeypatch.setattr(path_jail.os, "walk", _walk)
+    assert snapshot_intermediates(str(project)) is None
+    monkeypatch.setattr(path_jail.os, "walk", real_walk)
+    assert remove_temp_intermediates(str(project), user_scope_id=OWN_SCOPE, preexisting=None) == 0
+    assert (project / "scratch.py").exists()
+
+
+def test_the_engine_takes_the_snapshot(home):
+    """The real execute(): a file already in the folder is in the result's snapshot, and the
+    cleanup with that snapshot keeps it."""
+    own = _own_root(home) / "green123456" / "Probe"
+    own.mkdir(parents=True)
+    (own / "app.py").write_text("print('mine')")
+    shell, result = _run({"workflow_project_path": str(own)})
+    assert result.success and "app.py" in (result.preexisting_files or ())
+    (own / "scratch.py").write_text("x")
+    remove_temp_intermediates(result.project_path, user_scope_id=OWN_SCOPE,
+                              preexisting=result.preexisting_files)
+    assert (own / "app.py").exists() and not (own / "scratch.py").exists()
+
+
+def test_the_cleanup_rechecks_each_entry(home, tmp_path, monkeypatch):
+    """The walk can be stale by the time an entry is removed (a folder swapped for a link
+    meanwhile). Simulated by a walk that lists a link and a file below a linked folder: the
+    cleanup checks each entry again and removes neither, nor anything they point at."""
+    import vaf.workflows.engine as engine_module
+    if not _can_link(tmp_path):
+        pytest.skip("no symlinks on this file system")
+    outside = tmp_path / "outside2"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("x")
+    (outside / "x.py").write_text("x")
+    project = _own_root(home) / "Raced"
+    project.mkdir(parents=True)
+    (project / "a.tmp").symlink_to(outside / "keep.txt")
+    (project / "sub").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(engine_module, "_scratch_entries",
+                        lambda base: [("a.tmp", False), ("sub/x.py", False)])
+
+    assert remove_temp_intermediates(str(project), user_scope_id=OWN_SCOPE, preexisting=()) == 0
+    assert (project / "a.tmp").is_symlink(), "a link entry was removed"
+    assert (outside / "keep.txt").exists() and (outside / "x.py").exists()

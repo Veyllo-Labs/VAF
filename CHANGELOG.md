@@ -102,17 +102,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
-- **Local models lose less of the conversation and stop contradicting themselves.** A long
-  chat no longer triggers an emergency cleanup on every message: the token count before a reply
-  counted every tool's description, although only the tools chosen for the message are sent.
-  If the cleanup does run, it keeps your request. The summary of the conversation no longer
-  falls back to an older one in the middle of a reply. When a reply claims a result the tools
-  did not deliver, VAF now asks the model once to correct it and then adds a short note that
-  the claim is unconfirmed, instead of a third rewrite. A temporary workflow with a shell step
-  now runs that step in the shell instead of failing inside the Python sandbox, and a plan that
-  cannot run (a missing parameter, an unknown tool, a download in the offline shell, a host
-  command that would need your OK) is answered at once with what to fix, before anything
-  starts.
+- **A long chat with a local model no longer loses its context on every message.** The token
+  count before a reply counted the description of every tool, although only the tools chosen for
+  the message are sent, so each message triggered an emergency cleanup. If the cleanup does run,
+  it keeps your request, and the summary of the conversation no longer falls back to an older
+  one in the middle of a reply.
+- **A reply that claims a result the tools did not deliver gets one correction, then a note.**
+  VAF asks the model once to correct it and then adds a short line, in your language, that the
+  claim is unconfirmed, instead of a third rewrite.
+- **Temporary workflows with shell steps run, or say at once what to fix.** A shell step now runs
+  in the shell instead of failing inside the Python sandbox, in the workflow's own project
+  folder. A plan that cannot run (a missing parameter, an unknown tool, a download in the
+  offline shell, a host command that would need your OK) is answered right away with what to
+  fix, before anything starts.
 - **vLLM now starts on NVIDIA GPUs without the CUDA developer tools** (such as an RTX 3080),
   where it used to crash a minute into its start. Switching to vLLM now starts it once as a
   test and only switches when it answers.
@@ -163,6 +165,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **A workflow's project folder is always its own.** Its variables can no longer point the
+  folder its steps write to, and its shell steps work in, at another place (for example VAF's
+  settings folder or another account's projects), and the cleanup of temporary files after a
+  workflow only ever removes files inside `Documents/VAF_Projects`.
 - **The background agent no longer changes how everybody else's chats run.** While the
   background agent (Thinking mode) worked for one person, everything else VAF did at the
   same time was treated as part of that run: with DeepSeek Auto every chat of every account

@@ -664,12 +664,22 @@ _GROUNDING_NOTE = {
           "nicht belegt. Bitte verlass dich nicht darauf, ohne es zu prüfen.",
     "en": "Note: what I wrote above is not backed by the results of my tools. Please do not "
           "rely on it without checking.",
+    "ja": "注意：上に書いた内容は、ツールの結果では裏付けられていません。確認せずにそのまま"
+          "信用しないでください。",
+    "ko": "참고: 위에 쓴 내용은 도구 결과로 확인되지 않았어요. 확인하기 전에는 그대로 믿지 마세요.",
+    "th": "หมายเหตุ: สิ่งที่ฉันเขียนไว้ด้านบนไม่มีผลลัพธ์จากเครื่องมือยืนยัน โปรดตรวจสอบก่อนนำไปใช้",
+    "tr": "Not: Yukarıda yazdıklarım araçlarımın sonuçlarıyla doğrulanmıyor. Lütfen kontrol "
+          "etmeden buna güvenme.",
+    "zh": "注意：我上面写的内容没有得到工具结果的支持。请先核实，不要直接依赖。",
 }
 
 
 def _grounding_note(user_language) -> str:
-    """The fixed unconfirmed-claim line in the user's language (German or English)."""
-    return _GROUNDING_NOTE["de" if user_language == "de" else "en"]
+    """The fixed unconfirmed-claim line in the turn's language: the seven languages of the UI
+    catalogue (web/messages), English for any other language and for an unclear one ("auto"),
+    where no language is known to answer in."""
+    code = str(user_language or "").strip().lower().replace("_", "-").split("-", 1)[0]
+    return _GROUNDING_NOTE.get(code, _GROUNDING_NOTE["en"])
 
 
 def _find_redundant_read_call(history, tool_name: str, arguments, max_window: int = 12) -> bool:

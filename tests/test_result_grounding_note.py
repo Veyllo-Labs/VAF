@@ -13,11 +13,14 @@ MUTATIONS, each turns the named tests red:
 - drop the note append -> all three note tests;
 - the old cap (`> _rg_max`: N corrections, then the note) -> the N=2 test (a third model
   reply);
-- the note always in English -> the German test.
+- the note always in English -> the German test and the language table test;
+- a catalogue language without its note -> the catalogue test.
 """
 import pytest
 
-from vaf.core.agent import _GROUNDING_NOTE
+from pathlib import Path
+
+from vaf.core.agent import _GROUNDING_NOTE, _grounding_note
 from vaf.core.config import Config
 from vaf.core.platform import Platform
 
@@ -98,3 +101,19 @@ def test_no_note_when_the_guard_is_off(agent, monkeypatch):
     assert len(agent.main_calls) == 1
     assert [m["content"] for m in stored] == [REPLIES[0]]
     assert _GROUNDING_NOTE["en"] not in streamed
+
+
+def test_each_language_gets_its_own_note():
+    for code in ("de", "en", "ja", "ko", "th", "tr", "zh"):
+        assert _grounding_note(code) == _GROUNDING_NOTE[code]
+    assert _grounding_note("zh-CN") == _GROUNDING_NOTE["zh"]
+    assert _grounding_note("TR") == _GROUNDING_NOTE["tr"]
+    for unclear in ("auto", "", None, "fr"):
+        assert _grounding_note(unclear) == _GROUNDING_NOTE["en"]
+    assert len(set(_GROUNDING_NOTE.values())) == len(_GROUNDING_NOTE), "two languages share a text"
+
+
+def test_every_catalogue_language_has_a_note():
+    """The UI's languages are the files in web/messages; a language added there needs its note."""
+    catalogue = {p.stem for p in (Path(__file__).resolve().parents[1] / "web" / "messages").glob("*.json")}
+    assert catalogue and catalogue == set(_GROUNDING_NOTE), sorted(catalogue ^ set(_GROUNDING_NOTE))

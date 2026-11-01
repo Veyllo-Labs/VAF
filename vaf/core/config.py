@@ -302,7 +302,7 @@ class Config:
                 # not support — including a result for a tool that was never run this turn. On a
                 # mismatch the reply is bounced back for correction (capped, then it proceeds).
                 "result_grounding_enabled": True,              # global kill-switch
-                "result_grounding_max_retries": 2,             # corrections before proceeding anyway
+                "result_grounding_max_retries": 2,             # unsupported verdicts per reply before the fixed note (N-1 corrections)
 
                 # An outward message the agent prepares on the person's own web chat turn waits
                 # for that person: a mail is parked as a draft, a WhatsApp message with an

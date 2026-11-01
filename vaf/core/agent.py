@@ -655,6 +655,23 @@ def _grounding_correction(claim: str) -> str:
     )
 
 
+# The fixed line under a reply the result-grounding guard still finds unsupported after its last
+# correction. Another model rewrite there is what a weak model answers with a reversal (live: a
+# 4B model's three replies said done, not done, running), and every one of them stays on the
+# screen; a line the model did not write ends the chain honestly instead.
+_GROUNDING_NOTE = {
+    "de": "Hinweis: Was ich oben geschrieben habe, ist durch die Ergebnisse meiner Werkzeuge "
+          "nicht belegt. Bitte verlass dich nicht darauf, ohne es zu prüfen.",
+    "en": "Note: what I wrote above is not backed by the results of my tools. Please do not "
+          "rely on it without checking.",
+}
+
+
+def _grounding_note(user_language) -> str:
+    """The fixed unconfirmed-claim line in the user's language (German or English)."""
+    return _GROUNDING_NOTE["de" if user_language == "de" else "en"]
+
+
 def _find_redundant_read_call(history, tool_name: str, arguments, max_window: int = 12) -> bool:
     """True when an identical (name, args) READ call already SUCCEEDED earlier in
     the CURRENT turn and nothing mutated state since - its result is still in
@@ -11736,7 +11753,9 @@ class Agent:
             # When the model produced a final text reply (no new tool call), make sure it isn't
             # claiming a concrete tool OUTCOME that the turn's actual tool results don't support
             # (e.g. "Workflow failed: Tool not found" when execute_workflow was never run). On a
-            # mismatch, send it back for correction, capped, then proceed so it never loops.
+            # mismatch, send it back for correction; the Nth unsupported verdict of the chain
+            # (N = result_grounding_max_retries) gets the fixed note below it instead of another
+            # model call, so it never loops.
             if not streaming_tools and not tool_calls_detected and full_content.strip():
                 _rg_on = True
                 try:
@@ -11763,9 +11782,18 @@ class Agent:
                             _rg_max = int(_CfgRG2.get("result_grounding_max_retries", 2))
                         except Exception:
                             _rg_max = 2
-                        if self._result_grounding_retries > _rg_max:
-                            UI.event("System", "Result grounding: max retries reached - proceeding.", style="error")
+                        if self._result_grounding_retries >= max(_rg_max, 1):
+                            # Appended, never replacing: a guard does not erase a streamed reply,
+                            # so the replies stay where the user read them, and the note reaches the stored message and the
+                            # text a channel sends, because both are built from these buffers.
+                            UI.event("System", "Result grounding: still unsupported after the corrections - adding the note.", style="error")
                             self._result_grounding_retries = 0
+                            _pm = getattr(self, "prompt_manager", None)
+                            _note = "\n\n" + _grounding_note(getattr(_pm, "user_language", None))
+                            full_content += _note
+                            full_response += _note
+                            if stream_callback:
+                                stream_callback(_note)
                         else:
                             UI.event("System", f"Ungrounded tool-result claim detected (attempt {self._result_grounding_retries}) - keeping the reply, correction follows...", style="warning")
                             # NON-DESTRUCTIVE, like the team-await hold: a finished answer is

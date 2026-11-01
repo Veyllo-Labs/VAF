@@ -2903,7 +2903,7 @@
     "fit": {
       "fits": "放得下：约需 {need} GB，预算 {budget} GB（上下文 {ctx}，KV 缓存 {kv}）。",
       "too_big": "该模型约需 {need} GB 的 GPU 显存，目前空闲 {free} GB，其他程序占用 {other} GB。请关闭使用 GPU 的程序后重试。本地引擎保持不变；llama.cpp 可以把模型的一部分放到 CPU 上运行。",
-      "too_big_reserve": "该模型约需 {need} GB，但 vLLM 只能分到 {budget} GB：这块 GPU 连接着显示器，因此自动分配把显卡的 {reserve} GB 留在了 vLLM 之外，供屏幕使用。如需给 vLLM 更多显存，请手动把 GPU 显存设为至少 {min}（屏幕显存耗尽时可能会卡死），或继续使用 llama.cpp。",
+      "too_big_reserve": "该模型约需 {need} GB，但 vLLM 只能分到 {budget} GB：这块 GPU 连接着显示器，或 VAF 无法判断是否连接，因此自动分配把显卡的 {reserve} GB 留在了 vLLM 之外，供屏幕使用。如需给 vLLM 更多显存，请手动把 GPU 显存设为至少 {min}（屏幕显存耗尽时可能会卡死），或继续使用 llama.cpp。",
       "share_above_free": "其他程序正在占用 GPU：vLLM 需要 {budget} GB，但只有 {free} GB 空闲。请关闭这些程序后重试。",
       "no_shape": "模型的 config.json 没有说明其结构。",
       "no_gpu_memory": "GPU 驱动没有报告 GPU 的显存。"

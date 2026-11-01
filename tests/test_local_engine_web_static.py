@@ -535,4 +535,9 @@ def test_balanced_cards_and_share_texts(locale):
                                     "in Sekunden")
         assert cat["share"]["label"] == "GPU-Speicher für vLLM"
         assert cat["share"]["leaves"].startswith("Es bleiben {left} GB")
+        assert "weil diese GPU ein Display ansteuert oder VAF das nicht erkennen kann" in \
+            cat["fit"]["too_big_reserve"]
         assert cat["share"]["leavesLow"].startswith("Es bleiben nur {left} GB")
+    if locale == "en":
+        # The refusal comes for an unknown display state too (the reserve applies then).
+        assert "because this GPU drives a display or VAF cannot tell" in cat["fit"]["too_big_reserve"]

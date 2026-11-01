@@ -2903,7 +2903,7 @@
     "fit": {
       "fits": "Fits: about {need} of {budget} GB (context {ctx}, KV cache {kv}).",
       "too_big": "The model needs about {need} GB of GPU memory; {free} GB are free and other programs hold {other} GB. Close programs that use the GPU and try again. The local engine stays as it was; llama.cpp can move part of the model to the CPU.",
-      "too_big_reserve": "The model needs about {need} GB, but vLLM gets {budget} GB: the automatic share keeps {reserve} GB of the card outside vLLM for the screen, because this GPU drives a display. Set the GPU memory by hand to at least {min} to give vLLM more (the screen can freeze when its memory runs out), or stay on llama.cpp.",
+      "too_big_reserve": "The model needs about {need} GB, but vLLM gets {budget} GB: the automatic share keeps {reserve} GB of the card outside vLLM for the screen, because this GPU drives a display or VAF cannot tell. Set the GPU memory by hand to at least {min} to give vLLM more (the screen can freeze when its memory runs out), or stay on llama.cpp.",
       "share_above_free": "Other programs use the GPU: vLLM would need {budget} GB, but only {free} GB are free. Close them and try again.",
       "no_shape": "The model's config.json does not say its shape.",
       "no_gpu_memory": "The GPU driver does not report the GPU's memory."

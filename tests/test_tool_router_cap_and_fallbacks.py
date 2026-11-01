@@ -82,7 +82,7 @@ def test_the_context_pressure_subset_keeps_search_tools(agent, monkeypatch):
     agent.use_server = True
     many = sorted(agent.tools)[:20]
     monkeypatch.setattr(agent, "_route_tools", lambda text: list(many))
-    monkeypatch.setattr(agent, "get_token_usage", lambda: (100000, 32768))
+    monkeypatch.setattr(agent, "get_token_usage", lambda **kw: (100000, 32768))
     monkeypatch.setattr(agent, "manage_context", lambda *a, **kw: None)
     monkeypatch.setattr(agent, "analyze_intent", lambda *a, **kw: 0.7)
     sent = []

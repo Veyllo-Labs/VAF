@@ -22,7 +22,7 @@ class ContextStateProvider(StateProvider):
     Persists:
     - Intent context (goals, constraints, keywords)
     - State context (files, errors, decisions, snippets)
-    - Token limits and usage
+    - Token limits (written for readers of the file, not restored: see restore_state)
     """
     
     def __init__(self, context_manager):
@@ -85,12 +85,12 @@ class ContextStateProvider(StateProvider):
                 self.context_manager.state.narrative_summary = state_data.get("narrative_summary", "")
                 self.context_manager.state.last_updated = state_data.get("last_updated", "")
             
-            # Restore settings
-            if "max_tokens" in state:
-                self.context_manager.max_tokens = state["max_tokens"]
-            if "trigger_threshold" in state:
-                self.context_manager.trigger_threshold = state["trigger_threshold"]
-            
+            # "max_tokens" and "trigger_threshold" are written (get_state) but deliberately not
+            # restored: the window belongs to the running engine, not to the chat. The agent
+            # re-syncs it every turn (Agent._sync_compression_limit) and set_max_tokens derives
+            # the threshold from it; a snapshot saved under another engine or config (e.g. an
+            # n_ctx of 128000 while the engine serves 32768) put the stale limit back bare.
+
             log.debug("Successfully restored context state")
         except Exception as e:
             log.error(f"Failed to restore context state: {e}")

@@ -50,7 +50,27 @@ request, so the budget must never shrink that guard. Limit changes go through
 `ContextManager.set_max_tokens`, which re-derives `trigger_threshold` and
 `recent_memory_size` in place - the manager instance is NEVER replaced, because
 the state registry's `ContextStateProvider` holds a reference to it (a rebuilt
-manager persisted as an empty snapshot and lost the checkpoint summary).
+manager persisted as an empty snapshot and lost the checkpoint summary). A
+session snapshot never sets the limit: `ContextStateProvider.restore_state`
+restores intent and state but not `max_tokens`/`trigger_threshold`, so a chat
+saved under another engine or config (an `n_ctx` of 128000 while vLLM serves
+32768) cannot put its old limit back.
+
+**What the counts before routing leave out.** Until a new turn has routed its
+tools, `TOOLS` is the whole registry (about 40k tokens of schema for the main
+agent, measured on a Qwen3 tokenizer), while the request that is sent carries
+only the routed set. The calls `chat_step` makes before routing - the first
+count, the context broadcast and both `manage_context` calls - therefore pass
+`include_tools=False` (`Agent._counted_tool_schemas` is the one rule every
+count reads: the estimate, the server's `/tokenize`, the local tokenizer and the
+breakdown in the broadcast). Counting the full schema there made every turn of a long local
+chat an overflow and purged it. The request itself is still guarded after
+routing, with the routed schema counted (the proactive compression and the core
+tool subset of the local server lane). When the purge does fire, it keeps the
+system prompt, the turn's request (`turn_anchor_index`, for the same reason the
+compression keeps it: inside a tool loop it lies more than six messages back)
+and the last six messages; the compression right after it rebuilds the summary
+block.
 
 **In short:** compression is triggered as soon as the estimated usage of the history reaches the dynamic threshold of the effective limit (model window, or the pay-per-token budget on APIs).
 

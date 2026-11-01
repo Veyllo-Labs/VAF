@@ -306,7 +306,9 @@ still runs a hidden tool, but never one outside the allowed set.
 - `set_event_sink(callable)` - structured `tool_start`/`tool_end`/
   `gate_required`/`gate_decision` events; full schema in
   [OBSERVABILITY.md](OBSERVABILITY.md).
-- `get_token_usage() -> (used, max)` - provider-appropriate context usage.
+- `get_token_usage(*, include_tools=True) -> (used, max)` - provider-appropriate context usage;
+  `include_tools=False` leaves the tool schemas out (the agent's own counts before a turn's
+  tools are routed use it).
 - `last_turn` - how the most recent `chat_step` ended, beside its text: a frozen
   `vaf.TurnStatus(failed, failure)` (see the return contract above). Reset at the start of
   every `chat_step`; read it right after the turn, before another one runs on this agent.

@@ -28,6 +28,8 @@ BLOCK = "## Memory context (relevant to this query)\n\n[Source 1] (Relevance: 90
 class _Dummy:
     """Just enough agent for the two unbound methods under test."""
 
+    _counted_tool_schemas = CoreAgent._counted_tool_schemas
+
     def __init__(self, history=None):
         self.history = history if history is not None else []
         self.api_backend = None

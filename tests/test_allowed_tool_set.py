@@ -269,7 +269,7 @@ def _retry_step_corrections(agent, monkeypatch):
     _get = Config.get
     monkeypatch.setattr(Config, "get", staticmethod(
         lambda key, default=None: True if key == "false_promise_detection_enabled" else _get(key, default)))
-    monkeypatch.setattr(agent, "get_token_usage", lambda: (100000, 32768))
+    monkeypatch.setattr(agent, "get_token_usage", lambda **kw: (100000, 32768))
     monkeypatch.setattr(agent, "manage_context", lambda *a, **kw: None)
     monkeypatch.setattr(agent, "_try_workflow", lambda *a, **kw: None)
     main, scope = [], []

@@ -102,10 +102,10 @@ def _agent_on(session_id: str, history):
     a.state_registry = None
     a.main_persistence = None
     a.current_session_id = session_id
-    a.get_token_usage = lambda: (100, 128000)
+    a.get_token_usage = lambda **kw: (100, 128000)
     a.init_chat = lambda **kw: a.__dict__.__setitem__("history", [{"role": "system", "content": "sys"}])
     a._bind_session_persistence = lambda sid: None
-    a._broadcast_context_status = lambda: None
+    a._broadcast_context_status = lambda **kw: None
     return a
 
 

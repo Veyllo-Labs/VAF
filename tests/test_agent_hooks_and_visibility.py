@@ -61,7 +61,7 @@ class _Agent:
         self.current_session_id = "s-1"
         self.tools = dict(tools or {})
 
-    def get_token_usage(self):
+    def get_token_usage(self, **kw):
         return 100, 1000
 
     def _sync_compression_limit(self, window):

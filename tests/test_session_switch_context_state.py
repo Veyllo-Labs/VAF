@@ -269,9 +269,8 @@ def test_another_account_on_the_same_agent_gets_none_and_keeps_its_own(make_agen
 
     agent._current_user_role = "admin"
     _on_the_owners_chat(agent)
-    # The context broadcast re-loads the session with the registry and restores the stored
-    # snapshot a second time; held off here, so what is pinned is the loader's own restore.
-    agent._broadcast_context_status = lambda: None
+    # The context broadcast that ends the load reads the session without restoring it, so
+    # what is pinned here is the loader's own restore.
     agent.load_session_context(OTHER_OWN_SESSION)
     agent._current_user_role = "user"
 
@@ -386,10 +385,9 @@ def test_a_rebuild_of_the_same_chat_keeps_its_state(make_agent):
 def test_a_rebuild_keeps_a_newer_live_state_over_the_chats_saved_one(make_agent):
     """The chat's file holds a snapshot older than what the agent noted since. A forced
     rebuild of the same chat must not put the older one back; a switch away and back does
-    restore the saved one. The context broadcast that ends every load restores the saved
-    snapshot on its own and is held off, so this pins the loader."""
+    restore the saved one. The context broadcast that ends every load reads the file without
+    restoring it, so it runs here too and must not put the older snapshot back either."""
     agent = make_agent()
-    agent._broadcast_context_status = lambda: None
     agent.load_session_context(OWNER_SESSION)
     agent.context_manager.state.narrative_summary = "LIVE7QSUMMARY newer than the file"
     agent.context_manager.state.key_decisions.append("LIVE7QDECISION")
@@ -501,6 +499,9 @@ def test_init_chat_starts_a_fresh_conversation_unless_told_to_keep_it(make_agent
     assert snapshot["intent"] == asdict(cm.intent)
     assert snapshot["state"]["narrative_summary"] == ""
 
+    # The live state a compression of this chat would leave; a rebuild of the same chat
+    # keeps it, and so does the prompt rebuild for the same conversation.
+    provider.restore_state(_context_runtime_state(OWNER_TAG)["providers"]["context"]["state"])
     agent.load_session_context(OWNER_SESSION, force=True)
     agent.init_chat(keep_chat_state=True)
 

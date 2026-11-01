@@ -102,6 +102,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Local models lose less of the conversation and stop contradicting themselves.** A long
+  chat no longer triggers an emergency cleanup on every message: the token count before a reply
+  counted every tool's description, although only the tools chosen for the message are sent.
+  If the cleanup does run, it keeps your request. The summary of the conversation no longer
+  falls back to an older one in the middle of a reply.
 - **vLLM now starts on NVIDIA GPUs without the CUDA developer tools** (such as an RTX 3080),
   where it used to crash a minute into its start. Switching to vLLM now starts it once as a
   test and only switches when it answers.

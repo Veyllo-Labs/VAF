@@ -380,7 +380,7 @@ def test_agent_token_usage_counts_vllm_tokens(monkeypatch, values):
 def test_agent_token_usage_estimates_when_the_server_cannot_count(monkeypatch, values):
     monkeypatch.setattr(requests, "post", lambda *a, **k: _Resp(404, {}))
     agent = _bare_agent([{"role": "user", "content": "hallo " * 200}])
-    monkeypatch.setattr(agent, "_estimate_token_usage", lambda: (777, 32768), raising=False)
+    monkeypatch.setattr(agent, "_estimate_token_usage", lambda **kw: (777, 32768), raising=False)
     assert agent.get_token_usage() == (777, 32768), "a failed count is an estimate, not 5 + 100"
 
 
@@ -402,7 +402,7 @@ def _local_agent(monkeypatch, tmp_path):
     a.use_server = True
     monkeypatch.setattr(a, "_try_workflow", lambda *args, **kw: None)
     monkeypatch.setattr(a, "_route_tools", lambda text: ["web_search"])
-    monkeypatch.setattr(a, "get_token_usage", lambda: (1000, 32768))
+    monkeypatch.setattr(a, "get_token_usage", lambda **kw: (1000, 32768))
     monkeypatch.setattr(a, "manage_context", lambda *args, **kw: None)
     monkeypatch.setattr(a, "analyze_intent", lambda *args, **kw: 0.7)
     return a

@@ -5957,12 +5957,8 @@ class Agent:
         # The same chat keeps its live provider state (the context state and any other
         # provider registered): a terminal chat stores no snapshot, so a reset would lose its
         # summary to every background append, and the load below does not restore a chat's
-        # saved snapshot over its newer live state either.
-        #
-        # NAMED BOUNDARY: `_broadcast_context_status`, which ends every load and every
-        # turn, reloads the session with the state registry and so still restores its
-        # saved snapshot; a chat WITH one gets the saved state back after this rebuild
-        # until that broadcast reads the file without restoring.
+        # saved snapshot over its newer live state either (nor does the broadcast that ends
+        # the load: it reads the file without restoring).
         if not same_chat:
             self._reset_chat_state()
 
@@ -6606,7 +6602,20 @@ class Agent:
 
         self.history[0]["content"] = content
 
-    def _estimate_token_usage(self):
+    def _counted_tool_schemas(self, include_tools: bool = True) -> list:
+        """The tool schemas a token count adds to the history: the one rule for all four counts.
+
+        ``include_tools=False`` is for the counts taken BEFORE the turn's tools are routed. Until
+        then ``TOOLS`` is the whole registry (an internal step leaves ``_active_tools`` at None),
+        while the request that is sent carries only the routed set. Measured on the main agent's
+        registry: 137 schemas, about 40k tokens of a 32k local window, so every turn of a long
+        chat read as an overflow and was purged before routing. The real request is guarded
+        after routing with the routed schema counted (the post-routing check in chat_step)."""
+        if not include_tools:
+            return []
+        return getattr(self, "TOOLS", None) or []
+
+    def _estimate_token_usage(self, *, include_tools: bool = True):
         """
         Estimate token usage without loading the tokenizer.
         Uses weighted ratios (2.8 for code, 3.6 for text) for high accuracy.
@@ -6627,9 +6636,10 @@ class Agent:
 
         # 2. Estimate tool schema tokens — only for local/server mode.
         # API backends handle schemas server-side.
-        if hasattr(self, 'TOOLS') and self.TOOLS and not self.api_backend:
+        _schemas = self._counted_tool_schemas(include_tools) if not self.api_backend else []
+        if _schemas:
             try:
-                schema_str = json_module.dumps(self.TOOLS)
+                schema_str = json_module.dumps(_schemas)
                 # Tool schemas are mostly structured text/code-like
                 total_tokens += int(len(schema_str) / 3.0)
             except Exception:
@@ -6746,9 +6756,12 @@ class Agent:
                 pass
             cm.set_max_tokens(effective)
 
-    def get_token_usage(self):
+    def get_token_usage(self, *, include_tools: bool = True):
         """
         Calculates a precise token usage by using the model's tokenizer.
+
+        ``include_tools=False`` leaves the tool schemas out (see ``_counted_tool_schemas``):
+        for the counts a turn takes before its tools are routed.
         """
         # API Backend: Calculate current history status even if no request was made yet.
         if self.api_backend:
@@ -6760,7 +6773,7 @@ class Agent:
                 last_total = li + lo
             
             # If last_total is 0 (new session) or too small, calculate based on current history
-            current_est = self._estimate_token_usage()[0]
+            current_est = self._estimate_token_usage(include_tools=include_tools)[0]
             
             # Real total is the maximum of last request or current estimate
             # (Last request might be smaller if we just compressed, but current history is what counts)
@@ -6800,8 +6813,9 @@ class Agent:
                             raise LookupError("tokenize unavailable")
                         total += count
                     total += 5
-                if hasattr(self, "TOOLS") and self.TOOLS:
-                    count = local_engine.local_token_count(json.dumps(self.TOOLS), timeout=5,
+                _schemas = self._counted_tool_schemas(include_tools)
+                if _schemas:
+                    count = local_engine.local_token_count(json.dumps(_schemas), timeout=5,
                                                            engine=engine)
                     total += count if count is not None else len(self.tools) * 200
                 total += 100
@@ -6811,7 +6825,7 @@ class Agent:
                                or self.config.get("n_ctx", 8192))
             except Exception:
                 pass
-            return self._estimate_token_usage()
+            return self._estimate_token_usage(include_tools=include_tools)
 
         tokenizer = self._get_tokenizer()
         if not tokenizer:
@@ -6834,9 +6848,8 @@ class Agent:
 
         # 2. Tokenize tool schemas
         # This is the "hidden" context cost.
-        if hasattr(self, 'TOOLS') and self.TOOLS:
-            # self.TOOLS is a property that returns the list of schema dicts
-            tool_schemas = self.TOOLS
+        tool_schemas = self._counted_tool_schemas(include_tools)
+        if tool_schemas:
             # Convert the schema to a JSON string to tokenize it
             try:
                 schema_str = json.dumps(tool_schemas)
@@ -7169,7 +7182,7 @@ class Agent:
             logging.getLogger(__name__).warning("Reply-classification LLM call failed: %s", e)
         return (content or "").strip()
 
-    def manage_context(self):
+    def manage_context(self, *, include_tools: bool = True):
         """
         Cursor-Style Context Management
         
@@ -7181,12 +7194,15 @@ class Agent:
         - Narrative Summarization: LLM summarizes old messages (1+1.. -> 5+3..)
         
         Use /restore to recover full context after compression.
+
+        ``include_tools=False`` counts the history without the tool schemas: for the calls a
+        turn makes before its tools are routed (see ``_counted_tool_schemas``).
         """
         from vaf.cli.ui import UI
-        from vaf.core.context import ContextManager
+        from vaf.core.context import ContextManager, turn_anchor_index
         
         # Determine appropriate context limit
-        current_tokens_calc, max_tokens = self.get_token_usage()
+        current_tokens_calc, max_tokens = self.get_token_usage(include_tools=include_tools)
 
         # ONE manager, updated in place. Rebuilding here created a second instance
         # next to the one __init__ registered with the state registry, so intent,
@@ -7233,17 +7249,24 @@ class Agent:
                 get_web_interface().log("Context limit reached! Performing emergency cleanup...", level="warning", source="System", session_id=getattr(self, 'current_session_id', None))
             except: pass
 
-            # Absolute Minimum: System Prompt + LAST 6 messages (or as many as available)
+            # Absolute Minimum: System Prompt + the turn's request + LAST 6 messages (or as many
+            # as available). The request is kept for the same reason the compression keeps it
+            # (ContextManager.compress): inside a tool loop it lies more than 6 messages back,
+            # and without it the model follows whatever its last replies said. The old summary
+            # message is not kept: the compression right after this rebuilds the summary block.
             system_msg = [self.history[0]] if self.history and self.history[0].get("role") == "system" else []
-            # Keep more than just the last message - try to keep 6
             recent_count = 6
-            last_msgs = self.history[-recent_count:] if len(self.history) > 1 else []
-            self.history = system_msg + last_msgs
+            _start = max(len(system_msg), len(self.history) - recent_count)
+            last_msgs = self.history[_start:]
+            _anchor = turn_anchor_index(self.history)
+            anchor_msg = ([self.history[_anchor]]
+                          if _anchor is not None and len(system_msg) <= _anchor < _start else [])
+            self.history = system_msg + anchor_msg + last_msgs
             
             # Force UI update
-            self._broadcast_context_status()
+            self._broadcast_context_status(include_tools=include_tools)
             # Continue to standard compression for remaining history if still needed
-            current_tokens, _ = self.get_token_usage()
+            current_tokens, _ = self.get_token_usage(include_tools=include_tools)
             usage_percent = current_tokens / limit_tokens if limit_tokens else 0
 
         if usage_percent < cm.trigger_threshold:
@@ -7302,7 +7325,7 @@ class Agent:
         except: pass
 
         # Broadcast update to WebUI
-        self._broadcast_context_status()
+        self._broadcast_context_status(include_tools=include_tools)
 
     # ═══════════════════════════════════════════════════════════════════════════
     # PROACTIVE CHECKPOINT (Plan-Act-Summarize support)
@@ -7406,7 +7429,9 @@ class Agent:
         if cm is None:
             return False
         try:
-            _, window = self.get_token_usage()
+            # Only the window is read here (should_compress counts the history itself), so the
+            # tool schemas are not tokenized for nothing.
+            _, window = self.get_token_usage(include_tools=False)
             self._sync_compression_limit(window)
         except Exception:
             pass
@@ -7435,14 +7460,16 @@ class Agent:
             pass
         return True
 
-    def _broadcast_context_status(self):
-        """Send precise context debug info to WebUI (X-Ray Vision)."""
+    def _broadcast_context_status(self, *, include_tools: bool = True):
+        """Send precise context debug info to WebUI (X-Ray Vision).
+
+        ``include_tools=False`` before the turn's tools are routed (``_counted_tool_schemas``)."""
         try:
             from vaf.core.web_interface import get_web_interface
             session_id = getattr(self, "current_session_id", None)
             
             # 1. Get absolute totals (Precise)
-            tokens, max_tokens = self.get_token_usage()
+            tokens, max_tokens = self.get_token_usage(include_tools=include_tools)
 
             # 2. Calculate detailed breakdown (High Precision)
             system_tokens = 0
@@ -7490,9 +7517,10 @@ class Agent:
             # 3. Handle Tool Schema Tokens
             # Important: this must work for BOTH local and API providers, otherwise
             # the Context Window can show 0 for tools in API mode.
-            if hasattr(self, 'TOOLS') and self.TOOLS:
+            _schemas = self._counted_tool_schemas(include_tools)
+            if _schemas:
                 try:
-                    schema_str = json.dumps(self.TOOLS)
+                    schema_str = json.dumps(_schemas)
                     if self.use_server:
                         tools_tokens = local_engine.local_token_count(schema_str, timeout=2,
                                                                       engine=_engine) or 0
@@ -7512,8 +7540,11 @@ class Agent:
                 compaction_interval = int(Config.get("memory_compaction_interval", 15))
                 if session_id:
                     try:
-                        _sm = SessionManager(state_registry=self.state_registry)
-                        _session = _sm.load(session_id)
+                        # Read-only: a load with the registry would put the file's saved
+                        # snapshot back into the LIVE context manager, rolling back a summary
+                        # this turn just wrote (and the window it was compressed against).
+                        _session = SessionManager().load(session_id, restore_state=False,
+                                                         repoint=False)
                         _runtime = getattr(_session, 'runtime_state', None) or {}
                         user_turn_count = _runtime.get("user_turn_count", 0)
                     except: pass
@@ -10276,8 +10307,13 @@ class Agent:
         # Clean old workflow messages from context (prevents clutter)
         self._clean_workflow_context()
 
+        # Whether this turn routes its tools. Until it has, TOOLS is the whole registry, so the
+        # counts below leave the schemas out (_counted_tool_schemas); the request itself is
+        # checked after routing, with the routed schema counted.
+        _will_route = not auto_retry and not skip_input and bool(user_input)
+
         # Initialize context info at the start so it's available in all branches
-        current_tokens, max_tokens = self.get_token_usage()
+        current_tokens, max_tokens = self.get_token_usage(include_tools=not _will_route)
 
         # ------------------------------------------------------------------
         # Sub-Agent Results: Check for completed async tasks
@@ -10397,11 +10433,11 @@ class Agent:
             self._refresh_language_hint(user_input)
             
         # Broadcast context status to WebUI (X-Ray Vision)
-        self._broadcast_context_status()
+        self._broadcast_context_status(include_tools=not _will_route)
 
         # 0. Context Management (Trim/Summarize) - BEFORE adding user input
         # This ensures we have space for the new message and system prompt updates
-        self.manage_context()
+        self.manage_context(include_tools=not _will_route)
         
         # ═══════════════════════════════════════════════════════════════════════
         # WORKFLOW ENGINE: ENABLED - Try to match workflow templates first
@@ -10570,7 +10606,7 @@ class Agent:
         
         # 0.5 Context Management - AFTER adding user input and results
         # Ensures that the context is optimized before we route tools and call the LLM
-        self.manage_context()
+        self.manage_context(include_tools=not _will_route)
 
         # Snapshot history AFTER adding user input. 
         # This index points to the user message we just added.
@@ -10579,7 +10615,7 @@ class Agent:
 
         # Dynamic Tool Selection (Tool Router)
         # Only route tools on a new, non-empty input
-        if not auto_retry and not skip_input and user_input:
+        if _will_route:
             self._select_turn_tools(_route_text, current_tokens, max_tokens)
         else:
             # On retries or for internal steps, use a slightly more generous set if ALL doesn't fit

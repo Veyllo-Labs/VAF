@@ -176,7 +176,7 @@ def test_the_local_lanes_context_pressure_subset_stays_inside_the_set(monkeypatc
     agent = _front_office(_make_agent(monkeypatch, tmp_path, "openai"))
     agent.api_backend = None
     agent.use_server = True
-    monkeypatch.setattr(agent, "get_token_usage", lambda: (100000, 32768))
+    monkeypatch.setattr(agent, "get_token_usage", lambda **kw: (100000, 32768))
     monkeypatch.setattr(agent, "manage_context", lambda *a, **kw: None)
     monkeypatch.setattr(agent, "analyze_intent", lambda *a, **kw: 0.7)
     sent = []

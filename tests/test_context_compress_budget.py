@@ -75,7 +75,7 @@ def test_api_budget_lowers_compression_limit(archive_dir):
     a = _agent_stub(archive_dir, cm_tokens=128000, budget=30000)
     a.provider = "veyllo"
     a.api_backend.get_model_context_window = lambda model=None: 128000
-    a._estimate_token_usage = lambda: (1000, 128000)
+    a._estimate_token_usage = lambda **kw: (1000, 128000)
 
     total, window = a.get_token_usage()
 
@@ -108,7 +108,7 @@ def test_checkpoint_summary_reaches_state_snapshot(archive_dir):
     a.state_registry = StateRegistry()
     a.state_registry.register("context", ContextStateProvider(a.context_manager))
     a.history = _fat_history(10)
-    a.get_token_usage = lambda: (100, 128000)  # far below threshold: no summarize call
+    a.get_token_usage = lambda **kw: (100, 128000)  # far below threshold: no summarize call
 
     a.manage_context()
     result = a.checkpoint_and_reset(summary="CHECKPOINT SUMMARY SURVIVES")
@@ -160,10 +160,10 @@ def test_session_load_compresses_replayed_history(archive_dir, monkeypatch):
     a = _agent_stub(archive_dir, cm_tokens=500, budget=500)
     a.state_registry = None
     a.current_session_id = "other-session"
-    a.get_token_usage = lambda: (2000, 128000)
+    a.get_token_usage = lambda **kw: (2000, 128000)
     a.init_chat = lambda **kw: a.__dict__.__setitem__("history", [{"role": "system", "content": "sys"}])
     a._bind_session_persistence = lambda sid: None
-    a._broadcast_context_status = lambda: None
+    a._broadcast_context_status = lambda **kw: None
 
     a.load_session_context("ab12cd34")
 

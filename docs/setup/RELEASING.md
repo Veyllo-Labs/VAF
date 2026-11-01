@@ -160,7 +160,11 @@ waiting for a stable `X.Y.Z`.
    3.4 GB of downloads to hash; delete the uv cache afterwards): edit the `vllm==` line of
    `vaf/core/vllm_requirements_rocm.in` and run the command written there, then
    `venv/bin/python scripts/check_vllm_lock.py vaf/core/vllm_requirements_rocm.lock`, which
-   must report 0 problems for `x86_64 cp312 glibc 2.39`. Both checker runs belong to the
+   must report 0 problems for `x86_64 cp312 glibc 2.39`. The ROCm index publishes no
+   digest, so the hash of each of its eight packages in the lock is whatever the index
+   served when the lock was generated (trust on first use): after regenerating, download at
+   least one small wheel of that index (amdsmi or torchaudio) and compare its `sha256sum`
+   with the lock by hand. Both checker runs belong to the
    release; `tests/test_vllm_lock.py` refuses a ROCm lock whose vllm is not
    `PIN+ROCM_VARIANT` and any index option inside a lock.
 3. In `CHANGELOG.md`, move the relevant `[Unreleased]` notes into a new

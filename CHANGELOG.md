@@ -19,9 +19,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Hugging Face repo with `--model`), checks that it fits and switches the local engine;
   `vaf engine llama` switches back, `vaf engine` shows what this machine can run. llama.cpp
   stays the default. `vaf health` shows an `engine` row while vLLM is the engine.
-  vLLM needs Linux with an NVIDIA GPU (Turing or newer), an NVIDIA driver 580 or newer and a
-  recent distribution (for example Ubuntu 20.04 on a PC, Ubuntu 22.04 on ARM). VAF checks
-  this first and tells you what to update. On Intel, Apple Silicon and Windows
+  With an NVIDIA GPU, vLLM needs Linux, a Turing or newer card, an NVIDIA driver 580 or newer
+  and a recent distribution (for example Ubuntu 20.04 on a PC, Ubuntu 22.04 on ARM); AMD GPUs
+  are supported too (see below). VAF checks this first and tells you what to update. On Intel, Apple Silicon and Windows
   `vaf engine` says why not yet, and llama.cpp keeps running.
   The install uses a fixed list of package files shipped with VAF, so a new release of one of
   vLLM's dependencies can neither break nor change it.
@@ -88,10 +88,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
-- **AMD GPU memory is read from the driver.** On Linux with ROCm, VAF now reads an AMD GPU's
-  memory and architecture from the amdgpu driver; rocm-smi prints the memory in bytes, which
-  VAF did not read, so it saw 0. The default model and the fit check now see the real VRAM. With the real figure,
-  `model: auto` may now pick a larger GGUF on such machines.
+- **VAF now sees how much memory an AMD GPU has** (Linux with ROCm). It read 0 before, so the
+  automatic model choice treated the card as having none; it may now pick a larger model.
 - On Windows with an NVIDIA GPU, a local model started from the tray ran on the CPU. It now
   uses the GPU.
 - Settings showed a few words only in English whatever the language: the main provider's

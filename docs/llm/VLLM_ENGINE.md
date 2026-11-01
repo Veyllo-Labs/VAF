@@ -178,13 +178,22 @@ command.
   index is an EXTRA one on the command line, never in the lock (pip honours index options
   inside a requirements file; `tests/test_vllm_lock.py` refuses any in either lock); the
   primary index stays pip's own, as for CUDA, and `--require-hashes` makes the second index
-  safe, since a file of the same name from another index has another hash.
+  safe, since a file of the same name from another index has another hash. What it does not
+  give is independence from PyPI: a release of the same name and version published there
+  cannot replace a locked file (its hash differs, pip refuses it), but it can make the
+  install fail with a hash error. `amd-aiter` exists on PyPI under another publisher (one
+  release, 0.1.7.post2.dev18, not the pinned 0.1.24.post1); the packages pinned with a local
+  version label (torch, triton, vllm, torchvision, torchaudio, amdsmi) cannot be published
+  there at all.
   The wheels do NOT bundle the ROCm runtime: `torch/lib/libc10_hip.so` and
   `vllm/_rocm_C.abi3.so` NEED `libamdhip64.so.7` (RUNPATH `/opt/rocm/lib` and
   `/opt/rocm-7.2.3/lib`, read with readelf on the wheels), and the build image is
   `rocm/dev-ubuntu-22.04:7.2.3-complete`. The host needs ROCm 7.2 or newer installed; a
   distribution's packages in `/usr/lib64` or `/usr/lib/x86_64-linux-gnu` count, the linker
-  finds them without a RUNPATH. The ROCm lock (219 pinned releases) is generated with uv
+  finds them without a RUNPATH. A ROCm under `$ROCM_PATH` or another `/opt/rocm-<version>`
+  (no `/opt/rocm` link) is on neither, so every install step, the probe and the server get
+  its library directory first on `LD_LIBRARY_PATH` (`gpu_detection.rocm_library_dir`,
+  `vllm_server.with_rocm_library`); the CUDA build's environment is untouched. The ROCm lock (219 pinned releases) is generated with uv
   (`uv==0.13.6` in a throwaway venv, the command is in `vllm_requirements_rocm.in`):
   pip-compile resolves only for the interpreter it runs on, and this lock is for cp312 x86_64
   glibc 2.39. uv is a release-time tool only, never a runtime dependency. The ROCm index
@@ -321,8 +330,8 @@ a driver that is too old). From vLLM's installation guide
 | Linux, AMD, no `libamdhip64.so.7` | unsupported | `amd_rocm_missing`: the wheels link the host's ROCm 7 runtime |
 | Linux, AMD, ROCm below 7.2 | unsupported | `amd_rocm_old`: the build image is ROCm 7.2.3; a version VAF cannot read (`<rocm>/.info/version`, missing in a distribution install) is not refused, the probe judges it |
 | Linux, AMD, /dev/kfd not open to the account | unsupported | `amd_no_access`: ROCm's prerequisite is membership in the render and video groups |
-| Linux, AMD, glibc below 2.39, unknown, or musl | unsupported | `amd_glibc_old`: vllm, torch, amd-aiter and flash-attn of the ROCm index are `manylinux_2_39` wheels (Ubuntu 24.04, Debian 13, Fedora 40, RHEL 10 and later); `local_engine.MIN_GLIBC_ROCM` |
-| Linux, AMD, no Python 3.12 | unsupported | `amd_python`: the ROCm wheels are cp312 only; Ubuntu 24.04 and Fedora 40 ship it as their default Python, Debian 13 does not ship it at all |
+| Linux, AMD, glibc below 2.39, unknown, or musl | unsupported | `amd_glibc_old`: vllm, torch, amd-aiter and flash-attn of the ROCm index are `manylinux_2_39` wheels (Ubuntu 24.04, Fedora 40, RHEL 10 and later); `local_engine.MIN_GLIBC_ROCM` |
+| Linux, AMD, no Python 3.12 | unsupported | `amd_python`: the ROCm wheels are cp312 only; Ubuntu 24.04 and Fedora 40 ship it as their default Python; Debian 13 meets the glibc floor but ships no Python 3.12, so the sentence names pyenv for such systems (VAF finds `python3.12` on PATH, `vllm_server.rocm_python`) |
 | Linux, Intel GPU | later | "basic model inference and serving", needs Python 3.12 |
 | Linux, no GPU | unsupported | the CPU backend is basic, no 4-bit GGUF-style quantization; llama.cpp is the better CPU engine |
 | macOS, Apple Silicon | later | the GPU path is vLLM-Metal, "a community-maintained hardware plugin" on MLX; the CPU build is experimental, from source |

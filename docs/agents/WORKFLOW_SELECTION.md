@@ -301,8 +301,11 @@ create_agent_workflow(
   `{placeholders}` left literal) and checked against the tool's schema the way dispatch checks
   them. Refused: a missing required field (a type mismatch alone never refuses, because a
   placeholder resolves at run time), a tool that does not exist (with `unknown_tool_hint`'s
-  suggestion), a `bash` step that downloads (`bash.command_needs_network`: pip, npm, pnpm,
-  yarn, git clone/fetch/pull/push, a system package manager, curl/wget), and any `host_bash`
+  suggestion; `create` saves such a step and says so in its answer instead, because a saved
+  workflow may run in a lane whose registry has the tool, such as the automation lane's
+  channel tools), a `bash` step that downloads (`bash.command_needs_network`: pip, npm, pnpm,
+  yarn when bare or with a fetching subcommand, so a package script such as `yarn dev` runs,
+  git clone/fetch/pull/push, a system package manager, curl/wget), and any `host_bash`
   step. All problems of all steps come back as ONE `Error:` result that says nothing ran, one
   line per step, so a single retry can fix everything; a refused `create` writes nothing. A
   download is answered with the way that works: `host_bash(command="...")` called directly,
@@ -350,7 +353,7 @@ create_agent_workflow(
 
 **Rule:** Use `research_agent` for patent/market/technical research needing many sources. Use `coding_agent` for file generation and scripts.
 
-The table above lists the common ones, but a step can call **any tool the user has in chat - and may use there**: non-spawn steps pass the same hard policy, account allowlist and authorizer as a chat turn (confirmation gate excepted), and saved templates additionally pass the per-user workflow START gate - `search_tools`, `list_tools`, calendar/memory/GitHub tools, custom tools, etc. Both `run_temp` and **saved** workflows (`execute_workflow`) run on the agent's full live registry, plus the workflow primitives (`bash`, `move_file`) that the Main Agent normally delegates to sub-agents (`write_file` is registered to the Main Agent directly as well); both build it the same way, `workflow_primitives()` with the live registry on top. A step the model writes itself cannot name `host_bash` (refused before the run, see above). (Saved workflows previously used a fixed subset, which is why a step like `search_tools` could report "Tool not found" - they now overlay the same live registry as `run_temp`.)
+The table above lists the common ones, but a step can call **any tool the user has in chat - and may use there**: non-spawn steps pass the same hard policy, account allowlist and authorizer as a chat turn (confirmation gate excepted), and saved templates additionally pass the per-user workflow START gate - `search_tools`, `list_tools`, calendar/memory/GitHub tools, custom tools, etc. Both `run_temp` and **saved** workflows (`execute_workflow`) run on the agent's full live registry, plus the workflow primitives (`bash`, `move_file`) that the Main Agent normally delegates to sub-agents (`write_file` is registered to the Main Agent directly as well); both build it the same way, `workflow_primitives()` with the live registry on top. A step the model writes through `create_agent_workflow` (`run_temp` or `create`) cannot name `host_bash`: it is refused before the run (see above), and a model-written saved workflow (`# created_by: agent`) that still holds one from before is refused again when `execute_workflow` starts it (`agent_workflow_refusal`). NAMED BOUNDARY: `create_automation` has a second model call generate the steps of an automation's workflow from the task text (`vaf/tools/automation.py`); nothing checks those steps for `host_bash`, and automations run with the confirmation gate off, so such a step would run unasked. The fix that covers every lane is host_bash re-checking its own grant (`accepts_call_confirmation`, as `python_exec`, `ssh` and `ftp` do); it changes what existing automations may do and is a feature of its own. (Saved workflows previously used a fixed subset, which is why a step like `search_tools` could report "Tool not found" - they now overlay the same live registry as `run_temp`.)
 
 ##### Shared project path (`{workflow_project_path}`)
 

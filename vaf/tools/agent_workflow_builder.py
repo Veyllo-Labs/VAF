@@ -126,8 +126,22 @@ def _resolve_step_tool(tool_val: Any) -> str:
     return _STEP_TOOL_ALIASES.get(tool_str.lower(), tool_str)
 
 
+_HOST_BASH_STEP = (
+    "a workflow runs its steps without asking the user, and host_bash needs the user's OK "
+    "for every command. Call host_bash directly in the chat instead, one call per command "
+    "(the user confirms each).")
+
+
+def _refusal(problems: List[str]) -> str:
+    """The one in-turn refusal for a plan: nothing ran, one line per step, one instruction."""
+    return ("Error: nothing ran, the workflow plan has steps that cannot run:\n"
+            + "\n".join(f"- {p}" for p in problems)
+            + "\nFix these steps and call create_agent_workflow again.")
+
+
 def _preflight_steps(normalised: List[dict], tools: Dict[str, Any],
-                     visible: Optional[set] = None) -> Optional[str]:
+                     visible: Optional[set] = None, *,
+                     unknown: Optional[List[str]] = None) -> Optional[str]:
     """Check a plan before anything runs; the refusal for ALL broken steps, or None.
 
     A run_temp workflow usually runs in the background, so a step that cannot run used to
@@ -144,13 +158,18 @@ def _preflight_steps(normalised: List[dict], tools: Dict[str, Any],
     asks a person); and a `host_bash` step, because this lane runs its steps without asking
     the user while host_bash in chat asks for every command.
 
+    With an ``unknown`` list (the `create` action), a tool this registry lacks is appended
+    there instead of refused: a saved workflow may run in another lane whose registry has it
+    (the automation lane's channel tools). A temporary workflow runs here and now, so it
+    refuses.
+
     NAMED BOUNDARY: a private helper, not on the facade. Measured: this module (its two
     actions) is the only planner that checks steps before they run; the facade's ToolCaller
     applies the same schema check at dispatch, so an embedder's own plan fails there with the
     same words. A second planner is the trigger for a public primitive.
     """
     from vaf.core.tool_dispatch import unknown_tool_hint
-    from vaf.core.tool_input_repair import MISSING_REQUIRED, repair_tool_input
+    from vaf.core.tool_input_repair import MISSING_REQUIRED, RETRY_SAME_CALL, repair_tool_input
     from vaf.tools.bash import command_needs_network
     from vaf.workflows.engine import build_step_args
 
@@ -160,12 +179,12 @@ def _preflight_steps(normalised: List[dict], tools: Dict[str, Any],
         name = step.get("tool") or ""
         label = f"step {i} ({name})"
         if name == "host_bash":
-            problems.append(
-                f"{label}: a workflow runs its steps without asking the user, and host_bash "
-                "needs the user's OK for every command. Call host_bash directly in the chat "
-                "instead, one call per command (the user confirms each).")
+            problems.append(f"{label}: {_HOST_BASH_STEP}")
             continue
         tool = tools.get(name)
+        if tool is None and unknown is not None:
+            unknown.append(label)
+            continue
         if tool is None:
             hint = unknown_tool_hint(name, tools)
             problems.append(f"{label}: Unknown tool '{name}'." + (f" {hint}" if hint else ""))
@@ -180,7 +199,12 @@ def _preflight_steps(normalised: List[dict], tools: Dict[str, Any],
                                              getattr(tool, "input_aliases", None))
         except Exception:
             errors = []
-        missing = [e for e in errors if str(e).startswith(MISSING_REQUIRED)]
+        # One line per field: jsonschema reports a missing field once per required entry it
+        # checks, and the dispatcher's own "Retry the SAME call" sentence is dropped, because
+        # the refusal ends with the one instruction that fits a plan (call the builder again).
+        missing = list(dict.fromkeys(
+            str(e).split(RETRY_SAME_CALL, 1)[0].strip()
+            for e in errors if str(e).startswith(MISSING_REQUIRED)))
         if missing:
             problems.append(f"{label}: " + " ".join(missing))
             continue
@@ -200,9 +224,40 @@ def _preflight_steps(normalised: List[dict], tools: Dict[str, Any],
                     "from here, so tell the user.")
     if not problems:
         return None
-    return ("Error: nothing ran, the workflow plan has steps that cannot run:\n"
-            + "\n".join(f"- {p}" for p in problems)
-            + "\nFix these steps and call create_agent_workflow again.")
+    return _refusal(problems)
+
+
+def _agent_workflow_path(workflow_id: str) -> str:
+    return os.path.join(os.path.expanduser("~/.vaf/workflows"), f"{workflow_id}.py")
+
+
+def is_agent_created(workflow_id: str) -> bool:
+    """Whether the saved workflow ``workflow_id`` was written by this builder (its first line
+    carries the `created_by: agent` marker). False when there is no such file."""
+    try:
+        with open(_agent_workflow_path(workflow_id), "r", encoding="utf-8") as fh:
+            return "created_by: agent" in fh.readline()
+    except Exception:
+        return False
+
+
+def agent_workflow_refusal(workflow_id: str, template: Dict[str, Any]) -> Optional[str]:
+    """The refusal for running a model-written saved workflow that has a host_bash step, or None.
+
+    `create` refuses such a step, but a workflow saved before it did still holds one, and the
+    workflow lanes run their steps without the confirmation gate. Checked when one is started
+    (execute_workflow), with the same message the builder gives. A person's own workflow
+    file (no marker) and the built-in templates are not touched."""
+    if not is_agent_created(workflow_id):
+        return None
+    problems = [f"step {i} (host_bash): {_HOST_BASH_STEP}"
+                for i, step in enumerate((template or {}).get("steps") or [], 1)
+                if isinstance(step, dict) and str(step.get("tool") or "").strip() == "host_bash"]
+    if not problems:
+        return None
+    return ("Error: nothing ran, the saved workflow '" + workflow_id + "' has steps that cannot "
+            "run:\n" + "\n".join(f"- {p}" for p in problems)
+            + "\nRun those commands with host_bash yourself, or save the workflow again without them.")
 
 
 class AgentWorkflowBuilderTool(BaseTool):
@@ -566,10 +621,10 @@ class AgentWorkflowBuilderTool(BaseTool):
         # The run's registry, collected before anything starts: the preflight checks every
         # step against it, and the engine (inline) runs on it.
         tools = self._collect_tools()
-        _refusal = _preflight_steps(normalised, tools, self._visible_tool_names(tools))
-        if _refusal:
-            self.log(f"[RUN_TEMP] refused before running: {_refusal[:400]}")
-            return _refusal
+        _refused = _preflight_steps(normalised, tools, self._visible_tool_names(tools))
+        if _refused:
+            self.log(f"[RUN_TEMP] refused before running: {_refused[:400]}")
+            return _refused
 
         # Build WorkflowStep objects directly (no WORKFLOW_TEMPLATES mutation)
         try:
@@ -968,9 +1023,11 @@ class AgentWorkflowBuilderTool(BaseTool):
         # The same check as run_temp, before anything is written: a saved plan that cannot
         # run fails each time it is started, where nobody can fix it.
         _tools = self._collect_tools()
-        _refusal = _preflight_steps(normalised, _tools, self._visible_tool_names(_tools))
-        if _refusal:
-            return _refusal
+        _unknown: List[str] = []
+        _refused = _preflight_steps(normalised, _tools, self._visible_tool_names(_tools),
+                                    unknown=_unknown)
+        if _refused:
+            return _refused
 
         wf_dict = {
             "name":        name,
@@ -1068,9 +1125,13 @@ class AgentWorkflowBuilderTool(BaseTool):
         except Exception:
             pass
 
+        _note = ""
+        if _unknown:
+            _note = (f"\nNote: {', '.join(_unknown)} names a tool this chat does not have; that "
+                     "step fails unless the workflow runs where the tool exists.")
         return (
             f"Workflow '{workflow_id}' saved successfully. "
-            "It is now available via execute_workflow() and visible in the WebUI."
+            "It is now available via execute_workflow() and visible in the WebUI." + _note
         )
 
     # ─── list ─────────────────────────────────────────────────────────────────
@@ -1084,14 +1145,8 @@ class AgentWorkflowBuilderTool(BaseTool):
         for fname in sorted(os.listdir(user_dir)):
             if not fname.endswith(".py"):
                 continue
-            fpath = os.path.join(user_dir, fname)
-            try:
-                with open(fpath, "r", encoding="utf-8") as fh:
-                    first = fh.readline().strip()
-                if "created_by: agent" in first:
-                    found.append(fname[:-3])   # strip .py
-            except Exception:
-                pass
+            if is_agent_created(fname[:-3]):
+                found.append(fname[:-3])   # strip .py
 
         if not found:
             return "You have not created any persistent workflows yet."
@@ -1124,17 +1179,12 @@ class AgentWorkflowBuilderTool(BaseTool):
                 "Use action='list' to see what you have created."
             )
 
-        # Ownership check — only files with the agent marker may be deleted
-        try:
-            with open(wf_path, "r", encoding="utf-8") as fh:
-                first = fh.readline().strip()
-            if "created_by: agent" not in first:
-                return (
-                    f"Error: '{workflow_id}' was not created by the agent "
-                    "(missing 'created_by: agent' marker). Cannot delete."
-                )
-        except Exception as exc:
-            return f"Error reading workflow file: {exc}"
+        # Ownership check: only files with the agent marker may be deleted
+        if not is_agent_created(workflow_id):
+            return (
+                f"Error: '{workflow_id}' was not created by the agent "
+                "(missing 'created_by: agent' marker). Cannot delete."
+            )
 
         os.remove(wf_path)
 

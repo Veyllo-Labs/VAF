@@ -223,6 +223,13 @@ class ExecuteWorkflowTool(BaseTool):
                     f"Available workflows:\n{workflow_list}"
                 )
 
+            # A model-written saved workflow is checked again for host_bash steps: the builder
+            # refuses them now, and one saved before that would run them here unasked.
+            from vaf.tools.agent_workflow_builder import agent_workflow_refusal
+            _refused = agent_workflow_refusal(workflow_id, template)
+            if _refused:
+                return _refused
+
             variables = variables or {}
             if isinstance(variables, str):
                 import json as _json

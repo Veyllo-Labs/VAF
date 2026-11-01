@@ -38,14 +38,16 @@ _NO_NETWORK_RE = re.compile(
 )
 
 # Commands that download by what they ARE, judged before they run (the regex above reads the
-# output after a failure). Executable -> the subcommands that fetch; an empty set means the
-# bare command already does (`yarn` installs). `classify_command` already names the plain
-# fetchers (curl, wget, ...) as network_fetch; these are the package managers and git.
+# output after a failure). Executable -> the subcommands that fetch; "" is the bare command
+# (`yarn` alone installs). Anything else passes: `yarn start` or `yarn dev` runs a package
+# script, and refusing it as a download would send an offline step away for nothing.
+# `classify_command` already names the plain fetchers (curl, wget, ...) as network_fetch;
+# these are the package managers and git.
 _DOWNLOADING_SUBCOMMANDS = {
     "pip": {"install", "download"},
     "npm": {"install", "i", "add", "ci"},
     "pnpm": {"install", "i", "add"},
-    "yarn": set(),
+    "yarn": {"", "install", "add", "upgrade", "up", "import", "global", "dlx", "create"},
     "git": {"clone", "fetch", "pull", "push"},
     "apt": {"install"},
     "apt-get": {"install"},
@@ -57,7 +59,8 @@ _DOWNLOADING_SUBCOMMANDS = {
 }
 _PIP_RE = re.compile(r"^pip(\d+(\.\d+)?)?$")
 _PYTHON_RE = re.compile(r"^python(\d+(\.\d+)?)?$")
-_YARN_OFFLINE = {"run", "test", "build", "lint", "--version", "-v", "help", "--help"}
+# Flags that ARE the yarn command (`yarn --version`), not options in front of one.
+_YARN_COMMAND_FLAGS = {"--version", "-v", "--help", "-h"}
 
 
 def _downloads(tokens) -> bool:
@@ -84,14 +87,11 @@ def _downloads(tokens) -> bool:
         if exe == "git" and tok in ("-C", "-c"):
             skip = True  # an option with a value of its own
             continue
-        if tok.startswith("-") and not (exe == "yarn" and tok in _YARN_OFFLINE):
+        if tok.startswith("-") and not (exe == "yarn" and tok in _YARN_COMMAND_FLAGS):
             continue
         sub = tok
         break
-    wanted = _DOWNLOADING_SUBCOMMANDS[exe]
-    if exe == "yarn":
-        return sub not in _YARN_OFFLINE
-    return sub in wanted
+    return sub in _DOWNLOADING_SUBCOMMANDS[exe]
 
 
 def command_needs_network(command: str) -> bool:

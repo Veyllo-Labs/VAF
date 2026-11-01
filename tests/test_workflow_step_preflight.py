@@ -22,7 +22,12 @@ MUTATIONS, each turns the named tests red:
   test_placeholders_pass;
 - `command_needs_network` returns False -> test_command_needs_network,
   test_network_bash_step_refused;
-- remove the host_bash check -> test_host_bash_step_refused.
+- remove the host_bash check -> test_host_bash_step_refused;
+- yarn back to "every subcommand but a short list downloads" -> the yarn rows of
+  test_command_needs_network;
+- no de-duplication, or the "Retry the SAME call" sentence kept -> the missing-field test;
+- `create` refusing an unknown tool -> test_create_saves_a_plan_with_a_tool_of_another_lane;
+- the execute_workflow check removed -> the saved-workflow test.
 """
 import ast
 import importlib
@@ -195,6 +200,16 @@ def test_preflight_refuses_missing_code(run):
         assert not _FakeEngine.runs, "a refused plan reached the engine"
 
 
+def test_a_missing_field_is_named_once_with_one_closing_instruction(run):
+    """jsonschema reports a missing field once per required entry; the refusal names each
+    field once, and only the plan's own instruction closes it."""
+    out = run([{"tool": "move_file", "args": {"path": "a"}},
+               {"tool": "web_search", "input": "y"}])
+    assert out.count("'src'") == 1 and out.count("'dst'") == 1, out
+    assert "Retry the SAME call" not in out
+    assert out.count("call create_agent_workflow again") == 1
+
+
 def test_preflight_collects_all_steps(run):
     out = run([{"tool": "python_sandbox", "args": {"command": "a"}},
                {"tool": "python_sandbox", "args": {"command": "b"}}])
@@ -236,6 +251,10 @@ def test_create_refuses_without_writing(run, tmp_path):
     ("ls -la", False), ("python -m pytest", False), ("git status", False),
     ("npm run build", False), ("yarn test", False), ("echo pip install", False),
     ("pip list", False),
+    # yarn: only the bare command and the fetching subcommands download; a package script runs.
+    ("yarn install", True), ("yarn add left-pad", True), ("yarn dlx create-vite", True),
+    ("yarn upgrade", True), ("yarn start", False), ("yarn dev", False), ("yarn tsc", False),
+    ("yarn format", False), ("yarn --version", False),
 ])
 def test_command_needs_network(command, downloads):
     from vaf.tools.bash import command_needs_network
@@ -270,6 +289,49 @@ def test_host_bash_step_refused(run, tmp_path, action):
     assert "directly in the chat" in out
     assert not _FakeEngine.runs
     assert not (tmp_path / ".vaf" / "workflows" / "host_plan.py").exists()
+
+
+def test_create_saves_a_plan_with_a_tool_of_another_lane(run, tmp_path):
+    """A saved workflow may run where the tool exists (the automation lane's channel tools):
+    `create` saves it and says so; run_temp still refuses (test_unknown_tool_hint)."""
+    out = run([{"tool": "web_search", "input": "x", "output": "w"},
+               {"tool": "send_signal_message", "input": "{w}"}],
+              action="create", workflow_id="other_lane", name="Other lane")
+    assert "saved successfully" in out, out
+    assert "step 2 (send_signal_message)" in out and "does not have" in out
+    assert (tmp_path / ".vaf" / "workflows" / "other_lane.py").exists()
+
+
+def _saved_workflow(home, workflow_id, *, marker):
+    folder = home / ".vaf" / "workflows"
+    folder.mkdir(parents=True, exist_ok=True)
+    body = ('WORKFLOW = {"name": "Saved", "description": "d", "triggers": [], "steps": ['
+            '{"input": "ls", "tool": "host_bash", "output": "a"}, '
+            '{"input": "x", "tool": "web_search", "output": "b"}]}\n')
+    (folder / f"{workflow_id}.py").write_text(("# created_by: agent\n" if marker else "") + body,
+                                             encoding="utf-8")
+
+
+def test_a_saved_model_workflow_with_host_bash_is_refused_at_start(run, tmp_path, monkeypatch):
+    """A model-written workflow saved before `create` refused host_bash: execute_workflow
+    refuses it with the same message. A person's own workflow file is not touched."""
+    from vaf.tools.agent_workflow_builder import agent_workflow_refusal, is_agent_created
+    from vaf.tools.workflow_executor import ExecuteWorkflowTool
+    from vaf.workflows.templates import get_template
+
+    _saved_workflow(tmp_path, "old_plan", marker=True)
+    _saved_workflow(tmp_path, "own_plan", marker=False)
+    assert is_agent_created("old_plan") and not is_agent_created("own_plan")
+    refusal = agent_workflow_refusal("old_plan", get_template("old_plan"))
+    assert refusal and refusal.startswith("Error:") and "step 1 (host_bash)" in refusal
+    assert "directly in the chat" in refusal
+    assert agent_workflow_refusal("own_plan", get_template("own_plan")) is None
+
+    started = []
+    monkeypatch.setattr(engine_module, "create_workflow",
+                        lambda template: started.append(template) or [])
+    out = ExecuteWorkflowTool().run(workflow_id="old_plan")
+    assert out == refusal and not started, out
 
 
 def test_create_saves_a_plan_that_can_run(run, tmp_path):

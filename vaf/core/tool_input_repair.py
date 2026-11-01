@@ -30,6 +30,9 @@ PROTECTED_FIELDS = frozenset({"content", "code"})
 # apart from a shape problem (a workflow planner checking steps whose values are still
 # {placeholders}) matches this prefix, so the two cannot drift apart.
 MISSING_REQUIRED = "missing required"
+# The sentence that closes a missing-field line for a single call. A caller whose refusal
+# carries its own closing instruction (the workflow planner) cuts the line here.
+RETRY_SAME_CALL = "Retry the SAME call"
 
 
 def _type_set(prop: dict) -> set:
@@ -62,7 +65,7 @@ def _localize(err) -> str:
         if hints:
             noun = "fields" if len(hints) > 1 else "field"
             it = "them" if len(hints) > 1 else "it"
-            return f"{MISSING_REQUIRED} {noun}: {'; '.join(hints)}. Retry the SAME call and include {it}."
+            return f"{MISSING_REQUIRED} {noun}: {'; '.join(hints)}. {RETRY_SAME_CALL} and include {it}."
         return f"{MISSING_REQUIRED} field: {err.message}"
     path = ".".join(str(p) for p in err.absolute_path)
     # The expects/got wording ONLY fits actual type failures. Rendering every

@@ -31,7 +31,11 @@ MUTATIONS, each turns the named tests red:
   test_advice_is_not_carried_into_the_next_turn;
 - drop the `advise_tools` call in the plan gate -> test_plan_gate_advises_working_memory;
 - re-add the search_tools prose hook -> test_the_prose_hook_is_gone; advise without the
-  filter -> test_search_does_not_advise_a_refused_tool.
+  filter -> test_search_does_not_advise_a_refused_tool;
+- word the unknown-tool correction without `keep=self._offerable` ->
+  test_the_correction_names_only_what_the_caller_may_run;
+- let `_offerable` ask the policy with `quiet=False`, or let `quiet` keep the real logger ->
+  test_an_offer_check_logs_nothing.
 """
 import ast
 import contextlib
@@ -495,3 +499,39 @@ def test_the_prose_hook_is_gone():
     assert "search_tools" not in ast.unparse(fn)
     import vaf.tools.search_tools as st
     assert not hasattr(st, "extract_discovered_tool_names")
+
+
+# ── the correction names only what the caller may run; an offer check is quiet ──
+
+@pytest.mark.parametrize("role, scope, expected", [
+    ("admin", None, ("host_bash",)),
+    ("user", REGULAR, ("search_tools",)),
+])
+def test_the_correction_names_only_what_the_caller_may_run(role, scope, expected):
+    """A near miss of host_bash for an account without the grant: the text must not name a
+    tool the account may not run (advice would refuse it, and the next request would not
+    carry it), so the correction falls through to search_tools."""
+    tools = _registry(_host_bash(), _Tool("search_tools"))
+    outcome = ToolCaller(tools, user_scope_id=scope, user_role=role).call("host_bsh", {})
+    assert outcome.advised_tools == expected, outcome.result
+    if expected == ("host_bash",):
+        assert "Did you mean host_bash(" in outcome.result
+    else:
+        assert "host_bash" not in outcome.result.split("'host_bsh'", 1)[1], outcome.result
+        assert "call search_tools(" in outcome.result
+
+
+def test_an_offer_check_logs_nothing(caplog):
+    """POLICY_* lines say a call was blocked or put to a person. Asking what may be OFFERED
+    is no call: host_bash advised (a confirmation) and host_bash on a channel (a block) leave
+    no line. The control shows the logger is captured: a real call writes one."""
+    import logging
+    with caplog.at_level(logging.DEBUG, logger="vaf.policy"):
+        for kw in ({}, {"source": "telegram", "session_id": "telegram_123456"}):
+            advisor = _Tool("advisor", lambda **kw: advise_tools("host_bash") and "OK")
+            ToolCaller(_registry(advisor, _host_bash()), **kw).call("advisor", {})
+        offered = [r.getMessage() for r in caplog.records if r.name == "vaf.policy"]
+        assert [m for m in offered if "host_bash" in m] == [], offered
+        ToolCaller(_registry(_host_bash()), interactive=False).call("host_bash", {"command": "true"})
+    called = [r.getMessage() for r in caplog.records if r.name == "vaf.policy"]
+    assert any(m.startswith("POLICY_CONFIRM tool=host_bash") for m in called), called

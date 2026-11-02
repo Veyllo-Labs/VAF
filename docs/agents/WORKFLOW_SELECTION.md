@@ -314,20 +314,27 @@ create_agent_workflow(
   hands exactly those to the turn, so the model can call them in the same turn even when
   the router did not offer them. With both: run them outside the workflow with
   `python_sandbox`, which has network and asks nothing but keeps what it installs or
-  downloads in the sandbox (several commands fit in one call, `subprocess.run(...)` in its
+  downloads in the sandbox (one call runs all of them, one `run(...)` per command in its
   code), or with `host_bash(command="...")`, one call per command that the user confirms,
   when the result must land on the user's computer. python_sandbox comes first because
   most of these commands (an install, a clone to work on) need nothing on the user's disk
   and it asks no question. Only python_sandbox (a regular account without the host_bash
-  grant, a messaging channel): the sandbox sentence and that a download onto the user's
-  computer is not possible from here. Only host_bash: the host_bash sentence. Neither: tell
-  the user to run the commands themselves. When the network steps are the plan's only
+  grant, a messaging channel): the sandbox sentence, then "Only if the user needs the
+  result on their own computer, say that you cannot put it there from here." (not "tell
+  them the commands", which sends a weak model straight to the by-hand answer). Only
+  host_bash: one host_bash call per command, each spelled out. Neither: tell the user to
+  run the commands themselves. Every command is spelled out, never only the first: a weak
+  model copies the example and, shown one command, runs one and reports all done. The
+  refusal is kept under the funnel's cut (`_REFUSAL_BUDGET`, 1900 characters): when both
+  lists do not fit, host_bash points at the order of the sandbox code's `run(...)` calls,
+  and when even one list does not fit, as many commands as fit are spelled out and the
+  rest are named by step number. When the network steps are the plan's only
   problem, the instruction closes the refusal, because "call create_agent_workflow again"
   would send the model straight back into it; with other problems, "Fix the other steps and
   call create_agent_workflow again." follows. Measured on a plan of 10 installs and 10
-  clones, the shape of the live incident: 672 characters, where the per-step wording was
-  5369 and the chat funnel's 2000-character cut left the model only the first and last
-  steps of it. Called
+  clones, the shape of the live incident: 1456 characters with every command in the sandbox
+  code, where the per-step wording was 5369 and the chat funnel's 2000-character cut left
+  the model only the first and last steps of it. Called
   outside a tool call (a direct run), every tool counts as offered. A `host_bash` step is
   refused because this lane runs its steps without the confirmation gate, while host_bash in
   chat asks for every command; the refusal points at host_bash in the chat only when the

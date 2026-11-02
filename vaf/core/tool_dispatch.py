@@ -1250,11 +1250,17 @@ def unknown_tool_hint(name, tools, args=None, *, limit: int = 3) -> str:
     return _unknown_tool_correction(name, tools, args, limit=limit)[0]
 
 
-def _unknown_tool_correction(name, tools, args=None, *, limit: int = 3):
+def _unknown_tool_correction(name, tools, args=None, *, limit: int = 3, keep=None):
     """``unknown_tool_hint``'s text and the tool names it tells the model to call: the
     parameter owners (up to ``limit``), the near-miss names, or ``search_tools``. The funnel
     advises those names (``advise_tools``); a planner that only words a refusal reads the
-    text alone. ``("", ())`` when there is no correction."""
+    text alone. ``("", ())`` when there is no correction.
+
+    ``keep(name) -> bool`` drops a candidate BEFORE the text is worded: the funnel passes
+    ``ToolCaller._offerable``, so the correction never names a tool this caller may not
+    run (a near miss of ``host_bash`` for an account without the grant), which advice would
+    refuse and the next request would not carry. Asked only for the names that would be
+    named, never for the whole registry."""
     try:
         wanted = str(name or "").strip()
         if not wanted or not tools:
@@ -1265,6 +1271,8 @@ def _unknown_tool_correction(name, tools, args=None, *, limit: int = 3):
             props = params.get("properties") if isinstance(params, dict) else None
             if isinstance(props, dict) and wanted in props:
                 owners.append(str(tname))
+        if keep is not None:
+            owners = [o for o in owners if keep(o)]
         if owners:
             owners.sort()
             if len(owners) == 1:
@@ -1278,13 +1286,19 @@ def _unknown_tool_correction(name, tools, args=None, *, limit: int = 3):
         by_lower: dict = {}
         for tname in tools:
             by_lower.setdefault(str(tname).lower(), str(tname))
-        close = difflib.get_close_matches(wanted.lower(), list(by_lower), n=limit, cutoff=0.6)
+        # Every name above the cutoff, best first, then the first `limit` the caller keeps:
+        # the same answer as n=limit when nothing is dropped.
+        close = difflib.get_close_matches(wanted.lower(), list(by_lower), n=len(by_lower),
+                                          cutoff=0.6)
+        if keep is not None:
+            close = [key for key in close if keep(by_lower[key])]
+        close = close[:limit]
         if close:
             from vaf.tools.base import format_tool_signature
             rendered = [format_tool_signature(tools[by_lower[key]]) or by_lower[key] for key in close]
             return ("Did you mean " + " or ".join(rendered) + "?",
                     tuple(by_lower[key] for key in close))
-        if "search_tools" in tools:
+        if "search_tools" in tools and (keep is None or keep("search_tools")):
             return ('No registered tool has a similar name: call search_tools(query="...") '
                     "to find the right one.", ("search_tools",))
         return "", ()
@@ -1604,7 +1618,7 @@ class ToolCaller:
             return (f"This call could not be checked ({type(exc).__name__}), so it is put "
                     "to you.")
 
-    def _policy(self, name, tool):
+    def _policy(self, name, tool, *, quiet: bool = False):
         from vaf.core.tool_contract import evaluate_tool_policy
         return evaluate_tool_policy(
             tool_name=name, tool=tool, current_source=self.source,
@@ -1613,6 +1627,8 @@ class ToolCaller:
             # Only the lane that would ask a person refuses a tool that needs one on a
             # channel; the unattended lanes (gate off) decide by the account allowlist.
             gated_lane=self.gate_enabled,
+            # An offer check is not a call: same decision, no POLICY_* log line.
+            quiet=quiet,
         )
 
     def _offerable(self, name: str) -> bool:
@@ -1623,7 +1639,8 @@ class ToolCaller:
         (``admin_only``, the channel rule of the gated lane), allowed by the account
         allowlist (``account_opt_in`` included; a raising resolver answers no), and the
         caller's ``offer_check``. Every stage is one the call itself would run, so advice
-        is never broader than what this caller may start. Any exception answers no.
+        is never broader than what this caller may start. Any exception answers no. The
+        policy is asked quietly: an offer is not a call, so it writes no POLICY_* line.
         """
         try:
             tool = (self.tools or {}).get(name)
@@ -1634,7 +1651,7 @@ class ToolCaller:
                 return False
             if self.allowed_tools is not None and name not in self.allowed_tools:
                 return False
-            if self._policy(name, tool).blocked:
+            if self._policy(name, tool, quiet=True).blocked:
                 return False
             if self._account_allowlist_blocks(name, tool):
                 return False
@@ -1720,7 +1737,8 @@ class ToolCaller:
             # misspelt name in the set must not be answered with a tool the set leaves out.
             candidates = self.tools if self.allowed_tools is None else {
                 n: t for n, t in (self.tools or {}).items() if n in self.allowed_tools}
-            hint, named = _unknown_tool_correction(name, candidates, args)
+            hint, named = _unknown_tool_correction(name, candidates, args,
+                                                   keep=self._offerable)
             if named:
                 # Handed over, not only named: a narrowed turn may not carry the tool the
                 # correction points at, and a correction the model cannot follow is a refusal.

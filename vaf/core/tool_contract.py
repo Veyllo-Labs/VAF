@@ -137,6 +137,17 @@ def category_label(key: str) -> str:
 logger = logging.getLogger("vaf.policy")
 
 
+class _QuietLog:
+    """The policy log of a question that is not a call (``evaluate_tool_policy(quiet=True)``):
+    POLICY_BLOCK / POLICY_CONFIRM lines say a call was blocked or put to a person, and an
+    offer check that only asks "could this caller run it" must not write them."""
+
+    def info(self, *args, **kwargs) -> None:
+        pass
+
+    debug = info
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Data classes
 # ─────────────────────────────────────────────────────────────────────────────
@@ -260,6 +271,7 @@ def evaluate_tool_policy(
     is_channel_session: bool,
     is_admin: bool = False,
     gated_lane: bool = True,
+    quiet: bool = False,
 ) -> ToolPolicyDecision:
     """
     Evaluate whether a tool may run in the current session context.
@@ -279,6 +291,9 @@ def evaluate_tool_policy(
                         unattended lanes (the coder, workflow steps) pass False:
                         nobody is asked there, by decision, and the account
                         allowlist is what decides.
+    quiet             : True for a question that is not a call (what the dispatch
+                        funnel may OFFER a model, ``ToolCaller._offerable``): the
+                        same decision, without the POLICY_* log lines a call writes.
 
     Returns
     -------
@@ -293,6 +308,7 @@ def evaluate_tool_policy(
     3. permission_level      — confirmation gate (extended: "system" now skips legacy gate)
     4. Legacy risky-tool gate — fallback for tools that predate this contract
     """
+    log = _QuietLog() if quiet else logger
     contract = resolve_tool_contract(tool_name, tool)
     source   = str(current_source or "").strip().lower()
 
@@ -302,7 +318,7 @@ def evaluate_tool_policy(
     # prompt.  The agent sees the error string returned by execute_tool() and
     # must handle it gracefully (e.g. tell the user it cannot do this).
     if contract.admin_only and not is_admin:
-        logger.info("POLICY_BLOCK tool=%s reason=admin_only", tool_name)
+        log.info("POLICY_BLOCK tool=%s reason=admin_only", tool_name)
         return ToolPolicyDecision(
             blocked=True,
             requires_confirmation=False,
@@ -324,7 +340,7 @@ def evaluate_tool_policy(
     # steps run unattended by decision, and a coder started from a chat may still build.
     if (is_channel_session and gated_lane and contract.permission_level == "dangerous"
             and "channel" in contract.channel_restrictions):
-        logger.info("POLICY_BLOCK tool=%s reason=channel_needs_a_person source=%s",
+        log.info("POLICY_BLOCK tool=%s reason=channel_needs_a_person source=%s",
                     tool_name, source or "channel")
         return ToolPolicyDecision(
             blocked=True,
@@ -348,7 +364,7 @@ def evaluate_tool_policy(
         try:
             from vaf.core.config import Config
             if Config.get("channel_tools_unrestricted", True):
-                logger.info(
+                log.info(
                     "POLICY_ALLOW tool=%s reason=channel_full_access source=%s",
                     tool_name, source or "channel",
                 )
@@ -371,8 +387,8 @@ def evaluate_tool_policy(
             old_requires_confirmation = should_gate_tool(tool_name)
             old_label = _decision_label(blocked=False, requires_confirmation=old_requires_confirmation)
             if old_label != "block":
-                logger.info("POLICY_DIVERGENCE tool=%s old=%s new=block", tool_name, old_label)
-            logger.info("POLICY_BLOCK tool=%s reason=channel source=%s", tool_name, label)
+                log.info("POLICY_DIVERGENCE tool=%s old=%s new=block", tool_name, old_label)
+            log.info("POLICY_BLOCK tool=%s reason=channel source=%s", tool_name, label)
             return ToolPolicyDecision(
                 blocked=True,
                 requires_confirmation=False,
@@ -387,7 +403,7 @@ def evaluate_tool_policy(
             base_reason = f"{base_reason} This action may be irreversible."
         elif tool_name not in {"move_file", "bash", "run_command", "python_exec"}:
             base_reason = "This action is marked as dangerous by the tool contract."
-        logger.info("POLICY_CONFIRM tool=%s reason=dangerous", tool_name)
+        log.info("POLICY_CONFIRM tool=%s reason=dangerous", tool_name)
         return ToolPolicyDecision(
             blocked=False,
             requires_confirmation=True,
@@ -400,7 +416,7 @@ def evaluate_tool_policy(
         # create_agent_tool) where a user-facing confirmation prompt would be
         # disruptive and the action is already gated by admin_only or context.
         # Previously this value was defined but never evaluated — now it is.
-        logger.debug("POLICY_ALLOW tool=%s reason=system_bypass", tool_name)
+        log.debug("POLICY_ALLOW tool=%s reason=system_bypass", tool_name)
         return ToolPolicyDecision(blocked=False, requires_confirmation=False, reason="")
 
     # ── 4. Legacy risky-tool gate (fallback) ─────────────────────────────
@@ -412,7 +428,7 @@ def evaluate_tool_policy(
     old_label = _decision_label(blocked=False, requires_confirmation=old_requires_confirmation)
     new_label = _decision_label(blocked=False, requires_confirmation=False)
     if old_label != new_label:
-        logger.info("POLICY_DIVERGENCE tool=%s old=%s new=%s", tool_name, old_label, new_label)
+        log.info("POLICY_DIVERGENCE tool=%s old=%s new=%s", tool_name, old_label, new_label)
 
     if old_requires_confirmation:
         base_reason = explain_gate(tool_name)

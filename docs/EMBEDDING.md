@@ -1552,10 +1552,11 @@ In order: if `<name>` is a *parameter* of one of your tools, the answer names
 that tool and spells out the call, with the value the model passed (`call
 update_working_memory(mark_task_done=0) instead`); if it is a near miss of a
 tool name, the closest names follow with their call signatures; if nothing is
-near and you registered `search_tools`, the model is pointed there. The tools a
-correction names arrive in `outcome.advised_tools` (filtered for this caller like
-any advice), so a loop that narrows tools can offer them without reading the
-text. The prefix is the contract and stays byte-identical when no correction
+near and you registered `search_tools`, the model is pointed there. Only tools
+this caller may run are candidates (the advice filter below, asked before the
+text is worded), so the correction never names a tool the account may not use,
+and the ones it names arrive in `outcome.advised_tools`: a loop that narrows
+tools can offer them without reading the text. The prefix is the contract and stays byte-identical when no correction
 applies; the wording of the correction is not something to parse.
 
 The supported arguments:

@@ -37,7 +37,9 @@ through a real ToolCaller whose registry and identity decide what the caller may
 - the "Fix the other steps" line dropped -> test_mixed_plan_closes_with_both;
 - the preflight asking `agent.visible_tools()` again instead of `advise_tools` ->
   test_no_host_bash_advice_for_a_regular_account, test_no_host_bash_advice_on_a_channel;
-- `_HOST_BASH_INSTEAD` changed -> test_saved_refusal_outside_a_call_is_unchanged.
+- `_HOST_BASH_INSTEAD` changed -> test_saved_refusal_outside_a_call_is_unchanged;
+- the sandbox code or the host_bash list showing only the first command ->
+  test_every_command_is_spelled_out; no fitting loop -> the sixty-command test.
 """
 import ast
 import importlib
@@ -317,7 +319,8 @@ def test_network_bash_step_refused(run, run_as):
     out = run_as(plan).result
     assert out.startswith("Error: nothing ran") and "steps 1, 2 (bash)" in out, out
     assert 'host_bash(command="pip install vaf")' in out
-    assert "subprocess.run('pip install vaf', shell=True, check=True)" in out
+    assert 'host_bash(command="git clone https://x/y")' in out
+    assert "run('pip install vaf'); run('git clone https://x/y')" in out
     out = run_as(plan, role="user", scope=REGULAR).result
     assert "host_bash(" not in out and "python_sandbox(code=" in out, out
     assert not _FakeEngine.runs
@@ -336,13 +339,53 @@ def test_network_refusal_fits_the_cut(run_as):
     lines = [line for line in out.splitlines() if line.startswith("- ")]
     assert lines == ["- steps " + ", ".join(str(i) for i in range(1, 21)) + " (bash): these "
                      "commands need the network, and the workflow shell has none."], lines
-    assert out.count("pip install") == 2, "a command repeated per step"
+    # Every command in the sandbox code, once; host_bash points at that order, because both
+    # lists together would not fit the cut.
+    for step in _net_plan():
+        assert out.count(f"run({step['args']['command']!r})") == 1, step
 
 
-_SANDBOX_TAIL = ("A download onto the user's computer is not possible from here; if they need "
-                 "it there, tell them the commands.")
-_HOST_ONLY = ("Run them outside the workflow with host_bash, one call per command; the user "
-              'confirms each: `host_bash(command="pip install pkg0")`.')
+def _commands(plan):
+    return [step["args"]["command"] for step in plan]
+
+
+@pytest.mark.parametrize("case, caller", [
+    ("both", {}),
+    ("sandbox_only", {"role": "user", "scope": REGULAR}),
+    ("host_bash_only", {"registry": ("host_bash",)}),
+])
+@pytest.mark.parametrize("size", [(2, 2), (10, 10)])
+def test_every_command_is_spelled_out(run_as, case, caller, size):
+    """A weak model copies the example it is shown: shown only the first command, it runs
+    that one and reports all of them done. Each command is in the sandbox code as its own
+    run(...), and each is its own host_bash call where host_bash is the only way; a small
+    plan gets both lists in full."""
+    plan = _net_plan(*size)
+    out = run_as(plan, **caller).result
+    assert len(out) < 2000, len(out)
+    for command in _commands(plan):
+        if case != "host_bash_only":
+            assert out.count(f"run({command!r})") == 1, (case, command)
+        if case == "host_bash_only" or (case == "both" and size == (2, 2)):
+            assert out.count(f'`host_bash(command="{command}")`') == 1, (case, command)
+
+
+def test_a_plan_too_long_to_spell_out_names_the_rest(run_as):
+    """Sixty commands do not fit the cut: as many as fit are spelled out, and the rest are
+    named by step number instead of being cut out of the middle by the funnel."""
+    plan = [{"tool": "bash", "args": {"command": f"git clone https://example.org/team/{i}.git"}}
+            for i in range(60)]
+    out = run_as(plan).result
+    assert len(out) <= 1900, len(out)
+    assert "run('git clone https://example.org/team/0.git')" in out
+    assert "Then the commands of steps" in out and "60 the same way" in out, out[-300:]
+
+
+_SANDBOX_TAIL = ("Only if the user needs the result on their own computer, say that you cannot "
+                 "put it there from here.")
+_HOST_ONLY = ("Run them outside the workflow with host_bash, one call per command and in this "
+              "order; the user confirms each: " + ", ".join(
+                  f'`host_bash(command="{c}")`' for c in _commands(_net_plan())) + ".")
 _NEITHER = ("Neither python_sandbox nor host_bash is available to you here, so tell the user "
             "to run these commands themselves.")
 
@@ -361,13 +404,14 @@ def test_network_refusal_variants(run_as, case, caller, advised):
     out = outcome.result
     assert outcome.advised_tools == advised, (case, outcome.advised_tools)
     last = out.splitlines()[-1]
-    sandbox_call = ('`python_sandbox(code="import subprocess; subprocess.run(\'pip install '
-                    'pkg0\', shell=True, check=True)")`')
+    sandbox_call = ('`python_sandbox(code="import subprocess; run = lambda c: subprocess.run(c, '
+                    'shell=True, check=True); run(\'pip install pkg0\'); ')
     if case == "both":
         assert last.startswith("Run them outside the workflow. python_sandbox has network")
         assert sandbox_call in last
-        assert last.endswith('call `host_bash(command="pip install pkg0")` instead, one call '
-                             "per command; the user confirms each."), last
+        assert last.endswith("one call per command in the order of the run(...) calls above, "
+                             'starting with `host_bash(command="pip install pkg0")`; the user '
+                             "confirms each."), last
         assert last.index("python_sandbox(") < last.index("host_bash(")
     elif case == "sandbox_only":
         assert sandbox_call in last and last.endswith(_SANDBOX_TAIL), last

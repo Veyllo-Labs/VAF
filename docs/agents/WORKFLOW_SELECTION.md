@@ -318,7 +318,9 @@ create_agent_workflow(
   code: every command runs even after one failed, and each prints OK or FAILED with its exit
   code and the end of its stderr, so the model reports each one as it came back. Output that
   is not UTF-8 is decoded with `errors='replace'` and any other exception is a FAILED line
-  of its own, so one command cannot end the run for the rest; each line is flushed, so the
+  of its own, so one command cannot end the run for the rest; the command and the stderr
+  tail are printed as `repr()`, so each command is exactly one line even when either holds a
+  newline; each line is flushed, so the
   lines already printed survive a timeout of the whole call, and the instruction says that
   a missing line means that command did not finish; the call
   asks for `timeout=` 60 s plus 45 s per command, at most the sandbox's 600, because the
@@ -337,7 +339,9 @@ create_agent_workflow(
   refusal is kept under the funnel's cut (`_REFUSAL_BUDGET`, 1900 characters): when both
   lists do not fit, host_bash points at the order of the sandbox code's `run(...)` calls;
   when even one list does not fit, as many commands as fit are spelled out (a binary search,
-  not one rebuild per command) and the rest are named by step number; when not even one
+  not one rebuild per command, after trying all of them with the order reference first: the
+  length is not monotonic at the top, because all but one shown adds the sentence that names
+  the rest) and the rest are named by step number; when not even one
   command fits (a single command longer than the budget), no command text is shown and the
   commands are named by their step numbers only. Step numbers are capped at 30 per sentence
   ("1, 2, ... 30 and 970 more"), so no plan pushes the refusal past the cut. When the
@@ -345,8 +349,11 @@ create_agent_workflow(
   problem, the instruction closes the refusal, because "call create_agent_workflow again"
   would send the model straight back into it; with other problems, "Fix the other steps and
   call create_agent_workflow again." follows. Measured on the live incident's plan, ten
-  times `pip install vaf` and ten clones of the VAF repository: 1862 characters with every
-  command in the sandbox code (1782 for a regular account, sandbox only), where the
+  times `pip install vaf` and ten times `git clone https://github.com/Veyllo-Labs/VAF.git`,
+  as `create_agent_workflow(action="run_temp")` answers it through a `ToolCaller` (the
+  `run_as` fixture of `tests/test_workflow_step_preflight.py`, pinned by
+  `test_the_live_incident_plan_spells_out_every_command`): 1891 characters with all twenty
+  commands in the sandbox code (1811 for a regular account, sandbox only), where the
   per-step wording was 5369 and the chat funnel's 2000-character cut left the model only
   the first and last steps of it. Called
   outside a tool call (a direct run), every tool counts as offered. A `host_bash` step is

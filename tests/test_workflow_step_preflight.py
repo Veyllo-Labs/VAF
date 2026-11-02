@@ -44,7 +44,10 @@ through a real ToolCaller whose registry and identity decide what the caller may
   test_the_sandbox_example_has_room;
 - `check=True` back in the sandbox code (stop at the first failure) ->
   test_the_sandbox_code_runs_every_command; `errors='replace'` or the try/except removed ->
-  test_output_that_is_not_utf8_does_not_end_the_run; `flush=True` dropped ->
+  test_output_that_is_not_utf8_does_not_end_the_run; the command or the stderr tail printed
+  without repr() -> test_one_line_per_command_whatever_it_prints; the search without the
+  all-commands try first -> test_the_live_incident_plan_spells_out_every_command;
+  `flush=True` dropped ->
   test_printed_lines_survive_a_timeout_of_the_call;
 - no step-numbers-only fallback, or no cap on the step numbers ->
   test_a_huge_command_and_a_thousand_steps_fit;
@@ -458,7 +461,37 @@ def test_printed_lines_survive_a_timeout_of_the_call(tmp_path):
     finally:
         os.killpg(proc.pid, signal.SIGKILL)       # the run and its shell, as the sandbox does
         out, _ = proc.communicate()
-    assert out.decode().splitlines()[:1] == ["OK 0 echo one "], out
+    assert out.decode().splitlines()[:1] == ["OK 0 'echo one' ''"], out
+
+
+@_POSIX_SHELL
+def test_one_line_per_command_whatever_it_prints(tmp_path):
+    """A stderr tail with a newline (or a command with one) printed as is split one result
+    over several lines, and "a missing line means that command did not finish" stopped
+    being true. Printed as repr(), each command is exactly one line."""
+    import subprocess
+    import sys
+    from vaf.tools.agent_workflow_builder import _sandbox_code
+    code = _sandbox_code(["echo first >&2; echo second >&2; exit 2", "echo a\necho b",
+                          "echo a\x00b"])
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, cwd=tmp_path,
+                          timeout=60)
+    lines = done.stdout.decode("utf-8", "replace").splitlines()
+    assert [line.split()[0] for line in lines] == ["FAILED", "OK", "FAILED"], lines
+    assert "'first\\nsecond'" in lines[0], lines[0]
+
+
+def test_the_live_incident_plan_spells_out_every_command(run_as):
+    """Ten times pip install vaf and ten clones of the VAF repository: every command fits,
+    with host_bash pointing at the sandbox code's order. The length is not monotonic at the
+    top (all but one shown adds a "Then the commands of steps ..." sentence), and a search
+    that assumed it was settled on 18 of 20."""
+    plan = ([{"tool": "bash", "args": {"command": "pip install vaf"}}] * 10
+            + [{"tool": "bash", "args": {"command": "git clone https://github.com/Veyllo-Labs/VAF.git"}}] * 10)
+    for caller in ({}, {"role": "user", "scope": REGULAR}):
+        out = run_as(plan, **caller).result
+        assert len(out) <= 1900, (caller, len(out))
+        assert out.count("run('") == 20 and "Then the commands of steps" not in out, (caller, out)
 
 
 def test_a_huge_command_and_a_thousand_steps_fit(run_as):

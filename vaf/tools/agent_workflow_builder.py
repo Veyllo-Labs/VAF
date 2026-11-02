@@ -181,15 +181,17 @@ def _sandbox_code(commands: List[str]) -> str:
 
     A command's output is decoded with ``errors='replace'`` (bytes that are not UTF-8 raised
     UnicodeDecodeError and ended the run), any other exception is a FAILED line of its own,
-    and every line is flushed, so the lines already printed survive a timeout of the call."""
+    and every line is flushed, so the lines already printed survive a timeout of the call.
+    The command and the stderr tail are printed as repr(), so a newline in either cannot
+    split one command's result over two lines ("a missing line" must mean a missing command)."""
     return ("import subprocess\n"
             "def run(c):\n"
             " try:\n"
             "  r = subprocess.run(c, shell=True, capture_output=True, text=True, errors='replace')\n"
-            "  print('OK' if r.returncode == 0 else 'FAILED', r.returncode, c,"
-            " r.stderr[-200:].strip(), flush=True)\n"
+            "  print('OK' if r.returncode == 0 else 'FAILED', r.returncode, repr(c),"
+            " repr(r.stderr[-200:].strip()), flush=True)\n"
             " except Exception as e:\n"
-            "  print('FAILED', '-', c, e, flush=True)\n"
+            "  print('FAILED', '-', repr(c), repr(str(e)), flush=True)\n"
             + "".join(f"run({c!r})\n" for c in commands))
 
 
@@ -276,14 +278,19 @@ def _fitted_network_refusal(problems: List[str], commands: List[str], steps: Lis
                             offered: tuple, others: bool) -> str:
     """The longest network refusal under `_REFUSAL_BUDGET`: every command in both tools, then
     host_bash pointing at the sandbox code's order with as many commands spelled out as fit
-    (a binary search: the length grows with every command shown), then step numbers only."""
+    (a binary search), then step numbers only. Every command with host_bash pointing at the
+    sandbox code is tried before the search, because the length is not monotonic at the top:
+    with all but one shown, the "Then the commands of steps ..." sentence makes the refusal
+    LONGER than with all of them (measured on the live incident's plan: 19 shown did not fit
+    where 20 did, and the search settled on 18)."""
     def render(listed: int, host_listed: bool) -> str:
         return _refusal(problems, _network_instruction(
             commands, steps, offered, listed=listed, host_listed=host_listed), others=others)
 
-    full = render(len(commands), True)
-    if len(full) <= _REFUSAL_BUDGET:
-        return full
+    for host_listed in (True, False):
+        full = render(len(commands), host_listed)
+        if len(full) <= _REFUSAL_BUDGET:
+            return full
     best, low, high = render(0, False), 1, len(commands)
     while low <= high:
         mid = (low + high) // 2

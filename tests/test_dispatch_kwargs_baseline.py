@@ -194,7 +194,10 @@ KWARGS_BASELINE = {
     # the policy itself (vaf/tools/python_exec.py) - without the declared
     # identity it would read the local-admin bucket for every tenant.
     "python_exec":               ("chat", ["_agent", "user_scope_id"]),
-    "python_sandbox":            ("chat", ["_agent", "_session_id", "user_scope_id"]),
+    # DELIBERATE change: the chat arrives as the declared session_id (identity_kwargs), and
+    # the hand-injected _session_id is gone; username and role ride along for the wake
+    # turn a background run queues when it ends.
+    "python_sandbox":            ("chat", ["_agent", "session_id", "user_role", "user_scope_id", "username"]),
     "read_automation":           ("chat", ["user_role", "user_scope_id"]),
     "read_discord_chat":         ("chat", ["user_scope_id", "username"]),
     "read_file":                 ("chat", ["user_role", "user_scope_id"]),

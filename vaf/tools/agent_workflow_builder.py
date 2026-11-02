@@ -155,11 +155,11 @@ _REFUSAL_BUDGET = 1900
 # Step numbers named in one sentence before "and N more": a plan with hundreds of network
 # steps must not spend the budget on numbers.
 _STEP_NUMBERS_SHOWN = 30
-# The sandbox's own default is 30 s and its clamp 600 s (PythonSandboxTool._run_timeout); an
-# install or a clone takes longer than 30 s, so the example asks for room per command.
+# Room per command for the sandbox example: an install or a clone takes about 40 s. Never
+# below the sandbox's own default nor above its clamp (PythonSandboxTool, read at call time
+# so the two cannot drift apart).
 _SANDBOX_SECONDS_BASE = 60
 _SANDBOX_SECONDS_PER_COMMAND = 45
-_SANDBOX_SECONDS_MAX = 600
 
 
 def _step_numbers(steps: List[str]) -> str:
@@ -170,7 +170,9 @@ def _step_numbers(steps: List[str]) -> str:
 
 
 def _sandbox_timeout(count: int) -> int:
-    return min(_SANDBOX_SECONDS_MAX, _SANDBOX_SECONDS_BASE + _SANDBOX_SECONDS_PER_COMMAND * count)
+    from vaf.tools.python_sandbox import PythonSandboxTool as _Sandbox
+    wanted = _SANDBOX_SECONDS_BASE + _SANDBOX_SECONDS_PER_COMMAND * count
+    return min(_Sandbox.MAX_TIMEOUT_SECONDS, max(_Sandbox.DEFAULT_TIMEOUT_SECONDS, wanted))
 
 
 def _sandbox_code(commands: List[str]) -> str:

@@ -56,8 +56,10 @@ WHAT MAY BE FORCED (`forceable`, `FORCEABLE_TOOLS`). The forced call is a real c
 re-run forces only VAF's own tools from a fail-closed name list: tools that already run on any
 turn without asking the person, so forcing one makes the model do nothing it could not do
 unasked. That is all the list promises; it does not promise that the effect is local or can
-be undone. The sandbox's network reaches the internet and the local network, and in a project
-environment `sandbox_exec` writes the real project folder and can leave a process running;
+be undone. The sandbox's network reaches the internet and the local network, in a project
+environment `sandbox_exec` writes the real project folder, and `sandbox_exec` and
+`python_sandbox` with `background=true` can leave a process running (up to
+`sandbox_env_process_max_hours`, reported to the chat when it ends);
 `write_file` and `edit_file` overwrite without a revision, and for an account other than the
 admin their jail includes the shared folder of a room it joined; `web_search` and `webfetch`
 send a query the model chose. The list is checked against the tool's declared contract too

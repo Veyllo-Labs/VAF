@@ -12,9 +12,10 @@ another chat reads as unknown.
 they do not ask again. Starting is where the confirmation is.
 
 Background commands started in a sandbox environment (``sandbox_exec(background=true)``,
-ids ``e-<environment>-<process>``) are listed, read and stopped here too; they run in the
-person's own container, and vaf/core/environments.py holds them. ``write`` does not reach
-them: they have no input channel.
+``python_sandbox(background=true)``, ids ``e-<environment>-<process>``) are listed, read
+and stopped here too; they run in the person's own container, and
+vaf/core/environments.py holds them. ``write`` does not reach them: they have no input
+channel.
 """
 from __future__ import annotations
 
@@ -31,10 +32,10 @@ class HostProcessTool(BaseTool):
     # chat from the run's session.
     identity_kwargs = ("user_scope_id",)
     description = (
-        "Work with the background commands this chat started with host_bash(background=true) "
-        "or sandbox_exec(background=true): action='list' shows them, 'log' shows the end of "
-        "one's output, 'write' sends a line to its input (host commands only, e.g. a server "
-        "console command), 'stop' ends it and everything it started. The chat is woken on its "
+        "Work with the background commands this chat started with host_bash(background=true), "
+        "sandbox_exec(background=true) or python_sandbox(background=true): action='list' "
+        "shows them, 'log' shows the end of one's output, 'write' sends a line to its input "
+        "(host commands only, e.g. a server console command), 'stop' ends it and everything it started. The chat is woken on its "
         "own when a command ends; use 'log' to look before that."
     )
     parameters = {
@@ -42,7 +43,7 @@ class HostProcessTool(BaseTool):
         "properties": {
             "action": {"type": "string", "enum": ["list", "log", "write", "stop"],
                        "description": "What to do."},
-            "id": {"type": "string", "description": "The id host_bash or sandbox_exec returned, e.g. p-1a2b3c4d or e-0a1b2c3d-p1a2b3c4d. Not needed for list."},
+            "id": {"type": "string", "description": "The id host_bash, sandbox_exec or python_sandbox returned, e.g. p-1a2b3c4d or e-0a1b2c3d-p1a2b3c4d. Not needed for list."},
             "text": {"type": "string", "description": "For write: the line to send to the command's input."},
             "max_chars": {"type": "integer", "description": "For log: how much of the end of the output to show (default 4000, max 20000).", "default": 4000},
         },
@@ -60,7 +61,7 @@ class HostProcessTool(BaseTool):
         if action == "list":
             records = processes.list_for(session_id=session_id, user_scope_id=scope)
             lines = [r.describe() for r in records]
-            lines += [f"{p['handle']}: {p['state']} - {p['command'][:120]}"
+            lines += [f"{p['handle']}: {p['state']} - {(p.get('label') or p['command'])[:120]}"
                       for p in self._environment_processes(scope, session_id)]
             if not lines:
                 return "No background commands in this chat."

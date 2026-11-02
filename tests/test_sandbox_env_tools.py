@@ -344,3 +344,168 @@ def test_the_shell_scripts_carry_no_raw_control_characters(procs):
     for s in scripts + [containers.MARKED_PROCESSES_CMD,
                         containers.kill_marked_cmd("VAF_RUN_ID", "ab12")]:
         assert "\x00" not in s and "\n" not in s, repr(s)
+
+
+# -- the cap, the label, the run folder, one report per process, the watcher -------------
+
+def _ended(fake, handle, code="0"):
+    proc = handle.split("-")[-1]
+    fake.alive.discard(proc)
+    fake.exits[proc] = code
+    return proc
+
+
+def test_the_wake_names_the_label_and_how_long_it_ran(procs):
+    """MUTATION: build the wake text from the command instead of the label, or drop the
+    137 note - red."""
+    import time as _t
+    m, env, fake, woken = procs
+    h = m.start_process("scope-alice", env.id, "sh -c 'python3 -u main.py'", session_id="chat-1",
+                        label="python_sandbox: import subprocess")
+    [row] = m.processes("scope-alice")
+    assert row["label"] == "python_sandbox: import subprocess"
+    _ended(fake, h)
+    m._watch_processes(env, now=_t.time() + 42)
+    text = woken[0]["text"]
+    assert "python_sandbox: import subprocess" in text and "main.py" not in text
+    assert h in text and "exit 0" in text and "after 4" in text      # 42 s, give or take one
+    assert "out of memory" not in text
+    h2 = m.start_process("scope-alice", env.id, "python3 big.py", session_id="chat-1")
+    _ended(fake, h2, "137")
+    m._watch_processes(env, now=_t.time())
+    assert "exit 137 (killed: out of memory or ended from outside)" in woken[1]["text"]
+    assert "python3 big.py" in woken[1]["text"]                        # no label: the command
+
+
+def test_start_process_is_capped_per_environment(procs):
+    """MUTATION: remove the cap check - red."""
+    from vaf.core.processes import MAX_PER_CHAT
+    m, env, fake, _ = procs
+    handles = [m.start_process("scope-alice", env.id, f"sleep {i}", session_id="chat-1",
+                               label=f"job {i}") for i in range(MAX_PER_CHAT)]
+    with pytest.raises(envmod.EnvironmentRefused) as e:
+        m.start_process("scope-alice", env.id, "sleep 99", session_id="chat-1")
+    msg = str(e.value)
+    assert f"the limit is {MAX_PER_CHAT}" in msg and 'host_process(action="stop"' in msg
+    assert all(h in msg for h in handles) and "job 3" in msg
+    assert len(fake.detached) == MAX_PER_CHAT, "the ninth never reached docker"
+    _ended(fake, handles[0])
+    m.start_process("scope-alice", env.id, "sleep 99", session_id="chat-1")   # room again
+
+
+def test_two_watchers_wake_once(procs, monkeypatch):
+    """Two lookers (the starting process's watcher and a reaper) see the same exit. The
+    record is claimed under the lock before anyone is woken. MUTATION: wake first and
+    write `notified` afterwards, without re-reading under the lock - two wakes, red."""
+    m, env, fake, woken = procs
+    h = m.start_process("scope-alice", env.id, "npm test", session_id="chat-1")
+    proc = _ended(fake, h)
+    real = m._proc_status
+    nested = []
+
+    def _status(e):
+        if not nested:
+            nested.append(1)
+            m._watch_processes(env, now=50.0)          # the other watcher, in between
+        return real(e)
+
+    monkeypatch.setattr(m, "_proc_status", _status)
+    m._watch_processes(env, now=50.0)
+    assert len(woken) == 1 and h in woken[0]["text"]
+    assert m._read_procs(env.id)[proc]["notified"] is True
+
+
+def test_the_reaper_leaves_a_record_another_live_process_watches(procs, monkeypatch):
+    """MUTATION: ignore watcher_pid - the first case wakes, red."""
+    import os
+    from vaf.core.platform import Platform
+    m, env, fake, woken = procs
+    h = m.start_process("scope-alice", env.id, "npm test", session_id="chat-1")
+    proc = _ended(fake, h)
+    recs = m._read_procs(env.id)
+    recs[proc]["watcher_pid"] = os.getppid()                # another process, alive
+    m._write_procs(env.id, recs)
+    m._watch_processes(env, now=50.0)
+    assert woken == [], "its wake belongs in the watching process's queue"
+    monkeypatch.setattr(Platform, "is_process_running", staticmethod(lambda pid: False))
+    m._watch_processes(env, now=50.0)
+    assert len(woken) == 1, "a dead watcher's record is taken over"
+    h2 = m.start_process("scope-alice", env.id, "npm run build", session_id="chat-1")
+    p2 = _ended(fake, h2)
+    assert "watcher_pid" not in m._read_procs(env.id)[p2]   # housekeeping is off in the suite
+    m._watch_processes(env, now=50.0)
+    assert len(woken) == 2, "a record without a watcher is anybody's"
+
+
+def test_start_process_registers_with_the_watcher(procs, monkeypatch):
+    """With housekeeping on, the starting process watches what it started: the record names
+    it, one tick after the end queues the wake, and the reported record is dropped from the
+    watch. MUTATION: skip the registration; keep a claimed record registered - red."""
+    import os
+    m, env, fake, woken = procs
+    monkeypatch.delenv("VAF_SANDBOX_ENV_HOUSEKEEPING_OFF", raising=False)
+    monkeypatch.delenv("VAF_IN_SUBAGENT_TERMINAL", raising=False)
+    started = []
+    monkeypatch.setattr(m, "_start_watch_thread", lambda: started.append(1))
+    monkeypatch.setattr(m, "_docker_rows", lambda owner=None, strict=False: [
+        {"container": env.container, "state": "running", "id": env.id, "owner": env.owner,
+         "kind": env.kind, "network": env.network}])
+    monkeypatch.setattr(m, "_from_row", lambda row: env)
+    h1 = m.start_process("scope-alice", env.id, "npm test", session_id="chat-1")
+    h2 = m.start_process("scope-alice", env.id, "npm run dev", session_id="chat-1")
+    p1, p2 = h1.split("-")[-1], h2.split("-")[-1]
+    assert started == [1], "one thread for the manager, not one per process"
+    assert m._read_procs(env.id)[p1]["watcher_pid"] == os.getpid()
+    assert m._watched[env.id]["procs"] == {p1, p2}
+    _ended(fake, h1)
+    m._watch_tick(now=60.0)
+    assert len(woken) == 1 and h1 in woken[0]["text"]
+    assert m._watched[env.id]["procs"] == {p2}
+    m.stop_process("scope-alice", h2)
+    m._watch_tick(now=70.0)
+    assert env.id not in m._watched and len(woken) == 1
+
+
+def test_no_watcher_without_a_chat_in_a_sub_agent_or_with_housekeeping_off(procs, monkeypatch):
+    """No watcher where nobody would be told: housekeeping off (the suite), no chat, or a
+    sub-agent child whose wake queue nobody drains. The reaper takes those records."""
+    m, env, fake, _ = procs
+    started = []
+    monkeypatch.setattr(m, "_start_watch_thread", lambda: started.append(1))
+    m.start_process("scope-alice", env.id, "a", session_id="chat-1")
+    monkeypatch.delenv("VAF_SANDBOX_ENV_HOUSEKEEPING_OFF", raising=False)
+    m.start_process("scope-alice", env.id, "b", session_id="")
+    monkeypatch.setenv("VAF_IN_SUBAGENT_TERMINAL", "1")
+    m.start_process("scope-alice", env.id, "c", session_id="chat-1")
+    assert started == [] and m._watched == {}
+    assert not any("watcher_pid" in r for r in m._read_procs(env.id).values())
+
+
+def test_cleanup_dir_is_checked_and_removed_on_end_and_on_stop(procs):
+    """MUTATION: accept any path; skip the rm in _finish or in stop_process - red."""
+    m, env, fake, woken = procs
+    for bad in ("/workspace", "/tmp/x; rm -rf /", "/tmp/vaf_run_xyz", "/tmp/vaf_run_ab12cd/..",
+                "/home/user/vaf_run_ab12cd"):
+        with pytest.raises(ValueError):
+            m.start_process("scope-alice", env.id, "x", session_id="chat-1", cleanup_dir=bad)
+    assert fake.detached == [], "a refused folder starts nothing"
+
+    def _removed():
+        return [c[-1] for c in fake.calls if c[:1] == ["exec"] and c[-3:-1] == ["rm", "-rf"]]
+
+    h1 = m.start_process("scope-alice", env.id, "python3 -u main.py", session_id="chat-1",
+                         cleanup_dir="/tmp/vaf_run_ab12cd34ef56")
+    m._watch_processes(env, now=10.0)
+    assert _removed() == [], "not while it runs"
+    _ended(fake, h1)
+    m._watch_processes(env, now=20.0)
+    assert _removed() == ["/tmp/vaf_run_ab12cd34ef56"] and len(woken) == 1
+    h2 = m.start_process("scope-alice", env.id, "python3 -u main.py", session_id="chat-1",
+                         cleanup_dir="/tmp/vaf_run_0011223344aa")
+    m.stop_process("scope-alice", h2)
+    assert _removed()[-1] == "/tmp/vaf_run_0011223344aa"
+    m.start_process("scope-alice", env.id, "sleep 1", session_id="chat-1")
+    _ended(fake, m.processes("scope-alice")[-1]["handle"])
+    before = len(_removed())
+    m._watch_processes(env, now=30.0)
+    assert len(_removed()) == before, "no folder, nothing removed"

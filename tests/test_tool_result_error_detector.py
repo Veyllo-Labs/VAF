@@ -38,6 +38,20 @@ def test_host_bash_gate_markers():
     _fails("[PLAN REQUIRED] set your approach first")
 
 
+def test_a_run_stopped_before_it_finished():
+    """python_sandbox and sandbox_exec answer a timeout or a Stop with what the run printed so
+    far: green would tell the summarizer the work is done. MUTATION: remove the two prefixes
+    from _ERROR_PREFIXES - red."""
+    _fails("[timed out after 600 s] The code was stopped before it finished.\n"
+           "Output so far:\nline 0\nSplit the work into shorter runs.")       # python_sandbox.py
+    _fails("[cancelled by stop request] The code was stopped before it finished.\n"
+           "Output so far:\n(nothing was printed)")                             # python_sandbox.py
+    _fails("[timed out after 120s]\nCollecting requests")                       # tools/environments.py
+    _fails("[cancelled by stop request]\n(no output)")                          # tools/environments.py
+    _ok("[started in the background] e-s-ab12cd34ef56-p1a2b3c4d\nThe code runs on its own now")
+    _ok("[exit 0]\nall good")
+
+
 def test_librarian_and_warn_markers():
     _fails("[LIBRARIAN_ERROR] source fetch failed")                           # librarian.py
     _fails("[WARN] model output was empty, nothing saved")

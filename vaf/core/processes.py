@@ -25,6 +25,8 @@ Boundaries, each deliberate:
 - **Not where nobody can be woken.** The wake turn reaches the chat through the process
   that started the command, so a messaging-channel session (no wake delivery there) and a
   sub-agent child process (it exits long before the command) are refused by the tool.
+  ``background_refusal()`` is that one check, for every background lane: host commands
+  here and runs in a sandbox environment (python_sandbox, vaf/core/environments.py).
 
 The process tree is stopped with ``Platform.terminate_process_tree``, the same code that
 stops sub-agent children: a command run through a shell is only the child of that shell.
@@ -77,6 +79,32 @@ def agent_env(secret_env: Optional[Dict[str, str]] = None, **extra: str) -> Dict
 def started_by_agent(environ: Optional[Dict[str, str]] = None) -> bool:
     """Whether this process runs inside a command VAF started for the agent."""
     return (os.environ if environ is None else environ).get(AGENT_COMMAND_ENV) == "1"
+
+
+def in_subagent_process() -> bool:
+    """Whether this process is a sub-agent child (``VAF_IN_SUBAGENT_TERMINAL``). Such a
+    process ends with its run, long before a background job it started would."""
+    return os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip().lower() in ("1", "true", "yes")
+
+
+def background_refusal(session_id: Optional[str], source: str = "") -> Optional[str]:
+    """Why a background job started from here could not report back, or None when it can.
+
+    A background job's end reaches its chat as a wake turn queued in the process that
+    started it. Nobody is told in three places: a call without a chat, a messaging-channel
+    chat (no wake delivery there; ``source`` is the live chat source when the caller knows
+    it, the session id's prefix is the other signal), and a sub-agent child, whose process
+    ends before the job does. Every background lane asks this one question."""
+    from vaf.core.tool_dispatch import is_channel_session
+
+    sid = str(session_id or "").strip()
+    if not sid:
+        return "a background run needs a chat to report back to, and this call has none"
+    if is_channel_session(source, sid):
+        return "nobody could be told when it ends in a messaging-channel chat"
+    if in_subagent_process():
+        return "a sub-agent's process ends before the run does"
+    return None
 
 
 @dataclass

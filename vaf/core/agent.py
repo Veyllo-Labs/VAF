@@ -14277,13 +14277,10 @@ class Agent:
         if name in ("python_sandbox", "python_exec"):
             # Inject agent reference so with_vaf_tools=True can call back into the tool registry.
             tool_args["_agent"] = self
-            if name == "python_sandbox":
-                # export_files copies artifacts into THIS chat's workspace -
-                # key on the session, never the process-global pointer.
-                tool_args["_session_id"] = getattr(self, "current_session_id", None)
-                # The caller's identity (user_scope_id) is not assigned here: the tool
-                # declares identity_kwargs, and assign_declared_identity in
-                # vaf/core/tool_dispatch.py overwrites whatever the model sent.
+            # python_sandbox's identity and chat (the export target, the background run's
+            # report) are not assigned here: the tool declares identity_kwargs, and
+            # assign_declared_identity in vaf/core/tool_dispatch.py overwrites whatever the
+            # model sent with this turn's own answer.
             if name == "python_sandbox" and is_channel_session:
                 # Non-main channel sessions must not bridge host tools from sandbox code.
                 tool_args["with_vaf_tools"] = False

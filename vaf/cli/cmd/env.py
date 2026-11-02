@@ -180,7 +180,7 @@ def ps():
         UI.info("No background processes.")
         return
     for row in rows:
-        print(f"{row['handle']}: {row['state']} - {row['command'][:120]}")
+        print(f"{row['handle']}: {row['state']} - {(row.get('label') or row['command'])[:120]}")
 
 
 @app.command("logs")

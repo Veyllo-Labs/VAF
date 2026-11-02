@@ -40,7 +40,8 @@ through a real ToolCaller whose registry and identity decide what the caller may
 - `_HOST_BASH_INSTEAD` changed -> test_saved_refusal_outside_a_call_is_unchanged;
 - the sandbox code or the host_bash list showing only the first command ->
   test_every_command_is_spelled_out; no fitting -> the sixty-command test;
-- the sandbox example without its timeout, or with the sandbox's own 30 s ->
+- the sandbox example without its timeout, below the sandbox's own default (120 s), or with
+  its bounds hard-coded instead of read from PythonSandboxTool ->
   test_the_sandbox_example_has_room;
 - `check=True` back in the sandbox code (stop at the first failure) ->
   test_the_sandbox_code_runs_every_command; `errors='replace'` or the try/except removed ->
@@ -396,16 +397,24 @@ def test_a_plan_too_long_to_spell_out_names_the_rest(run_as):
         out[-300:]
 
 
-def test_the_sandbox_example_has_room(run_as):
-    """The sandbox stops a run after 30 s unless asked for more (600 at most): an install or a
-    clone takes longer, so the example asks for room per command."""
+def test_the_sandbox_example_has_room(run_as, monkeypatch):
+    """The sandbox stops a run after 120 s unless asked for more (600 at most): an install or a
+    clone takes about 40 s, so the example asks for room per command, never less than the
+    sandbox's own default and never more than its clamp, both read from PythonSandboxTool."""
     import re
     from vaf.tools.python_sandbox import PythonSandboxTool
-    for size, plan in ((2, _net_plan(1, 1)), (20, _net_plan())):
-        out = run_as(plan).result
-        timeouts = [int(t) for t in re.findall(r"timeout=(\d+)\)`", out)]
-        assert timeouts == [min(600, 60 + 45 * size)], (size, timeouts)
-        assert 30 < timeouts[0] <= PythonSandboxTool.MAX_TIMEOUT_SECONDS
+
+    def _asked(plan):
+        return [int(t) for t in re.findall(r"timeout=(\d+)\)`", run_as(plan).result)]
+
+    # One network command next to a local step (a plan of one step is refused before this).
+    one = _net_plan(1, 0) + [{"tool": "bash", "args": {"command": "ls"}}]
+    for size, plan in ((1, one), (2, _net_plan(1, 1)), (20, _net_plan())):
+        assert _asked(plan) == [min(600, max(120, 60 + 45 * size))], size
+    assert _asked(one) == [PythonSandboxTool.DEFAULT_TIMEOUT_SECONDS]
+    monkeypatch.setattr(PythonSandboxTool, "DEFAULT_TIMEOUT_SECONDS", 200)
+    monkeypatch.setattr(PythonSandboxTool, "MAX_TIMEOUT_SECONDS", 900)
+    assert _asked(_net_plan(1, 1)) == [200] and _asked(_net_plan()) == [900]
 
 
 def test_the_sandbox_code_runs_every_command(tmp_path):
@@ -751,6 +760,14 @@ def test_the_workflow_command_refuses_it_too(run, tmp_path, monkeypatch):
         raise _Ended(kw)
     monkeypatch.setattr(wf_cmd, "finish_terminal", _finish)
     monkeypatch.delenv("VAF_SESSION_ID", raising=False)
+    # The command marks its own process as a workflow child (it is one when run for real).
+    # In-process here, so these are recorded first and restored at teardown (setenv records
+    # an unset variable, delenv alone does not): a leaked VAF_IN_SUBAGENT_TERMINAL made
+    # every later background start in the same run refuse.
+    for name in ("VAF_IN_SUBAGENT_TERMINAL", "VAF_IN_WORKFLOW_TERMINAL", "VAF_AGENT_TYPE",
+                 "VAF_TASK_ID"):
+        monkeypatch.setenv(name, "")
+        monkeypatch.delenv(name)
     with pytest.raises(_Ended) as ended:
         CliRunner().invoke(wf_cmd.app, ["run", "old_plan"])
     assert ended.value.args[0].get("success") is False

@@ -187,10 +187,11 @@ def test_export_runs_before_workdir_cleanup():
     )
 
 
-def test_agent_injects_session_for_sandbox():
+def test_the_sandbox_declares_its_chat_instead_of_an_injection():
+    """export_files delivers into the chat the dispatcher declares (identity_kwargs), never a
+    name-keyed injection in agent.py. MUTATION: put the injection back - red."""
     import vaf.core.agent as agent_mod
+    assert "session_id" in PythonSandboxTool.identity_kwargs
     src = Path(agent_mod.__file__).read_text(encoding="utf-8")
-    m = re.search(r'if name in \("python_sandbox", "python_exec"\):(.{0,600})', src, re.S)
-    assert m and '_session_id' in m.group(1), (
-        "python_sandbox dispatch must inject the chat's session id for export_files"
-    )
+    m = re.search(r'if name in \("python_sandbox", "python_exec"\):(.{0,900})', src, re.S)
+    assert m and 'tool_args["_session_id"]' not in m.group(1)

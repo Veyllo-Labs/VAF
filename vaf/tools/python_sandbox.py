@@ -12,7 +12,15 @@ Security features:
 - One container per person, non-root, every capability dropped
 - Memory limit: 512MB, CPU limit: 0.5 cores
 - A working directory per run, removed after it
-- Timeouts and Stop end the run's own processes inside the container
+- Timeouts and Stop end the run's own processes inside the container; output is
+  unbuffered (PYTHONUNBUFFERED), so a run stopped at its limit returns what it printed
+
+Background runs (background=true) go through EnvironmentManager.start_process, the lane
+sandbox_exec already uses: the call returns a handle at once, and the chat gets the
+output and exit code as a wake turn when the run ends. The run's folder is removed then.
+Refused where nobody could be told (processes.background_refusal), with with_vaf_tools
+(the bridge lives only as long as the call), with export_files (files are delivered only
+inside the call) and while a tool is being trained (a probe leaves nothing behind).
 
 Programmatic Tool Calling (Tool Calling 2.0 — provider-agnostic)
 -----------------------------------------------------------------
@@ -49,6 +57,29 @@ from vaf.core.channels import CHAT_CHANNELS
 logger = logging.getLogger("vaf.python_sandbox")
 
 
+# The note containers.exec_bounded's backstop appends to stderr when it ends a run: the
+# executor's own words, not the code's, so the answer leaves it out.
+_CONTAINER_NOTE_RE = re.compile(r"\n?(?:cancelled by stop request|timed out after \d+s)\s*$")
+
+
+class _Outcome(tuple):
+    """`(rc, stdout, stderr)` of one command, with the ExecResult's own flags beside it.
+
+    The setup commands unpack the three; the main run reads `timed_out`, `cancelled` and
+    `raw_stderr` (the command's stderr without the executor's note) from here, so a timeout
+    is known from the flag and never parsed out of text the code itself could print."""
+    timed_out = False
+    cancelled = False
+    raw_stderr = ""
+
+    @classmethod
+    def of(cls, rc: int, stdout: str, stderr: str, *, timed_out: bool = False,
+           cancelled: bool = False, raw_stderr: str = "") -> "_Outcome":
+        o = cls((rc, stdout, stderr))
+        o.timed_out, o.cancelled, o.raw_stderr = timed_out, cancelled, raw_stderr
+        return o
+
+
 class PythonSandboxTool(BaseTool):
     """
     Secure Python Sandbox in the caller's own scratch environment.
@@ -62,7 +93,9 @@ class PythonSandboxTool(BaseTool):
     """
     
     
-    identity_kwargs = ("user_scope_id",)
+    # The chat (session_id) is declared, not injected by name: export_files delivers into it,
+    # and a background run reports back to it with the person's name and role.
+    identity_kwargs = ("user_scope_id", "username", "user_role", "session_id")
     name = "python_sandbox"
     # A stop-aware poll loop with its own deadline that kills the docker exec the moment Stop
     # is requested. Abandoned by a bounded run instead, the thread could lose the stop flag
@@ -73,39 +106,49 @@ class PythonSandboxTool(BaseTool):
     side_effect_class = "reversible"
     # Whare Wananga: probe this in full rather than via the error path. Executing self-contained
     # probe code here is harmless and leaves nothing permanent (Docker-isolated; the host-tool
-    # bridge `with_vaf_tools` is opt-in and defaults to False), and full probing is the only way
-    # to learn a tool whose whole job is to ACCEPT and run code.
+    # bridge `with_vaf_tools` is opt-in and defaults to False; background=true is refused while
+    # a tool is being trained, because a run that outlives the call is not nothing), and full
+    # probing is the only way to learn a tool whose whole job is to ACCEPT and run code.
     whare_wananga_full_probe = True
     description = (
-        "Execute Python code safely in a Docker-isolated sandbox. "
-        "Runs code in a secure container with limited resources (512MB RAM, 0.5 CPU). "
-        "Use for calculations, data processing, algorithms, and running untrusted code. "
-        "The sandbox filesystem is EPHEMERAL and isolated from the host: files you write here "
-        "do NOT reach the user by themselves. To DELIVER files (images, PDFs, any artifact "
-        "your code produces), write them to relative paths and list them in export_files - "
-        "they are copied into the chat workspace after the run. For plain text content "
-        "write_file(path=..., content=...) also works. "
-        "Set with_vaf_tools=True to call other VAF tools from inside the code via "
-        "`import vaf_tools; result = vaf_tools.call('tool_name', {...})` — "
-        "only the final print output returns to context (Programmatic Tool Calling). "
-        "REQUIRES Docker to be installed and running."
+        "Run Python code in your own isolated sandbox (a Docker container: 512 MB RAM, 0.5 CPU, "
+        "internet access, no access to this computer's files) and get what it prints. Default "
+        "wait 120 s, max 600; on a timeout you get the output so far. For long work set "
+        "background=true: the call returns at once and the result comes into this chat when the "
+        "run ends. Files the code writes are temporary: list the ones the user should get in "
+        "export_files. with_vaf_tools=True lets the code call VAF tools "
+        "(`import vaf_tools; vaf_tools.call('tool_name', {...})`). REQUIRES Docker."
     )
     input_examples = [
         {"code": "print(2 ** 32)"},
         {"code": "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\nplt.plot([1,2,3])\nplt.savefig('chart.png')\nprint('done')", "packages": ["matplotlib"], "export_files": ["chart.png"]},
         {"code": "import vaf_tools\ndata = vaf_tools.call('web_search', {'query': 'EUR/USD rate'})\nprint(data)", "with_vaf_tools": True},
+        {"code": "import subprocess\nfor i in range(10):\n    subprocess.run(['pip', 'install', 'requests'])\n    print('done', i)", "background": True},
     ]
     parameters = {
         "type": "object",
         "properties": {
             "code": {
                 "type": "string",
-                "description": "Python code to execute in the sandbox"
+                "description": "The Python code to run. print() what you want to see."
             },
             "timeout": {
                 "type": "integer",
-                "description": "Timeout in seconds (default: 30, max 600)",
-                "default": 30
+                "description": (
+                    "Seconds to wait for the result. Default 120, max 600. When time runs out, "
+                    "the run is stopped and you get what it printed so far. Not used with "
+                    "background=true."
+                ),
+                "default": 120
+            },
+            "background": {
+                "type": "boolean",
+                "description": (
+                    "true: start the run and return at once. Its output and exit code come into "
+                    "this chat as a new message when it ends (at most 8 hours). Use it for long "
+                    "work: many installs, big downloads, long loops."
+                ),
+                "default": False
             },
             "packages": {
                 "type": "array",
@@ -124,7 +167,7 @@ class PythonSandboxTool(BaseTool):
                     "sandbox into the chat workspace after a successful run (e.g. ['chart.png']). "
                     "THE way to persist binary artifacts - never print base64 into context. "
                     "Relative paths resolve against the run's working directory, and only files "
-                    "inside it can be exported. Max 5 files."
+                    "inside it can be exported. Max 5 files (not with background=true)."
                 )
             },
             "with_vaf_tools": {
@@ -133,7 +176,7 @@ class PythonSandboxTool(BaseTool):
                     "If true, inject a `vaf_tools` module so code can call VAF tools: "
                     "`import vaf_tools; result = vaf_tools.call('web_search', {'query': '...'})`. "
                     "Only the final print output is returned to the model context (no intermediate tool results). "
-                    "Default: false."
+                    "Default: false (not with background=true)."
                 ),
                 "default": False
             }
@@ -147,14 +190,17 @@ class PythonSandboxTool(BaseTool):
     
     # The sandbox supervises itself (self_supervised), so no dispatcher bound stands behind
     # the model's timeout: it is clamped here, like host_bash's, for both execution paths.
+    # The default is sandbox_exec's: one `pip install` measured about 40 s, which a 30 s
+    # default cut off before it had printed anything.
+    DEFAULT_TIMEOUT_SECONDS = 120
     MAX_TIMEOUT_SECONDS = 600
 
     @classmethod
     def _run_timeout(cls, kwargs) -> int:
         try:
-            requested = int(kwargs.get("timeout") or 30)
+            requested = int(kwargs.get("timeout") or cls.DEFAULT_TIMEOUT_SECONDS)
         except (TypeError, ValueError):
-            requested = 30
+            requested = cls.DEFAULT_TIMEOUT_SECONDS
         return min(max(1, requested), cls.MAX_TIMEOUT_SECONDS)
 
     @staticmethod
@@ -188,11 +234,14 @@ class PythonSandboxTool(BaseTool):
         def execute_fn(command: str, timeout: int, env: Optional[Dict[str, str]] = None):
             r = mgr.exec_in(run_env, ["sh", "-c", command], timeout=timeout, env_values=env,
                             check_stop=stopped, run_id=run_id)
+            raw = _CONTAINER_NOTE_RE.sub("", r.stderr or "") if (r.cancelled or r.timed_out) else (r.stderr or "")
             if r.cancelled:
-                return -1, r.stdout, f"{(r.stderr or '').strip()}\nExecution cancelled by stop request.".strip()
+                return _Outcome.of(-1, r.stdout, f"{raw.strip()}\nExecution cancelled by stop request.".strip(),
+                                   cancelled=True, raw_stderr=raw)
             if r.timed_out:
-                return -1, r.stdout, f"{(r.stderr or '').strip()}\nExecution timed out after {int(timeout)}s.".strip()
-            return r.returncode, r.stdout, r.stderr
+                return _Outcome.of(-1, r.stdout, f"{raw.strip()}\nExecution timed out after {int(timeout)}s.".strip(),
+                                   timed_out=True, raw_stderr=raw)
+            return _Outcome.of(r.returncode, r.stdout, r.stderr, raw_stderr=raw)
 
         run_env = env
         return execute_fn
@@ -257,8 +306,11 @@ class PythonSandboxTool(BaseTool):
 
     @classmethod
     def _run_env_prefix(cls, workdir: str, extra_pythonpath: str = "") -> str:
+        """The run's environment. PYTHONUNBUFFERED: stdout is a pipe, so Python would
+        block-buffer it, and the kill at a timeout drops that buffer - measured, a run that
+        had printed three lines returned none. It reaches every Python the code starts too."""
         pp = f"{extra_pythonpath}:{cls._pkgs_dir(workdir)}" if extra_pythonpath else cls._pkgs_dir(workdir)
-        return f"PIP_TARGET={cls._pkgs_dir(workdir)} PYTHONPATH={pp}"
+        return f"PIP_TARGET={cls._pkgs_dir(workdir)} PYTHONPATH={pp} PYTHONUNBUFFERED=1"
 
     def _run_with_bridge(
         self,
@@ -438,6 +490,148 @@ class PythonSandboxTool(BaseTool):
             notes.append(f"[export failed: {e}]")
         return notes
 
+    # ------------------------------------------------------------------ #
+    #  The answers                                                          #
+    # ------------------------------------------------------------------ #
+    # A timeout or a Stop is not worded as a failure ("error", "failed ... execution"): the
+    # chat loop's inline retry blocker (vaf/core/agent.py, "Blocked retry of failed tool")
+    # would then refuse the model's NEXT call of this tool, the one with a larger timeout or
+    # background=true. Its identical-argument check still stops a verbatim repeat.
+
+    @classmethod
+    def _more_time_hint(cls, timeout: int, background_ok: bool) -> str:
+        """The last line of a timeout answer: what gives the work the time it needs."""
+        larger = (f"call python_sandbox again with a larger timeout (at most "
+                  f"{cls.MAX_TIMEOUT_SECONDS})")
+        later = "it returns at once and the result comes into this chat when the run ends."
+        if timeout < cls.MAX_TIMEOUT_SECONDS:
+            if background_ok:
+                return f"To give it more time, {larger}, or with background=true for long work: {later}"
+            return f"To give it more time, {larger}, or split the work into shorter runs."
+        if background_ok:
+            return (f"For work longer than {cls.MAX_TIMEOUT_SECONDS} s, call python_sandbox again "
+                    f"with background=true: {later}")
+        return "Split the work into shorter runs."
+
+    @staticmethod
+    def _stopped_answer(lead: str, stdout: str, stderr: str, export_given: bool,
+                        hint: str = "") -> str:
+        """A run that did not finish: what it printed until then, never thrown away. The
+        status line first and the hint last, so both survive the chat's cut from the middle."""
+        lines = [f"{lead} The code was stopped before it finished.", "Output so far:",
+                 (stdout or "").rstrip() or "(nothing was printed)"]
+        if (stderr or "").strip():
+            lines += ["[stderr]", stderr.rstrip()]
+        if export_given:
+            lines.append("export_files were not copied: the run did not finish.")
+        if hint:
+            lines.append(hint)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _failed_answer(exit_code: int, stdout: str, stderr: str) -> str:
+        """A run that exited with a code other than 0: its output AND its error, because a
+        traceback alone hides how far the code got."""
+        lines = [f"[ERROR] Sandbox execution failed (exit={exit_code}):"]
+        if (stdout or "").strip():
+            lines.append(stdout.rstrip())
+        if (stderr or "").strip():
+            lines += ["[stderr]", stderr.rstrip()]
+        if len(lines) == 1:
+            lines.append("(no output)")
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------ #
+    #  Background runs                                                      #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _background_refusal(kwargs: dict, agent: Any, source: str) -> Optional[str]:
+        """Why this call may not run in the background, as the whole answer, or None. Asked
+        before anything is created or run."""
+        if kwargs.get("with_vaf_tools"):
+            return ("[BLOCKED] with_vaf_tools does not work with background=true: the tool bridge "
+                    "lives only as long as this call. Nothing ran. Call it again without one of "
+                    "the two.")
+        if kwargs.get("export_files"):
+            return ("[BLOCKED] export_files does not work with background=true: files are "
+                    "delivered only when the run ends inside the call. Nothing ran. Run it "
+                    "without background to get the files.")
+        from vaf.core.processes import background_refusal
+        reason = background_refusal(kwargs.get("session_id"), source)
+        if reason:
+            return f"[BLOCKED] {reason}. Nothing ran. Run it without background."
+        if getattr(agent, "_ww_training", False):
+            return ("[BLOCKED] background runs are not started while a tool is being trained. "
+                    "Nothing ran.")
+        return None
+
+    @staticmethod
+    def _label(code: str) -> str:
+        first = next((ln.strip() for ln in code.splitlines() if ln.strip()), "")
+        return "python_sandbox: " + first[:80]
+
+    def _start_background(self, code: str, packages, kwargs: dict, user_scope_id: Any) -> str:
+        """Start the code as a background process in the caller's scratch environment
+        (EnvironmentManager.start_process) and return its handle at once. The folder is the
+        process's now: start_process removes it when the run is reported or stopped."""
+        from vaf.core.environments import EnvironmentRefused, get_environment_manager, setting
+        if packages:
+            bad = self._validate_packages(packages)
+            if bad:
+                return f"[ERROR] {bad}"
+        mgr = get_environment_manager()
+        try:
+            scratch = mgr.scratch_for(user_scope_id)
+        except EnvironmentRefused as e:
+            return f"[ERROR] python_sandbox: {e}"
+        except Exception as e:
+            logger.error("python_sandbox: scratch environment unavailable: %s", e)
+            return f"[ERROR] python_sandbox: the sandbox could not be started: {e}"
+        workdir = f"/tmp/vaf_run_{uuid.uuid4().hex[:12]}"
+        handed_over = False
+        try:
+            r = mgr.exec_in(scratch, ["mkdir", "-p", workdir], timeout=30)
+            if r.returncode != 0:
+                return f"[ERROR] Failed to create workspace: {r.stderr}"
+            # On stdin, never in the command: the command travels as one environment
+            # string (VAF_CMD), which the kernel limits to 128 KB.
+            r = mgr.exec_in(scratch, ["sh", "-c", f"cat > {workdir}/main.py"], timeout=30,
+                            input_text=code)
+            if r.returncode != 0:
+                return f"[ERROR] python_sandbox: the code could not be written: {r.stderr}"
+            command = f"{self._run_env_prefix(workdir)} python3 -u main.py"
+            if packages:
+                command = f"{self._pip_install_cmd(packages, workdir)} && {command}"
+            try:
+                handle = mgr.start_process(
+                    user_scope_id, scratch.id, command,
+                    session_id=str(kwargs.get("session_id") or ""),
+                    username=kwargs.get("username"), user_role=kwargs.get("user_role"),
+                    cwd=workdir, cleanup_dir=workdir, label=self._label(code))
+            except EnvironmentRefused as e:
+                return f"[BLOCKED] {e} Nothing ran."
+            handed_over = True
+        except Exception as e:
+            logger.error("python_sandbox: background start failed: %s", e)
+            return f"[ERROR] python_sandbox: the background run could not be started: {e}"
+        finally:
+            if not handed_over:
+                try:
+                    mgr.exec_in(scratch, ["rm", "-rf", workdir], timeout=15)
+                except Exception:
+                    pass
+        from vaf.core.tool_dispatch import advise_tools
+        accepted = advise_tools("host_process")
+        lines = [f"[started in the background] {handle}",
+                 f"The code runs on its own now (at most {setting('process_max_hours')} h); this "
+                 f"chat gets its output and exit code as a new message when it ends, so there is "
+                 f"nothing to wait for."]
+        if accepted is None or "host_process" in accepted:
+            lines.append(f"To look before then: host_process(action=\"log\", id=\"{handle}\"); "
+                         f"to stop it: host_process(action=\"stop\", id=\"{handle}\").")
+        return "\n".join(lines)
+
     def run(self, **kwargs) -> str:
         """Execute Python code in Docker sandbox (per-user isolated workspace)."""
         code = str(kwargs.get("code", "")).strip()
@@ -451,9 +645,17 @@ class PythonSandboxTool(BaseTool):
             with_vaf_tools = False
         # Whose sandbox: each person gets a container of their own (the scratch environment).
         user_scope_id = kwargs.get("user_scope_id")
+        # Strict: a model that writes the flag as the string "false" means no.
+        background = str(kwargs.get("background", "")).strip().lower() in ("true", "1", "yes")
+        export_given = bool(kwargs.get("export_files"))
 
         if not code:
             return "[ERROR] python_sandbox: No code provided."
+
+        if background:
+            refused = self._background_refusal(kwargs, agent, current_source)
+            if refused:
+                return refused
 
         # Guard: the sandbox is isolated from the host FS, so a write to a workspace/host path
         # silently vanishes. Redirect persistence-intent writes to write_file before running.
@@ -467,6 +669,9 @@ class PythonSandboxTool(BaseTool):
         if not docker_ok:
             logger.error(f"Docker not available: {docker_error}")
             return f"[SECURITY] Sandbox requires Docker: {docker_error}\n\nCode execution blocked for security reasons."
+
+        if background:
+            return self._start_background(code, packages, kwargs, user_scope_id)
 
         # Step 2: This person's scratch environment, created or started on demand.
         from vaf.core.environments import EnvironmentRefused, get_environment_manager
@@ -544,7 +749,7 @@ class PythonSandboxTool(BaseTool):
             # Step 5: Execute code
             if with_vaf_tools and bridge_env and stub_src:
                 logger.debug("Executing with vaf_tools bridge: %s...", code[:100])
-                exit_code, stdout, stderr = self._run_with_bridge(
+                outcome = self._run_with_bridge(
                     code, execute_fn, workdir, timeout, bridge_env, stub_src
                 )
             else:
@@ -555,7 +760,21 @@ class PythonSandboxTool(BaseTool):
                     f"sh -c 'echo {b64_code} | base64 -d | python3'"
                 )
                 logger.debug(f"Executing: {code[:100]}...")
-                exit_code, stdout, stderr = execute_fn(safe_cmd, timeout=timeout)
+                outcome = execute_fn(safe_cmd, timeout=timeout)
+            exit_code, stdout, stderr = outcome
+
+            # A run that did not finish: what it printed so far, and how to go on.
+            if getattr(outcome, "timed_out", False) or getattr(outcome, "cancelled", False):
+                raw_err = getattr(outcome, "raw_stderr", stderr)
+                if getattr(outcome, "cancelled", False):
+                    return self._stopped_answer("[cancelled by stop request]", stdout, raw_err,
+                                                export_given)
+                from vaf.core.processes import background_refusal
+                background_ok = (not with_vaf_tools and not export_given
+                                 and background_refusal(kwargs.get("session_id"), current_source) is None
+                                 and not getattr(agent, "_ww_training", False))
+                return self._stopped_answer(f"[timed out after {timeout} s]", stdout, raw_err,
+                                            export_given, self._more_time_hint(timeout, background_ok))
 
             # Step 5b: Export declared artifacts BEFORE the workdir is removed -
             # this is how binary files reach the user (docker cp to the chat
@@ -563,12 +782,12 @@ class PythonSandboxTool(BaseTool):
             export_notes = []
             _export_files = kwargs.get("export_files") or []
             if _export_files and exit_code == 0:
-                # One resolver: context first, process boundary second.
+                # The declared chat first (identity_kwargs), the process boundary second.
                 try:
                     from vaf.core.subagent_ipc import get_current_session_id
-                    _sid = kwargs.get("_session_id") or get_current_session_id()
+                    _sid = kwargs.get("session_id") or get_current_session_id()
                 except Exception:
-                    _sid = kwargs.get("_session_id")
+                    _sid = kwargs.get("session_id")
                 export_notes = self._export_artifacts(
                     _export_files, workdir, scratch.container, _sid
                 )
@@ -577,8 +796,7 @@ class PythonSandboxTool(BaseTool):
 
             # Step 7: Format result
             if exit_code != 0:
-                error_output = stderr or stdout or f"Exit code: {exit_code}"
-                return f"[ERROR] Sandbox execution failed (exit={exit_code}):\n{error_output}"
+                return self._failed_answer(exit_code, stdout, stderr)
 
             result = ""
             if stdout:

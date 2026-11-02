@@ -67,8 +67,8 @@ so a run starts in well under a second (measured: `docker exec` of `python3` in 
 | **User** | Non-root: the caller's uid on Linux, the image's uid 10001 elsewhere. `--cap-drop ALL`, `no-new-privileges`, `--pids-limit` |
 | **Memory / CPU** | 512 MB / 0.5 cores; exempt from the per-person count and the memory floor of other environments, so this lane keeps answering |
 | **Network** | Its own bridge network with outbound internet (pip) and `host.docker.internal` for the Tool Bridge. No other environment shares it |
-| **Workspace** | A directory per run, `/tmp/vaf_run_<id>`, removed after the run. Packages installed via the `packages` parameter go into that run's `_pkgs` (pip `--target`, `--no-cache-dir`, `PIP_TARGET`/`PYTHONPATH` set), so nothing accumulates. `export_files` copies only files inside the run's own directory, and a link or folder the copy produced is removed instead of delivered |
-| **Timeout and Stop** | Every command of a run carries a marker (`VAF_RUN_ID`) in its environment. A timeout (`timeout -s KILL` inside the container) or a Stop kills exactly that run's processes, found through `/proc/*/environ` (`vaf/core/containers.py`, `exec_bounded`); killing the host's `docker exec` client alone would leave them running |
+| **Workspace** | A directory per run, `/tmp/vaf_run_<id>`, removed after the run (a background run's when it is reported or stopped). Packages installed via the `packages` parameter go into that run's `_pkgs` (pip `--target`, `--no-cache-dir`, `PIP_TARGET`/`PYTHONPATH` set), so nothing accumulates. `export_files` copies only files inside the run's own directory, and a link or folder the copy produced is removed instead of delivered |
+| **Timeout and Stop** | Every command of a run carries a marker (`VAF_RUN_ID`) in its environment. A timeout (`timeout -s KILL` inside the container) or a Stop kills exactly that run's processes, found through `/proc/*/environ` (`vaf/core/containers.py`, `exec_bounded`); killing the host's `docker exec` client alone would leave them running. Output is unbuffered (`PYTHONUNBUFFERED=1` for every Python the run starts), and a run that is stopped answers with everything it printed until then: measured with the command's own shape, a buffered run killed at its limit had lost all three lines it printed |
 | **Lifetime** | Removed whole 24 h after its last use (`sandbox_env_temp_ttl_hours`), stopped at VAF's quit |
 
 `run_tests` copies the project (without `.git`, `node_modules`, virtualenvs and build output; at
@@ -100,9 +100,29 @@ python_sandbox(
 
 ### Custom timeout
 
+A run waits 120 s by default and at most 600. When the time is up, the run is stopped and the
+answer starts with `[timed out after N s]`, followed by everything the code printed so far and,
+as its last line, how to give the work more time.
+
 ```python
 python_sandbox(code="import time; time.sleep(5); print('done')", timeout=60)
 ```
+
+### Long work in the background
+
+```python
+python_sandbox(code="import subprocess\nfor i in range(10):\n    subprocess.run(['pip', 'install', 'requests'])\n    print('done', i)",
+               background=True)
+```
+
+The call returns at once with a handle (`[started in the background] e-<environment>-<process>`)
+and the chat stays free. The code runs as a background process in the same scratch environment
+(below, "Background processes"); when it ends, the chat gets a new message with the end of its
+output and its exit code, and the run's folder is removed. `host_process` reads its log or stops
+it before then. Refused, with "Nothing ran", together with `with_vaf_tools` (the bridge lives only
+as long as the call) or `export_files` (files are delivered only inside the call), in a call
+without a chat, in a messaging-channel chat, inside a sub-agent's process and while a tool is
+being trained.
 
 ---
 
@@ -355,16 +375,28 @@ From the terminal, `vaf env` does the same as the machine owner, behind the term
 (`-- python3 -c "print('a b')"`); a single quoted word is taken as a shell line, so pipes
 and `&&` work (`-- "pip install -r requirements.txt && pytest"`).
 
-Background processes are listed, read and stopped with `host_process` (ids
-`e-<environment>-<process>`), next to the chat's host commands. The record of who started
-one, from which chat, lives on the host beside the environment's record, so code in the
-environment cannot rewrite it; whether it runs and its exit code are read from the
-container. The reaper wakes the chat when one ends on its own, and ends one after
-`sandbox_env_process_max_hours`. None of these tools is offered to thinking runs or on a
-4k context.
+Background processes (`sandbox_exec(background=true)`, `python_sandbox(background=true)`) are
+listed, read and stopped with `host_process` (ids `e-<environment>-<process>`), next to the
+chat's host commands; lists and the report show a process's label (`python_sandbox: <first code
+line>`) where one was given. The record of who started one, from which chat, lives on the host
+beside the environment's record, so code in the environment cannot rewrite it; whether it runs
+and its exit code are read from the container. At most eight run in one environment at a time
+(`processes.MAX_PER_CHAT`, the host lane's number); a ninth is refused with the running ones
+named. The process that started one with a chat to report to watches it itself every 5 seconds,
+so the report lands in that process's own queue (the web server's, the full-screen app's); the
+modern terminal lane (`vaf run --web`) declines such a turn with a note, as it declines a timer's. The reaper is the backstop for a
+process whose watcher is gone (a restart, a short `vaf env exec --background`) and for one
+started without a chat or from a sub-agent; it leaves a record alone while another live process
+watches it. Whoever reports first claims the record under the state lock, so one ended process
+is reported once by intent (without `filelock` that lock holds only between threads). A process
+past `sandbox_env_process_max_hours` is ended and reported; exit 137 is reported as "killed: out
+of memory or ended from outside". A run folder the process was started with
+(`/tmp/vaf_<lane>_<hex>` only) is removed when it is reported or stopped; its log stays as long
+as the container, so `host_process(action="log")` still reads it after the report. None of these
+tools is offered to thinking runs or on a 4k context.
 
 **Housekeeping.**
-- **Reaper.** The web server runs one: it removes expired temporary environments, stops idle project environments, and clears records and labelled volumes or networks a crash left behind.
+- **Reaper.** The web server runs one: it removes expired temporary environments, stops idle project environments, clears records and labelled volumes or networks a crash left behind, and reports background processes that ended with nobody else watching them.
 - **Restore.** A restore on another machine brings back the records and volumes, not the containers, and the reaper would clear such a record and its volume as a crash leftover. `vaf backup restore` calls `EnvironmentManager.readopt()` first: each project environment gets its container back from its record (with today's image), a temporary one is dropped, and one whose mounted host folder is missing here is reported. The host folder a restored record names passes the same checks as a new environment's mount (not the home directory, not a system folder) and is stored resolved; a refused one is reported as failed. The rest of the record is held to what `create` allows as well: the id is the record file's, the container, volume and network names are derived from it and the owner (they are what removing an environment deletes, so a record never names them), a network profile that is no profile becomes `none` rather than the open network, and the network and memory are capped by today's limits instead of refused, which would hand the work to the reaper. For the same reason the reaper clears an orphan record with only the volume and network VAF names for that id. Before anything is replaced, a restore whose backup holds project environments makes sure the environment image is available and refuses otherwise. The restored volume is handed to this machine's environment user, which need not be the uid the files had on the old one.
 - **Busy.** It is asked of docker, not of the reaper's memory: a process inside that carries a VAF run marker (`VAF_RUN_ID`, `VAF_PROC_ID`) keeps an environment alive. When the answer cannot be had, the environment counts as busy.
 - **Repeatable removal.** Removing an environment twice does no harm, because several reapers may race.

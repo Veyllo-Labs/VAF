@@ -106,7 +106,10 @@ IDENTITY_BASELINE = {
     # username added with the cross-chat half of the tool: the contact lookup that keeps
     # other people's conversations out of the answer is keyed on the caller's account.
     "memory_search": ["user_scope_id", "username"],
-    "python_sandbox": ["user_scope_id"],
+    # Gained username and user_role with the background mode: the run reports to its chat as
+    # a wake turn carrying the person's identity. (It declares session_id too, the chat it
+    # reports to and exports into; that key is not a person key and not part of this table.)
+    "python_sandbox": ["user_role", "user_scope_id", "username"],
     "read_automation": ["user_role", "user_scope_id"],
     "read_discord_chat": ["user_scope_id", "username"],
     "read_file": ["user_role", "user_scope_id"],

@@ -93,6 +93,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- **Long Python runs no longer end in a bare timeout.** `python_sandbox` now prints as it
+  goes, so a run stopped at its time limit (120 s by default, at most 600) returns everything
+  it printed so far and says how to continue, and a failed run shows its output next to the
+  error. `background=true` starts long work and returns at once; the chat gets the output and
+  exit code as a new message when the run ends (at most 8 h by default). Ask the agent to stop
+  it, or use `vaf env kill`. At most eight background runs at a time per sandbox.
 - **The llama.cpp and vLLM cards now say in the same way whom each engine is for, what it
   needs and how long it takes to start**: llama.cpp for everyday tasks on personal PCs, laptops
   and edge devices, vLLM for servers and high-end PCs that answer many requests at once, in

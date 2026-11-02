@@ -321,10 +321,10 @@ create_agent_workflow(
   of its own, so one command cannot end the run for the rest; the command and the stderr
   tail are printed as `repr()`, so each command is exactly one line even when either holds a
   newline; each line is flushed, so the
-  lines already printed survive a timeout of the whole call, and the instruction says that
-  a missing line means that command did not finish; the call
-  asks for `timeout=` 60 s plus 45 s per command, at most the sandbox's 600, because the
-  sandbox stops a run after 30 s by default), or with `host_bash(command="...")` (the
+  lines already printed survive a timeout of the whole call (the sandbox returns what a
+  stopped run printed), and the instruction says that a missing line means that command did
+  not finish; the call asks for `timeout=` 60 s plus 45 s per command, never less than the
+  sandbox's 120 s default and at most its 600, both read from `PythonSandboxTool`), or with `host_bash(command="...")` (the
   command JSON-escaped, so a quote, a backslash or a newline stays one argument), one call
   per command that the user confirms,
   when the result must land on the user's computer. python_sandbox comes first because

@@ -181,6 +181,10 @@ _ERROR_PREFIXES = (
     "[host]",
     "[security]",
     "[cancelled]",
+    # A run stopped before it finished (python_sandbox, sandbox_exec): the work is not
+    # done, whatever partial output follows.
+    "[timed out after",
+    "[cancelled by stop request",
     "[confirm required]",
     "[awaiting user]",
     "[tool blocked]",

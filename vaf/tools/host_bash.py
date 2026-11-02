@@ -30,7 +30,6 @@ A cheap blocklist stops the few catastrophic patterns (command_policy, host prof
 """
 from __future__ import annotations
 
-import os
 import subprocess
 
 from vaf.tools.base import BaseTool
@@ -147,19 +146,12 @@ class HostBashTool(BaseTool):
         """Start the command detached (vaf/core/processes.py) and return its id at once."""
         from vaf.core import processes
         from vaf.core.subagent_ipc import get_current_session_id
-        from vaf.core.tool_dispatch import is_channel_session
 
         session_id = get_current_session_id()
-        # Where nobody could be woken, a background command would run on unseen: a
-        # messaging-channel chat has no wake delivery, and a sub-agent's own process ends
-        # long before the command does, taking the watcher with it.
-        if is_channel_session("", session_id):
-            return ("[BLOCKED] background commands are not available in a messaging-channel "
-                    "chat: nobody could be told when it ends. Run it without background.")
-        if os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "").strip().lower() in ("1", "true", "yes"):
-            return ("[BLOCKED] a sub-agent cannot start a background command: its process ends "
-                    "before the command does. Run it without background, or report that the "
-                    "main chat should start it.")
+        # Where nobody could be woken, a background command would run on unseen.
+        reason = processes.background_refusal(session_id)
+        if reason:
+            return f"[BLOCKED] {reason}. Run it without background."
         try:
             record = processes.start(
                 command, session_id=session_id, user_scope_id=kwargs.get("user_scope_id"),

@@ -41,9 +41,10 @@ def test_the_sandbox_timeout_is_bounded_and_defaults_on_nonsense():
 
     t = PythonSandboxTool._run_timeout
     assert t({"timeout": 99999}) == PythonSandboxTool.MAX_TIMEOUT_SECONDS
-    assert t({"timeout": 0}) == 30          # "or 30": zero reads as unset
+    assert PythonSandboxTool.DEFAULT_TIMEOUT_SECONDS == 120
+    assert t({"timeout": 0}) == 120         # zero reads as unset: the default
     assert t({"timeout": -5}) == 1
-    assert t({"timeout": "abc"}) == 30 and t({}) == 30
+    assert t({"timeout": "abc"}) == 120 and t({}) == 120
     assert t({"timeout": 45}) == 45
 
 

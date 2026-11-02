@@ -896,15 +896,17 @@ def enqueue_wake_turn(*, kind: str, session_id: str, text: str, source: str = "w
 # drains the queue and runs wake turns declares itself the same way.
 _wake_runners: set = set()
 # A runner tied to its thread (declare_wake_runner(thread=...)) counts from the declaration
-# until that thread has run and ended: a loop that ends by any path, an exception in its setup included, stops
-# counting without having to withdraw, and its restart declares itself again.
+# until that thread has run and ended: a loop that ends by any path, an exception in its
+# setup included, stops counting without having to withdraw, and its restart declares
+# itself again.
 _wake_runner_threads: Dict[str, threading.Thread] = {}
 _wake_runners_lock = threading.Lock()
 
 
 def declare_wake_runner(name: str, *, thread: Optional[threading.Thread] = None) -> None:
     """Say that a lane of this process runs wake turns: until withdrawn, or, with
-    ``thread``, while that thread is alive."""
+    ``thread``, from now until that thread has run and ended (declaring before its
+    ``start()`` is fine)."""
     with _wake_runners_lock:
         _wake_runners.add(str(name))
         if thread is not None:

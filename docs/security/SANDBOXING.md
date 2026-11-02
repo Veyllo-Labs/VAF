@@ -389,8 +389,9 @@ before the lock, and a start docker answered after that read counts as running);
 placeholder goes when docker refuses the start, and one older than 60 s that never ran (a crash
 in between) stops counting, is listed as "did not start" and is removed on the next look. A
 process stopped while docker is still starting it is ended as soon as docker has started it:
-the stop marks the record before its kill, so the start sees the stop or the kill finds the
-process, in either order. A start whose placeholder was removed while docker was still
+the stop marks the record before its kill and reports it only while it is still marked, so in
+every ordering the process is killed by the stop or the start, or, when the kills fail, stays
+tracked and the limit ends it. A start whose placeholder was removed while docker was still
 answering is ended too, and the 60 s count from the reservation itself. A background start from
 the agent (`sandbox_exec`, `python_sandbox`, like `host_bash`) is refused where its end could
 not be reported (`processes.background_refusal`): no chat, a messaging-channel chat, a

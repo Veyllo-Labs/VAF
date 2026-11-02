@@ -914,3 +914,79 @@ def test_a_look_during_a_stop_does_not_report_its_kill(procs):
     fake.exits[proc] = "137"                               # its kill
     m._watch_processes(env, now=100.0)
     assert woken == []
+
+
+def test_a_stop_does_not_overwrite_a_start_that_took_its_process_back(procs, monkeypatch):
+    """Ordering: the stop marks, its kill finds nothing (docker has not started it), docker
+    answers, the start sees the mark and its own kill fails, so it takes the record back as
+    running; only then does the stop finish. The stop must not report the record now, or
+    the process runs on with no limit and no report. MUTATION: report unconditionally in
+    the stop's second step - red."""
+    import threading
+    import time as _t
+    m, env, fake, woken = procs
+    exec_gate, exec_entered = threading.Event(), threading.Event()
+    m2_gate, stop_kill_ran = threading.Event(), threading.Event()
+    kills = []
+
+    def _docker(args, timeout=60, **kw):
+        if args[:2] == ["exec", "-d"]:
+            exec_entered.set()
+            exec_gate.wait(10)
+        if args[0] == "exec" and "kill" in args[-1]:
+            kills.append(1)
+            if len(kills) == 1:                    # the stop's kill: nothing to kill yet
+                out = fake(args, timeout=timeout, **kw)
+                stop_kill_ran.set()
+                m2_gate.wait(10)
+                return out
+            if len(kills) == 2:                    # the start's kill fails
+                return types.SimpleNamespace(returncode=1, stdout="", stderr="busy")
+        return fake(args, timeout=timeout, **kw)
+
+    monkeypatch.setattr(containers, "docker", _docker)
+    started = []
+    ts = threading.Thread(target=lambda: started.append(_try_start(m, env)))
+    ts.start()
+    assert exec_entered.wait(10)
+    [row] = m.processes("scope-alice")
+    tk = threading.Thread(target=lambda: m.stop_process("scope-alice", row["handle"]))
+    tk.start()
+    assert stop_kill_ran.wait(10)
+    exec_gate.set()
+    ts.join(10)
+    m2_gate.set()
+    tk.join(10)
+    proc = row["handle"].split("-")[-1]
+    assert started == [row["handle"]]
+    rec = m._read_procs(env.id)[proc]
+    assert proc in fake.alive and rec["stopped"] is False and rec["notified"] is False
+    m._watch_processes(env, now=_t.time() + 10 * 3600)
+    assert proc not in fake.alive, "the limit still ends it"
+    assert len(woken) == 1 and "ended after 8 h" in woken[0]["text"]
+
+
+def test_a_stop_whose_kill_raises_leaves_the_process_tracked(procs, monkeypatch):
+    """A docker that times out on the kill: the process runs on, so the record must not stay
+    marked as being stopped (every look would skip it). MUTATION: do not clear `stopped`
+    when the kill raises - red."""
+    import subprocess
+    import time as _t
+    m, env, fake, woken = procs
+    h = m.start_process("scope-alice", env.id, "sleep 999", session_id="chat-1")
+    proc = h.split("-")[-1]
+
+    def _timeout(args, timeout=60, **kw):
+        if args[0] == "exec" and "kill" in args[-1]:
+            raise subprocess.TimeoutExpired(args, timeout)
+        return fake(args, timeout=timeout, **kw)
+
+    monkeypatch.setattr(containers, "docker", _timeout)
+    with pytest.raises(subprocess.TimeoutExpired):
+        m.stop_process("scope-alice", h)
+    rec = m._read_procs(env.id)[proc]
+    assert rec["stopped"] is False and rec["notified"] is False
+    assert m.processes("scope-alice")[0]["state"] == "running"
+    monkeypatch.setattr(containers, "docker", fake)
+    m._watch_processes(env, now=_t.time() + 10 * 3600)
+    assert proc not in fake.alive and len(woken) == 1

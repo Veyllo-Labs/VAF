@@ -1328,8 +1328,9 @@ class EnvironmentManager:
                 procs[proc]["running_since"] = time.time()
                 # Stopped while docker was starting it (its handle is listed from the
                 # placeholder on): the stop may have found nothing to kill yet, so it is
-                # ended here. stop_process marks `stopped` before it kills, so one of the
-                # two always sees the other.
+                # killed here. stop_process marks `stopped` before its kill and reports the
+                # record only while it is still marked, so in every ordering the process is
+                # either killed by one of the two or, when both kills fail, stays tracked.
                 stopped_meanwhile = bool(procs[proc].get("stopped"))
             elif started:
                 # The placeholder was removed while docker was still answering (a looker
@@ -1451,7 +1452,7 @@ class EnvironmentManager:
         env_id, proc = self._own_process(owner_scope, handle)
         env = self.get(owner_scope, env_id)
         # `stopped` first, under the lock, THEN the kill: a start still waiting for docker
-        # either sees `stopped` when docker answers and ends the process itself, or has
+        # either sees `stopped` when docker answers and kills the process itself, or has
         # answered already, and then this kill finds the process. Marked after the kill, one
         # ordering left a process nobody tracked. A look skips a record being stopped, so
         # the kill is not reported as an exit.
@@ -1461,13 +1462,24 @@ class EnvironmentManager:
                 procs[proc]["stopped"] = True
                 self._write_procs(env.id, procs)
         if env.state == "running":
-            containers.docker(["exec", env.container, "sh", "-c",
-                               containers.kill_marked_cmd("VAF_PROC_ID", proc)], timeout=20)
+            try:
+                containers.docker(["exec", env.container, "sh", "-c",
+                                   containers.kill_marked_cmd("VAF_PROC_ID", proc)], timeout=20)
+            except BaseException:
+                # The kill did not happen (docker timed out): left marked, every look would
+                # skip a process that runs on. Tracked again before the error goes up.
+                with self._locked():
+                    procs = self._read_procs(env.id)
+                    if proc in procs and not procs[proc].get("notified"):
+                        procs[proc]["stopped"] = False
+                        self._write_procs(env.id, procs)
+                raise
         rec = None
         with self._locked():
             procs = self._read_procs(env.id)
-            if proc in procs:
-                procs[proc]["stopped"] = True
+            # Only while still marked: a start whose own kill failed has taken the record
+            # back as running (`stopped` cleared), and it must stay tracked.
+            if proc in procs and procs[proc].get("stopped"):
                 procs[proc]["notified"] = True
                 self._write_procs(env.id, procs)
                 rec = procs[proc]

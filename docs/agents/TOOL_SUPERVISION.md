@@ -284,7 +284,8 @@ Requests are processed by worker threads pulling from a single shared `TaskQueue
   `wait_for_session` gives the same place to a reload (`history_update.chatWait`).
 - **Bounded cost.** One chat reports one place, its first queued turn's; a later turn of the same
   chat starts reporting when it becomes the first. Places are counted up to `PLACES_COUNTED` (20);
-  a turn further back hears `PLACES_COUNTED + 1`, "more than 20 ahead", without an ETA. A change
+  a turn further back hears `PLACES_COUNTED + 1`, place 21 or later, shown as "at least 20 ahead",
+  without an ETA. A change
   works out at most 20 picks on copies limited to each person's first 20 turns, and looks only at
   the chats within the counted places now or at their last report. Measured on 2000 queued turns
   of one account: before these bounds every other person's enqueue simulated 2001 picks and fired

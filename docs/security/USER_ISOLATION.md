@@ -1020,7 +1020,7 @@ queued web turn's place (`chat_wait`, and `chatWait` in a `history_update`) goes
 the connections subscribed to that chat (`broadcast_to_session`), never through
 `_push_session_update`, which reroutes to a room owner while worker 1's agent runs a room
 turn; it is a count of the turns ahead and never says whose. One chat reports one place,
-and places are counted only up to 20 ("more than 20" beyond), so one account's backlog
+and places are counted only up to 20 ("at least 20 ahead" beyond), so one account's backlog
 cannot make every other person's enqueue and pop work out thousands of places and send
 thousands of updates (measured on 2000 queued turns: 2001 picks and 2000 callbacks per
 change before, 20 and at most 21 after). The forget refresh after a credential was

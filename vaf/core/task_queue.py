@@ -24,9 +24,13 @@ resource ``chat``) whenever it changes, and position 0 when a worker takes it af
 The place is the place in line: it ignores whether the turn's own chat is still busy, so a
 turn behind its own running turn waits for that one too. One chat reports ONE place, its
 first queued turn's (what ``wait_for_session`` answers for a reload); a later turn of the
-same chat starts reporting when it becomes the first. Places are counted up to
-``PLACES_COUNTED``; a turn further back hears ``PLACES_COUNTED + 1``, meaning "more than
-that", with no ETA. Both bounds keep the cost of a change independent of how many turns
+same chat starts reporting when it becomes the first. The live place equals the reloaded one
+because every queued web turn carries ``on_wait`` (both web enqueues pass it): a chat whose
+first queued turn has none (a channel or wake turn in the same session) reports through its
+first watched turn, while a reload names the first queued one. Places are counted up to
+``PLACES_COUNTED``; a turn further back hears ``PLACES_COUNTED + 1``, meaning "place
+``PLACES_COUNTED + 1`` or later", that is at least ``PLACES_COUNTED`` turns ahead, with no
+ETA. Both bounds keep the cost of a change independent of how many turns
 one account queued: measured before them, 2000 queued turns of one account made every
 other person's enqueue simulate 2001 picks and fire 2000 callbacks.
 
@@ -60,8 +64,9 @@ HOUSEKEEPING_KEY = ("housekeeping",)
 # The lane every task shares under queue_policy "legacy" (no class weights).
 _LEGACY_LANE = "all"
 # How many places in line are counted exactly. A turn further back is told
-# PLACES_COUNTED + 1 ("more than PLACES_COUNTED", no ETA): working out every place would make
-# every enqueue and every pop cost as much as the whole backlog, which one account can grow.
+# PLACES_COUNTED + 1 (that place or later: at least PLACES_COUNTED ahead, no ETA): working
+# out every place would make every enqueue and every pop cost as much as the whole backlog,
+# which one account can grow.
 PLACES_COUNTED = 20
 
 

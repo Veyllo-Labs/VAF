@@ -392,6 +392,44 @@ def test_page_forwards_and_shows_the_place():
         assert "clearChatWait(" in body, kind
 
 
+# ── the counted places ───────────────────────────────────────────────────────────
+
+# Each locale's way of saying "at least": the reported place PLACES_COUNTED + 1 means that
+# place OR LATER, so exactly PLACES_COUNTED turns may be ahead and "more than" would be false.
+AT_LEAST = {"en": "at least", "de": "mindestens", "ja": "以上", "ko": "이상",
+            "th": "อย่างน้อย", "tr": "en az", "zh": "至少"}
+
+
+@pytest.mark.parametrize("ahead", [19, 20, 21])
+def test_the_line_beyond_the_counted_places_is_true(ahead, _fresh_queue):
+    """19, 20 and 21 turns ahead: 19 is counted exactly; 20 and 21 both arrive as
+    PLACES_COUNTED + 1 with `more`, and the page says "at least {position - 1} ahead",
+    which holds for both. MUTATION: the old "more than {count}" wording - red at 20 ahead."""
+    import vaf.core.web_server as server
+    from vaf.core.task_queue import PLACES_COUNTED
+
+    tq = _fresh_queue
+    _busy(tq)
+    for i in range(ahead):
+        tq.add(session_id=f"ahead-{i}", input_text="x", source="web",
+               metadata={"enqueue_user_scope_id": OTHER})
+    tq.add(session_id=SID, input_text="mine", source="web",
+           metadata={"enqueue_user_scope_id": OTHER})
+    wait = server._session_chat_wait(SID)
+    if ahead < PLACES_COUNTED:
+        assert wait == {"position": ahead + 1, "eta_ms": None, "more": False}
+        return
+    assert wait == {"position": PLACES_COUNTED + 1, "eta_ms": None, "more": True}
+    count = wait["position"] - 1          # what page.tsx passes as {count}
+    assert count <= ahead, "the line claims more turns ahead than there are"
+    src = PAGE.read_bytes().decode()
+    assert "tMain('chatWaitingMany', { count: chatWait.position - 1 })" in src
+    for locale, marker in AT_LEAST.items():
+        catalog = json.loads((ROOT / "web" / "messages" / f"{locale}.json").read_bytes())
+        line = catalog["main"]["chatWaitingMany"]
+        assert "{count}" in line and marker in line, (locale, line)
+
+
 # ── the ghost ────────────────────────────────────────────────────────────────────
 
 def test_no_queue_broadcast():

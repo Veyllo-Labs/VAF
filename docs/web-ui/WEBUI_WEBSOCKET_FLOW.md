@@ -501,7 +501,7 @@ Key rules:
   position, more, eta_ms, waited_ms }`; `eta_ms` is null until three turns ran in the last 15
   minutes, `position: 0` when a worker takes it. One chat reports one place (its first queued
   turn). Places are counted up to `PLACES_COUNTED` (20): `more: true` with `position` 21 means
-  "more than 20 ahead", without an ETA. Sent with `broadcast_to_session` to that chat's subscribers
+  place 21 or later, at least 20 ahead (the page shows "at least 20 ahead"), without an ETA. Sent with `broadcast_to_session` to that chat's subscribers
   only, never through `_push_session_update` (which reroutes to a room owner during a room turn),
   and only after the turn waited `CHAT_WAIT_GRACE_S` (0.5 s): a turn taken at once sends nothing,
   and position 0 goes out only when a place did; a turn dropped by Stop within the grace sends

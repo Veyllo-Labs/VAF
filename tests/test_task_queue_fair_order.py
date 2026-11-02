@@ -442,8 +442,8 @@ def test_a_backlog_costs_the_others_a_bounded_number_of_steps(one_chat):
 
 
 def test_a_place_beyond_the_counted_ones_says_more():
-    """Beyond PLACES_COUNTED the place is PLACES_COUNTED + 1 ("more than that") without an
-    ETA, for the report and for a reload alike."""
+    """Beyond PLACES_COUNTED the place is PLACES_COUNTED + 1 ("that place or later") without
+    an ETA, for the report and for a reload alike."""
     tq = _fresh(True)
     _busy(tq)
     for i in range(PLACES_COUNTED + 3):

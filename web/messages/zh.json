@@ -402,7 +402,7 @@
     "chatWaiting": "正在排队等待智能体：第 {position} 位，约 {seconds} 秒",
     "chatWaitingMinutes": "正在排队等待智能体：第 {position} 位，约 {minutes} 分钟",
     "chatWaitingNoEta": "正在排队等待智能体：第 {position} 位",
-    "chatWaitingMany": "正在排队等待智能体：前面超过 {count} 条",
+    "chatWaitingMany": "正在排队等待智能体：前面至少 {count} 条",
     "sttBusy": "语音识别当前繁忙，请稍后再试。",
     "ttsBusy": "朗读当前繁忙，请稍后再试。"
   },

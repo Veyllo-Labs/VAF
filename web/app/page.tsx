@@ -4577,7 +4577,8 @@ function VAFDashboardContent() {
     // A queued chat turn's place in line (chat_wait, and history_update.chatWait on a reload
     // or chat switch): its own place and expected wait only, shown under the loading dots of
     // that chat, cleared when the turn starts, completes or is stopped.
-    // `more`: the server counts places only so far; the place is then "more than position - 1".
+    // `more`: the server counts places only so far; the place is then "position or later",
+    // at least position - 1 ahead.
     const [chatWait, setChatWait] = useState<{ sessionId: string; position: number; etaMs: number | null; more: boolean } | null>(null);
     const clearChatWait = useCallback((sessionId?: string | null) => {
         setChatWait(prev => (prev && (!sessionId || prev.sessionId === sessionId)) ? null : prev);

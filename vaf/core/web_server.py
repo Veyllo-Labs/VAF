@@ -959,7 +959,8 @@ CHAT_WAIT_GRACE_S = 0.5
 
 def _chat_wait_payload(payload: dict) -> dict:
     """`more` marks a place beyond the counted ones: `position` is then
-    `PLACES_COUNTED + 1` and means "more than PLACES_COUNTED turns ahead"."""
+    `PLACES_COUNTED + 1` and means "that place or later", at least PLACES_COUNTED turns
+    ahead (the page says so with count = position - 1)."""
     from vaf.core.task_queue import PLACES_COUNTED
     payload["more"] = int(payload.get("position") or 0) > PLACES_COUNTED
     return payload

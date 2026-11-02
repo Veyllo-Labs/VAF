@@ -402,7 +402,7 @@
     "chatWaiting": "Warte auf den Agenten: Platz {position}, etwa {seconds} s",
     "chatWaitingMinutes": "Warte auf den Agenten: Platz {position}, etwa {minutes} Min.",
     "chatWaitingNoEta": "Warte auf den Agenten: Platz {position}",
-    "chatWaitingMany": "Warte auf den Agenten: mehr als {count} davor",
+    "chatWaitingMany": "Warte auf den Agenten: mindestens {count} davor",
     "sttBusy": "Die Spracherkennung ist gerade ausgelastet. Versuch es bitte gleich noch einmal.",
     "ttsBusy": "Das Vorlesen ist gerade ausgelastet. Versuch es bitte gleich noch einmal."
   },

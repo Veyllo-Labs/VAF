@@ -187,7 +187,7 @@ lanes drop `local_engine` and every `vllm_` key (`local_engine.without_engine_ke
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `action_tag_enabled` | `False` | The `<Action>` declaration tag. Off by default (small models stall on it). |
-| `model_health_guard_enabled` | `True` | Per-chat stuck-model score (`vaf/core/model_health.py`): a turn whose model announces work and calls nothing is re-run once with a tool call of the routed task tools forced where the provider allows it, and a chat that stays stuck gets an honest note in its language. Only the user's own turns are scored. Admin-only: one config file serves every account, and the guard changes what the agent sends to the provider. |
+| `model_health_guard_enabled` | `True` | Per-chat stuck-model score (`vaf/core/model_health.py`): a turn whose model announces work and calls nothing is re-run once with a tool call of the routed task tools forced where the provider allows it (never a tool that needs confirmation, cannot be undone, sends or deletes), and a chat that stays stuck gets an honest note in its language. Only the user's own turns are scored, and a question is never re-run. Admin-only: one config file serves every account, and the guard changes what the agent sends to the provider. |
 | `empty_response_retry_enabled` | `False` | Local empty-response snapshot+retry. Off (noisy). |
 | `plan_gate_enabled` | `True` | Block state-changing tools until a plan exists in working memory. |
 | `plan_gate_max_blocks` | `3` | Blocks before proceeding without a plan. |

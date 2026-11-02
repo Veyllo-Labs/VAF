@@ -295,11 +295,18 @@ docstring holds the full rationale.
 |---|---|---|
 | `reasoning_action_mismatch` | the visible reply names a tool of the turn's task set (the router's pick, without riders, discovery and bookkeeping tools) as a whole word | 1 |
 | `action_tag_mismatch` | an `<Action>` block matches a task tool with score >= 0.7 (only with `action_tag_enabled`) | 3 |
-| `step_repetition` | the reply is >= 0.85 similar to the chat's previous text reply | 3 |
+| `step_repetition` | the reply is >= 0.85 similar to the chat's previous text reply (a bounded head and tail of each) | 3 |
 | `language_drift` | a reply of >= 40 characters is in another language than the chat (both detected concretely) | 2 |
 | `confirmation_unheeded` | the person's message is a plain yes (<= 40 characters, no `?`), matched with the voice confirmation's vocabulary (`speaker_confirm.parse_reply`) in the chat's language | 1 |
-| `user_repeats` | the person's message is >= 0.6 similar to their previous one | 1 |
+| `user_repeats` | the person's message is >= 0.6 similar to their previous one (the history's last user message, never the stored intent, which the model can write through `update_intent`) | 1 |
 | `ungrounded` | result grounding found an unsupported claim in this turn | 2 |
+
+**A question is answered, not re-run.** A message with a question mark of any script
+(`vocab.QUESTION_MARKS`, the set the inbox and the voice agent read too) fires none of the
+three "should have acted" signals (`reasoning_action_mismatch`, `step_repetition`,
+`user_repeats`), and its turn is never re-run, forced or noted. Measured before the rule: four
+German follow-up questions about `host_bash` reached mid on the fourth, and the re-run forced a
+call of the tool asked about.
 
 **The score.** Each signal counts once per turn. A turn without progress sets
 `S = max(0, S_prev + sum(weights) - 1)`; a turn in which a progress tool ran sets `S = 0`, also
@@ -312,7 +319,8 @@ whose whole text is "ja" keeps it. The score lives in the chat's `model_health.j
 **Measured** on 50 stored chats (698 turns, 550 person turns scored, 10 hand-labelled stuck):
 mid caught 6 of 10 stuck turns with 0 false crossings, the highest score of any unlabelled
 turn was 1.0, and naming a tool at weight 2 instead of 1 already lifted two chats that only
-discussed tools to a false mid.
+discussed tools to a false mid. Replayed after the question rule (557 person turns, 257 of
+them questions): the same turns act as before, and no question turn does.
 
 **Where it runs and in which order.** Only on the user's own turn (`_turn_is_from_the_user`:
 no drain, wake, timer, background or thinking run, no sub-agent process, and no allowed set,
@@ -330,19 +338,24 @@ step 6b chain, would run that one), never on a generation the person stopped. In
 4. at high with the re-run spent: the note in the chat's language (seven languages, English
    otherwise) is appended once per turn and streamed, like the grounding note, and grounding
    does not judge that generation, so a reply carries one note, never two;
-5. the ledger is written once the turn has answered (phase 11); a turn that ends without an
-   answer writes nothing. Every scored generation writes one `[MODEL_HEALTH] score= level=
+5. the ledger is written on every exit of a turn that answered: the final answer (phase 11), a
+   delegation to a sub-agent (`[ASYNC_ACK]`) and a turn a tool closed (`ask_user`, a draft);
+   a turn that ends without an answer writes nothing. Every scored generation writes one `[MODEL_HEALTH] score= level=
    signals= reaction=` line to the backend log and is counted for the `model` row of
    `vaf health` (counts only).
 
 **The re-run.** The reply stays where the person read it and in `kept_turn_answers` (never
-retracted). The history gets that reply, then a system note that quotes what the person asked
-(and, for a plain yes, the request it confirmed), says that the reasons the reply gave come from
-no tool result, and names the task tools. No tool call is pending between the two, so the
-adjacency invariant holds. The next generation is forced where the lane can
-(`Agent._can_force_tool_call`): on a provider that restricts callability separately the resident
-array stays and the `allowed_tools` dict carries mode `required`; elsewhere the array is
-narrowed to the task tools and `tool_choice` is `required`. The riders are left out on purpose
+retracted). The history gets that reply, then a system note that quotes what the person wrote
+this turn (for a plain yes it points at their own earlier message in the conversation and
+quotes nothing stored), says that the reasons the reply gave come from no tool result, and
+names the tools to call. No tool call is pending between the two, so the adjacency invariant
+holds. The next generation is forced where the lane can (`Agent._can_force_tool_call`), and
+only to task tools that may be forced (`model_health.forceable`, read from each tool's
+contract): never one declared `dangerous` or `system`, never an `irreversible` one, never a
+channel or mail send, never a delete. Where none is left the re-run runs unforced with the same
+note. On a provider that restricts callability separately the resident array stays and the
+`allowed_tools` dict carries mode `required`; elsewhere the array is narrowed to the forced
+tools and `tool_choice` is `required`. The riders are left out on purpose
 (`ask_user` would let the model ask "shall I start?" again). One helper, `_forced_request`,
 builds this at all three request sites, and a thinking run's forced node passes through it
 unchanged. The local server lane forces (vLLM and llama-server both accept `required`); on the

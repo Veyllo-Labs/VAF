@@ -280,7 +280,7 @@ def _stuck_turn(agent, monkeypatch):
         yield "Ich suche das jetzt mit web_search heraus und melde mich gleich bei dir."
 
     agent.api_backend.chat_completion = backend
-    text = "Was weisst du ueber deinen Chef, such das bitte heraus?"
+    text = "Such bitte heraus, was du ueber deinen Chef weisst."
     agent.chat_step(user_input=text, raw_user_input=text, disable_workflows=True,
                     stream_callback=lambda t: None)
     notes = [str(m.get("content")) for m in agent.history
@@ -292,7 +292,7 @@ def test_the_model_health_rerun_names_only_the_task(agent, monkeypatch):
     """The re-run's note and its forced set name the turn's task tools, never a rider: the
     forced call can only be the work the turn was routed for."""
     offered, choices, notes = _stuck_turn(agent, monkeypatch)
-    assert len(notes) == 1 and "one of web_search," in notes[0], notes
+    assert len(notes) == 1 and "the tool web_search," in notes[0], notes
     forced = choices[1]["allowed_tools"]
     assert forced["mode"] == "required"
     assert [t["function"]["name"] for t in forced["tools"]] == ["web_search"]

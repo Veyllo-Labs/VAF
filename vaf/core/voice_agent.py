@@ -242,10 +242,10 @@ def addressed_by_name(text: str, agent_name: str, threshold: float = 0.59) -> bo
 
 
 # Question marks across scripts (spoken TTS text carries no markdown, so the final
-# meaningful character is a reliable, no-LLM signal that a reply is a question):
-# ASCII, fullwidth CJK, Arabic, Armenian. Greek ';' (U+037E) is intentionally left
-# out - it collides with a normal semicolon and would false-fire.
-_QUESTION_MARKS = "?？؟՞"
+# meaningful character is a reliable, no-LLM signal that a reply is a question): the one
+# multi-script set of the vocabulary book (ASCII, fullwidth CJK, Arabic, Armenian, the
+# emoji marks; Greek ';' left out, it collides with a semicolon).
+from vaf.core.vocab import QUESTION_MARKS as _QUESTION_MARKS  # noqa: E402
 
 
 def is_question(text: str) -> bool:

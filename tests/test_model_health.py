@@ -19,6 +19,10 @@ MUTATIONS, each turns the named test red:
   test_tool_naming_alone_never_accumulates / test_failed_tool_resets /
   test_replay_reaches_mid_then_high;
 - delete the `tr` note -> test_stuck_note_languages;
+- let a question fire the action signals -> test_follow_up_questions_about_a_tool_stay_below_mid;
+- force a dangerous, system, irreversible, outward or deleting tool -> test_never_forced;
+- no K drain without a scored generation -> test_commit_without_a_scored_generation_drains_by_k;
+- compare only the head of long replies -> test_long_replies_that_only_open_alike_are_no_repeat;
 - key the ledger file by scope, or accept any format -> the ledger tests;
 - leave `false_promise_detection_enabled` in DEFAULTS -> test_deleted_guard_leaves_no_trace;
 - retreat to "auto" unconditionally -> test_allowed_tools_retreat_keeps_required;
@@ -142,7 +146,7 @@ def test_tool_naming_alone_never_accumulates(detect):
     state = mh.State()
     for turn in range(10):
         v = mh.evaluate(state, reply=f"`host_bash` führt einen Befehl in der Shell aus ({turn}).",
-                        user_text=f"Was macht host_bash eigentlich, Frage {turn}?",
+                        user_text=f"Erzähl mir noch etwas über host_bash, Teil {turn}.",
                         task_tools=["host_bash", "python_sandbox"], detect_language=detect)
         assert v.signals == ("reasoning_action_mismatch",), v.signals
         state = mh.commit(state, v, progressed=False)
@@ -221,12 +225,97 @@ def test_grounding_note_shares_the_picker():
 
 
 def test_retry_note_is_specific():
-    note = mh.retry_note("ja bitte fang an", ["python_sandbox"],
-                         confirmed_request="Bitte installiere die 10 Pakete")
-    assert '"Bitte installiere die 10 Pakete"' in note and '"ja bitte fang an"' in note
-    assert "python_sandbox" in note
+    note = mh.retry_note("Bitte installiere die 10 Pakete", ["python_sandbox", "host_bash"])
+    assert 'the user asked: "Bitte installiere die 10 Pakete"' in note
+    assert "one of python_sandbox, host_bash," in note
     assert "do not repeat any reason given above" in note
-    assert "one of" not in mh.retry_note("los", [])
+    one = mh.retry_note("Bitte installiere die 10 Pakete", ["python_sandbox"])
+    assert "the tool python_sandbox," in one and "one of" not in one
+    none = mh.retry_note("los", [])
+    assert "one of" not in none and "now: the tool" not in none and "now, with real" in none
+
+
+def test_retry_note_quotes_only_this_turns_words():
+    """A plain yes is quoted as a confirmation of the person's own earlier message in the
+    conversation; no stored request is ever quoted back with system authority."""
+    note = mh.retry_note("ja bitte fang an", ["python_sandbox"], confirmed=True)
+    assert 'the user confirmed: "ja bitte fang an"' in note
+    assert "earlier message in the conversation above" in note
+    assert "asked:" not in note
+
+
+# ── a conversation ABOUT a tool never climbs ─────────────────────────────────────────────
+
+QUESTIONS = [
+    "Was macht das Tool host_bash eigentlich?",
+    "Und kann host_bash auch Dateien löschen?",
+    "Was macht host_bash, wenn ein Befehl hängt?",
+    "Wie sicher ist host_bash eigentlich, ehrlich gesagt?",
+]
+
+
+@pytest.mark.parametrize("same_answer", [False, True])
+def test_follow_up_questions_about_a_tool_stay_below_mid(detect, same_answer):
+    """The measured probe: four German follow-up questions about host_bash climbed 0, 1, 2, 3
+    (mid on the fourth) with different answers, and to mid on the second with a near-identical
+    answer. A question fires none of the "should have acted" signals."""
+    state, prev_user, prev_reply = mh.State(), "", ""
+    for i, text in enumerate(QUESTIONS):
+        reply = ("`host_bash` führt einen Befehl in der Shell dieses Rechners aus."
+                 if same_answer else f"`host_bash` führt Befehl Nummer {i} in der Shell aus, "
+                                     f"und dazu gibt es Antwort {i} mit eigenem Inhalt.")
+        v = mh.evaluate(state, reply=reply, user_text=text, prev_reply=prev_reply,
+                        prev_user=prev_user, task_tools=["host_bash"], detect_language=detect)
+        assert v.asks and v.signals == () and v.level == mh.NONE, (i, v)
+        state = mh.commit(state, v, progressed=False)
+        prev_user, prev_reply = text, reply
+    assert state.score == 0.0
+
+
+def test_is_question_reads_every_script():
+    for text in ("Was macht host_bash?", "Was macht host_bash? Erklär mal.", "これは何？",
+                 "هل تريد ذلك؟", "Ծանոթ ե՞ս", "kurz ❓"):
+        assert mh.is_question(text), text
+    for text in ("ja bitte fang an", "Mach das jetzt.", ""):
+        assert not mh.is_question(text), text
+
+
+def test_a_question_still_counts_drift_and_ungrounded(detect):
+    v = mh.evaluate(mh.State(0.0, "de"), reply=ANNOUNCE, user_text="Was macht host_bash?",
+                    task_tools=["host_bash"], detect_language=detect, grounding_hit=True)
+    assert v.asks and set(v.signals) == {"language_drift", "ungrounded"}
+
+
+# ── what may be forced ───────────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("name, permission, side_effect, outward, expected", [
+    ("python_sandbox", "write", "reversible", False, True),
+    ("web_search", "read", "none", False, True),
+    ("host_bash", "dangerous", "irreversible", False, False),
+    ("settings_tool", "system", "reversible", False, False),
+    ("send_mail", "write", "irreversible", True, False),
+    ("send_telegram", "write", "reversible", True, False),
+    ("delete_mail", "write", "reversible", False, False),
+    ("remove_member", "write", "reversible", False, False),
+    ("write_file", "write", "irreversible", False, False),
+])
+def test_never_forced(name, permission, side_effect, outward, expected):
+    assert mh.forceable(name, permission, side_effect, outward=outward) is expected
+
+
+def test_commit_without_a_scored_generation_drains_by_k():
+    assert mh.commit(mh.State(5.0, "de"), None, progressed=False) == mh.State(4.0, "de")
+    assert mh.commit(mh.State(0.5, "de"), None, progressed=False) == mh.State(0.0, "de")
+    assert mh.commit(mh.State(5.0, "de"), None, progressed=True) == mh.State(0.0, "de")
+
+
+def test_long_replies_that_only_open_alike_are_no_repeat():
+    head = "Hier ist der Bericht. " * 120          # 2640 characters, the same opening
+    a = head + "Ergebnis A: alle Pakete installiert, keine Fehler, fertig. " * 30
+    b = head + "Ergebnis B: zwei Pakete fehlen noch, bitte Netzwerk pruefen. " * 30
+    assert len(head) > mh.REPEAT_CHARS
+    assert mh.similarity(a, b) < mh.REPEAT_RATIO
+    assert mh.similarity(a, a) == 1.0
 
 
 # ── the ledger ───────────────────────────────────────────────────────────────────────────
@@ -287,7 +376,7 @@ def test_deleted_guard_leaves_no_trace():
                     ".py", ".md", ".json", ".ts", ".tsx", ".txt", ".yml", ".yaml"):
                 continue
             text = path.read_bytes().decode("utf-8", "replace")
-            found += [f"{path.relative_to(ROOT)}: {name}" for name in GONE if name in text]
+            found += [f"{path.relative_to(ROOT).as_posix()}: {name}" for name in GONE if name in text]
     assert not found, found
     from vaf.core.config import Config
     assert "false_promise_detection_enabled" not in Config.DEFAULTS

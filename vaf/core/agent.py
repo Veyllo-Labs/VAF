@@ -2050,16 +2050,20 @@ class Agent:
 
     def _model_health_begin(self, user_input, skip_input, thinking_mode, raw_user_input) -> None:
         """Open this turn's reading: the chat's ledger, the person's words, their previous
-        message and the chat's previous text reply. None when the turn is out of scope.
+        message and the chat's previous text reply. None when the turn is out of scope. A lane
+        without a per-chat store starts at score 0 (fail-open).
 
-        Read before phase 1 overwrites the stored intent: that store holds the person's own
-        previous words for this chat (never the lane's enrichment), so it is the previous
-        message to compare with. A lane without a per-chat store reads the history instead and
-        starts at score 0 (fail-open)."""
+        The previous message is the history's last user message (a restored-checkpoint glue
+        message is not one), never the stored intent: the model writes that store too
+        (`update_intent` rides along on every turn), and what an injected page made it write
+        must not become "the person's previous message". When this turn's input carries the
+        lane's added context ahead of the person's words, the previous one does too, so only
+        its last paragraph is compared: the person's words come last."""
         self._model_health_turn = None
         if not self._model_health_in_scope(user_input, skip_input, thinking_mode):
             return
         from vaf.core.completion import strip_think_blocks
+        from vaf.core.context import CONTEXT_RESTORED_PREFIX
         state, prev_user = model_health.State(), ""
         store = getattr(self, "main_persistence", None)
         if store is not None:
@@ -2067,17 +2071,16 @@ class Agent:
                 state = model_health.from_payload(store.get_model_health())
             except Exception:
                 state = model_health.State()
-            try:
-                intent = str(store.get_user_intent() or "")
-                prev_user = "" if intent.lstrip().startswith("# USER INTENT") else intent
-            except Exception:
-                prev_user = ""
         history = getattr(self, "history", None) or []
-        if store is None:
-            for msg in reversed(history):
-                if isinstance(msg, dict) and msg.get("role") == "user":
-                    prev_user = str(msg.get("content") or "")
-                    break
+        for msg in reversed(history):
+            content = str((msg or {}).get("content") or "") if isinstance(msg, dict) else ""
+            if (isinstance(msg, dict) and msg.get("role") == "user"
+                    and not content.lstrip().startswith(CONTEXT_RESTORED_PREFIX)):
+                prev_user = content
+                break
+        enriched = bool(raw_user_input) and str(user_input or "") != str(raw_user_input)
+        if enriched and prev_user:
+            prev_user = prev_user.rsplit("\n\n", 1)[-1]
         prev_reply = ""
         for msg in reversed(history):
             if (isinstance(msg, dict) and msg.get("role") == "assistant"
@@ -2153,13 +2156,33 @@ class Agent:
         except Exception:
             pass
 
-    def _model_health_arm_retry(self, tools_off) -> str:
+    def _model_health_forceable(self, names) -> list:
+        """The task tools the re-run may FORCE (`model_health.forceable`): never one a person
+        has to confirm, one that cannot be taken back, one that sends to somebody (a channel
+        send tool, a mail send) or one that deletes, read from each tool's declared contract."""
+        from vaf.core.channels import ALL_SEND_TOOLS
+        from vaf.core.outbound_hold import MAIL_HOLD_TOOLS
+        from vaf.core.tool_contract import resolve_tool_contract
+        out = []
+        for name in names:
+            tool = (self.tools or {}).get(name)
+            if tool is None:
+                continue
+            contract = resolve_tool_contract(name, tool)
+            if model_health.forceable(name, contract.permission_level, contract.side_effect_class,
+                                      outward=name in ALL_SEND_TOOLS or name in MAIL_HOLD_TOOLS):
+                out.append(name)
+        return out
+
+    def _model_health_arm_retry(self, tools_off, verdict=None) -> str:
         """Set up the turn's one re-run and say how it runs: FORCED where the lane can force a
-        call and the turn has task tools to force; otherwise the same round unforced ("auto")
-        with the same note. Returns the reaction for the log."""
+        call, the person did not ask a question and the turn has task tools that may be
+        forced (only those are offered then); otherwise the same round unforced ("auto") with
+        the same note. Returns the reaction for the log."""
         self._model_health_retried = True
-        task = self._model_health_task_tools()
-        if task and not tools_off and self._can_force_tool_call():
+        task = self._model_health_forceable(self._model_health_task_tools())
+        asks = bool(getattr(verdict, "asks", False))
+        if task and not asks and not tools_off and self._can_force_tool_call():
             self._force_tool_choice = "required"
             self._force_tool_choice_used = False
             self._forced_tool_names = list(task)
@@ -2167,12 +2190,12 @@ class Agent:
         return model_health.REACTION_RETRY
 
     def _model_health_retry_note(self, verdict) -> str:
-        """The re-run's system note: the person's words (and, for a plain yes, the request it
-        confirmed), and the task tools."""
+        """The re-run's system note: the person's words of this turn and the tools to call
+        (the forced set when the call is forced, the task tools otherwise)."""
         turn = self._model_health_turn or {}
-        confirmed = turn.get("prev_user", "") if "confirmation_unheeded" in verdict.signals else ""
-        return model_health.retry_note(turn.get("user_text", ""), self._model_health_task_tools(),
-                                       confirmed_request=confirmed)
+        tools = list(getattr(self, "_forced_tool_names", None) or ()) or self._model_health_task_tools()
+        return model_health.retry_note(turn.get("user_text", ""), tools,
+                                       confirmed="confirmation_unheeded" in verdict.signals)
 
     def _model_health_commit(self) -> None:
         """Write the chat's ledger after an answered turn. Idempotent within a turn: every
@@ -10955,7 +10978,7 @@ class Agent:
             call one of them where the lane can. Nothing is left pending between the two
             messages, so the tool-call adjacency holds. The caller `continue`s."""
             nonlocal _last_kept_is_final
-            reaction = self._model_health_arm_retry(tools_off)
+            reaction = self._model_health_arm_retry(tools_off, verdict)
             self._model_health_log(verdict, reaction)
             _event = ("Model health: no tool ran although the request needs one - "
                       "re-running the turn once with a tool call...")
@@ -11920,10 +11943,13 @@ class Agent:
                     and not self._turn_ran_progress_tool
                     and not self._text_tool_calls(full_response, full_reasoning)):
                 _mh_verdict = self._model_health_score(full_content, full_response)
-                if _mh_verdict.level != model_health.NONE and not self._model_health_retried:
+                # A question is answered in text, and that is what it asked for: never re-run,
+                # never forced, never noted (`Verdict.asks`).
+                if (_mh_verdict.level != model_health.NONE and not _mh_verdict.asks
+                        and not self._model_health_retried):
                     _model_health_rerun(_mh_verdict, full_content, disable_tools)
                     continue
-                if _mh_verdict.level == model_health.HIGH_LEVEL:
+                if _mh_verdict.level == model_health.HIGH_LEVEL and not _mh_verdict.asks:
                     _mh_skip_grounding = True
                     if not self._model_health_noted:
                         # Appended, never replacing, the same way as the grounding note: it
@@ -11982,6 +12008,7 @@ class Agent:
                                 full_content, full_response, grounding_hit=True)
                             if (self._result_grounding_retries + 1 < max(_rg_max, 1)
                                     and _mh_verdict.level != model_health.NONE
+                                    and not _mh_verdict.asks
                                     and not self._model_health_retried):
                                 _model_health_rerun(_mh_verdict, full_content, disable_tools)
                                 continue
@@ -12950,6 +12977,10 @@ class Agent:
                             "content": response_text
                         })
                         
+                        # An answered turn: the delegation is progress, so the chat's
+                        # model-health score resets (idempotent within the turn).
+                        self._model_health_commit()
+
                         UI.event("System", "Async task started - returning status immediately", style="dim")
                         
                         # Do not speak subagent/tool status via TTS (user requested no "librarian_agent" etc. read aloud)
@@ -13015,6 +13046,9 @@ class Agent:
                         stream_callback("\n\n" + _closing_text)
                     self.history.append({"role": "assistant", "content": _closing_text})
                     self._turn_closed_by_tool = True
+                    # An answered turn (a question to the person, a draft): its tool ran, so
+                    # the chat's model-health score resets, as on the final-answer path.
+                    self._model_health_commit()
                     return _closing_text
 
                 # ═══════════════════════════════════════════════════════════════

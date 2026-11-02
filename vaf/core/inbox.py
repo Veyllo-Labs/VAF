@@ -46,10 +46,8 @@ WAITS_DRAFT = "draft"   # mail: the agent's answer is held in the outbox for the
 # short thank-you, goodbye or acknowledgement does not.
 WAITS_THRESHOLD_DEFAULT = 0.6
 
-# The question marks of every script a chat may arrive in: ASCII, fullwidth CJK, Arabic,
-# Armenian, and the two emoji marks (the voice agent's is_question reads the same set for a
-# spoken reply; it is not imported here because that module carries the whole voice stack).
-_QUESTION_MARKS = "?？؟՞❓❔"
+# The question marks of every script a chat may arrive in (one set, in the vocabulary book).
+from vaf.core.vocab import QUESTION_MARKS as _QUESTION_MARKS  # noqa: E402
 
 # What is stripped before anything is read: a link's own "?" is not a question, and a
 # question quoted from somebody else asks nothing of the reader.

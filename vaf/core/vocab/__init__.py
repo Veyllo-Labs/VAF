@@ -23,6 +23,12 @@ from pathlib import Path
 from typing import Optional, Dict, List
 
 _DATA_DIR = Path(__file__).resolve().parent / "data"
+
+# The question marks of every script a message may arrive in: ASCII, fullwidth CJK, Arabic,
+# Armenian, and the two emoji marks. One set for every reader that asks "is this a question"
+# without a model: the inbox's "waits for you", the voice agent's own reply, the model-health
+# score. Greek ';' (U+037E) is left out on purpose: it collides with a normal semicolon.
+QUESTION_MARKS = "?？؟՞❓❔"
 _cache: Dict[str, Dict[str, List[str]]] = {}
 _cache_lock = threading.Lock()
 _last_pick: Dict[tuple, int] = {}  # (scope, key) -> last index, to rotate so consecutive picks differ

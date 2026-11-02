@@ -396,7 +396,11 @@
     "wakeTimer": "タイマー",
     "wakeProcess": "バックグラウンドコマンド",
     "wakeDraft": "送信した下書き",
-    "askPickHint": "答えを選ぶか、自分で入力できます"
+    "askPickHint": "答えを選ぶか、自分で入力できます",
+    "sttWaiting": "音声認識を待っています：{position}番目、約{seconds}秒",
+    "sttWaitingNoEta": "音声認識を待っています：{position}番目",
+    "sttBusy": "音声認識がいま混み合っています。少ししてからもう一度お試しください。",
+    "ttsBusy": "読み上げがいま混み合っています。少ししてからもう一度お試しください。"
   },
   "nav": {
     "settings": "設定",
@@ -2666,7 +2670,11 @@
     "gateAbove": "録音されます",
     "gateHint": "雑音が入らないようにスライダーを調整してください。",
     "status_deaf_busy": "いまは聞き取りできません。モデルがメインエージェントの作業に使われています。",
-    "resultReady": "タスクが完了しました。詳細はチャットにあります。"
+    "resultReady": "タスクが完了しました。詳細はチャットにあります。",
+    "status_waiting": "順番待ち：{position}番目、約{seconds}秒",
+    "status_waiting_noeta": "順番待ち：{position}番目",
+    "status_busy": "音声サービスが混雑中",
+    "status_tts_busy": "音声が混雑中、テキストで返答"
   },
   "outbox": {
     "titleMail": "{recipient}宛てのメール",

@@ -396,7 +396,11 @@
     "wakeTimer": "Timer",
     "wakeProcess": "Background command",
     "wakeDraft": "Draft sent",
-    "askPickHint": "Pick an answer or type your own"
+    "askPickHint": "Pick an answer or type your own",
+    "sttWaiting": "Waiting for speech recognition: place {position}, about {seconds} s",
+    "sttWaitingNoEta": "Waiting for speech recognition: place {position}",
+    "sttBusy": "Speech recognition is busy right now. Please try again in a moment.",
+    "ttsBusy": "Read-aloud is busy right now. Please try again in a moment."
   },
   "nav": {
     "settings": "Settings",
@@ -2666,7 +2670,11 @@
     "gateAbove": "recorded",
     "gateHint": "Move the slider so background noise is not picked up.",
     "status_deaf_busy": "Not listening right now - the model is working for the main agent",
-    "resultReady": "The task is done. The details are in the chat."
+    "resultReady": "The task is done. The details are in the chat.",
+    "status_waiting": "In line: place {position}, about {seconds} s",
+    "status_waiting_noeta": "In line: place {position}",
+    "status_busy": "Speech service busy",
+    "status_tts_busy": "Voice busy, reply as text"
   },
   "outbox": {
     "titleMail": "Email to {recipient}",

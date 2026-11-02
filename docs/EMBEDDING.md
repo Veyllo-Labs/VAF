@@ -1643,7 +1643,7 @@ engine = VoiceTurnEngine(
 outcome = engine.turn(wav_bytes, session_id="call-1",
                       main_busy=False, pending_task="", username="alice")
 if outcome.error:
-    ...                            # busy_local | no_speech | llm_failed
+    ...                            # busy | busy_local | no_speech | llm_failed
 elif not outcome.flags.get("silent"):
     audio = my_tts(outcome.reply, outcome.tts_lang)   # TTS is YOURS
 if outcome.delegate:
@@ -1661,7 +1661,16 @@ variant flag is ever set:
 | `clarify` | the agent asks "did you mean me?" (speaker ambiguity) | TTS `reply` |
 | `reask` | the user asked the agent to repeat its own question | TTS `reply` |
 | `chime_in` | a brief grounded remark on overheard talk (opt-in topics) | TTS `reply` |
+| `busy` | a speech queue turned the turn away; `busy` holds `resource`, `reason` (`timeout`, `full`, `cancelled`), `waited_ms`, `position` | tell the person (unless `reason` is `cancelled`: they hung up), keep listening |
 | `busy_local` / `no_speech` / `llm_failed` | `error` is set; nothing was decided | keep listening |
+
+`turn()` takes two more keyword arguments for the STT queue of the default
+transcribe path: `on_wait(vaf.WaitInfo)` hears the turn's place while it waits, and
+`cancelled()` (asked only while it waits) lets a hang-up take a waiting turn out.
+Both are optional; an injected `transcribe` seam never receives them and is called
+exactly as before. Your own seam says "my recognizer is busy" by raising
+`vaf.QueueBusy`, which becomes the same `busy` outcome. Nothing enters the call
+history for a `busy` turn.
 
 `tts_follow=True` (on `reply` and `chime_in`) means: voice the text in ITS OWN
 language when your TTS can, else fall back to `tts_lang`.
@@ -1683,7 +1692,11 @@ The division of labor, stated plainly:
   reply) - a sane starting point.
 - **You bring the STT.** The `transcribe` seam is where your recognizer plugs
   in; the default reaches for VAF's speech stack (`vaf[speech]` extra plus its
-  Docker lane), which an embedded process usually does not want.
+  Docker lane), which an embedded process usually does not want. That stack
+  queues: each speech container serves one request at a time in fair order, a
+  live turn waits at most 15 s for its slot (`busy` after that), and a cloud
+  provider lane is never held back. The queue lives in your process, see
+  "Sharing a scarce resource fairly".
 - **The reply layer needs an LLM.** `voice_reply` runs on the configured
   provider (API key or the one local server), like every other engine call.
 - **Speaker security works, or fails open, exactly as documented.** With no
@@ -1701,6 +1714,58 @@ Runnable version: [examples/09_voice_turn.py](../examples/09_voice_turn.py)
 (injects a scripted STT, prints instead of speaking; needs only a configured
 provider). The full pipeline semantics - every gate, every outcome kind - are
 documented in [docs/agents/VOICE_AGENT.md](agents/VOICE_AGENT.md).
+
+---
+
+## Sharing a scarce resource fairly: `vaf.ResourceQueue`
+
+One model in one process, one speech container, one licence: when several people
+want it at once, somebody waits. `vaf.ResourceQueue` makes that wait fair and
+visible. It is the queue VAF's own speech lanes wait in.
+
+```python
+import vaf
+
+gpu = vaf.resource_queue("my-gpu", slots=1, max_waiting=12)
+
+def answer(user_scope, prompt, show_place):
+    try:
+        with gpu.slot(user_scope, deadline_s=15.0, on_wait=show_place,
+                      cancelled=lambda: request_was_dropped(user_scope)):
+            return run_on_the_gpu(prompt)          # holds the slot for the block
+    except vaf.QueueBusy as busy:
+        return f"busy ({busy.reason}), try again"  # timeout | full | cancelled
+```
+
+- **Fair order.** Waiters are grouped by the key (a person), first come first served
+  within one key, and the next slot always goes to the key that was served least
+  recently: one person with ten requests no longer holds up somebody with one. The
+  order alone is `vaf.core.fair_queue.FairOrder` (pure, no threads).
+- **Slots.** `slots=1` lets one call in at a time; `slots=None` is an unbounded
+  pass-through that only measures (VAF's cloud speech lanes).
+- **`slot(key, *, deadline_s=None, cancelled=None, on_wait=None, poll_s=0.25)`.** The
+  key is canonical: no key and the local admin's scope are one bucket. A free slot
+  with nobody waiting is taken at once and `cancelled` is NOT asked: only a caller
+  that waits can be cancelled. Otherwise the caller waits; `on_wait(WaitInfo)` hears
+  its place on entry, on every change and with position 0 when the slot is granted.
+  Exceptions in either callback are swallowed.
+- **`QueueBusy`** carries `resource`, `reason` (`full`: `max_waiting` callers already
+  wait; `timeout`: `deadline_s` passed; `cancelled`: `cancelled()` turned true),
+  `position`, `waited_s` and `eta_s`.
+- **`WaitInfo`** is the caller's own `position` (1 is next), `eta_s` (None until the
+  queue has three service samples, then `ceil(position / slots)` times the median
+  service time) and `waited_s`. It carries nothing about anyone else.
+- **One slot per queue per thread.** A thread that asks for a second slot of a queue
+  it holds gets `RuntimeError`: with one slot it would wait on itself forever.
+  Slots of different queues nest.
+- **Numbers.** `queue.metrics()` and `vaf.queue_metrics()` (every queue
+  `resource_queue()` registered) give length, running, served, refusals per reason,
+  wait p50/p95/max and service p50/p95 over the last 15 minutes. Counts only, never
+  a key. VAF shows them as the `queues` row of `vaf health`.
+- **Per process.** The queue does not coordinate across processes; two processes in
+  front of the same container share it the way they did before.
+- It is **sync**, like every engine object: the waiting thread blocks. Run it in an
+  executor from async code.
 
 ---
 
@@ -2575,7 +2640,13 @@ Stable public surface (safe to build on):
   constructor's documented seams, `turn(wav, ...) -> TurnOutcome`, the
   outcome's documented fields and the five INITIAL state-dict keys are the
   promise; the keys the engine adds at runtime are not - hold the dict,
-  do not read its insides.
+  do not read its insides. `turn(..., on_wait=, cancelled=)` and the `busy`
+  outcome are part of it, and so is `vaf.QueueBusy` raised from your own
+  `transcribe` seam.
+- `vaf.ResourceQueue` / `vaf.QueueBusy` / `vaf.WaitInfo` / `vaf.resource_queue` /
+  `vaf.queue_metrics` - the fair queue: `slot()`'s arguments and its rule that only a
+  waiting caller is cancelled, the three refusal reasons, the `WaitInfo` fields and
+  the metric names. The ETA formula and the 15-minute window may be tuned.
 - `vaf.user_jail` - turning a declared identity into a file boundary by hand. Prefer the
   `file_access` declaration on your tool, which does it on every lane; this remains
   exported for tools that need the boundary around something other than a whole `run()`.

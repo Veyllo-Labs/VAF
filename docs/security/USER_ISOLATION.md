@@ -991,6 +991,22 @@ the coder's child the list that crossed as `VAF_ALLOWED_TOOLS`). See
 
 The Settings UI shows the **General**, **AI & Model**, **Advanced**, and **Local Network** tabs only to admins (controlled by the `adminOnly` flag in the `CATEGORIES` array and per-tab content rendering guards). Non-admin users are automatically redirected away from admin-only tabs. All users see Persona, Voice, Interface, Connections, Automations, and About, and receive the global config they need for display/behavior, but it is **credential-redacted**: for non-admins the backend strips secret values (`api_key_*`, `*_client_secret`, `*_secret`, `*_credentials_key`, `*_encryption_key`, `*_kek`, `*_password`, plus `secure_store_kek`, `memory_db_url`, `redis_url`) from every config read (`GET /api/config` and the WebSocket config push) via `Config.config_for_user()` / `Config.is_secret_config_key()`. This read-redaction is intentionally narrower than the admin-only *write* denylist (`is_secret_config_key` vs `is_global_config_key`): non-secret admin-only keys the UI needs (model/provider names, non-secret network settings) stay readable, only credentials are removed. Admins receive the full config.
 
+### Fair queues in front of shared resources
+
+The speech lanes wait in fair queues (`vaf/core/fair_queue.py`; see
+[SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md#waiting-in-line-the-speech-queues)), and
+the fairness keys on the canonical scope (`trust._scope_key`): the local admin's scope and
+no scope at all are one person, so nobody skips ahead by alternating aliases. The web
+dictation, read-aloud and voice call key on the connection's scope, Telegram on the
+sender's whitelist scope, WhatsApp and `send_whatsapp` on the account's scope. A waiting
+person learns only their own place and expected wait (`stt_wait`, `voice_call_wait`, sent
+to their own socket); the place is a count of the requests ahead, which is the feature's
+purpose, and never says whose they are. The queue numbers (length, wait and service
+times, refusals) are counts without any key, and only an admin reads them
+(`GET /api/system/health`, `vaf health`); `GET /api/health` still answers the status word
+alone. A hang-up cancels only the caller's own waiting request: the cancel event lives on
+the call record of that connection.
+
 ## 7. Watchdog and Admin Security APIs
 
 ### Sub-agent watchdog (`vaf/api/supervisor_routes.py`)
@@ -1030,6 +1046,7 @@ The connection map (`/api/network/connections`) lists every connected device's a
 | Live browser (interactive + agent) | Per-scope container, profile volume and docker network for every scope the pool can serve (`browser_pool_max`, default `"auto"`: at least 2 where memory allows, at most 16, admin-only); beyond that a shared container with one lease at a time and a verified, fail-closed profile wipe on every handover to another scope | Container / Application |
 | WhatsApp | Separate subprocess per user | Process |
 | Telegram | Whitelist-based routing | Application |
+| Speech queues | Fair order keyed on the canonical scope; a waiter sees only its own place and ETA; the metrics are keyless counts for an admin | Application |
 | Email | Per-user encrypted credentials + scope-based config lookup chain | Application |
 | Calendar (Google/Microsoft) | Same OAuth and `user_scope_id` as Email; no separate credentials | Application |
 | Automations | Per-user task storage and scoped RAG access; max 3 users per time slot (global cap) | Application |

@@ -171,6 +171,43 @@ curl -X POST "http://localhost:5003/asr?encode=true&output=json" \
 
 **Key Feature:** Automatic language detection via `language` field in response.
 
+### Queues
+
+Neither speech container runs two requests in parallel: three at once took 3.0 times as
+long each (STT 1.84-1.94 s against 0.54-0.61 s alone, TTS 3.11-3.19 s against 1.05 s,
+measured on a 16-core machine) and finished together. VAF therefore sends them one at a
+time through a fair queue per resource (`vaf/core/fair_queue.py`): the next slot goes to
+the person served least recently, a live caller (voice call, dictation, read-aloud)
+waits at most 15 s and then hears "busy", channels and the CLI wait up to 180 s, and at
+most 12 requests wait per queue. The table of queues is in
+[SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md#waiting-in-line-the-speech-queues);
+their numbers are the `queues` row of `vaf health` (below).
+
+Where VAF deliberately does not queue, each with the measurement behind it:
+
+- **Across processes.** The queue lives in each process. A CLI dictation and the web
+  server share a container by processor sharing, as before (3.0x per request at three
+  at once); the server process carries every web user, the voice call and the channel
+  bridges, which is where contention arises.
+- **Scale-out and overflow.** No second speech container and no switch to a cloud
+  provider when a queue is long: both wait for a server pilot that measures the need.
+  The cloud speech lanes are not gated (no local capacity), only measured.
+- **The admin's "test voice" button** (`/api/tts/synthesize`): one click by an admin,
+  not a lane people use.
+- **Embeddings and speaker ID**: in-process models that answer in milliseconds, with a
+  lock around the model load only.
+- **llama.cpp slots across processes** (sub-agents, the coder): llama-server queues
+  internally, and no cross-process primitive exists. vLLM batches with its own
+  scheduler.
+- **Gotenberg** queues inside the container (one LibreOffice: 0.20, 0.39 and 0.59 s for
+  three previews at once against 0.21 s alone), first come first served and without a
+  visible place; VAF does not queue the document preview, or the browser agent's runs on
+  one Chromium (a gate of its own in `vaf/tools/browser_agent.py`), in front of it yet.
+- **Browser pool start, sandbox environments, admin jobs, mail and calendar sync**: the
+  pool admits or falls back and never waits, environments are per-person containers, a
+  second repair, backup or update is refused on purpose, and sync runs in the
+  background where nobody waits live.
+
 ---
 
 ## Database & Cache Services
@@ -564,7 +601,7 @@ The repair answers for the containers. Whether the installation works is a wider
 and two failures leave every container healthy while VAF stops working: the disk filling up
 (the database stops writing, a backup cannot be written) and the server's agent loop dying
 (the page loads, every request but the chat is answered, and no chat gets an answer again).
-`vaf/core/health.py` asks all three, whether the scheduled backups run and, under vLLM, the local engine:
+`vaf/core/health.py` asks all three, whether the scheduled backups run, under vLLM the local engine, and whether the server's fair queues turned somebody away:
 
 | Check | What it reads | Down when | Degraded when |
 |---|---|---|---|
@@ -572,6 +609,7 @@ and two failures leave every container healthy while VAF stops working: the disk
 | `disk` | free space on the fullest disk among the data folders, the backup folder and Docker's root directory (named in `docker info`, when it is a path on this machine) | less than 1 GB free | less than 5 GB free |
 | `backup` | the scheduled backups (`backup_schedule.backup_check`) | never | the last scheduled run failed, or the newest backup is older than its interval and a day |
 | `agent` | the agent loops of the server process (`headless_runner.worker_status`) | none is left | some have stopped |
+| `queues` | only in a process that registered a fair queue (the server's speech lanes): per queue the length, the requests served, wait p50/p95 and service p50 over the last 15 minutes, and the refusals; `--json` and `/api/system/health` carry the numbers as `metrics` (counts, never who) | never | a queue turned somebody away (`timeout` or `full`) in the last 15 minutes; a hang-up (`cancelled`) does not count |
 | `engine` | only while vLLM is the local engine (`local_engine = vllm`): the platform verdict, the managed install, the model, whether its server runs, read from `local_engine.status_row`, the row Update and Repair draws ([VLLM_ENGINE.md](../llm/VLLM_ENGINE.md)) | never | vLLM cannot run on this machine, or it is not installed |
 
 The verdict is the worst check. `vaf health` asks the running VAF, because the agent loop

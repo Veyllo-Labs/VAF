@@ -396,7 +396,11 @@
     "wakeTimer": "Zamanlayıcı",
     "wakeProcess": "Arka plan komutu",
     "wakeDraft": "Taslak gönderildi",
-    "askPickHint": "Bir cevap seç ya da kendin yaz"
+    "askPickHint": "Bir cevap seç ya da kendin yaz",
+    "sttWaiting": "Konuşma tanıma bekleniyor: {position}. sıra, yaklaşık {seconds} sn",
+    "sttWaitingNoEta": "Konuşma tanıma bekleniyor: {position}. sıra",
+    "sttBusy": "Konuşma tanıma şu anda meşgul. Lütfen birazdan tekrar dene.",
+    "ttsBusy": "Sesli okuma şu anda meşgul. Lütfen birazdan tekrar dene."
   },
   "nav": {
     "settings": "Ayarlar",
@@ -2666,7 +2670,11 @@
     "gateAbove": "kaydediliyor",
     "gateHint": "Arka plan gürültüsü alınmayacak şekilde sürgüyü kaydır.",
     "status_deaf_busy": "Şu anda dinlemiyor - model ana ajan için çalışıyor",
-    "resultReady": "Görev tamamlandı. Ayrıntılar sohbette."
+    "resultReady": "Görev tamamlandı. Ayrıntılar sohbette.",
+    "status_waiting": "Sırada: {position}. sıra, yaklaşık {seconds} sn",
+    "status_waiting_noeta": "Sırada: {position}. sıra",
+    "status_busy": "Konuşma hizmeti meşgul",
+    "status_tts_busy": "Ses meşgul, yanıt metin olarak"
   },
   "outbox": {
     "titleMail": "{recipient} için e-posta",

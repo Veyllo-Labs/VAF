@@ -396,7 +396,11 @@
     "wakeTimer": "定时器",
     "wakeProcess": "后台命令",
     "wakeDraft": "草稿已发送",
-    "askPickHint": "选择一个回答，或自己输入"
+    "askPickHint": "选择一个回答，或自己输入",
+    "sttWaiting": "正在等待语音识别：第 {position} 位，约 {seconds} 秒",
+    "sttWaitingNoEta": "正在等待语音识别：第 {position} 位",
+    "sttBusy": "语音识别当前繁忙，请稍后再试。",
+    "ttsBusy": "朗读当前繁忙，请稍后再试。"
   },
   "nav": {
     "settings": "设置",
@@ -2666,7 +2670,11 @@
     "gateAbove": "会被录音",
     "gateHint": "拖动滑块，避免把背景噪音录进来。",
     "status_deaf_busy": "当前未在聆听：模型正在为主智能体工作",
-    "resultReady": "任务已完成。详情在对话里。"
+    "resultReady": "任务已完成。详情在对话里。",
+    "status_waiting": "排队中：第 {position} 位，约 {seconds} 秒",
+    "status_waiting_noeta": "排队中：第 {position} 位",
+    "status_busy": "语音服务繁忙",
+    "status_tts_busy": "语音繁忙，以文字回复"
   },
   "outbox": {
     "titleMail": "发给 {recipient} 的邮件",

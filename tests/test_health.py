@@ -26,6 +26,14 @@ LAN_DEVICE = "192.168.1.77"
 GB = 1024 ** 3
 
 
+@pytest.fixture(autouse=True)
+def _no_queues_of_other_tests(monkeypatch):
+    """The queue registry is process-wide; queues an earlier test registered (the speech
+    client's) would add a row to every collection here."""
+    from vaf.core import fair_queue
+    monkeypatch.setattr(fair_queue, "_registry", {})
+
+
 def _svc(name, state, required=True, needed=True, reason="r"):
     return {"name": name, "state": state, "required": required, "needed": needed,
             "reason": reason}
@@ -380,3 +388,95 @@ def test_a_caller_that_hangs_up_does_not_cancel_the_others(monkeypatch):
         return await asyncio.wait_for(stayer, 10)
 
     assert asyncio.run(scene())["status"] == "ok"
+
+
+# ── the fair queues ──────────────────────────────────────────────────────────────
+
+def _quiet_checks():
+    usage = lambda p: types.SimpleNamespace(free=40 * GB)                  # noqa: E731
+    return dict(status_probe=lambda: _status(_svc("vaf-redis", "ok")),
+                worker_probe=lambda: None, usage=usage,
+                backup_probe=lambda: {"name": "backup", "status": "ok", "reason": "fine"},
+                engine_probe=lambda: None)
+
+
+def _hold_and_refuse(q, reason):
+    """One served request, then a refusal of the given kind while the slot is held."""
+    from vaf.core.fair_queue import QueueBusy
+    with q.slot("tenant-a"):
+        pass
+    held, release = threading.Event(), threading.Event()
+
+    def hold():
+        with q.slot("tenant-a"):
+            held.set()
+            release.wait(5)
+
+    t = threading.Thread(target=hold, daemon=True)
+    t.start()
+    assert held.wait(5)
+    gone = threading.Event()
+    gone.set()
+    try:
+        with q.slot("tenant-b", deadline_s=0.05 if reason == "timeout" else None,
+                    cancelled=gone.is_set if reason == "cancelled" else None, poll_s=0.01):
+            pass
+    except QueueBusy as busy:
+        assert busy.reason == reason
+    release.set()
+    t.join(5)
+
+
+@pytest.mark.parametrize("reason, expected", [("timeout", "degraded"), ("cancelled", "ok")])
+def test_queues_row_degraded_after_refusal(reason, expected):
+    """Somebody turned away (timeout, full) in the window degrades; a hang-up does not.
+    MUTATION: count cancelled as degraded - red."""
+    from vaf.core import fair_queue
+    q = fair_queue.resource_queue("stt", slots=1)
+    _hold_and_refuse(q, reason)
+    result = health.collect_health(**_quiet_checks())
+    row = next(c for c in result["checks"] if c["name"] == "queues")
+    assert row["status"] == expected
+    assert row["reason"].startswith("stt: 0 waiting, 2 served")
+    assert [m["name"] for m in row["metrics"]] == ["stt"]
+    assert row["metrics"][0]["refused"][reason] == 1
+    assert result["status"] == expected
+
+
+def test_no_queues_no_row():
+    """A process that registered no queue reports none (the agent-row pattern).
+    MUTATION: always add the row - red."""
+    result = health.collect_health(**_quiet_checks())
+    assert "queues" not in [c["name"] for c in result["checks"]]
+
+
+def test_public_health_stays_word_only(monkeypatch):
+    """The queue numbers are for an admin: /api/health still answers the word alone.
+    MUTATION: put the metrics into /api/health - red."""
+    from vaf.core import fair_queue
+    q = fair_queue.resource_queue("tts", slots=1)
+    _hold_and_refuse(q, "timeout")
+
+    async def _snapshot():
+        return health.collect_health(**_quiet_checks())
+
+    monkeypatch.setattr(health, "snapshot", _snapshot)
+    answer = TestClient(_public_app(), client=PROXY_PEER).get(
+        "/api/health", headers={"X-Forwarded-For": LAN_DEVICE})
+    assert answer.json() == {"status": "degraded"}
+
+
+def test_vaf_health_json_carries_the_queue_numbers(monkeypatch):
+    import json
+    from vaf.core import fair_queue
+    app, health_cmd = _health_app()
+    q = fair_queue.resource_queue("stt", slots=1)
+    _hold_and_refuse(q, "timeout")
+    monkeypatch.setattr(health_cmd, "from_running_vaf",
+                        lambda timeout=30.0: health.collect_health(**_quiet_checks()))
+    out = CliRunner().invoke(app, ["--json"])
+    assert out.exit_code == 1
+    row = next(c for c in json.loads(out.output)["checks"] if c["name"] == "queues")
+    assert row["metrics"][0]["name"] == "stt" and row["metrics"][0]["refused"]["timeout"] == 1
+    text = CliRunner().invoke(app, [])
+    assert "queues" in text.output and "stt: 0 waiting" in text.output

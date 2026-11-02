@@ -50,7 +50,8 @@ scripts/
 
 Current keys: `nudge` (thinking-run "are you there?"), the voice stack's
 spoken lines (`voice_greeting`, `voice_greeting_anon`, `voice_tangled`,
-`voice_delegate_ack`), the speaker-confirmation texts (`speaker_confirm_*`),
+`voice_delegate_ack`, and `voice_busy`, said when a speech queue turned a call turn away),
+`speech_busy_text` (the written reply to a Telegram voice note the STT queue turned away), the speaker-confirmation texts (`speaker_confirm_*`),
 the guided-enrollment script (`speaker_enroll_*`; its `questions` key is
 consumed as a FULL ordered list via `phrasings()`, not `pick()`), and
 `stopwords` - per-language function-word lists (not phrasings) consumed as

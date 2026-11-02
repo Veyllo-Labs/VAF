@@ -186,6 +186,51 @@ curl -X POST "http://localhost:5003/asr?encode=true&output=json" \
 
 ---
 
+## Waiting in line: the speech queues
+
+Neither speech container runs two requests in parallel. Measured on a 16-core machine
+with the containers healthy: three STT requests at once took 1.84-1.94 s each against
+0.54-0.61 s alone, three TTS requests 3.11-3.19 s each against 1.05 s, and all three
+finished at the same moment. So every speech request waits in a fair queue
+(`vaf/core/fair_queue.py`, exported as `vaf.ResourceQueue`) and the container gets
+one at a time: the first caller is answered three times sooner, the last no later.
+The order is fair between people: the next slot goes to the person served least
+recently, so one person with many requests does not hold up the others.
+
+| Queue | Resource | Slots | Where it is taken |
+|---|---|---|---|
+| `stt` | the STT container (`/asr`, and its `/transcribe` fallback in the same slot) | 1 | `speech_client.transcribe` |
+| `stt_local` | the local faster-whisper model | 1 | `web_server._transcribe_local`, in an executor thread (it ran on the event loop before and froze every connection while it ran) |
+| `stt_api` | a cloud STT provider | unbounded, measured only | `speech_client.transcribe` |
+| `tts` | the TTS container | 1 | `speech_client.synthesize_docker` |
+| `tts_chatterbox` | a chatterbox server | 1 | `speech_client.synthesize_docker`, chosen by the URL |
+| `tts_piper` | the Piper binary (CLI read-aloud) | 1 | `SpeechManager.synthesize_audio` |
+| `tts_api` | a cloud TTS provider | unbounded, measured only | `speech_client.synthesize_api` |
+
+Each resource is admitted at exactly one place, so nothing waits twice. The slot
+numbers are constants in `speech_client.py`, not config keys: they are measured, and
+a key arrives with the measurement of a speech server that can do more. At most 12
+requests wait per queue; the thirteenth is refused at once.
+
+How long a request waits for its slot (`speech_client.WAIT_LIVE_S` and
+`WAIT_BACKGROUND_S`):
+
+- **15 s when a person watches**: the voice call, dictation and read-aloud in the web
+  UI. At the measured STT median of 0.6 s that is about 25 requests ahead. After that
+  the person hears an honest "busy" instead of silence (see the WebSocket protocol
+  below and [VOICE_AGENT.md](../agents/VOICE_AGENT.md)); the call's own TTS waits up
+  to 20 s and sends the reply as text when it gets no slot.
+- **180 s for channels and the CLI**: nobody watches a spinner there, and a voice note
+  answered late beats one dropped.
+
+The waiting person learns their own place and an estimate (from the median service
+time once three requests were served), never who else waits. `vaf health` shows each
+queue's length, wait and service time and its refusals as the `queues` row
+([DOCKER_SERVICES.md](../setup/DOCKER_SERVICES.md)). The queue lives in each process:
+a CLI dictation and the web server still share the container the old way.
+
+---
+
 ## Cloud provider lane (ElevenLabs / OpenAI)
 
 Implemented in `vaf/core/speech_api.py` (mirroring the vision pattern in
@@ -483,9 +528,17 @@ sending the raw WebM/OGG recording):
 
 **STT Responses:**
 ```json
+{ "type": "stt_wait", "position": 2, "eta_ms": 1200, "waited_ms": 300 }
 { "type": "stt_result", "text": "Transcribed text here" }
 { "type": "stt_error", "error": "..." }
+{ "type": "stt_error", "error": "stt is busy: ...", "code": "busy", "reason": "timeout", "waited_ms": 15000 }
 ```
+
+`stt_wait` arrives while the dictation waits for the recognizer (at most once a
+second; `eta_ms` is null until the queue can estimate, `position: 0` when it is its
+turn); the mic button shows the place next to its spinner. An `stt_error` with
+`code: "busy"` means the recognizer stayed busy for 15 s or its queue was full: the
+page shows a short notice instead of the error dialog the other errors open.
 
 **TTS Request:**
 ```json
@@ -500,7 +553,11 @@ provider; `tts_state` drives the loading/playing indicators):
 ```json
 { "type": "tts_audio", "audio": "<base64-encoded-wav>", "format": "wav" }
 { "type": "tts_state", "status": "loading|playing|stopped" }
+{ "type": "tts_state", "status": "stopped", "reason": "busy" }
 ```
+
+`reason: "busy"` means the read-aloud got no TTS slot within 15 s; the page shows a
+short notice.
 
 **Stop playback:**
 ```json
@@ -558,12 +615,23 @@ User Voice Message (OGA/Opus)
 
 ```python
 # Excerpt: the download, the known-bad check and the cleanup are left out.
-async def _transcribe_voice(bot_token: str, file_id: str) -> tuple[Optional[str], Optional[str]]:
+async def _transcribe_voice(bot_token: str, file_id: str,
+                            user_scope_id: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
     ...  # download the voice note to temp_path
     from vaf.core import speech_client
-    text, language = speech_client.transcribe(temp_path, mime="audio/ogg", filename="voice.ogg")
+    # Off the bridge's event loop: the transcription and its wait for an STT slot
+    # would otherwise stall every other Telegram message.
+    text, language = await asyncio.to_thread(
+        speech_client.transcribe, temp_path, mime="audio/ogg", filename="voice.ogg",
+        user_key=user_scope_id, deadline_s=speech_client.WAIT_BACKGROUND_S,
+        busy_raises=True)
     return (text, language or "en") if text else (None, None)
 ```
+
+A voice note the STT queue turned away (no slot within 180 s, or a full queue) is
+answered with the vocabulary line `speech_busy_text` in the sender's language ("speech
+recognition is busy, send it again in a few minutes, or type"), not with "could not
+understand" (`_voice_note_text`).
 
 **Voice Reply (`_send_voice_reply`):**
 
@@ -571,8 +639,9 @@ async def _transcribe_voice(bot_token: str, file_id: str) -> tuple[Optional[str]
 # Excerpt: the send through the Bot API and the error handling are left out.
 async def _send_voice_reply(bot_token: str, chat_id: str, text: str, language: str) -> bool:
     from vaf.core import speech_client
-    audio_data = speech_client.synthesize(text, language, want_format="ogg")
-    ...  # send audio_data as a voice note
+    user_key = _voice_reply_scope.get(str(chat_id))  # the sender's scope, set with the voice note
+    audio_data = speech_client.synthesize(text, language, want_format="ogg", user_key=user_key)
+    ...  # send audio_data as a voice note; no audio (failed or busy) sends the text
 ```
 
 ### Language Detection
@@ -589,6 +658,8 @@ WhatsApp supports the same bidirectional voice flow as Telegram:
 1. **Incoming:** User sends voice message → Node bridge downloads via Baileys → Python transcribes through the speech client (provider first, Whisper on the Full profile) → Agent processes text
 2. **Outgoing:** Agent response → the speech client synthesizes → Sent as voice via Node bridge (`sendAudioAsVoice`)
 3. **Proactive voice:** The agent can explicitly send voice via `send_whatsapp(voice_lang="de")` or `send_telegram(voice_lang="de")` when the user requests it (e.g. "send as voice via WhatsApp")
+
+Both directions wait in the speech queues under the account's scope, like Telegram. A voice note the STT queue turned away reaches the agent as the `<media:audio>` marker, as an untranscribable one always did, and the log says `busy`; a reply whose voice got no TTS slot goes out as text.
 
 Needs a speech provider set in Settings, or on the Full profile the containers at `speech_stt_docker_url` (port 5003) and `speech_tts_docker_url` (port 5002). See [CONNECTIONS.md](../integrations/CONNECTIONS.md) for WhatsApp setup.
 

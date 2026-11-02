@@ -151,7 +151,7 @@ class SendWhatsAppTool(BaseTool):
             else:
                 return f"File not found or not a file: {file_path_str}"
         elif voice_lang:
-            voice_path = self._synthesize_voice(out, voice_lang[:2].lower())
+            voice_path = self._synthesize_voice(out, voice_lang[:2].lower(), user_scope_id)
             if not voice_path:
                 return (
                     "Voice message could not be generated (TTS failed). "
@@ -200,8 +200,9 @@ class SendWhatsAppTool(BaseTool):
 
         return result
 
-    def _synthesize_voice(self, text: str, lang: str):
-        """Synthesize TTS to OGG file, return path. Returns None on failure."""
+    def _synthesize_voice(self, text: str, lang: str, user_key=None):
+        """Synthesize TTS to OGG file, return path. Returns None on failure (and when the
+        TTS queue is busy). `user_key` is the caller's scope, the person it waits for."""
         try:
             from vaf.core import speech_client
             from vaf.core.config import Config
@@ -210,7 +211,8 @@ class SendWhatsAppTool(BaseTool):
             tts_url = (Config.get("speech_tts_docker_url") or Config.get("speech_tts_docker_url_de") or "http://localhost:5002").strip().rstrip("/")
             if not tts_url:
                 return None
-            data = speech_client.synthesize(text[:4000], lang, want_format="ogg", docker_url=tts_url)
+            data = speech_client.synthesize(text[:4000], lang, want_format="ogg", docker_url=tts_url,
+                                            user_key=user_key)
             if not data or data[:4] not in (b"OggS", b"RIFF"):
                 return None
             suffix = ".ogg" if data[:4] == b"OggS" else ".wav"

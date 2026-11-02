@@ -466,3 +466,63 @@ def test_the_call_lane_has_one_engine_door():
     assert not offenders, (
         "the voice-call lane reaches past its one engine door again:\n  "
         + "\n  ".join(offenders))
+
+
+# ── the speech queue: busy is an outcome, the injected seam's contract holds ──
+
+def _engine_with(e, transcribe) -> VoiceTurnEngine:
+    state = {"history": [], "lang": "de", "scope": SCOPE, "chat_context": "",
+             "agent_name": "Nobel", "agent_soul": "", "session": "s1",
+             "chime_recent": []}
+    e["state"] = state
+    return VoiceTurnEngine(state, transcribe=transcribe, lane_speaks=lambda lang: True,
+                           subagents_busy=lambda: False,
+                           request_confirmation=lambda *a, **kw: None,
+                           clock=Clock(), log=e["logs"].append)
+
+
+def test_injected_seam_busy_is_a_busy_outcome(env):
+    """An embedder's recognizer says "busy" by raising vaf.QueueBusy: the turn is a busy
+    outcome with the numbers, and nothing enters the history (like no_speech).
+    MUTATION: catch QueueBusy only on the default transcribe path - red."""
+    import vaf
+
+    def busy_stt(wav, **kw):
+        raise vaf.QueueBusy("my-asr", "timeout", position=3, waited_s=2.5)
+
+    eng = _engine_with(env, busy_stt)
+    out = turn(eng, on_wait=lambda info: None, cancelled=lambda: False)
+    assert out.kind == "busy" and out.error == "busy"
+    assert out.busy == {"resource": "my-asr", "reason": "timeout", "waited_ms": 2500,
+                        "position": 3}
+    assert env["state"]["history"] == []
+
+
+def test_injected_seam_signature_unchanged(env):
+    """The queue arguments go to VAF's own speech client, never into an embedder's seam:
+    a seam written before the queue existed keeps working. MUTATION: pass on_wait (or
+    cancelled) to the injected seam - TypeError, red."""
+    calls = []
+
+    def strict_stt(wav, *, mime, filename, cache_key, default_language):
+        calls.append((mime, filename, cache_key, default_language))
+        return env["stt"]
+
+    eng = _engine_with(env, strict_stt)
+    out = turn(eng, on_wait=lambda info: None, cancelled=lambda: True)
+    assert out.kind == "reply"
+    assert calls == [("audio/wav", "call.wav", SCOPE, "de")]
+
+
+def test_the_default_seam_waits_live_in_the_stt_queue(env, monkeypatch):
+    """VAF's own path hands the queue the call's scope, the live deadline and the hooks."""
+    from vaf.core import speech_client
+    seen = {}
+    monkeypatch.setattr(speech_client, "transcribe",
+                        lambda wav, **kw: seen.update(kw) or env["stt"])
+    eng = _engine_with(env, None)
+    hooks = (lambda info: None, lambda: False)
+    assert turn(eng, on_wait=hooks[0], cancelled=hooks[1]).kind == "reply"
+    assert seen["user_key"] == SCOPE and seen["busy_raises"] is True
+    assert seen["deadline_s"] == speech_client.WAIT_LIVE_S
+    assert seen["on_wait"] is hooks[0] and seen["cancelled"] is hooks[1]

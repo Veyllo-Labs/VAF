@@ -17,6 +17,15 @@ Contracts (all functions log instead of raising):
   fallbacks (e.g. Telegram's send-as-document path).
 - transcribe(): returns (text, language) or (None, None); never deletes input
   files (file lifecycle stays with the caller).
+
+Every lane waits in a fair queue (vaf/core/fair_queue.py) at exactly ONE place per
+resource, so nothing nests: the STT container (`stt`), the TTS container (`tts`), a
+chatterbox server (`tts_chatterbox`), the Piper binary (`tts_piper`, in
+SpeechManager.synthesize_audio) and the local faster-whisper model (`stt_local`, in the
+web server). The cloud lanes (`stt_api`, `tts_api`) have no local capacity to protect and
+are unbounded pass-throughs that only measure. With `busy_raises=True` a refusal raises
+fair_queue.QueueBusy instead of returning the failure value, so a caller can tell "busy"
+from "failed".
 """
 from __future__ import annotations
 
@@ -31,11 +40,36 @@ from typing import Optional, Tuple, Union
 import requests
 
 from vaf.core.config import Config
+from vaf.core.fair_queue import QueueBusy, ResourceQueue, resource_queue
 
 logger = logging.getLogger(__name__)
 
 _STT_TIMEOUT = 60
 _TTS_TIMEOUT = 60
+
+# Slots per speech resource. Measured, not guessed: neither container runs requests in
+# parallel (three at once took 3.0x as long each and finished together, see the
+# fair_queue module docstring), so one slot answers the first caller three times sooner
+# and the last no later. Chatterbox and Piper are one model in one process too (not
+# measured, no such server on the measuring machine): one slot is the conservative value.
+STT_SLOTS = 1
+TTS_SLOTS = 1
+SPEECH_MAX_WAITING = 12
+# How long a caller waits for a slot. A person watching (voice call, dictation, read-aloud)
+# gets 15 s, about 25 turns ahead at the measured STT p50 of 0.6 s. Channels and the CLI
+# get 180 s: nobody watches a spinner there, and a voice note answered late beats one dropped.
+WAIT_LIVE_S = 15.0
+WAIT_BACKGROUND_S = 180.0
+
+_QUEUE_SLOTS: "dict[str, Optional[int]]" = {
+    "stt": STT_SLOTS, "stt_local": STT_SLOTS, "stt_api": None,
+    "tts": TTS_SLOTS, "tts_chatterbox": TTS_SLOTS, "tts_piper": TTS_SLOTS, "tts_api": None,
+}
+
+
+def speech_queue(name: str) -> ResourceQueue:
+    """The process-wide queue of one speech resource (names in _QUEUE_SLOTS)."""
+    return resource_queue(name, slots=_QUEUE_SLOTS[name], max_waiting=SPEECH_MAX_WAITING)
 
 # ── Per-speaker language cache for the cloud STT hint ─────────────────────────
 # Passing a known language to a cloud STT (Veyllo/OpenAI/ElevenLabs) yields a more
@@ -131,6 +165,11 @@ def transcribe(
     cache_key: Optional[str] = None,
     language: Optional[str] = None,
     default_language: Optional[str] = None,
+    user_key: Optional[str] = None,
+    deadline_s: Optional[float] = WAIT_BACKGROUND_S,
+    cancelled=None,
+    on_wait=None,
+    busy_raises: bool = False,
 ) -> Tuple[Optional[str], Optional[str]]:
     """Transcribe an audio file or raw bytes via the cloud lane or Docker Whisper.
 
@@ -147,7 +186,13 @@ def transcribe(
     the caller's user-profile language - so the very first clip is not left to a wild
     auto-detect while still letting the re-detect catch a genuine later switch. All
     optional and only affect the cloud lane; the Docker lane always auto-detects.
+
+    `user_key` is the person the request waits for in the `stt` queue (default:
+    `cache_key`); `deadline_s`, `cancelled` and `on_wait` go to the queue
+    (fair_queue.ResourceQueue.slot). A refusal returns (None, None), or raises QueueBusy
+    with `busy_raises=True`.
     """
+    key = user_key if user_key is not None else cache_key
     try:
         if isinstance(audio, (str, Path)):
             payload = Path(audio).read_bytes()
@@ -173,7 +218,9 @@ def transcribe(
         # when unconfigured or on any API error -> Docker lane below.
         from vaf.core import speech_api
         if speech_api.select_stt_backend()[0]:
-            text, lang = speech_api.transcribe(payload, mime=mime, filename=filename, language=hint)
+            with speech_queue("stt_api").slot(key):
+                text, lang = speech_api.transcribe(payload, mime=mime, filename=filename,
+                                                   language=hint)
             if text:
                 _lang_cache_update(cache_key, lang, used_hint)
                 return text, lang
@@ -190,9 +237,12 @@ def transcribe(
             return None, None
 
         base_url = _stt_base_url()
-        resp = _post_stt(f"{base_url}/asr", payload, mime, filename)
-        if resp is not None and resp.status_code == 404:
-            resp = _post_stt(f"{base_url}/transcribe", payload, mime, filename)
+        # ONE slot for both posts: the fallback is the same request to the same container.
+        with speech_queue("stt").slot(key, deadline_s=deadline_s, cancelled=cancelled,
+                                      on_wait=on_wait):
+            resp = _post_stt(f"{base_url}/asr", payload, mime, filename)
+            if resp is not None and resp.status_code == 404:
+                resp = _post_stt(f"{base_url}/transcribe", payload, mime, filename)
         if resp is None or not resp.ok:
             status = getattr(resp, "status_code", "n/a")
             body = (getattr(resp, "text", "") or "")[:200]
@@ -214,6 +264,11 @@ def transcribe(
         _lang_cache_update(cache_key, language, used_hint=False)
         logger.info("STT transcribed: lang=%s, text=%s...", language, (text or "")[:50])
         return (text or None), language
+    except QueueBusy as busy:
+        if busy_raises:
+            raise
+        logger.warning("STT: %s", busy)
+        return None, None
     except Exception as e:
         logger.warning("STT transcription error: %s", e)
         return None, None
@@ -242,6 +297,11 @@ def synthesize(
     *,
     want_format: str = "wav",
     docker_url: Optional[str] = None,
+    user_key: Optional[str] = None,
+    deadline_s: Optional[float] = WAIT_BACKGROUND_S,
+    cancelled=None,
+    on_wait=None,
+    busy_raises: bool = False,
 ) -> Optional[bytes]:
     """Synthesize text to audio bytes.
 
@@ -250,12 +310,15 @@ def synthesize(
     no converter is available - callers keep their magic-byte handling.
 
     A configured cloud provider (speech_tts_provider) takes precedence; on any
-    API error the Docker lane below is used automatically.
+    API error the Docker lane below is used automatically. The queue arguments are
+    synthesize_docker's.
     """
+    queue_args = dict(user_key=user_key, deadline_s=deadline_s, cancelled=cancelled,
+                      on_wait=on_wait, busy_raises=busy_raises)
     try:
         from vaf.core import speech_api
         if speech_api.select_tts_backend()[0]:
-            audio = speech_api.synthesize(text, lang, want_format=want_format)
+            audio = synthesize_api(text, lang, want_format=want_format, user_key=user_key)
             if audio:
                 return audio
     except Exception as e:
@@ -269,10 +332,25 @@ def synthesize(
         engine = str(Config.get("speech_tts_engine", "docker") or "docker").strip().lower()
         if engine == "chatterbox":
             return synthesize_docker(text, lang, want_format=want_format,
-                                     base_url=chatterbox_base_url())
+                                     base_url=chatterbox_base_url(), **queue_args)
         logger.warning("TTS: %s", inference_profile.refusal("the text-to-speech container"))
         return None
-    return synthesize_docker(text, lang, want_format=want_format, base_url=docker_url)
+    return synthesize_docker(text, lang, want_format=want_format, base_url=docker_url,
+                             **queue_args)
+
+
+def synthesize_api(text: str, lang: str, *, want_format: str = "wav",
+                   user_key: Optional[str] = None) -> Optional[bytes]:
+    """The cloud TTS provider (speech_api.synthesize), measured in the unbounded `tts_api`
+    queue. Shared by synthesize() and SpeechManager.synthesize_audio."""
+    from vaf.core import speech_api
+    with speech_queue("tts_api").slot(user_key):
+        return speech_api.synthesize(text, lang, want_format=want_format)
+
+
+def _tts_queue_name(url: str) -> str:
+    """`tts_chatterbox` for the chatterbox server, `tts` for every other HTTP TTS URL."""
+    return "tts_chatterbox" if url == chatterbox_base_url() else "tts"
 
 
 def synthesize_docker(
@@ -281,11 +359,18 @@ def synthesize_docker(
     *,
     want_format: str = "wav",
     base_url: Optional[str] = None,
+    user_key: Optional[str] = None,
+    deadline_s: Optional[float] = WAIT_BACKGROUND_S,
+    cancelled=None,
+    on_wait=None,
+    busy_raises: bool = False,
 ) -> Optional[bytes]:
     """Docker/HTTP TTS lane only (Piper container or chatterbox-style server).
 
     Used directly by SpeechManager.synthesize_audio, which resolves the engine
-    URL itself (docker vs chatterbox).
+    URL itself (docker vs chatterbox). The request waits in the `tts` queue, or in
+    `tts_chatterbox` when the URL is the chatterbox server's; a refusal returns None,
+    or raises QueueBusy with `busy_raises=True`.
     """
     try:
         url = (base_url or _tts_base_url()).strip().rstrip("/")
@@ -299,18 +384,22 @@ def synthesize_docker(
             body["format"] = "ogg"
 
         resp = None
-        try:
-            resp = requests.post(f"{url}/synthesize", json=body, timeout=_TTS_TIMEOUT)
-        except Exception as e:
-            logger.warning("TTS POST %s/synthesize failed: %s", url, e)
-
         audio: Optional[bytes] = None
-        if resp is not None and resp.ok and resp.content:
-            audio = resp.content
-        else:
-            # Legacy fallback: old-style direct POST to the base URL with
-            # {"text","lang"}; may answer with raw WAV or JSON base64 audio.
-            audio = _legacy_tts_fallback(url, text, lang_short)
+        # One slot for the request and its legacy fallback; the ffmpeg conversion below
+        # runs on this machine and stays outside.
+        with speech_queue(_tts_queue_name(url)).slot(
+                user_key, deadline_s=deadline_s, cancelled=cancelled, on_wait=on_wait):
+            try:
+                resp = requests.post(f"{url}/synthesize", json=body, timeout=_TTS_TIMEOUT)
+            except Exception as e:
+                logger.warning("TTS POST %s/synthesize failed: %s", url, e)
+
+            if resp is not None and resp.ok and resp.content:
+                audio = resp.content
+            else:
+                # Legacy fallback: old-style direct POST to the base URL with
+                # {"text","lang"}; may answer with raw WAV or JSON base64 audio.
+                audio = _legacy_tts_fallback(url, text, lang_short)
 
         if not audio:
             status = getattr(resp, "status_code", "n/a")
@@ -330,6 +419,11 @@ def synthesize_docker(
             # No converter available: hand back the WAV so callers can use
             # their own fallbacks (Telegram sends it as a document).
         return audio
+    except QueueBusy as busy:
+        if busy_raises:
+            raise
+        logger.warning("TTS: %s", busy)
+        return None
     except Exception as e:
         logger.warning("TTS synthesis error: %s", e)
         return None

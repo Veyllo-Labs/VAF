@@ -1,0 +1,23 @@
+{
+  "de": [
+    "Deine Sprachnachricht konnte gerade nicht umgewandelt werden, weil die Spracherkennung ausgelastet ist. Schick sie bitte in ein paar Minuten noch einmal oder schreib mir einfach."
+  ],
+  "en": [
+    "Your voice message could not be transcribed right now because speech recognition is busy. Please send it again in a few minutes, or type your message."
+  ],
+  "ja": [
+    "音声認識が混み合っているため、いまは音声メッセージを文字にできませんでした。数分後にもう一度送るか、文字で送ってください。"
+  ],
+  "ko": [
+    "음성 인식이 바빠서 지금은 음성 메시지를 텍스트로 바꾸지 못했어요. 몇 분 뒤에 다시 보내 주시거나 메시지를 입력해 주세요."
+  ],
+  "th": [
+    "ตอนนี้ระบบรู้จำเสียงไม่ว่าง จึงยังแปลงข้อความเสียงของคุณเป็นข้อความไม่ได้ โปรดส่งใหม่อีกครั้งในอีกไม่กี่นาที หรือพิมพ์ข้อความมาแทน"
+  ],
+  "tr": [
+    "Konuşma tanıma şu anda meşgul olduğu için sesli mesajın yazıya dökülemedi. Lütfen birkaç dakika sonra tekrar gönder ya da mesajını yaz."
+  ],
+  "zh": [
+    "语音识别目前繁忙，暂时无法转写你的语音消息。请几分钟后重新发送，或直接输入文字。"
+  ]
+}

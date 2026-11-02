@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from .core.code_audit import AuditFinding, AuditReport, code_audit
     from .core.completion import is_error_reply
     from .core.environments import EnvironmentManager, get_environment_manager
+    from .core.fair_queue import QueueBusy, ResourceQueue, WaitInfo, queue_metrics, resource_queue
     from .core.git_runner import run_project_git
     from .core.pdf_extract import extract_pdf_markdown
     from .core.session import TurnStatus, model_text, stored_turn_copy
@@ -39,14 +40,14 @@ __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_K
            "CoreAgent",
            "EgressPolicy", "EgressRefused", "EnvironmentManager",
            "NON_CONVERSATION_KINDS",
-           "PathEscape", "RemoteRefused",
-           "RemoteRoom", "Room", "RoomError", "RoomTriggerWatch",
+           "PathEscape", "QueueBusy", "RemoteRefused",
+           "RemoteRoom", "ResourceQueue", "Room", "RoomError", "RoomTriggerWatch",
            "SOUL_CONTINUITY_ADDENDUM",
            "StoreError", "ToolCallHooks", "ToolCallOutcome", "ToolCaller", "ToolRequest",
            "TurnOutcome",
            "TurnStatus",
            "UnsafeName",
-           "UploadVerdict", "VoiceTurnEngine",
+           "UploadVerdict", "VoiceTurnEngine", "WaitInfo",
            "account_allows_tool", "add_revocation_listener", "advise_tools",
            "build_capability_addendum",
            "code_audit", "contained_path", "derive_peer_id",
@@ -56,8 +57,9 @@ __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_K
            "install_thread_excepthook", "invited_rooms", "is_error_reply", "jail_allows",
            "joined_rooms",
            "list_standing_grants", "mark_trusted_dir", "markers", "model_text",
-           "participant_key", "record_threat", "remove_revocation_listener",
-           "restore_account", "revoke_account", "revoke_standing_grants", "room_invitation",
+           "participant_key", "queue_metrics", "record_threat", "remove_revocation_listener",
+           "resource_queue", "restore_account", "revoke_account", "revoke_standing_grants",
+           "room_invitation",
            "run_project_git", "safe_entry_name", "set_account_allowlist_resolver",
            "set_account_directory_resolver",
            "set_confirmation_bypass_resolver", "set_tool_policy", "stop_account_work",
@@ -138,6 +140,15 @@ def __getattr__(name):
         # surface suffices. Pure stdlib at module level (slim-base safe).
         from .core.voice_turn import VoiceTurnEngine, TurnOutcome
         return {"VoiceTurnEngine": VoiceTurnEngine, "TurnOutcome": TurnOutcome}[name]
+    if name in ("ResourceQueue", "QueueBusy", "WaitInfo", "resource_queue", "queue_metrics"):
+        # A fair waiting queue in front of a scarce resource: one person with many
+        # requests no longer holds up the others, a waiter learns its place and the
+        # expected wait, and a full queue says "busy" instead of going silent. VAF's own
+        # speech lanes wait in it; QueueBusy is also the engine contract an injected
+        # `transcribe` seam raises to say its recognizer is busy. Stdlib only. See
+        # docs/EMBEDDING.md, "Sharing a scarce resource fairly".
+        from .core import fair_queue
+        return getattr(fair_queue, name)
     if name == "is_error_reply":
         # Tell a turn that failed from a turn that answered. run() and chat_step do not
         # raise for a failing provider: the failure comes back as the turn's text, with

@@ -366,12 +366,16 @@ def _append_chat_activity(chat_id: str, user_scope_id: Any, direction: str = "in
                                     "ts": time.time(), "direction": direction}, keep=100)
 
 
-async def _transcribe_voice(bot_token: str, file_id: str) -> tuple[Optional[str], Optional[str]]:
+async def _transcribe_voice(bot_token: str, file_id: str,
+                            user_scope_id: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
     """
     Download voice message from Telegram and transcribe it through the shared speech client:
     the STT provider first, the Whisper container only on the Full profile.
-    Returns (transcribed_text, detected_language) or (None, None) on error.
+    Returns (transcribed_text, detected_language) or (None, None) on error. Raises
+    fair_queue.QueueBusy when the speech queue turned the note away, so the sender hears
+    "busy" and not "could not understand"; `user_scope_id` is the person it waits for.
     """
+    from vaf.core.fair_queue import QueueBusy
     try:
         # 1. Get file path from Telegram
         # to_thread: requests is blocking, and this coroutine runs on the bridge's own
@@ -407,11 +411,14 @@ async def _transcribe_voice(bot_token: str, file_id: str) -> tuple[Optional[str]
             temp_path = temp_file.name
 
         try:
-            # 4. Transcribe via the shared speech client (Docker Whisper STT)
+            # 4. Transcribe via the shared speech client (Docker Whisper STT). Off the
+            # bridge's loop like the downloads above: the transcription, and the wait for
+            # an STT slot, would otherwise stall every other Telegram message.
             from vaf.core import speech_client
-            text, language = speech_client.transcribe(
-                temp_path, mime="audio/ogg", filename="voice.ogg"
-            )
+            text, language = await asyncio.to_thread(
+                speech_client.transcribe, temp_path, mime="audio/ogg", filename="voice.ogg",
+                user_key=user_scope_id, deadline_s=speech_client.WAIT_BACKGROUND_S,
+                busy_raises=True)
             if not text:
                 return None, None
             return text, language or "en"
@@ -423,9 +430,33 @@ async def _transcribe_voice(bot_token: str, file_id: str) -> tuple[Optional[str]
             except Exception:
                 pass
 
+    except QueueBusy:
+        raise
     except Exception as e:
         logger.exception(f"Voice transcription error: {e}")
         return None, None
+
+
+async def _voice_note_text(message: Any, bot_token: str, file_id: str,
+                           user_scope_id: Optional[str],
+                           vaf_username: str) -> tuple[Optional[str], Optional[str]]:
+    """A voice note's (text, language), or (None, None) after telling the sender why not:
+    the recognizer was busy for too long (the vocabulary line, in their language), or the
+    note could not be understood."""
+    from vaf.core.fair_queue import QueueBusy
+    try:
+        text, language = await _transcribe_voice(bot_token, file_id, user_scope_id)
+    except QueueBusy as busy:
+        # Honest: the note was not misheard, the recognizer was busy for too long.
+        logger.warning("Telegram voice note refused: %s", busy)
+        from vaf.core import vocab
+        lang = vocab.resolve_user_language(user_scope_id, vaf_username)
+        await message.reply_text(vocab.pick("speech_busy_text", lang, scope=user_scope_id))
+        return None, None
+    if not text:
+        await message.reply_text("❌ Konnte Sprachnachricht nicht verstehen. Bitte erneut versuchen.")
+        return None, None
+    return text, language
 
 
 async def _send_voice_reply(bot_token: str, chat_id: str, text: str, language: str) -> bool:
@@ -436,8 +467,13 @@ async def _send_voice_reply(bot_token: str, chat_id: str, text: str, language: s
     try:
         # 1. Synthesize via the shared speech client (OGG preferred; the client
         #    already tries container-side and local ffmpeg conversion).
+        # The person the reply waits for in the TTS queue; busy or failed audio is None
+        # and the caller sends the text instead.
         from vaf.core import speech_client
-        audio_data = speech_client.synthesize(text, language, want_format="ogg")
+        with _voice_reply_lock:
+            user_key = _voice_reply_scope.get(str(chat_id))
+        audio_data = speech_client.synthesize(text, language, want_format="ogg",
+                                              user_key=user_key)
 
         if not audio_data:
             logger.warning("TTS returned no audio")
@@ -563,6 +599,9 @@ async def _send_audio_as_document(bot_token: str, chat_id: str, audio_path: str)
 
 # Track which chats expect voice replies (set when user sends voice, cleared after reply)
 _voice_reply_pending: Dict[str, str] = {}  # chat_id -> detected_language
+# chat_id -> the sender's scope, the key a voice reply waits under in the TTS queue. One
+# entry per authorized chat that ever sent a voice note: bounded by the allowlist.
+_voice_reply_scope: Dict[str, str] = {}
 _voice_reply_lock = threading.Lock()
 
 
@@ -904,6 +943,8 @@ def _run_bot():
         if voice_lang:
             with _voice_reply_lock:
                 _voice_reply_pending[chat_id] = voice_lang
+                if user_scope_id:
+                    _voice_reply_scope[str(chat_id)] = str(user_scope_id)
             logger.info(f"Voice message from chat {chat_id}, will reply in {voice_lang}")
 
         _append_chat_activity(chat_id, user_scope_id, "in")
@@ -1120,10 +1161,9 @@ def _run_bot():
         file_id = voice.file_id
 
         # Transcribe voice message (no confirmation message - only errors)
-        text, detected_lang = await _transcribe_voice(bot_token, file_id)
-
+        text, detected_lang = await _voice_note_text(update.message, bot_token, file_id,
+                                                     user_scope_id, vaf_username)
         if not text:
-            await update.message.reply_text("❌ Konnte Sprachnachricht nicht verstehen. Bitte erneut versuchen.")
             return
 
         logger.info(f"Voice transcribed: lang={detected_lang}, text={text[:100]}...")

@@ -231,7 +231,7 @@ def test_the_messengers_speak_through_a_chatterbox_server_under_the_api_profile(
     monkeypatch.setattr(speech_api, "select_tts_backend", lambda: (None, None))
     reached = []
     monkeypatch.setattr(speech_client, "synthesize_docker",
-                        lambda text, lang, want_format="wav", base_url=None:
+                        lambda text, lang, want_format="wav", base_url=None, **queue:
                         reached.append(base_url) or b"OggS")
     assert speech_client.synthesize("Hallo", "de", want_format="ogg",
                                     docker_url="http://localhost:5002") == b"OggS"

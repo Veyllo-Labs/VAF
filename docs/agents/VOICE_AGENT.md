@@ -95,8 +95,14 @@ suffices.
    than 0.3 s of audible 30 ms frames never reach STT (Whisper-class models
    hallucinate text on silence). Convenience gate, fail-open on analysis
    errors.
-2. **STT** via `speech_client.transcribe` (provider lane first). The
-   detected language drives LANGUAGE FOLLOW: when it differs from the call
+2. **STT** via `speech_client.transcribe` (provider lane first). The STT container
+   serves one request at a time, so the turn waits in its fair queue
+   (`vaf/core/fair_queue.py`, queue `stt`, keyed on the call's scope): the window shows
+   its place (`voice_call_wait`), and a turn that gets no slot within
+   `speech_client.WAIT_LIVE_S` (15 s), or whose queue is full, ends as
+   `kind == "busy"` - like `no_speech`, nothing enters the call history, and the handler
+   says so (`voice_call_error "busy"`, below). A cloud STT provider is never held back.
+   The detected language drives LANGUAGE FOLLOW: when it differs from the call
    language and the lane the call actually speaks with can speak it
    (`SpeechManager.call_lane_speaks`: a configured cloud TTS provider
    counts as multilingual, else the Docker container is asked for its
@@ -204,7 +210,11 @@ suffices.
 6. **Delegation**: the task text goes into the TaskQueue for the CALLING
    session (`origin_channel: "voice_call"`); the main agent runs it as a
    normal turn.
-7. **TTS** and the `voice_call_reply` payload. Model-written spoken text is voiced in
+7. **TTS** and the `voice_call_reply` payload. Every TTS of the call (greeting, short
+   lines, chime, reply, `voice_call_speak`) waits in the TTS queue for at most 20 s
+   under the call's scope; a reply whose voice gets no slot goes out as text with
+   `audio: null` and `tts_busy: true` - nothing already decided is withdrawn, and a
+   greeting that gets no slot is not sent, as a failed one never was. Model-written spoken text is voiced in
    ITS OWN language, not the input language: `_tts_lang_for` detects the reply text's
    language (`_detect_language_simple`, langid) and, when it differs from the call
    language AND the lane can speak it (`call_lane_speaks`), follows it - so a Turkish
@@ -351,6 +361,18 @@ speaker_ok=... text=... -> reply_len=... delegate=...`).
    (seconds, warm). This applies the repo-wide local-mode rule to the call:
    ONE llama server, never a second concurrent inference (swapping, not
    parallelism).
+11. **A waiting turn is cancelled by the hang-up; an uncontended turn is never
+   cancelled.** The receive loop handles one frame at a time and the turn awaits its
+   executor hop inline, so a `voice_call_end` or a disconnect used to be read only
+   after the turn. While a turn (or its TTS) WAITS in a speech queue, the handler
+   reads the socket ahead (`web_server._ReadAhead`): an end or a disconnect sets the
+   call's `cancel` event, the waiting slot leaves the queue (`refused.cancelled`), the
+   container is never called for it and nothing is said. Every frame read ahead is
+   still handled afterwards, in arrival order, and a pending receive is never
+   cancelled. A turn that never waits never reads ahead and the queue never asks it
+   whether it was cancelled, so an uncontended call behaves exactly as before
+   (`tests/test_voice_call_baseline.py` is unchanged; `tests/test_voice_call_queue.py`
+   pins the waiting side).
 
 ## WebSocket events
 
@@ -370,7 +392,17 @@ and when ok is false `reason: "model_loading"` - local model load kicked,
 the frontend shows a loading state and re-sends `voice_call_start` on the
 `model_state {loaded:true}` push - or `"no_model"`), `voice_call_reply`,
 `voice_call_error` (`no_call` | `bad_format` | `no_speech` | `llm_failed` |
-`busy_local` - the frontend keeps listening). A `voice_call_reply` may carry
+`busy_local` - the frontend keeps listening - or `busy`, see below).
+`voice_call_wait` (`resource` `stt` or `tts`, `position` with 1 as next, `eta_ms` or
+null while the queue has fewer than three service samples, `waited_ms`) reports the
+call's place while a turn or its TTS waits in a speech queue, at most once a second,
+and `position: 0` when the slot is granted. `voice_call_error` with `error: "busy"`
+carries `resource`, `reason` (`timeout` | `full`), `waited_ms`, `text` (the
+`voice_busy` line in the call language) and `audio` (that line spoken, or null when
+no TTS slot was free within 10 s); a hang-up during the wait sends nothing. The
+frontend shows `status_busy`, plays the audio or the busy earcon (two low tones) and
+keeps listening. A `voice_call_reply` with `tts_busy: true` has its text but no audio;
+the window shows it as a caption under the status until the next turn starts. A `voice_call_reply` may carry
 `chime_in: true` (a proactive grounded remark on overheard side talk) or
 `clarify: true` (a "did you mean me?" addressee check); both carry audio and play
 through the existing reply path unchanged, so the frontend needs no special handling.
@@ -387,7 +419,9 @@ Speaker confirmation events (`speaker_confirm_*`) are documented in
 
 - `web/lib/voiceCallStore.ts` - Zustand store shared by bar and controller
   (`active`, `closing`, `speaker`, `agentMode`, `statusKey`, `mainTask`,
-  `muted`, `hangupRequested`).
+  `muted`, `hangupRequested`, `wait` - the call's own place in a speech queue -
+  and `busyNotice` - a refused turn or a text-only reply, shown until the next
+  turn starts).
 - `web/components/VoiceCallLayer.tsx` - controller + agent window (top-left):
   hands-free VAD loop (silence auto-stop, max utterance cap), noise gates,
   mute handling, result callback, enter/exit choreography, red in-call ring.
@@ -440,7 +474,8 @@ Every fixed line the voice stack speaks or sends (call greeting, spoken
 fallbacks, the confirmation question and acks, the enrollment script) lives
 in the vocabulary book (`vaf/core/vocab`, see
 [VOCABULARY_BOOK.md](../platform/VOCABULARY_BOOK.md)) under the keys
-`voice_*`, `speaker_confirm_*`, `speaker_enroll_*` and the reflex key
+`voice_*` (among them `voice_busy`, the line a turn the STT queue turned away
+gets), `speaker_confirm_*`, `speaker_enroll_*` and the reflex key
 `addressee_clarify` (the spoken "did you mean me?"). The reflex system also
 reads two MATCHED lexicons from the same book, `awareness_triggers` and
 `addressee_check` (cues it substring-matches, not lines it speaks). Adding a language

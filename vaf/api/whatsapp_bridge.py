@@ -477,13 +477,19 @@ def _append_chat_activity(chat_id: str, user_scope_id: Any, direction: str = "in
                                     "ts": time.time(), "direction": direction}, keep=100)
 
 
-def _synthesize_voice_for_reply(text: str, lang: str) -> Optional[str]:
-    """Synthesize TTS to temp file. Returns path or None."""
+def _synthesize_voice_for_reply(text: str, lang: str,
+                                user_scope_id: Optional[str] = None,
+                                busy_raises: bool = False) -> Optional[str]:
+    """Synthesize TTS to temp file. Returns path or None (also when the TTS queue is busy:
+    the reply then goes out as text; with `busy_raises` that case raises
+    fair_queue.QueueBusy instead). `user_scope_id` is the person it waits for."""
+    from vaf.core.fair_queue import QueueBusy
     try:
         import tempfile
         from vaf.core import speech_client
         logger.info("WhatsApp TTS: synthesizing lang=%s text_len=%d", lang, len(text))
-        data = speech_client.synthesize(text[:4000], lang, want_format="ogg")
+        data = speech_client.synthesize(text[:4000], lang, want_format="ogg",
+                                        user_key=user_scope_id, busy_raises=busy_raises)
         if not data:
             logger.warning("WhatsApp TTS: no audio returned")
             return None
@@ -495,17 +501,23 @@ def _synthesize_voice_for_reply(text: str, lang: str) -> Optional[str]:
             f.write(data)
             logger.info("WhatsApp TTS: wrote %d bytes to %s", len(data), f.name)
             return f.name
+    except QueueBusy:
+        raise
     except Exception as e:
         logger.warning("WhatsApp TTS synthesis error: %s", e)
         return None
 
 
-def _transcribe_voice_file(voice_path: str) -> tuple[Optional[str], Optional[str]]:
+def _transcribe_voice_file(voice_path: str,
+                           user_scope_id: Optional[str] = None) -> tuple[Optional[str], Optional[str]]:
     """
     Transcribe a voice file through the shared speech client: the STT provider first,
     the Whisper container only on the Full profile.
-    Returns (transcribed_text, detected_language) or (None, None) on error.
+    Returns (transcribed_text, detected_language) or (None, None) on error. A note the
+    STT queue turned away is (None, None) too, logged as busy: the caller's media marker
+    reaches the agent, which answers it. `user_scope_id` is the person it waits for.
     """
+    from vaf.core.fair_queue import QueueBusy
     try:
         path_obj = Path(voice_path)
         if not path_obj.is_file():
@@ -525,11 +537,16 @@ def _transcribe_voice_file(voice_path: str) -> tuple[Optional[str], Optional[str
         filename = f"voice{ext}" if ext else "voice.ogg"
         logger.info("WhatsApp STT: transcribing %s (%d bytes)", voice_path, file_size)
         from vaf.core import speech_client
-        text, language = speech_client.transcribe(voice_path, mime=mime, filename=filename)
+        text, language = speech_client.transcribe(
+            voice_path, mime=mime, filename=filename, user_key=user_scope_id,
+            deadline_s=speech_client.WAIT_BACKGROUND_S, busy_raises=True)
         if not text:
             return None, None
         logger.info("WhatsApp voice transcribed: lang=%s, text=%s...", language, (text or "")[:50])
         return text, language or "en"
+    except QueueBusy as busy:
+        logger.warning("WhatsApp STT busy: %s", busy)
+        return None, None
     except Exception as e:
         logger.warning("WhatsApp voice transcription error: %s", e)
         return None, None
@@ -939,13 +956,22 @@ def _enqueue_reply(username: str, chat_jid: str, text: str, voice_path: Optional
         with _voice_reply_lock:
             lang = _voice_reply_pending.pop(f"{username}|{chat_jid}", None)
         if lang:
-            voice_path = _synthesize_voice_for_reply(text, lang)
-            # Fallback: if TTS returns empty (e.g. unsupported lang like tr), try English so we still send voice
-            if not voice_path and (lang or "")[:2].lower() != "en":
-                logger.info("WhatsApp TTS: fallback to en after empty/fail for lang=%s", lang)
-                voice_path = _synthesize_voice_for_reply(text, "en")
-                if voice_path:
-                    lang = "en"
+            from vaf.core.fair_queue import QueueBusy
+            try:
+                voice_path = _synthesize_voice_for_reply(text, lang, user_scope_id,
+                                                         busy_raises=True)
+                # Fallback: if TTS returns empty (e.g. unsupported lang like tr), try English so we still send voice
+                if not voice_path and (lang or "")[:2].lower() != "en":
+                    logger.info("WhatsApp TTS: fallback to en after empty/fail for lang=%s", lang)
+                    voice_path = _synthesize_voice_for_reply(text, "en", user_scope_id,
+                                                             busy_raises=True)
+                    if voice_path:
+                        lang = "en"
+            except QueueBusy as busy:
+                # Busy is not a language problem: no second wait in English, the text
+                # goes out now.
+                logger.warning("WhatsApp TTS busy, replying as text: %s", busy)
+                voice_path = None
             if voice_path:
                 try:
                     from vaf.core.log_helper import log_whatsapp_reply
@@ -1523,7 +1549,7 @@ def _dispatch_bridge_event(username: str, user_scope_id: str, typ: str, obj: Dic
         was_voice = bool(voice_path)
         if voice_path and body == "<voice>":
             try:
-                transcript, voice_lang = _transcribe_voice_file(voice_path)
+                transcript, voice_lang = _transcribe_voice_file(voice_path, user_scope_id)
                 body = transcript if transcript else "<media:audio>"
             except Exception as e:
                 logger.warning("WhatsApp: transcription failed: %s", e)

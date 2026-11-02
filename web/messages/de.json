@@ -396,7 +396,11 @@
     "wakeTimer": "Timer",
     "wakeProcess": "Hintergrundbefehl",
     "wakeDraft": "Entwurf gesendet",
-    "askPickHint": "Antwort auswählen oder eine eigene schreiben"
+    "askPickHint": "Antwort auswählen oder eine eigene schreiben",
+    "sttWaiting": "Warte auf die Spracherkennung: Platz {position}, etwa {seconds} s",
+    "sttWaitingNoEta": "Warte auf die Spracherkennung: Platz {position}",
+    "sttBusy": "Die Spracherkennung ist gerade ausgelastet. Versuch es bitte gleich noch einmal.",
+    "ttsBusy": "Das Vorlesen ist gerade ausgelastet. Versuch es bitte gleich noch einmal."
   },
   "nav": {
     "settings": "Einstellungen",
@@ -2666,7 +2670,11 @@
     "gateAbove": "wird aufgenommen",
     "gateHint": "Verschiebe den Regler, damit Störgeräusche nicht aufgenommen werden.",
     "status_deaf_busy": "Hört gerade nicht - das Modell arbeitet für den Main-Agent",
-    "resultReady": "Die Aufgabe ist fertig. Die Details stehen im Chat."
+    "resultReady": "Die Aufgabe ist fertig. Die Details stehen im Chat.",
+    "status_waiting": "In der Warteschlange: Platz {position}, etwa {seconds} s",
+    "status_waiting_noeta": "In der Warteschlange: Platz {position}",
+    "status_busy": "Sprachdienst ausgelastet",
+    "status_tts_busy": "Stimme ausgelastet, Antwort als Text"
   },
   "outbox": {
     "titleMail": "E-Mail an {recipient}",

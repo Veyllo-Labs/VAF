@@ -1,0 +1,25 @@
+{
+  "de": [
+    "Entschuldige, meine Spracherkennung ist gerade ausgelastet. Sag es bitte gleich noch einmal.",
+    "Gerade sprechen zu viele gleichzeitig mit mir. Sag es bitte in einem Moment noch einmal."
+  ],
+  "en": [
+    "Sorry, my speech recognition is busy right now. Please say that again in a moment.",
+    "Too many people are talking to me at once. Give me a second and say it again."
+  ],
+  "ja": [
+    "すみません、いま音声認識が混み合っています。少ししてからもう一度話してください。"
+  ],
+  "ko": [
+    "죄송해요, 지금 음성 인식이 바빠요. 잠시 후에 다시 말씀해 주세요."
+  ],
+  "th": [
+    "ขอโทษนะ ตอนนี้ระบบรู้จำเสียงยุ่งอยู่ ช่วยพูดอีกครั้งในอีกสักครู่นะ"
+  ],
+  "tr": [
+    "Kusura bakma, konuşma tanıma şu anda çok meşgul. Lütfen birazdan tekrar söyle."
+  ],
+  "zh": [
+    "抱歉，语音识别现在很忙。请稍后再说一遍。"
+  ]
+}

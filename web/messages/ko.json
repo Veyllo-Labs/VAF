@@ -396,7 +396,11 @@
     "wakeTimer": "타이머",
     "wakeProcess": "백그라운드 명령",
     "wakeDraft": "보낸 초안",
-    "askPickHint": "답을 고르거나 직접 입력할 수 있어요"
+    "askPickHint": "답을 고르거나 직접 입력할 수 있어요",
+    "sttWaiting": "음성 인식 대기 중: {position}번째, 약 {seconds}초",
+    "sttWaitingNoEta": "음성 인식 대기 중: {position}번째",
+    "sttBusy": "지금은 음성 인식이 바빠요. 잠시 후 다시 시도해 주세요.",
+    "ttsBusy": "지금은 읽어 주기가 바빠요. 잠시 후 다시 시도해 주세요."
   },
   "nav": {
     "settings": "설정",
@@ -2666,7 +2670,11 @@
     "gateAbove": "녹음됨",
     "gateHint": "주변 소음이 녹음되지 않도록 슬라이더를 조절해 주세요.",
     "status_deaf_busy": "모델이 메인 에이전트 작업에 쓰이는 중이라 지금은 듣지 못해요",
-    "resultReady": "작업이 끝났어요. 자세한 내용은 대화에 있어요."
+    "resultReady": "작업이 끝났어요. 자세한 내용은 대화에 있어요.",
+    "status_waiting": "대기 중: {position}번째, 약 {seconds}초",
+    "status_waiting_noeta": "대기 중: {position}번째",
+    "status_busy": "음성 서비스 사용 중",
+    "status_tts_busy": "음성 사용 중, 텍스트로 답변"
   },
   "outbox": {
     "titleMail": "{recipient}에게 보낼 이메일",

@@ -503,7 +503,9 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
             }
             // Utterance accepted for processing: give the user an audible "heard you"
             playEarcon('accept');
-            useVoiceCallStore.getState().set({ speaker: null, agentMode: 'thinking', statusKey: 'thinking' });
+            // A new turn starts: a busy caption or a queue place from the last one is over.
+            useVoiceCallStore.getState().set({ speaker: null, agentMode: 'thinking', statusKey: 'thinking',
+                wait: null, busyNotice: null });
             try {
                 const blob = new Blob(chunks, { type: mime });
                 const wav = await toWav16k(blob);
@@ -588,7 +590,33 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
             let data: any;
             try { data = JSON.parse(ev.data); } catch { return; }
 
+            if (data.type === 'voice_call_wait') {
+                // This turn (stt) or its reply (tts) waits in a speech queue: show the
+                // place; position 0 = the slot was granted, back to what the call was doing.
+                const stW = useVoiceCallStore.getState();
+                const position = Number(data.position) || 0;
+                if (position > 0) {
+                    stW.set({
+                        statusKey: 'waiting',
+                        wait: {
+                            resource: data.resource === 'tts' ? 'tts' : 'stt',
+                            position,
+                            etaMs: typeof data.eta_ms === 'number' ? data.eta_ms : null,
+                        },
+                    });
+                } else {
+                    stW.set({ wait: null, statusKey: stW.agentMode === 'listening' ? 'listening' : 'thinking' });
+                }
+                return;
+            }
             if (data.type === 'voice_call_reply') {
+                if (data.tts_busy) {
+                    // The reply was decided but its voice got no TTS slot: show it as a
+                    // caption instead of playing nothing.
+                    useVoiceCallStore.getState().set({
+                        wait: null, busyNotice: { kind: 'tts', text: String(data.reply || '') },
+                    });
+                }
                 // Voice small talk stays OUT of the chat (user decision): the
                 // conversation lives in audio. Only a DELEGATION appears, on
                 // the right side, as the voice agent's message to the main
@@ -658,6 +686,22 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
                             type: 'voice_call_start', ui_lang: locale,
                             sessionId: callSessionRef.current ?? sessionId }));
                     } catch { /* noop */ }
+                }
+            }
+            else if (data.type === 'voice_call_error' && data.error === 'busy') {
+                // A speech queue turned this turn away: say so, never go silent. The
+                // spoken line when the server could voice it, else the busy cue; then
+                // keep listening, as the reply path does.
+                useVoiceCallStore.getState().set({
+                    statusKey: 'busy', wait: null,
+                    busyNotice: { kind: 'stt', text: typeof data.text === 'string' ? data.text : undefined },
+                });
+                if (data.audio) {
+                    holdLoopRef.current = true;
+                    playAgentAudio(data.audio, () => { holdLoopRef.current = false; later(listenLoop, 300); });
+                } else {
+                    playEarcon('busy');
+                    later(listenLoop, 1500);
                 }
             }
             else if (data.type === 'voice_call_error') {
@@ -786,12 +830,34 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
                         : store.statusKey === 'listening' ? 'bg-green-500 animate-pulse'
                         : store.statusKey === 'speaking' ? 'bg-gray-100 animate-pulse'
                         : store.statusKey === 'thinking' ? 'bg-amber-500 animate-pulse'
+                        : store.statusKey === 'waiting' ? 'bg-amber-500 animate-pulse'
+                        : store.statusKey === 'busy' ? 'bg-red-500'
                         : 'bg-gray-400'}`} />
                     <span>{!store.voiceReady
                         ? (store.loadingModel ? t('status_loading_model') : t('status_deaf'))
                         : (store.exclusive && (store.mainTask || mainBusy)) ? t('status_deaf_busy')
+                        : (store.statusKey === 'waiting' && store.wait)
+                            ? (store.wait.etaMs !== null
+                                ? t('status_waiting', {
+                                    position: store.wait.position,
+                                    seconds: Math.max(1, Math.round(store.wait.etaMs / 1000)),
+                                })
+                                : t('status_waiting_noeta', { position: store.wait.position }))
                         : t('status_' + store.statusKey)}</span>
                 </div>
+                {store.busyNotice && (store.busyNotice.kind === 'tts' || store.busyNotice.text) && (
+                    <div className="text-[11px] leading-snug text-gray-600 dark:text-gray-300">
+                        {store.busyNotice.kind === 'tts' && (
+                            <div className="font-medium text-amber-700 dark:text-amber-400">{t('status_tts_busy')}</div>
+                        )}
+                        {store.busyNotice.text && (
+                            // A reply can be long: three lines. The busy line is one short sentence, whole.
+                            <p className={store.busyNotice.kind === 'tts' ? 'line-clamp-3 break-words' : 'break-words'}>
+                                {store.busyNotice.text}
+                            </p>
+                        )}
+                    </div>
+                )}
                 {store.mainTask && (
                     <div className="flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400">
                         <span className="flex-none scale-[0.45] -m-2.5"><AgentAvatar mode="working" /></span>
@@ -805,10 +871,11 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
 
 // ── earcons: tiny synthesized audio cues (no asset files) ──
 // start = gentle ascending two-tone, end = descending twin, accept = one soft
-// blip the moment an utterance is accepted for processing ("I heard you").
+// blip the moment an utterance is accepted for processing ("I heard you"), busy = two
+// low tones when a speech queue turned the turn away and no spoken line came with it.
 // A short-lived AudioContext per cue; calls originate from a user gesture
 // (call button) so autoplay policy is satisfied.
-function playEarcon(kind: 'start' | 'end' | 'accept' | 'dial') {
+function playEarcon(kind: 'start' | 'end' | 'accept' | 'dial' | 'busy') {
     try {
         const ctx = new AudioContext();
         const gain = ctx.createGain();
@@ -817,6 +884,7 @@ function playEarcon(kind: 'start' | 'end' | 'accept' | 'dial') {
             kind === 'start' ? [[440, 0, 0.10], [660, 0.10, 0.12]]
             : kind === 'end' ? [[660, 0, 0.10], [440, 0.10, 0.12]]
             : kind === 'dial' ? [[425, 0, 0.45]]  // phone ringing tone while the model loads
+            : kind === 'busy' ? [[330, 0, 0.16], [330, 0.26, 0.16]]  // two low tones: busy, try again
             : [[880, 0, 0.06]];
         const vol = kind === 'accept' ? 0.10 : kind === 'dial' ? 0.08 : 0.16;
         const t0 = ctx.currentTime;

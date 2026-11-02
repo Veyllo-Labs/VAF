@@ -26,7 +26,11 @@ Checks, each ``{name, status, reason}``:
   process that runs them;
 - ``engine``: the managed vLLM (vaf/core/local_engine.py), only when it is the local engine:
   degraded when this machine cannot run it or it is not installed, ok otherwise, also when
-  its server is idle (the desktop unloads the local model when nobody uses it).
+  its server is idle (the desktop unloads the local model when nobody uses it);
+- ``queues``: the fair queues of this process (vaf/core/fair_queue.py: the speech lanes),
+  only in a process that registered one: degraded when a queue turned somebody away
+  (``timeout`` or ``full``) in the last 15 minutes, never down. The check carries the
+  numbers as ``metrics`` (length, wait and service time, refusals; counts, never who).
 
 The whole is the worst of them: ``ok``; ``degraded`` (VAF works, a part of it does not);
 ``down`` (chats or data are not safe: a required service is unusable, the disk is nearly
@@ -186,6 +190,42 @@ def engine_check() -> Optional[Dict[str, str]]:
     return _check("engine", DEGRADED if row["state"] == "degraded" else OK, row["text"])
 
 
+def _format_ms(value: Optional[int]) -> str:
+    if value is None:
+        return "-"
+    return f"{value} ms" if value < 1000 else f"{value / 1000:.1f} s"
+
+
+def queues_check(metrics: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The fair queues of this process; None (no row) where this process has none. A
+    hang-up (``cancelled``) is somebody leaving, not somebody turned away, so it does not
+    degrade."""
+    if not metrics:
+        return None
+    lines, turned_away = [], 0
+    for m in metrics:
+        refused = m.get("refused") or {}
+        turned_away += int(refused.get("timeout") or 0) + int(refused.get("full") or 0)
+        total_refused = sum(int(v or 0) for v in refused.values())
+        if not (m.get("served") or total_refused or m.get("waiting") or m.get("running")):
+            continue
+        wait, service = m.get("wait_ms") or {}, m.get("service_ms") or {}
+        lines.append(f"{m.get('name')}: {m.get('waiting', 0)} waiting, {m.get('served', 0)} "
+                     f"served, wait p50 {_format_ms(wait.get('p50'))} / p95 "
+                     f"{_format_ms(wait.get('p95'))}, service p50 "
+                     f"{_format_ms(service.get('p50'))}, {total_refused} refused")
+    reason = "; ".join(lines) if lines else "Nothing queued in the last 15 minutes."
+    check: Dict[str, Any] = _check("queues", DEGRADED if turned_away else OK, reason)
+    check["metrics"] = metrics
+    return check
+
+
+def _queue_metrics() -> List[Dict[str, Any]]:
+    import sys
+    queues = sys.modules.get("vaf.core.fair_queue")
+    return queues.queue_metrics() if queues is not None else []
+
+
 def _worker_status() -> Optional[Dict[str, int]]:
     import sys
     runner = sys.modules.get("vaf.core.headless_runner")
@@ -202,10 +242,11 @@ def collect_health(status_probe: Optional[Callable[[], Dict[str, Any]]] = None,
                    usage: Callable[[str], Any] = shutil.disk_usage,
                    backup_probe: Callable[[], Dict[str, str]] = _backup_check,
                    engine_probe: Callable[[], Optional[Dict[str, str]]] = engine_check,
+                   queue_probe: Callable[[], List[Dict[str, Any]]] = _queue_metrics,
                    ) -> Dict[str, Any]:
     """Every check and the verdict: {status, checks, checked_at}. Never raises: a check that
     cannot run says so as its own result."""
-    checks: List[Dict[str, str]] = []
+    checks: List[Dict[str, Any]] = []
     status: Dict[str, Any] = {}
     try:
         if status_probe is None:
@@ -235,6 +276,12 @@ def collect_health(status_probe: Optional[Callable[[], Dict[str, Any]]] = None,
             checks.append(engine)
     except Exception as e:
         checks.append(_check("engine", DEGRADED, f"The local engine could not be read: {e}"))
+    try:
+        queues = queues_check(queue_probe())
+        if queues is not None:
+            checks.append(queues)
+    except Exception as e:
+        checks.append(_check("queues", DEGRADED, f"The queues could not be read: {e}"))
     return {"status": worst(c["status"] for c in checks), "checks": checks,
             "checked_at": datetime.now(timezone.utc).isoformat()}
 

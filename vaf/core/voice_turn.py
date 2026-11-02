@@ -44,7 +44,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+
+if TYPE_CHECKING:  # the module level stays stdlib (slim base); the type is only annotated
+    from vaf.core.fair_queue import WaitInfo
 
 
 # ONE history-content cap, applied centrally in _history_add. The extraction had
@@ -88,7 +91,7 @@ class TurnOutcome:
     ``error`` set -> voice_call_error; else voice_call_reply with the one variant
     flag, TTS synthesized by the handler (`reply` in `tts_lang`, following the
     reply's own language when `tts_follow`)."""
-    kind: str                      # busy_local|no_speech|clarify|reask|chime_in|silent|llm_failed|reply
+    kind: str                      # busy_local|busy|no_speech|clarify|reask|chime_in|silent|llm_failed|reply
     error: Optional[str] = None
     user_text: str = ""
     speaker_label: Optional[str] = None
@@ -100,6 +103,9 @@ class TurnOutcome:
     speaker_ok: bool = True
     active_s: float = 0.0
     marks: Dict[str, float] = field(default_factory=dict)
+    # kind == "busy": a speech queue refused the turn - {resource, reason, waited_ms,
+    # position}; reason "cancelled" means the person hung up while it waited.
+    busy: Optional[Dict[str, Any]] = None
 
 
 class VoiceTurnEngine:
@@ -152,7 +158,10 @@ class VoiceTurnEngine:
         except Exception:
             pass
 
-    def _do_transcribe(self, wav: bytes):
+    def _do_transcribe(self, wav: bytes, on_wait: Optional[Callable[["WaitInfo"], None]] = None,
+                       cancelled: Optional[Callable[[], bool]] = None):
+        # An injected seam is called exactly as before: its signature is the embedder's
+        # contract. It signals "my recognizer is busy" by raising vaf.QueueBusy.
         if self._transcribe is not None:
             return self._transcribe(wav, mime="audio/wav", filename="call.wav",
                                     cache_key=self.state.get("scope"),
@@ -160,7 +169,10 @@ class VoiceTurnEngine:
         from vaf.core import speech_client as _vsc
         return _vsc.transcribe(wav, mime="audio/wav", filename="call.wav",
                                cache_key=self.state.get("scope"),
-                               default_language=self.state.get("lang"))
+                               default_language=self.state.get("lang"),
+                               user_key=self.state.get("scope"),
+                               deadline_s=_vsc.WAIT_LIVE_S, cancelled=cancelled,
+                               on_wait=on_wait, busy_raises=True)
 
     def _do_lane_speaks(self, lang: str) -> bool:
         if self._lane_speaks is not None:
@@ -177,12 +189,19 @@ class VoiceTurnEngine:
     # ── the pipeline ─────────────────────────────────────────────────────────
 
     def turn(self, wav: bytes, *, session_id: str = "", main_busy: bool = False,
-             pending_task: str = "", username: str = "") -> TurnOutcome:
+             pending_task: str = "", username: str = "",
+             on_wait: Optional[Callable[["WaitInfo"], None]] = None,
+             cancelled: Optional[Callable[[], bool]] = None) -> TurnOutcome:
         """One utterance through the whole pipeline. Sync on purpose: the handler
         runs it in one executor hop; TTS and the wire stay outside. The step
         numbering (0a, 0, 1, 1b, 2, 2a/2b/2c, 2d, 3, 4) mirrors the pipeline
         section of docs/agents/VOICE_AGENT.md and the branch this code moved
-        out of - the comments moved with it."""
+        out of - the comments moved with it.
+
+        `on_wait` and `cancelled` reach the STT queue of the default transcribe path
+        (fair_queue.ResourceQueue.slot): `on_wait` hears the turn's place while it waits,
+        `cancelled` (asked only while waiting) lets a hang-up take the turn out. A
+        refusal, from the queue or raised by an injected seam, is a `busy` outcome."""
         from vaf.core import voice_agent as _va
 
         _call = self.state          # the shared per-call record - same dict as the registry
@@ -230,7 +249,16 @@ class VoiceTurnEngine:
         # language cache + periodic re-detect, so a genuine mid-call switch is still
         # caught; default_language only fills the cold-cache first turn.
         # state["lang"] = identity preferred_language (voice_call_start).
-        _text, _stt_lang = self._do_transcribe(wav)
+        from vaf.core.fair_queue import QueueBusy
+        try:
+            _text, _stt_lang = self._do_transcribe(wav, on_wait=on_wait, cancelled=cancelled)
+        except QueueBusy as _busy:
+            # Like no_speech, nothing was heard: no history entry, the caller says so
+            # (or, for a hang-up, says nothing) and keeps listening.
+            _tm_mark("stt")
+            return _out("busy", error="busy", active_s=_active_s, busy={
+                "resource": _busy.resource, "reason": _busy.reason,
+                "waited_ms": int(_busy.waited_s * 1000), "position": _busy.position})
         _tm_mark("stt")
         if not _text:
             return _out("no_speech", error="no_speech", active_s=_active_s)
@@ -764,6 +792,13 @@ def lane_status() -> Dict[str, Any]:
     return {"available": _va.available(),
             "exclusive": _va.is_exclusive(),
             "dedicated_model": _va.dedicated_local_model()}
+
+
+def busy_line(state: Dict[str, Any]) -> str:
+    """What the agent says when a speech queue turned a turn away (``kind == "busy"``),
+    in the call language: the vocabulary line ``voice_busy``, never silence."""
+    from vaf.core import vocab as _vocab
+    return _vocab.pick("voice_busy", state.get("lang"), scope=state.get("scope"))
 
 
 def greeting_for(state: Dict[str, Any]) -> str:

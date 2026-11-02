@@ -4565,6 +4565,15 @@ function VAFDashboardContent() {
 
     const [isRecording, setIsRecording] = useState(false);
     const [isProcessingAudio, setIsProcessingAudio] = useState(false);
+    // The dictation's place in the speech queue (stt_wait): its own place and expected
+    // wait only, cleared by stt_result / stt_error.
+    const [sttWait, setSttWait] = useState<{ position: number; etaMs: number | null } | null>(null);
+    const sttWaitText = sttWait
+        ? (sttWait.etaMs !== null
+            ? tMain('sttWaiting', { position: sttWait.position,
+                seconds: Math.max(1, Math.round(sttWait.etaMs / 1000)) })
+            : tMain('sttWaitingNoEta', { position: sttWait.position }))
+        : '';
     const [sttEnabled, setSttEnabled] = useState(false); // Track STT status
     const [memoryLearning, setMemoryLearning] = useState<{ active: boolean; message: string } | null>(null);
     const memoryLearningTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -5764,6 +5773,10 @@ function VAFDashboardContent() {
                     } else if (data.status === 'stopped') {
                         setPlayingMessageId(null);
                         setLoadingMessageId(null);
+                        if (data.reason === 'busy') {
+                            setDownloadToast({ show: true, message: tMain('ttsBusy'), success: false });
+                            setTimeout(() => setDownloadToast(prev => ({ ...prev, show: false })), 4000);
+                        }
                     }
                 }
                 else if (data.type === 'message_complete') {
@@ -7231,7 +7244,15 @@ function VAFDashboardContent() {
                         setModelProvider(data.provider);
                     }
                 }
+                else if (data.type === 'stt_wait') {
+                    // The dictation waits for the speech recognizer: position 0 = it is its turn now.
+                    const position = Number(data.position) || 0;
+                    setSttWait(position > 0
+                        ? { position, etaMs: typeof data.eta_ms === 'number' ? data.eta_ms : null }
+                        : null);
+                }
                 else if (data.type === 'stt_result') {
+                    setSttWait(null);
                     // STT transcription result: append to existing input so multiple voice segments accumulate
                     const text = (data.text || '').trim();
                     if (text) {
@@ -7251,8 +7272,15 @@ function VAFDashboardContent() {
                     }
                 }
                 else if (data.type === 'stt_error') {
+                    setSttWait(null);
                     console.error('STT Error:', data.error);
-                    alert(`Voice Error: ${data.error}`);
+                    if (data.code === 'busy') {
+                        // The recognizer was busy for too long: a passing notice, not an error dialog.
+                        setDownloadToast({ show: true, message: tMain('sttBusy'), success: false });
+                        setTimeout(() => setDownloadToast(prev => ({ ...prev, show: false })), 4000);
+                    } else {
+                        alert(`Voice Error: ${data.error}`);
+                    }
                     setIsProcessingAudio(false);
                 }
                 else if (data.type === 'autosuggest_result') {
@@ -8329,6 +8357,7 @@ function VAFDashboardContent() {
                     reader.readAsDataURL(wavBlob);
                     reader.onloadend = () => {
                         const base64Audio = reader.result as string;
+                        setSttWait(null);   // a place shown for the last dictation is not this one's
                         // Send to backend
                         ws?.send(JSON.stringify({
                             type: 'process_audio',
@@ -8344,6 +8373,7 @@ function VAFDashboardContent() {
                     reader.readAsDataURL(audioBlob);
                     reader.onloadend = () => {
                         const base64Audio = reader.result as string;
+                        setSttWait(null);
                         ws?.send(JSON.stringify({
                             type: 'process_audio',
                             audio: base64Audio.split(',')[1]
@@ -11204,7 +11234,7 @@ function VAFDashboardContent() {
                                             onClick={isRecording ? stopRecording : startRecording}
                                             disabled={isProcessingAudio || (isGenerating && !isSubAgentRunning)}
                                             className={cn(
-                                                "shrink-0 mb-1.5 mr-2 h-10 w-10 flex items-center justify-center rounded-xl transition-colors",
+                                                "relative shrink-0 mb-1.5 mr-2 h-10 w-10 flex items-center justify-center rounded-xl transition-colors",
                                                 isRecording ? "bg-red-500 text-white" :
                                                     isProcessingAudio ? "text-gray-400" :
                                                         "text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:text-gray-300"
@@ -11213,8 +11243,16 @@ function VAFDashboardContent() {
                                                 boxShadow: isRecording ? `0 0 0 ${Math.min(volume / 5, 15)}px rgba(239, 68, 68, 0.4)` : 'none',
                                                 transition: 'box-shadow 0.05s ease-out'
                                             }}
-                                            title={isRecording ? tMain('stopRecording') : isProcessingAudio ? tMain('processing') : tMain('voiceInput')}
+                                            title={isRecording ? tMain('stopRecording')
+                                                : (isProcessingAudio && sttWaitText) ? sttWaitText
+                                                : isProcessingAudio ? tMain('processing') : tMain('voiceInput')}
                                         >
+                                            {isProcessingAudio && sttWaitText && (
+                                                <span role="status"
+                                                    className="pointer-events-none absolute bottom-full right-0 mb-1.5 whitespace-nowrap rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-[#1f1f1f] px-2 py-1 text-[11px] font-medium text-gray-600 dark:text-gray-300 shadow-sm">
+                                                    {sttWaitText}
+                                                </span>
+                                            )}
                                             {isProcessingAudio ? (
                                                 <Loader2 size={18} className="animate-spin" />
                                             ) : isRecording ? (

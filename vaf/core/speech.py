@@ -594,10 +594,24 @@ $player.Close()
         except Exception:
             return False
 
-    def synthesize_audio(self, text: str, lang: str = "auto", force_engine: Optional[str] = None) -> Optional[bytes]:
+    def synthesize_audio(self, text: str, lang: str = "auto", force_engine: Optional[str] = None,
+                         *, user_key: Optional[str] = None,
+                         deadline_s: Optional[float] = None, cancelled=None, on_wait=None,
+                         busy_raises: bool = False) -> Optional[bytes]:
         """Synthesize text to audio bytes (WAV) without playing. Used for Web UI streaming.
         When force_engine is set (e.g. 'docker'), use that engine; otherwise use config.
-        Web UI always uses force_engine='docker' so audio is streamed to the client, never played on server."""
+        Web UI always uses force_engine='docker' so audio is streamed to the client, never played on server.
+
+        Every local lane waits in its fair queue, taken exactly once (speech_client: `tts`
+        or `tts_chatterbox` for the HTTP lane, `tts_piper` here for the binary). The
+        keyword arguments go to that queue; `deadline_s` defaults to
+        speech_client.WAIT_BACKGROUND_S. A refusal returns None, or raises
+        fair_queue.QueueBusy with `busy_raises=True`."""
+        from vaf.core import speech_client as _sc
+        if deadline_s is None:
+            deadline_s = _sc.WAIT_BACKGROUND_S
+        queue_args = dict(user_key=user_key, deadline_s=deadline_s, cancelled=cancelled,
+                          on_wait=on_wait, busy_raises=busy_raises)
         # Skip TTS check if force_engine is set (caller already verified TTS is enabled)
         if not force_engine and not self.is_tts_enabled():
             print(f"[TTS Debug] TTS disabled, returning None")
@@ -617,8 +631,8 @@ $player.Close()
         # dispatch, mirroring vision_provider. force_engine only selects the local
         # fallback engine; a configured provider takes precedence. Never raises;
         # None falls through to the local engine below.
-        from vaf.core import speech_api
-        api_audio = speech_api.synthesize(clean_text, lang_short, want_format="wav")
+        api_audio = _sc.synthesize_api(clean_text, lang_short, want_format="wav",
+                                       user_key=user_key)
         if api_audio:
             print(f"[TTS Debug] Cloud provider TTS SUCCESS ({len(api_audio)} bytes)")
             return api_audio
@@ -647,7 +661,8 @@ $player.Close()
             if url:
                 # Shared client: /synthesize POST with legacy direct-POST +
                 # base64-JSON fallback preserved (never raises, returns None).
-                body = speech_client.synthesize_docker(clean_text, lang_short, want_format="wav", base_url=url)
+                body = speech_client.synthesize_docker(clean_text, lang_short, want_format="wav",
+                                                       base_url=url, **queue_args)
                 if body:
                     print(f"[TTS Debug] SUCCESS - returning WAV audio ({len(body)} bytes)")
                     return body
@@ -658,9 +673,19 @@ $player.Close()
             model_path = self._ensure_voice_model(lang)
             if model_path:
                 import tempfile
-                fd, wav_path = tempfile.mkstemp(prefix="vaf_", suffix=".wav")
-                os.close(fd)
+                from vaf.core.fair_queue import QueueBusy
                 try:
+                    piper_slot = _sc.speech_queue("tts_piper").slot(
+                        user_key, deadline_s=deadline_s, cancelled=cancelled, on_wait=on_wait)
+                    piper_slot.__enter__()
+                except QueueBusy:
+                    if busy_raises:
+                        raise
+                    return None
+                wav_path = ""
+                try:
+                    fd, wav_path = tempfile.mkstemp(prefix="vaf_", suffix=".wav")
+                    os.close(fd)
                     binary = self._get_piper_binary()
                     
                     # Run Piper
@@ -693,7 +718,8 @@ $player.Close()
                     from vaf.cli.ui import UI
                     UI.event("Debug", f"Piper synthesis failed: {e}", style="dim")
                 finally:
-                    if os.path.exists(wav_path):
+                    piper_slot.__exit__(None, None, None)
+                    if wav_path and os.path.exists(wav_path):
                         try:
                             os.remove(wav_path)
                         except:

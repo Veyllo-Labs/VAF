@@ -16,6 +16,7 @@ import html
 import os
 import time
 import queue
+from collections import deque
 log("WebServer", "Basic imports done")
 
 from vaf.core.web_interface import get_web_interface
@@ -835,6 +836,156 @@ def unload_whisper_model():
             import gc
             gc.collect()
             log("WebServer", "WhisperModel unloaded")
+
+
+def _transcribe_local(path: str, key: Optional[str] = None, *,
+                      deadline_s: Optional[float] = None, cancelled=None, on_wait=None) -> str:
+    """Local faster-whisper, as ONE blocking call for an executor thread: the model load,
+    the transcription and the segment join (the generator transcribes lazily, so joining
+    it IS the work). It ran on the event loop before and froze every connection for as
+    long as it ran. One in-process model, so one slot (`stt_local`). ImportError from the
+    load propagates: the caller words that message."""
+    from vaf.core import speech_client
+    with speech_client.speech_queue("stt_local").slot(
+            key, deadline_s=deadline_s, cancelled=cancelled, on_wait=on_wait):
+        model = get_whisper_model()
+        segments, _info = model.transcribe(path, beam_size=5)
+        return " ".join(segment.text for segment in segments)
+
+
+def _queue_wait_sender(websocket, loop, msg_type: str, armed=None, resource=None):
+    """An `on_wait` for a fair queue that tells THIS socket the caller's place.
+
+    Runs in the executor thread that waits, so the send is handed to the loop; a failed
+    send is swallowed (the wait goes on). Throttled to one update per second, except the
+    first and the grant (position 0). `armed` (an asyncio.Event) is set on the first
+    report: the caller is waiting, so the socket may be read ahead (_ReadAhead)."""
+    last = {"at": None}
+
+    def on_wait(info) -> None:
+        now = time.monotonic()
+        if info.position > 0 and last["at"] is not None and now - last["at"] < 1.0:
+            return
+        last["at"] = now
+        if armed is not None:
+            try:
+                loop.call_soon_threadsafe(armed.set)
+            except Exception:
+                pass
+        payload = {"type": msg_type, "position": int(info.position),
+                   "eta_ms": None if info.eta_s is None else int(info.eta_s * 1000),
+                   "waited_ms": int(info.waited_s * 1000)}
+        if resource is not None:
+            payload["resource"] = resource(info.resource)
+        try:
+            asyncio.run_coroutine_threadsafe(websocket.send_json(payload), loop)
+        except Exception:
+            pass
+
+    return on_wait
+
+
+# How long a live call's TTS waits for a slot: the reply text is already decided and goes
+# out anyway, so a long wait only delays what the person can already read.
+_CALL_TTS_WAIT_S = 20.0
+
+# Frames read ahead while one voice turn waits; the client sends one turn at a time, so a
+# handful is all a live call produces in a wait (an end, a reset, a few chunks).
+_READ_AHEAD_MAX = 32
+
+
+class _ReadAhead:
+    """Lets a hang-up reach a voice turn that waits in a speech queue, without reordering.
+
+    The receive loop handles one frame at a time and a voice turn awaits its executor hop
+    inline, so a `voice_call_end` (or a disconnect) sent during the turn used to be read
+    only after it. While a turn WAITS in a queue (its on_wait set `armed`), `wait()` keeps
+    reading frames into a buffer; an end or a disconnect sets the call's cancel event,
+    which the waiting slot polls. Every buffered frame is handed to the receive loop
+    afterwards, in arrival order, and a pending receive is never cancelled. A turn that
+    never waits never reads ahead, so an uncontended call behaves exactly as before.
+    """
+
+    def __init__(self, websocket) -> None:
+        self._ws = websocket
+        self._buffer: deque = deque()
+        self._pending: Optional[asyncio.Future] = None
+
+    async def next_frame(self) -> str:
+        if self._buffer:
+            item = self._buffer.popleft()
+            if isinstance(item, BaseException):
+                raise item
+            return item
+        if self._pending is not None:
+            pending, self._pending = self._pending, None
+            return await pending
+        return await self._ws.receive_text()
+
+    async def wait(self, awaitable, armed: asyncio.Event, cancel_ev: threading.Event):
+        fut = asyncio.ensure_future(awaitable)
+        arm_task: Optional[asyncio.Future] = None
+        reading = True
+        try:
+            while not fut.done():
+                waiters = {fut}
+                if armed.is_set():
+                    if (reading and self._pending is None
+                            and len(self._buffer) < _READ_AHEAD_MAX):
+                        self._pending = asyncio.ensure_future(self._ws.receive_text())
+                    if reading and self._pending is not None:
+                        waiters.add(self._pending)
+                else:
+                    if arm_task is None:
+                        arm_task = asyncio.ensure_future(armed.wait())
+                    waiters.add(arm_task)
+                await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+                pending = self._pending
+                if pending is not None and pending.done() and not pending.cancelled():
+                    self._pending = None
+                    exc = pending.exception()
+                    if exc is not None:
+                        self._buffer.append(exc)
+                        cancel_ev.set()
+                        reading = False
+                    else:
+                        frame = pending.result()
+                        self._buffer.append(frame)
+                        if _is_call_end(frame):
+                            cancel_ev.set()
+                            reading = False
+            return fut.result()
+        finally:
+            if arm_task is not None and not arm_task.done():
+                arm_task.cancel()
+
+
+def _stt_busy_payload(busy) -> dict:
+    """The dictation's honest "busy": the sentence, plus a code the page shows as a toast."""
+    return {"type": "stt_error", "error": str(busy), "code": "busy",
+            "reason": busy.reason, "waited_ms": int(busy.waited_s * 1000)}
+
+
+def _is_call_end(frame: str) -> bool:
+    try:
+        return (json.loads(frame) or {}).get("type") == "voice_call_end"
+    except Exception:
+        return False
+
+
+def _call_resource(queue_name: str) -> str:
+    """The resource a call's wait event names: `stt` or `tts`, never the queue's lane."""
+    return "stt" if str(queue_name).startswith("stt") else "tts"
+
+
+def _call_wait_hooks(websocket, loop):
+    """One await of a live call: the event that arms the read-ahead, and the on_wait that
+    sends `voice_call_wait` to this socket."""
+    armed = asyncio.Event()
+    return armed, _queue_wait_sender(websocket, loop, "voice_call_wait", armed=armed,
+                                     resource=_call_resource)
+
+
 log("WebServer", "Getting SessionManager...")
 session_mgr = SessionManager()
 tray_context = TrayContext()
@@ -4680,9 +4831,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
         except Exception as e:
             log("WebServer", f"Auto-load session failed: {e}")
 
+        # Frames a waiting voice turn read ahead come first, in arrival order (_ReadAhead).
+        _rx = _ReadAhead(websocket)
         while True:
             # Listen for client commands
-            data_str = await websocket.receive_text()
+            data_str = await _rx.next_frame()
             tray_context.register_websocket_activity()
             try:
                 cmd = json.loads(data_str)
@@ -8247,21 +8400,34 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         text = ""
 
                         from vaf.core import speech_api as _speech_api
+                        from vaf.core import speech_client
+                        from vaf.core.fair_queue import QueueBusy
+                        loop = asyncio.get_running_loop()
+                        # Per-speaker language hint keyed on the user's scope (the
+                        # language is a trait of the speaker, and the key is
+                        # user-isolated); "local" for the no-scope local admin.
+                        _stt_user = manager.get_connection_user(websocket) if manager else None
+                        _stt_key = _stt_user or "local"
+                        # A person is watching the mic spin: they learn their place
+                        # (stt_wait) and, past WAIT_LIVE_S, an honest "busy".
+                        _stt_on_wait = _queue_wait_sender(websocket, loop, "stt_wait")
                         if _speech_api.resolve_stt_engine() == "docker":
                             # Shared speech client: cloud provider lane first when
                             # speech_stt_provider is set, then Docker Whisper
                             # (/asr with /transcribe fallback, parsing inside).
-                            from vaf.core import speech_client
-                            loop = asyncio.get_running_loop()
                             filename = f"audio{suffix}"
-                            # Per-speaker language hint keyed on the user's scope (the
-                            # language is a trait of the speaker, and the key is
-                            # user-isolated); "local" for the no-scope local admin.
-                            _stt_key = (manager.get_connection_user(websocket) if manager else None) or "local"
-                            stt_text, _stt_lang = await loop.run_in_executor(
-                                None,
-                                lambda: speech_client.transcribe(temp_path, mime=mime_type, filename=filename, cache_key=_stt_key),
-                            )
+                            try:
+                                stt_text, _stt_lang = await loop.run_in_executor(
+                                    None,
+                                    lambda: speech_client.transcribe(
+                                        temp_path, mime=mime_type, filename=filename,
+                                        cache_key=_stt_key, user_key=_stt_user,
+                                        deadline_s=speech_client.WAIT_LIVE_S,
+                                        on_wait=_stt_on_wait, busy_raises=True),
+                                )
+                            except QueueBusy as _busy:
+                                await websocket.send_json(_stt_busy_payload(_busy))
+                                continue
                             if not stt_text:
                                 # Detail is in the server log (speech_client warns). Without
                                 # local models there is no container to blame: the provider
@@ -8278,11 +8444,18 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 continue
                             text = stt_text
                         else:
-                            # Local STT: faster-whisper (SINGLETON)
+                            # Local STT: faster-whisper (SINGLETON), in an executor thread
+                            # under the `stt_local` queue - never on the event loop.
                             try:
-                                model = get_whisper_model()
-                                segments, info = model.transcribe(temp_path, beam_size=5)
-                                text = " ".join([segment.text for segment in segments])
+                                text = await loop.run_in_executor(
+                                    None,
+                                    lambda: _transcribe_local(
+                                        temp_path, _stt_user,
+                                        deadline_s=speech_client.WAIT_LIVE_S,
+                                        on_wait=_stt_on_wait))
+                            except QueueBusy as _busy:
+                                await websocket.send_json(_stt_busy_payload(_busy))
+                                continue
                             except ImportError as import_error:
                                 # Name the SETTING that led here and the REAL reason.
                                 # "not installed" used to be printed for every
@@ -8388,15 +8561,25 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             # so the budget scales with the configured lane.
                             from vaf.core import speech_api as _sa
                             _TTS_SYNTH_TIMEOUT = 130.0 if _sa.select_tts_backend()[0] else 35.0
+                            from vaf.core import speech_client as _sc_speak
+                            from vaf.core.fair_queue import QueueBusy as _SpeakBusy
+                            _speak_user = manager.get_connection_user(websocket) if manager else None
                             try:
                                 configured_engine = Config.get("speech_tts_engine", "docker")
                                 if configured_engine not in ("docker", "chatterbox"):
                                     configured_engine = "docker"
                                 print(f"[WebSocket] Calling synthesize_audio with engine={configured_engine}")
+                                # The queue wait (WAIT_LIVE_S) sits well below the budget
+                                # below, so a refused read-aloud says "busy" instead of
+                                # timing out with a thread still waiting behind it.
                                 audio_bytes = await asyncio.wait_for(
                                     loop.run_in_executor(
                                         None,
-                                        lambda: sm.synthesize_audio(text, lang, force_engine=configured_engine),
+                                        lambda: sm.synthesize_audio(
+                                            text, lang, force_engine=configured_engine,
+                                            user_key=_speak_user,
+                                            deadline_s=_sc_speak.WAIT_LIVE_S,
+                                            busy_raises=True),
                                     ),
                                     timeout=_TTS_SYNTH_TIMEOUT,
                                 )
@@ -8412,6 +8595,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 else:
                                     print("[WebSocket] No audio bytes, sending stopped state")
                                     await websocket.send_json({"type": "tts_state", "status": "stopped"})
+                            except _SpeakBusy as _busy:
+                                log("WebServer", f"TTS read-aloud refused: {_busy}")
+                                await websocket.send_json({"type": "tts_state", "status": "stopped",
+                                                           "reason": "busy"})
                             except asyncio.TimeoutError:
                                 log("WebServer", f"TTS synthesize timed out after {_TTS_SYNTH_TIMEOUT}s (WebSocket continues)")
                                 await websocket.send_json({"type": "tts_state", "status": "stopped"})
@@ -8505,7 +8692,11 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                                    # rolling transcript, and a small
                                                    # ring of recent chime-ins for dedup.
                                                    "session": (cmd.get("sessionId") or str(_conn_key)),
-                                                   "chime_recent": []}
+                                                   "chime_recent": [],
+                                                   # Set by a hang-up read while one of
+                                                   # this call's requests waits in a
+                                                   # speech queue (_ReadAhead).
+                                                   "cancel": threading.Event()}
                         # The turn pipeline lives in the engine (vaf/core/voice_turn.py);
                         # it SHARES this record as its state - the registry keeps its
                         # exact dict shape and id(websocket) key, which the tray's
@@ -8646,11 +8837,19 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 from vaf.core.speech import SpeechManager
                                 _gsm = SpeechManager.get_instance()
                                 loop = asyncio.get_running_loop()
+                                _gcancel = _VOICE_CALLS[_conn_key]["cancel"]
+                                _garmed, _gwait = _call_wait_hooks(websocket, loop)
+                                # A refused greeting (QueueBusy) is a failed one: never heard,
+                                # so it never happened, as below.
                                 _gaudio = await asyncio.wait_for(
-                                    loop.run_in_executor(
+                                    _rx.wait(loop.run_in_executor(
                                         None,
-                                        lambda: _gsm.synthesize_audio(_greet, _lang, force_engine="docker"),
-                                    ),
+                                        lambda: _gsm.synthesize_audio(
+                                            _greet, _lang, force_engine="docker",
+                                            user_key=_scope, deadline_s=_CALL_TTS_WAIT_S,
+                                            cancelled=_gcancel.is_set, on_wait=_gwait,
+                                            busy_raises=True),
+                                    ), _garmed, _gcancel),
                                     timeout=30.0,
                                 )
                                 _call_rec = _VOICE_CALLS.get(_conn_key)
@@ -8771,12 +8970,51 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         _uname_t = manager.get_connection_username(websocket) or ""
                         _sid_t = cmd.get("sessionId") or ""
                         _main_busy_t = bool(cmd.get("main_busy"))
-                        _outcome = await loop.run_in_executor(
+                        _cancel = _call.setdefault("cancel", threading.Event())
+                        # The facade's type: a refusal from any speech queue of this call.
+                        from vaf import QueueBusy as _CallBusy
+                        # While the turn waits in the STT queue the socket is read ahead,
+                        # so a hang-up takes the waiting turn out (_ReadAhead).
+                        _armed_t, _wait_t = _call_wait_hooks(websocket, loop)
+                        _outcome = await _rx.wait(loop.run_in_executor(
                             None,
                             lambda: _eng.turn(
                                 _wav, session_id=_sid_t, main_busy=_main_busy_t,
                                 pending_task=(cmd.get("pending_task") or ""),
-                                username=_uname_t))
+                                username=_uname_t, on_wait=_wait_t,
+                                cancelled=_cancel.is_set)), _armed_t, _cancel)
+
+                        if _outcome.kind == "busy":
+                            _b = _outcome.busy or {}
+                            if _b.get("reason") == "cancelled":
+                                continue   # the person hung up while it waited: nothing to say
+                            # Honest busy, never silence: the vocabulary line, spoken if a
+                            # TTS slot is free within 10 s, else the frontend's busy cue.
+                            _busy_lang = _call.get("lang", "de")
+                            _busy_text = _vt.busy_line(_call)
+                            _busy_audio = None
+                            try:
+                                from vaf.core.speech import SpeechManager as _SMb
+                                _b_sm = _SMb.get_instance()
+                                _b_out = await asyncio.wait_for(
+                                    loop.run_in_executor(
+                                        None, lambda: _b_sm.synthesize_audio(
+                                            _busy_text, _busy_lang, force_engine="docker",
+                                            user_key=_scope, deadline_s=10.0,
+                                            busy_raises=True)),
+                                    timeout=30.0)
+                                if _b_out:
+                                    _busy_audio = _b64v.b64encode(_b_out).decode("utf-8")
+                            except Exception:
+                                _busy_audio = None
+                            await websocket.send_json({
+                                "type": "voice_call_error", "error": "busy",
+                                "resource": _call_resource(_b.get("resource") or "stt"),
+                                "reason": _b.get("reason"),
+                                "waited_ms": _b.get("waited_ms", 0),
+                                "text": _busy_text, "audio": _busy_audio,
+                            })
+                            continue
 
                         if _outcome.error is not None:
                             await websocket.send_json({"type": "voice_call_error",
@@ -8796,26 +9034,36 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             # remark's own language) - TTS failure degrades to audio=None,
                             # exactly as before; state was already written by the engine.
                             _v_audio = None
+                            _v_busy = False
                             try:
                                 from vaf.core.speech import SpeechManager as _SMv
                                 _v_sm = _SMv.get_instance()
                                 _v_lang = (_tts_lang_for(_outcome.reply, _outcome.tts_lang, _v_sm)
                                            if _outcome.tts_follow else _outcome.tts_lang)
+                                _armed_v, _wait_v = _call_wait_hooks(websocket, loop)
                                 _va_out = await asyncio.wait_for(
-                                    loop.run_in_executor(
+                                    _rx.wait(loop.run_in_executor(
                                         None, lambda: _v_sm.synthesize_audio(
-                                            _outcome.reply, _v_lang, force_engine="docker")),
+                                            _outcome.reply, _v_lang, force_engine="docker",
+                                            user_key=_scope, deadline_s=_CALL_TTS_WAIT_S,
+                                            cancelled=_cancel.is_set, on_wait=_wait_v,
+                                            busy_raises=True)), _armed_v, _cancel),
                                     timeout=60.0 if _outcome.kind == "chime_in" else 30.0)
                                 if _va_out:
                                     _v_audio = _b64v.b64encode(_va_out).decode("utf-8")
+                            except _CallBusy:
+                                _v_busy = True
                             except Exception:
                                 _v_audio = None
-                            await websocket.send_json({
+                            _v_payload = {
                                 "type": "voice_call_reply", "user_text": _outcome.user_text,
                                 "speaker_label": _outcome.speaker_label,
                                 "reply": _outcome.reply, "audio": _v_audio,
                                 "delegated": None, **_outcome.flags,
-                            })
+                            }
+                            if _v_busy:
+                                _v_payload["tts_busy"] = True
+                            await websocket.send_json(_v_payload)
                             continue
 
                         # kind == "reply": forensic line first (pre-TTS marks, as always),
@@ -8855,6 +9103,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # that language's voice when the lane can speak it, else stays on the
                         # call language.
                         _reply_audio = None
+                        _reply_busy = False
                         try:
                             from vaf.core.speech import SpeechManager
                             _sm = SpeechManager.get_instance()
@@ -8863,21 +9112,29 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 log("WebServer",
                                     f"voice_call: TTS follows reply language "
                                     f"{_outcome.tts_lang}->{_tts_lang}")
+                            _armed_r, _wait_r = _call_wait_hooks(websocket, loop)
                             _audio_out = await asyncio.wait_for(
-                                loop.run_in_executor(
+                                _rx.wait(loop.run_in_executor(
                                     None,
                                     lambda: _sm.synthesize_audio(
-                                        _outcome.reply, _tts_lang, force_engine="docker"),
-                                ),
+                                        _outcome.reply, _tts_lang, force_engine="docker",
+                                        user_key=_scope, deadline_s=_CALL_TTS_WAIT_S,
+                                        cancelled=_cancel.is_set, on_wait=_wait_r,
+                                        busy_raises=True),
+                                ), _armed_r, _cancel),
                                 timeout=130.0,
                             )
                             if _audio_out:
                                 _reply_audio = _b64v.b64encode(_audio_out).decode("utf-8")
+                        except _CallBusy:
+                            # The reply was decided and goes out as text; only its voice
+                            # could not get a TTS slot (nothing already decided is withdrawn).
+                            _reply_busy = True
                         except Exception:
                             _reply_audio = None
                         _outcome.marks["tts"] = __import__("time").perf_counter()
 
-                        await websocket.send_json({
+                        _reply_payload = {
                             "type": "voice_call_reply",
                             "user_text": _outcome.user_text,
                             "speaker_label": _outcome.speaker_label,
@@ -8888,7 +9145,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             # server gate/stt/speaker/policy/llm/tts. Read by the
                             # VoiceCallLayer debug line; absent fields simply not shown.
                             "timings": timings_report(_outcome.marks, _tm_browser),
-                        })
+                        }
+                        if _reply_busy:
+                            _reply_payload["tts_busy"] = True
+                        await websocket.send_json(_reply_payload)
 
                 elif type in ("speaker_enroll_start", "speaker_enroll_round",
                               "speaker_enroll_finalize", "speaker_enroll_abort",
@@ -8969,10 +9229,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 _sm = SpeechManager.get_instance()
                                 _lang = _detect_language_simple(_text)
                                 loop = asyncio.get_running_loop()
+                                # A refusal (QueueBusy) is captions-only, like a failure.
                                 _audio = await asyncio.wait_for(
                                     loop.run_in_executor(
                                         None,
-                                        lambda: _sm.synthesize_audio(_text, _lang, force_engine="docker"),
+                                        lambda: _sm.synthesize_audio(
+                                            _text, _lang, force_engine="docker",
+                                            user_key=_scope, deadline_s=_CALL_TTS_WAIT_S,
+                                            busy_raises=True),
                                     ),
                                     timeout=60.0,
                                 )

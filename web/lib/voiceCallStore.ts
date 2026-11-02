@@ -14,6 +14,12 @@ import { create } from 'zustand';
 
 export type VoiceSpeaker = 'user' | 'agent' | null;
 export type VoiceAgentMode = 'idle' | 'listening' | 'thinking' | 'talking';
+/** This call's place in a speech queue (voice_call_wait): only its own place and
+ *  expected wait, never anything about the others in line. */
+export type VoiceQueueWait = { resource: 'stt' | 'tts'; position: number; etaMs: number | null };
+/** A speech queue turned something away: the turn (stt) was not heard, or a reply
+ *  (tts) arrived as text only - `text` is that reply, shown as a caption. */
+export type VoiceBusyNotice = { kind: 'stt' | 'tts'; text?: string };
 
 interface VoiceCallState {
   active: boolean;
@@ -45,6 +51,10 @@ interface VoiceCallState {
   gateLevel: number;
   /** bar -> controller intents */
   hangupRequested: boolean;
+  /** set while a turn or a reply waits in a speech queue (statusKey 'waiting') */
+  wait: VoiceQueueWait | null;
+  /** set until the next turn starts */
+  busyNotice: VoiceBusyNotice | null;
 
   start: () => void;
   stop: () => void;
@@ -81,13 +91,17 @@ export const useVoiceCallStore = create<VoiceCallState>((set) => ({
   muted: false,
   gateLevel: loadGate(),
   hangupRequested: false,
+  wait: null,
+  busyNotice: null,
 
   start: () => set({
     active: true, closing: false, voiceReady: true, exclusive: false,
     loadingModel: false, seconds: 0, speaker: null, agentMode: 'idle',
     statusKey: 'connecting', mainTask: '', muted: false, hangupRequested: false,
+    wait: null, busyNotice: null,
   }),
-  stop: () => set({ active: false, closing: false, speaker: null, mainTask: '', hangupRequested: false }),
+  stop: () => set({ active: false, closing: false, speaker: null, mainTask: '', hangupRequested: false,
+    wait: null, busyNotice: null }),
   tick: () => set((s) => ({ seconds: s.seconds + 1 })),
   set: (patch) => set(patch as VoiceCallState),
   requestHangup: () => set({ hangupRequested: true }),

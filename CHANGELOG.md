@@ -136,6 +136,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **A small model that gets stuck in a long chat is caught.** VAF scores each of your turns on
+  signals that work in every language (your instruction left without a tool call, the same
+  reply again, a reply in another language, a plain yes not acted on), makes the model call
+  the routed tool once when the score climbs, and tells you honestly when it stays stuck. A
+  tool that ran and failed does not count. Its reply stays on screen either way, and
+  `vaf health` shows how often it happened in the last hour. Switch it off with
+  `model_health_guard_enabled` (admin). The old opt-in false-promise retry is removed; a config
+  file that still sets `false_promise_detection_enabled` keeps a harmless unread key.
 - **A long chat with a local model no longer loses its context on every message.** The token
   count before a reply counted the description of every tool, although only the tools chosen for
   the message are sent, so each message triggered an emergency cleanup. If the cleanup does run,

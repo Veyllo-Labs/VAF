@@ -200,6 +200,29 @@ def note_openai_tools_effort_refusal(model: str, error_text: str) -> bool:
     return True
 
 
+def _allowed_tools_retreat(tools, tool_choice):
+    """The (tools, tool_choice) to retry with after a provider refused the `allowed_tools`
+    form. A restriction in mode "auto" only narrowed what the model may call, so the plain
+    retry is the whole array with "auto". One in mode "required" FORCED a call (the
+    model-health re-run): retrying it as "auto" would quietly drop the force, so the array is
+    narrowed to the tools the dict allowed and "required" is kept. With no such tool left in
+    the array there is nothing to force, and the retry is "auto"."""
+    inner = tool_choice.get("allowed_tools") if isinstance(tool_choice, dict) else None
+    if not isinstance(inner, dict) or inner.get("mode") != "required":
+        return tools, "auto"
+    names = {
+        str(((entry or {}).get("function") or {}).get("name") or "")
+        for entry in (inner.get("tools") or ())
+        if isinstance(entry, dict)
+    }
+    names.discard("")
+    narrowed = [t for t in (tools or ())
+                if isinstance(t, dict) and (t.get("function") or {}).get("name") in names]
+    if not narrowed:
+        return tools, "auto"
+    return narrowed, "required"
+
+
 def openai_request_params(provider_name: str, model: str, *, temperature: float,
                           max_tokens: int, has_tools: bool) -> Dict[str, Any]:
     """The per-model parameters an OpenAI-compatible chat/completions body needs.
@@ -634,8 +657,9 @@ class OpenAIProvider(BaseAIProvider):
                 self.allowed_tools_refused = True
                 UI.event("Backend", "provider refused allowed_tools; retrying without it",
                          style="warning")
+                retry_tools, retry_choice = _allowed_tools_retreat(tools, tool_choice)
                 yield from self.chat_completion(messages, temperature, max_tokens, stream,
-                                                model, tools, "auto")
+                                                model, retry_tools, retry_choice)
                 return
             # Same shape, one level down: a MODEL that refuses function tools unless
             # reasoning_effort is "none". The seed table knows the families measured

@@ -36,6 +36,8 @@ RESULTS_DIR = "results"
 # Conversations of their own (an agent room's turn), apart from the chats' "sessions" folder.
 CONVERSATIONS_DIR = "conversations"
 SUBAGENT_VALIDATION_FILE = "subagent_validation.json"
+# The chat's model-health ledger (vaf/core/model_health.py): a score and a language, no text.
+MODEL_HEALTH_FILE = "model_health.json"
 
 # Team state: a stuck entry (e.g. a sub-agent that crashed without reporting) is pruned
 # after this wall-clock TTL as a safety net.
@@ -240,6 +242,18 @@ class MainPersistenceManager:
     def update_user_intent(self, content: str):
         from vaf.core import data_files
         data_files.write_text_atomic(self.context_dir / USER_INTENT_FILE, content)
+
+    # --- MODEL HEALTH ---
+    def get_model_health(self) -> Dict:
+        """The chat's model-health ledger as stored ({} when there is none). Read through
+        `model_health.from_payload`, which discards a foreign format."""
+        data = self._load_json(self.context_dir / MODEL_HEALTH_FILE, {})
+        return data if isinstance(data, dict) else {}
+
+    def save_model_health(self, payload: Dict) -> None:
+        """Store the ledger `model_health.to_payload` built: the score, the chat's language
+        and the time, encrypted at rest like every file of this store."""
+        self._save_json(self.context_dir / MODEL_HEALTH_FILE, dict(payload or {}))
 
     # --- SUBAGENT VALIDATION RETRY COUNT ---
     def _get_validation_data(self) -> dict:

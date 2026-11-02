@@ -35,7 +35,12 @@ Checks, each ``{name, status, reason}``:
   (its ``/metrics``); only when one of them is there: degraded when a queue turned somebody
   away (``timeout`` or ``full``) in the last 15 minutes, never down, and neither the chat
   queue nor vLLM ever turns anybody away. The check carries the numbers as ``metrics``
-  (length, wait and service time, refusals; counts, never who).
+  (length, wait and service time, refusals; counts, never who);
+- ``model``: the model-health score of the chat turns (vaf/core/model_health.py), only in
+  the process that runs the agent loops and only when a turn was scored in the last 60
+  minutes: how many, how many re-runs (forced or not) and how many stuck notes. Always ok: a
+  stuck model is a condition of one chat, which that chat already tells its person honestly,
+  and paging a monitor for what a new chat fixes would be noise. Counts, never who.
 
 The whole is the worst of them: ``ok``; ``degraded`` (VAF works, a part of it does not);
 ``down`` (chats or data are not safe: a required service is unusable, the disk is nearly
@@ -236,6 +241,34 @@ def queues_check(metrics: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return check
 
 
+def model_check(metrics: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The model-health counts of this process (`model_health.metrics`); None (no row) when
+    no turn was scored in the window. Status always ok, see the module docstring."""
+    if not metrics or not int(metrics.get("scored") or 0):
+        return None
+    minutes = max(1, int(metrics.get("window_s") or 3600) // 60)
+    scored = int(metrics.get("scored") or 0)
+    retries, forced = int(metrics.get("retries") or 0), int(metrics.get("forced") or 0)
+    notes = int(metrics.get("notes") or 0)
+    reason = (f"In the last {minutes} minutes: {scored} turn{'s' if scored != 1 else ''} scored, "
+              f"{retries} health retr{'ies' if retries != 1 else 'y'} ({forced} forced), "
+              f"{notes} stuck note{'s' if notes != 1 else ''}.")
+    check: Dict[str, Any] = _check("model", OK, reason)
+    check["metrics"] = {k: int(metrics.get(k) or 0) for k in
+                        ("window_s", "scored", "mid", "high", "retries", "forced", "notes")}
+    return check
+
+
+def _model_metrics() -> Optional[Dict[str, Any]]:
+    """The model-health counts, only in the process whose agent loops score the turns (the
+    agent row's rule): elsewhere nothing is ever scored."""
+    import sys
+    scorer = sys.modules.get("vaf.core.model_health")
+    if scorer is None or _worker_status() is None:
+        return None
+    return scorer.metrics()
+
+
 def _chat_queue_metrics() -> List[Dict[str, Any]]:
     """The chat-turn queue (``TaskQueue.metrics``), only in the process whose agent loops
     take the turns (the agent row's rule): elsewhere the queue is empty by construction."""
@@ -294,6 +327,7 @@ def collect_health(status_probe: Optional[Callable[[], Dict[str, Any]]] = None,
                    backup_probe: Callable[[], Dict[str, str]] = _backup_check,
                    engine_probe: Callable[[], Optional[Dict[str, str]]] = engine_check,
                    queue_probe: Callable[[], List[Dict[str, Any]]] = _queue_metrics,
+                   model_probe: Callable[[], Optional[Dict[str, Any]]] = _model_metrics,
                    ) -> Dict[str, Any]:
     """Every check and the verdict: {status, checks, checked_at}. Never raises: a check that
     cannot run says so as its own result."""
@@ -333,6 +367,12 @@ def collect_health(status_probe: Optional[Callable[[], Dict[str, Any]]] = None,
             checks.append(queues)
     except Exception as e:
         checks.append(_check("queues", DEGRADED, f"The queues could not be read: {e}"))
+    try:
+        model = model_check(model_probe())
+        if model is not None:
+            checks.append(model)
+    except Exception as e:
+        checks.append(_check("model", OK, f"The model-health counts could not be read: {e}"))
     return {"status": worst(c["status"] for c in checks), "checks": checks,
             "checked_at": datetime.now(timezone.utc).isoformat()}
 

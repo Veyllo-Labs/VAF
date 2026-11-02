@@ -66,7 +66,7 @@ user input
 ║       ▼                                                      ║
 ║   ┌─────────────────────────────────────────────────────┐   ║
 ║   │ 7. GUARDRAILS                                       │   ║
-║   │    false-promise · result-grounding · team-await    │   ║
+║   │    model-health · result-grounding · team-await     │   ║
 ║   └─────────────────────────────────────────────────────┘   ║
 ║       │                                                      ║
 ║       ├── tool calls present ──┐                            ║
@@ -146,7 +146,7 @@ grep the symbol names to find them.
 | 5 | Adaptive temperature | `analyze_intent` |
 | 6 | LLM call (streaming) + parse tool calls | `_prepare_messages` runs on ALL THREE lanes (api_backend / local llama-server / llama-cpp-python in-process) before the call - it strips dangling `tool_calls`, drops orphaned `role:tool` messages, converts images to text and downgrades synthetic tool ids; the memory block is spliced into the first system message right after. The server lane re-prepares per retry attempt, because its 400/500 recovery rebinds the history between attempts. Then `api_backend.chat_completion`, `_parse_qwen_tool_calls`, `_parse_gemma4_tool_calls` |
 | 6b | Recover tool calls leaked as TEXT | `vaf/core/tool_call_recovery.py` - see below |
-| 7 | Guardrails | false-promise, result-grounding gates (the last unsupported verdict of a reply chain appends a fixed unconfirmed-claim note instead of another model rewrite); team-await note (a reply claiming completion while a sub-agent runs is KEPT - never erased - and a history note keeps the next turn honest); outbound messenger sends (normal headless path AND runner drain) apply the shared `_prepare_channel_outbound` chain incl. a conservative untagged-CoT prefix guard, with the drain text taken from its stored copy of the stream (the return is a status) |
+| 7 | Guardrails | model health first (a stuck model is re-run once with a tool call forced, then gets an honest note; see [Model health](#model-health-a-stuck-model-or-a-normal-error)), then result grounding (the last unsupported verdict of a reply chain appends a fixed unconfirmed-claim note instead of another model rewrite); team-await note (a reply claiming completion while a sub-agent runs is KEPT - never erased - and a history note keeps the next turn honest); outbound messenger sends (normal headless path AND runner drain) apply the shared `_prepare_channel_outbound` chain incl. a conservative untagged-CoT prefix guard, with the drain text taken from its stored copy of the stream (the return is a status) |
 | 8 | Tool dispatch. What the answer advises (`ToolCallOutcome.advised_tools`) is added to the turn's tool set, never to the history, and put back after the two mid-turn narrowings (see [TOOL_ROUTER_ARCHITECTURE.md](TOOL_ROUTER_ARCHITECTURE.md#a-tool-result-that-advises-a-tool)) | `execute_tool`, `_take_tool_advice`, `_pin_advised_tools`, `_anti_spin_step` |
 | 9 | Empty-response recovery + final-answer validation (an EMPTY reply only; a reply the provider cut off at the output limit has content, so this phase passes it through and the turn ends there. The provider's `finish_reason` is recorded as `cut=` in `logs/usage_*.log` and acted on nowhere) | `_final_answer_probe` decides what counts as an answer - closed AND unclosed `<think>` blocks are thinking, not answer (an unclosed one once passed as the reply and suppressed the retry) - then `_validate_final_answer` |
 | 10 | Pending-task auto-continue (a continuation round APPENDS to the turn's reply, never replaces it: every answer that passed validation and reached the final history append is collected in `kept_turn_answers`, `_join_turn_answers` builds the returned reply from all of them, and `_restream_kept_answers` puts them back into the web stream buffer after every clear, so the bubble keeps what the user was already shown. Live incident: a 2259-character deliverable was displaced by a 227-character auto-continue confirmation, on the return value AND on screen. The clear itself runs before the round that follows a tool round, keyed on the completed round (`_tool_round_completed`), never on `history[-1]` being a tool result: a deferred error nudge, an anti-spin or no-progress note, a limit reminder or a compaction trim all put something else last, and every such round used to stack into the buffer - which is both the web bubble and the answer the session stores, so a reloaded chat showed seven rounds' think blocks as plain text) | `_reply_needs_user`, `_task_stuck_step` |
@@ -269,6 +269,7 @@ The rule, the measurements and the named boundaries are in
 | `_plan_gate_blocks` | gate bounces before proceeding anyway. Workflow launches (`execute_workflow`, `create_agent_workflow` with steps) are never bounced: the call itself IS the plan the gate demands, so the gate SEEDS working memory's plan from the call (template id + variables, or the steps list) and allows it - a bounce here cost a weak model the thread (live incident: bounce, plan set, workflow forgotten, manual steps). Launch calls without a usable plan payload (e.g. `action='list'`) still bounce normally |
 | `_anti_spin_streak` | consecutive bookkeeping-only calls before tools are disabled for a turn. The forced text turn explicitly FORBIDS claiming results (an earlier wording said "state your result" - with tools off, a weak model answered by fabricating one, live incident). Two sibling self-poisoning guards close the same loop end to end: the working-memory NOTE FIREWALL (`_working_memory_note_gate`) refuses outcome/progress-claiming notes ("Workflow wurde erfolgreich gestartet", "Web-Suche: läuft") while no non-bookkeeping tool has run this turn - a model that narrates fiction into its notes gets that fiction re-injected as trusted context next generation and then coherently reports work it never did; and RESULT GROUNDING gained a deterministic rule: a final reply asserting tool outcomes after a bookkeeping-only turn is UNGROUNDED without consulting the LLM judge (which had waved exactly this case through). Working-memory note timestamps are now rendered in the user's timezone (they were UTC, misdating the model's own recent actions) |
 | `_nonprogress_streak` | consecutive read-only/verify-only tool turns (`list_*`/`read_*`/`get_*`, `list_automations`, `read_automation`, …; NOT `web_search`/`memory_search`, which are genuine gathering) before a nudge then a forced text answer - catches a "verify forever" loop where the work is already done; any mutating/producing tool resets it (`nonprogress_max_turns`, default 6) |
+| `_model_health_retried` | the model-health re-run: at most ONE per turn, and its forced generation is one generation (the next round is `auto` again), so a turn the score sends back can always end with a text answer |
 | `redundant_block_count` | repeated identical tool calls before a nudge. Three layers share it: (a) the adjacent check against the newest tool message (failure retry + immediate repetition; streamed-call lane), and in one CROSS-LANE filter that runs after EVERY parsing lane (streamed AND the XML/JSON/paren/recovery fallbacks - the in-loop-only version was bypassed by fallback-parsed batches, live incident with `streaming_tools=0`) and before the assistant tool_calls message is built: (b) a WINDOWED exact-duplicate check for pure lookups (`_find_redundant_read_call`): an identical read call that already SUCCEEDED this turn is refused with a pointer to its result, unless a mutating tool succeeded in between (fail-open), and (c) an in-batch dedupe that silently drops an exact (name, args) duplicate WITHIN one model response (for a send tool that hole meant a double-send) |
 | wall-clock backstop | a generous per-turn deadline (`chat_step_wall_clock_seconds`, default **3600s = 1h**) checked at each tool-turn boundary; independent of tool count or provider speed, it is the last-resort stop for a true infinite/zombie loop and never aborts legitimate long work (the no-progress guard + per-tool timeouts stop the common case far earlier). The 75-turn cap is a secondary guard. |
 
@@ -278,6 +279,82 @@ exist because a *slow* runaway (a reasoning provider grinding many varied tool t
 kept re-verifying an already-created automation) evades the count- and 5-second-based guards. Their
 config keys are in [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md) (the `*_gate_*`, `anti_spin_*`,
 `nonprogress_*`, `chat_step_wall_clock_seconds`, `result_grounding_*` families).
+
+## Model health: a stuck model or a normal error
+
+A small local model in a long chat can stop acting. Measured in one stored chat on a 4B model:
+the person asked in German for ten package installs, the model answered in English that it
+would run them, called nothing, and returned the same reply word for word to "ja bitte fang
+an", "JA BITTE FANG AN" and "ja". Result grounding then asked for a prose correction, and the
+model invented a network restriction. In between, one turn DID call the sandbox and it timed
+out: that is a normal error, and it must not count. `vaf/core/model_health.py` tells the two
+apart with deterministic signals (no model call) and one cumulative score per chat; the module
+docstring holds the full rationale.
+
+| Signal | Fires when (only on a turn in which no progress tool ran) | Weight |
+|---|---|---|
+| `reasoning_action_mismatch` | the visible reply names a tool of the turn's task set (the router's pick, without riders, discovery and bookkeeping tools) as a whole word | 1 |
+| `action_tag_mismatch` | an `<Action>` block matches a task tool with score >= 0.7 (only with `action_tag_enabled`) | 3 |
+| `step_repetition` | the reply is >= 0.85 similar to the chat's previous text reply | 3 |
+| `language_drift` | a reply of >= 40 characters is in another language than the chat (both detected concretely) | 2 |
+| `confirmation_unheeded` | the person's message is a plain yes (<= 40 characters, no `?`), matched with the voice confirmation's vocabulary (`speaker_confirm.parse_reply`) in the chat's language | 1 |
+| `user_repeats` | the person's message is >= 0.6 similar to their previous one | 1 |
+| `ungrounded` | result grounding found an unsupported claim in this turn | 2 |
+
+**The score.** Each signal counts once per turn. A turn without progress sets
+`S = max(0, S_prev + sum(weights) - 1)`; a turn in which a progress tool ran sets `S = 0`, also
+when that tool failed. Below 3 nothing happens, from 3 (mid) the turn is re-run once, from 8
+(high) the reply after that re-run gets the note. The chat's language is sticky (taken from a
+message of the person of at least 20 characters whose language the detector names), so a turn
+whose whole text is "ja" keeps it. The score lives in the chat's `model_health.json`
+(score, language, time; no text), keyed per session.
+
+**Measured** on 50 stored chats (698 turns, 550 person turns scored, 10 hand-labelled stuck):
+mid caught 6 of 10 stuck turns with 0 false crossings, the highest score of any unlabelled
+turn was 1.0, and naming a tool at weight 2 instead of 1 already lifted two chats that only
+discussed tools to a false mid.
+
+**Where it runs and in which order.** Only on the user's own turn (`_turn_is_from_the_user`:
+no drain, wake, timer, background or thinking run, no sub-agent process, and no allowed set,
+under which a forced call could force a send to a contact), for a generation that put an
+answer on the screen, called no tool and wrote no call as text either (`_text_tool_calls`, the
+step 6b chain, would run that one), never on a generation the person stopped. In phase 7:
+
+1. the generation is scored;
+2. at mid or high with the re-run unused: the RE-RUN, and result grounding does not judge
+   this generation;
+3. otherwise result grounding as before; an unsupported verdict that is not the chain's last
+   lifts the score by `ungrounded`, and when that reaches mid with the re-run unused, the
+   re-run REPLACES the grounding correction (no correction message, the correction counter is
+   not spent): the prose correction is what the stuck model answered with an invented excuse;
+4. at high with the re-run spent: the note in the chat's language (seven languages, English
+   otherwise) is appended once per turn and streamed, like the grounding note, and grounding
+   does not judge that generation, so a reply carries one note, never two;
+5. the ledger is written once the turn has answered (phase 11); a turn that ends without an
+   answer writes nothing. Every scored generation writes one `[MODEL_HEALTH] score= level=
+   signals= reaction=` line to the backend log and is counted for the `model` row of
+   `vaf health` (counts only).
+
+**The re-run.** The reply stays where the person read it and in `kept_turn_answers` (never
+retracted). The history gets that reply, then a system note that quotes what the person asked
+(and, for a plain yes, the request it confirmed), says that the reasons the reply gave come from
+no tool result, and names the task tools. No tool call is pending between the two, so the
+adjacency invariant holds. The next generation is forced where the lane can
+(`Agent._can_force_tool_call`): on a provider that restricts callability separately the resident
+array stays and the `allowed_tools` dict carries mode `required`; elsewhere the array is
+narrowed to the task tools and `tool_choice` is `required`. The riders are left out on purpose
+(`ask_user` would let the model ask "shall I start?" again). One helper, `_forced_request`,
+builds this at all three request sites, and a thinking run's forced node passes through it
+unchanged. The local server lane forces (vLLM and llama-server both accept `required`); on the
+API lane `ProviderSpec.forces_tool_calls` decides (OpenAI only, see
+[PROVIDER_MODES.md](../llm/PROVIDER_MODES.md)); the library lane, an empty task set and a turn
+that offers every tool run the same re-run unforced.
+
+**Named boundaries** (with their reasons in the module docstring): no LLM judge, no token
+entropy (llama.cpp refuses `logprobs` with tools and streaming), no hand-over of a stuck local
+turn to a paid API model, and tool-call loops stay with the redundant-call filter, anti-spin and
+the no-progress streak. Not on the facade: no host reads the verdict today, and every lane gets
+the re-run and the note through `chat_step`.
 
 ## A turn that produces no answer
 
@@ -296,7 +373,7 @@ frozen `TurnStatus(failed, failure)` (CORE_AGENT.md), never the fields themselve
 answered. A turn whose newest kept answer passed the final-answer path (the pending-task
 auto-continue re-entered after it) has answered: it returns its answers and is not failed.
 Any other turn failed, `_turn_failed` is set and the text is the return value; that
-includes a turn whose newest kept reply a guard (false promise, result grounding) had sent
+includes a turn whose newest kept reply a guard (model health, result grounding) had sent
 back for correction, because that reply is an unchecked claim whose correction never came.
 Both flags are reset at the start of every `chat_step`, like `_turn_closed_by_tool`. A
 failed round's tool calls do not run: they are a stream cut off mid-way. The text is the

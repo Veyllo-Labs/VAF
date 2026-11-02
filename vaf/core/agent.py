@@ -26,6 +26,7 @@ from pathlib import Path
 from vaf.core.config import Config
 from vaf.core.backend import ServerManager
 from vaf.core import local_engine
+from vaf.core import model_health
 from vaf.core.platform import Platform
 from vaf.core.channels import ALL_SEND_TOOLS, CHANNEL_SEND_TOOLS, CHAT_SEND_TOOLS
 from vaf.core.log_helper import append_domain_log, get_dated_log_path, log_timeline_event
@@ -678,9 +679,10 @@ _GROUNDING_NOTE = {
 def _grounding_note(user_language) -> str:
     """The fixed unconfirmed-claim line in the turn's language: the seven languages of the UI
     catalogue (web/messages), English for any other language and for an unclear one ("auto"),
-    where no language is known to answer in."""
-    code = str(user_language or "").strip().lower().replace("_", "-").split("-", 1)[0]
-    return _GROUNDING_NOTE.get(code, _GROUNDING_NOTE["en"])
+    where no language is known to answer in. Picked by the one helper the model-health note
+    uses too (`model_health.pick_note`)."""
+    from vaf.core.model_health import pick_note
+    return pick_note(_GROUNDING_NOTE, user_language)
 
 
 def _find_redundant_read_call(history, tool_name: str, arguments, max_window: int = 12) -> bool:
@@ -1891,10 +1893,6 @@ class Agent:
         # Flag to prevent multiple shutdown calls
         self._shutdown_called = False
         
-        # False Promise Detection State
-        self._false_promise_retries = 0
-        self._max_false_promise_retries = 20
-
         # Result Grounding State (anti-confabulation of tool results)
         self._result_grounding_retries = 0
 
@@ -1946,8 +1944,8 @@ class Agent:
         """Consume this step's ONE forced generation and record that this round is it.
 
         Returns the tool_choice to send, or None. Three request-building branches used to
-        carry this three-line dance by hand; having them share it is what keeps the snapshot
-        below from being forgotten in one of them.
+        carry this three-line dance by hand; they all reach it through `_forced_request` now,
+        which is what keeps the snapshot below from being forgotten in one of them.
 
         The snapshot matters because the two events happen at different times: the flag is
         spent while the REQUEST is built, and the read-cap that depends on it runs later,
@@ -1975,6 +1973,335 @@ class Agent:
         flag - see the note there for why the two cannot be the same value.
         """
         return bool(getattr(self, "_forced_round", False))
+
+    def _can_force_tool_call(self) -> bool:
+        """Can this agent's chat lane force one tool call (`tool_choice="required"`)?
+
+        The API lane by the provider's declared capability (`ProviderSpec.forces_tool_calls`,
+        where each provider's value is explained). The local server lane yes: vLLM accepts
+        "required" (streaming included; VAF starts it with --enable-auto-tool-choice) and
+        llama-server parses it (with --jinja, which VAF passes). The in-process library lane
+        no: never measured there.
+        """
+        if self.api_backend:
+            try:
+                from vaf.core.provider_registry import PROVIDER_SPECS
+                spec = PROVIDER_SPECS.get(getattr(self.api_backend, "provider_name", "") or "")
+                return bool(spec and spec.forces_tool_calls)
+            except Exception:
+                return False
+        return bool(getattr(self, "use_server", False))
+
+    def _forced_request(self, tools, tool_choice):
+        """The (tools, tool_choice) of ONE request with this step's forced generation applied.
+
+        Every request site (the API lane, the local server lane, the library lane) calls this
+        once, so the three cannot drift. Two forced generations exist:
+
+        - a thinking run's forced node (`_forced_tool_names` None): the tool_choice its caller
+          gave, on the array as it is, exactly as before;
+        - the model-health re-run (`_forced_tool_names` = the turn's task tools): only those
+          may be called. On a provider that restricts callability separately the resident
+          array stays byte-identical and the `allowed_tools` dict carries mode "required";
+          elsewhere the array is narrowed to them and tool_choice is "required". The riders
+          are left out on purpose: `ask_user` would let the model ask "shall I start?" again,
+          `update_working_memory` would let it plan again instead of acting.
+
+        One generation: the next round is "auto" again (`_force_tool_choice_used`), so the turn
+        can always end with a text answer.
+        """
+        forced = self._take_forced_tool_choice(tools)
+        if not forced:
+            return tools, tool_choice
+        names = list(getattr(self, "_forced_tool_names", None) or ())
+        if not names:
+            return tools, forced
+        present = {(t.get("function") or {}).get("name") for t in (tools or ()) if isinstance(t, dict)}
+        keep = [n for n in names if n in present]
+        if not keep:
+            return tools, tool_choice
+        if self.api_backend and self._supports_allowed_tools():
+            return tools, {"type": "allowed_tools", "allowed_tools": {
+                "mode": "required",
+                "tools": [{"type": "function", "function": {"name": n}} for n in keep],
+            }}
+        narrowed = [t for t in tools if isinstance(t, dict)
+                    and (t.get("function") or {}).get("name") in keep]
+        return narrowed, "required"
+
+    # ── model health (vaf/core/model_health.py) ──────────────────────────────────────────
+
+    def _model_health_in_scope(self, user_input, skip_input, thinking_mode) -> bool:
+        """Is this a turn the model-health score reads? Only the user speaking in their own
+        chat (`_turn_is_from_the_user`: no drain, wake, timer or background turn, and no
+        allowed set, under which a forced call could force a send to a contact), never a
+        thinking or background run, never a sub-agent process, and only with the guard on.
+        Measured: scoring timer turns lifted a long chat to 10 on legitimate timer replies."""
+        try:
+            if not Config.get("model_health_guard_enabled", True):
+                return False
+        except Exception:
+            return False
+        if thinking_mode or self._is_thinking_run() or getattr(self, "_background_run", False):
+            return False
+        if os.environ.get("VAF_IN_SUBAGENT_TERMINAL", "") == "1":
+            return False
+        return self._turn_is_from_the_user(user_input, skip_input)
+
+    def _model_health_begin(self, user_input, skip_input, thinking_mode, raw_user_input) -> None:
+        """Open this turn's reading: the chat's ledger, the person's words, their previous
+        message and the chat's previous text reply. None when the turn is out of scope.
+
+        Read before phase 1 overwrites the stored intent: that store holds the person's own
+        previous words for this chat (never the lane's enrichment), so it is the previous
+        message to compare with. A lane without a per-chat store reads the history instead and
+        starts at score 0 (fail-open)."""
+        self._model_health_turn = None
+        if not self._model_health_in_scope(user_input, skip_input, thinking_mode):
+            return
+        from vaf.core.completion import strip_think_blocks
+        state, prev_user = model_health.State(), ""
+        store = getattr(self, "main_persistence", None)
+        if store is not None:
+            try:
+                state = model_health.from_payload(store.get_model_health())
+            except Exception:
+                state = model_health.State()
+            try:
+                intent = str(store.get_user_intent() or "")
+                prev_user = "" if intent.lstrip().startswith("# USER INTENT") else intent
+            except Exception:
+                prev_user = ""
+        history = getattr(self, "history", None) or []
+        if store is None:
+            for msg in reversed(history):
+                if isinstance(msg, dict) and msg.get("role") == "user":
+                    prev_user = str(msg.get("content") or "")
+                    break
+        prev_reply = ""
+        for msg in reversed(history):
+            if (isinstance(msg, dict) and msg.get("role") == "assistant"
+                    and not msg.get("tool_calls") and str(msg.get("content") or "").strip()):
+                prev_reply = strip_think_blocks(str(msg.get("content") or ""))
+                break
+        self._model_health_turn = {
+            "state": state,
+            "user_text": str(raw_user_input or user_input or ""),
+            "prev_user": prev_user,
+            "prev_reply": prev_reply,
+        }
+
+    def _model_health_task_tools(self) -> list:
+        """The tools this turn is FOR: the router's pick (with the recent tools it merged,
+        `_turn_task_tools`) and what a tool result advised this turn, as far as the turn still
+        offers them; never a rider, a discovery tool or a bookkeeping tool, which ride along on
+        every turn and do none of the work. What a stuck model announced and should have
+        called. Empty when the router made no pick or the turn offers every tool
+        (`_active_tools` None): then no tool is the task."""
+        if self._active_tools is None:
+            return []
+        picked = list(getattr(self, "_turn_task_tools", None) or ())
+        picked += list(getattr(self, "_advised_tools_this_turn", None) or ())
+        offered = set(self._offered_tool_names())
+        return [n for n in dict.fromkeys(picked)
+                if n in offered and n not in _TURN_RIDERS and n not in _BOOKKEEPING_TOOLS
+                and n not in ("list_tools", "search_tools")]
+
+    def _model_health_language(self) -> Optional[str]:
+        return getattr(getattr(self, "prompt_manager", None), "user_language", None)
+
+    def _model_health_score(self, full_content, full_response, *, grounding_hit=False):
+        """Score this generation (`model_health.evaluate`) and keep the turn's signals."""
+        from vaf.core.completion import strip_think_blocks
+        turn = self._model_health_turn or {}
+        task = self._model_health_task_tools()
+        matches = []
+        try:
+            if Config.get("action_tag_enabled", False) and task:
+                act = _extract_action_text(full_response)
+                if act:
+                    matches = _match_action_to_tools(act, task)
+        except Exception:
+            matches = []
+        verdict = model_health.evaluate(
+            turn.get("state"),
+            reply=strip_think_blocks(full_content or ""),
+            user_text=turn.get("user_text", ""),
+            prev_reply=turn.get("prev_reply", ""),
+            prev_user=turn.get("prev_user", ""),
+            task_tools=task,
+            action_matches=matches,
+            grounding_hit=grounding_hit,
+            detect_language=self._detect_user_language,
+            fallback_language=self._model_health_language(),
+            prior=getattr(self, "_model_health_signals", ()) or (),
+            progressed=bool(getattr(self, "_turn_ran_progress_tool", False)),
+        )
+        self._model_health_signals = verdict.signals
+        self._model_health_verdict = verdict
+        return verdict
+
+    def _model_health_log(self, verdict, reaction) -> None:
+        """One count and one log line per scored generation. Counts and signal names only."""
+        model_health.record(verdict.level, reaction)
+        try:
+            append_domain_log(
+                "backend",
+                f"[MODEL_HEALTH] score={verdict.score:g} level={verdict.level} "
+                f"signals={','.join(verdict.signals) or '-'} reaction={reaction}",
+            )
+        except Exception:
+            pass
+
+    def _model_health_arm_retry(self, tools_off) -> str:
+        """Set up the turn's one re-run and say how it runs: FORCED where the lane can force a
+        call and the turn has task tools to force; otherwise the same round unforced ("auto")
+        with the same note. Returns the reaction for the log."""
+        self._model_health_retried = True
+        task = self._model_health_task_tools()
+        if task and not tools_off and self._can_force_tool_call():
+            self._force_tool_choice = "required"
+            self._force_tool_choice_used = False
+            self._forced_tool_names = list(task)
+            return model_health.REACTION_FORCED
+        return model_health.REACTION_RETRY
+
+    def _model_health_retry_note(self, verdict) -> str:
+        """The re-run's system note: the person's words (and, for a plain yes, the request it
+        confirmed), and the task tools."""
+        turn = self._model_health_turn or {}
+        confirmed = turn.get("prev_user", "") if "confirmation_unheeded" in verdict.signals else ""
+        return model_health.retry_note(turn.get("user_text", ""), self._model_health_task_tools(),
+                                       confirmed_request=confirmed)
+
+    def _model_health_commit(self) -> None:
+        """Write the chat's ledger after an answered turn. Idempotent within a turn: every
+        call starts from the ledger as the turn found it, so a pending-task continuation that
+        answers again rewrites the same turn, and one that ran a tool resets it to 0."""
+        turn = getattr(self, "_model_health_turn", None)
+        if not turn:
+            return
+        progressed = bool(getattr(self, "_turn_ran_progress_tool", False))
+        verdict = getattr(self, "_model_health_verdict", None)
+        start = turn.get("state") or model_health.State()
+        if verdict is None:
+            language = model_health.chat_language(start, turn.get("user_text", ""),
+                                                  self._detect_user_language,
+                                                  self._model_health_language())
+            start = model_health.State(start.score, language)
+        state = model_health.commit(start, verdict, progressed)
+        store = getattr(self, "main_persistence", None)
+        if store is None:
+            return
+        try:
+            store.save_model_health(model_health.to_payload(state))
+        except Exception:
+            pass
+
+    def _text_tool_calls(self, full_response, full_reasoning) -> list:
+        """Tool calls a model wrote as TEXT, in the dialects it was trained on (AGENT_LOOP.md,
+        step 6b), as structured calls. The fallback chain of `chat_step`, run there when the
+        stream carried no call, and asked by the model-health guard first: a reply that holds
+        a call written as text is a call about to run, never a model that did nothing."""
+        tool_calls_detected = []
+        # 1. XML Format: <tool_call>{"name":..., "arguments":...}</tool_call>
+        # Search full_response AND full_reasoning so tool_calls inside <think> are found
+        # (e.g. when reasoning is streamed separately from content)
+        text_to_search = (full_response + "\n" + (full_reasoning or "")).strip() or full_response
+        xml_tools = re.findall(r'<tool_call>(.*?)</tool_call>', text_to_search, re.DOTALL)
+        for tool_str in xml_tools:
+             try:
+                tool_data = json.loads(tool_str)
+                if "name" in tool_data and "arguments" in tool_data:
+                    tool_calls_detected.append({
+                        "id": _synth_tool_call_id(),
+                        "type": "function",
+                        "function": {"name": tool_data["name"], "arguments": json.dumps(tool_data["arguments"]) if isinstance(tool_data["arguments"], dict) else tool_data["arguments"]}
+                    })
+             except: pass
+        
+        # 2. Raw JSON Code Block: ```json ... ``` (if XML fails and looks like tool)
+        if not tool_calls_detected and "```json" in text_to_search:
+            try:
+                json_match = re.search(r'```json\s*(\[.*?\]|\{.*?\})\s*```', text_to_search, re.DOTALL)
+                if json_match:
+                    data = json.loads(json_match.group(1))
+                    if isinstance(data, dict): data = [data] # normalize to list
+                    for item in data:
+                        if "name" in item and "arguments" in item:
+                             tool_calls_detected.append({
+                                "id": _synth_tool_call_id(),
+                                "type": "function",
+                                "function": {"name": item["name"], "arguments": json.dumps(item["arguments"]) if isinstance(item["arguments"], dict) else item["arguments"]}
+                            })
+            except: pass
+
+        # 3. Text Pattern: "1. web_search(...)", "Answer: web_search(...)"
+        # or leaked plan bullets '- find_mail({"query": ...})' (deepseek-v4).
+        # Shared parser _parse_paren_tool_calls (module level, tested).
+        if not tool_calls_detected:
+            for _p_name, _p_args in _parse_paren_tool_calls(text_to_search, self.tools):
+                tool_calls_detected.append({
+                    "id": _synth_tool_call_id(),
+                    "type": "function",
+                    "function": {"name": _p_name, "arguments": json.dumps(_p_args)},
+                })
+
+        # 4. Pipe-delimited native tool calls: <|tool_call>call:NAME{key:<|"|>value<|"|>}<tool_call|>
+        # Additive defensive net, tried only when nothing above matched. The server normally
+        # converts these via --jinja; this catches the rare case where a raw call leaks into
+        # the text unconverted. NOT model-gated: this was gated to model_mode=="gemma4", but
+        # the local Qwen 3.5 4B (VAF's default) emits the SAME format, so a leaked call was
+        # never recovered and vanished into the chat, doing nothing (live incident 2026-07-21:
+        # create_calendar_event leaked exactly this way). The format is highly specific (those
+        # delimiters plus the <|"|> quote markers) and _parse_gemma4_tool_calls filters to
+        # known tool names, so it is safe for any model - the same posture as lanes 5 and 6.
+        if not tool_calls_detected:
+            for _g_name, _g_args in _parse_gemma4_tool_calls(text_to_search, self.tools):
+                tool_calls_detected.append({
+                    "id": _synth_tool_call_id(),
+                    "type": "function",
+                    "function": {"name": _g_name, "arguments": json.dumps(_g_args)},
+                })
+
+        # 5. Qwen / Hermes text tool calls: <tool_call><function=NAME><parameter=KEY>VALUE</parameter>...</function></tool_call>
+        # A reasoning model (e.g. Qwen) sometimes writes this INSIDE <think> instead of making a
+        # native call, so the server never converts it and the call is dropped (observed:
+        # update_working_memory written this way -> the plan is never set -> the [PLAN REQUIRED]
+        # gate loops). The format is specific and results are filtered to known tools, so it is
+        # safe to try for any model once nothing above matched.
+        if not tool_calls_detected:
+            for _q_name, _q_args in _parse_qwen_tool_calls(text_to_search, self.tools):
+                tool_calls_detected.append({
+                    "id": _synth_tool_call_id(),
+                    "type": "function",
+                    "function": {"name": _q_name, "arguments": json.dumps(_q_args)},
+                })
+
+        # 6. Claude-style XML / DeepSeek ｜｜DSML｜｜ tool call leaked into content
+        # (the same shape the coding agent recovers in its Format 0d). DeepSeek v4
+        # intermittently emits a real call as content instead of structured tool_calls;
+        # filtered to known tools, so it is safe to try once nothing above matched.
+        if not tool_calls_detected:
+            from vaf.core.tool_call_recovery import extract_xml_tool_calls
+            # ALL of them: a model that leaks a batch leaks it whole, and
+            # taking only the first left the rest to be erased from the
+            # text by strip_tool_call_markup - work silently not done.
+            for _xml_tc in extract_xml_tool_calls(text_to_search, self.tools):
+                tool_calls_detected.append(_xml_tc)
+
+        # 7. Bare OpenAI-wire JSON leaked as content:
+        # {"tool_calls": [{"id": ..., "function": {...}}]}. First live
+        # sighting: Veyllo echoed the wire format as text - the turn
+        # ended think-only, the UI hid the raw JSON, and the user saw an
+        # agent that "thought but never answered". Provider-issued ids
+        # are PRESERVED (the stateful backend accepts only its own ids
+        # on replay); one unknown tool name refuses the whole leak.
+        if not tool_calls_detected:
+            from vaf.core.tool_call_recovery import extract_wire_json_tool_calls
+            for _wire_tc in extract_wire_json_tool_calls(text_to_search, self.tools):
+                tool_calls_detected.append(_wire_tc)
+        return tool_calls_detected
 
     def _ensure_thinking_exit_tools(self) -> None:
         """Guarantee a thinking run can always reach the user and always stop.
@@ -6345,207 +6672,6 @@ class Agent:
 
         return "auto"
 
-    def _detect_mixed_languages(self, text: str) -> list[str]:
-        """
-        Detects mixed languages in text by splitting it into sections.
-        Returns a list of detected languages (without duplicates).
-        """
-        if not text or len(text.strip()) < 10:
-            return []
-        
-        # Split text into sentences/phrases (at punctuation or line breaks)
-        import re
-        # Split at punctuation but keep it
-        sentences = re.split(r'([.!?]\s+|\.\s+|,\s+|\n+)', text)
-        sentences = [s.strip() for s in sentences if s.strip() and len(s.strip()) >= 5]
-        
-        detected_langs = set()
-        
-        # Analyze each sentence individually
-        for sentence in sentences:
-            lang = self._detect_user_language(sentence)
-            if lang != "auto":
-                detected_langs.add(lang)
-        
-        # If no sentences detected, try the whole text
-        if not detected_langs:
-            lang = self._detect_user_language(text)
-            if lang != "auto":
-                detected_langs.add(lang)
-        
-        return list(detected_langs)
-
-    def _user_requested_translation(self, user_input: str, detected_response_lang: str) -> bool:
-        """
-        Intelligently checks if the user explicitly requested a translation,
-        WITHOUT using hardcoded words.
-        
-        Strategy:
-        1. Detect mixed languages in user input
-        2. If response language is one of the mixed languages (but not the main language),
-           then it's probably a translation request
-        3. If user input is mainly in language A, but response is in language B,
-           AND language B appears in user input → translation request
-        
-        Returns:
-            True if user likely requested a translation, False otherwise
-        """
-        if not user_input or not detected_response_lang:
-            return False
-        
-        # Detect main language of user input
-        main_user_lang = self._detect_user_language(user_input)
-        
-        # If main language is "auto", we can't be sure
-        if main_user_lang == "auto":
-            return False
-        
-        # If response language = main language, it's not a translation request
-        if detected_response_lang == main_user_lang:
-            return False
-        
-        # Detect mixed languages in user input
-        mixed_langs = self._detect_mixed_languages(user_input)
-        
-        # If response language appears in mixed languages,
-        # but is not the main language → probably translation request
-        if detected_response_lang in mixed_langs and detected_response_lang != main_user_lang:
-            return True
-        
-        # Additional check: Split input into words/phrases
-        # and check if parts are detected in response language
-        import re
-        words = re.findall(r'\b\w+\b', user_input)
-        
-        # Check if there are significant parts in response language
-        # (at least 2 words that together are detected in response language)
-        if len(words) >= 2:
-            # Test phrases of 2-4 words
-            for phrase_length in [2, 3, 4]:
-                for i in range(len(words) - phrase_length + 1):
-                    phrase = ' '.join(words[i:i+phrase_length])
-                    phrase_lang = self._detect_user_language(phrase)
-                    if phrase_lang == detected_response_lang and phrase_lang != main_user_lang:
-                        # Found: A phrase in user input is in response language
-                        return True
-        
-        return False
-
-    def _check_language_mismatch(self, user_input: str, assistant_response: str) -> bool:
-        """
-        Check if the assistant responded in a different language than the user.
-        If so, inject a system warning into history.
-        
-        Returns:
-            True if mismatch detected and correction requested, False otherwise.
-        """
-        
-        # Determine language (simplified check for common cases)
-        # Using langid for robust detection
-        try:
-            from vaf.vendor import langid
-            import re
-            
-            user_lang = self._detect_user_language(user_input)
-            
-            # CRITICAL: Remove <think> blocks from response before classifying!
-            # Otherwise, the English thinking process triggers false "Language Mismatch" on German responses.
-            clean_response = re.sub(r'<think>.*?</think>', '', assistant_response, flags=re.DOTALL).strip()
-            if not clean_response:
-                 # Fallback if response was ONLY thinking (should not happen usually)
-                 clean_response = assistant_response
-                 
-            response_lang, _ = langid.classify(clean_response)
-        except ImportError:
-            # Fallback if langid missing
-            return False
-        
-        # Skip if either is "auto" (unclear) or if they match
-        if user_lang == "auto" or response_lang == "auto":
-            return False
-        if user_lang == response_lang:
-            return False
-        
-        # INTELLIGENT check: Did the user explicitly request a translation?
-        # Uses existing language detection, no hardcoded words!
-        if self._user_requested_translation(user_input, response_lang):
-            # User likely requested a translation - that's OK
-            # (Silently ignored - no debug output needed)
-            return False
-        
-        # Language names for friendly messages (comprehensive list for langid's 97 languages)
-        language_names = {
-            # Major European languages
-            "en": "English", "de": "German", "fr": "French", "es": "Spanish",
-            "it": "Italian", "pt": "Portuguese", "nl": "Dutch", "pl": "Polish",
-            "ru": "Russian", "uk": "Ukrainian", "sv": "Swedish", "no": "Norwegian",
-            "da": "Danish", "fi": "Finnish", "cs": "Czech", "ro": "Romanian",
-            "hu": "Hungarian", "el": "Greek", "tr": "Turkish", "bg": "Bulgarian",
-            "hr": "Croatian", "sr": "Serbian", "sk": "Slovak", "sl": "Slovenian",
-            "et": "Estonian", "lv": "Latvian", "lt": "Lithuanian", "ga": "Irish",
-            "mt": "Maltese", "is": "Icelandic", "mk": "Macedonian", "sq": "Albanian",
-            "bs": "Bosnian", "ca": "Catalan", "eu": "Basque", "gl": "Galician",
-            # Asian languages
-            "ja": "Japanese", "ko": "Korean", "zh": "Chinese", "hi": "Hindi",
-            "th": "Thai", "vi": "Vietnamese", "id": "Indonesian", "ms": "Malay",
-            "tl": "Filipino", "my": "Burmese", "km": "Khmer", "lo": "Lao",
-            "bn": "Bengali", "ta": "Tamil", "te": "Telugu", "ml": "Malayalam",
-            "kn": "Kannada", "gu": "Gujarati", "pa": "Punjabi", "ur": "Urdu",
-            "ne": "Nepali", "si": "Sinhala", "ka": "Georgian",
-            "hy": "Armenian", "az": "Azerbaijani", "kk": "Kazakh", "ky": "Kyrgyz",
-            "uz": "Oʻzbek", "mn": "Mongol", "bo": "Tibetan",
-            # Middle Eastern & African languages
-            "ar": "Arabic", "he": "Hebrew", "fa": "Persian", "ps": "Pashto",
-            "sw": "Swahili", "am": "Amharic", "zu": "Zulu", "af": "Afrikaans",
-            "so": "Somali", "ha": "Hausa", "yo": "Yoruba", "ig": "Igbo",
-            # Other languages
-            "eo": "Esperanto", "la": "Latin", "cy": "Welsh", "br": "Breton",
-        }
-        
-        user_lang_name = language_names.get(user_lang, user_lang.upper())
-        response_lang_name = language_names.get(response_lang, response_lang.upper())
-        
-        # Immediate, direct warning (instruction to the model, always English)
-        if user_lang == "de":
-            warning = (
-                f"[!] **Language mismatch detected**: You responded in {response_lang_name}, "
-                f"but the user is speaking {user_lang_name}. "
-                f"Please translate your response immediately into {user_lang_name}."
-            )
-        elif user_lang in language_names:
-            # Try to generate a warning in the user's language (simple approach)
-            warning = (
-                f"[!] **Language mismatch detected**: You responded in {response_lang_name}, "
-                f"but the user is speaking {user_lang_name}. "
-                f"Please translate your response immediately to {user_lang_name}."
-            )
-        else:
-            # Fallback: bilingual
-            warning = (
-                f"[!] **Language mismatch**: You answered in {response_lang_name}, "
-                f"but user speaks {user_lang_name}. "
-                f"Please respond immediately in {user_lang_name}."
-            )
-        
-        # Insert immediate warning into history (before the response!)
-        # This forces the model to correct the response immediately
-        self.history.append({
-            "role": "system",
-            "content": warning
-        })
-        
-        # Store details for retry logging (used when we trigger immediate retry)
-        self._last_language_mismatch = {
-            "user": user_lang_name,
-            "response": response_lang_name,
-            "target": user_lang_name,
-        }
-
-        from vaf.cli.ui import UI
-        UI.event("Language", f"Mismatch: User={user_lang_name}, Response={response_lang_name} - Auto-correction requested", style="warning")
-        
-        return True
-
     def _refresh_language_hint(self, user_input: str) -> None:
         """
         Update LANGUAGE_HINT inside the main system prompt (history[0]).
@@ -7957,7 +8083,7 @@ class Agent:
             # Provider-agnostic router inference: the LLM tier is the ONLY tier that
             # can route SKILLS (and do intent-based workflow routing). It must run the
             # same way regardless of provider, mirroring the canonical 3-way pattern
-            # used elsewhere in this file (e.g. the false-promise validator):
+            # used elsewhere in this file (e.g. `_run_validation_llm`):
             #   local llama.cpp server  -> use_server
             #   cloud / API provider    -> api_backend   (e.g. veyllo)
             #   local in-process lib    -> llm
@@ -9290,6 +9416,9 @@ class Agent:
         # What the router (and the recent turns) chose for THIS task, before anything rides
         # along: the cap below cuts the riders first (_task_tools_first).
         _task_tools = list(selected_tools or [])
+        # Kept for the turn: the model-health re-run forces a call of these and no rider
+        # (`_model_health_task_tools`).
+        self._turn_task_tools = list(_task_tools)
 
         # list_tools and search_tools are ALWAYS included when we have a restricted set
         # so the model can discover other tools on-demand (provider-agnostic Tool Search).
@@ -10199,6 +10328,14 @@ class Agent:
         self._force_tool_choice = force_tool_choice if (force_tool_choice and thinking_mode) else None
         self._force_tool_choice_used = False  # force only the FIRST generation, then revert to auto
         self._forced_round = False            # snapshot: is the round being PROCESSED the forced one
+        # The model-health re-run's forced set (None: a thinking node's force, on the array as it
+        # is), and the turn's reading: one re-run and one note per turn, each signal once.
+        self._forced_tool_names = None
+        self._turn_task_tools = None
+        self._model_health_retried = False
+        self._model_health_noted = False
+        self._model_health_signals = ()
+        self._model_health_verdict = None
         # Which NODE of the thinking ladder this step is, so the read-cap can answer with the block
         # text and the budget that node actually earns. "" for every non-thinking turn.
         self._thinking_node = (thinking_node or "") if thinking_mode else ""
@@ -10216,6 +10353,9 @@ class Agent:
         # working-memory note firewall and the deterministic grounding rule
         # (self-poisoning guards). Reset per user turn.
         self._turn_ran_progress_tool = False
+        # The model-health reading of this turn (vaf/core/model_health.py), opened before phase
+        # 1 overwrites the stored intent, which holds the person's previous message.
+        self._model_health_begin(user_input, skip_input, thinking_mode, raw_user_input)
         # Raw user reply of a pickup turn - the proactive-reply mutation gate needs it to decide
         # "clear affirmative" deterministically. Reset per turn with the context above.
         self._thinking_reply_user_text = None
@@ -10803,9 +10943,35 @@ class Agent:
         # list is what keeps those answers part of the reply (_join_turn_answers).
         kept_turn_answers: list = []
         # Whether the newest kept answer passed the final-answer path. A guard that keeps a
-        # flagged reply on screen and sends it back for correction (false promise, result
-        # grounding) keeps it too, unchecked, until a later round answers.
+        # flagged reply on screen and sends it back (the model-health re-run, a result-grounding
+        # correction) keeps it too, unchecked, until a later round answers.
         _last_kept_is_final = False
+
+        def _model_health_rerun(verdict, reply, tools_off):
+            """The turn's one model-health re-run (vaf/core/model_health.py): the reply stays
+            where the user read it (Rule 4 invariant 2: kept, never retracted, re-streamed by
+            every later buffer clear), the history gets that reply and then a note that names
+            what the person asked and which tools do it, and the next generation is forced to
+            call one of them where the lane can. Nothing is left pending between the two
+            messages, so the tool-call adjacency holds. The caller `continue`s."""
+            nonlocal _last_kept_is_final
+            reaction = self._model_health_arm_retry(tools_off)
+            self._model_health_log(verdict, reaction)
+            _event = ("Model health: no tool ran although the request needs one - "
+                      "re-running the turn once with a tool call...")
+            UI.event("System", _event, style="warning")
+            if _emit_to_web_ui():
+                try:
+                    from vaf.core.web_interface import get_web_interface
+                    from vaf.core.subagent_ipc import get_current_session_id
+                    get_web_interface().log(_event, level="warning", source="System",
+                                            session_id=get_current_session_id())
+                except Exception:
+                    pass
+            kept_turn_answers.append(self._clean_reasoning(reply))
+            _last_kept_is_final = False   # flagged: the re-run follows
+            self.history.append({"role": "assistant", "content": reply})
+            self.history.append({"role": "system", "content": self._model_health_retry_note(verdict)})
 
         def _end_turn_without_answer(text, *, streamed):
             """Every exit that ends the turn on the engine's own text (a backend failure, a
@@ -10957,9 +11123,7 @@ class Agent:
                     # callability without a different array, the router's pick
                     # becomes the restriction and the array stays byte-identical.
                     current_tools, tool_choice = self._tools_and_choice(disable_tools)
-                    _forced = self._take_forced_tool_choice(current_tools)
-                    if _forced:
-                        tool_choice = _forced   # forced-resolution node: model MUST emit a tool
+                    current_tools, tool_choice = self._forced_request(current_tools, tool_choice)
 
                     first_token = True
                     # json, sys, escape already imported globally
@@ -11233,9 +11397,8 @@ class Agent:
                         # Disable tools if requested (forces text response)
                         current_tools = self.TOOLS if not disable_tools else None
                         current_tool_choice = "auto" if not disable_tools else "none"
-                        _forced = self._take_forced_tool_choice(current_tools)
-                        if _forced:
-                            current_tool_choice = _forced   # forced-resolution node
+                        current_tools, current_tool_choice = self._forced_request(
+                            current_tools, current_tool_choice)
 
                         payload = {
                              "messages": prepared_messages,
@@ -11652,9 +11815,7 @@ class Agent:
                 prepared_messages = self._append_turn_block(prepared_messages)
                 _lib_tools = self.TOOLS if not disable_tools else None
                 _lib_tool_choice = "auto" if _lib_tools else "none"
-                _forced = self._take_forced_tool_choice(_lib_tools)
-                if _forced:
-                    _lib_tool_choice = _forced
+                _lib_tools, _lib_tool_choice = self._forced_request(_lib_tools, _lib_tool_choice)
                 # The local sibling lane already reads this key; sharing it is what
                 # stops a fourth output cap from drifting away from the other three.
                 _lib_max_tokens = int(Config.get("max_generation_tokens", 10000) or 10000)
@@ -11741,112 +11902,41 @@ class Agent:
             except Exception:
                 pass
 
-            # 0. FALSE PROMISE DETECTION (Anti-Hallucination)
-            # Check if model claimed to use a tool but didn't emit a tool call.
-            # DISABLED BY DEFAULT for all models: the forced retry on a heuristic/<Action> match caused
-            # more harm than good (retry loops, false positives -- especially on weak local models).
-            # Opt back in via config `false_promise_detection_enabled: true`. Only runs with content + NO tools.
-            if (Config.get("false_promise_detection_enabled", False)
-                    and not streaming_tools and not tool_calls_detected and full_content.strip()):
-                # Measure only the USER-VISIBLE answer: weak local models (e.g. Gemma)
-                # stream their reasoning inline as <think>...</think> in the content
-                # field, which would otherwise inflate the length and trip the >800
-                # skip below, hiding genuinely short false promises behind a long
-                # thinking block.
-                from vaf.core.completion import strip_think_blocks as _strip_think
-                _visible = _strip_think(full_content)
-                _response_len = len(_visible)
-
-                # High-confidence signal: the model committed to a tool in its <Action>
-                # block, which per the system prompt is emitted ONLY right before a tool
-                # call, but then emitted no call at all. This is a definitional false
-                # promise, far more reliable than the free-text heuristic, and it is what
-                # catches "Using web_search to find the weather..." with no call behind it.
-                _act_intent = _extract_action_text(full_response)
-                if _act_intent:
-                    # What this step OFFERS, never the raw scope: the nudge below says "Call
-                    # <tool> NOW", and a tool outside the allowed set would be ordered and refused.
-                    _avail_fp = self._offered_tool_names()
-                    _act_matches = _match_action_to_tools(_act_intent, _avail_fp)
-                else:
-                    _act_matches = []
-                _action_promise = bool(_act_matches and _act_matches[0][1] >= 0.7)
-                _promised_tool = _act_matches[0][0] if _action_promise else None
-
-                # False promises are always short (1-2 sentences like "Let me search...").
-                # A long analytical/conversational response is never a false promise, so
-                # skip detection to avoid trapping the agent in a retry loop. An explicit
-                # <Action> commitment overrides the skip (the length is just thinking).
-                _skip_fp_detection = (_response_len > 800) and not _action_promise
-                if not _skip_fp_detection and (_action_promise or self._detect_false_tool_promise(_visible, tool_calls_detected)):
-                    self._false_promise_retries += 1
-                    # An <Action> commitment is high-confidence, so it is never treated as
-                    # a "substantial answer" the validator merely misread.
-                    _is_substantial = (_response_len > 200) and not _action_promise
-                    # For substantial responses, cap at 2 retries: the validator is
-                    # likely misclassifying analytical text, and more retries only
-                    # deepen the loop (each CORRECTION prompt produces more analysis).
-                    _effective_max = 2 if _is_substantial else self._max_false_promise_retries
-
-                    if self._false_promise_retries > _effective_max:
-                        UI.event("System", "Max false promise retries reached - skipping validation", style="error")
-                        self._false_promise_retries = 0
-                        # Proceed without blocking
-                    else:
-                        UI.event("System", f"False promise detected (attempt {self._false_promise_retries}) - forcing retry...", style="warning")
-                        if _emit_to_web_ui():
-                            try:
-                                from vaf.core.web_interface import get_web_interface
-                                from vaf.core.subagent_ipc import get_current_session_id
-                                session_id = get_current_session_id()
-                                get_web_interface().log(
-                                    f"False promise detected (attempt {self._false_promise_retries}) - forcing retry...",
-                                    level="warning",
-                                    source="System",
-                                    session_id=session_id,
-                                )
-                            except Exception:
-                                pass
-                        # Only retract a short/empty response. A substantial answer (>200 visible
-                        # chars) that this heuristic flagged stays where the user is reading it and
-                        # gets a corrected follow-up appended instead. The bubble and the stream
-                        # buffer are retracted together: clearing only the buffer left the screen
-                        # showing text that the stored reply no longer contained.
-                        if _is_substantial:
-                            # Validated as shown, so the next round's buffer clear re-streams it
-                            # instead of dropping the text the user is reading.
-                            kept_turn_answers.append(self._clean_reasoning(full_content))
-                            _last_kept_is_final = False   # flagged: correction follows
-                        else:
-                            self._retract_streamed_reply(stream_callback, kept_turn_answers)
-                        # Add error to history to force correction
-                        self.history.append({
-                            "role": "assistant",
-                            "content": full_content
-                        })
-                        if _promised_tool:
-                            _correction = (
-                                f"CORRECTION NEEDED: You announced an action (\"{_act_intent[:120]}\") "
-                                f"but did NOT execute the tool call.\n"
-                                f"Call `{_promised_tool}` NOW using a proper function call. "
-                                f"Do not describe the call, emit it."
-                            )
-                        else:
-                            _correction = (
-                                "CORRECTION NEEDED: You mentioned using a tool (e.g. 'I am using...', 'Let me search...') "
-                                "but you did NOT execute the tool call.\n"
-                                "Please call the tool using proper function syntax now."
-                            )
-                        self.history.append({
-                            "role": "system",
-                            "content": _correction,
-                        })
-                        
-                        # Force retry without user input
-                        continue
-
-            # Reset retry counter if tool calls were made or we passed the check
-            self._false_promise_retries = 0
+            # 0. MODEL HEALTH (vaf/core/model_health.py): is the model stuck in this chat?
+            # Read on the user's own turn (`_model_health_begin` decides the scope) for a
+            # generation that put an answer on the screen, called no tool and wrote none as
+            # text either (the fallback parsers below would run that one), in a turn where no
+            # progress tool ran (a tool that ran and FAILED is a normal error, not a stuck
+            # model). It comes BEFORE result grounding so the two never both send a reply back:
+            # at mid or high the turn is re-run once, a tool call forced where the lane can; at
+            # high after that re-run the reply gets the honest note and grounding stands down,
+            # so the reply carries one note, never two.
+            _mh_verdict = None
+            _mh_logged = False
+            _mh_skip_grounding = False
+            if (getattr(self, "_model_health_turn", None) is not None and not _generation_stopped
+                    and not streaming_tools and not tool_calls_detected and full_content.strip()
+                    and self._guard_keeps_answer(full_content)
+                    and not self._turn_ran_progress_tool
+                    and not self._text_tool_calls(full_response, full_reasoning)):
+                _mh_verdict = self._model_health_score(full_content, full_response)
+                if _mh_verdict.level != model_health.NONE and not self._model_health_retried:
+                    _model_health_rerun(_mh_verdict, full_content, disable_tools)
+                    continue
+                if _mh_verdict.level == model_health.HIGH_LEVEL:
+                    _mh_skip_grounding = True
+                    if not self._model_health_noted:
+                        # Appended, never replacing, the same way as the grounding note: it
+                        # reaches the stored reply and a channel's text, both built from these.
+                        self._model_health_noted = True
+                        self._model_health_log(_mh_verdict, model_health.REACTION_NOTE)
+                        _mh_logged = True
+                        UI.event("System", "Model health: still stuck after the re-run - adding the note.", style="error")
+                        _note = "\n\n" + model_health.stuck_note(_mh_verdict.chat_language)
+                        full_content += _note
+                        full_response += _note
+                        if stream_callback:
+                            stream_callback(_note)
 
             # 0b. RESULT GROUNDING (Anti-Confabulation)
             # When the model produced a final text reply (no new tool call), make sure it isn't
@@ -11854,8 +11944,9 @@ class Agent:
             # (e.g. "Workflow failed: Tool not found" when execute_workflow was never run). On a
             # mismatch, send it back for correction; the Nth unsupported verdict of the chain
             # (N = result_grounding_max_retries) gets the fixed note below it instead of another
-            # model call, so it never loops.
-            if not streaming_tools and not tool_calls_detected and full_content.strip():
+            # model call, so it never loops. Not after the model-health note: one note per reply.
+            if (not streaming_tools and not tool_calls_detected and full_content.strip()
+                    and not _mh_skip_grounding):
                 _rg_on = True
                 try:
                     from vaf.core.config import Config as _CfgRG
@@ -11875,12 +11966,26 @@ class Agent:
                         full_content, _turn_res
                     )
                     if _ungrounded:
-                        self._result_grounding_retries += 1
                         try:
                             from vaf.core.config import Config as _CfgRG2
                             _rg_max = int(_CfgRG2.get("result_grounding_max_retries", 2))
                         except Exception:
                             _rg_max = 2
+                        # An unsupported claim is a model-health signal too. When it lifts the
+                        # turn to mid or high and the turn's re-run is unused, the re-run
+                        # REPLACES the correction: a prose correction is what a stuck model
+                        # answers with an invented excuse (live incident), and a forced call
+                        # gets the real result. The correction counter is not spent then. The
+                        # chain's last verdict keeps its fixed note either way.
+                        if _mh_verdict is not None:
+                            _mh_verdict = self._model_health_score(
+                                full_content, full_response, grounding_hit=True)
+                            if (self._result_grounding_retries + 1 < max(_rg_max, 1)
+                                    and _mh_verdict.level != model_health.NONE
+                                    and not self._model_health_retried):
+                                _model_health_rerun(_mh_verdict, full_content, disable_tools)
+                                continue
+                        self._result_grounding_retries += 1
                         if self._result_grounding_retries >= max(_rg_max, 1):
                             # Appended, never replacing: a guard does not erase a streamed reply,
                             # so the replies stay where the user read them, and the note reaches the stored message and the
@@ -11921,9 +12026,14 @@ class Agent:
                                 "role": "system",
                                 "content": _grounding_correction(_claim),
                             })
+                            if _mh_verdict is not None and not _mh_logged:
+                                self._model_health_log(_mh_verdict, model_health.REACTION_NONE)
                             continue
                     else:
                         self._result_grounding_retries = 0
+
+            if _mh_verdict is not None and not _mh_logged:
+                self._model_health_log(_mh_verdict, model_health.REACTION_NONE)
 
             # Team-await gate: hold a "task complete" claim while a sub-agent is genuinely running.
             if not streaming_tools and not tool_calls_detected and full_content.strip():
@@ -12114,103 +12224,7 @@ class Agent:
             
             # Fallback regex matches for models that don't use server API for tools
             if not tool_calls_detected:
-                # 1. XML Format: <tool_call>{"name":..., "arguments":...}</tool_call>
-                # Search full_response AND full_reasoning so tool_calls inside <think> are found
-                # (e.g. when reasoning is streamed separately from content)
-                text_to_search = (full_response + "\n" + (full_reasoning or "")).strip() or full_response
-                xml_tools = re.findall(r'<tool_call>(.*?)</tool_call>', text_to_search, re.DOTALL)
-                for tool_str in xml_tools:
-                     try:
-                        tool_data = json.loads(tool_str)
-                        if "name" in tool_data and "arguments" in tool_data:
-                            tool_calls_detected.append({
-                                "id": _synth_tool_call_id(),
-                                "type": "function",
-                                "function": {"name": tool_data["name"], "arguments": json.dumps(tool_data["arguments"]) if isinstance(tool_data["arguments"], dict) else tool_data["arguments"]}
-                            })
-                     except: pass
-                
-                # 2. Raw JSON Code Block: ```json ... ``` (if XML fails and looks like tool)
-                if not tool_calls_detected and "```json" in text_to_search:
-                    try:
-                        json_match = re.search(r'```json\s*(\[.*?\]|\{.*?\})\s*```', text_to_search, re.DOTALL)
-                        if json_match:
-                            data = json.loads(json_match.group(1))
-                            if isinstance(data, dict): data = [data] # normalize to list
-                            for item in data:
-                                if "name" in item and "arguments" in item:
-                                     tool_calls_detected.append({
-                                        "id": _synth_tool_call_id(),
-                                        "type": "function",
-                                        "function": {"name": item["name"], "arguments": json.dumps(item["arguments"]) if isinstance(item["arguments"], dict) else item["arguments"]}
-                                    })
-                    except: pass
-
-                # 3. Text Pattern: "1. web_search(...)", "Answer: web_search(...)"
-                # or leaked plan bullets '- find_mail({"query": ...})' (deepseek-v4).
-                # Shared parser _parse_paren_tool_calls (module level, tested).
-                if not tool_calls_detected:
-                    for _p_name, _p_args in _parse_paren_tool_calls(text_to_search, self.tools):
-                        tool_calls_detected.append({
-                            "id": _synth_tool_call_id(),
-                            "type": "function",
-                            "function": {"name": _p_name, "arguments": json.dumps(_p_args)},
-                        })
-
-                # 4. Pipe-delimited native tool calls: <|tool_call>call:NAME{key:<|"|>value<|"|>}<tool_call|>
-                # Additive defensive net, tried only when nothing above matched. The server normally
-                # converts these via --jinja; this catches the rare case where a raw call leaks into
-                # the text unconverted. NOT model-gated: this was gated to model_mode=="gemma4", but
-                # the local Qwen 3.5 4B (VAF's default) emits the SAME format, so a leaked call was
-                # never recovered and vanished into the chat, doing nothing (live incident 2026-07-21:
-                # create_calendar_event leaked exactly this way). The format is highly specific (those
-                # delimiters plus the <|"|> quote markers) and _parse_gemma4_tool_calls filters to
-                # known tool names, so it is safe for any model - the same posture as lanes 5 and 6.
-                if not tool_calls_detected:
-                    for _g_name, _g_args in _parse_gemma4_tool_calls(text_to_search, self.tools):
-                        tool_calls_detected.append({
-                            "id": _synth_tool_call_id(),
-                            "type": "function",
-                            "function": {"name": _g_name, "arguments": json.dumps(_g_args)},
-                        })
-
-                # 5. Qwen / Hermes text tool calls: <tool_call><function=NAME><parameter=KEY>VALUE</parameter>...</function></tool_call>
-                # A reasoning model (e.g. Qwen) sometimes writes this INSIDE <think> instead of making a
-                # native call, so the server never converts it and the call is dropped (observed:
-                # update_working_memory written this way -> the plan is never set -> the [PLAN REQUIRED]
-                # gate loops). The format is specific and results are filtered to known tools, so it is
-                # safe to try for any model once nothing above matched.
-                if not tool_calls_detected:
-                    for _q_name, _q_args in _parse_qwen_tool_calls(text_to_search, self.tools):
-                        tool_calls_detected.append({
-                            "id": _synth_tool_call_id(),
-                            "type": "function",
-                            "function": {"name": _q_name, "arguments": json.dumps(_q_args)},
-                        })
-
-                # 6. Claude-style XML / DeepSeek ｜｜DSML｜｜ tool call leaked into content
-                # (the same shape the coding agent recovers in its Format 0d). DeepSeek v4
-                # intermittently emits a real call as content instead of structured tool_calls;
-                # filtered to known tools, so it is safe to try once nothing above matched.
-                if not tool_calls_detected:
-                    from vaf.core.tool_call_recovery import extract_xml_tool_calls
-                    # ALL of them: a model that leaks a batch leaks it whole, and
-                    # taking only the first left the rest to be erased from the
-                    # text by strip_tool_call_markup - work silently not done.
-                    for _xml_tc in extract_xml_tool_calls(text_to_search, self.tools):
-                        tool_calls_detected.append(_xml_tc)
-
-                # 7. Bare OpenAI-wire JSON leaked as content:
-                # {"tool_calls": [{"id": ..., "function": {...}}]}. First live
-                # sighting: Veyllo echoed the wire format as text - the turn
-                # ended think-only, the UI hid the raw JSON, and the user saw an
-                # agent that "thought but never answered". Provider-issued ids
-                # are PRESERVED (the stateful backend accepts only its own ids
-                # on replay); one unknown tool name refuses the whole leak.
-                if not tool_calls_detected:
-                    from vaf.core.tool_call_recovery import extract_wire_json_tool_calls
-                    for _wire_tc in extract_wire_json_tool_calls(text_to_search, self.tools):
-                        tool_calls_detected.append(_wire_tc)
+                tool_calls_detected = self._text_tool_calls(full_response, full_reasoning)
 
             try:
                 append_domain_log("backend", f"after_regex_fallback tool_calls={len(tool_calls_detected)}")
@@ -13440,6 +13454,9 @@ class Agent:
             # below may loop again, and the next round's reset wipes full_response.
             kept_turn_answers.append(self._clean_reasoning(full_response))
             _last_kept_is_final = True
+            # The chat's model-health ledger, once the turn has answered (a turn that ends
+            # without an answer commits nothing; the call is idempotent within the turn).
+            self._model_health_commit()
             try:
                 append_domain_log("backend", f"after_history_append content_len={len(history_content)}")
             except Exception:
@@ -13461,40 +13478,6 @@ class Agent:
                     pass
                 self._thinking_reply_pending = None
 
-            # NOTE: Language mismatch auto-retry is currently disabled.
-            # To re-enable, uncomment the block below.
-            #
-            # Check for language mismatch: Did the model respond in a different language than the user?
-            # This helps catch cases where LANGUAGE_HINT was ignored (e.g., user asks in Turkish, model responds in English)
-            # CRITICAL: Do NOT check if tools were called (tool syntax "web_search" looks English but is valid)
-            # if not skip_input and user_input and history_content and not tool_calls_detected:
-            #     if self._check_language_mismatch(user_input, history_content):
-            #         # Mismatch detected! The warning is already in history (as system msg).
-            #         # Now we must REMOVE the bad response and RETRY immediately.
-            #
-            #         # 1. Remove the bad response, keep the system warning for the retry.
-            #         # The history is [..., assistant_response, system_warning], so we remove the item at -2.
-            #         del self.history[-2]
-            #
-            #         # 2. Treat as a retry (reuses logic for patience/backoff if needed)
-            #         empty_retry_count += 1
-            #
-            #         mismatch = getattr(self, "_last_language_mismatch", None) or {}
-            #         if mismatch:
-            #             UI.event(
-            #                 "System",
-            #                 "Triggering retry for language."
-            #                 f" User={mismatch.get('user', 'unknown')},"
-            #                 f" Response={mismatch.get('response', 'unknown')},"
-            #                 f" Retry={mismatch.get('target', 'unknown')}",
-            #                 style="warning",
-            #             )
-            #         else:
-            #             UI.event("System", "Triggering immediate retry for language correction...", style="warning")
-            #
-            #         # 3. Restart loop - model will see the system warning and try again
-            #         continue
-            
             # Context Management: Check after adding assistant response
             # Long reasoning phases can push us over the limit
             try:
@@ -14901,102 +14884,6 @@ class Agent:
 
         return "", -1
 
-    def _detect_false_tool_promise(self, response_text: str, tool_calls: list) -> bool:
-        """
-        Intelligently detects if the model claimed to use a tool but didn't execute it.
-        Uses a hybrid approach: Structural Analysis (Fast) -> LLM Validator (Accurate).
-        
-        Args:
-            response_text: The model's text response.
-            tool_calls: List of tool calls extracted (if any).
-            
-        Returns:
-            True if a false promise is detected (model lied about using tool).
-        """
-        # 1. Fast Path: If tools were actually called, it's valid.
-        if tool_calls and len(tool_calls) > 0:
-            return False
-            
-        # 2. Structural Analysis (Heuristics)
-        # -----------------------------------
-        # Normalize text
-        text = response_text.strip()
-        
-        # Skip only very short responses (keep long ones as they might contain false promises)
-        if len(text) < 10:
-            return False
-
-        suspicion_score = 0.0
-        import re
-        
-        # Indicator A: Mentions known tool names in code format (e.g. `read_file`)
-        tool_names = list(self.tools.keys())
-        formatted_tool_mentions = 0
-        for tool in tool_names:
-            if f"`{tool}`" in text or f"'{tool}'" in text or f'"{tool}"' in text:
-                formatted_tool_mentions += 1
-        
-        if formatted_tool_mentions > 0:
-            suspicion_score += 0.35
-            
-        # Indicator B: Waiting indicators (Ellipses, "wait", "moment")
-        if re.search(r'\.{3,}|…|⏳|⌛|🔄', text):
-            suspicion_score += 0.35
-            
-        # Indicator C: Ends with action-like statement (before punctuation)
-        if re.search(r'(:|…|\.{3,})\s*$', text):
-            suspicion_score += 0.2
-            
-        # Indicator D: Action keywords (Multilingual)
-        # We check for a few common ones, but rely mostly on structure
-        action_keywords = [
-            "read", "lesen", "search", "suche", "execute", "führe aus",
-            "using", "nutze", "verwende", "opening", "öffne"
-        ]
-        if any(kw in text.lower() for kw in action_keywords):
-            suspicion_score += 0.1
-
-        # 3. Decision Logic
-        # -----------------
-        # Low suspicion: Trust the model (it's just talking)
-        if suspicion_score < 0.4:
-            return False
-            
-        # High suspicion: Verify with LLM (LLM-as-Judge)
-        # This prevents false positives where model explains "You can use `read_file`..."
-        try:
-            # Construct a fast validation prompt
-            validator_prompt = (
-                f"Analyze this AI response. Did the AI CLAIM to use a tool RIGHT NOW (future/present), but didn't execute it?\n"
-                f"Response: \"{text[:600]}\"\n"
-                f"Tools Executed: None\n\n"
-                f"Rules:\n"
-                f"- FALSE_PROMISE (forward-looking, not yet done): \"I am using `read_file`...\", \"Let me search...\", \"I'll execute this now...\"\n"
-                f"- SAFE (past analysis, recommendation, or explanation): \"I called `read_file` three times\", \"Ich hab den librarian_agent aufgerufen\", \"You can use `web_search`\", \"The tool had no write access\", analytical summaries of what already happened\n\n"
-                f"Answer ONLY 'FALSE_PROMISE' or 'SAFE'."
-            )
-            
-            # Fast inference (low tokens, deterministic)
-            messages = [{"role": "user", "content": validator_prompt}]
-            result = ""
-            
-            if self.use_server: # Local Server
-                payload = {"messages": messages, "max_tokens": 5, "temperature": 0.0}
-                res = requests.post("http://127.0.0.1:8080/v1/chat/completions", json=payload, timeout=120).json()
-                result = res['choices'][0]['message']['content']
-            elif self.api_backend: # API
-                response_chunks = list(self.api_backend.chat_completion(messages, max_tokens=5, temperature=0.0, stream=False))
-                result = "".join(str(c) for c in response_chunks)
-            elif self.llm: # Local Library
-                output = self.llm.create_chat_completion(messages=messages, max_tokens=5, temperature=0.0)
-                result = output['choices'][0]['message']['content']
-                
-            return "FALSE_PROMISE" in result.upper()
-            
-        except Exception:
-            # If validation fails, fallback to heuristic (conservative)
-            return suspicion_score > 0.7
-
     def _turn_tool_results(self) -> list:
         """The actual tool outcomes of the CURRENT turn: walk history back to the last user message
         and collect the role='tool' entries since then as (tool_name, result) pairs, in order. Used
@@ -15063,8 +14950,8 @@ class Agent:
         and on a provider whose reasoning is folded into the content field (api_backend wraps
         `reasoning_content` in <think> tags) the raw text is mostly reasoning: a live incident had
         the guard grade a think block that recited "File written successfully" instead of the German
-        answer below it. The sibling false-promise guard has always measured the stripped text; this
-        one now uses the same shared helper.
+        answer below it. It uses the shared helper every reader of the visible reply uses (the
+        model-health score included).
         """
         from vaf.core.completion import strip_think_blocks
         text = strip_think_blocks(response_text or "").strip()
@@ -15256,7 +15143,8 @@ class Agent:
         """Drop the just-produced reply from the bubble AND from the stream buffer, then put the
         turn's already-validated answers back.
 
-        One sequence, three callers (empty response, false promise, result grounding). It was
+        One sequence, one caller: the empty-response retry, the one guard that runs only when
+        nothing answer-shaped was produced; every other guard keeps what the user read. It was
         three hand copies with three different policies, and they had drifted: one site cleared
         the bubble only for a short reply but the buffer unconditionally, so the screen and the
         stored message disagreed about what the user was shown. Never raises.
@@ -15638,7 +15526,7 @@ class Agent:
             if role == "system":
                 # Gemma 4: the LEADING system block (before any user/assistant) becomes the native
                 # front system turn. A system message that arrives LATER is an interstitial nudge
-                # (e.g. the empty-response / false-promise correction); fold it into a trailing USER
+                # (e.g. the empty-response or model-health note); fold it into a trailing USER
                 # turn instead -- never to the front -- otherwise the prior assistant message ends up
                 # last and the template rejects the request: "Assistant response prefill is
                 # incompatible with enable_thinking" (400). Gemma 3n folds all system into user as before.

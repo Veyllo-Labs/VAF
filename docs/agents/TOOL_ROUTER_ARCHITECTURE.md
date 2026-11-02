@@ -174,8 +174,9 @@ set and, while the agent has an allowed set (`set_allowed_tools`), inside that s
 model-facing surface reads it: the schema (`TOOLS`, which passes every name of the turn's
 scope through it, so no pin, rider or narrowed subset can carry a tool past it), `list_tools`,
 `search_tools` (both handed the agent by the dispatcher), the router's own tool prompt, the
-system prompt's tool documentation, its learned-pitfalls block, the false-promise correction
-and the `python_sandbox` tool bridge. Measured before it existed: the schema hid a tool while
+system prompt's tool documentation, its learned-pitfalls block, the model-health re-run's note
+and forced set (the turn's task tools as the turn offers them, never a rider; and never on a turn
+under an allowed set, where the re-run does not run at all) and the `python_sandbox` tool bridge. Measured before it existed: the schema hid a tool while
 the other five still named it. Hidden is not forbidden: `execute_tool` still runs a hidden
 tool, which is what lets code call a tool the model is not offered. Outside the allowed set
 IS forbidden: the dispatch funnel refuses it for every caller (`ToolCaller(allowed_tools=)`,

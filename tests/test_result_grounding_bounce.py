@@ -4,10 +4,10 @@
 """A guard may append to what the user has read. It may not take it away.
 
 Rule 4 invariant 2 of this repo says a guardrail must never erase or regenerate a streamed
-reply. Three of the four post-stream guards honoured it: the empty-response retry only clears
-when nothing answer-shaped exists, the false-promise retry spares a substantial answer, and
-the team-await hold carries an explicit non-destructive rationale. Result grounding, the one
-that is ON by default, cleared the bubble and the stream buffer unconditionally.
+reply. The empty-response retry only clears when nothing answer-shaped exists, the model-health
+re-run keeps the reply it sends back, and the team-await hold carries an explicit
+non-destructive rationale. Result grounding, the one that is ON by default, used to clear the
+bubble and the stream buffer unconditionally.
 
 Live incident: a correct German email draft was erased twice by a misjudgement, and what the
 user was left reading was the model's own English deliberation about the correction. The
@@ -146,17 +146,17 @@ def test_no_guard_clears_the_stream_buffer_by_hand():
     )
 
 
-def test_the_false_promise_keep_survives_the_next_round():
-    """MUTATION: remove the `kept_turn_answers.append` from the false-promise keep branch.
+def test_the_model_health_keep_survives_the_next_round():
+    """MUTATION: remove the `kept_turn_answers.append` from the model-health re-run.
 
-    Its comment promises a substantial reply "stays where the user is reading it", but that
-    guard's correction orders a tool call, and the next round's buffer clear re-streams only
-    `kept_turn_answers`. Without the append the kept text is gone from the screen and from the
-    stored reply one round later. Two sites needed the same half; only one had it.
-    """
-    region = _region("# 0. FALSE PROMISE DETECTION", "# Reset retry counter")
-    assert "kept_turn_answers.append(self._clean_reasoning(full_content))" in region
-    assert "self._retract_streamed_reply(stream_callback, kept_turn_answers)" in region
+    The re-run orders a tool call, and the round after a tool round clears the buffer and
+    re-streams only `kept_turn_answers`. Without the append the reply the user read is gone
+    from the screen and from the stored reply one round later (the behaviour is pinned in
+    test_model_health_turn.py::test_mid_forces_one_narrowed_call). It never retracts."""
+    region = _region("def _model_health_rerun(", "def _end_turn_without_answer(")
+    assert "kept_turn_answers.append(self._clean_reasoning(reply))" in region
+    assert "_retract_streamed_reply" not in region
+    assert "stream_callback.clear()" not in region
 
 
 def test_the_empty_response_retry_still_retracts_unconditionally():

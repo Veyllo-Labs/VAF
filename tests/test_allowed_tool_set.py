@@ -21,8 +21,9 @@ MUTATIONS, each turns the named test red:
 - ignore the set in `visible_tools()` -> the visibility test;
 - drop the set from the `TOOLS` cache key -> the cache test;
 - drop the visibility condition in `_plan_gate_state` -> the plan gate test;
-- read the raw `_active_tools` in `_turn_pitfalls` or in the false-promise candidates -> the
-  two reader tests.
+- read the raw `_active_tools` in `_turn_pitfalls` -> the pitfall test;
+- score a turn under a set (`_turn_is_from_a_person` instead of `_turn_is_from_the_user` in
+  `_model_health_in_scope`) -> the model-health test.
 """
 import json
 import re
@@ -255,63 +256,56 @@ def test_the_pitfall_block_names_no_tool_outside_the_set(agent, monkeypatch):
     assert "memory_search" not in block, block
 
 
-class _Sent(BaseException):
-    """Ends the turn at the second main request; BaseException so no retry handler eats it."""
-
-
-def _retry_step_corrections(agent, monkeypatch):
-    """Run one retry step with a tight context (the scope narrows to the internal subset,
-    which carries memory_search) where the model announces memory_search in its <Action>
-    block and calls nothing. Returns the tool names of the first main request, the turn's
-    scope and the false-promise corrections the step wrote into the history. The guard is
-    opt-in (`false_promise_detection_enabled`), so it is switched on here."""
-    from vaf.core.config import Config
-    _get = Config.get
-    monkeypatch.setattr(Config, "get", staticmethod(
-        lambda key, default=None: True if key == "false_promise_detection_enabled" else _get(key, default)))
-    monkeypatch.setattr(agent, "get_token_usage", lambda **kw: (100000, 32768))
+def _stuck_turn(agent, monkeypatch):
+    """One turn of a model the model-health score already finds stuck (a ledger at high)
+    that announces web_search and calls nothing. Returns the tool names of every main request,
+    their tool_choice, and the re-run notes the step wrote into the history."""
+    from vaf.core import model_health
+    monkeypatch.delenv("VAF_IN_SUBAGENT_TERMINAL", raising=False)
+    monkeypatch.setattr(agent, "get_token_usage", lambda **kw: (1000, 32768))
     monkeypatch.setattr(agent, "manage_context", lambda *a, **kw: None)
     monkeypatch.setattr(agent, "_try_workflow", lambda *a, **kw: None)
-    main, scope = [], []
+    monkeypatch.setattr(agent, "_route_tools", lambda text: ["web_search"])
+    monkeypatch.setattr(agent, "_detect_ungrounded_result_claim", lambda *a, **kw: (False, None))
+    agent._bind_session_persistence(SESSION)
+    agent.main_persistence.save_model_health(model_health.to_payload(model_health.State(10.0, "de")))
+    offered, choices = [], []
 
     def backend(messages=None, **kw):
         if not kw.get("tools"):
             yield "ok"
             return
-        main.append([t["function"]["name"] for t in kw["tools"]])
-        scope.append(list(agent._active_tools or []))
-        if len(main) > 1:
-            raise _Sent()
-        yield "<Action>memory_search: look up what I know about the owner</Action> Moment."
+        offered.append([t["function"]["name"] for t in kw["tools"]])
+        choices.append(kw.get("tool_choice"))
+        yield "Ich suche das jetzt mit web_search heraus und melde mich gleich bei dir."
 
     agent.api_backend.chat_completion = backend
-    agent.history.append({"role": "user", "content": "Was weisst du ueber deinen Chef?"})
-    try:
-        agent.chat_step(user_input="Was weisst du ueber deinen Chef?", skip_input=True,
-                        disable_workflows=True, stream_callback=lambda t: None)
-    except _Sent:
-        pass
-    corrections = [str(m.get("content")) for m in agent.history
-                   if "CORRECTION NEEDED" in str(m.get("content"))]
-    return main[0], scope[0], corrections
+    text = "Was weisst du ueber deinen Chef, such das bitte heraus?"
+    agent.chat_step(user_input=text, raw_user_input=text, disable_workflows=True,
+                    stream_callback=lambda t: None)
+    notes = [str(m.get("content")) for m in agent.history
+             if str(m.get("content")).startswith("No tool ran this turn")]
+    return offered, choices, notes
 
 
-def test_the_false_promise_correction_names_no_tool_outside_the_set(agent, monkeypatch):
-    """The nudge says "Call `<tool>` NOW": a tool the set leaves out would be ordered and then
-    refused."""
-    _, scope, corrections = _retry_step_corrections(agent, monkeypatch)
-    assert "memory_search" in scope, "the internal subset did not engage"
-    assert any("Call `memory_search` NOW" in c for c in corrections), (
-        "control: without a set the guard orders the announced tool")
+def test_the_model_health_rerun_names_only_the_task(agent, monkeypatch):
+    """The re-run's note and its forced set name the turn's task tools, never a rider: the
+    forced call can only be the work the turn was routed for."""
+    offered, choices, notes = _stuck_turn(agent, monkeypatch)
+    assert len(notes) == 1 and "one of web_search," in notes[0], notes
+    forced = choices[1]["allowed_tools"]
+    assert forced["mode"] == "required"
+    assert [t["function"]["name"] for t in forced["tools"]] == ["web_search"]
 
 
-def test_under_a_set_the_correction_orders_nothing_outside_it(agent, monkeypatch):
+def test_under_a_set_the_model_health_guard_does_not_run(agent, monkeypatch):
+    """A turn under a set answers somebody else: a forced call there could force a send to a
+    contact, so the turn is not scored, re-run or forced at all."""
     agent.set_allowed_tools({"web_search", "send_telegram"})
-    offered, scope, corrections = _retry_step_corrections(agent, monkeypatch)
-    assert "memory_search" in scope, "the internal subset did not engage"
-    assert set(offered) <= {"web_search", "send_telegram"}, offered
-    assert not any("memory_search" in c for c in corrections), corrections
-    assert agent._offered_tool_names() == ["web_search"]
+    offered, choices, notes = _stuck_turn(agent, monkeypatch)
+    assert len(offered) == 1, "the turn was re-run under the set"
+    assert set(offered[0]) <= {"web_search", "send_telegram"}, offered
+    assert notes == [] and choices[0] == "auto"
 
 
 def test_the_facade_passes_the_set_to_a_live_engine(agent):

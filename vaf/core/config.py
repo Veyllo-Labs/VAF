@@ -89,7 +89,7 @@ class Config:
         "provider": "local",
         "gpu_layers": -1,
         "auto_install_gpu": True,  # On an NVIDIA GPU without CUDA, auto-install CUDA llama-cpp-python (no terminal prompt). Set false to stay on CPU.
-        "false_promise_detection_enabled": False,  # Forced retry when a model claims a tool but emits none. OFF by default (caused retry loops / false positives); set true to re-enable.
+        "model_health_guard_enabled": True,  # Per-chat stuck-model score (vaf/core/model_health.py): one re-run with a forced tool call when a model keeps announcing work it never does, then an honest note. Admin-only (GLOBAL_CONFIG_KEYS).
         "empty_response_retry_enabled": False,  # Local "Empty response detected -> snapshot and retry". OFF by default (noisy + false positives from messy <think>, esp. in background thinking runs). API empty-handling is unaffected.
         "action_tag_enabled": False,  # The <Action> declaration tag (model announces the tool before calling it; UI Action panel). OFF by default: not needed currently, and small local models (e.g. Qwen/Gemma 4B) tend to emit the <Action> block and then stop instead of calling the tool. Soft/optional convention -- nothing breaks when off (code + parser stay). See docs/agents/ACTION_TAG.md.
         "n_ctx": 32768,  # Minimum supported context window; load() clamps lower values up to this.
@@ -1172,6 +1172,9 @@ class Config:
         "a2a_room_invite_directory",
         # Loop-protection budgets: a limit its own subject can raise is not a limit.
         "max_tool_turns_per_step", "tool_loop_unlimited",
+        # The model-health guard changes what the agent sends to the provider (a forced
+        # tool call) for every account at once: one config file serves them all.
+        "model_health_guard_enabled",
         # Which tools the coding agent may reach for. The built-in list deliberately
         # leaves out mail, messengers, calendars and contacts; a non-admin LAN user
         # who could add them back would be granting a build step the ability to act

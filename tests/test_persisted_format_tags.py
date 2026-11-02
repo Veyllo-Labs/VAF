@@ -130,6 +130,8 @@ def test_format_identities_are_pinned_literals():
     assert RECIPE_FORMAT == "vllmenv-1-18dfb7"
     from vaf.core.vllm_server import RECIPE_FORMAT_ROCM
     assert RECIPE_FORMAT_ROCM == "vllmrocm-1-a69536"
+    from vaf.core.model_health import LEDGER_FORMAT
+    assert LEDGER_FORMAT == "modelhealth-1-d52e8a"
 
 
 def test_chain_with_versioned_seed_verifies():

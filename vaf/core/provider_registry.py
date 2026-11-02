@@ -86,6 +86,24 @@ class ProviderSpec:
     # anthropic needs no flag because a tool_choice change there invalidates only
     # the messages tier, and google uses a different SDK entirely.
     supports_allowed_tools: bool = False
+    # Whether the chat lane may FORCE a tool call (`tool_choice="required"`, or the
+    # `allowed_tools` dict with mode "required" where the flag above holds). Read by the
+    # model-health re-run (vaf/core/model_health.py), which forces one generation when a
+    # stuck model announced work and called nothing. Default False: a provider that refuses
+    # the form answers 400 and loses the turn, and one that accepts and ignores it gives no
+    # signal at all, so only a measured provider is on.
+    #   openai      True: documents and honours "required".
+    #   anthropic   False: VAF runs adaptive thinking by default (`anthropic_thinking`), and
+    #               Anthropic refuses forced tool use while thinking is on.
+    #   deepseek    False: answers 400 to every forcing form (measured; api_backend.py
+    #               downgrades it to "auto" for every caller).
+    #   google, openrouter
+    #               False: not probed.
+    #   veyllo      False: accepts a tool restriction and ignores it (probed above).
+    #   local       False: the agent's local lane is the server lane, not this backend,
+    #               and `Agent._can_force_tool_call` decides it there (vLLM and llama-server
+    #               both accept "required").
+    forces_tool_calls: bool = False
     # Vision
     vision_capable: bool = False
     vision_default_model: Optional[str] = None  # None + capable -> Config.get_default_model(name)
@@ -103,6 +121,7 @@ PROVIDER_SPECS: Dict[str, ProviderSpec] = {
             coder_base_url="https://api.openai.com/v1",
             models_url="https://api.openai.com/v1/models",
             supports_allowed_tools=True,  # probed on gpt-4o-mini: subset swap costs nothing
+            forces_tool_calls=True,
             vision_capable=True,
         ),
         ProviderSpec(

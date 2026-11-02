@@ -13,12 +13,11 @@ AST and not substring, deliberately: browser_agent.py carries two doc-comments n
 `APIBackendManager.chat_completion()` - a text scan would count them as calls.
 
 THE NAMED FOLLOW-UP, recorded where the next reader looks: vaf/core/agent.py is
-excluded below and carries 13 chat_completion calls, of which 11 are one-shot
+excluded below and carries 12 chat_completion calls, of which 10 are one-shot
 hand-rolls (five factored helpers: _run_validation_llm, _generate_summary,
 _generate_for_compaction, _generate_for_document_extraction,
-_generate_for_classification; six inline: analyze_intent, analyze_workflow,
-_route_tools, the async-ack translation, _detect_false_tool_promise, the vision
-fallback in _prepare_messages). The follow-up rebases those onto self.complete() /
+_generate_for_classification; five inline: analyze_intent, analyze_workflow,
+_route_tools, the async-ack translation, the vision fallback in _prepare_messages). The follow-up rebases those onto self.complete() /
 the completion helpers, one round with its own baselines - the OTHER two calls are
 chat_step's conversation lane (streaming + its non-stream fallback) and NEVER convert.
 """

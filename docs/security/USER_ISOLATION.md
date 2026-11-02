@@ -1019,7 +1019,14 @@ next turn goes to the person served least recently (`vaf/core/task_queue.py` on
 queued web turn's place (`chat_wait`, and `chatWait` in a `history_update`) goes only to
 the connections subscribed to that chat (`broadcast_to_session`), never through
 `_push_session_update`, which reroutes to a room owner while worker 1's agent runs a room
-turn; it is a count of the turns ahead and never says whose. The former
+turn; it is a count of the turns ahead and never says whose. One chat reports one place,
+and places are counted only up to 20 ("more than 20" beyond), so one account's backlog
+cannot make every other person's enqueue and pop work out thousands of places and send
+thousands of updates (measured on 2000 queued turns: 2001 picks and 2000 callbacks per
+change before, 20 and at most 21 after). The forget refresh after a credential was
+replaced in a chat (`_refresh_after_forget`) sends the transcript the same way, to the
+chat's subscribers only: through `_push_session_update` it could reach the room owner of
+another worker's room turn. The former
 every-two-seconds `queue_stats` broadcast, which sent the whole queue's counts per class
 to every connection of every account, is gone; an admin reads the chat queue's numbers
 as the `chat` line of the `queues` row.

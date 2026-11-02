@@ -402,6 +402,7 @@
     "chatWaiting": "エージェントの順番待ち：{position}番目、約{seconds}秒",
     "chatWaitingMinutes": "エージェントの順番待ち：{position}番目、約{minutes}分",
     "chatWaitingNoEta": "エージェントの順番待ち：{position}番目",
+    "chatWaitingMany": "エージェントの順番待ち：{count}件以上が先です",
     "sttBusy": "音声認識がいま混み合っています。少ししてからもう一度お試しください。",
     "ttsBusy": "読み上げがいま混み合っています。少ししてからもう一度お試しください。"
   },

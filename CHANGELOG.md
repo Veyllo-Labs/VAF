@@ -78,7 +78,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   puts any scarce resource behind the same fair queue.
 - **Chat messages now take turns fairly too.** When several people write at once, the next
   answer goes to whoever was served least recently, so one person with many chats no longer
-  holds up the others; your own messages still run in the order you sent them. A message
+  holds up the others; within a chat, messages still run in the order you sent them. A message
   that has to wait shows its place in line and the expected wait under the dots ("In line
   for the agent: place 2, about 40 s"), also after a reload. `vaf health` also reports the
   chat queue and, with vLLM, how many requests wait in the engine.
@@ -191,6 +191,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **A chat cleaned of a credential refreshes only for the people who have it open.** After the
+  agent replaced a credential you typed into a chat, the refreshed transcript is now sent only
+  to the views of that chat. Before, while VAF was answering in an agent room at the same
+  moment, it could also reach the room's owner when several replies ran in parallel.
 - **A workflow's project folder is always its own.** Neither its variables nor a step's output
   can point the folder its steps write to, and its shell steps work in, at another place (for
   example VAF's settings folder or another account's projects), and the cleanup of temporary

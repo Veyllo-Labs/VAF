@@ -221,6 +221,77 @@ def test_a_turn_taken_at_once_sends_nothing(monkeypatch, tmp_path, _fresh_queue)
         assert sent == []
 
 
+def test_a_stop_within_the_grace_sends_nothing(monkeypatch, tmp_path, _fresh_queue):
+    """Stop drops the queued turn before the grace is over: the held-back place is never
+    sent (the queue drops a turn silently, so the sender asks whether the chat still waits).
+    MUTATION: drop the still_waiting check - "place 1" arrives after the Stop, red."""
+    tq = _fresh_queue
+    _busy(tq)
+    with _bob(monkeypatch, tmp_path) as (ws, server):
+        sent = []
+        real_to_session = server.manager.broadcast_to_session
+
+        async def spy(session_id, message):
+            if message.get("type") == "chat_wait":
+                sent.append(message.get("position"))
+            return await real_to_session(session_id, message)
+
+        monkeypatch.setattr(server.manager, "broadcast_to_session", spy)
+        _send(ws, {"type": "chat", "content": "hello", "sessionId": SID})
+        assert _wait_for(lambda: tq.has_queued(SID), timeout=5.0)
+        assert tq.drop_queued_tasks_for_session(SID) == 1
+        time.sleep(server.CHAT_WAIT_GRACE_S + 0.5)
+        assert sent == []
+
+
+def test_the_forget_refresh_stays_with_the_chat(monkeypatch, tmp_path):
+    """The transcript a forget refresh carries goes to the chat's subscribers only, also while
+    worker 1's agent runs a room turn of another account (the reroute of
+    _push_session_update).
+    MUTATION: send it through _bridge_or_push again - it goes to the room owner, red."""
+    import asyncio
+
+    import vaf.core.session as session_mod
+    import vaf.core.web_server as server
+
+    mgr = session_mod.SessionManager(storage_dir=str(tmp_path))
+    s = mgr.new(name="Bobs Chat", user_scope_id=SCOPE)
+    s.id = SID
+    mgr.save(s)
+    monkeypatch.setattr(server, "session_mgr", mgr)
+    agent = type("RoomAgent", (), {})()
+    agent._room_turn = {"room_id": "room-1"}
+    agent._current_user_scope_id = OTHER
+    monkeypatch.setattr(server.manager, "agent_instance", agent, raising=False)
+    loop = asyncio.new_event_loop()
+    runner = threading.Thread(target=loop.run_forever, daemon=True)
+    runner.start()
+    to_session, to_user = [], []
+
+    async def session_spy(session_id, message):
+        to_session.append((session_id, message.get("type")))
+
+    async def user_spy(user_id, message):
+        to_user.append((user_id, message.get("type")))
+
+    monkeypatch.setattr(server.manager, "broadcast_to_session", session_spy)
+    monkeypatch.setattr(server.manager, "broadcast_to_user", user_spy)
+    monkeypatch.setattr(server.manager, "_get_dispatch_loop", lambda: loop)
+    try:
+        worker = threading.Thread(target=server._refresh_after_forget,
+                                  kwargs={"session_id": SID, "transcript_scrubbed": True})
+        worker.start()
+        worker.join(5)
+        assert _wait_for(lambda: len(to_session) >= 2, timeout=5.0)
+        time.sleep(0.2)
+        assert to_session == [(SID, "context_checkpoint"), (SID, "history_update")]
+        assert to_user == []
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        runner.join(5)
+        loop.close()
+
+
 def test_the_speech_sender_is_unchanged():
     """The speech callers pass none of the new knobs: the first place goes at once, a change
     within a second is throttled, the grant always goes.
@@ -265,13 +336,14 @@ def test_history_update_carries_the_place(monkeypatch, tmp_path, _fresh_queue):
     tq.add(session_id=SID, input_text="waiting", source="web",
            metadata={"enqueue_user_scope_id": SCOPE})
     with _bob(monkeypatch, tmp_path) as (ws, server):
-        assert server._session_activity(SID)["chatWait"] == {"position": 2, "eta_ms": None}
+        assert server._session_activity(SID)["chatWait"] == {"position": 2, "eta_ms": None,
+                                                             "more": False}
         assert server._session_activity(SID2)["chatWait"] is None
         _send(ws, {"type": "load_session", "id": SID})
         update = _until(ws, "history_update")[-1]
         while update.get("sessionId") != SID:   # the connect sends the newest chat first
             update = _until(ws, "history_update")[-1]
-        assert update["chatWait"] == {"position": 2, "eta_ms": None}
+        assert update["chatWait"] == {"position": 2, "eta_ms": None, "more": False}
         assert update["isActive"] is True
 
 
@@ -305,11 +377,13 @@ def test_page_forwards_and_shows_the_place():
     MUTATIONS: drop the eta_ms forward; drop the clear in generation_stopped - red."""
     src = PAGE.read_bytes().decode()
     wait = _branch(src, "else if (data.type === 'chat_wait')")
-    for read in ("data.sessionId", "data.position", "data.eta_ms"):
+    for read in ("data.sessionId", "data.position", "data.eta_ms", "data.more"):
         assert read in wait, read
     history = _branch(src, "else if (data.type === 'history_update')")
     assert "data.chatWait.position" in history and "data.chatWait.eta_ms" in history
-    for key in ("'chatWaiting'", "'chatWaitingMinutes'", "'chatWaitingNoEta'"):
+    assert "data.chatWait.more" in history
+    for key in ("'chatWaiting'", "'chatWaitingMinutes'", "'chatWaitingNoEta'",
+                "'chatWaitingMany'"):
         assert key in src, key
     bubble = _branch(src, "{chatWaitLine ? (", 400)
     assert 'role="status"' in bubble and 'aria-live="polite"' in bubble

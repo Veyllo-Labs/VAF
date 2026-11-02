@@ -331,7 +331,9 @@ VAF serves many users from one process, in two layers that behave differently:
   **one** worker (`parallel_main_workers: 1`), so turns execute one at a time - a long reasoning turn by one
   user still delays the others until it finishes. They take turns, though: the next turn goes to the person
   served least recently, so one user with messages in several chats cannot hold up everyone else, and a
-  waiting message shows its place in line and the expected wait under the dots of its chat.
+  waiting message shows its place in line and the expected wait under the dots of its chat. Fairness
+  starts at the second waiting turn: a turn taken from an empty queue is not remembered, so with one worker
+  a user's next message can still go before another user's that arrived after it.
 
 To run users concurrently, raise the pool (admin-only keys; restart to apply):
 

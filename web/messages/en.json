@@ -402,6 +402,7 @@
     "chatWaiting": "In line for the agent: place {position}, about {seconds} s",
     "chatWaitingMinutes": "In line for the agent: place {position}, about {minutes} min",
     "chatWaitingNoEta": "In line for the agent: place {position}",
+    "chatWaitingMany": "In line for the agent: more than {count} ahead",
     "sttBusy": "Speech recognition is busy right now. Please try again in a moment.",
     "ttsBusy": "Read-aloud is busy right now. Please try again in a moment."
   },

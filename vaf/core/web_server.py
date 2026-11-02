@@ -855,7 +855,8 @@ def _transcribe_local(path: str, key: Optional[str] = None, *,
 
 
 def _queue_wait_sender(websocket, loop, msg_type: str, armed=None, resource=None, *,
-                       send=None, extra=None, throttle_s: float = 1.0, grace_s: float = 0.0):
+                       send=None, extra=None, throttle_s: float = 1.0, grace_s: float = 0.0,
+                       still_waiting=None):
     """An `on_wait` for a fair queue that tells THIS socket the caller's place.
 
     Runs in the thread that reports (the executor thread that waits, or a queue worker), so
@@ -869,7 +870,10 @@ def _queue_wait_sender(websocket, loop, msg_type: str, armed=None, resource=None
     `send_json`), `extra` is merged into every payload. With `grace_s` the first place is
     held back that long and dropped when the grant comes first, and the grant is sent only
     when a place was: a queue whose idle worker takes the turn a moment later must not
-    flash "place 1" before every answer. That state lives on the loop, so it needs no lock."""
+    flash "place 1" before every answer. That state lives on the loop, so it needs no lock.
+    `still_waiting()` is asked before that first, held-back place goes out: a turn dropped by
+    Stop within the grace tells its sender nothing (the queue drops it silently), so the
+    timer would otherwise show a place for a turn that no longer exists."""
     last = {"at": None}
     deliver = send if send is not None else (lambda payload: websocket.send_json(payload))
 
@@ -910,6 +914,14 @@ def _queue_wait_sender(websocket, loop, msg_type: str, armed=None, resource=None
         held["timer"] = None
         if held["done"] or held["latest"] is None:
             return
+        if still_waiting is not None:
+            try:
+                waiting = bool(still_waiting())
+            except Exception:
+                waiting = True
+            if not waiting:
+                held["done"] = True
+                return
         held["shown"] = True
         on_wait(held["latest"])
 
@@ -945,17 +957,31 @@ def _queue_wait_sender(websocket, loop, msg_type: str, armed=None, resource=None
 CHAT_WAIT_GRACE_S = 0.5
 
 
+def _chat_wait_payload(payload: dict) -> dict:
+    """`more` marks a place beyond the counted ones: `position` is then
+    `PLACES_COUNTED + 1` and means "more than PLACES_COUNTED turns ahead"."""
+    from vaf.core.task_queue import PLACES_COUNTED
+    payload["more"] = int(payload.get("position") or 0) > PLACES_COUNTED
+    return payload
+
+
+def _send_chat_wait(session_id: str, payload: dict):
+    return manager.broadcast_to_session(session_id, _chat_wait_payload(payload))
+
+
 def _chat_wait_sender(loop, session_id):
-    """The `on_wait` of a queued web chat turn: `chat_wait {sessionId, position, eta_ms,
-    waited_ms}` to the connections subscribed to that chat, after the grace. The session id
-    is bound HERE, when the turn is queued (the WS loop reassigns its own per message).
-    Never `_push_session_update`: that one reroutes to a room owner while worker 1's agent
-    runs a room turn, and a place in line belongs to the chat's own viewers."""
+    """The `on_wait` of a queued web chat turn: `chat_wait {sessionId, position, more,
+    eta_ms, waited_ms}` to the connections subscribed to that chat, after the grace. The
+    session id is bound HERE, when the turn is queued (the WS loop reassigns its own per
+    message). Never `_push_session_update`: that one reroutes to a room owner while worker
+    1's agent runs a room turn, and a place in line belongs to the chat's own viewers."""
+    from vaf.core.task_queue import TaskQueue
     sid = str(session_id)
     return _queue_wait_sender(None, loop, "chat_wait",
-                              send=functools.partial(manager.broadcast_to_session, sid),
+                              send=functools.partial(_send_chat_wait, sid),
                               extra={"sessionId": sid}, throttle_s=0.0,
-                              grace_s=CHAT_WAIT_GRACE_S)
+                              grace_s=CHAT_WAIT_GRACE_S,
+                              still_waiting=functools.partial(TaskQueue().has_queued, sid))
 
 
 # How long a live call's TTS waits for a slot: the reply text is already decided and goes
@@ -1278,8 +1304,8 @@ def _session_chat_wait(session_id):
         return None
     if info is None:
         return None
-    return {"position": int(info.position),
-            "eta_ms": None if info.eta_s is None else int(info.eta_s * 1000)}
+    return _chat_wait_payload({"position": int(info.position),
+                               "eta_ms": None if info.eta_s is None else int(info.eta_s * 1000)})
 
 
 def _session_activity(session_id) -> dict:
@@ -1321,13 +1347,29 @@ def _refresh_after_forget(session_id=None, transcript_scrubbed=False, **_):
     except Exception:
         return
     sid = str(session_id)
-    wi = get_web_interface()
-    wi._bridge_or_push({"type": "context_checkpoint", "session_id": sid}, sid)
-    wi._bridge_or_push({
+    _send_to_chat_viewers(sid, {"type": "context_checkpoint", "session_id": sid})
+    _send_to_chat_viewers(sid, {
         "type": "history_update",
         "messages": _history_projection(loaded, sid),
         **_session_activity(sid),
-    }, sid)
+    })
+
+
+def _send_to_chat_viewers(session_id: str, payload: dict) -> None:
+    """From any thread, to the connections subscribed to this chat and nobody else. The
+    forget refresh carries the whole transcript, so it must not take `_push_session_update`:
+    that one reroutes to the room owner while worker 1's agent runs a room turn (or the chat
+    has a room-ordered task), which with several workers is another chat's room. Without a
+    live server loop there is no connection to refresh."""
+    wi = get_web_interface()
+    loop = wi._get_dispatch_loop()
+    if loop is None:
+        return
+    payload["sessionId"] = session_id
+    try:
+        asyncio.run_coroutine_threadsafe(wi.broadcast_to_session(session_id, payload), loop)
+    except Exception:
+        pass
 
 
 from vaf.core.forget_secrets import add_listener as _add_forget_listener

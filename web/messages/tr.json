@@ -402,6 +402,7 @@
     "chatWaiting": "Ajan için sırada: {position}. sıra, yaklaşık {seconds} sn",
     "chatWaitingMinutes": "Ajan için sırada: {position}. sıra, yaklaşık {minutes} dk",
     "chatWaitingNoEta": "Ajan için sırada: {position}. sıra",
+    "chatWaitingMany": "Ajan için sırada: önünde {count} taneden fazla var",
     "sttBusy": "Konuşma tanıma şu anda meşgul. Lütfen birazdan tekrar dene.",
     "ttsBusy": "Sesli okuma şu anda meşgul. Lütfen birazdan tekrar dene."
   },

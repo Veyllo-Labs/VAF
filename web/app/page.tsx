@@ -4577,12 +4577,15 @@ function VAFDashboardContent() {
     // A queued chat turn's place in line (chat_wait, and history_update.chatWait on a reload
     // or chat switch): its own place and expected wait only, shown under the loading dots of
     // that chat, cleared when the turn starts, completes or is stopped.
-    const [chatWait, setChatWait] = useState<{ sessionId: string; position: number; etaMs: number | null } | null>(null);
+    // `more`: the server counts places only so far; the place is then "more than position - 1".
+    const [chatWait, setChatWait] = useState<{ sessionId: string; position: number; etaMs: number | null; more: boolean } | null>(null);
     const clearChatWait = useCallback((sessionId?: string | null) => {
         setChatWait(prev => (prev && (!sessionId || prev.sessionId === sessionId)) ? null : prev);
     }, []);
     const chatWaitLine = (chatWait && chatWait.position > 0 && chatWait.sessionId === currentSessionId)
-        ? (chatWait.etaMs === null
+        ? (chatWait.more
+            ? tMain('chatWaitingMany', { count: chatWait.position - 1 })
+            : chatWait.etaMs === null
             ? tMain('chatWaitingNoEta', { position: chatWait.position })
             : chatWait.etaMs < 90000
                 ? tMain('chatWaiting', { position: chatWait.position,
@@ -6686,7 +6689,8 @@ function VAFDashboardContent() {
                     const historyWaitPosition = data.chatWait ? (Number(data.chatWait.position) || 0) : 0;
                     setChatWait(historyWaitPosition > 0 && data.sessionId
                         ? { sessionId: data.sessionId, position: historyWaitPosition,
-                            etaMs: typeof data.chatWait.eta_ms === 'number' ? data.chatWait.eta_ms : null }
+                            etaMs: typeof data.chatWait.eta_ms === 'number' ? data.chatWait.eta_ms : null,
+                            more: data.chatWait.more === true }
                         : null);
                     // New Chat reaches a new session only through here, past handleSessionSwitch.
                     if (data.sessionId !== prevSessionId) {
@@ -7276,7 +7280,8 @@ function VAFDashboardContent() {
                     const waitPosition = Number(data.position) || 0;
                     if (waitPosition > 0 && waitSessionId) {
                         setChatWait({ sessionId: waitSessionId, position: waitPosition,
-                            etaMs: typeof data.eta_ms === 'number' ? data.eta_ms : null });
+                            etaMs: typeof data.eta_ms === 'number' ? data.eta_ms : null,
+                            more: data.more === true });
                     } else {
                         clearChatWait(waitSessionId);
                     }

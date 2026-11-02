@@ -829,7 +829,37 @@ there any more: the per-user pool below is on by default and gives each of them 
 browser of its own. The shared container is what remains for everyone the pool cannot
 serve, and everything here describes that fallback.
 
-On it, `browser_agent` serialises all calls - only **one** browser session runs at a time. If a second user (or a second concurrent workflow) triggers `browser_agent` while a session is already running, the call waits in a queue for up to **120 seconds** before giving up with a "Browser agent is busy" message.
+On it, `browser_agent` serialises all calls - only **one** browser session runs at a time. If a second user (or a second concurrent workflow) triggers `browser_agent` while a session is already running, the run waits in the browser's fair queue (`browser:vaf-browser`, the `vaf.ResourceQueue` primitive of [EMBEDDING.md](../EMBEDDING.md)):
+
+- **Turns by person.** Runs waiting for the same browser take turns by person, keyed on the
+  canonical scope (`resolve_browser_scope`): one person's backlog of runs does not hold up
+  somebody else's single run.
+- **Eight places, two per person.** At most 8 runs wait for one browser, and at most 2 of
+  them from one person. Each waiting run holds a thread (a chat worker, an automation, an
+  in-process workflow step), and a run takes minutes, so a person's third waiting run would
+  almost surely time out anyway. That third run is told at once: "Browser agent is busy: 2
+  of this person's browser runs are already waiting for this browser."
+- **120 seconds.** A run waits at most 120 seconds, the value the gate always had: a chat
+  turn waiting here holds its queue worker that long. A run that gives up says where it
+  stood ("This run waited 120 s at place 1 and gave up, the expected wait was about 3
+  min"), so the agent can tell the user why. The text never names the container or
+  another person.
+- **Stop ends a waiting run.** Stop in the chat that started the run ends its wait within a
+  quarter of a second, before it drives anything ("Browser task stopped by user."). Stop in
+  another chat does not touch it.
+- **Per process**, as before. A spawned browser child and the server do not share the
+  queue; across processes the holder record below answers busy.
+- **No live place in the UI** (a named boundary): the browser window opens on the run's
+  first frame, and a console line would land in a window that is still closed. The chat
+  shows the running `browser_agent` tool, and the model gets the place in the busy text. A
+  live place would need a session-scoped event and a window state of its own.
+
+Each per-user instance of the pool below has a queue of its own (`browser:<container>`),
+with the same numbers, so runs on different instances proceed in parallel. Those queues are
+unlisted (`listed=False`): an instance's container name is a scope hash, so it never reaches
+the `queues` row of `vaf health`, which shows the shared browser's line only. A browser
+timeout or refusal degrades that row for 15 minutes, which is its designed meaning
+(somebody was turned away); browser runs are long, so a busy shared browser shows there.
 
 This avoids memory exhaustion and tab interference in the shared Chromium container.
 

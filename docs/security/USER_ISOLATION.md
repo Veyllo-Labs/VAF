@@ -1031,6 +1031,21 @@ every-two-seconds `queue_stats` broadcast, which sent the whole queue's counts p
 to every connection of every account, is gone; an admin reads the chat queue's numbers
 as the `chat` line of the `queues` row.
 
+The browser agent's runs and the document preview wait in fair queues on the same
+canonical key. A browser run keys on `resolve_browser_scope` (the run's scope, the child's
+`VAF_USER_SCOPE_ID`, else the local admin's), at most 2 of a browser's 8 waiting places per
+person. A web upload's preview (`set_sidebar_documents`, the chat inject) keys on the
+connection's scope, and a report opened in the viewer on the session's recorded owner, read
+before the conversion, at most 3 of the `gotenberg` queue's 12 places per person. The
+preview's place (`document_preview_wait`) and its refusal (`document_preview_busy`) go to
+the uploading socket, or for a report to that session's subscribers through
+`broadcast_to_session`, never through `_push_session_update`. A per-user browser
+instance's queue is named after its container, a scope hash, so it is registered unlisted
+(`listed=False`) and never reaches the health payload, the rule the pool's own health row
+keeps ("counts only, never a scope or a container name"); the shared browser's queue is
+listed, since that is where people meet. The browser's busy text, which reaches the model,
+names its place and wait and never another person or a container.
+
 ## 7. Watchdog and Admin Security APIs
 
 ### Sub-agent watchdog (`vaf/api/supervisor_routes.py`)

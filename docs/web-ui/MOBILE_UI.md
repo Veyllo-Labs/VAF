@@ -36,6 +36,18 @@ the full width there too. The card's insides stack by construction (a column of 
 the text field grows with the text instead of scrolling, and the buttons wrap
 (`flex-wrap`) when the "take the change back" link joins them on a narrow screen.
 
+## The document viewer's preview place
+
+While an Office document waits for its preview, the viewer's header (`DocumentViewer.tsx`,
+dock mode) shows "Waiting for the preview: place 2, about 1 s" in place of the index label.
+The header is `h-12`, and an ancestor clips with `overflow-hidden`, so a status row that wraps
+loses the title above it: measured at 390 px, the wrapped row cut off "Document Viewer", and
+with a long file name also the name itself. With a notice the row is therefore `flex-nowrap`,
+the notice truncates (`min-w-0 truncate`, full text in its `title`), and below `md` the
+separator, the "Attachments" chip and the file name are `max-md:hidden`, which leaves the dot
+and the notice. Without a notice the row keeps its old classes, so the desktop is unchanged;
+the same wrap still clips the title of the plain "Ready" row at 390 px, as it did before.
+
 ## Reusable patterns (copy the class strings)
 
 ### Full-screen sheet (modals / dialogs with real content)

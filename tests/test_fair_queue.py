@@ -350,6 +350,32 @@ def test_a_second_registration_cannot_drop_the_share():
         fair_queue.resource_queue("weak-first", slots=1, max_waiting=12, max_waiting_per_key=3)
 
 
+def test_an_unlisted_queue_is_left_out_of_the_numbers():
+    """A queue only one person waits in (a per-user browser named after a scope hash)
+    is a queue like any other, but its name never reaches the numbers payload.
+    MUTATION: queue_metrics() ignores `listed` - red."""
+    shared = fair_queue.resource_queue("shared-thing", slots=1)
+    private = fair_queue.resource_queue("private-u-0123", slots=1, listed=False)
+    assert fair_queue.resource_queue("private-u-0123", slots=1, listed=False) is private
+    with private.slot("alice"):
+        assert private.metrics()["running"] == 1
+    names = [m["name"] for m in fair_queue.queue_metrics()]
+    assert names == ["shared-thing"], names
+    assert shared.listed is True and private.listed is False
+
+
+def test_listed_is_part_of_the_registration():
+    """Asking for the same queue listed and unlisted is two callers disagreeing, and an
+    error: either one would silently lose what it relies on. MUTATION: drop `listed`
+    from the compared numbers - red."""
+    fair_queue.resource_queue("one-name", slots=1, listed=False)
+    with pytest.raises(ValueError, match="listed"):
+        fair_queue.resource_queue("one-name", slots=1)
+    fair_queue.resource_queue("other-name", slots=1)
+    with pytest.raises(ValueError):
+        fair_queue.resource_queue("other-name", slots=1, listed=False)
+
+
 def test_unbounded_queue_never_waits():
     q = ResourceQueue("open", slots=None)
     inside = threading.Barrier(3, timeout=2)

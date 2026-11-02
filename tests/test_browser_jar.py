@@ -47,9 +47,12 @@ class _Procs:
 def box(monkeypatch, tmp_path):
     import vaf.core.browser_pool as bp
     import vaf.core.containers as containers
+    import vaf.core.fair_queue as fair_queue
     import vaf.core.session as sess
     import vaf.core.subagent_ipc as ipc_mod
 
+    # Every test starts with no browser queue: a run's gate is the real fair queue.
+    monkeypatch.setattr(fair_queue, "_registry", {})
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("VAF_USER_SCOPE_ID", raising=False)
     monkeypatch.delenv("VAF_IN_SUBAGENT_TERMINAL", raising=False)
@@ -530,14 +533,14 @@ class _Reached(Exception):
 
 def _two_runs_through_the_gate(box, monkeypatch, *, a_end_waits_for_b_claim):
     """Drive two REAL BrowserAgentTool.run calls on the shared browser through the
-    real concurrency gate (one slot) and the real _run_browser up to its handover;
+    real browser queue (one slot) and the real _run_browser up to its handover;
     the workspace mirror right after it ends each run. A holds the gate until the
     test lets it go; B queues behind it. Returns (result of B, B's view of the
     record at the moment B had its handover)."""
     pytest.importorskip("browser_use", exc_type=ImportError)
     import vaf.tools.browser_agent as ba
 
-    monkeypatch.setitem(ba._BROWSER_SEMAPHORES, "vaf-browser", threading.Semaphore(1))
+    assert ba._BROWSER_MAX_PARALLEL == 1
     web = box["web"]
     release_a = threading.Event()
     b_claimed = threading.Event()
@@ -629,7 +632,7 @@ def test_the_run_reads_its_generation_after_the_gate_and_ends_before_opening_it(
     assert "run_generation(" not in run_src, "run() reads the generation before the gate"
     assert run_src.count("agent_run_ended(container_name=_container)") == 1
     assert (run_src.index("agent_run_ended(container_name=_container)")
-            < run_src.index("_browser_semaphore(_container).release()")), (
+            < run_src.index("gate.__exit__(None, None, None)")), (
         "the gate opens before the run has ended")
     body = inspect.getsource(BrowserAgentTool._run_browser)
     read = body.index("_run_gen = run_generation(container_name=container_name)")
@@ -754,7 +757,7 @@ def test_a_queued_run_keeps_the_browser_marked_as_driven(box, monkeypatch, momen
     pytest.importorskip("browser_use", exc_type=ImportError)
     import vaf.tools.browser_agent as ba
 
-    monkeypatch.setitem(ba._BROWSER_SEMAPHORES, "vaf-browser", threading.Semaphore(1))
+    assert ba._BROWSER_MAX_PARALLEL == 1
     web = box["web"]
     assert web.start("scope-y", "sess-y", save=False)["status"] == "active"
     release_a, b_here, release_b = threading.Event(), threading.Event(), threading.Event()
@@ -810,11 +813,20 @@ def test_a_run_whose_gate_times_out_gives_its_count_back(box, monkeypatch):
     instead (red: the run ahead's generation and entry are gone)."""
     import vaf.tools.browser_agent as ba
 
-    gate = threading.Semaphore(1)
-    monkeypatch.setitem(ba._BROWSER_SEMAPHORES, "vaf-browser", gate)
-    monkeypatch.setattr(ba, "_BROWSER_QUEUE_TIMEOUT", 0.2)
+    monkeypatch.setattr(ba, "BROWSER_WAIT_S", 0.2)
     web = box["web"]
-    gate.acquire()                               # the run ahead holds the gate...
+    # The run ahead holds the browser's slot from a thread of its own, as a real run
+    # does: a second slot of one queue in the same thread is refused outright.
+    holding, let_go = threading.Event(), threading.Event()
+
+    def ahead():
+        with ba._browser_queue("vaf-browser").slot("scope-a"):
+            holding.set()
+            let_go.wait(10)
+
+    holder = threading.Thread(target=ahead, daemon=True)
+    holder.start()
+    assert holding.wait(5)
     bi.stop_for_agent_run(container_name="vaf-browser")
     bi.hand_jar_to_run(user_scope_id="scope-a", persistent=True, container_name="vaf-browser",
                        run_generation=bi.run_generation(container_name="vaf-browser"))
@@ -823,13 +835,15 @@ def test_a_run_whose_gate_times_out_gives_its_count_back(box, monkeypatch):
 
     out = ba.BrowserAgentTool().run(task="look it up", user_scope_id="scope-b")
     assert out.startswith("Browser agent is busy"), out
+    assert "place 1" in out, out
     assert web._agent_runs == 1, "the timed-out run kept its place in the count"
     assert web._run_token == token and web.run_generation() == generation
     data = json.loads((bj._state_dir() / "vaf-browser.json").read_bytes())
     assert [h["kind"] for h in data["holders"]] == [bj.KIND_RUN]
 
     bi.agent_run_ended(container_name="vaf-browser")   # ...and ends
-    gate.release()
+    let_go.set()
+    holder.join(5)
     assert web._agent_runs == 0 and not web.has_activity()
 
 

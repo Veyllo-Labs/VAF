@@ -102,3 +102,40 @@ def test_a_full_queue_says_busy_with_a_reason():
     assert len(refused) == 1 and isinstance(refused[0], vaf.QueueBusy)
     assert refused[0].reason == "full" and refused[0].resource == "one-licence"
     assert str(refused[0])
+
+
+def test_a_stranger_keeps_a_private_queue_unlisted(monkeypatch):
+    """A queue that belongs to one person (one per user, named after them) still admits,
+    waits and refuses, and stays out of the numbers a health payload carries.
+    MUTATION: queue_metrics() ignores `listed` - red."""
+    import vaf.core.fair_queue as fq
+
+    monkeypatch.setattr(fq, "_registry", {})
+    q = vaf.resource_queue("gpu-of-alice", slots=1, max_waiting=1, listed=False)
+    assert vaf.resource_queue("gpu-of-alice", slots=1, max_waiting=1, listed=False) is q
+    places, outcome = [], []
+
+    def second():
+        with q.slot("alice", on_wait=lambda info: places.append(info.position), poll_s=0.01):
+            outcome.append("admitted")
+
+    def third():
+        try:
+            with q.slot("alice"):
+                outcome.append("third admitted")
+        except vaf.QueueBusy as busy:
+            outcome.append(busy.reason)
+
+    with q.slot("alice"):
+        t = threading.Thread(target=second, daemon=True)
+        t.start()
+        end = time.monotonic() + 5
+        while q.metrics()["waiting"] == 0 and time.monotonic() < end:
+            time.sleep(0.005)
+        refused = threading.Thread(target=third, daemon=True)
+        refused.start()
+        refused.join(5)
+    t.join(5)
+    assert outcome == ["full", "admitted"], outcome
+    assert places[0] == 1 and places[-1] == 0
+    assert "gpu-of-alice" not in [m["name"] for m in vaf.queue_metrics()]

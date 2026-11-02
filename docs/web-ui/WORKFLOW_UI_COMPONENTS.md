@@ -192,7 +192,7 @@ Located at `web/components/DocumentViewer.tsx`
 
 The attachments panel (paperclip). Displays uploaded documents with:
 - **PDF**: Original PDF via react-pdf with text selection and highlights
-- **Office** (.docx, .xlsx, .pptx, .odt, .ods, .odp): When Gotenberg is running, the backend converts to PDF and returns `mimeType: application/pdf` with `data` (PDF base64), so the frontend uses the PDF viewer for full design fidelity. Without Gotenberg: DOCX via client-side mammoth.js when `data` is present; .xlsx/.pptx via backend `htmlContent` (HTML)
+- **Office** (.docx, .xlsx, .pptx, .odt, .ods, .odp): When Gotenberg is running, the backend converts to PDF and returns `mimeType: application/pdf` with `data` (PDF base64), so the frontend uses the PDF viewer for full design fidelity. Without Gotenberg, or while its queue is busy: DOCX via client-side mammoth.js when `data` is present; .xlsx/.pptx via backend `htmlContent` (HTML); .odt/.ods/.odp on busy as their extracted text (no `htmlContent`). While the conversion waits, the header shows its place (`previewNotice`)
 - **Markdown, HTML, plain text**: Rendered accordingly
 - **Document list**: Collapsible sidebar (overlays when expanded; compact strip when collapsed)
 - **Quote from document**: Text selection inserts a chip; each selection gets a distinct highlight color

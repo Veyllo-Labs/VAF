@@ -404,6 +404,9 @@
     "chatWaitingNoEta": "正在排队等待智能体：第 {position} 位",
     "chatWaitingMany": "正在排队等待智能体：前面至少 {count} 条",
     "sttBusy": "语音识别当前繁忙，请稍后再试。",
+    "docPreviewWaiting": "正在等待预览：第 {position} 位，约 {seconds} 秒",
+    "docPreviewWaitingNoEta": "正在等待预览：第 {position} 位",
+    "docPreviewBusy": "预览当前繁忙，因此 {name} 以简化版式显示。",
     "ttsBusy": "朗读当前繁忙，请稍后再试。"
   },
   "nav": {

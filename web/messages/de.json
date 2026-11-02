@@ -404,6 +404,9 @@
     "chatWaitingNoEta": "Warte auf den Agenten: Platz {position}",
     "chatWaitingMany": "Warte auf den Agenten: mindestens {count} davor",
     "sttBusy": "Die Spracherkennung ist gerade ausgelastet. Versuch es bitte gleich noch einmal.",
+    "docPreviewWaiting": "Warte auf die Vorschau: Platz {position}, etwa {seconds} s",
+    "docPreviewWaitingNoEta": "Warte auf die Vorschau: Platz {position}",
+    "docPreviewBusy": "Die Vorschau ist gerade ausgelastet, {name} wird deshalb einfacher dargestellt.",
     "ttsBusy": "Das Vorlesen ist gerade ausgelastet. Versuch es bitte gleich noch einmal."
   },
   "nav": {

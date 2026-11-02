@@ -4594,6 +4594,17 @@ function VAFDashboardContent() {
                 : tMain('chatWaitingMinutes', { position: chatWait.position,
                     minutes: Math.round(chatWait.etaMs / 60000) }))
         : '';
+    // An Office document's preview waits for the converter (document_preview_wait): its own
+    // place and expected wait, shown in the document viewer's header of that chat, cleared
+    // on the grant (position 0), when the documents arrive and on a chat switch.
+    const [docPreviewWait, setDocPreviewWait] = useState<{ sessionId: string; name: string; position: number; etaMs: number | null } | null>(null);
+    useEffect(() => { setDocPreviewWait(null); }, [currentSessionId]);
+    const docPreviewNotice = (docPreviewWait && docPreviewWait.position > 0 && docPreviewWait.sessionId === currentSessionId)
+        ? (docPreviewWait.etaMs === null
+            ? tMain('docPreviewWaitingNoEta', { position: docPreviewWait.position })
+            : tMain('docPreviewWaiting', { position: docPreviewWait.position,
+                seconds: Math.max(1, Math.round(docPreviewWait.etaMs / 1000)) }))
+        : undefined;
     const [sttEnabled, setSttEnabled] = useState(false); // Track STT status
     const [memoryLearning, setMemoryLearning] = useState<{ active: boolean; message: string } | null>(null);
     const memoryLearningTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -6207,6 +6218,7 @@ function VAFDashboardContent() {
                     setInsertedSelections(prev => prev.filter((_, i) => i !== selectionIndex));
                 }
                 else if (data.type === 'sidebar_documents_set') {
+                    setDocPreviewWait(null);
                     const contents = (data.contents || []) as Array<{ name: string; content: string; data?: string; mimeType?: string; htmlContent?: string }>;
                     const sid = data.sessionId || activeSessionId;
                     const updater = (prev: { isOpen: boolean; documents: DocumentViewerDoc[] }) => {
@@ -7286,6 +7298,24 @@ function VAFDashboardContent() {
                     } else {
                         clearChatWait(waitSessionId);
                     }
+                }
+                else if (data.type === 'document_preview_wait') {
+                    // An Office document's preview waits for the converter; position 0 = its turn now.
+                    const previewSessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
+                    const previewName = typeof data.name === 'string' ? data.name : '';
+                    const previewPosition = Number(data.position) || 0;
+                    setDocPreviewWait(previewPosition > 0 && previewSessionId
+                        ? { sessionId: previewSessionId, name: previewName, position: previewPosition,
+                            etaMs: typeof data.eta_ms === 'number' ? data.eta_ms : null }
+                        : null);
+                }
+                else if (data.type === 'document_preview_busy') {
+                    // The converter was busy for too long: the document shows in the simpler
+                    // layout. A passing notice, not an error dialog.
+                    setDocPreviewWait(null);
+                    const busyName = typeof data.name === 'string' ? data.name : '';
+                    setDownloadToast({ show: true, message: tMain('docPreviewBusy', { name: busyName }), success: false });
+                    setTimeout(() => setDownloadToast(prev => ({ ...prev, show: false })), 4000);
                 }
                 else if (data.type === 'stt_wait') {
                     // The dictation waits for the speech recognizer: position 0 = it is its turn now.
@@ -11489,6 +11519,7 @@ function VAFDashboardContent() {
                                     insertedSelectionsCount={insertedSelections.length}
                                     insertedSelections={insertedSelections}
                                     indexStatus={activeAttachmentIndexStatus}
+                                    previewNotice={docPreviewNotice}
                                     canClose={!isIndexing}
                                     onLearnDocument={(name) => {
                                         if (ws && currentSessionId) {

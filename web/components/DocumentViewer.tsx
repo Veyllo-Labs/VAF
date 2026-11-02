@@ -71,6 +71,10 @@ export type DocumentViewerProps = {
      *  auto-clears after seconds (header back to neutral), which re-locked the
      *  button right after it unlocked. */
     learnReady?: boolean;
+    /** The preview's place in line while an Office document waits for its conversion
+     *  ("Waiting for the preview: place 2, about 1 s"), already translated. Shown in
+     *  the header status instead of the index label while set. */
+    previewNotice?: string;
 };
 
 const FILE_ACCEPT = '.pdf,.docx,.xlsx,.pptx,.txt,.md,.json,.csv,.html,.htm';
@@ -506,6 +510,7 @@ export default function DocumentViewer({
     insertedSelectionsCount = 0,
     insertedSelections = [],
     indexStatus,
+    previewNotice,
 }: DocumentViewerProps) {
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [listExpanded, setListExpanded] = useState(true);
@@ -636,7 +641,9 @@ export default function DocumentViewer({
                                 </div>
                                 <div className="min-w-0">
                                     <div className="text-xs font-semibold text-gray-900">{title}</div>
-                                    <div className="flex items-center gap-2 text-[10px] text-gray-500 flex-wrap">
+                                    {/* With a preview notice the row stays on one line (the header is h-12 and
+                                        clips a wrapped row); below md only the dot and the notice remain. */}
+                                    <div className={previewNotice ? 'flex items-center gap-2 text-[10px] text-gray-500 flex-nowrap' : 'flex items-center gap-2 text-[10px] text-gray-500 flex-wrap'}>
                                         <span
                                             className="relative flex h-1.5 w-1.5 shrink-0"
                                             title={indexStatus === 'indexing' ? 'Attachments are being prepared for search' : undefined}
@@ -644,14 +651,18 @@ export default function DocumentViewer({
                                             {indexStatus === 'indexing' && (
                                                 <span className="absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-75 animate-ping" />
                                             )}
-                                            <span className={cn('relative inline-flex h-1.5 w-1.5 rounded-full', idxDotClass)} />
+                                            <span className={cn('relative inline-flex h-1.5 w-1.5 rounded-full', previewNotice ? 'bg-amber-500' : idxDotClass)} />
                                         </span>
-                                        <span className={cn('uppercase', idxLabelClass)}>{idxLabel}</span>
-                                        <span className="text-gray-300">·</span>
-                                        <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-gray-500 shrink-0">
+                                        {previewNotice ? (
+                                            <span role="status" aria-live="polite" className="min-w-0 truncate text-amber-600" title={previewNotice}>{previewNotice}</span>
+                                        ) : (
+                                            <span className={cn('uppercase', idxLabelClass)}>{idxLabel}</span>
+                                        )}
+                                        <span className={cn('text-gray-300', previewNotice && 'max-md:hidden')}>·</span>
+                                        <span className={cn('rounded bg-gray-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-gray-500 shrink-0', previewNotice && 'max-md:hidden')}>
                                             Attachments
                                         </span>
-                                        <span className="truncate font-mono text-[11px] text-gray-600">
+                                        <span className={cn('truncate font-mono text-[11px] text-gray-600', previewNotice && 'max-md:hidden')}>
                                             {documents.length === 0
                                                 ? 'No document'
                                                 : documents.length === 1

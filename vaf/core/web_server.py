@@ -2548,7 +2548,23 @@ async def _open_report_in_viewer(session_id: str, file_path: str, title: Optiona
         name = title or p.name
         data_b64 = _b64.b64encode(p.read_bytes()).decode("ascii")
         mime = _mt.guess_type(p.name)[0] or "application/octet-stream"
-        contents = await process_files_to_sidebar_list([{"name": name, "data": data_b64, "mimeType": mime}])
+        # The session's recorded owner, read BEFORE the conversion: the preview waits in
+        # the queue under that person's scope, not in the local admin's bucket. The
+        # session is loaded again after the conversion for the merge, so a change made
+        # while the preview waited is not overwritten.
+        try:
+            _owner = session_mgr.load(session_id)
+        except Exception:
+            _owner = None
+        user_scope_id = (getattr(_owner, "metadata", None) or {}).get("user_scope_id") or None
+        # The preview's place goes to this session's viewers only (broadcast_to_session
+        # stamps the sessionId), never through the room reroute of _push_session_update.
+        # Without a session id broadcast_to_session would widen to every connection, so
+        # no event goes out then (the route always passes one).
+        contents = await process_files_to_sidebar_list(
+            [{"name": name, "data": data_b64, "mimeType": mime}], user_scope_id=user_scope_id,
+            notify=(functools.partial(manager.broadcast_to_session, session_id)
+                    if session_id else None))
         if not contents:
             return
         try:
@@ -2557,7 +2573,6 @@ async def _open_report_in_viewer(session_id: str, file_path: str, title: Optiona
             loaded = _Session(id=session_id, name=f"Session {session_id}")
         if not getattr(loaded, "runtime_state", None):
             loaded.runtime_state = {}
-        user_scope_id = (getattr(loaded, "metadata", None) or {}).get("user_scope_id") or None
         existing = [d for d in (loaded.runtime_state.get("sidebar_documents") or []) if d.get("name") != name]
         # Persist a SLIM copy (drop the big base64 'data') to keep the session JSON small, but BROADCAST the
         # full contents WITH 'data' (the Gotenberg-rendered PDF). Without 'data' the viewer falls back to the
@@ -3969,24 +3984,57 @@ def _escape_html(s: str) -> str:
     return html.escape(s, quote=True)
 
 
-def _office_to_pdf_via_gotenberg(file_path: str, filename: str) -> bytes | None:
+# The document preview's queue in front of Gotenberg. Measured on a 16-core machine: one
+# 1-page DOCX converts in 0.21 s, three at once finish at 0.20 / 0.39 / 0.59 s, so the
+# container already converts one at a time (one LibreOffice), first come first served:
+# one slot loses nothing and gives the waiting person a place.
+GOTENBERG_SLOTS = 1
+# The speech values, for the same many-tabs reason: one account's sockets fill its share,
+# never the whole line.
+GOTENBERG_MAX_WAITING = 12
+GOTENBERG_MAX_WAITING_PER_KEY = 3
+# A person is watching the viewer, and the fallback (the simpler layout) is instant.
+GOTENBERG_WAIT_S = 15.0
+# At 0.2 s per conversion a place shown sooner would flash before nearly every preview.
+PREVIEW_WAIT_GRACE_S = 0.5
+
+
+def _gotenberg_queue():
+    """The ONE registration of the preview queue: every call passes the same numbers."""
+    from vaf.core.fair_queue import resource_queue
+    return resource_queue("gotenberg", slots=GOTENBERG_SLOTS,
+                          max_waiting=GOTENBERG_MAX_WAITING,
+                          max_waiting_per_key=GOTENBERG_MAX_WAITING_PER_KEY)
+
+
+def _office_to_pdf_via_gotenberg(file_path: str, filename: str, *, user_key=None,
+                                 on_wait=None, deadline_s: Optional[float] = None
+                                 ) -> bytes | None:
     """
     Convert Office docs (DOCX, XLSX, PPTX, ODT, ODS, ODP) to PDF via Gotenberg Docker service.
     Returns PDF bytes or None if unavailable. Gotenberg uses LibreOffice under the hood; MIT license.
+
+    The conversion waits its turn in the `gotenberg` fair queue under `user_key` (the
+    uploader's scope), at most `deadline_s` (default GOTENBERG_WAIT_S); `on_wait` hears the
+    place. A refusal raises QueueBusy to the caller, which shows the simpler layout instead
+    of starting a second converter; every other failure still answers None.
     """
     url = (Config.get("document_conversion_docker_url") or "").strip().rstrip("/")
     if not url:
         return None
-    try:
-        import requests
-        api_url = f"{url}/forms/libreoffice/convert"
-        with open(file_path, "rb") as f:
-            files = {"files": (filename, f, "application/octet-stream")}
-            r = requests.post(api_url, files=files, timeout=60)
-        if r.status_code == 200 and r.headers.get("content-type", "").lower().startswith("application/pdf"):
-            return r.content
-    except Exception as e:
-        log("WebServer", f"Gotenberg conversion failed for {filename}: {e}")
+    with _gotenberg_queue().slot(
+            user_key, deadline_s=GOTENBERG_WAIT_S if deadline_s is None else deadline_s,
+            on_wait=on_wait):
+        try:
+            import requests
+            api_url = f"{url}/forms/libreoffice/convert"
+            with open(file_path, "rb") as f:
+                files = {"files": (filename, f, "application/octet-stream")}
+                r = requests.post(api_url, files=files, timeout=60)
+            if r.status_code == 200 and r.headers.get("content-type", "").lower().startswith("application/pdf"):
+                return r.content
+        except Exception as e:
+            log("WebServer", f"Gotenberg conversion failed for {filename}: {e}")
     return None
 
 
@@ -6698,7 +6746,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 if has_data:
                                     contents = await process_files_to_sidebar_list(
                                         sidebar_docs_payload, session_id=session_id,
-                                        user_scope_id=user_scope_id)
+                                        user_scope_id=user_scope_id,
+                                        notify=websocket.send_json)
                                     if contents:
                                         _slim = [{k: v for k, v in doc.items() if k != "data"} for doc in contents]
                                         try:
@@ -6992,7 +7041,8 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         else:
                             log_attachment("PROCESS_START", session=session_id, doc_count=len(documents))
                             contents = await process_files_to_sidebar_list(
-                                documents, session_id=session_id, user_scope_id=user_scope_id)
+                                documents, session_id=session_id, user_scope_id=user_scope_id,
+                                notify=websocket.send_json)
                             log_attachment("PROCESS_DONE", session=session_id, results=len(contents),
                                 content_lens=[len(c.get("content","")) for c in contents],
                                 content_types=[
@@ -10369,11 +10419,18 @@ _MAX_ATTACH_BYTES = 100 * 1024 * 1024
 
 
 async def process_files_to_sidebar_list(files: list, session_id: str = None,
-                                        user_scope_id: str = None) -> list:
+                                        user_scope_id: str = None, *, notify=None) -> list:
     """
     Process uploaded files and return a list of {name, content, data?, mimeType?, path?} for sidebar_documents.
     Uses same Librarian extraction as process_uploaded_files.
     Passes through data (base64) and mimeType for PDF display.
+
+    An Office document's preview waits in the `gotenberg` queue under `user_scope_id`.
+    `notify(payload)` returns an awaitable that delivers one event to whoever watches this
+    upload: `document_preview_wait` (the place, after PREVIEW_WAIT_GRACE_S) and
+    `document_preview_busy` (the queue refused, the document shows in the simpler layout).
+    Without `notify` no event is sent. A payload carries `sessionId` when `session_id` is
+    given; a caller without one adds it in its own `notify`.
 
     With a session, each document is PERSISTED to the user-siloed chat
     attachments folder (the image pattern) and `path` carries the REAL file
@@ -10513,8 +10570,34 @@ async def process_files_to_sidebar_list(files: list, session_id: str = None,
                 suf = file_ext.lower()
                 if suf in (".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp"):
                     # Prefer Gotenberg (LibreOffice in Docker): full design fidelity, DOCX/XLSX/PPTX → PDF.
-                    pdf_bytes = await asyncio.to_thread(_office_to_pdf_via_gotenberg, temp_path, filename)
-                    if not pdf_bytes and suf == ".docx":
+                    # It waits its turn in the preview queue; the event fields are built
+                    # here, per file, and handed over as arguments.
+                    from vaf.core.fair_queue import QueueBusy
+                    _event = {"name": filename}
+                    if session_id:
+                        _event["sessionId"] = session_id
+                    on_wait = None
+                    if notify is not None:
+                        on_wait = _queue_wait_sender(
+                            None, asyncio.get_running_loop(), "document_preview_wait",
+                            send=notify, extra=dict(_event), grace_s=PREVIEW_WAIT_GRACE_S)
+                    preview_busy = False
+                    try:
+                        pdf_bytes = await asyncio.to_thread(
+                            functools.partial(_office_to_pdf_via_gotenberg, temp_path, filename,
+                                              user_key=user_scope_id, on_wait=on_wait))
+                    except QueueBusy as busy:
+                        # No host LibreOffice on busy: a second converter on the same CPU is
+                        # what the queue exists to avoid. The simpler layout below is instant.
+                        pdf_bytes, preview_busy = None, True
+                        log("WebServer", f"document preview busy ({busy.reason}) for {filename}")
+                        if notify is not None:
+                            try:
+                                await notify({"type": "document_preview_busy", **_event,
+                                              "reason": busy.reason})
+                            except Exception:
+                                pass
+                    if not pdf_bytes and suf == ".docx" and not preview_busy:
                         pdf_bytes = await asyncio.to_thread(_docx_to_pdf_via_libreoffice, temp_path)
                     if pdf_bytes:
                         entry["data"] = base64.b64encode(pdf_bytes).decode("ascii")
@@ -10527,14 +10610,19 @@ async def process_files_to_sidebar_list(files: list, session_id: str = None,
                                 html_body = _xlsx_to_html(temp_path)
                             elif suf == ".pptx":
                                 html_body = _pptx_to_html(temp_path)
+                            elif preview_busy:
+                                # No HTML converter of its own: the viewer shows the
+                                # extracted text. "Not reachable" would not be true here.
+                                html_body = None
                             else:
                                 html_body = "<p>[ODT/ODS/ODP: Gotenberg nicht erreichbar. Bitte starten Sie den Docker-Stack.]</p>"
-                            entry["htmlContent"] = (
-                                "<!DOCTYPE html><html><head><meta charset=\"utf-8\"/>"
-                                "<style>body{font-family:system-ui,sans-serif;padding:1.5rem;max-width:80ch;}"
-                                "table{border-collapse:collapse;}td,th{border:1px solid #ccc;padding:6px;}</style>"
-                                "</head><body>" + html_body + "</body></html>"
-                            )
+                            if html_body is not None:
+                                entry["htmlContent"] = (
+                                    "<!DOCTYPE html><html><head><meta charset=\"utf-8\"/>"
+                                    "<style>body{font-family:system-ui,sans-serif;padding:1.5rem;max-width:80ch;}"
+                                    "table{border-collapse:collapse;}td,th{border:1px solid #ccc;padding:6px;}</style>"
+                                    "</head><body>" + html_body + "</body></html>"
+                                )
                         except Exception as e:
                             log("WebServer", f"Office to HTML failed for {filename}: {e}")
                 results.append(entry)

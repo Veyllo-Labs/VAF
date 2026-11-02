@@ -1721,7 +1721,9 @@ documented in [docs/agents/VOICE_AGENT.md](agents/VOICE_AGENT.md).
 
 One model in one process, one speech container, one licence: when several people
 want it at once, somebody waits. `vaf.ResourceQueue` makes that wait fair and
-visible. It is the queue VAF's own speech lanes wait in.
+visible. It is the queue VAF's own speech lanes wait in, and so do the browser agent's
+runs on one Chromium (`browser:<container>`) and the document preview in front of
+Gotenberg (`gotenberg`).
 
 ```python
 import vaf
@@ -1782,7 +1784,14 @@ def answer(user_scope, prompt, show_place):
   `max_waiting`, `max_waiting_per_key`) raises `ValueError`: returning the existing queue
   would silently drop the limits one of the two callers relies on, a per-person share
   above all. Create a queue in one place and ask for it with the same numbers.
-- **Numbers.** `queue.metrics()` and `vaf.queue_metrics()` (every queue
+- **Unlisted queues.** `vaf.resource_queue(name, ..., listed=False)` keeps the queue out
+  of `vaf.queue_metrics()`; it admits, waits and refuses like any other. Use it for a
+  queue that belongs to one person, such as VAF's per-user browser instances, whose
+  container names are a scope hash: only that person waits there, so the queue has no
+  numbers across people worth a health row, and its name never reaches a numbers
+  payload. `listed` is one of the registration's numbers, so a second call that
+  differs only in it raises `ValueError` too.
+- **Numbers.** `queue.metrics()` and `vaf.queue_metrics()` (every listed queue
   `resource_queue()` registered) give length, running, served, refusals per reason,
   wait p50/p95/max and service p50/p95 over the last 15 minutes. Counts only, never
   a key. VAF shows them as the `queues` row of `vaf health`, together with its
@@ -2671,7 +2680,7 @@ Stable public surface (safe to build on):
   `transcribe` seam.
 - `vaf.ResourceQueue` / `vaf.QueueBusy` / `vaf.WaitInfo` / `vaf.resource_queue` /
   `vaf.queue_metrics` - the fair queue: `slot()`'s arguments and its rule that only a
-  waiting caller is cancelled, `max_waiting` and `max_waiting_per_key`, the three refusal
+  waiting caller is cancelled, `max_waiting`, `max_waiting_per_key` and `listed`, the three refusal
   reasons and `own_share`, the `WaitInfo` fields and
   the metric names. The ETA formula and the 15-minute window may be tuned.
 - `vaf.user_jail` - turning a declared identity into a file boundary by hand. Prefer the

@@ -19,7 +19,8 @@ Three pieces, stdlib only, exported on the facade (``vaf.ResourceQueue`` and fri
 - :func:`resource_queue` / :func:`queue_metrics`: one queue per resource name per
   process (a second registration with other numbers is an error, never a silent change
   of the limits the first one declared), and its numbers (length, wait and service time, refusals) for the health
-  check. The metrics carry counts only, never a key.
+  check. The metrics carry counts only, never a key, and leave out a queue registered
+  with ``listed=False`` (one only its one person waits in, named after that person).
 
 Why one slot is right for the speech containers, measured on a 16-core machine with the
 containers healthy: three concurrent STT requests each took 1.84-1.94 s against 0.54-0.61 s
@@ -75,6 +76,17 @@ Named boundaries, each with the measurement that supports it:
   message on someone's messenger. TaskQueue has no cap per person and never refuses: a
   dropped chat message is worse than a wait, and the round robin bounds one person's
   cost to another at one turn per round per band.
+- The browser agent's runs wait in one queue per browser container
+  (``browser:<container>``, in vaf/tools/browser_agent.py) and the document preview in
+  ``gotenberg`` (vaf/core/web_server.py; Gotenberg converts one document at a time,
+  measured 0.20 / 0.39 / 0.59 s for three at once against 0.21 s alone). A per-user
+  browser instance's queue is unlisted: its name is a scope hash. Per process, like every
+  queue here: a spawned browser child does not share its parent's queue, and across
+  processes the browser's holder record answers busy. No live place is shown for a
+  waiting browser run: the browser window opens on the run's first frame, and a console
+  line would land in a window that is still closed; the model gets the place in the busy
+  text. The preview upload awaits inline in its socket's loop, as it did around the HTTP
+  call, so a disconnect does not cancel it; the 15 s wait bounds it.
 - The browser pool start never waits (admit, or fall back to the shared container);
   sandbox environments are per-person containers; admin jobs (repair, backup, update)
   refuse a second job, which is correct for them; mail and calendar sync run in the
@@ -375,6 +387,8 @@ class ResourceQueue:
         self.max_waiting_per_key = (None if max_waiting_per_key is None
                                     else max(0, int(max_waiting_per_key)))
         self._clock = clock
+        # Set by the registry (resource_queue): whether queue_metrics() reports it.
+        self.listed = True
         self._cond = threading.Condition()
         self._order = FairOrder()
         self._running = 0
@@ -592,29 +606,37 @@ _registry_lock = threading.Lock()
 
 
 def resource_queue(name: str, *, slots: Optional[int] = 1, max_waiting: int = 12,
-                   max_waiting_per_key: Optional[int] = None) -> ResourceQueue:
+                   max_waiting_per_key: Optional[int] = None,
+                   listed: bool = True) -> ResourceQueue:
     """The process-wide queue for ``name``, created on first use. A later call must ask
     for the same numbers: one with others raises ValueError, because handing back the
     existing queue would silently drop the limits one of the two callers relies on (a
-    per-person share registered second would simply not exist)."""
+    per-person share registered second would simply not exist).
+
+    ``listed=False`` keeps the queue out of :func:`queue_metrics`: for a queue that only
+    one person can ever wait in (a per-user instance whose name is derived from that
+    person's scope), which has no numbers across people worth a health row, and whose
+    name must not reach a numbers payload. It is one of the registration's numbers."""
     wanted = (slots, max(0, int(max_waiting)),
-              None if max_waiting_per_key is None else max(0, int(max_waiting_per_key)))
+              None if max_waiting_per_key is None else max(0, int(max_waiting_per_key)),
+              bool(listed))
     with _registry_lock:
         queue = _registry.get(name)
         if queue is None:
-            return _registry.setdefault(name, ResourceQueue(
-                name, slots=slots, max_waiting=max_waiting,
-                max_waiting_per_key=max_waiting_per_key))
-        held = (queue.slots, queue.max_waiting, queue.max_waiting_per_key)
+            queue = ResourceQueue(name, slots=slots, max_waiting=max_waiting,
+                                  max_waiting_per_key=max_waiting_per_key)
+            queue.listed = bool(listed)
+            return _registry.setdefault(name, queue)
+        held = (queue.slots, queue.max_waiting, queue.max_waiting_per_key, queue.listed)
         if held != wanted:
             raise ValueError(
-                f"the queue {name!r} exists with slots, max_waiting, max_waiting_per_key = "
-                f"{held}; a second registration asked for {wanted}")
+                f"the queue {name!r} exists with slots, max_waiting, max_waiting_per_key, "
+                f"listed = {held}; a second registration asked for {wanted}")
         return queue
 
 
 def queue_metrics() -> List[Dict[str, Any]]:
-    """``metrics()`` of every queue this process registered, sorted by name."""
+    """``metrics()`` of every listed queue this process registered, sorted by name."""
     with _registry_lock:
-        queues = sorted(_registry.values(), key=lambda q: q.name)
+        queues = sorted((q for q in _registry.values() if q.listed), key=lambda q: q.name)
     return [q.metrics() for q in queues]

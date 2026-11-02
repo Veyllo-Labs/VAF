@@ -404,6 +404,9 @@
     "chatWaitingNoEta": "에이전트 대기 중: {position}번째",
     "chatWaitingMany": "에이전트 대기 중: 앞에 {count}개 이상",
     "sttBusy": "지금은 음성 인식이 바빠요. 잠시 후 다시 시도해 주세요.",
+    "docPreviewWaiting": "미리 보기 대기 중: {position}번째, 약 {seconds}초",
+    "docPreviewWaitingNoEta": "미리 보기 대기 중: {position}번째",
+    "docPreviewBusy": "지금은 미리 보기가 바빠서 {name}을(를) 간단한 레이아웃으로 보여 드려요.",
     "ttsBusy": "지금은 읽어 주기가 바빠요. 잠시 후 다시 시도해 주세요."
   },
   "nav": {

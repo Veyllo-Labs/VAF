@@ -404,6 +404,9 @@
     "chatWaitingNoEta": "In line for the agent: place {position}",
     "chatWaitingMany": "In line for the agent: at least {count} ahead",
     "sttBusy": "Speech recognition is busy right now. Please try again in a moment.",
+    "docPreviewWaiting": "Waiting for the preview: place {position}, about {seconds} s",
+    "docPreviewWaitingNoEta": "Waiting for the preview: place {position}",
+    "docPreviewBusy": "The preview is busy right now, so {name} is shown in a simpler layout.",
     "ttsBusy": "Read-aloud is busy right now. Please try again in a moment."
   },
   "nav": {

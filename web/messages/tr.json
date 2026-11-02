@@ -404,6 +404,9 @@
     "chatWaitingNoEta": "Ajan için sırada: {position}. sıra",
     "chatWaitingMany": "Ajan için sırada: önünde en az {count} tane var",
     "sttBusy": "Konuşma tanıma şu anda meşgul. Lütfen birazdan tekrar dene.",
+    "docPreviewWaiting": "Önizleme bekleniyor: {position}. sıra, yaklaşık {seconds} sn",
+    "docPreviewWaitingNoEta": "Önizleme bekleniyor: {position}. sıra",
+    "docPreviewBusy": "Önizleme şu anda meşgul, bu yüzden {name} daha sade bir düzende gösteriliyor.",
     "ttsBusy": "Sesli okuma şu anda meşgul. Lütfen birazdan tekrar dene."
   },
   "nav": {

@@ -82,6 +82,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   that has to wait shows its place in line and the expected wait under the dots ("In line
   for the agent: place 2, about 40 s"), also after a reload. `vaf health` also reports the
   chat queue and, with vLLM, how many requests wait in the engine.
+- **The browser agent and the document preview wait their turn fairly too.** Browser runs
+  on the shared browser take turns by person, one person can have at most two runs waiting,
+  and a run that cannot get the browser in time says where it stood instead of only "busy";
+  Stop now also ends a run that is still waiting for the browser. An Office document whose
+  preview has to wait shows its place in the document viewer, and when the preview service
+  is too busy the document opens in a simpler layout instead of waiting. `vaf health`
+  reports both queues. For your own application, `vaf.resource_queue(..., listed=False)`
+  keeps a queue that belongs to one person out of the health numbers.
 
 ### Changed
 

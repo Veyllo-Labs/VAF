@@ -1274,12 +1274,13 @@ class InteractiveBrowserManager:
         even for the same scope: "starts with a clean browser" is the tool's
         documented promise.
 
-        Across processes the gate does not reach, so the SHARED container's run
+        Across processes the browser's fair queue does not reach (it is per
+        process), so the SHARED container's run
         is claimed in the holder record every VAF process keeps
         (vaf.core.browser_jar): a probe of another process is waited out, a
         lease or a run there refuses this one with BrowserHeldElsewhere, and the
         owner the handover compares with is the record's, never this process's
-        memory alone. Named boundary: within one process the gate admits
+        memory alone. Named boundary: within one process the queue admits
         VAF_BROWSER_MAX_PARALLEL runs at once, and above 1 they share one jar,
         as they always have, and one holder entry: the first run to end releases
         it, so other processes see the browser free while the second run still
@@ -1710,8 +1711,8 @@ class InteractiveBrowserManager:
 
     def agent_run_abandoned(self) -> None:
         """A run that evicted (stop_for_agent_run) and then left before it drove -
-        the concurrency gate timed out on it: it gives its place in `_agent_runs`
-        back, and nothing else. The run ahead of it is still driving, so the run
+        it gave up at the gate (timed out, refused or stopped): it gives its place
+        in `_agent_runs` back, and nothing else. The run ahead of it is still driving, so the run
         generation, the holder entry and the give-back are that run's to settle."""
         with self._lock:
             self._agent_runs = max(0, self._agent_runs - 1)
@@ -2706,8 +2707,8 @@ def agent_stream_started(session_id: Optional[str],
 
 def agent_run_abandoned(container_name: Optional[str] = None) -> None:
     """Hook for BrowserAgentTool.run(): the run evicted and then left before it
-    drove (its concurrency gate timed out). Gives back its count only. Never
-    raises."""
+    drove (it gave up at the gate: timed out, refused or stopped). Gives back its
+    count only. Never raises."""
     try:
         _manager_for_run(container_name).agent_run_abandoned()
     except Exception:

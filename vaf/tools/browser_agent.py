@@ -360,29 +360,76 @@ def _sweep_stale_session_tmp(sessions_dir: str) -> None:
         pass
 
 
-# ── 2. Global browser concurrency gate ───────────────────────────────────────
-# One shared Chromium container → limit parallel sessions to avoid memory
-# exhaustion and tab interference.  Default: 1 (serialised).
-# Override via env var:  VAF_BROWSER_MAX_PARALLEL=2
+# ── 2. The browser queue ─────────────────────────────────────────────────────
+# One Chromium container drives one run at a time by default: parallel runs on one
+# browser exhaust its memory and share its tabs. The runs that want the same browser
+# wait in a fair queue (vaf.core.fair_queue), one per container: turns by person, a
+# share per person, a place a refused run can name. Runs on different pooled
+# instances proceed in parallel, which is the point of the pool.
+# Override the slots via env var:  VAF_BROWSER_MAX_PARALLEL=2
+import functools
 import os as _os
+
+from vaf.core.fair_queue import QueueBusy, ResourceQueue, resource_queue
+
 _BROWSER_MAX_PARALLEL = max(1, int(_os.environ.get("VAF_BROWSER_MAX_PARALLEL", "1")))
-_BROWSER_SEMAPHORE = threading.Semaphore(_BROWSER_MAX_PARALLEL)
-_BROWSER_QUEUE_TIMEOUT = 120  # seconds a caller will wait before giving up
-# One gate PER BROWSER: with the per-user pool on, runs against different
-# instances must not queue behind each other - the whole point of the pool is
-# parallel use. The shared container keeps the original semaphore object (some
-# tests pin it); pooled instances get their own with the same limit.
-_BROWSER_SEMAPHORES: dict = {"vaf-browser": _BROWSER_SEMAPHORE}
-_BROWSER_SEM_LOCK = threading.Lock()
+# How long a run waits for its browser. A chat turn waiting here holds its queue worker
+# for that long, so it stays at the value the gate always had.
+BROWSER_WAIT_S = 120.0
+# Each waiting run holds a thread: the chat workers (at most five), automations and
+# in-process workflow steps are the lanes that can wait here at once.
+BROWSER_MAX_WAITING = 8
+# A run takes minutes: a person's third waiting run would almost surely time out anyway,
+# and the share keeps one person's automations from filling the shared browser's line.
+BROWSER_MAX_WAITING_PER_KEY = 2
+_SHARED_BROWSER = "vaf-browser"
 
 
-def _browser_semaphore(container_name: str) -> threading.Semaphore:
-    with _BROWSER_SEM_LOCK:
-        sem = _BROWSER_SEMAPHORES.get(container_name)
-        if sem is None:
-            sem = threading.Semaphore(_BROWSER_MAX_PARALLEL)
-            _BROWSER_SEMAPHORES[container_name] = sem
-        return sem
+def _browser_queue(container_name: str) -> ResourceQueue:
+    """The fair queue of one browser. Every argument is a module constant or follows from
+    the name, so every call for one container passes the numbers the registry compares.
+    A pooled instance's queue is unlisted: its name carries a scope hash, and only its
+    one person waits in it, so it has no numbers across people for the health row."""
+    return resource_queue("browser:" + container_name, slots=_BROWSER_MAX_PARALLEL,
+                          max_waiting=BROWSER_MAX_WAITING,
+                          max_waiting_per_key=BROWSER_MAX_WAITING_PER_KEY,
+                          listed=(container_name == _SHARED_BROWSER))
+
+
+def _stop_requested(session_id: Optional[str]) -> bool:
+    """Whether the chat that started this run pressed Stop: the check the run's own stop
+    watchdog makes, asked here while the run still waits for its browser."""
+    if not session_id:
+        return False
+    try:
+        from vaf.core.task_queue import TaskQueue
+        return bool(TaskQueue().should_stop(session_id))
+    except Exception:
+        return False
+
+
+def _wait_words(seconds: float) -> str:
+    if seconds < 90:
+        return f"{max(1, int(round(seconds)))} s"
+    return f"{max(2, int(round(seconds / 60.0)))} min"
+
+
+def _busy_text(busy: QueueBusy) -> str:
+    """The answer for the model when the queue refused a run. Never ``str(busy)`` or the
+    queue's name: a pooled browser's name is a scope hash."""
+    if busy.reason == "full" and busy.own_share:
+        return (f"Browser agent is busy: {max(busy.position - 1, 0)} of this person's "
+                "browser runs are already waiting for this browser. Wait until they are "
+                "done, then try again.")
+    if busy.reason == "full":
+        return (f"Browser agent is busy: {max(busy.position - 1, 0)} browser runs are "
+                "already waiting for this browser. Try again in a few minutes.")
+    waited = (f"{busy.waited_s:.1f}" if busy.waited_s < 10 else f"{int(round(busy.waited_s))}")
+    eta = ("" if busy.eta_s is None
+           else f", the expected wait was about {_wait_words(busy.eta_s)}")
+    return (f"Browser agent is busy: another run is still using this browser. This run "
+            f"waited {waited} s at place {busy.position} and gave up{eta}. Try again "
+            "later, or tell the user the browser is busy.")
 
 # ── 3. Browser-use step log capture ──────────────────────────────────────────
 
@@ -1130,37 +1177,46 @@ class BrowserAgentTool(BaseTool):
             except Exception:
                 pass   # any spawn error → fall through to in-process below
 
-        # ── Concurrency gate ──────────────────────────────────────────────────
-        # Serialises access to ONE Chromium container - the gate is per
-        # browser, so runs on different pooled instances proceed in parallel.
-        # Excess callers on the same browser wait up to _BROWSER_QUEUE_TIMEOUT
-        # seconds before giving up.
-        acquired = _browser_semaphore(_container).acquire(timeout=_BROWSER_QUEUE_TIMEOUT)
-        if not acquired:
+        # ── The browser queue ─────────────────────────────────────────────────
+        # One queue per browser, so runs on different pooled instances proceed in
+        # parallel. Excess runs on one browser wait their turn by person, at most
+        # BROWSER_WAIT_S. The session id is resolved here, before the wait, and
+        # crosses the thread boundary AS AN ARGUMENT: the run's loop thread runs in
+        # a copy of this context, but the stop watchdog is a plain thread and the
+        # run's executor work starts empty, and a None session id silently disarms
+        # every stop lane (measured live when the loop thread still started empty:
+        # ten Stop presses, none seen, and the live frames broadcast unscoped). The
+        # same value lets Stop end a run that is still waiting here.
+        try:
+            from vaf.core.subagent_ipc import get_current_session_id
+            _session_id = get_current_session_id()
+        except Exception:
+            _session_id = None
+        from vaf.core.browser_interactive import agent_run_abandoned
+        gate = _browser_queue(_container).slot(
+            resolve_browser_scope(kwargs.get("user_scope_id")),
+            deadline_s=BROWSER_WAIT_S,
+            cancelled=functools.partial(_stop_requested, _session_id))
+        try:
+            gate.__enter__()
+        except QueueBusy as busy:
             # The run leaves without driving: its place in the browser's run count
             # goes back, and only that - the run ahead is still driving, and the
             # generation and the holder entry are its own. Without this the browser
             # counted as driven for the life of the process.
-            from vaf.core.browser_interactive import agent_run_abandoned
             agent_run_abandoned(container_name=_container)
-            return (
-                f"Browser agent is busy — all {_BROWSER_MAX_PARALLEL} slot(s) are in use. "
-                f"Please try again in a moment."
-            )
+            if busy.reason == "cancelled":
+                return "Browser task stopped by user."
+            return _busy_text(busy)
+        except RuntimeError:
+            # This thread already holds this browser's slot (a run inside a run):
+            # waiting would wait on itself forever.
+            agent_run_abandoned(container_name=_container)
+            return ("Error (browser_agent): this run already drives this browser; a "
+                    "browser run cannot start another one on it.")
         # The try opens right after the gate: whatever follows, the finally ends
         # the run (and its count) exactly once.
         try:
-            # Session id crosses the thread boundary AS AN ARGUMENT, resolved once here.
-            # The run's loop thread now runs in a copy of this context, but the stop
-            # watchdog is a plain thread and the run's executor work starts empty, and a
-            # None session id silently disarms every stop lane (measured live when the
-            # loop thread still started empty: ten Stop presses, none seen, and the live
-            # frames broadcast unscoped). One value resolved here reaches all of them.
-            try:
-                from vaf.core.subagent_ipc import get_current_session_id
-                _session_id = get_current_session_id()
-            except Exception:
-                _session_id = None
             # The run's watch-only live stream is granted in _run_browser, once
             # the run holds the browser (after its handover), not here.
             return _run_async_in_new_loop(
@@ -1222,7 +1278,7 @@ class BrowserAgentTool(BaseTool):
             try:
                 agent_run_ended(container_name=_container)
             finally:
-                _browser_semaphore(_container).release()
+                gate.__exit__(None, None, None)
 
     # ── Internal async implementation ─────────────────────────────────────────
 

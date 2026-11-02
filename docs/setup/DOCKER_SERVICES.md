@@ -202,10 +202,20 @@ Where VAF deliberately does not queue, each with the measurement behind it:
   its chat queue, fair per person too ([TOOL_SUPERVISION.md](../agents/TOOL_SUPERVISION.md),
   Worker and queue model). vLLM batches with its own scheduler, and its waiting count is
   shown in the `queues` row.
-- **Gotenberg** queues inside the container (one LibreOffice: 0.20, 0.39 and 0.59 s for
-  three previews at once against 0.21 s alone), first come first served and without a
-  visible place; VAF does not queue the document preview, or the browser agent's runs on
-  one Chromium (a gate of its own in `vaf/tools/browser_agent.py`), in front of it yet.
+- **Gotenberg** converts one document at a time (one LibreOffice: 0.20, 0.39 and 0.59 s
+  for three previews at once against 0.21 s alone), so the document preview now waits in
+  the `gotenberg` fair queue in front of it, with one slot: turns by person, at most 12
+  previews waiting and 3 of them from one person, at most 15 s (a person is watching the
+  viewer). A preview that waits longer than half a second shows its place in the viewer's
+  header; one the queue refuses opens at once in the simpler layout (below) without the
+  host's own LibreOffice, since a second converter on the same CPU is what the queue
+  avoids. The browser agent's runs on one Chromium wait in a fair queue of their own
+  ([BROWSER_AGENT.md](../agents/BROWSER_AGENT.md), Concurrency / Multi-user).
+- **The preview upload is not cancelled by a disconnect.** It awaits inline in the
+  socket's loop, as it did around the 60 s HTTP call; the 15 s wait bounds it now. Each
+  add re-sends every document of the viewer and converts the Office ones again, one after
+  another, so one socket has at most one preview waiting; that re-send belongs to the
+  upload protocol, not to the queue.
 - **Browser pool start, sandbox environments, admin jobs, mail and calendar sync**: the
   pool admits or falls back and never waits, environments are per-person containers, a
   second repair, backup or update is refused on purpose, and sync runs in the
@@ -264,6 +274,8 @@ curl -X POST http://localhost:5005/forms/libreoffice/convert \
 **Configuration:** `document_conversion_docker_url` in `~/.vaf/config.json` (default: `http://localhost:5005`)
 
 When Gotenberg is running, uploaded Office documents in the Document Viewer are converted to PDF and displayed in their original design. Without Gotenberg, VAF falls back to HTML rendering (python-docx, openpyxl, python-pptx).
+
+The conversions wait their turn in the `gotenberg` queue (see Queues above). When the queue is too busy (no turn within 15 s, or the queue or the person's share of it full), the viewer shows a notice and the document in the same simpler layout: DOCX, XLSX and PPTX as HTML, ODT, ODS and ODP as their extracted text. The host's own LibreOffice is tried only when Gotenberg failed for another reason.
 
 Important: Gotenberg is a **preview/rendering** service, not the mutable editing engine for the native DOCX editor. The native DOCX editor uses VAF's own DOCX-first document model and dedicated load/save endpoints; Gotenberg remains responsible for high-fidelity Office-to-PDF rendering.
 
@@ -612,7 +624,7 @@ and two failures leave every container healthy while VAF stops working: the disk
 | `disk` | free space on the fullest disk among the data folders, the backup folder and Docker's root directory (named in `docker info`, when it is a path on this machine) | less than 1 GB free | less than 5 GB free |
 | `backup` | the scheduled backups (`backup_schedule.backup_check`) | never | the last scheduled run failed, or the newest backup is older than its interval and a day |
 | `agent` | the agent loops of the server process (`headless_runner.worker_status`) | none is left | some have stopped |
-| `queues` | only where there is a queue to show: the fair queues the process registered (the server's speech lanes), the chat-turn queue in the process that runs the agent loops (`chat`: waiting turns, served, wait p50/p95 and service p50), and, while vLLM is the local engine and its server runs, vLLM's own scheduler read from its `/metrics` (`vllm: <n> waiting, <n> running, queue time mean <t> since start`); per queue the length, the requests served, wait p50/p95 and service p50 over the last 15 minutes, and the refusals; `--json` and `/api/system/health` carry the numbers as `metrics` (counts, never who) | never | a queue turned somebody away (`timeout` or `full`) in the last 15 minutes; a hang-up (`cancelled`) does not count, and the chat queue and vLLM never turn anybody away |
+| `queues` | only where there is a queue to show: the fair queues the process registered (the server's speech lanes, the document preview's `gotenberg` and the shared browser's `browser:vaf-browser`; a per-user browser instance's queue is unlisted and never shown, its name is a scope hash), the chat-turn queue in the process that runs the agent loops (`chat`: waiting turns, served, wait p50/p95 and service p50), and, while vLLM is the local engine and its server runs, vLLM's own scheduler read from its `/metrics` (`vllm: <n> waiting, <n> running, queue time mean <t> since start`); per queue the length, the requests served, wait p50/p95 and service p50 over the last 15 minutes, and the refusals; `--json` and `/api/system/health` carry the numbers as `metrics` (counts, never who) | never | a queue turned somebody away (`timeout` or `full`) in the last 15 minutes; a hang-up (`cancelled`) does not count, and the chat queue and vLLM never turn anybody away |
 | `engine` | only while vLLM is the local engine (`local_engine = vllm`): the platform verdict, the managed install, the model, whether its server runs, read from `local_engine.status_row`, the row Update and Repair draws ([VLLM_ENGINE.md](../llm/VLLM_ENGINE.md)) | never | vLLM cannot run on this machine, or it is not installed |
 
 The verdict is the worst check. `vaf health` asks the running VAF, because the agent loop

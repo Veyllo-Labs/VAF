@@ -99,6 +99,14 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   its shutdown day. The estimate now uses each model's own cache discount and the higher
   price for very long prompts, and prices OpenRouter's Claude models instead of treating
   them as unknown. `vaf usage show` prints the date the prices were checked.
+- **When a refusal names the tool to use instead, the agent now gets that tool for the rest of
+  the turn**, but only a tool your account may use. A workflow step that needs the network is
+  now answered in one short message that points to the Python sandbox, which has network but
+  keeps everything in the sandbox, or to the host shell when the result must land on your
+  computer, where you confirm each command. Before, the message named the host shell even
+  where you could not use it, and a long plan's message was cut in the middle.
+  For embedders: `vaf.advise_tools` lets a tool name the tool a model should call next;
+  `ToolCallOutcome` carries the accepted names in `advised_tools`.
 
 ### Fixed
 

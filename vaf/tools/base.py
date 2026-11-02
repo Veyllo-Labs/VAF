@@ -46,6 +46,12 @@ class BaseTool(ABC):
     -----------------------------------------
 
     The tool will be automatically discovered and loaded!
+
+    A result that tells the model to call another tool ("use python_sandbox instead")
+    should hand that tool over, not only name it: call ``vaf.advise_tools(name)`` in
+    ``run()``. The model's turn may not carry the tool; advice adds it for the rest of
+    the turn when this caller may run it, and the return value (the accepted names, or
+    None outside a tool call) lets the answer be worded for what is really there.
     """
     
     # ═══════════════════════════════════════════════════════════════════════════

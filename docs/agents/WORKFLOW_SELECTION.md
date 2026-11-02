@@ -307,14 +307,34 @@ create_agent_workflow(
   yarn when bare or with a fetching subcommand, so a package script such as `yarn dev` runs, the value of an option such as `--cwd app` never counting as the subcommand,
   git clone/fetch/pull/push, a system package manager, curl/wget), and any `host_bash`
   step. All problems of all steps come back as ONE `Error:` result that says nothing ran, one
-  line per step, so a single retry can fix everything; a refused `create` writes nothing. A
-  download is answered with the way that works: `host_bash(command="...")` called directly,
-  one call per command, when the agent has host_bash (it asks the user first), otherwise
-  `python_sandbox` with `args.packages` for packages the code needs. A `host_bash` step is
+  line per step, so a single retry can fix everything; a refused `create` writes nothing.
+  The steps that download share ONE line (`steps 1, 2, ..., 20 (bash): these commands need
+  the network, and the workflow shell has none.`) and ONE instruction, which names only the
+  tools this caller may use (`vaf.advise_tools`, asked with the funnel's own stages) and
+  hands exactly those to the turn, so the model can call them in the same turn even when
+  the router did not offer them. With both: run them outside the workflow with
+  `python_sandbox`, which has network and asks nothing but keeps what it installs or
+  downloads in the sandbox (several commands fit in one call, `subprocess.run(...)` in its
+  code), or with `host_bash(command="...")`, one call per command that the user confirms,
+  when the result must land on the user's computer. python_sandbox comes first because
+  most of these commands (an install, a clone to work on) need nothing on the user's disk
+  and it asks no question. Only python_sandbox (a regular account without the host_bash
+  grant, a messaging channel): the sandbox sentence and that a download onto the user's
+  computer is not possible from here. Only host_bash: the host_bash sentence. Neither: tell
+  the user to run the commands themselves. When the network steps are the plan's only
+  problem, the instruction closes the refusal, because "call create_agent_workflow again"
+  would send the model straight back into it; with other problems, "Fix the other steps and
+  call create_agent_workflow again." follows. Measured on a plan of 10 installs and 10
+  clones, the shape of the live incident: 672 characters, where the per-step wording was
+  5369 and the chat funnel's 2000-character cut left the model only the first and last
+  steps of it. Called
+  outside a tool call (a direct run), every tool counts as offered. A `host_bash` step is
   refused because this lane runs its steps without the confirmation gate, while host_bash in
-  chat asks for every command. NAMED BOUNDARY: the check is a private helper of the builder,
-  the only planner that checks steps before they run; the facade's `ToolCaller` applies the
-  same schema check at dispatch.
+  chat asks for every command; the refusal points at host_bash in the chat only when the
+  caller may run it, and otherwise says "host_bash is not available to you here; a command
+  without network can be a bash step, otherwise tell the user to run it." NAMED BOUNDARY:
+  the check is a private helper of the builder, the only planner that checks steps before
+  they run; the facade's `ToolCaller` applies the same schema check at dispatch.
 - **`bash` steps run in the workflow folder, without network.** The engine assigns the run's
   project directory as the shell's workspace (`_inject_workflow_paths`) and drops a
   step's own `base_dir` first, because the shell takes `base_dir` as the folder it may write;
@@ -353,7 +373,7 @@ create_agent_workflow(
 
 **Rule:** Use `research_agent` for patent/market/technical research needing many sources. Use `coding_agent` for file generation and scripts.
 
-The table above lists the common ones, but a step can call **any tool the user has in chat - and may use there**: non-spawn steps pass the same hard policy, account allowlist and authorizer as a chat turn (confirmation gate excepted), and saved templates additionally pass the per-user workflow START gate - `search_tools`, `list_tools`, calendar/memory/GitHub tools, custom tools, etc. Both `run_temp` and **saved** workflows (`execute_workflow`) run on the agent's full live registry, plus the workflow primitives (`bash`, `move_file`) that the Main Agent normally delegates to sub-agents (`write_file` is registered to the Main Agent directly as well); both build it the same way, `workflow_primitives()` with the live registry on top. A step the model writes through `create_agent_workflow` (`run_temp` or `create`) cannot name `host_bash`: it is refused before the run (see above), and a model-written saved workflow (`# created_by: agent`) that still holds one from before is refused again whenever it is started: `execute_workflow`, the `@workflow_id` lane and `vaf workflow run <id>` (the person's command and the background child of both chat lanes) each call `agent_workflow_refusal` once. NAMED BOUNDARY: `create_automation` has a second model call generate the steps of an automation's workflow from the task text (`vaf/tools/automation.py`); nothing checks those steps for `host_bash`, and automations run with the confirmation gate off, so such a step would run unasked. The fix that covers every lane is host_bash re-checking its own grant (`accepts_call_confirmation`, as `python_exec`, `ssh` and `ftp` do); it changes what existing automations may do and is a feature of its own. (Saved workflows previously used a fixed subset, which is why a step like `search_tools` could report "Tool not found" - they now overlay the same live registry as `run_temp`.)
+The table above lists the common ones, but a step can call **any tool the user has in chat - and may use there**: non-spawn steps pass the same hard policy, account allowlist and authorizer as a chat turn (confirmation gate excepted), and saved templates additionally pass the per-user workflow START gate - `search_tools`, `list_tools`, calendar/memory/GitHub tools, custom tools, etc. Both `run_temp` and **saved** workflows (`execute_workflow`) run on the agent's full live registry, plus the workflow primitives (`bash`, `move_file`) that the Main Agent normally delegates to sub-agents (`write_file` is registered to the Main Agent directly as well); both build it the same way, `workflow_primitives()` with the live registry on top. A step the model writes through `create_agent_workflow` (`run_temp` or `create`) cannot name `host_bash`: it is refused before the run (see above), and a model-written saved workflow (`# created_by: agent`) that still holds one from before is refused again whenever it is started: `execute_workflow`, the `@workflow_id` lane and `vaf workflow run <id>` (the person's command and the background child of both chat lanes) each call `agent_workflow_refusal` once. Inside a tool call (`execute_workflow`) its closing line points at host_bash in the chat only for a caller that may run it, and advises it; the `@workflow_id` lane and `vaf workflow run` ask outside any tool call, where nothing can be handed over, and keep that line as it was. NAMED BOUNDARY: `create_automation` has a second model call generate the steps of an automation's workflow from the task text (`vaf/tools/automation.py`); nothing checks those steps for `host_bash`, and automations run with the confirmation gate off, so such a step would run unasked. The fix that covers every lane is host_bash re-checking its own grant (`accepts_call_confirmation`, as `python_exec`, `ssh` and `ftp` do); it changes what existing automations may do and is a feature of its own. (Saved workflows previously used a fixed subset, which is why a step like `search_tools` could report "Tool not found" - they now overlay the same live registry as `run_temp`.)
 
 ##### Shared project path (`{workflow_project_path}`)
 

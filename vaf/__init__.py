@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from .core.trust import (list_standing_grants, mark_trusted_dir, revoke_standing_grants,
                              set_tool_policy)
     from .core.tool_dispatch import (ToolCallHooks, ToolCallOutcome, ToolCaller, ToolRequest,
+                                     advise_tools,
                                      set_account_allowlist_resolver,
                                      set_account_directory_resolver,
                                      set_confirmation_bypass_resolver)
@@ -46,7 +47,8 @@ __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_K
            "TurnStatus",
            "UnsafeName",
            "UploadVerdict", "VoiceTurnEngine",
-           "account_allows_tool", "add_revocation_listener", "build_capability_addendum",
+           "account_allows_tool", "add_revocation_listener", "advise_tools",
+           "build_capability_addendum",
            "code_audit", "contained_path", "derive_peer_id",
            "describe_room_entry", "egress_session", "extract_pdf_markdown",
            "fold_room_owners", "fold_room_tasks", "fold_room_votes", "get_environment_manager",
@@ -197,6 +199,13 @@ def __getattr__(name):
         # the check from the resolver alone. Stdlib-only underneath. See docs/EMBEDDING.md.
         from .core.tool_dispatch import account_allows_tool
         return account_allows_tool
+    if name == "advise_tools":
+        # A tool's way to hand the model the tool its answer tells it to use next, instead
+        # of only naming it: called inside a ToolCaller call, filtered by the funnel's own
+        # stages, returned in ToolCallOutcome.advised_tools. Stdlib-only underneath.
+        # See docs/EMBEDDING.md.
+        from .core.tool_dispatch import advise_tools
+        return advise_tools
     if name == "set_account_allowlist_resolver":
         # Which tools each ACCOUNT may use, answered by YOUR backend. One resolver per
         # process, consulted in the funnel after the hard policy block and BEFORE the

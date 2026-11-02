@@ -45,6 +45,7 @@ EXPORTED = [
     "__version__",
     "account_allows_tool",
     "add_revocation_listener",
+    "advise_tools",
     "build_capability_addendum",
     "code_audit",
     "contained_path",
@@ -130,6 +131,7 @@ def test_the_resolver_setter_is_the_engine_function_itself():
     assert vaf.set_account_allowlist_resolver is td.set_account_allowlist_resolver
     assert vaf.set_confirmation_bypass_resolver is td.set_confirmation_bypass_resolver
     assert vaf.ToolCallOutcome is td.ToolCallOutcome
+    assert vaf.advise_tools is td.advise_tools
 
 
 def test_pdf_extraction_is_the_engine_function_itself():
@@ -143,7 +145,8 @@ def test_the_tool_contract_names_are_classes_with_their_documented_members():
     assert callable(vaf.BaseTool.log)
     assert callable(vaf.ToolCaller.execute)
     assert callable(vaf.ToolCaller.call)
-    assert {f for f in vaf.ToolCallOutcome.__dataclass_fields__} == {"result", "dispatched"}
+    assert {f for f in vaf.ToolCallOutcome.__dataclass_fields__} == {
+        "result", "dispatched", "advised_tools"}
     for method in ("deny", "ask", "allow"):
         assert callable(getattr(vaf.ToolRequest, method)), f"ToolRequest lost {method}()"
     assert callable(vaf.user_jail)

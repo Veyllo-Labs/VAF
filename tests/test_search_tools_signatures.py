@@ -6,12 +6,18 @@
 search_tools returned only name + one description line, so a freshly discovered
 tool had to be called with GUESSED parameters (observed live: document_writer
 called with an invented 'document_content' arg -> schema error). The top matches
-now carry a compact call signature. The output format and the execute_tool
-post-hook parser share one function (extract_discovered_tool_names) and this
-file round-trips them, so they can never drift apart silently.
+now carry a compact call signature. Every listed tool is handed to the turn through
+`vaf.advise_tools`, never parsed back out of this text; the last test pins that the
+advised names are exactly the listed ones.
+
+MUTATIONS: advise only the top 3 matches, or drop the browse list's advise call ->
+test_search_advises_what_it_lists goes red.
 """
+import re
+
+from vaf.core.tool_dispatch import ToolCaller
 from vaf.tools.base import BaseTool, format_tool_signature
-from vaf.tools.search_tools import SearchToolsTool, extract_discovered_tool_names
+from vaf.tools.search_tools import SearchToolsTool
 
 
 class _FakeTool(BaseTool):
@@ -118,28 +124,33 @@ def test_no_match_fallback_stays_signature_free():
     assert "(" not in out.split(":", 1)[1] or "document_writer(" not in out
 
 
-# ── Round-trip guard: format <-> post-hook parser ────────────────────────────
+# ── What it lists is what it advises ─────────────────────────────
 
-def test_parser_roundtrip_discovers_match_names_only():
-    out, registry = _search("document file", [DOC_WRITER, READ_FILE, NO_ARGS])
-    discovered = extract_discovered_tool_names(out, registry)
-    # every discovered name is real, and the signature lines added no phantoms
-    assert set(discovered) <= set(registry)
-    assert "document_writer" in discovered
-    for cand in discovered:
-        assert "(" not in cand
+def _listed(text):
+    """The `name:` match lines of a search_tools answer (signature lines contain '(')."""
+    return [m.group(1) for m in re.finditer(r"^  (\S+): ", text, re.M)]
 
 
-def test_parser_ignores_signature_lines():
-    line_block = (
-        "Tools matching 'x':\n"
-        "  document_writer: Creates documents.\n"
-        "      document_writer(document_type: string, content: string, filename: string)\n"
-    )
-    got = extract_discovered_tool_names(line_block, {"document_writer": object()})
-    assert got == ["document_writer"], got
+def _advised(query, tools):
+    registry = {t.name: t for t in tools}
+    st = SearchToolsTool()
+    st.available_tools = registry
+    registry = dict(registry, search_tools=st)
+    outcome = ToolCaller(registry).call("search_tools", {"query": query})
+    return outcome
 
 
-def test_parser_matches_historic_semantics_no_dedup():
-    block = "a: x\na: y\n"
-    assert extract_discovered_tool_names(block, {"a": 1}) == ["a", "a"]
+def test_search_advises_what_it_lists():
+    """Every match line's tool, in the order listed, and nothing from the signature lines;
+    more than three matches, so a cut to the signature rows shows."""
+    many = [_mk(f"doc_tool_{i}", f"document helper {i}") for i in range(6)]
+    outcome = _advised("document", [DOC_WRITER, READ_FILE, NO_ARGS] + many)
+    listed = _listed(outcome.result)
+    assert len(listed) > 3, outcome.result
+    assert outcome.advised_tools == tuple(listed)
+    assert "document_writer" in outcome.advised_tools
+    # The browse fallback (no match) lists the first tools, and advises them too.
+    outcome = _advised("zzz_nothing_matches", [DOC_WRITER, READ_FILE, NO_ARGS])
+    assert "No close matches" in outcome.result
+    assert outcome.advised_tools == tuple(_listed(outcome.result))
+    assert outcome.advised_tools, outcome.result

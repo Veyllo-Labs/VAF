@@ -122,8 +122,9 @@ AGENT_STATE: dict = {
     "_tools_schema_cache_key": _ENGINE, "_win_handler_ref": _ENGINE,
     "_ww_stale_checked": _ENGINE, "_ww_training": _ENGINE,
     # step: reset by chat_step itself
-    "_active_tools": _STEP, "_anti_spin_streak": _STEP, "_autocontinue_step_sig": _STEP,
-    "_autocontinue_stuck": _STEP, "_compaction_in_progress": _STEP, "_cross_chat_block": _STEP,
+    "_active_tools": _STEP, "_advised_tools_this_turn": _STEP, "_anti_spin_streak": _STEP,
+    "_autocontinue_step_sig": _STEP, "_autocontinue_stuck": _STEP,
+    "_compaction_in_progress": _STEP, "_cross_chat_block": _STEP,
     "_cross_chat_hints": _STEP, "_current_turn_thinking_mode": _STEP,
     "_false_promise_retries": _STEP, "_force_tool_choice": _STEP,
     "_force_tool_choice_used": _STEP, "_forced_round": _STEP, "_held_this_round": _STEP,

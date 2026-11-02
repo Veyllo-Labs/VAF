@@ -724,7 +724,7 @@ CHAT_STAGES = (
     "_chat_after_dispatch_bookkeeping", "_ask_user_about_gate",
     "_push_gate_to_websocket", "_run_multi_tool_use", "_announce_held_send",
     "_close_turn", "_close_turn_if_declared", "_fanout_for", "visible_tools",
-    "_room_file_scope",
+    "_room_file_scope", "_take_tool_advice", "_pin_advised_tools",
 )
 
 

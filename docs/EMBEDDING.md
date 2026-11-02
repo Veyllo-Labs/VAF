@@ -1317,6 +1317,42 @@ caller with no scope always have it. `account_allows_tool(name, scope, role,
 tool=tool)` gives the same answer to a surface that lists tools; without `tool`
 it answers the plain list rule.
 
+**Pointing the model at another tool: `vaf.advise_tools`.** A refusal or an
+answer that says "call X instead" is only useful if the model can call X, and a
+turn whose tools were narrowed (VAF's router offers about a dozen) often cannot:
+in the live incident behind this, a workflow refusal told the model to use
+`host_bash`, the turn did not carry it, and the model told the person to run the
+commands by hand. Call `advise_tools(*names)` in `run()` and the names travel with
+the answer instead of only inside its text:
+
+```python
+from vaf import BaseTool, advise_tools
+
+class Convert(BaseTool):
+    name = "convert"
+    ...
+    def run(self, **kwargs) -> str:
+        if needs_network(kwargs):
+            offered = advise_tools("python_sandbox")
+            if offered is None or "python_sandbox" in offered:
+                return "No network here: run it with python_sandbox instead."
+            return "No network here, and no tool that has it is available to you."
+        ...
+```
+
+It returns the names this caller may use, deduplicated, in the order given, so
+your wording can match what will really be there; `None` when no tool call is
+open (your own `tool.run()`, a test), and then nothing is recorded. The filter is
+the funnel's own stages, asked without a call: the name is registered, the
+account is not revoked, it is inside the caller's allowed set, the policy does
+not block it (`admin_only`, the channel rule) and the account allowlist allows
+it (`account_opt_in` included). Advice therefore never widens what a caller may
+start, and it decides nothing about the call itself: a gated tool still asks the
+person per call, and your authorizer still sees it. Only code advises: text in a
+result (a fetched page, a mail) cannot put a tool into the turn. The accepted
+names arrive in `ToolCallOutcome.advised_tools`; VAF's chat loop adds them to the
+turn's tool set for the rest of that turn, and the next turn routes fresh.
+
 **Background host commands** (`host_bash(background=true)`, then `host_process`)
 report their end as a wake turn queued on VAF's `TaskQueue`, the lane a fired
 timer uses. VAF's own runners (the web server, the terminal apps) consume that
@@ -1472,7 +1508,7 @@ ask, `[CANCELLED] ...` when the person at the gate said no, and whatever your
 never sees a blocked tool reported as having run.
 
 **Did the tool start? Ask `call()`, not the text.** `caller.call(name, args)` runs
-the same pipeline and returns a `vaf.ToolCallOutcome` with two fields: `result`,
+the same pipeline and returns a `vaf.ToolCallOutcome` whose first two fields are `result`,
 exactly what `execute()` would have returned, and `dispatched`, which is `True`
 exactly when the call emitted `tool_start`. It is `False` for every stage that turns
 a call away before the tool can do anything: arguments that are not a JSON object, a
@@ -1493,6 +1529,21 @@ if outcome.dispatched and outcome.result.startswith("Tool Error:"):
     remember_failure("tenant_notes", outcome.result)   # the tool really failed
 ```
 
+**What the answer advises: `advised_tools`.** The third field is a tuple of the
+tool names the answer tells the model to call next, as the tool (or the funnel's
+own unknown-tool correction, below) declared them with `vaf.advise_tools`, and
+only those this caller may run. It is empty for most calls. A loop of your own
+that offers the model a narrowed set adds them to its next request, which is
+what VAF's chat loop does:
+
+```python
+outcome = caller.call(name, args)
+offered = list(dict.fromkeys(offered + list(outcome.advised_tools)))
+# the next model request carries the schemas of `offered`
+```
+
+`ToolCallOutcome(result, dispatched)` still constructs; the field has a default.
+
 The unknown-tool refusal carries a correction after its prefix whenever the
 registry allows one, because a model told only "no such tool" guesses again and
 the second guess is the expensive one (in the live incident behind this, it
@@ -1501,9 +1552,11 @@ In order: if `<name>` is a *parameter* of one of your tools, the answer names
 that tool and spells out the call, with the value the model passed (`call
 update_working_memory(mark_task_done=0) instead`); if it is a near miss of a
 tool name, the closest names follow with their call signatures; if nothing is
-near and you registered `search_tools`, the model is pointed there. The prefix
-is the contract and stays byte-identical when no correction applies; the
-wording of the correction is not something to parse.
+near and you registered `search_tools`, the model is pointed there. The tools a
+correction names arrive in `outcome.advised_tools` (filtered for this caller like
+any advice), so a loop that narrows tools can offer them without reading the
+text. The prefix is the contract and stays byte-identical when no correction
+applies; the wording of the correction is not something to parse.
 
 The supported arguments:
 
@@ -2593,9 +2646,12 @@ Stable public surface (safe to build on):
 - `vaf.ToolCaller` - running a tool with the agent's own policy, gate, identity
   and bounds, without an agent. Its **documented arguments** (the table under
   "Running a tool yourself"), `execute(name, args) -> str` and
-  `call(name, args) -> vaf.ToolCallOutcome` (`result`, `dispatched`) are the
-  promise; the constructor's remaining parameters exist for VAF's internal lanes
-  and are not.
+  `call(name, args) -> vaf.ToolCallOutcome` (`result`, `dispatched`,
+  `advised_tools`) are the promise; the constructor's remaining parameters exist
+  for VAF's internal lanes and are not.
+- `vaf.advise_tools(*names)` - called inside a tool call, it records the tools
+  the answer points at for this caller and returns the accepted names, or `None`
+  outside a call. The filter's stages are the funnel's own.
 - `set_tool_authorizer(fn)` on both `Agent` and `CoreAgent`, and `vaf.ToolRequest`
   with `deny()` / `ask()` / `allow()` and its context fields.
 - `set_allowed_tools(names)` on both `Agent` and `CoreAgent`, and `ToolCaller(allowed_tools=)` -
@@ -2646,7 +2702,7 @@ Two that are easy to mistake for surface because this page names them:
 Both are engine-internal by design: VAF exposes no session enumeration on the
 façade, and no embedder has asked for one. If you need it, say so - the export is
 one lazy branch away, and it is not being added on speculation.
-`vaf.ToolCaller`, `vaf.ToolCallOutcome`, `vaf.ToolRequest`, `vaf.set_account_allowlist_resolver`,
+`vaf.ToolCaller`, `vaf.ToolCallOutcome`, `vaf.advise_tools`, `vaf.ToolRequest`, `vaf.set_account_allowlist_resolver`,
 `vaf.extract_pdf_markdown`, `vaf.install_thread_excepthook`, `vaf.is_error_reply`,
 `vaf.TurnStatus`, `vaf.stored_turn_copy` and `vaf.model_text`
 are the deliberate exceptions: they live in `vaf.core` but are re-exported on the façade, and the

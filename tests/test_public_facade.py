@@ -58,8 +58,8 @@ def test_facade_exports_exactly_the_documented_surface():
         "UnsafeName", "UploadVerdict",
         "VoiceTurnEngine",
         "__version__",
-        "account_allows_tool", "add_revocation_listener", "build_capability_addendum",
-        "code_audit", "contained_path",
+        "account_allows_tool", "add_revocation_listener", "advise_tools",
+        "build_capability_addendum", "code_audit", "contained_path",
         "derive_peer_id", "describe_room_entry", "egress_session", "extract_pdf_markdown",
         "fold_room_owners", "fold_room_tasks", "fold_room_votes", "get_environment_manager",
         "inspect_upload",
@@ -109,6 +109,7 @@ def test_the_resolver_setter_is_the_same_object_on_facade_and_engine():
     import vaf.core.tool_dispatch as td
 
     assert vaf.account_allows_tool is td.account_allows_tool
+    assert vaf.advise_tools is td.advise_tools
     assert vaf.set_account_allowlist_resolver is td.set_account_allowlist_resolver
 
 

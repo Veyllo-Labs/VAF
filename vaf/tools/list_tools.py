@@ -38,10 +38,11 @@ class ListToolsTool(BaseTool):
         from vaf.core.tool_contract import TOOL_CATEGORIES, category_label, tool_category
 
         # Grouped by bundle so the model sees "these four are the Telegram
-        # tools" instead of an alphabetical wall. The per-tool line keeps its
-        # exact "- name: description" shape: a post-hook parses that shape out
-        # of search_tools output, and a heading is written WITHOUT a colon so
-        # it can never be mistaken for a tool row if that hook is ever widened.
+        # tools" instead of an alphabetical wall. The per-tool line keeps the
+        # "- name: description" shape search_tools uses, and a heading is
+        # written WITHOUT a colon so it never reads as a tool row. Nothing is
+        # advised from here (vaf.advise_tools): the full catalogue would put
+        # every schema into the turn; search_tools hands over what it finds.
         order = {key: index for index, key in enumerate(TOOL_CATEGORIES)}
         grouped: Dict[str, list] = {}
         for name, tool in catalog.items():

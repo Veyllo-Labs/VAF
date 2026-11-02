@@ -232,7 +232,11 @@ A refusal is told apart from a tool that ran by the funnel, not by the text:
 False for every stage that turned the call away before `tool_start`, and
 `chat_step` reads it from the same dispatch (`execute_tool` is that outcome's
 `result`). A call refused at any of those stages is inert for the tool-learning
-lane (see [WHARE_WANANGA.md](memory/WHARE_WANANGA.md)).
+lane (see [WHARE_WANANGA.md](memory/WHARE_WANANGA.md)). The outcome also carries
+`advised_tools`, the tools the answer told the model to use next (`vaf.advise_tools`,
+filtered for this caller by the funnel's own stages), and `chat_step` adds them to the
+turn's tool set for the rest of the turn, so a refusal that says "call X instead" is
+followed by a request that can call X.
 
 The workflow engine builds one `ToolCaller` per run for its non-spawn steps, with
 its own differences as arguments (no confirmation gate, no tool events, no

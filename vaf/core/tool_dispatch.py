@@ -671,8 +671,7 @@ class ToolCallHooks:
       lane's session plumbing) and may refuse (its duplicate sub-agent guard). Runs after
       identity assignment, so what it adds is not validated against the tool's schema.
     - ``after_dispatch(name, tool_args, result) -> str`` - may replace the result. The chat
-      lane discovers tools from a ``search_tools`` answer here and runs its python_exec
-      fallback, which emits its own event pair.
+      lane runs its python_exec fallback here, which emits its own event pair.
     - ``after_emit(name, result) -> None`` - only on paths that actually dispatched. The chat
       lane records router recency here, and deliberately NOT for a blocked or refused call.
       It receives the UNTRUNCATED result, because its debug log summarises what the tool
@@ -706,10 +705,17 @@ class ToolCallOutcome:
     whatever a hook returned, and a tool of anyone's may answer with the same words. A caller
     that has to know whether the tool could have done anything - one that learns from a
     failure, or counts tool use - reads this instead of a prefix.
+
+    - ``advised_tools`` - the tools this call's answer tells the model to use next, as the
+      tool (or the funnel itself) declared them with ``advise_tools``, and only those this
+      caller may run (``ToolCaller._offerable``). Empty for most calls. A loop that narrows
+      the tools it offers adds these to its next request, so a refusal that says "call X
+      instead" is not answered by a model that cannot call X.
     """
 
     result: Any
     dispatched: bool
+    advised_tools: tuple = ()
 
 
 class ToolRequest:
@@ -812,6 +818,88 @@ def authorizer_scope(authorize):
 
 def current_authorizer():
     return _authorizer_ctx.get()
+
+
+# The tools the answer of the call now running advises, for `advise_tools`. A context
+# variable for the same reason as the authorizer above: the bounded run copies the caller's
+# context into the worker thread, so a tool's run() sees the scope of the call that started it.
+_advice_ctx = _contextvars.ContextVar("vaf_tool_advice", default=None)
+
+
+class _AdviceScope:
+    """What one ``ToolCaller.call`` was advised, while it runs. Closed when the call returns:
+    a worker the call abandoned (timeout, Stop) may still be running, and what it advises
+    afterwards belongs to no answer."""
+
+    __slots__ = ("caller", "names", "closed", "_lock")
+
+    def __init__(self, caller):
+        import threading
+        self.caller = caller
+        self.names: list = []
+        self.closed = False
+        self._lock = threading.Lock()
+
+    def add(self, names) -> bool:
+        """Record the names; False when the call has returned already (nothing is kept)."""
+        with self._lock:
+            if self.closed:
+                return False
+            for name in names:
+                if name not in self.names:
+                    self.names.append(name)
+            return True
+
+    def close(self) -> tuple:
+        with self._lock:
+            self.closed = True
+            return tuple(self.names)
+
+
+def advise_tools(*names: str):
+    """Tell the model of this turn which tool to call next: the tools a refusal or an answer
+    points at, handed over instead of only named.
+
+    Called from code that runs inside a ``ToolCaller.call``: a tool's ``run()``, a hook, or
+    the funnel itself (the unknown-tool correction). The names are recorded for the running
+    call and arrive in ``ToolCallOutcome.advised_tools``; the chat lane adds them to the
+    turn's tool set for the rest of the turn, so the next request carries their schemas.
+
+    Returns the names THIS caller may use, deduplicated, in the order given, so a producer
+    can word its answer for what will really be there. Returns None when no call is open in
+    this context (a direct ``tool.run()``, a command a person runs): nothing is recorded, and
+    the producer keeps the wording it would use without advice. Returns () when the call it
+    belongs to has returned already (a worker the call abandoned): nothing reaches a model.
+
+    What filters a name is the funnel's own stages, asked without arguments
+    (``ToolCaller._offerable``): registered, the account not revoked, inside the caller's
+    allowed set, not blocked by the policy (``admin_only``, the channel rule), allowed by the
+    account allowlist (including ``account_opt_in``). Advice never widens what a caller may
+    start, and it decides nothing about the call itself: a tool behind the confirmation gate
+    is still asked for, per call, and an authorizer still sees it.
+
+    NAMED BOUNDARIES:
+    - Only a call through ``ToolCaller.call`` carries advice. Text the chat loop writes
+      outside the funnel (loop protection, malformed tool arguments) names no tool the turn
+      does not already pin.
+    - Text in a result never advises: only code calls this, so a fetched page or a mail that
+      says "call host_bash" puts nothing into the turn.
+    - A nested call (a workflow step inside a tool) opens its own scope and keeps its advice
+      to itself: that answer goes to the engine, not to the model of the turn.
+    - The confirmation gate and an authorizer's verdict are not predicted; both depend on the
+      call's arguments and on standing grants.
+    """
+    scope = _advice_ctx.get()
+    if scope is None:
+        return None
+    accepted: list = []
+    for raw in names:
+        name = str(raw or "").strip() if isinstance(raw, str) else ""
+        if not name or name in accepted:
+            continue
+        if scope.caller._offerable(name):
+            accepted.append(name)
+    return tuple(accepted) if scope.add(accepted) else ()
 
 
 def consult_authorizer(authorize, request: "ToolRequest") -> "ToolRequest":
@@ -1159,10 +1247,18 @@ def unknown_tool_hint(name, tools, args=None, *, limit: int = 3) -> str:
     ``Error: Unknown tool`` prefix stays the contract (the event ``ok`` flag and the dispatch
     baseline pin it); the wording here is not.
     """
+    return _unknown_tool_correction(name, tools, args, limit=limit)[0]
+
+
+def _unknown_tool_correction(name, tools, args=None, *, limit: int = 3):
+    """``unknown_tool_hint``'s text and the tool names it tells the model to call: the
+    parameter owners (up to ``limit``), the near-miss names, or ``search_tools``. The funnel
+    advises those names (``advise_tools``); a planner that only words a refusal reads the
+    text alone. ``("", ())`` when there is no correction."""
     try:
         wanted = str(name or "").strip()
         if not wanted or not tools:
-            return ""
+            return "", ()
         owners = []
         for tname, tool in tools.items():
             params = getattr(tool, "parameters", None)
@@ -1174,10 +1270,11 @@ def unknown_tool_hint(name, tools, args=None, *, limit: int = 3) -> str:
             if len(owners) == 1:
                 value = _sole_value(args)
                 return (f"'{wanted}' is a parameter of {owners[0]}, not a tool: call "
-                        f"{owners[0]}({wanted}={value if value is not None else '...'}) instead.")
+                        f"{owners[0]}({wanted}={value if value is not None else '...'}) instead.",
+                        (owners[0],))
             more = f" and {len(owners) - limit} more" if len(owners) > limit else ""
             return (f"'{wanted}' is a parameter of {', '.join(owners[:limit])}{more}, not a tool: "
-                    f"call one of those with {wanted}=... instead.")
+                    f"call one of those with {wanted}=... instead.", tuple(owners[:limit]))
         by_lower: dict = {}
         for tname in tools:
             by_lower.setdefault(str(tname).lower(), str(tname))
@@ -1185,13 +1282,14 @@ def unknown_tool_hint(name, tools, args=None, *, limit: int = 3) -> str:
         if close:
             from vaf.tools.base import format_tool_signature
             rendered = [format_tool_signature(tools[by_lower[key]]) or by_lower[key] for key in close]
-            return "Did you mean " + " or ".join(rendered) + "?"
+            return ("Did you mean " + " or ".join(rendered) + "?",
+                    tuple(by_lower[key] for key in close))
         if "search_tools" in tools:
             return ('No registered tool has a similar name: call search_tools(query="...") '
-                    "to find the right one.")
-        return ""
+                    "to find the right one.", ("search_tools",))
+        return "", ()
     except Exception:
-        return ""
+        return "", ()
 
 
 def normalize_allowed_tools(names):
@@ -1258,6 +1356,7 @@ class ToolCaller:
         on_event=None,
         hooks: "ToolCallHooks | None" = None,
         model_name: str | None = None,
+        offer_check=None,
     ):
         self.tools = tools
         self.user_scope_id = user_scope_id
@@ -1293,6 +1392,11 @@ class ToolCaller:
         self.on_event = on_event
         self.hooks = hooks or ToolCallHooks()
         self.model_name = model_name
+        # Internal: one more say over what `advise_tools` may hand the model, beyond the
+        # funnel's own stages - the chat lane passes what its model may see at all
+        # (`Agent.visible_tools`, the editor's exclusions included). It narrows advice only;
+        # a call itself never asks it.
+        self.offer_check = offer_check
 
     # ── the pipeline ─────────────────────────────────────────────────────────
 
@@ -1328,7 +1432,26 @@ class ToolCaller:
           declared ``result_is_deliverable`` is not truncated at all, because its
           result is a hand-over artifact that is broken rather than shortened by
           a cut (the tool promises to keep itself bounded in return).
+
+        The whole call runs inside its advice scope, so every refusal stage and every hook
+        can advise a tool (``advise_tools``); what was advised and may be offered comes back
+        in ``ToolCallOutcome.advised_tools``. A nested call opens a scope of its own, and the
+        outer one is current again when it returns.
         """
+        scope = _AdviceScope(self)
+        token = _advice_ctx.set(scope)
+        try:
+            outcome = self._call(name, args)
+        finally:
+            _advice_ctx.reset(token)
+            advised = scope.close()
+        if advised:
+            from dataclasses import replace
+            return replace(outcome, advised_tools=advised)
+        return outcome
+
+    def _call(self, name: str, args) -> "ToolCallOutcome":
+        """The pipeline of ``call``, in the order its docstring gives."""
         import time
 
         tool = self.tools.get(name)
@@ -1492,6 +1615,35 @@ class ToolCaller:
             gated_lane=self.gate_enabled,
         )
 
+    def _offerable(self, name: str) -> bool:
+        """May ``advise_tools`` hand this tool to the model of this caller?
+
+        The funnel's own stages, asked without a call and in the funnel's order: registered,
+        the account not revoked, inside the allowed set, not blocked by the policy
+        (``admin_only``, the channel rule of the gated lane), allowed by the account
+        allowlist (``account_opt_in`` included; a raising resolver answers no), and the
+        caller's ``offer_check``. Every stage is one the call itself would run, so advice
+        is never broader than what this caller may start. Any exception answers no.
+        """
+        try:
+            tool = (self.tools or {}).get(name)
+            if tool is None:
+                return False
+            from vaf.core.revocation import is_revoked
+            if is_revoked(self.user_scope_id):
+                return False
+            if self.allowed_tools is not None and name not in self.allowed_tools:
+                return False
+            if self._policy(name, tool).blocked:
+                return False
+            if self._account_allowlist_blocks(name, tool):
+                return False
+            if self.offer_check is not None and not self.offer_check(name):
+                return False
+            return True
+        except Exception:
+            return False
+
     def _account_allowlist_blocks(self, name: str, tool=None) -> str:
         """The account-level tool allowlist, as a refusal reason or "".
 
@@ -1568,7 +1720,11 @@ class ToolCaller:
             # misspelt name in the set must not be answered with a tool the set leaves out.
             candidates = self.tools if self.allowed_tools is None else {
                 n: t for n, t in (self.tools or {}).items() if n in self.allowed_tools}
-            hint = unknown_tool_hint(name, candidates, args)
+            hint, named = _unknown_tool_correction(name, candidates, args)
+            if named:
+                # Handed over, not only named: a narrowed turn may not carry the tool the
+                # correction points at, and a correction the model cannot follow is a refusal.
+                advise_tools(*named)
             return f"{refusal}. {hint}" if hint else refusal
         tool_args = dict(args) if args else {}
         tool_args, errors = repair_arguments(tool, tool_args, tool_name=name,

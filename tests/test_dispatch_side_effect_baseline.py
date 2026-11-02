@@ -47,8 +47,10 @@ THE OTHER THREE:
   machine-global, so moving the gate is the single riskiest step of the split.
 - The person's chat grants grow only on the "for this chat" answer - never on "once",
   which used to fill a set on the agent that one web process serves every chat and
-  account from - and `_active_tools` only through the search_tools post-hook - which parses one tool per line, name before the colon, and
-  silently yields nothing for any other shape.
+  account from - and `_active_tools` only through what a result advises: the post-hook
+  that parsed search_tools' prose (one tool per line, name before the colon) became the
+  tool's own `vaf.advise_tools` call, so the scenario's stub advises instead of formatting,
+  and the frozen result is the same.
 
 Measured, never typed. Five measurement bugs were caught and fixed while building these
 baselines rather than frozen into them; the search_tools output format was the last of them.
@@ -242,6 +244,13 @@ def _gate(answer):
                       _noninteractive=False, current_session_id=None)
 
 
+def _search_stub(**kw):
+    """search_tools' shape: it lists two tools and advises exactly those."""
+    from vaf.core.tool_dispatch import advise_tools
+    advise_tools("write_file", "read_file")
+    return "- write_file: writes a file\n- read_file: reads a file"
+
+
 SCENARIOS = {
     "ok": lambda: _probe([_tool("probe")], ("probe", {})),
     "unknown_tool": lambda: _probe([_tool("probe")], ("nope", {})),
@@ -256,9 +265,8 @@ SCENARIOS = {
     "dup_guard": lambda: _probe([_tool("coding_agent")], ("coding_agent", {}),
                                 get_live_session_subagents=lambda: _LIVE_CODER),
     "search_tools": lambda: _probe(
-        [_tool("search_tools",
-               lambda **kw: "- write_file: writes a file\n- read_file: reads a file"),
-         _tool("write_file"), _tool("read_file")], ("search_tools", {})),
+        [_tool("search_tools", _search_stub), _tool("write_file"), _tool("read_file")],
+        ("search_tools", {})),
     "gate_allow_always": lambda: _gate("a"),
     "gate_allow_chat": lambda: _gate("t"),
     "gate_allow_once": lambda: _gate("o"),

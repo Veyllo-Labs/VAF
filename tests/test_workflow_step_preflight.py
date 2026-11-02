@@ -29,6 +29,15 @@ MUTATIONS, each turns the named tests red:
 - `create` refusing an unknown tool -> test_create_saves_a_plan_with_a_tool_of_another_lane;
 - the execute_workflow check removed -> the saved-workflow test; the `@workflow_id` check or
   the `vaf workflow run` check removed -> the two lane tests after it.
+
+The network refusal (one line, one instruction, the tools it names handed to the turn), run
+through a real ToolCaller whose registry and identity decide what the caller may use:
+- the per-step instruction restored -> test_network_refusal_fits_the_cut;
+- python_sandbox and host_bash swapped in what is advised -> test_network_refusal_variants;
+- the "Fix the other steps" line dropped -> test_mixed_plan_closes_with_both;
+- the preflight asking `agent.visible_tools()` again instead of `advise_tools` ->
+  test_no_host_bash_advice_for_a_regular_account, test_no_host_bash_advice_on_a_channel;
+- `_HOST_BASH_INSTEAD` changed -> test_saved_refusal_outside_a_call_is_unchanged.
 """
 import ast
 import importlib
@@ -73,15 +82,49 @@ def run(monkeypatch, tmp_path):
     monkeypatch.setattr(engine_module, "WorkflowEngine", _FakeEngine)
     _FakeEngine.runs = []
 
-    def _call(steps, *, action="run_temp", visible=(), agent_tools=None, **extra):
+    def _call(steps, *, action="run_temp", agent_tools=None, **extra):
         agent = SimpleNamespace(
             tools=dict(agent_tools or {}),
-            visible_tools=lambda: {name: object() for name in visible},
             current_session_id=None, _current_user_role="admin",
             _current_user_scope_id=None, _current_username="alice")
         tool = AgentWorkflowBuilderTool()
         return tool.run(action=action, steps=steps, _agent=agent, **extra)
     return _call
+
+
+REGULAR = "ab12cd34-0000-0000-0000-000000000000"   # synthetic scope of a regular account
+
+
+@pytest.fixture
+def run_as(run, monkeypatch):
+    """Call the builder through a real ToolCaller, as the chat lane does; returns the
+    ToolCallOutcome. `registry` names the tools besides the builder (real instances), and
+    the caller's identity and source decide which of them the caller may use."""
+    from vaf.core.tool_dispatch import ToolCaller
+    from vaf.tools.host_bash import HostBashTool
+    from vaf.workflows.tool_overlay import workflow_primitives
+
+    def _call(steps, *, registry=("python_sandbox", "host_bash"), role="admin", scope=None,
+              source="", session_id=None, action="run_temp", **extra):
+        tools = {"create_agent_workflow": AgentWorkflowBuilderTool()}
+        if "host_bash" in registry:
+            tools["host_bash"] = HostBashTool()
+        if "python_sandbox" in registry:
+            tools["python_sandbox"] = workflow_primitives()["python_sandbox"]
+        agent = SimpleNamespace(tools={}, current_session_id=session_id,
+                                _current_user_role=role, _current_user_scope_id=scope,
+                                _current_username="alice")
+        caller = ToolCaller(tools, user_scope_id=scope, user_role=role, source=source,
+                            session_id=session_id)
+        return caller.call("create_agent_workflow",
+                           {"action": action, "steps": steps, "_agent": agent, **extra})
+    return _call
+
+
+def _net_plan(pips=10, clones=10):
+    return ([{"tool": "bash", "args": {"command": f"pip install pkg{i}"}} for i in range(pips)]
+            + [{"tool": "bash", "args": {"command": f"git clone https://example.org/r{i}.git"}}
+               for i in range(clones)])
 
 
 # ── A1: the alias table ──────────────────────────────────────────────────────
@@ -268,18 +311,85 @@ def test_command_needs_network(command, downloads):
     assert command_needs_network(command) is downloads
 
 
-def test_network_bash_step_refused(run):
+def test_network_bash_step_refused(run, run_as):
     plan = [{"tool": "bash", "args": {"command": "pip install vaf"}},
             {"tool": "bash", "args": {"command": "git clone https://x/y"}}]
-    out = run(plan, visible=("host_bash",))
+    out = run_as(plan).result
+    assert out.startswith("Error: nothing ran") and "steps 1, 2 (bash)" in out, out
     assert 'host_bash(command="pip install vaf")' in out
-    assert 'host_bash(command="git clone https://x/y")' in out
-    out = run(plan)
-    assert "host_bash(" not in out and "args.packages" in out
+    assert "subprocess.run('pip install vaf', shell=True, check=True)" in out
+    out = run_as(plan, role="user", scope=REGULAR).result
+    assert "host_bash(" not in out and "python_sandbox(code=" in out, out
     assert not _FakeEngine.runs
     out = run([{"tool": "bash", "args": {"command": "ls -la"}},
                {"tool": "bash", "input": "python -m pytest"}])
     assert "completed" in out, out
+
+
+def test_network_refusal_fits_the_cut(run_as):
+    """The measured plan: 10 installs and 10 clones. Its refusal was 5369 characters, and the
+    chat funnel cuts at 2000 from the middle, so the model saw neither all the steps nor its
+    instruction whole."""
+    out = run_as(_net_plan()).result
+    assert len(out) < 2000, len(out)
+    assert "[Output Truncated" not in out
+    lines = [line for line in out.splitlines() if line.startswith("- ")]
+    assert lines == ["- steps " + ", ".join(str(i) for i in range(1, 21)) + " (bash): these "
+                     "commands need the network, and the workflow shell has none."], lines
+    assert out.count("pip install") == 2, "a command repeated per step"
+
+
+_SANDBOX_TAIL = ("A download onto the user's computer is not possible from here; if they need "
+                 "it there, tell them the commands.")
+_HOST_ONLY = ("Run them outside the workflow with host_bash, one call per command; the user "
+              'confirms each: `host_bash(command="pip install pkg0")`.')
+_NEITHER = ("Neither python_sandbox nor host_bash is available to you here, so tell the user "
+            "to run these commands themselves.")
+
+
+@pytest.mark.parametrize("case, caller, advised", [
+    ("both", {}, ("python_sandbox", "host_bash")),
+    ("sandbox_only", {"role": "user", "scope": REGULAR}, ("python_sandbox",)),
+    ("host_bash_only", {"registry": ("host_bash",)}, ("host_bash",)),
+    ("neither", {"registry": ("host_bash",), "source": "telegram",
+                 "session_id": "telegram_123456"}, ()),
+])
+def test_network_refusal_variants(run_as, case, caller, advised):
+    """The instruction names exactly what this caller may use, and exactly that is advised;
+    python_sandbox first, because it asks nothing."""
+    outcome = run_as(_net_plan(), **caller)
+    out = outcome.result
+    assert outcome.advised_tools == advised, (case, outcome.advised_tools)
+    last = out.splitlines()[-1]
+    sandbox_call = ('`python_sandbox(code="import subprocess; subprocess.run(\'pip install '
+                    'pkg0\', shell=True, check=True)")`')
+    if case == "both":
+        assert last.startswith("Run them outside the workflow. python_sandbox has network")
+        assert sandbox_call in last
+        assert last.endswith('call `host_bash(command="pip install pkg0")` instead, one call '
+                             "per command; the user confirms each."), last
+        assert last.index("python_sandbox(") < last.index("host_bash(")
+    elif case == "sandbox_only":
+        assert sandbox_call in last and last.endswith(_SANDBOX_TAIL), last
+        assert "host_bash" not in out
+    elif case == "host_bash_only":
+        assert last == _HOST_ONLY, last
+        assert "python_sandbox" not in out
+    else:
+        assert last == _NEITHER, last
+    assert "call create_agent_workflow again" not in out, "sends the model back into the refusal"
+
+
+def test_mixed_plan_closes_with_both(run_as):
+    """A network step and a missing field: the network instruction, then the plan's own."""
+    out = run_as([{"tool": "bash", "args": {"command": "pip install vaf"}},
+                  {"tool": "move_file", "args": {"path": "a"}}]).result
+    lines = out.splitlines()
+    assert lines[1] == ("- step 1 (bash): this command needs the network, and the workflow "
+                        "shell has none."), lines
+    assert lines[2].startswith("- step 2 (move_file):")
+    assert lines[-2].startswith("Run it outside the workflow. python_sandbox"), lines[-2]
+    assert lines[-1] == "Fix the other steps and call create_agent_workflow again."
 
 
 # ── A6: no host_bash step ────────────────────────────────────────────────────
@@ -290,12 +400,90 @@ def test_host_bash_step_refused(run, tmp_path, action):
     extra = {"workflow_id": "host_plan", "name": "Host plan"} if action == "create" else {}
     out = run([{"tool": "host_bash", "args": {"command": "ls"}},
                {"tool": "web_search", "input": "y"}],
-              action=action, visible=("host_bash",), agent_tools={"host_bash": HostBashTool()},
-              **extra)
+              action=action, agent_tools={"host_bash": HostBashTool()}, **extra)
     assert out.startswith("Error:") and "step 1 (host_bash)" in out, out
     assert "directly in the chat" in out
     assert not _FakeEngine.runs
     assert not (tmp_path / ".vaf" / "workflows" / "host_plan.py").exists()
+
+
+def _host_bash_wording(out):
+    return ("directly in the chat" in out, "host_bash is not available to you here" in out)
+
+
+def test_no_host_bash_advice_for_a_regular_account(run_as, tmp_path):
+    """host_bash is opt-in per account: a regular account whose list does not name it gets
+    the "not available" wording from the preflight (A5 and A6) and from the saved-workflow
+    refusal, and nothing about host_bash is advised."""
+    plan = [{"tool": "host_bash", "args": {"command": "ls"}},
+            {"tool": "bash", "args": {"command": "pip install vaf"}}]
+    outcome = run_as(plan, role="user", scope=REGULAR)
+    assert _host_bash_wording(outcome.result) == (False, True), outcome.result
+    assert "host_bash(" not in outcome.result
+    assert "host_bash" not in outcome.advised_tools
+    admin = run_as(plan)
+    assert _host_bash_wording(admin.result) == (True, False), admin.result
+    assert "host_bash" in admin.advised_tools
+    _saved_refusal_through_caller(tmp_path, role="user", scope=REGULAR, expect_host_bash=False)
+    _saved_refusal_through_caller(tmp_path, role="admin", scope=None, expect_host_bash=True)
+
+
+def test_no_host_bash_advice_on_a_channel(run_as, tmp_path):
+    """No messaging channel can show host_bash's confirmation, so it is never advised there."""
+    channel = {"source": "telegram", "session_id": "telegram_123456"}
+    plan = [{"tool": "host_bash", "args": {"command": "ls"}},
+            {"tool": "bash", "args": {"command": "pip install vaf"}}]
+    outcome = run_as(plan, **channel)
+    assert _host_bash_wording(outcome.result) == (False, True), outcome.result
+    assert "host_bash(" not in outcome.result
+    assert outcome.advised_tools == ("python_sandbox",)
+    _saved_refusal_through_caller(tmp_path, expect_host_bash=False, **channel)
+
+
+def _saved_refusal_through_caller(home, *, expect_host_bash, role="admin", scope=None,
+                                  source="", session_id=None):
+    """`agent_workflow_refusal` asked inside a chat call (execute_workflow's lane)."""
+    from vaf.core.tool_dispatch import ToolCaller
+    from vaf.tools.agent_workflow_builder import agent_workflow_refusal
+    from vaf.tools.base import BaseTool
+    from vaf.tools.host_bash import HostBashTool
+    from vaf.workflows.templates import get_template
+
+    _saved_workflow(home, "old_plan", marker=True)
+
+    class _Start(BaseTool):
+        name = "start_saved"
+        description = "starts the saved workflow"
+        parameters = {"type": "object", "properties": {}}
+
+        def run(self, **kw):
+            return agent_workflow_refusal("old_plan", get_template("old_plan"))
+
+    outcome = ToolCaller({"start_saved": _Start(), "host_bash": HostBashTool()},
+                         user_scope_id=scope, user_role=role, source=source,
+                         session_id=session_id).call("start_saved", {})
+    assert outcome.result.startswith("Error: nothing ran"), outcome.result
+    assert _host_bash_wording(outcome.result) == (expect_host_bash, not expect_host_bash), \
+        outcome.result
+    assert outcome.advised_tools == (("host_bash",) if expect_host_bash else ())
+
+
+def test_saved_refusal_outside_a_call_is_unchanged(tmp_path, monkeypatch):
+    """The `@workflow` lane and `vaf workflow run` ask outside any tool call: nothing can be
+    handed over there, and the text is exactly what it was."""
+    from vaf.core.tool_dispatch import advise_tools
+    from vaf.tools.agent_workflow_builder import agent_workflow_refusal
+    from vaf.workflows.templates import get_template
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    _saved_workflow(tmp_path, "old_plan", marker=True)
+    assert advise_tools("host_bash") is None
+    assert agent_workflow_refusal("old_plan", get_template("old_plan")) == (
+        "Error: nothing ran, the saved workflow 'old_plan' has steps that cannot run:\n"
+        "- step 1 (host_bash): a workflow runs its steps without asking the user, and "
+        "host_bash needs the user's OK for every command.\n"
+        "Call host_bash directly in the chat instead, one call per command (the user "
+        "confirms each).")
 
 
 def test_create_saves_a_plan_with_a_tool_of_another_lane(run, tmp_path):

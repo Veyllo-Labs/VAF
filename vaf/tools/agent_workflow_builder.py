@@ -130,18 +130,74 @@ _HOST_BASH_REASON = ("a workflow runs its steps without asking the user, and hos
                      "the user's OK for every command.")
 _HOST_BASH_INSTEAD = ("Call host_bash directly in the chat instead, one call per command (the "
                       "user confirms each).")
-_HOST_BASH_STEP = f"{_HOST_BASH_REASON} {_HOST_BASH_INSTEAD}"
+_HOST_BASH_UNAVAILABLE = ("host_bash is not available to you here; a command without network can "
+                          "be a bash step, otherwise tell the user to run it.")
 
 
-def _refusal(problems: List[str]) -> str:
-    """The one in-turn refusal for a plan: nothing ran, one line per step, one instruction."""
-    return ("Error: nothing ran, the workflow plan has steps that cannot run:\n"
-            + "\n".join(f"- {p}" for p in problems)
-            + "\nFix these steps and call create_agent_workflow again.")
+def _offered(*names: str) -> tuple:
+    """The named tools the caller of this run may use, handed to its turn (`advise_tools`).
+
+    Outside a tool call (the `@workflow` lane, `vaf workflow run`, a direct run) nobody can be
+    handed anything and every name counts as offered, so the wording stays what it was."""
+    from vaf.core.tool_dispatch import advise_tools
+    accepted = advise_tools(*names)
+    return tuple(names) if accepted is None else accepted
 
 
-def _preflight_steps(normalised: List[dict], tools: Dict[str, Any],
-                     visible: Optional[set] = None, *,
+def _host_bash_instead() -> str:
+    """What to do instead of a host_bash step: call it in the chat, when this caller may."""
+    return _HOST_BASH_INSTEAD if "host_bash" in _offered("host_bash") else _HOST_BASH_UNAVAILABLE
+
+
+def _network_instruction(commands: List[str]) -> str:
+    """The one instruction for the bash steps that need the network.
+
+    python_sandbox comes first: it has network and asks nothing, and most of these commands
+    (an install, a clone to work on) need no result on the user's disk. host_bash is the way
+    when the result must land there, and it asks the user per command. Only the tools this
+    caller may use are named, and exactly those are advised."""
+    first = commands[0]
+    several = len(commands) > 1
+    offered = _offered("python_sandbox", "host_bash")
+    code = f"import subprocess; subprocess.run({first!r}, shell=True, check=True)"
+    sandbox_call = "`python_sandbox(code=" + json.dumps(code, ensure_ascii=False) + ")`"
+    host_call = '`host_bash(command="' + first.replace('"', '\\"') + '")`'
+    them = "them" if several else "it"
+    sandbox = ("python_sandbox has network and asks nothing, but what it installs or downloads "
+               "stays in the sandbox and never reaches the user's computer; "
+               + ("several commands fit in one call: " if several else "for example: ")
+               + sandbox_call + ".")
+    if "python_sandbox" in offered and "host_bash" in offered:
+        return (f"Run {them} outside the workflow. {sandbox} If the result must land on the "
+                f"user's computer, call {host_call} instead, one call per command; the user "
+                "confirms each.")
+    if "python_sandbox" in offered:
+        return (f"Run {them} outside the workflow. {sandbox} A download onto the user's computer "
+                "is not possible from here; if they need it there, tell them the "
+                + ("commands." if several else "command."))
+    if "host_bash" in offered:
+        return (f"Run {them} outside the workflow with host_bash, one call per command; the user "
+                f"confirms each: {host_call}.")
+    return ("Neither python_sandbox nor host_bash is available to you here, so tell the user to "
+            + ("run these commands themselves." if several else "run this command themselves."))
+
+
+def _refusal(problems: List[str], instruction: Optional[str] = None, *,
+             others: bool = False) -> str:
+    """The one in-turn refusal for a plan: nothing ran, one line per step, one instruction.
+
+    With a network ``instruction`` the refusal ends with it, and "call create_agent_workflow
+    again" follows only when ``others`` (other steps to fix) - a plan whose only problem is
+    the network would be sent straight back into this refusal."""
+    head = ("Error: nothing ran, the workflow plan has steps that cannot run:\n"
+            + "\n".join(f"- {p}" for p in problems))
+    if instruction is None:
+        return head + "\nFix these steps and call create_agent_workflow again."
+    return (head + "\n" + instruction
+            + ("\nFix the other steps and call create_agent_workflow again." if others else ""))
+
+
+def _preflight_steps(normalised: List[dict], tools: Dict[str, Any], *,
                      unknown: Optional[List[str]] = None) -> Optional[str]:
     """Check a plan before anything runs; the refusal for ALL broken steps, or None.
 
@@ -160,6 +216,11 @@ def _preflight_steps(normalised: List[dict], tools: Dict[str, Any],
     the user while host_bash in chat asks for every command; and a step whose output name the
     engine owns (`engine.ENGINE_OUTPUT_NAMES`), which the engine refuses as well.
 
+    The way out a refusal names is a tool this caller may use, and it is handed to the turn
+    (`advise_tools`): the network steps share one line and one instruction
+    (`_network_instruction`), and a host_bash step points at host_bash in the chat only when
+    the caller may run it. Called outside a tool call, every tool counts as offered.
+
     With an ``unknown`` list (the `create` action), a tool this registry lacks is appended
     there instead of refused: a saved workflow may run in another lane whose registry has it
     (the automation lane's channel tools). A temporary workflow runs here and now, so it
@@ -175,8 +236,10 @@ def _preflight_steps(normalised: List[dict], tools: Dict[str, Any],
     from vaf.tools.bash import command_needs_network
     from vaf.workflows.engine import build_step_args, reserved_output_problem
 
-    visible = set(tools) if visible is None else visible
     problems: List[str] = []
+    network: List[str] = []         # the commands of the bash steps that need the network
+    network_steps: List[str] = []
+    network_at = -1                 # where their one line goes: at the first such step
     for i, step in enumerate(normalised, 1):
         name = step.get("tool") or ""
         label = f"step {i} ({name})"
@@ -185,7 +248,7 @@ def _preflight_steps(normalised: List[dict], tools: Dict[str, Any],
             problems.append(f"{label}: {_reserved}")
             continue
         if name == "host_bash":
-            problems.append(f"{label}: {_HOST_BASH_STEP}")
+            problems.append(f"{label}: {_HOST_BASH_REASON} {_host_bash_instead()}")
             continue
         tool = tools.get(name)
         if tool is None and unknown is not None:
@@ -216,21 +279,25 @@ def _preflight_steps(normalised: List[dict], tools: Dict[str, Any],
             continue
         command = args.get("command") if name == "bash" else None
         if isinstance(command, str) and command_needs_network(command):
-            if "host_bash" in visible:
-                problems.append(
-                    f"{label}: the workflow shell has no network, so `{command}` cannot run "
-                    "there. Run it with host_bash yourself, one call per command, outside the "
-                    "workflow (it asks the user first): host_bash(command=\""
-                    + command.replace('"', '\\"') + '").')
-            else:
-                problems.append(
-                    f"{label}: the workflow shell has no network, so `{command}` cannot run "
-                    "there. For Python packages your code needs, use a python_sandbox step "
-                    "with args.packages; a download onto the user's disk is not possible "
-                    "from here, so tell the user.")
-    if not problems:
+            # One line for all of them, and nothing repeated per step: a long plan's
+            # refusal was cut in the middle by the funnel and lost its own instruction.
+            if network_at < 0:
+                network_at = len(problems)
+            network.append(command)
+            network_steps.append(str(i))
+    if not problems and not network:
         return None
-    return _refusal(problems)
+    if not network:
+        return _refusal(problems)
+    if len(network) == 1:
+        line = (f"step {network_steps[0]} (bash): this command needs the network, and the "
+                "workflow shell has none.")
+    else:
+        line = (f"steps {', '.join(network_steps)} (bash): these commands need the network, "
+                "and the workflow shell has none.")
+    others = bool(problems)
+    problems.insert(network_at, line)
+    return _refusal(problems, _network_instruction(network), others=others)
 
 
 def _agent_workflow_path(workflow_id: str) -> str:
@@ -263,7 +330,7 @@ def agent_workflow_refusal(workflow_id: str, template: Dict[str, Any]) -> Option
         return None
     return ("Error: nothing ran, the saved workflow '" + workflow_id + "' has steps that cannot "
             "run:\n" + "\n".join(f"- {p}" for p in problems)
-            + f"\n{_HOST_BASH_INSTEAD}")
+            + f"\n{_host_bash_instead()}")
 
 
 class AgentWorkflowBuilderTool(BaseTool):
@@ -628,7 +695,7 @@ class AgentWorkflowBuilderTool(BaseTool):
         # The run's registry, collected before anything starts: the preflight checks every
         # step against it, and the engine (inline) runs on it.
         tools = self._collect_tools()
-        _refused = _preflight_steps(normalised, tools, self._visible_tool_names(tools))
+        _refused = _preflight_steps(normalised, tools)
         if _refused:
             self.log(f"[RUN_TEMP] refused before running: {_refused[:400]}")
             return _refused
@@ -977,17 +1044,6 @@ class AgentWorkflowBuilderTool(BaseTool):
             tools.update(dict(agent.tools))
         return tools
 
-    def _visible_tool_names(self, tools: Dict[str, Any]) -> set:
-        """The tool names the model may call in chat (Agent.visible_tools), for the advice a
-        refusal gives; the run's registry when there is no agent to ask."""
-        agent = self._agent
-        try:
-            if agent is not None and hasattr(agent, "visible_tools"):
-                return set(agent.visible_tools())
-        except Exception:
-            pass
-        return set(tools)
-
     # ─── create (persistent) ──────────────────────────────────────────────────
 
     def _create_persistent(self, kwargs: dict) -> str:
@@ -1040,8 +1096,7 @@ class AgentWorkflowBuilderTool(BaseTool):
         # run fails each time it is started, where nobody can fix it.
         _tools = self._collect_tools()
         _unknown: List[str] = []
-        _refused = _preflight_steps(normalised, _tools, self._visible_tool_names(_tools),
-                                    unknown=_unknown)
+        _refused = _preflight_steps(normalised, _tools, unknown=_unknown)
         if _refused:
             return _refused
 

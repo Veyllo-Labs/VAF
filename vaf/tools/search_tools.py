@@ -21,40 +21,18 @@ Workflow:
            create_calendar_event(title: string, start: string, [duration: integer])
        list_calendar_events: List upcoming events from the calendar.
   3. Model calls the relevant tool in the NEXT turn.
-     The agent auto-adds requested tool names to _active_tools so their full
-     schema is available in the next request.
-
-FORMAT CONTRACT: the execute_tool post-hook parses this tool's output through
-extract_discovered_tool_names() below — match lines must stay "name: desc" and
-signature lines must stay indented "name(...)" (their pre-colon part contains
-'(' so they can never collide with a registry name). The round-trip test in
-tests/test_search_tools_signatures.py guards this.
+     run() advises every name it lists (vaf.advise_tools), so the agent adds the
+     ones this caller may run to the turn's tool set and their full schema is
+     available in the next request. The names come from the code, never from
+     parsing this text back.
 
 Works with every backend (OpenAI, Anthropic, Google, local) — no special
 API features required.
 """
 from typing import Dict
 
+from vaf.core.tool_dispatch import advise_tools
 from vaf.tools.base import BaseTool, format_tool_signature
-
-
-def extract_discovered_tool_names(result: str, registry) -> list:
-    """Parse tool names out of a search_tools result string.
-
-    Shared by the execute_tool post-hook (auto-adds discovered tools to
-    _active_tools) and the format tests, so the output format and the parser
-    can never drift apart silently. Mirrors the historical inline parser
-    exactly: one candidate per line containing ':', the pre-colon token must be
-    a registered tool name; duplicates are kept (the caller dedups on append).
-    """
-    discovered = []
-    for line in (result or "").splitlines():
-        line = line.strip().lstrip("-").lstrip(" ")
-        if ":" in line:
-            candidate = line.split(":")[0].strip()
-            if candidate and candidate in registry:
-                discovered.append(candidate)
-    return discovered
 
 
 class SearchToolsTool(BaseTool):
@@ -128,6 +106,7 @@ class SearchToolsTool(BaseTool):
             for tool_name, tool in all_tools[:_CAP]:
                 short = (getattr(tool, "description", "") or "").split("\n")[0][:100]
                 lines.append(f"  {tool_name}: {short}")
+            advise_tools(*(tool_name for tool_name, _ in all_tools[:_CAP]))
             if len(all_tools) > _CAP:
                 lines.append(f"  … and {len(all_tools) - _CAP} more tools. Refine your query to narrow results.")
             return "\n".join(lines)
@@ -148,9 +127,7 @@ class SearchToolsTool(BaseTool):
                 short += "..."
             lines.append(f"  {tool_name}: {short}")
             if i < _SIGNATURE_TOP_N:
-                # Parser contract: the signature sits on its OWN indented line and
-                # its pre-colon part contains '(' - it can never be mistaken for a
-                # "name: desc" match line by extract_discovered_tool_names.
+                # The signature sits on its OWN indented line under its match line.
                 sig = format_tool_signature(tool)
                 if sig:
                     lines.append(f"      {sig}")
@@ -158,4 +135,6 @@ class SearchToolsTool(BaseTool):
         # Budget: drop signature lines (least critical, last first) until we fit.
         while sig_line_idxs and sum(len(l) + 1 for l in lines) > _TOTAL_BUDGET:
             lines.pop(sig_line_idxs.pop())
+        # Every listed tool, handed over for the rest of the turn (those this caller may run).
+        advise_tools(*(tool_name for _, tool_name, _ in matches[:10]))
         return "\n".join(lines)

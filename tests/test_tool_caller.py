@@ -457,9 +457,15 @@ def test_execute_is_call_result():
     spy.assert_called_once_with("probe", {"x": "1"})
 
 
-def test_the_outcome_is_immutable_and_has_exactly_two_fields():
+def test_the_outcome_is_immutable_and_has_exactly_three_fields():
+    """`advised_tools` came third, with a default: every two-argument construction (the
+    chat lane's early returns, embedders' own loops) keeps working.
+    MUTATION: drop the default on `advised_tools` -> the two-argument line goes red."""
     import dataclasses
     outcome = _caller(_tool()).call("probe", {})
-    assert [f.name for f in dataclasses.fields(outcome)] == ["result", "dispatched"]
+    assert [f.name for f in dataclasses.fields(outcome)] == ["result", "dispatched",
+                                                             "advised_tools"]
+    assert outcome.advised_tools == ()
+    assert ToolCallOutcome("x", True).advised_tools == ()
     with pytest.raises(dataclasses.FrozenInstanceError):
         outcome.dispatched = False

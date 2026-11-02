@@ -38,6 +38,7 @@ from vaf.core.tool_dispatch import (
     ToolCallHooks as _ToolCallHooks,
     ToolCallOutcome as _ToolCallOutcome,
     ToolCaller as _ToolCaller,
+    advise_tools as _advise_tools,
     assign_declared_identity as _assign_declared_identity,
     decode_arguments as _decode_arguments,
     event_result,
@@ -1739,6 +1740,9 @@ class Agent:
         # Tools a suggestion note of the current turn names (use_skill, execute_workflow);
         # pinned into the capped set once the router has run, then cleared.
         self._note_tools_this_turn: set = set()
+        # Tools a tool result of the current turn advised (vaf.advise_tools), in the order
+        # they were advised; kept in the turn's set until the next turn is routed.
+        self._advised_tools_this_turn: list = []
 
         # Optional application-supplied authorizer; see set_tool_authorizer().
         self._tool_authorizer = None
@@ -1995,6 +1999,56 @@ class Agent:
         missing = [t for t in _want if t in self.tools and t not in self._active_tools]
         if missing:
             self._active_tools = list(self._active_tools) + missing
+
+    def _take_tool_advice(self, producer, names) -> None:
+        """A tool call's answer advised these tools (``ToolCallOutcome.advised_tools``): keep
+        them in the turn's tool set for the rest of the turn.
+
+        A refusal that says "call host_bash instead" is no help to a model whose turn does
+        not carry host_bash: it can only repeat the advice to the person (live incident, a
+        workflow refused for its network steps). The names were filtered by the funnel for
+        THIS caller already; nothing is appended to the history (Rule 4.1), only the next
+        request's tool set changes, on every backend (``TOOLS`` and the resident array both
+        read ``_active_tools``)."""
+        names = [n for n in (names or ()) if isinstance(n, str) and n]
+        if not names:
+            return
+        advised = getattr(self, "_advised_tools_this_turn", None)
+        if advised is None:
+            advised = self._advised_tools_this_turn = []
+        for name in names:
+            if name not in advised:
+                advised.append(name)
+        added = self._pin_advised_tools()
+        if not added:
+            return
+        try:
+            append_domain_log("backend", f"[TOOL_ADVICE] '{producer}' advised "
+                                         f"{', '.join(names)}; added for this turn: {', '.join(added)}")
+        except Exception:
+            pass
+        try:
+            from vaf.cli.ui import UI
+            UI.event("Router", f"Added for this turn, advised by {producer}: {', '.join(added)}",
+                     style="dim")
+        except Exception:
+            pass
+
+    def _pin_advised_tools(self) -> list:
+        """Put this turn's advised tools back into a narrowed set; returns what it added.
+
+        Called when advice arrives and after each mid-turn narrowing (the internal-step and
+        the context-pressure subsets), because the turn was told to use that tool. A no-op
+        when ``_active_tools`` is None: every visible tool is offered already."""
+        if self._active_tools is None:
+            return []
+        advised = getattr(self, "_advised_tools_this_turn", None) or []
+        visible = self.visible_tools()
+        current = list(self._active_tools)
+        added = [n for n in advised if n in visible and n not in current]
+        if added:
+            self._active_tools = current + added
+        return added
 
     @staticmethod
     def _is_placeholder_plan(plan) -> bool:
@@ -2322,6 +2376,9 @@ class Agent:
                 except Exception:
                     pass
                 return None
+            # The one exit of this gate, handed over: the cap cuts riders first, and a
+            # narrowed turn may have lost update_working_memory.
+            _advise_tools("update_working_memory")
             return (
                 f"[PLAN REQUIRED] '{name}' changes state, so set your REAL approach for THIS task first "
                 "(a placeholder like \"test\" or \"new plan\" does NOT count): "
@@ -9209,6 +9266,9 @@ class Agent:
         turn without a set."""
         from vaf.cli.ui import UI
 
+        # What a tool result advised lasts for the turn it was advised in: the new turn routes
+        # fresh, and a tool the model actually used stays through the recency below.
+        self._advised_tools_this_turn = []
         if getattr(self, "_allowed_tools", None) is not None:
             self._decay_recent_tools()
             self._note_tools_this_turn = set()
@@ -10682,6 +10742,7 @@ class Agent:
                 UI.event("Router", f"Tight context in internal step ({current_tokens}/{max_tokens}). Using internal subset.", style="warning")
                 self._active_tools = [t for t in ["web_search", "memory_search", "list_tools", "search_tools", "update_intent", "read_file", "list_files"] if t in self.tools]
                 self._ensure_thinking_exit_tools()
+                self._pin_advised_tools()
 
         if not skip_input and user_input:
             # Re-apply after potential compression to ensure the hint stays in history[0].
@@ -11139,6 +11200,7 @@ class Agent:
                              CORE_FALLBACK = ["web_search", "memory_search", "memory_save", "list_tools", "search_tools", "update_intent", "read_file", "list_files", "librarian_agent", "coding_agent"]
                              self._active_tools = [t for t in CORE_FALLBACK if t in self.tools]
                              self._ensure_thinking_exit_tools()
+                             self._pin_advised_tools()
                              # Re-calculate after tool reduction
                              current_tokens, _ = self.get_token_usage(include_tools=not disable_tools)
 
@@ -13791,8 +13853,9 @@ class Agent:
         for tool failures; errors come back as the result string.
 
         What stays HERE is the chat turn: the thinking-only guard, the four turn gates, the
-        session plumbing those tools expect, the anti-re-delegation guard, the search_tools
-        discovery hook, the python_exec fallback and the router bookkeeping. Each of them is
+        session plumbing those tools expect, the anti-re-delegation guard, the tools a
+        result advises (``_take_tool_advice``), the python_exec fallback and the router
+        bookkeeping. Each of them is
         a property of this lane, not of dispatching, and each travels to the shared pipeline
         as a hook at the point where it actually belongs.
         """
@@ -13866,6 +13929,9 @@ class Agent:
             allowed_tools=getattr(self, "_allowed_tools", None),
             on_event=emit,
             model_name=getattr(self, "model_display_name", None),
+            # Advice may hand the model only what it may see at all (the editor's
+            # exclusions, the allowed set), on top of the funnel's own stages.
+            offer_check=lambda n: n in self.visible_tools(),
             hooks=_ToolCallHooks(
                 after_policy=(None if _ww else self._chat_turn_gates),
                 before_dispatch=self._chat_session_plumbing,
@@ -13882,7 +13948,9 @@ class Agent:
         with fanout_scope(self._fanout_for(name)), \
                 authorizer_scope(getattr(self, "_tool_authorizer", None)), \
                 self._room_file_scope():
-            return caller.call(name, args)
+            outcome = caller.call(name, args)
+        self._take_tool_advice(name, outcome.advised_tools)
+        return outcome
 
     def _execute_tool_and_spawns(self, name, args):
         """One call of a chat turn: its ``ToolCallOutcome`` and the sub-agent tasks it started
@@ -14426,8 +14494,9 @@ class Agent:
             pass
 
     def _chat_post_dispatch(self, name, args, result):
-        """Router discovery and the python_exec fallback - both may replace or extend the
-        result, and both run before it is truncated."""
+        """The chat lane's bookkeeping after a call and the python_exec fallback, which may
+        replace the result; runs before it is truncated. (What a result advises arrives in
+        ``ToolCallOutcome.advised_tools`` instead, see ``_take_tool_advice``.)"""
         from pathlib import Path
 
         emit = _with_subagent_debug_mirror(self._event_sink)
@@ -14441,22 +14510,6 @@ class Agent:
             self._record_owner_question(name, args, result)
         self._announce_held_send(result)
         self._close_turn_if_declared(name, args, result)
-        # search_tools post-hook: expand _active_tools with discovered tool names so the
-        # model can call them in the very next turn without a router round-trip.
-        # The parser is SHARED with the tool module (and its format tests), so the
-        # output format and this hook can never drift apart silently.
-        if name == "search_tools" and isinstance(result, str) and ":" in result:
-            try:
-                from vaf.tools.search_tools import extract_discovered_tool_names
-                discovered = extract_discovered_tool_names(result, self.tools)
-                if discovered and self._active_tools is not None:
-                    current = list(self._active_tools)
-                    for t in discovered:
-                        if t not in current:
-                            current.append(t)
-                    self._active_tools = current
-            except Exception:
-                pass
 
         # If python_sandbox blocked the request, offer the unsandboxed run - as a call of its
         # own through the whole shared path, exactly as if the model had made it: the policy,

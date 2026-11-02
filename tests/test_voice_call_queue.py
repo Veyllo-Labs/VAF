@@ -49,6 +49,12 @@ class _Box:
         self.urls = []
 
     def post(self, url, *a, **kw):
+        # Patching `requests.post` patches it for the whole process: a background thread
+        # an earlier test left running (the TUI boot's heartbeat to /api/heartbeat) posts
+        # through this fake too. Only the STT container counts; anything else gets the
+        # connection error of a server that is not there.
+        if not str(url).startswith(sc._stt_base_url()):
+            raise sc.requests.ConnectionError(f"not the STT container: {url}")
         self.urls.append(url)
 
         class R:

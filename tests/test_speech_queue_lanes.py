@@ -46,6 +46,15 @@ class _Resp:
         return self._data
 
 
+def _speech_endpoint(url) -> bool:
+    """Patching `requests.post` patches it for the whole process: a background thread an
+    earlier test left running (the TUI boot's heartbeat to /api/heartbeat) posts through
+    the same fake. Only the speech services count; anything else gets the connection
+    error of a server that is not there."""
+    return any(str(url).startswith(base) for base in
+               (sc._stt_base_url(), sc._tts_base_url(), sc.chatterbox_base_url()))
+
+
 class _Container:
     """A fake speech container: records the URLs it got and the peak concurrency."""
 
@@ -56,6 +65,12 @@ class _Container:
         self.inflight = 0
         self.peak = 0
         self._lock = threading.Lock()
+
+    def http_post(self, url, *a, **kw):
+        """The `requests.post` stand-in: speech endpoints only (see _speech_endpoint)."""
+        if not _speech_endpoint(url):
+            raise sc.requests.ConnectionError(f"not a speech endpoint: {url}")
+        return self.post(url, *a, **kw)
 
     def post(self, url, *a, **kw):
         with self._lock:
@@ -97,7 +112,7 @@ def test_container_stt_runs_one_at_a_time(monkeypatch):
     """Three people dictate at once: the container sees one request at a time, and every
     one is answered. MUTATION: remove the slot around the container posts - red."""
     box = _Container(lambda url: _Resp(200, {"text": "hallo", "language": "de"}))
-    monkeypatch.setattr(sc.requests, "post", box.post)
+    monkeypatch.setattr(sc.requests, "post", box.http_post)
     results = _in_threads(lambda i: sc.transcribe(b"audio", user_key=f"person-{i}"))
     assert results == [("hallo", "de")] * 3
     assert box.peak == 1
@@ -109,7 +124,7 @@ def test_asr_fallback_shares_one_slot(monkeypatch):
     second slot for the fallback (the re-entrancy guard refuses it, no text) - red."""
     box = _Container(lambda url: _Resp(404) if url.endswith("/asr")
                      else _Resp(200, {"text": "ok", "language": "en"}), hold_s=0)
-    monkeypatch.setattr(sc.requests, "post", box.post)
+    monkeypatch.setattr(sc.requests, "post", box.http_post)
     assert sc.transcribe(b"audio", user_key="p") == ("ok", "en")
     assert [u.rsplit("/", 1)[1] for u in box.urls] == ["asr", "transcribe"]
     assert _metric("stt")["served"] == 1
@@ -132,7 +147,7 @@ def test_api_lane_is_not_gated(monkeypatch):
 def test_a_refused_stt_is_busy_only_when_asked(monkeypatch):
     """busy_raises separates "busy" from "failed"; without it the old contract holds."""
     box = _Container(lambda url: _Resp(200, {"text": "x"}), hold_s=0)
-    monkeypatch.setattr(sc.requests, "post", box.post)
+    monkeypatch.setattr(sc.requests, "post", box.http_post)
     q = sc.speech_queue("stt")
     release, held = threading.Event(), threading.Event()
 
@@ -159,7 +174,7 @@ def test_tts_queue_by_url(monkeypatch):
     """The chatterbox server and the TTS container are different resources with their
     own queues. MUTATION: map the chatterbox URL to `tts` - red."""
     box = _Container(lambda url: _Resp(200, content=RIFF), hold_s=0)
-    monkeypatch.setattr(sc.requests, "post", box.post)
+    monkeypatch.setattr(sc.requests, "post", box.http_post)
     assert sc.synthesize_docker("hallo", "de", base_url=sc.chatterbox_base_url()) == RIFF
     assert sc.synthesize_docker("hallo", "de") == RIFF
     assert _metric("tts_chatterbox")["served"] == 1
@@ -168,7 +183,7 @@ def test_tts_queue_by_url(monkeypatch):
 
 def test_container_tts_runs_one_at_a_time(monkeypatch):
     box = _Container(lambda url: _Resp(200, content=RIFF))
-    monkeypatch.setattr(sc.requests, "post", box.post)
+    monkeypatch.setattr(sc.requests, "post", box.http_post)
     assert _in_threads(lambda i: sc.synthesize("hallo", "de", user_key=f"p{i}")) == [RIFF] * 3
     assert box.peak == 1
 
@@ -185,7 +200,7 @@ def test_synthesize_audio_takes_one_slot(monkeypatch):
     nesting. MUTATION: a second admission around the docker branch (refused as re-entrant,
     no audio) - red."""
     box = _Container(lambda url: _Resp(200, content=RIFF), hold_s=0)
-    monkeypatch.setattr(sc.requests, "post", box.post)
+    monkeypatch.setattr(sc.requests, "post", box.http_post)
     sm = _bare_speech_manager()
     assert sm.synthesize_audio("Hallo du", "de", force_engine="docker", user_key="p") == RIFF
     assert _metric("tts")["served"] == 1
@@ -380,7 +395,7 @@ def test_local_tts_counts_no_cloud_request(monkeypatch):
     shows no tts_api traffic that did not happen. MUTATION: call synthesize_api without
     asking for a provider - red."""
     box = _Container(lambda url: _Resp(200, content=RIFF), hold_s=0)
-    monkeypatch.setattr(sc.requests, "post", box.post)
+    monkeypatch.setattr(sc.requests, "post", box.http_post)
     sm = _bare_speech_manager()
     assert sm.synthesize_audio("Hallo du", "de", force_engine="docker", user_key="p") == RIFF
     assert _metric("tts_api") is None and _metric("tts")["served"] == 1

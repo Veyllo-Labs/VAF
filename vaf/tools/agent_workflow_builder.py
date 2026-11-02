@@ -152,6 +152,44 @@ def _host_bash_instead() -> str:
 # The chat funnel cuts a result at 2000 characters (ToolCaller max_result_chars), from the
 # middle: a refusal that is longer loses exactly the commands it lists. Kept under it.
 _REFUSAL_BUDGET = 1900
+# Step numbers named in one sentence before "and N more": a plan with hundreds of network
+# steps must not spend the budget on numbers.
+_STEP_NUMBERS_SHOWN = 30
+# The sandbox's own default is 30 s and its clamp 600 s (PythonSandboxTool._run_timeout); an
+# install or a clone takes longer than 30 s, so the example asks for room per command.
+_SANDBOX_SECONDS_BASE = 60
+_SANDBOX_SECONDS_PER_COMMAND = 45
+_SANDBOX_SECONDS_MAX = 600
+
+
+def _step_numbers(steps: List[str]) -> str:
+    """"1, 2, 3", or "1, 2, ... 30 and 970 more" past `_STEP_NUMBERS_SHOWN`."""
+    shown = ", ".join(steps[:_STEP_NUMBERS_SHOWN])
+    more = len(steps) - _STEP_NUMBERS_SHOWN
+    return f"{shown} and {more} more" if more > 0 else shown
+
+
+def _sandbox_timeout(count: int) -> int:
+    return min(_SANDBOX_SECONDS_MAX, _SANDBOX_SECONDS_BASE + _SANDBOX_SECONDS_PER_COMMAND * count)
+
+
+def _sandbox_code(commands: List[str]) -> str:
+    """Runs EVERY command, never stopping at a failed one, and prints one line per command:
+    OK or FAILED, the exit code, the command and, for a failure, the end of its stderr. So
+    the model reports each command as it came back (a repeated clone fails from the second
+    one on) instead of stopping at the first failure or calling all of them done."""
+    return ("import subprocess\n"
+            "def run(c):\n"
+            " r = subprocess.run(c, shell=True, capture_output=True, text=True)\n"
+            " print('OK' if r.returncode == 0 else 'FAILED', r.returncode, c,"
+            " r.stderr[-200:].strip() if r.returncode else '')\n"
+            + "".join(f"run({c!r})\n" for c in commands))
+
+
+def _host_call(command: str) -> str:
+    """One host_bash call as the model should write it: the command JSON-escaped, so a quote,
+    a trailing backslash or a newline in it stays one valid argument."""
+    return "`host_bash(command=" + json.dumps(command, ensure_ascii=False) + ")`"
 
 
 def _network_instruction(commands: List[str], steps: List[str], offered: tuple, *,
@@ -167,57 +205,86 @@ def _network_instruction(commands: List[str], steps: List[str], offered: tuple, 
     host_bash call per command, because a weak model copies the example it is shown and,
     shown only the first command, runs that one and reports all of them done. ``listed`` and
     ``host_listed`` shorten it only when the whole refusal would not fit the funnel's cut
-    (`_preflight_steps` asks for the longest that fits): then host_bash refers to the
-    sandbox code's order, and past ``listed`` the steps are named by number."""
-    listed = len(commands) if listed is None else max(1, min(listed, len(commands)))
+    (`_preflight_steps` asks for the longest that fits): host_bash then refers to the sandbox
+    code's order; past ``listed`` the steps are named by number; with ``listed=0`` no command
+    text is shown at all (one command longer than the budget) and the commands are named by
+    their step numbers only."""
+    total = len(commands)
+    listed = total if listed is None else max(0, min(listed, total))
     shown = commands[:listed]
-    several = len(commands) > 1
+    several = total > 1
     them = "them" if several else "it"
-    if several:
-        code = ("import subprocess; run = lambda c: subprocess.run(c, shell=True, check=True); "
-                + "; ".join(f"run({c!r})" for c in shown))
-    else:
-        code = f"import subprocess; subprocess.run({commands[0]!r}, shell=True, check=True)"
-    sandbox_call = "`python_sandbox(code=" + json.dumps(code, ensure_ascii=False) + ")`"
-
-    def _host(command: str) -> str:
-        return '`host_bash(command="' + command.replace('"', '\\"') + '")`'
-    host_calls = ", ".join(_host(c) for c in shown)
+    timeout = _sandbox_timeout(total)
     rest = ""
-    if listed < len(commands):
-        rest = (f" Then the commands of steps {', '.join(steps[listed:])} the same way, one "
+    if 0 < listed < total:
+        rest = (f" Then the commands of steps {_step_numbers(steps[listed:])} the same way, one "
                 "per command: they are in your plan.")
-    if several:
-        sandbox = ("python_sandbox has network and asks nothing, but what it installs or "
-                   "downloads stays in the sandbox and never reaches the user's computer; one "
-                   "call runs all of them, one run(...) per command: " + sandbox_call + "."
-                   + rest)
+    keeps = ("python_sandbox has network and asks nothing, but what it installs or downloads "
+             "stays in the sandbox and never reaches the user's computer")
+    if listed:
+        sandbox_call = ("`python_sandbox(code=" + json.dumps(_sandbox_code(shown), ensure_ascii=False)
+                        + f", timeout={timeout})`")
+        sandbox = (f"{keeps}; one call runs {'all of them' if several else 'it'} and prints OK or "
+                   f"FAILED per command, report each line as it came back: {sandbox_call}." + rest)
+        host_calls = ", ".join(_host_call(c) for c in shown)
     else:
-        sandbox = ("python_sandbox has network and asks nothing, but what it installs or "
-                   "downloads stays in the sandbox and never reaches the user's computer: "
-                   + sandbox_call + ".")
+        sandbox = (f"{keeps}; one call runs all of them, with the commands of steps "
+                   f"{_step_numbers(steps)} from your plan in a list, each run with "
+                   "subprocess.run(c, shell=True, capture_output=True, text=True) and its result "
+                   f"printed as OK or FAILED, timeout={timeout}.")
+        host_calls = ""
     if "python_sandbox" in offered and "host_bash" in offered:
-        if not several:
-            host = f"call {_host(commands[0])} instead; the user confirms it."
+        if not listed:
+            host = ("call host_bash instead, one call per command, with each command from your "
+                    "plan; the user confirms each.")
+        elif not several:
+            host = f"call {_host_call(commands[0])} instead; the user confirms it."
         elif host_listed:
             host = ("call host_bash instead, one call per command and in this order; the user "
                     f"confirms each: {host_calls}." + rest)
         else:
             host = ("call host_bash instead, one call per command in the order of the run(...) "
-                    f"calls above, starting with {_host(commands[0])}; the user confirms each.")
+                    f"calls above, starting with {_host_call(commands[0])}; the user confirms each.")
         return (f"Run {them} outside the workflow. {sandbox} If the result must land on the "
                 f"user's computer, {host}")
     if "python_sandbox" in offered:
         return (f"Run {them} outside the workflow. {sandbox} Only if the user needs the result on "
                 "their own computer, say that you cannot put it there from here.")
     if "host_bash" in offered:
+        if not listed:
+            return (f"Run {them} outside the workflow with host_bash, one call per command, with "
+                    f"the commands of steps {_step_numbers(steps)} from your plan in this order; "
+                    "the user confirms each.")
         if not several:
             return (f"Run it outside the workflow with host_bash; the user confirms it: "
-                    f"{_host(commands[0])}.")
+                    f"{_host_call(commands[0])}.")
         return ("Run them outside the workflow with host_bash, one call per command and in this "
                 f"order; the user confirms each: {host_calls}." + rest)
     return ("Neither python_sandbox nor host_bash is available to you here, so tell the user to "
             + ("run these commands themselves." if several else "run this command themselves."))
+
+
+def _fitted_network_refusal(problems: List[str], commands: List[str], steps: List[str],
+                            offered: tuple, others: bool) -> str:
+    """The longest network refusal under `_REFUSAL_BUDGET`: every command in both tools, then
+    host_bash pointing at the sandbox code's order with as many commands spelled out as fit
+    (a binary search: the length grows with every command shown), then step numbers only."""
+    def render(listed: int, host_listed: bool) -> str:
+        return _refusal(problems, _network_instruction(
+            commands, steps, offered, listed=listed, host_listed=host_listed), others=others)
+
+    full = render(len(commands), True)
+    if len(full) <= _REFUSAL_BUDGET:
+        return full
+    best, low, high = render(0, False), 1, len(commands)
+    while low <= high:
+        mid = (low + high) // 2
+        text = render(mid, False)
+        if len(text) <= _REFUSAL_BUDGET:
+            best, low = text, mid + 1
+        else:
+            high = mid - 1
+    return best
 
 
 def _refusal(problems: List[str], instruction: Optional[str] = None, *,
@@ -331,23 +398,12 @@ def _preflight_steps(normalised: List[dict], tools: Dict[str, Any], *,
         line = (f"step {network_steps[0]} (bash): this command needs the network, and the "
                 "workflow shell has none.")
     else:
-        line = (f"steps {', '.join(network_steps)} (bash): these commands need the network, "
+        line = (f"steps {_step_numbers(network_steps)} (bash): these commands need the network, "
                 "and the workflow shell has none.")
     others = bool(problems)
     problems.insert(network_at, line)
     offered = _offered("python_sandbox", "host_bash")     # asked and advised once
-    # The longest instruction that keeps the refusal under the funnel's cut: every command
-    # in both tools when it fits, then host_bash pointing at the sandbox code's order, then
-    # fewer commands spelled out (the rest named by step number).
-    refusal = ""
-    for listed in range(len(network), 0, -1):
-        for host_listed in (True, False):
-            refusal = _refusal(problems, _network_instruction(
-                network, network_steps, offered, listed=listed, host_listed=host_listed),
-                others=others)
-            if len(refusal) <= _REFUSAL_BUDGET:
-                return refusal
-    return refusal
+    return _fitted_network_refusal(problems, network, network_steps, offered, others)
 
 
 def _agent_workflow_path(workflow_id: str) -> str:

@@ -39,7 +39,14 @@ through a real ToolCaller whose registry and identity decide what the caller may
   test_no_host_bash_advice_for_a_regular_account, test_no_host_bash_advice_on_a_channel;
 - `_HOST_BASH_INSTEAD` changed -> test_saved_refusal_outside_a_call_is_unchanged;
 - the sandbox code or the host_bash list showing only the first command ->
-  test_every_command_is_spelled_out; no fitting loop -> the sixty-command test.
+  test_every_command_is_spelled_out; no fitting -> the sixty-command test;
+- the sandbox example without its timeout, or with the sandbox's own 30 s ->
+  test_the_sandbox_example_has_room;
+- `check=True` back in the sandbox code (stop at the first failure) ->
+  test_the_sandbox_code_runs_every_command;
+- no step-numbers-only fallback, or no cap on the step numbers ->
+  test_a_huge_command_and_a_thousand_steps_fit;
+- host_bash rendered with the old quote-only escaping -> test_host_bash_examples_are_json.
 """
 import ast
 import importlib
@@ -320,7 +327,7 @@ def test_network_bash_step_refused(run, run_as):
     assert out.startswith("Error: nothing ran") and "steps 1, 2 (bash)" in out, out
     assert 'host_bash(command="pip install vaf")' in out
     assert 'host_bash(command="git clone https://x/y")' in out
-    assert "run('pip install vaf'); run('git clone https://x/y')" in out
+    assert "run('pip install vaf')\\nrun('git clone https://x/y')\\n" in out
     out = run_as(plan, role="user", scope=REGULAR).result
     assert "host_bash(" not in out and "python_sandbox(code=" in out, out
     assert not _FakeEngine.runs
@@ -378,7 +385,62 @@ def test_a_plan_too_long_to_spell_out_names_the_rest(run_as):
     out = run_as(plan).result
     assert len(out) <= 1900, len(out)
     assert "run('git clone https://example.org/team/0.git')" in out
-    assert "Then the commands of steps" in out and "60 the same way" in out, out[-300:]
+    assert "Then the commands of steps" in out and "the same way, one per command" in out, \
+        out[-300:]
+
+
+def test_the_sandbox_example_has_room(run_as):
+    """The sandbox stops a run after 30 s unless asked for more (600 at most): an install or a
+    clone takes longer, so the example asks for room per command."""
+    import re
+    from vaf.tools.python_sandbox import PythonSandboxTool
+    for size, plan in ((2, _net_plan(1, 1)), (20, _net_plan())):
+        out = run_as(plan).result
+        timeouts = [int(t) for t in re.findall(r"timeout=(\d+)\)`", out)]
+        assert timeouts == [min(600, 60 + 45 * size)], (size, timeouts)
+        assert 30 < timeouts[0] <= PythonSandboxTool.MAX_TIMEOUT_SECONDS
+
+
+def test_the_sandbox_code_runs_every_command(tmp_path):
+    """The example's code itself, run: a failed command does not stop the others, and each
+    command gets its own OK or FAILED line with its exit code."""
+    import subprocess
+    import sys
+    from vaf.tools.agent_workflow_builder import _sandbox_code
+    code = _sandbox_code(["exit 3", "echo second", "exit 4"])
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                          cwd=tmp_path, timeout=60)
+    lines = done.stdout.splitlines()
+    assert done.returncode == 0, done.stderr
+    assert [line.split()[:2] for line in lines] == [["FAILED", "3"], ["OK", "0"], ["FAILED", "4"]]
+
+
+def test_a_huge_command_and_a_thousand_steps_fit(run_as):
+    """No plan can push the refusal past the cut: a command longer than the budget is named
+    by its step number only, and a thousand step numbers are capped."""
+    huge = "pip install " + "a" * 3000
+    out = run_as([{"tool": "bash", "args": {"command": huge}},
+                  {"tool": "web_search", "input": "x"}]).result
+    assert len(out) <= 1900, len(out)
+    assert huge not in out and "a" * 200 not in out
+    assert "python_sandbox has network" in out and "host_bash" in out and "timeout=" in out
+    many = [{"tool": "bash", "args": {"command": f"git clone https://example.org/r{i}.git"}}
+            for i in range(1000)]
+    out = run_as(many).result
+    assert len(out) <= 1900, len(out)
+    assert "and 970 more (bash)" in out, out[:400]
+    assert "python_sandbox has network" in out and "host_bash" in out
+
+
+def test_host_bash_examples_are_json():
+    """A quote, a trailing backslash or a newline in a command stays one valid argument."""
+    import json
+    import re
+    from vaf.tools.agent_workflow_builder import _network_instruction
+    commands = ['git clone "https://x/y" dir\\', "pip install a\npip install b"]
+    text = _network_instruction(commands, ["1", "2"], ("host_bash",))
+    rendered = re.findall(r"`host_bash\(command=(.*?)\)`", text)
+    assert [json.loads(arg) for arg in rendered] == commands, text
 
 
 _SANDBOX_TAIL = ("Only if the user needs the result on their own computer, say that you cannot "
@@ -404,8 +466,8 @@ def test_network_refusal_variants(run_as, case, caller, advised):
     out = outcome.result
     assert outcome.advised_tools == advised, (case, outcome.advised_tools)
     last = out.splitlines()[-1]
-    sandbox_call = ('`python_sandbox(code="import subprocess; run = lambda c: subprocess.run(c, '
-                    'shell=True, check=True); run(\'pip install pkg0\'); ')
+    sandbox_call = ('`python_sandbox(code="import subprocess\\ndef run(c):\\n r = '
+                    'subprocess.run(c, shell=True, capture_output=True, text=True)\\n')
     if case == "both":
         assert last.startswith("Run them outside the workflow. python_sandbox has network")
         assert sandbox_call in last

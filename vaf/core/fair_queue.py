@@ -17,7 +17,8 @@ Three pieces, stdlib only, exported on the facade (``vaf.ResourceQueue`` and fri
   place (:class:`WaitInfo`), and leaves with :class:`QueueBusy` when the queue is full,
   its deadline passes, or its ``cancelled()`` turns true.
 - :func:`resource_queue` / :func:`queue_metrics`: one queue per resource name per
-  process, and its numbers (length, wait and service time, refusals) for the health
+  process (a second registration with other numbers is an error, never a silent change
+  of the limits the first one declared), and its numbers (length, wait and service time, refusals) for the health
   check. The metrics carry counts only, never a key.
 
 Why one slot is right for the speech containers, measured on a 16-core machine with the
@@ -37,6 +38,9 @@ The rules a caller relies on:
   changes, and with position 0 when the slot is granted after a wait. It never fires on
   the fast path. An exception in it is swallowed: a broken display never stops the wait.
 - A :class:`WaitInfo` carries the caller's own place and wait, nothing about anyone else.
+- No key (None) is one person: the canonical "default", the local admin's bucket. A lane
+  that serves many people (a channel bridge, a server route) must pass each person's scope,
+  or they all share that one bucket and its ``max_waiting_per_key``.
 
 Named boundaries, each with the measurement that supports it:
 
@@ -491,13 +495,23 @@ _registry_lock = threading.Lock()
 
 def resource_queue(name: str, *, slots: Optional[int] = 1, max_waiting: int = 12,
                    max_waiting_per_key: Optional[int] = None) -> ResourceQueue:
-    """The process-wide queue for ``name``, created on first use. The first creation fixes
-    its numbers; a later call with different ones gets the existing queue unchanged."""
+    """The process-wide queue for ``name``, created on first use. A later call must ask
+    for the same numbers: one with others raises ValueError, because handing back the
+    existing queue would silently drop the limits one of the two callers relies on (a
+    per-person share registered second would simply not exist)."""
+    wanted = (slots, max(0, int(max_waiting)),
+              None if max_waiting_per_key is None else max(0, int(max_waiting_per_key)))
     with _registry_lock:
         queue = _registry.get(name)
         if queue is None:
-            queue = _registry[name] = ResourceQueue(name, slots=slots, max_waiting=max_waiting,
-                                                    max_waiting_per_key=max_waiting_per_key)
+            return _registry.setdefault(name, ResourceQueue(
+                name, slots=slots, max_waiting=max_waiting,
+                max_waiting_per_key=max_waiting_per_key))
+        held = (queue.slots, queue.max_waiting, queue.max_waiting_per_key)
+        if held != wanted:
+            raise ValueError(
+                f"the queue {name!r} exists with slots, max_waiting, max_waiting_per_key = "
+                f"{held}; a second registration asked for {wanted}")
         return queue
 
 

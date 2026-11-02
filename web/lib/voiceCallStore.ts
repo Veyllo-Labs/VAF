@@ -17,10 +17,9 @@ export type VoiceAgentMode = 'idle' | 'listening' | 'thinking' | 'talking';
 /** This call's place in a speech queue (voice_call_wait): only its own place and
  *  expected wait, never anything about the others in line. */
 export type VoiceQueueWait = { resource: 'stt' | 'tts'; position: number; etaMs: number | null };
-/** A speech queue turned something away: the turn (stt) was not heard (cleared when the
- *  next turn starts), or a reply (tts) arrived as text only - `text` is that reply, shown
- *  as a caption until the next reply arrives. */
-export type VoiceBusyNotice = { kind: 'stt' | 'tts'; text?: string };
+/** The STT queue turned the current turn away: `text` is the spoken busy line, shown
+ *  until the next turn starts. */
+export type VoiceBusyNotice = { kind: 'stt'; text?: string };
 
 interface VoiceCallState {
   active: boolean;
@@ -54,8 +53,12 @@ interface VoiceCallState {
   hangupRequested: boolean;
   /** set while a turn or a reply waits in a speech queue (statusKey 'waiting') */
   wait: VoiceQueueWait | null;
-  /** stt: until the next turn starts; tts: until the next reply arrives */
+  /** the current turn's refusal; until the next turn starts */
   busyNotice: VoiceBusyNotice | null;
+  /** a reply that arrived as text only (its voice got no TTS slot in time): the only
+   *  readable copy, kept apart from the current status until the next spoken-or-text
+   *  reply replaces it - a silent reply or a refused turn does not */
+  textReply: string | null;
 
   start: () => void;
   stop: () => void;
@@ -94,15 +97,16 @@ export const useVoiceCallStore = create<VoiceCallState>((set) => ({
   hangupRequested: false,
   wait: null,
   busyNotice: null,
+  textReply: null,
 
   start: () => set({
     active: true, closing: false, voiceReady: true, exclusive: false,
     loadingModel: false, seconds: 0, speaker: null, agentMode: 'idle',
     statusKey: 'connecting', mainTask: '', muted: false, hangupRequested: false,
-    wait: null, busyNotice: null,
+    wait: null, busyNotice: null, textReply: null,
   }),
   stop: () => set({ active: false, closing: false, speaker: null, mainTask: '', hangupRequested: false,
-    wait: null, busyNotice: null }),
+    wait: null, busyNotice: null, textReply: null }),
   tick: () => set((s) => ({ seconds: s.seconds + 1 })),
   set: (patch) => set(patch as VoiceCallState),
   requestHangup: () => set({ hangupRequested: true }),

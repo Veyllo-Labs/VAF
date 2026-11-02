@@ -29,7 +29,8 @@ GB = 1024 ** 3
 @pytest.fixture(autouse=True)
 def _no_queues_of_other_tests(monkeypatch):
     """The queue registry is process-wide; queues an earlier test registered (the speech
-    client's) would add a row to every collection here."""
+    client's) would add a row to every collection here, and a queue registered here must
+    not outlive the test. Each test gets an empty registry of its own."""
     from vaf.core import fair_queue
     monkeypatch.setattr(fair_queue, "_registry", {})
 
@@ -431,8 +432,8 @@ def _hold_and_refuse(q, reason):
 def test_queues_row_degraded_after_refusal(reason, expected):
     """Somebody turned away (timeout, full) in the window degrades; a hang-up does not.
     MUTATION: count cancelled as degraded - red."""
-    from vaf.core import fair_queue
-    q = fair_queue.resource_queue("stt", slots=1)
+    from vaf.core import speech_client
+    q = speech_client.speech_queue("stt")
     _hold_and_refuse(q, reason)
     result = health.collect_health(**_quiet_checks())
     row = next(c for c in result["checks"] if c["name"] == "queues")
@@ -440,6 +441,8 @@ def test_queues_row_degraded_after_refusal(reason, expected):
     assert "stt: 0 waiting, 2 served" in row["reason"]
     # A degraded row says why first; a hang-up is no reason to.
     assert row["reason"].startswith("1 turned away") == (expected == "degraded")
+    # Both causes of "full": the whole queue, or one person's share of it.
+    assert ("share" in row["reason"]) == (expected == "degraded")
     assert [m["name"] for m in row["metrics"]] == ["stt"]
     assert row["metrics"][0]["refused"][reason] == 1
     assert result["status"] == expected
@@ -455,8 +458,8 @@ def test_no_queues_no_row():
 def test_public_health_stays_word_only(monkeypatch):
     """The queue numbers are for an admin: /api/health still answers the word alone.
     MUTATION: put the metrics into /api/health - red."""
-    from vaf.core import fair_queue
-    q = fair_queue.resource_queue("tts", slots=1)
+    from vaf.core import speech_client
+    q = speech_client.speech_queue("tts")
     _hold_and_refuse(q, "timeout")
 
     async def _snapshot():
@@ -470,9 +473,9 @@ def test_public_health_stays_word_only(monkeypatch):
 
 def test_vaf_health_json_carries_the_queue_numbers(monkeypatch):
     import json
-    from vaf.core import fair_queue
+    from vaf.core import speech_client
     app, health_cmd = _health_app()
-    q = fair_queue.resource_queue("stt", slots=1)
+    q = speech_client.speech_queue("stt")
     _hold_and_refuse(q, "timeout")
     monkeypatch.setattr(health_cmd, "from_running_vaf",
                         lambda timeout=30.0: health.collect_health(**_quiet_checks()))

@@ -217,8 +217,8 @@ def queues_check(metrics: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     reason = "; ".join(lines) if lines else "Nothing queued in the last 15 minutes."
     if turned_away:
         # The degraded row says why first: people were refused (no slot in time, or full).
-        reason = (f"{turned_away} turned away in the last 15 minutes (no slot in time or "
-                  f"queue full). {reason}")
+        reason = (f"{turned_away} turned away in the last 15 minutes (no slot in time, or "
+                  f"the queue or a person's share of it full). {reason}")
     check: Dict[str, Any] = _check("queues", DEGRADED if turned_away else OK, reason)
     check["metrics"] = metrics
     return check

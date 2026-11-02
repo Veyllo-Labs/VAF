@@ -263,10 +263,24 @@ def test_metrics_shape_and_no_keys():
         assert secret not in serialized
 
 
-def test_the_registry_keeps_the_first_numbers():
+def test_the_registry_hands_out_one_queue_per_name():
     q = fair_queue.resource_queue("reg", slots=1, max_waiting=3)
-    assert fair_queue.resource_queue("reg", slots=4, max_waiting=9) is q
-    assert q.slots == 1 and q.max_waiting == 3
+    assert fair_queue.resource_queue("reg", slots=1, max_waiting=3) is q
+
+
+def test_a_second_registration_cannot_drop_the_share():
+    """A caller asking for other numbers gets an error, never the existing queue: in
+    either order, a per-person share cannot silently disappear. MUTATION: hand back the
+    existing queue whatever was asked - red."""
+    q = fair_queue.resource_queue("share-reg", slots=1, max_waiting=12, max_waiting_per_key=3)
+    with pytest.raises(ValueError):
+        fair_queue.resource_queue("share-reg", slots=1, max_waiting=12)
+    assert fair_queue.resource_queue("share-reg", slots=1, max_waiting=12,
+                                     max_waiting_per_key=3) is q
+    assert q.max_waiting_per_key == 3
+    fair_queue.resource_queue("weak-first", slots=1, max_waiting=12)
+    with pytest.raises(ValueError):
+        fair_queue.resource_queue("weak-first", slots=1, max_waiting=12, max_waiting_per_key=3)
 
 
 def test_unbounded_queue_never_waits():

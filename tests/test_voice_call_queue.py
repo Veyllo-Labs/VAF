@@ -494,13 +494,22 @@ def test_every_call_status_has_its_words():
 
 def test_a_text_only_reply_can_be_read_whole():
     """Small talk never enters the chat, so the caption is the only copy: never clamped,
-    scrollable, and kept while the next turn starts. MUTATION: clamp it, or clear it when
-    the next utterance is accepted - red."""
+    scrollable, kept apart from the current status (textReply), and replaced only by a
+    reply that says something - not by the next utterance, a silent reply, or a refused
+    turn. MUTATION: clamp it, clear it on accept, let a silent reply clear it, or let the
+    busy branch touch it - red."""
+    import re
     src = (_REPO / "web" / "components" / "VoiceCallLayer.tsx").read_text(encoding="utf-8")
-    caption = src[src.index("store.busyNotice.text && ("):][:600]
+    caption = src[src.index("{store.textReply && ("):][:900]
     assert "line-clamp" not in caption and "overflow-y-auto" in caption
-    accept = src[src.index("const prevNotice = useVoiceCallStore.getState().busyNotice;"):][:400]
-    assert "prevNotice?.kind === 'tts' ? prevNotice : null" in accept
+    assert "{store.textReply}" in caption
+    accept = src[src.index("playEarcon('accept');\n            // A new turn starts"):][:600]
+    assert "textReply" not in accept.split("try {")[0].split("//")[-1]
+    assert "busyNotice: null" in accept
+    assert re.search(r"else if \(!data\.greeting && !data\.silent && String\(data\.reply \|\| ''\)\.trim\(\)\)"
+                     r"\s*\{[^}]*textReply: null", src)
+    busy = src[src.index("data.type === 'voice_call_error' && data.error === 'busy'"):][:700]
+    assert "textReply" not in busy
 
 
 def test_the_dictation_place_is_outside_the_clipping_form():
@@ -514,3 +523,79 @@ def test_the_dictation_place_is_outside_the_clipping_form():
     mic = src[src.index("onClick={isRecording ? stopRecording : startRecording}"):][:1500]
     assert "sttWaitText}" not in mic.split("</button>")[0].replace(
         "(isProcessingAudio && sttWaitText) ? sttWaitText", "")
+
+
+# ── round 2 ──────────────────────────────────────────────────────────────────────
+
+def test_the_read_ahead_budget_counts_bytes_not_characters():
+    """A frame of 3-byte characters weighs three times its len(). MUTATION: count
+    characters (about 12 MiB parked instead of 4) - red."""
+    import vaf.core.web_server as ws_mod
+    sock = _StreamSocket(1)
+    sock_frame = "€" * (512 * 1024)        # 1.5 MiB as UTF-8, 0.5 M characters
+
+    async def receive_text():
+        sock.reads += 1
+        await asyncio.sleep(0)
+        return sock_frame
+
+    sock.receive_text = receive_text
+    rx = ws_mod._ReadAhead(sock)
+
+    async def main():
+        armed = asyncio.Event()
+        armed.set()
+        await rx.wait(asyncio.sleep(0.3), armed, threading.Event())
+
+    asyncio.run(main())
+    parked = sum(len(f.encode("utf-8")) for f in rx._buffer)
+    assert parked <= ws_mod._READ_AHEAD_MAX_BYTES + len(sock_frame.encode("utf-8"))
+    assert rx._buffered_bytes == parked
+
+
+def test_a_reply_whose_budget_ran_out_in_the_queue_leaves_the_line(call_env, monkeypatch):
+    """A TTS request still queued when its outer budget passes (its executor started
+    late) leaves the queue instead of synthesizing for nobody; the call's own cancel stays
+    untouched for its next turn. MUTATION: do not mark the request gone - it waits out its
+    own deadline instead (refused.timeout, not cancelled) - red."""
+    from vaf.core.speech import SpeechManager
+    ws_mod = call_env["ws_mod"]
+    monkeypatch.setattr(ws_mod, "_CALL_TTS_WAIT_S", 0.6)
+    monkeypatch.setitem(ws_mod._CALL_TTS_SYNTH_S, "reply", 0.1)
+
+    class _LateTTS:
+        def synthesize_audio(self, text, lang, **kw):
+            if len(text) < 100:
+                return b"AUDIO"                 # the greeting: no contention
+            time.sleep(0.5)                     # the executor reached this request late
+            with sc.speech_queue("tts").slot(kw.get("user_key"), deadline_s=kw["deadline_s"],
+                                             cancelled=kw.get("cancelled"), poll_s=0.02):
+                return b"AUDIO"
+
+        def call_lane_speaks(self, lang):
+            return True
+
+    monkeypatch.setattr(SpeechManager, "get_instance", classmethod(lambda cls: _LateTTS()))
+    held, release = threading.Event(), threading.Event()
+
+    def hold():
+        with sc.speech_queue("tts").slot("another-person"):
+            held.set()
+            release.wait(5)
+
+    t = threading.Thread(target=hold, daemon=True)
+    t.start()
+    assert held.wait(5)
+    try:
+        sent = _run(call_env, FakeWebSocket([START, _turn()]))
+        tts = lambda: next(m for m in fair_queue.queue_metrics() if m["name"] == "tts")  # noqa: E731
+        end = time.monotonic() + 3
+        while time.monotonic() < end and not sum(tts()["refused"].values()):
+            time.sleep(0.02)
+        refused = tts()["refused"]
+    finally:
+        release.set()
+        t.join(5)
+    replies = [p for p in sent if p.get("type") == "voice_call_reply" and not p.get("greeting")]
+    assert replies and replies[0]["tts_busy"] is True
+    assert refused["cancelled"] == 1 and refused["timeout"] == 0

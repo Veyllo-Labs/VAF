@@ -504,11 +504,10 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
             // Utterance accepted for processing: give the user an audible "heard you"
             playEarcon('accept');
             // A new turn starts: a queue place or a busy line from the last one is over. A
-            // text-only reply stays until the next reply, so it can still be read while
-            // the person answers it.
-            const prevNotice = useVoiceCallStore.getState().busyNotice;
+            // text-only reply (textReply) stays until the next reply, so it can still be
+            // read while the person answers it.
             useVoiceCallStore.getState().set({ speaker: null, agentMode: 'thinking', statusKey: 'thinking',
-                wait: null, busyNotice: prevNotice?.kind === 'tts' ? prevNotice : null });
+                wait: null, busyNotice: null });
             try {
                 const blob = new Blob(chunks, { type: mime });
                 const wav = await toWav16k(blob);
@@ -618,12 +617,12 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
                     // caption instead of playing nothing. The status leaves 'waiting'
                     // here: a refused wait ends without the position-0 event.
                     useVoiceCallStore.getState().set({
-                        statusKey: 'tts_busy', wait: null,
-                        busyNotice: { kind: 'tts', text: String(data.reply || '') },
+                        statusKey: 'tts_busy', wait: null, textReply: String(data.reply || ''),
                     });
-                } else if (!data.greeting) {
-                    // A new reply supersedes a text-only one.
-                    useVoiceCallStore.getState().set({ busyNotice: null });
+                } else if (!data.greeting && !data.silent && String(data.reply || '').trim()) {
+                    // A new reply that says something supersedes a text-only one; a silent
+                    // turn says nothing, so the text stays readable.
+                    useVoiceCallStore.getState().set({ textReply: null });
                 }
                 // Voice small talk stays OUT of the chat (user decision): the
                 // conversation lives in audio. Only a DELEGATION appears, on
@@ -802,7 +801,7 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
             (w-16); z-10 keeps it BELOW the session sidebar (z-20), so the
             expanding list slides over it by design. Animates in on call start
             and back out (reverse path) while the call is closing. */}
-        <div className={`fixed top-4 left-20 z-10 w-[210px] min-h-[300px] flex flex-col items-center rounded-2xl border border-black/10 dark:border-white/10 bg-white/90 dark:bg-[#1f1f1f]/90 backdrop-blur-lg shadow-2xl px-4 pt-3.5 pb-3.5 ${store.closing ? 'animate-[voiceWindowOut_0.35s_ease_forwards]' : 'animate-[voiceWindowIn_0.35s_ease]'}`}>
+        <div className={`fixed top-4 left-20 z-10 w-[210px] min-h-[300px] max-h-[calc(100vh-2rem)] overflow-y-auto flex flex-col items-center rounded-2xl border border-black/10 dark:border-white/10 bg-white/90 dark:bg-[#1f1f1f]/90 backdrop-blur-lg shadow-2xl px-4 pt-3.5 pb-3.5 ${store.closing ? 'animate-[voiceWindowOut_0.35s_ease_forwards]' : 'animate-[voiceWindowIn_0.35s_ease]'}`}>
             <div className="self-start inline-flex items-center gap-1.5 text-[11px] font-bold font-mono text-red-600">
                 <i className="w-1.5 h-1.5 rounded-full bg-red-600 animate-pulse" />
                 {t('liveCall')}&nbsp;{mm}:{ss}
@@ -857,20 +856,21 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
                                 : t('status_waiting_noeta', { position: store.wait.position }))
                         : t('status_' + store.statusKey)}</span>
                 </div>
-                {store.busyNotice && (store.busyNotice.kind === 'tts' || store.busyNotice.text) && (
+                {store.busyNotice?.text && (
+                    <p className="text-[11px] leading-snug text-gray-600 dark:text-gray-300 break-words">
+                        {store.busyNotice.text}
+                    </p>
+                )}
+                {store.textReply && (
                     <div className="text-[11px] leading-snug text-gray-600 dark:text-gray-300">
-                        {store.busyNotice.kind === 'tts' && store.statusKey !== 'tts_busy' && (
+                        {store.statusKey !== 'tts_busy' && (
                             <div className="font-medium text-amber-700 dark:text-amber-400">{t('status_tts_busy')}</div>
                         )}
-                        {store.busyNotice.text && (
-                            // The whole reply, scrollable when long: small talk never enters the
-                            // chat, so this caption is the only place it can be read.
-                            <p className={store.busyNotice.kind === 'tts'
-                                ? 'max-h-40 overflow-y-auto whitespace-pre-wrap break-words pr-1'
-                                : 'break-words'}>
-                                {store.busyNotice.text}
-                            </p>
-                        )}
+                        {/* The whole reply, scrollable when long: small talk never enters the
+                            chat, so this caption is the only place it can be read. */}
+                        <p className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words pr-1">
+                            {store.textReply}
+                        </p>
                     </div>
                 )}
                 {store.mainTask && (

@@ -1750,7 +1750,9 @@ def answer(user_scope, prompt, show_place):
   the others are still admitted while total room is left. VAF's speech queues use 12
   and 3.
 - **`slot(key, *, deadline_s=None, cancelled=None, on_wait=None, poll_s=0.25)`.** The
-  key is canonical: no key and the local admin's scope are one bucket. A free slot
+  key is canonical: no key and the local admin's scope are one bucket. That makes "no
+  key" one person: a lane that serves many people (a bridge, a server route) must pass
+  each person's scope, or they all share that bucket and its `max_waiting_per_key`. A free slot
   with nobody waiting is taken at once and `cancelled` is NOT asked: only a caller
   that waits can be cancelled. Otherwise the caller waits; `on_wait(WaitInfo)` hears
   its place on entry, on every change and with position 0 when the slot is granted.
@@ -1764,6 +1766,11 @@ def answer(user_scope, prompt, show_place):
 - **One slot per queue per thread.** A thread that asks for a second slot of a queue
   it holds gets `RuntimeError`: with one slot it would wait on itself forever.
   Slots of different queues nest.
+- **One queue per name.** `vaf.resource_queue(name, ...)` creates the queue on first
+  use and hands the same one out after. A second call with other numbers (`slots`,
+  `max_waiting`, `max_waiting_per_key`) raises `ValueError`: returning the existing queue
+  would silently drop the limits one of the two callers relies on, a per-person share
+  above all. Create a queue in one place and ask for it with the same numbers.
 - **Numbers.** `queue.metrics()` and `vaf.queue_metrics()` (every queue
   `resource_queue()` registered) give length, running, served, refusals per reason,
   wait p50/p95/max and service p50/p95 over the last 15 minutes. Counts only, never

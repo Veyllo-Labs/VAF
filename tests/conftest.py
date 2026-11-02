@@ -250,6 +250,35 @@ def _no_remembered_vllm_start():
 
 
 @pytest.fixture(autouse=True)
+def _no_queue_left_behind():
+    """No test sees a fair queue another test registered.
+
+    `vaf.core.fair_queue` keeps one queue per name for the life of the process, and
+    `health.queues_check` turns ANY registered, listed queue into a `queues` row. A test that
+    only passed through a lane that registers one (an Office upload reaches the `gotenberg`
+    queue whenever the default converter URL is set, a browser run the shared browser's)
+    left that row in every later health test (measured: the engine-wiring tests saw a
+    `queues` row in the full-suite order). The process's registry dict is put back as it was
+    before the test, in place: a test that swapped in a dict of its own (monkeypatch) gets
+    the original back from monkeypatch, which this leaves alone. A module first loaded during
+    the test starts empty. Only when the module is loaded: importing it here would cost
+    every test."""
+    import sys as _sys
+    fq = _sys.modules.get("vaf.core.fair_queue")
+    registry = fq._registry if fq is not None else None
+    before = dict(registry) if registry is not None else {}
+    yield
+    fq = _sys.modules.get("vaf.core.fair_queue")
+    if fq is None:
+        return
+    if registry is None:
+        registry = fq._registry
+    with fq._registry_lock:
+        registry.clear()
+        registry.update(before)
+
+
+@pytest.fixture(autouse=True)
 def _no_real_imap_server(monkeypatch):
     """No test dials a real IMAP server.
 

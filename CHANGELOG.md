@@ -98,7 +98,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   it printed so far and says how to continue, and a failed run shows its output next to the
   error. `background=true` starts long work and returns at once; the chat gets the output and
   exit code as a new message when the run ends (at most 8 h by default). Ask the agent to stop
-  it, or use `vaf env kill`. At most eight background runs at a time per sandbox.
+  it, or use `vaf env kill`. At most eight background runs at a time per sandbox. In a
+  terminal that does not run the reports (`vaf run --web`), background runs and background
+  commands are refused up front instead of promising a message that never comes.
 - **The llama.cpp and vLLM cards now say in the same way whom each engine is for, what it
   needs and how long it takes to start**: llama.cpp for everyday tasks on personal PCs, laptops
   and edge devices, vLLM for servers and high-end PCs that answer many requests at once, in

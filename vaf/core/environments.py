@@ -79,12 +79,16 @@ LIFECYCLE
   process's memory, because another process may be the one using it. Removal is
   idempotent: several reapers may race.
 - Background processes (`start_process`): at most `processes.MAX_PER_CHAT` (8) run in
-  one environment at a time. The process that started one with a chat to report to
-  watches it itself, every PROCESS_WATCH_INTERVAL_S (5 s), so the wake turn lands in
-  that process's own queue: the web server's, the TUI's. The reaper is the backstop for
-  a process whose watcher is gone (a restart, a short CLI command) and for records
-  without one (no chat, a sub-agent child); it leaves alone a record another LIVE
-  process watches. Whoever reports claims the record under the state lock first
+  one environment at a time, counted and reserved (a placeholder record) in one step
+  under the state lock. Whether a start may promise a report is the caller's question
+  (`processes.background_refusal`, asked by VAF's tools). The process that started one
+  with a chat to report to watches it itself, every PROCESS_WATCH_INTERVAL_S (5 s), so
+  the wake turn lands in that process's own queue: the web server's, the TUI's. The
+  reaper is the backstop for a process whose watcher is gone (a restart, a short CLI
+  command) and for records without one (no chat, a sub-agent child); it leaves the
+  report of a record another LIVE process watches to that process, but applies
+  `sandbox_env_process_max_hours` to every record, because a live pid does not prove
+  its watcher still looks. Whoever reports claims the record under the state lock first
   (re-read, `notified` set, written), so one ended process is reported once by intent;
   without `filelock` that lock holds only between threads. A process started with a
   `cleanup_dir` has that folder removed when it is reported or stopped; its log under
@@ -133,9 +137,12 @@ PROC_DIR = "/tmp/vaf-env-proc"
 PROCESS_WATCH_INTERVAL_S = 5.0
 # A background process's `label` (what lists and the wake show instead of the command).
 PROCESS_LABEL_MAX = 160
+# How long a start's placeholder record ("starting") counts as running: the start's
+# `docker exec -d` gives up after 30 s, so an older one was left by a crash in between.
+PROCESS_START_GRACE_S = 60.0
 # The only folders a background process may have removed when it ends: a run folder of
 # VAF's own under /tmp, named by a lane and a hex id (python_sandbox's /tmp/vaf_run_<id>).
-_CLEANUP_RE = re.compile(r"^/tmp/vaf_[a-z]+_[0-9a-f]{6,32}$")
+_CLEANUP_RE = re.compile(r"/tmp/vaf_[a-z]+_[0-9a-f]{6,32}")      # fullmatch only
 # Added back to a temporary or project environment for the coder's root lane (see the
 # module docstring): what a package manager needs as root, and nothing for anyone else.
 ROOT_LANE_CAPS = ("CHOWN", "DAC_OVERRIDE", "FOWNER", "FSETID", "SETUID", "SETGID")
@@ -1248,17 +1255,29 @@ class EnvironmentManager:
         from vaf.core.processes import MAX_PER_CHAT
 
         cleanup = str(cleanup_dir or "")
-        if cleanup and not _CLEANUP_RE.match(cleanup):
+        if cleanup and not _CLEANUP_RE.fullmatch(cleanup):
             raise ValueError(f"cleanup_dir must be a run folder under /tmp (/tmp/vaf_<lane>_<hex>), "
                              f"not {cleanup!r}")
         label = str(label or "").strip()[:PROCESS_LABEL_MAX]
         owner_scope = resolve_owner(owner_scope)
         env = self.get(owner_scope, env_id)
         self._ensure_running(env)
-        known = self._read_procs(env.id)
-        if known:
-            alive, _ = self._proc_status(env)
-            running = [p for p in known if p in alive]
+        watch = self._watches_here(session_id)
+        proc = "p" + secrets.token_hex(4)
+        record: Dict[str, Any] = {
+            "command": str(command)[:400], "label": label,
+            "session_id": str(session_id or ""), "user_scope_id": owner_scope,
+            "username": username, "role": user_role, "started": time.time(),
+            "stopped": False, "notified": False, "cleanup": cleanup, "starting": True}
+        if watch:
+            record["watcher_pid"] = os.getpid()
+        # Counted and reserved in one step under the state lock: a placeholder record
+        # ("starting") counts as running until docker has answered, so starts at the same
+        # moment cannot all pass the count. Rolled back when the start fails.
+        with self._locked():
+            known = self._read_procs(env.id)
+            alive = self._proc_status(env)[0] if known else set()
+            running = [p for p, r in known.items() if p in alive or self._starting(r)]
             if len(running) >= MAX_PER_CHAT:
                 raise EnvironmentRefused(
                     f"this sandbox already runs {len(running)} background commands (the limit "
@@ -1267,33 +1286,42 @@ class EnvironmentManager:
                         f"{self.process_handle(env.id, p)}: "
                         f"{str(known[p].get('label') or known[p].get('command') or '')[:120]}"
                         for p in running))
-        proc = "p" + secrets.token_hex(4)
+            known[proc] = record
+            self._write_procs(env.id, known)
         script = (f'mkdir -p {PROC_DIR} && cd "$VAF_CWD" && '
                   f'( sh -c "$VAF_CMD" > {PROC_DIR}/{proc}.log 2>&1; '
                   f'echo $? > {PROC_DIR}/{proc}.exit )')
         values = {**os.environ, "VAF_CMD": str(command), "VAF_CWD": self._workdir(env, cwd)}
-        r = containers.docker(["exec", "-d", "-e", f"VAF_PROC_ID={proc}", "-e", "VAF_CMD",
-                               "-e", "VAF_CWD", env.container, "sh", "-c", script],
-                              timeout=30, env=values)
-        if r.returncode != 0:
-            raise EnvironmentRefused(f"the process could not be started: "
-                                     f"{(r.stderr or '').strip()[:200]}")
-        watch = self._watches_here(session_id)
-        record: Dict[str, Any] = {
-            "command": str(command)[:400], "label": label,
-            "session_id": str(session_id or ""), "user_scope_id": owner_scope,
-            "username": username, "role": user_role, "started": time.time(),
-            "stopped": False, "notified": False, "cleanup": cleanup}
-        if watch:
-            record["watcher_pid"] = os.getpid()
+        try:
+            r = containers.docker(["exec", "-d", "-e", f"VAF_PROC_ID={proc}", "-e", "VAF_CMD",
+                                   "-e", "VAF_CWD", env.container, "sh", "-c", script],
+                                  timeout=30, env=values)
+            started = r.returncode == 0
+        except Exception:
+            started, r = False, None
         with self._locked():
             procs = self._read_procs(env.id)
-            procs[proc] = record
+            if started and proc in procs:
+                procs[proc].pop("starting", None)
+            else:
+                procs.pop(proc, None)
             self._write_procs(env.id, procs)
+        if not started:
+            reason = (r.stderr or "").strip()[:200] if r is not None else "docker did not answer"
+            raise EnvironmentRefused(f"the process could not be started: {reason}")
         self._touch(env)
         if watch:
             self._register_watch(env, proc)
         return self.process_handle(env.id, proc)
+
+    @staticmethod
+    def _starting(rec: Dict[str, Any], now: Optional[float] = None) -> bool:
+        """A start still waiting for docker's answer (its placeholder record)."""
+        now = time.time() if now is None else now
+        try:
+            return bool(rec.get("starting")) and now - float(rec.get("started") or 0) < PROCESS_START_GRACE_S
+        except (TypeError, ValueError):
+            return False
 
     @staticmethod
     def _watches_here(session_id: Any) -> bool:
@@ -1341,6 +1369,8 @@ class EnvironmentManager:
                     continue
                 if proc in alive:
                     state = "running"
+                elif self._starting(rec):
+                    state = "starting"
                 elif rec.get("stopped"):
                     state = "stopped"
                 elif proc in exits:
@@ -1403,30 +1433,50 @@ class EnvironmentManager:
         except Exception:
             return False
 
+    @staticmethod
+    def _limit_note() -> str:
+        return (f"it was ended after {setting('process_max_hours')} h, the longest a background "
+                f"command may run")
+
     def _watch_processes(self, env: Environment, now: float) -> None:
         """One look at one environment's processes, from the watcher or the reaper: one that
         ended on its own wakes the chat that started it; one past
         `sandbox_env_process_max_hours` is stopped, and its chat is told.
+
+        The limit is applied by every looker, also to a process another live process watches:
+        whether that watcher still looks (a pid reused after a crash, a watcher thread that
+        died) cannot be told from here, and the bound must hold anyway. The record is marked
+        `ended_at_limit`; its report is left to its watcher for that look, and from the next
+        look on whoever sees it reports it, so a watcher that stopped looking does not swallow
+        it.
 
         Exactly one looker reports an ended process: the candidates are claimed under the
         state lock (re-read, still not `notified`, then marked and written) BEFORE anyone is
         woken, so a second watcher that saw the same exit finds the record taken."""
         procs = self._read_procs(env.id)
         pending = {p: r for p, r in procs.items()
-                   if not r.get("notified") and not self._watched_elsewhere(r)}
+                   if not r.get("notified") and not self._starting(r, now)}
         if not pending:
             return
         alive, exits = self._proc_status(env)
         limit = float(setting("process_max_hours")) * 3600
         ended: Dict[str, str] = {}
+        at_limit: List[str] = []
         for proc, rec in pending.items():
             if proc in alive:
                 if now - float(rec.get("started") or now) <= limit:
                     continue
                 containers.docker(["exec", env.container, "sh", "-c",
                                    containers.kill_marked_cmd("VAF_PROC_ID", proc)], timeout=20)
-                ended[proc] = (f"it was ended after {setting('process_max_hours')} h "
-                               f"(sandbox_env_process_max_hours)")
+                at_limit.append(proc)
+                if not self._watched_elsewhere(rec):
+                    ended[proc] = self._limit_note()
+            elif rec.get("ended_at_limit"):
+                # Ended at the limit on an earlier look: reported by whoever sees it now,
+                # because the watcher it was left to may be the one that stopped looking.
+                ended[proc] = self._limit_note()
+            elif self._watched_elsewhere(rec):
+                continue
             elif proc in exits:
                 note = f"exit {exits[proc]}"
                 if exits[proc] == "137":
@@ -1434,16 +1484,18 @@ class EnvironmentManager:
                 ended[proc] = note
             elif env.state != "running":
                 ended[proc] = "the environment stopped"
-        if not ended:
+        if not ended and not at_limit:
             return
         with self._locked():
             fresh = self._read_procs(env.id)
+            for p in at_limit:
+                if p in fresh:
+                    fresh[p]["ended_at_limit"] = True
             claimed = {p: n for p, n in ended.items()
                        if p in fresh and not fresh[p].get("notified")}
             for p in claimed:
                 fresh[p]["notified"] = True
-            if claimed:
-                self._write_procs(env.id, fresh)
+            self._write_procs(env.id, fresh)
         for proc, note in claimed.items():
             self._wake(env, proc, fresh[proc], note, now)
             self._finish(env, fresh[proc])
@@ -1467,8 +1519,7 @@ class EnvironmentManager:
         except (TypeError, ValueError):
             took = 0
         what = str(rec.get("label") or rec.get("command") or "")[:PROCESS_LABEL_MAX]
-        text = (f"Background command in sandbox environment {env.id} finished: "
-                f"{what} ({handle}, {note}, after {took} s).\n"
+        text = (f"Background command finished: {what} ({handle}, {note}, after {took} s).\n"
                 f"End of its output:\n{tail or '(no output)'}\n\n"
                 f"Continue with what it was started for, or tell the user how it went. "
                 f"host_process(action=\"log\", id=\"{handle}\") shows more of the output.")
@@ -1485,7 +1536,7 @@ class EnvironmentManager:
         is checked again (it is a file), and a stopped environment keeps its folder until
         it is removed with the container. Never raises."""
         cleanup = str(rec.get("cleanup") or "")
-        if not _CLEANUP_RE.match(cleanup) or env.state != "running":
+        if not _CLEANUP_RE.fullmatch(cleanup) or env.state != "running":
             return
         try:
             containers.docker(["exec", env.container, "rm", "-rf", cleanup], timeout=30)

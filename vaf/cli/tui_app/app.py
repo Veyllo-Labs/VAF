@@ -428,6 +428,10 @@ class VafApp(App):
         # an in-memory heap for "something woke me". A 60-second timer must not
         # inherit the file poll's cadence, and a slow drain must not delay a wake.
         self.set_interval(1.0, self._bridge.queue_tick)
+        # That lane runs this process's wake turns for its session: a background job
+        # started here may promise its report (processes.background_refusal).
+        from vaf.core.task_queue import declare_wake_runner
+        declare_wake_runner("tui")
         threading.Thread(target=self._tasks_loop, daemon=True,
                          name="vaf-tui-tasks").start()
         self._bridge.refresh_context()
@@ -444,6 +448,8 @@ class VafApp(App):
         # runs only after app.run() returned, which is too late to stop a drain
         # closure already sitting in the lane's queue.
         self._bridge.begin_stopping()
+        from vaf.core.task_queue import withdraw_wake_runner
+        withdraw_wake_runner("tui")
 
     def _tasks_loop(self) -> None:
         maint_was_active = False

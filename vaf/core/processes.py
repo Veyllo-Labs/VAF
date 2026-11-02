@@ -91,10 +91,13 @@ def background_refusal(session_id: Optional[str], source: str = "") -> Optional[
     """Why a background job started from here could not report back, or None when it can.
 
     A background job's end reaches its chat as a wake turn queued in the process that
-    started it. Nobody is told in three places: a call without a chat, a messaging-channel
+    started it. Nobody is told in four places: a call without a chat, a messaging-channel
     chat (no wake delivery there; ``source`` is the live chat source when the caller knows
-    it, the session id's prefix is the other signal), and a sub-agent child, whose process
-    ends before the job does. Every background lane asks this one question."""
+    it, the session id's prefix is the other signal), a sub-agent child, whose process ends
+    before the job does, and a process where no lane runs wake turns (the ``vaf run --web``
+    prompt loop declines them; ``task_queue.declare_wake_runner``). Every background lane
+    asks this one question: host_bash, sandbox_exec and python_sandbox."""
+    from vaf.core.task_queue import wake_runner_here
     from vaf.core.tool_dispatch import is_channel_session
 
     sid = str(session_id or "").strip()
@@ -103,7 +106,11 @@ def background_refusal(session_id: Optional[str], source: str = "") -> Optional[
     if is_channel_session(source, sid):
         return "nobody could be told when it ends in a messaging-channel chat"
     if in_subagent_process():
-        return "a sub-agent's process ends before the run does"
+        return ("a sub-agent's process ends before the run does (report that the main chat "
+                "should start it)")
+    if not wake_runner_here():
+        return ("this terminal does not run the turns VAF starts by itself, so nobody would be "
+                "told when it ends (VAF as a service runs them: vaf start)")
     return None
 
 

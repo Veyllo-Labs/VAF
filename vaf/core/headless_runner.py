@@ -1340,6 +1340,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
         # A loop restarted under the same id (web_server._ensure_headless_agent_runner)
         # replaces the dead one.
         _WORKER_THREADS[worker_id] = threading.current_thread()
+    # This loop runs the wake turns of this process (a timer, a background job's report).
+    from vaf.core.task_queue import declare_wake_runner
+    declare_wake_runner(f"headless-{worker_id}")
     def _lifecycle(msg: str) -> None:
         """Log lifecycle events unconditionally (ignores debug_logs_enabled toggle)."""
         try:

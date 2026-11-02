@@ -326,11 +326,15 @@ What it can change is decided by where a key is READ, not by how it looks:
   counted as evidence) and this loop would run the text as if the owner had
   typed it, a command's output included. NAMED BOUNDARY: this holds for the
   whole modern lane, also without `--web` (`tui_mode: modern`, or the
-  fallback when the full-screen app cannot load). A timer set or a
-  background command started from a chat in this lane therefore never wakes
-  it, although the timer tool and `host_bash(background=true)` say it will;
-  the full-screen app and VAF as a service run those turns. Binding a wake
-  turn in this loop needs the per-task binding it does not have.
+  fallback when the full-screen app cannot load). A timer set from a chat in
+  this lane therefore never wakes it, although the timer tool says it will. A
+  background start is refused here instead (`host_bash`, `sandbox_exec` and
+  `python_sandbox` with `background=true`): this loop does not declare itself
+  a wake runner (`task_queue.declare_wake_runner`), and
+  `processes.background_refusal` refuses where no lane of the process runs
+  wake turns. The full-screen app and VAF as a service run those turns.
+  Binding a wake turn in this loop needs the per-task binding it does not
+  have.
   Queued text is chat text and nothing else, handled before the input is
   read for anything: never the microphone sentinel, a shortcut, a command or
   an `@file` reference, all of which act on the operator's terminal and disk

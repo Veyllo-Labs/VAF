@@ -209,6 +209,12 @@ class SandboxExecTool(BaseTool):
         try:
             mgr = _manager()
             if kwargs.get("background"):
+                # The one "can its end be reported" check of every background lane.
+                from vaf.core.processes import background_refusal
+                reason = background_refusal(kwargs.get("session_id"))
+                if reason:
+                    return (f"[BLOCKED] {reason}. Nothing ran. Run it without background, with "
+                            f"a timeout that covers it.")
                 handle = mgr.start_process(scope, env_id, command,
                                            session_id=str(kwargs.get("session_id") or ""),
                                            username=kwargs.get("username"),

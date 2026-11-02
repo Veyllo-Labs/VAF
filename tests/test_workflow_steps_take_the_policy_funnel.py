@@ -293,3 +293,30 @@ def test_the_only_raw_tool_run_in_execute_is_the_spawn_branch():
         f"expected exactly one raw tool.run() in execute (the spawn branch), "
         f"found {len(raw_runs)} - a new one is a funnel bypass"
     )
+
+
+def test_rollback_lane_takes_no_identity_from_a_step():
+    """Under the rollback a step's arguments reached the tool verbatim, so a step could name
+    the chat a background run reports into and the role its report turn binds. A tool's
+    declared identity keys are removed before the name list assigns what it knows; a tool
+    that needs a chat then has none and refuses its background run. MUTATION: drop the
+    removal in `_inject_user_scope` - the step's values arrive, red."""
+
+    class _Declares(_Probe):
+        name = "python_sandbox"
+        identity_kwargs = ("user_scope_id", "username", "user_role", "session_id")
+
+    tool = _Declares()
+    step = WorkflowStep(tool="python_sandbox", input_template="", output_name="out1",
+                        args_template={"code": "print(1)", "background": True,
+                                       "session_id": "chat-of-someone-else",
+                                       "user_role": "admin", "username": "root"})
+    with _mode("legacy"):
+        _, result = _run_step(tool, engine_kwargs={"user_scope_id": SCOPE, "user_role": "user",
+                                                   "username": "alice"},
+                              steps=[step])
+    assert result.success, result.error
+    [seen] = tool.calls
+    assert not {"session_id", "user_role", "username"} & set(seen), seen
+    assert seen["user_scope_id"] == SCOPE, "what the name list assigns still arrives"
+    assert seen["code"] == "print(1)"

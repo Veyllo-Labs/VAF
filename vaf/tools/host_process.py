@@ -35,8 +35,9 @@ class HostProcessTool(BaseTool):
         "Work with the background commands this chat started with host_bash(background=true), "
         "sandbox_exec(background=true) or python_sandbox(background=true): action='list' "
         "shows them, 'log' shows the end of one's output, 'write' sends a line to its input "
-        "(host commands only, e.g. a server console command), 'stop' ends it and everything it started. The chat is woken on its "
-        "own when a command ends; use 'log' to look before that."
+        "(host commands only, e.g. a server console command), 'stop' ends it and everything "
+        "it started. The chat is woken on its own when a command ends; use 'log' to look "
+        "before that."
     )
     parameters = {
         "type": "object",

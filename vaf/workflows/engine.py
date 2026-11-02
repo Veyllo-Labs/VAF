@@ -1376,6 +1376,22 @@ class WorkflowEngine:
                         user_role=getattr(self, "user_role", None),
                     )
 
+                def _drop_step_identity(tool_name: str, a: Dict[str, Any]) -> None:
+                    """The rollback lane assigns only what its name list knows, so a step's
+                    OWN value for an identity key the tool declares would reach the tool: a
+                    chat to report into, a role a background run's report binds. Removed
+                    before the name list runs (it then sets what it sets, and a key it does
+                    not set stays absent, as in this lane before): identity never comes from
+                    a step. A tool that needs a chat then has none and says so. Kept out of
+                    _inject_user_scope, whose legacy branch is the measured rollback."""
+                    if _identity_is_declared():
+                        return
+                    from vaf.core.tool_dispatch import IDENTITY_KEYS
+                    _tool = self.tools.get(tool_name)
+                    for _key in (getattr(_tool, "identity_kwargs", ()) or ()):
+                        if _key in IDENTITY_KEYS:
+                            a.pop(_key, None)
+
                 def _inject_user_scope(tool_name: str, a: Dict[str, Any]) -> None:
                     if _identity_is_declared():
                         _inject_declared_identity(tool_name, a)
@@ -1449,6 +1465,7 @@ class WorkflowEngine:
                             # thread can hold the main agent's LLM lock.
                             # Stays OFF the funnel (spawn + IPC wait, not a tool run), so it
                             # needs the identity injection in BOTH modes.
+                            _drop_step_identity(step.tool, args)
                             _inject_user_scope(step.tool, args)
                             _spawn_out = tool.run(**args)
                             result = self._await_subagent(
@@ -1461,7 +1478,9 @@ class WorkflowEngine:
                             result = caller.execute(step.tool, args)
                         else:
                             # The pre-C2 lane, VERBATIM: the shipped rollback
-                            # (workflow_identity_injection = legacy/off).
+                            # (workflow_identity_injection = legacy/off), minus a step's
+                            # own identity values.
+                            _drop_step_identity(step.tool, args)
                             _inject_user_scope(step.tool, args)
                             result = run_tool_bounded(
                                 tool, args, tool_name=step.tool,

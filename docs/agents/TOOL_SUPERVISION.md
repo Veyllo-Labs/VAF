@@ -148,14 +148,19 @@ Boundaries, each deliberate:
 - **They end with an orderly VAF shutdown**: an atexit hook, and the tray's quit calls
   `terminate_all()` before its hard exit, which runs no atexit hooks. A crash that bypasses
   both leaves them running; the registry is in memory.
-- **Not where nobody can be woken**: a messaging-channel chat has no wake delivery, and a
-  sub-agent's own process ends before the command, so the tool refuses both, and a call
-  without a chat. One check for every background lane, `processes.background_refusal`;
-  `python_sandbox(background=true)` asks it too.
-- **Not woken in the modern terminal lane** (`vaf run --web`, `tui_mode: modern`): that loop
-  declines every wake turn with a note, because it cannot bind one (see
-  [TUI.md](../platform/TUI.md)). The command still runs and its log stays readable with
-  `host_process`; the full-screen app and VAF as a service deliver the wake.
+- **Not where nobody can be woken**: one check for every background lane
+  (`processes.background_refusal`, asked by `host_bash`, `sandbox_exec` and
+  `python_sandbox`), refusing four cases:
+  - a messaging-channel chat, which has no wake delivery;
+  - a sub-agent's own process, which ends before the command (the answer says to report that
+    the main chat should start it);
+  - a call without a chat. This is stricter than before for `host_bash`: such a call used to
+    start a command whose end nobody heard of;
+  - a process where no lane runs wake turns. The modern terminal lane (`vaf run --web`,
+    `tui_mode: modern`) declines every wake turn with a note, because it cannot bind one (see
+    [TUI.md](../platform/TUI.md)), so a background start there is refused instead of
+    promising a report that never comes. The full-screen app and VAF as a service run them:
+    each declares itself (`task_queue.declare_wake_runner`).
 - **Stopped as a tree and as its process group**: `Platform.terminate_process_tree`, the one
   kill used for sub-agent children too - a command run through a shell is only the shell's
   child, and a grandchild that detached (`( server & )`) is nobody's child any more but keeps

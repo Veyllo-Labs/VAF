@@ -65,6 +65,8 @@ def sandbox(monkeypatch):
                         staticmethod(lambda: (True, "")))
     monkeypatch.setenv("VAF_SANDBOX_ENV_PROCESS_MAX_HOURS", "8")
     monkeypatch.delenv("VAF_IN_SUBAGENT_TERMINAL", raising=False)
+    import vaf.core.task_queue as tq
+    monkeypatch.setattr(tq, "_wake_runners", {"test"})          # as in the web runner
     state = {}
 
     def _run(mgr=None, **kwargs):
@@ -136,6 +138,14 @@ def test_a_timeout_answers_with_the_output_so_far_and_the_hint(sandbox):
     assert "timed out after 30s" not in out and "Execution timed out" not in out
     assert "export_files" not in out
     assert "larger timeout (at most 600)" in lines[-1] and "background=true" in lines[-1]
+    assert lines[-1].index("larger timeout") < lines[-1].index("background=true"), \
+        "a short run is offered more time first"
+
+    out, _ = sandbox(_Mgr(_timed_out()), code="print(1)", timeout=120, session_id="chat-1")
+    last = out.splitlines()[-1]
+    assert last.startswith("For long work, call python_sandbox again with background=true"), \
+        "a run that already had the default is offered background first"
+    assert "larger timeout (at most 600)" in last
 
     out, _ = sandbox(_Mgr(_timed_out()), code="print(1)", timeout=600, session_id="chat-1")
     last = out.splitlines()[-1]
@@ -255,7 +265,7 @@ def test_background_starts_and_returns_at_once(sandbox):
 
 
 @pytest.mark.parametrize("case", ["with_vaf_tools", "export_files", "no_chat", "channel",
-                                  "sub_agent", "training"])
+                                  "sub_agent", "training", "terminal_lane"])
 def test_background_is_refused_where_it_cannot_report_back(sandbox, monkeypatch, case):
     """Refused before anything is created or run. MUTATION: delete any one refusal - its
     parameter goes red."""
@@ -272,6 +282,9 @@ def test_background_is_refused_where_it_cannot_report_back(sandbox, monkeypatch,
         monkeypatch.setenv("VAF_IN_SUBAGENT_TERMINAL", "1")
     elif case == "training":
         kwargs["_agent"] = types.SimpleNamespace(_ww_training=True)
+    elif case == "terminal_lane":
+        import vaf.core.task_queue as tq
+        monkeypatch.setattr(tq, "_wake_runners", set())     # `vaf run --web` declares nothing
     out, mgr = sandbox(**kwargs)
     assert out.startswith("[BLOCKED]") and "Nothing ran" in out, out
     assert mgr.calls == [], "no scratch_for, no exec_in, no start_process"
@@ -311,16 +324,24 @@ def test_a_full_sandbox_answers_blocked_and_leaves_no_folder(sandbox):
 # -- AC17: one "where can it report back" check --------------------------------------------
 
 def test_background_refusal_reasons(monkeypatch):
-    """MUTATION: re-inline the check in host_bash - the source check is red."""
-    from vaf.core import processes
+    """MUTATION: re-inline the check in host_bash - the source check is red; drop the
+    wake-runner check - the terminal case is red."""
+    from vaf.core import processes, task_queue
     monkeypatch.delenv("VAF_IN_SUBAGENT_TERMINAL", raising=False)
+    monkeypatch.setattr(task_queue, "_wake_runners", {"headless-1"})
     assert processes.background_refusal("chat-1") is None
     assert "has none" in processes.background_refusal("")
     assert "has none" in processes.background_refusal(None)
     assert "messaging-channel" in processes.background_refusal("telegram_9001")
     assert "messaging-channel" in processes.background_refusal("chat-1", source="telegram")
+    monkeypatch.setattr(task_queue, "_wake_runners", set())
+    assert "this terminal does not run" in processes.background_refusal("chat-1")
+    task_queue.declare_wake_runner("tui")
+    assert processes.background_refusal("chat-1") is None
+    task_queue.withdraw_wake_runner("tui")
+    assert processes.background_refusal("chat-1") is not None
     monkeypatch.setenv("VAF_IN_SUBAGENT_TERMINAL", "1")
-    assert "sub-agent" in processes.background_refusal("chat-1")
+    assert "report that the main chat should start it" in processes.background_refusal("chat-1")
     import vaf.tools.host_bash as hb
     src = Path(hb.__file__).read_text(encoding="utf-8")
     assert "background_refusal(" in src
@@ -349,3 +370,56 @@ def test_export_uses_the_declared_session(sandbox, monkeypatch):
     assert "session_id" in PythonSandboxTool.identity_kwargs
     assert "username" in PythonSandboxTool.identity_kwargs
     assert "user_role" in PythonSandboxTool.identity_kwargs
+
+
+def test_every_background_lane_refuses_in_a_terminal_that_declines_wakes(sandbox, monkeypatch):
+    """`vaf run --web` takes the queue but declines every wake turn (run.py
+    _declined_queue_task), so a background job started there would promise a message that
+    never comes. host_bash, sandbox_exec and python_sandbox refuse it there alike, and run
+    once a lane of the process runs wakes. MUTATION: drop the wake-runner check from
+    background_refusal - red."""
+    import vaf.core.task_queue as tq
+    from vaf.core import processes
+    from vaf.core.subagent_ipc import session_context
+    from vaf.tools.environments import SandboxExecTool
+    from vaf.tools.host_bash import HostBashTool
+    monkeypatch.setattr(tq, "_wake_runners", set())
+    monkeypatch.setattr(processes, "_registry", {})
+
+    with session_context("chat-1"):
+        out = HostBashTool._start_background("sleep 30", {})
+    assert out.startswith("[BLOCKED] this terminal does not run the turns VAF starts by itself")
+    assert out.endswith("Run it without background.") and processes._registry == {}
+
+    mgr = _Mgr()
+    monkeypatch.setattr(envmod, "get_environment_manager", lambda: mgr)
+    out = SandboxExecTool().run(environment="0a1b2c3d", command="npm run dev", background=True,
+                                user_scope_id="s", session_id="chat-1")
+    assert out.startswith("[BLOCKED] this terminal") and "Nothing ran" in out
+    assert mgr.calls == []
+
+    out, mgr = sandbox(code="print(1)", background=True, session_id="chat-1")
+    assert out.startswith("[BLOCKED] this terminal") and "Nothing ran" in out and mgr.calls == []
+
+    monkeypatch.setattr(tq, "_wake_runners", {"tui"})
+    out, mgr = sandbox(code="print(1)", background=True, session_id="chat-1")
+    assert out.startswith("[started in the background]")
+    out = SandboxExecTool().run(environment="0a1b2c3d", command="npm run dev", background=True,
+                                user_scope_id="s", session_id="chat-1")
+    assert out.startswith("Started e-")
+
+
+def test_host_bash_background_without_a_chat_is_refused_now(monkeypatch):
+    """Stricter than before: with no chat to report to, host_bash(background=true) used to
+    start a command nobody would hear of; it is refused like the other lanes."""
+    import vaf.core.task_queue as tq
+    from vaf.core import processes
+    from vaf.core.subagent_ipc import session_context
+    from vaf.tools.host_bash import HostBashTool
+    monkeypatch.setattr(tq, "_wake_runners", {"test"})
+    monkeypatch.setattr(processes, "_registry", {})
+    with session_context(""):
+        out = HostBashTool._start_background("sleep 30", {})
+    assert out == ("[BLOCKED] a background run needs a chat to report back to, and this call has "
+                   "none. Run it without background.")
+    assert processes._registry == {}

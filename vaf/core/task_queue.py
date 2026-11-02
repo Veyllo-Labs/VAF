@@ -887,6 +887,35 @@ def enqueue_wake_turn(*, kind: str, session_id: str, text: str, source: str = "w
     TaskQueue().add(session_id=session_id, input_text=text, source=source, metadata=metadata)
 
 
+# Which lanes of THIS process run the wake turns above as turns: the web runner
+# (run_headless_agent) and the full-screen terminal app. The queue is in memory, so a wake
+# reaches only a runner in the process that queued it, and a lane that takes the queue but
+# declines wakes (the `vaf run --web` prompt loop, run.py `_declined_queue_task`) declares
+# nothing. processes.background_refusal reads this: a background job started where nobody
+# runs its report would promise a message that never comes. An embedder whose own loop
+# drains the queue and runs wake turns declares itself the same way.
+_wake_runners: set = set()
+_wake_runners_lock = threading.Lock()
+
+
+def declare_wake_runner(name: str) -> None:
+    """Say that a lane of this process runs wake turns (until withdrawn)."""
+    with _wake_runners_lock:
+        _wake_runners.add(str(name))
+
+
+def withdraw_wake_runner(name: str) -> None:
+    with _wake_runners_lock:
+        _wake_runners.discard(str(name))
+
+
+def wake_runner_here() -> bool:
+    """Whether a lane of this process runs wake turns, so a background job's report would
+    become a turn in its chat."""
+    with _wake_runners_lock:
+        return bool(_wake_runners)
+
+
 SYSTEM_SESSION_ID = "system"
 SYSTEM_COMMAND_PREFIX = "__CMD__:"
 SYSTEM_COMMANDS = ("NEW_SESSION", "LOAD_SESSION", "RENAME_SESSION", "RELOAD_CONFIG")

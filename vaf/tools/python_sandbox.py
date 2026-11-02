@@ -505,6 +505,12 @@ class PythonSandboxTool(BaseTool):
                   f"{cls.MAX_TIMEOUT_SECONDS})")
         later = "it returns at once and the result comes into this chat when the run ends."
         if timeout < cls.MAX_TIMEOUT_SECONDS:
+            if background_ok and timeout >= cls.DEFAULT_TIMEOUT_SECONDS:
+                # Already the default or more: work this long is background work (a loop of
+                # installs ran about 7 minutes, past what any timeout here covers), and a
+                # weak model takes the first remedy it reads.
+                return (f"For long work, call python_sandbox again with background=true: {later} "
+                        f"For a little more time, {larger}.")
             if background_ok:
                 return f"To give it more time, {larger}, or with background=true for long work: {later}"
             return f"To give it more time, {larger}, or split the work into shorter runs."

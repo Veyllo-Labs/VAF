@@ -201,7 +201,9 @@ def test_preview_reads_numbers_it_cannot_parse_as_the_defaults(monkeypatch):
     assert seen == {"width": 1280, "height": 800, "wait_ms": 1500}
 
 
-def test_exec_in_the_background_returns_a_handle(mgr):
+def test_exec_in_the_background_returns_a_handle(mgr, monkeypatch):
+    import vaf.core.task_queue as tq
+    monkeypatch.setattr(tq, "_wake_runners", {"test"})
     out = tools.SandboxExecTool().run(environment="0a1b2c3d", command="npm run dev", background=True,
                                       user_scope_id="s", session_id="chat-1", username="alice")
     assert "e-0a1b2c3d-p12345678" in out and "host_process" in out
@@ -329,7 +331,8 @@ def test_a_stopped_process_does_not_wake_and_an_old_one_is_ended(procs, monkeypa
     import time as _t
     m._watch_processes(env, now=_t.time() + 7200)
     assert p2 not in fake.alive, "past the limit it is ended"
-    assert len(woken) == 1 and "sandbox_env_process_max_hours" in woken[0]["text"]
+    assert len(woken) == 1 and "ended after 1 h, the longest a background command may run" in woken[0]["text"]
+    assert "sandbox_env_process_max_hours" not in woken[0]["text"] and env.id + " " not in woken[0]["text"]
 
 
 def test_the_shell_scripts_carry_no_raw_control_characters(procs):
@@ -509,3 +512,111 @@ def test_cleanup_dir_is_checked_and_removed_on_end_and_on_stop(procs):
     before = len(_removed())
     m._watch_processes(env, now=30.0)
     assert len(_removed()) == before, "no folder, nothing removed"
+
+
+def test_starts_at_the_same_moment_cannot_pass_the_cap_together(procs, monkeypatch):
+    """Three starts meet after the count (a barrier inside the status read), and docker takes
+    its time to answer a start: with the count and a placeholder in one step under the state
+    lock, only one gets the last place. MUTATION: count outside the lock and write the
+    record after docker answered (the first version), or do not count the placeholder -
+    two or three pass, red."""
+    import threading
+    import time as _t
+    from vaf.core.processes import MAX_PER_CHAT
+    m, env, fake, _ = procs
+    for i in range(MAX_PER_CHAT - 1):
+        m.start_process("scope-alice", env.id, f"sleep {i}", session_id="chat-1")
+
+    def _slow(args, timeout=60, **kw):
+        if args[:2] == ["exec", "-d"]:
+            _t.sleep(0.3)                  # the start is not running yet while others count
+        return fake(args, timeout=timeout, **kw)
+
+    monkeypatch.setattr(containers, "docker", _slow)
+    barrier = threading.Barrier(3, timeout=1.0)
+    real = m._proc_status
+
+    def _status(e):
+        out = real(e)
+        try:
+            barrier.wait()
+        except threading.BrokenBarrierError:
+            pass
+        return out
+
+    monkeypatch.setattr(m, "_proc_status", _status)
+    results = []
+
+    def _start(n):
+        try:
+            results.append(m.start_process("scope-alice", env.id, f"job {n}", session_id="chat-1"))
+        except envmod.EnvironmentRefused as e:
+            results.append(e)
+
+    threads = [threading.Thread(target=_start, args=(n,)) for n in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    started = [r for r in results if isinstance(r, str)]
+    assert len(results) == 3 and len(started) == 1, results
+    assert len(fake.alive) == MAX_PER_CHAT
+
+
+def test_a_start_docker_refuses_leaves_no_record(procs, monkeypatch):
+    """The placeholder that reserved the place goes when `docker exec -d` fails. MUTATION:
+    keep the placeholder - it counts as running and a record is left, red."""
+    m, env, fake, _ = procs
+
+    def _refusing(args, timeout=60, **kw):
+        if args[:2] == ["exec", "-d"]:
+            return types.SimpleNamespace(returncode=1, stdout="", stderr="no such container")
+        return fake(args, timeout=timeout, **kw)
+
+    monkeypatch.setattr(containers, "docker", _refusing)
+    with pytest.raises(envmod.EnvironmentRefused) as e:
+        m.start_process("scope-alice", env.id, "sleep 9", session_id="chat-1")
+    assert "no such container" in str(e.value)
+    assert m._read_procs(env.id) == {}
+
+
+def test_a_stale_placeholder_stops_counting(procs):
+    """A start that crashed between its placeholder and docker's answer must not hold a
+    place for ever. MUTATION: count every "starting" record whatever its age - red."""
+    from vaf.core.processes import MAX_PER_CHAT
+    m, env, fake, _ = procs
+    m._write_procs(env.id, {f"p{i:08x}": {"command": "x", "starting": True, "started": 1.0}
+                            for i in range(MAX_PER_CHAT)})
+    m.start_process("scope-alice", env.id, "sleep 9", session_id="chat-1")
+
+
+def test_the_limit_holds_for_a_process_another_live_process_watches(procs):
+    """The max-hours kill does not wait for a watcher that may have stopped looking (a pid
+    reused after a crash, a dead watcher thread). The report is left to the watcher for that
+    look and taken by whoever looks next. MUTATION: skip a record watched elsewhere before
+    the limit check (the first version) - no kill, red."""
+    import os
+    m, env, fake, woken = procs
+    h = m.start_process("scope-alice", env.id, "python3 -u main.py", session_id="chat-1")
+    proc = h.split("-")[-1]
+    recs = m._read_procs(env.id)
+    recs[proc].update(watcher_pid=os.getppid(), started=1.0)
+    m._write_procs(env.id, recs)
+    m._watch_processes(env, now=10 * 3600.0)
+    assert proc not in fake.alive, "ended at the limit"
+    assert woken == [], "its report is its watcher's on this look"
+    assert m._read_procs(env.id)[proc]["ended_at_limit"] is True
+    fake.exits[proc] = "137"
+    m._watch_processes(env, now=10 * 3600.0 + 60)
+    assert len(woken) == 1
+    assert "ended after 8 h, the longest a background command may run" in woken[0]["text"]
+    assert "out of memory" not in woken[0]["text"]
+
+
+def test_the_cleanup_folder_is_matched_whole():
+    """A trailing newline passed `$`. MUTATION: match() instead of fullmatch() - red."""
+    assert envmod._CLEANUP_RE.fullmatch("/tmp/vaf_run_abcdef")
+    assert not envmod._CLEANUP_RE.fullmatch("/tmp/vaf_run_abcdef\n")
+    with pytest.raises(ValueError):
+        envmod.EnvironmentManager().start_process("scope-alice", "0a1b2c3d", "x",
+                                                  cleanup_dir="/tmp/vaf_run_abcdef\n")

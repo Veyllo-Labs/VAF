@@ -490,7 +490,11 @@ Ad-hoc runs without a template id (run_temp, automation inline steps) are govern
 TOOL permission of the lane that builds them. The rollback switch
 (`workflow_identity_injection` = legacy/off) restores the entire pre-funnel step lane -
 identity name list and absence of per-step policy alike; the start gate is not behind the
-switch.
+switch. One thing it does not restore: a step's own value for an identity key a tool
+declares (`identity_kwargs`: scope, name, role, chat) is cleared before the name list
+assigns what it knows, so a step cannot name the chat a background run reports into or the
+role its report turn binds; a tool that needs a chat has none there and refuses its
+background run.
 
 ### Taking access away reaches work already running
 

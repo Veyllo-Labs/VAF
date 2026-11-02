@@ -34,11 +34,13 @@ PY = f'"{sys.executable}"'
 
 @pytest.fixture(autouse=True)
 def _isolated(monkeypatch, tmp_path):
-    """Logs in a scratch folder, an empty registry, and the wake turns recorded."""
+    """Logs in a scratch folder, an empty registry, the wake turns recorded, and a lane of
+    this process that runs them (as the web runner does)."""
     from vaf.core import task_queue
     from vaf.core.platform import Platform
 
     monkeypatch.setattr(Platform, "config_dir", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(task_queue, "_wake_runners", {"test"})
     monkeypatch.setattr(processes, "_registry", {})
     woken = []
     monkeypatch.setattr(task_queue.TaskQueue, "add",

@@ -542,6 +542,8 @@ def test_health_engine_check_states(monkeypatch, values):
     assert row["status"] == health.OK and "idle" in row["reason"] and REPO in row["reason"]
     monkeypatch.setattr(vs, "running_pid", lambda: 12)
     assert "running" in health.engine_check()["reason"]
+    # The pid is faked, so the queues row's /metrics read must not reach a real port.
+    monkeypatch.setattr(vs, "request_counts", lambda *a, **k: None)
     out = health.collect_health(status_probe=lambda: {}, worker_probe=lambda: None,
                                 usage=lambda p: SimpleNamespace(free=100 * 1024 ** 3),
                                 backup_probe=lambda: {"name": "backup", "status": "ok", "reason": ""})

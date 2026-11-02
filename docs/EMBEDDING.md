@@ -1740,7 +1740,14 @@ def answer(user_scope, prompt, show_place):
 - **Fair order.** Waiters are grouped by the key (a person), first come first served
   within one key, and the next slot always goes to the key that was served least
   recently: one person with ten requests no longer holds up somebody with one. The
-  order alone is `vaf.core.fair_queue.FairOrder` (pure, no threads).
+  order alone is `vaf.core.fair_queue.FairOrder` (pure, no threads), for a dispatcher
+  that hands work to workers of its own instead of holding a caller: `push(key, item)`,
+  `pop()`, and `pop(eligible=...)` when some items are blocked for a while (only the
+  eligible ones take part; the least recently served key holding one wins, and the
+  blocked items keep their places); `items()` lists the waiting items in arrival order
+  and `copy()` is an independent twin for working out every item's place without
+  moving anyone. VAF's own chat-turn queue (`TaskQueue`) is built on it, with "this
+  chat's previous turn still runs" as the blocked case.
 - **Slots.** `slots=1` lets one call in at a time; `slots=None` is an unbounded
   pass-through that only measures (VAF's cloud speech lanes).
 - **A share per person.** `max_waiting` caps all waiters, `max_waiting_per_key` one
@@ -1774,7 +1781,9 @@ def answer(user_scope, prompt, show_place):
 - **Numbers.** `queue.metrics()` and `vaf.queue_metrics()` (every queue
   `resource_queue()` registered) give length, running, served, refusals per reason,
   wait p50/p95/max and service p50/p95 over the last 15 minutes. Counts only, never
-  a key. VAF shows them as the `queues` row of `vaf health`.
+  a key. VAF shows them as the `queues` row of `vaf health`, together with its
+  chat-turn queue (the `chat` line, same shape) and, under vLLM, the engine's own
+  waiting and running counts (the `vllm` line, read from its `/metrics`).
 - **Per process.** The queue does not coordinate across processes; two processes in
   front of the same container share it the way they did before.
 - It is **sync**, like every engine object: the waiting thread blocks. Run it in an

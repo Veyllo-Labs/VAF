@@ -264,8 +264,35 @@ Requests are processed by worker threads pulling from a single shared `TaskQueue
 
 - **Per-session serialization.** The queue tracks in-flight sessions (`_session_inflight`) and never
   hands the same session to two workers at once - a session's turns run strictly in order.
-- **Fairness.** With `queue_policy: weighted_fair`, interactive / automation / background task
-  classes are scheduled with weighted fairness; the default `legacy` policy is a single priority heap.
+- **Order.** First the priority band (lower first: `RELOAD_CONFIG` at 1, turns at 10, a compaction
+  at 15). With `queue_policy: weighted_fair`, interactive / automation / background task classes
+  then share the workers by the budget `queue_weight_*` (5/3/1); the default `legacy` policy has one
+  lane. Inside every band (and class) the next task goes to the **person served least recently**
+  (`vaf.core.fair_queue.FairOrder`, round robin), so one person with turns in three chats no longer
+  holds up somebody else's one turn (measured before: A1, A2, A3, B1; now A1, B1, A2, A3). One
+  person's own turns stay in arrival order, and a task whose chat is in flight is skipped and keeps
+  its place, as before. The fair key is the canonical scope (`enqueue_user_scope_id`, else
+  `user_scope_id`; the local admin's aliases are one key, a task without a scope is `default`); a
+  session command is keyed `HOUSEKEEPING_KEY`, never its sender's scope.
+- **Place report.** `TaskQueue.add(..., on_wait=...)` hears the task's place (`WaitInfo`, resource
+  `chat`) whenever it changes, and position 0 when a worker takes it after a wait; a task removed by
+  Stop hears nothing more and those behind it move up. The place is the place in line, in-flight
+  chats ignored: a turn behind its own chat's running turn also waits for that one. The web chat
+  and regenerate enqueues pass it and send `chat_wait` to that chat's subscribers, after a grace of
+  0.5 s (`CHAT_WAIT_GRACE_S`) so a turn an idle worker takes right away shows nothing.
+  `wait_for_session` gives the same place to a reload (`history_update.chatWait`).
+- **ETA and numbers.** The runner tells the queue its effective worker count (`set_workers`). The
+  ETA is `ceil(position / workers) * p50(service time)` over the last 15 minutes, None below three
+  turns (session commands are no samples). `TaskQueue.metrics()` feeds the `chat` entry of the
+  `queues` health row (counts, never who).
+- **Named boundaries.** The queue never refuses and has no cap per person: a dropped chat message is
+  worse than a wait, and the round robin bounds one person's cost to another at one turn per round
+  per band. Channel turns (Telegram, WhatsApp, Discord, email) get the fair order but no waiting
+  message, which would be an extra outbound message on someone's messenger. Thinking and automation
+  runs use their own `Agent` and never enter the queue (a thinking run on the local model yields to
+  every queued or running turn); moving automations in would change their timeout, room binding and
+  tool stripping, a change of its own. The voice call reply goes to the model directly, because a
+  live call cannot wait behind a chat turn (it refuses as `busy_local` while the model is exclusive).
 - **Pool.** `vaf/core/headless_runner.py` runs up to the **effective** worker count: the configured
   `parallel_main_workers` clamped per provider - API providers to `max_parallel_api_workers` (default 5),
   `provider=local` to `max_parallel_local_workers` (default 2, further clamped to the llama-server

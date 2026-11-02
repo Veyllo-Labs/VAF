@@ -705,6 +705,13 @@ engine reads. Under the `api` inference profile neither engine installs or runs.
 - `vaf engine`, `vaf health` (the `engine` row): installed version, model, server running
   or idle, a start that failed (`vllm_failed`, with its cause), and what contradicts the
   choice.
+- `vaf health` (the `queues` row, `vllm:` line): while the server runs, its own queue read
+  from `http://127.0.0.1:8080/metrics` (`vllm_server.request_counts`): the gauges
+  `vllm:num_requests_waiting` and `vllm:num_requests_running` summed over their label sets,
+  and the mean of `vllm:request_queue_time_seconds` since the start. The names are matched
+  exactly, because `vllm:num_requests_waiting_by_reason` starts with the waiting gauge's
+  name. It holds every client of the server, sub-agents and the coder included, and never
+  degrades the row. No request is made while vLLM is not the engine or not running.
 - `start_failed` (a switch's result): the first start did not pass; its cause (`kernels`,
   `memory`, `timeout`, `fit`, `interrupted`, `other`) is read from `logs/vllm_server.log`.
 

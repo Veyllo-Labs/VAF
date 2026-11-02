@@ -1208,6 +1208,56 @@ def served_model(port: int = 8080) -> Optional[str]:
     return None
 
 
+# One sample line of the Prometheus text format: the metric name, its labels (greedy up to
+# the LAST closing brace, so a brace inside a label value does not cut it short), the value.
+_METRIC_LINE = re.compile(r"^(?P<name>[A-Za-z_:][A-Za-z0-9_:]*)(?:\{.*\})?\s+(?P<value>\S+)")
+_WAITING = "vllm:num_requests_waiting"
+_RUNNING = "vllm:num_requests_running"
+_QUEUE_TIME_SUM = "vllm:request_queue_time_seconds_sum"
+_QUEUE_TIME_COUNT = "vllm:request_queue_time_seconds_count"
+
+
+def parse_request_counts(text: str) -> Optional[Dict[str, object]]:
+    """``{"waiting", "running", "queue_time_mean_ms"}`` from a ``/metrics`` page: the two
+    gauges summed over their label sets (one per engine and model), and the mean queue time
+    since the server started (None before its first request). Names are matched EXACTLY:
+    ``vllm:num_requests_waiting_by_reason`` starts with the waiting gauge's name and would
+    count every waiting request twice under a prefix match. None when a gauge is missing."""
+    sums: Dict[str, float] = {}
+    wanted = (_WAITING, _RUNNING, _QUEUE_TIME_SUM, _QUEUE_TIME_COUNT)
+    for line in str(text or "").splitlines():
+        if not line or line.startswith("#"):
+            continue
+        match = _METRIC_LINE.match(line)
+        if match is None or match.group("name") not in wanted:
+            continue
+        try:
+            value = float(match.group("value"))
+        except ValueError:
+            continue
+        sums[match.group("name")] = sums.get(match.group("name"), 0.0) + value
+    if _WAITING not in sums or _RUNNING not in sums:
+        return None
+    count = sums.get(_QUEUE_TIME_COUNT, 0.0)
+    mean = (int(round(sums.get(_QUEUE_TIME_SUM, 0.0) / count * 1000)) if count > 0 else None)
+    return {"waiting": int(sums[_WAITING]), "running": int(sums[_RUNNING]),
+            "queue_time_mean_ms": mean}
+
+
+def request_counts(port: int = 8080, timeout: float = 1.0) -> Optional[Dict[str, object]]:
+    """How many requests the vLLM on ``port`` has waiting and running (its own scheduler's
+    queue, which also holds sub-agents and the coder), read from ``/metrics``; None when
+    nothing answers or the page carries no such gauges."""
+    import requests
+    try:
+        r = requests.get(f"http://127.0.0.1:{int(port)}/metrics", timeout=timeout)
+        if r.status_code != 200:
+            return None
+        return parse_request_counts(r.text)
+    except Exception:
+        return None
+
+
 def _ready_budget() -> float:
     from vaf.core.backend import _server_ready_budget
     return _server_ready_budget()

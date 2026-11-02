@@ -1,13 +1,59 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-import heapq
+"""The queue in front of the agent loops: every chat turn, channel turn, wake turn,
+compaction and session command waits here until a worker of the headless runner takes it.
+
+The order, in this precedence:
+
+- **Priority bands.** A lower ``priority`` always goes first (``RELOAD_CONFIG`` at 1 before
+  every turn at 10, a compaction at 15 after them).
+- **Classes** (``queue_policy: weighted_fair`` only): interactive, automation and background
+  share the workers by the budget ``queue_weight_*`` (5/3/1). Under ``legacy`` there is one
+  lane and only the bands count.
+- **People.** Inside one band (and class), the next turn goes to the person served least
+  recently (:class:`vaf.core.fair_queue.FairOrder`, keyed on the canonical scope), so one
+  person with turns in many chats no longer holds up the others. One person's own turns stay
+  in arrival order. Session commands are their own key (``HOUSEKEEPING_KEY``), never the
+  sender's: a command is the server's housekeeping, not a person's turn.
+- **One turn per chat at a time.** A task whose session is in flight is skipped and keeps its
+  place; the next eligible one is taken.
+
+A turn queued with ``on_wait`` hears its place (:class:`vaf.core.fair_queue.WaitInfo`,
+resource ``chat``) whenever it changes, and position 0 when a worker takes it after a wait.
+The place is the place in line: it ignores whether the turn's own chat is still busy, so a
+turn behind its own running turn waits for that one too.
+
+Named boundaries: the queue never refuses and has no cap per person (a dropped chat message
+is worse than a wait, and the round robin already bounds one person's cost to another at one
+turn per round per band); channel turns get the fair order but no waiting message (that would
+be an extra outbound message on someone's messenger); thinking and automation runs, the
+voice call reply, sub-agents and the coder do not wait here (see ``fair_queue``).
+"""
 import itertools
+import math
 import threading
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Hashable, List, Optional, Tuple
+
+from vaf.core.fair_queue import (
+    METRICS_WINDOW_S,
+    _MAX_SAMPLES,
+    FairOrder,
+    WaitInfo,
+    _canonical_key,
+    _ms,
+    _percentile,
+)
+
+# The fair key of every session command: a tuple, so no scope string can ever equal it.
+HOUSEKEEPING_KEY = ("housekeeping",)
+# The lane every task shares under queue_policy "legacy" (no class weights).
+_LEGACY_LANE = "all"
+
 
 @dataclass
 class AgentTask:
@@ -27,10 +73,26 @@ class AgentTask:
     # can bind an answer and the files it produced to each other instead of
     # guessing from arrival order.
     turn_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    # When the task entered the queue, on the queue's monotonic clock (the wait samples
+    # and the waited time of a place report run from here; created_at is wall time).
+    queued_at: float = 0.0
 
     def __post_init__(self):
         if not self.created_at:
             self.created_at = time.time()
+
+
+class _Watch:
+    """One task whose place is reported: the last place computed for it (under the queue
+    lock) and the sequence number of the last report delivered (under the notify lock)."""
+    __slots__ = ("task", "on_wait", "last_position", "delivered_seq")
+
+    def __init__(self, task: AgentTask, on_wait: Callable[[WaitInfo], None]) -> None:
+        self.task = task
+        self.on_wait = on_wait
+        self.last_position: Optional[int] = None
+        self.delivered_seq = -1
+
 
 class TaskQueue:
     TASK_CLASS_INTERACTIVE = "interactive"
@@ -41,6 +103,7 @@ class TaskQueue:
         TASK_CLASS_AUTOMATION,
         TASK_CLASS_BACKGROUND,
     }
+    _CLASS_ORDER = (TASK_CLASS_INTERACTIVE, TASK_CLASS_AUTOMATION, TASK_CLASS_BACKGROUND)
 
     _instance = None
     _lock = threading.Lock()
@@ -51,13 +114,9 @@ class TaskQueue:
                 if cls._instance is None:
                     cls._instance = super(TaskQueue, cls).__new__(cls)
                     cls._instance._cv = threading.Condition()
-                    cls._instance._legacy_heap = []
-                    cls._instance._queues = {
-                        cls.TASK_CLASS_INTERACTIVE: [],
-                        cls.TASK_CLASS_AUTOMATION: [],
-                        cls.TASK_CLASS_BACKGROUND: [],
-                    }
-                    cls._instance._counter = itertools.count()
+                    # (lane, priority) -> the fair order of that band. The lane is the task
+                    # class under weighted_fair and _LEGACY_LANE under legacy.
+                    cls._instance._orders = {}
                     cls._instance.active_task = None
                     cls._instance._stop_requests = set()  # Session IDs that requested stop
                     cls._instance._session_inflight = set()
@@ -83,6 +142,15 @@ class TaskQueue:
                         cls._instance._legacy_mode = True
                     cls._instance._scheduler_budget = {}
                     cls._instance._reset_scheduler_budget_locked()
+                    # Place reports and the numbers behind the ETA and the health row.
+                    cls._instance._clock = time.monotonic
+                    cls._instance._workers = 1
+                    cls._instance._watch = {}
+                    cls._instance._watch_seq = itertools.count(1)
+                    cls._instance._notify_lock = threading.RLock()
+                    cls._instance._waits = deque(maxlen=_MAX_SAMPLES)
+                    cls._instance._services = deque(maxlen=_MAX_SAMPLES)
+                    cls._instance._service_start = {}
         return cls._instance
 
     def request_stop(self, session_id: str):
@@ -100,6 +168,12 @@ class TaskQueue:
         with self._cv:
             self._stop_requests.discard(session_id)
 
+    def set_workers(self, workers: int) -> None:
+        """How many workers take tasks from this queue (the runner's effective count): the
+        ETA divides the places ahead by it, and the health row shows it as the slots."""
+        with self._cv:
+            self._workers = max(1, int(workers or 1))
+
     def drop_queued_tasks_for_session(self, session_id: str) -> int:
         """
         Remove all queued (not in-flight) tasks for a given session.
@@ -109,39 +183,20 @@ class TaskQueue:
         if not sid:
             return 0
         removed = 0
+        deliveries: List[Tuple[_Watch, int, WaitInfo]] = []
         with self._cv:
-            if self._legacy_mode:
-                keep = []
-                for item in self._legacy_heap:
-                    task = item[3]
+            for band in list(self._orders):
+                order = self._orders[band]
+                for task in order.items():
                     if task.session_id == sid:
+                        order.remove(task)
                         removed += 1
-                    else:
-                        keep.append(item)
-                if removed:
-                    self._legacy_heap = keep
-                    heapq.heapify(self._legacy_heap)
-            else:
-                for task_class in (
-                    self.TASK_CLASS_INTERACTIVE,
-                    self.TASK_CLASS_AUTOMATION,
-                    self.TASK_CLASS_BACKGROUND,
-                ):
-                    heap = self._queues[task_class]
-                    if not heap:
-                        continue
-                    keep = []
-                    for item in heap:
-                        task = item[3]
-                        if task.session_id == sid:
-                            removed += 1
-                        else:
-                            keep.append(item)
-                    if len(keep) != len(heap):
-                        self._queues[task_class] = keep
-                        heapq.heapify(self._queues[task_class])
+                if not order:
+                    del self._orders[band]
             if removed:
+                deliveries = self._recompute_locked()
                 self._cv.notify_all()
+        self._deliver(deliveries)
         return removed
 
     def add(
@@ -152,11 +207,16 @@ class TaskQueue:
         callback: Callable = None,
         priority: int = 10,
         metadata: Optional[Dict[str, Any]] = None,
+        *,
+        on_wait: Optional[Callable[[WaitInfo], None]] = None,
     ):
         """
         Add a task to the queue.
         Priority: Lower number = Higher priority.
         metadata: Optional dict (e.g. user_scope_id for RAG) passed to the task.
+        on_wait: told the task's place (WaitInfo, resource "chat") while it waits, and
+        position 0 when a worker takes it after a wait. Called outside the queue lock;
+        an exception in it is swallowed.
         """
         md = metadata or {}
         task_class = self._classify_task_class(
@@ -174,22 +234,32 @@ class TaskQueue:
             priority=priority,
             task_class=task_class,
         )
+        deliveries: List[Tuple[_Watch, int, WaitInfo]] = []
         with self._cv:
-            item = (int(priority), task.created_at, next(self._counter), task)
-            if self._legacy_mode:
-                heapq.heappush(self._legacy_heap, item)
-            else:
-                heapq.heappush(self._queues[task_class], item)
+            task.queued_at = self._clock()
+            lane = _LEGACY_LANE if self._legacy_mode else task_class
+            band = (lane, int(priority))
+            order = self._orders.get(band)
+            if order is None:
+                order = self._orders[band] = FairOrder()
+            order.push(self._fair_key(task), task)
+            if on_wait is not None:
+                self._watch[id(task)] = _Watch(task, on_wait)
+            if self._watch:
+                deliveries = self._recompute_locked()
             self._cv.notify()
+        self._deliver(deliveries)
         return task
 
     def get(self, timeout: float = 0.1, worker_id: Optional[str] = None) -> Optional[AgentTask]:
         """
-        Get the next runnable task with weighted fairness.
-        Prevents parallel execution of multiple main tasks for the same session.
+        Get the next runnable task: by priority band, class budget and person (module
+        docstring). Prevents parallel execution of multiple main tasks for the same session.
         """
         worker_key = worker_id or str(threading.get_ident())
         deadline = time.time() + max(0.0, float(timeout))
+        task: Optional[AgentTask] = None
+        deliveries: List[Tuple[_Watch, int, WaitInfo]] = []
         with self._cv:
             # A worker holds at most one task: asking for the next one means the
             # previous is over, whether or not task_done() was reached. That is a
@@ -207,6 +277,7 @@ class TaskQueue:
                 self._session_inflight.discard(previous.session_id)
                 if self.active_task is previous:
                     self.active_task = None
+            self._end_service_locked(worker_key)
             self._cleanup_stale_inflight_locked()
             while True:
                 task = self._pop_next_task_locked()
@@ -216,11 +287,20 @@ class TaskQueue:
                     self._inflight_since[worker_key] = time.time()
                     if self.active_task is None:
                         self.active_task = task
-                    return task
+                    now = self._clock()
+                    sample = not is_system_command(task)
+                    if sample:
+                        self._waits.append((now, max(0.0, now - task.queued_at)))
+                    self._service_start[worker_key] = (now, sample)
+                    if self._watch:
+                        deliveries = self._recompute_locked(popped=task)
+                    break
                 remaining = deadline - time.time()
                 if remaining <= 0:
-                    return None
+                    break
                 self._cv.wait(timeout=remaining)
+        self._deliver(deliveries)
+        return task
 
     def reset_runtime_state(self, include_queued: bool = False) -> None:
         """
@@ -232,16 +312,11 @@ class TaskQueue:
             self._session_inflight.clear()
             self._inflight_by_worker.clear()
             self._inflight_since.clear()
+            self._service_start.clear()
             if include_queued:
-                if self._legacy_mode:
-                    self._legacy_heap.clear()
-                else:
-                    for task_class in (
-                        self.TASK_CLASS_INTERACTIVE,
-                        self.TASK_CLASS_AUTOMATION,
-                        self.TASK_CLASS_BACKGROUND,
-                    ):
-                        self._queues[task_class].clear()
+                self._orders.clear()
+                # The cleared tasks will never run: their watchers leave without a word.
+                self._watch.clear()
             self._cv.notify_all()
 
     def try_claim_session(self, session_id: str) -> bool:
@@ -309,14 +384,13 @@ class TaskQueue:
                 self._session_inflight.discard(resolved.session_id)
             self._inflight_by_worker.pop(worker_key, None)
             self._inflight_since.pop(worker_key, None)
+            self._end_service_locked(worker_key)
             self.active_task = next(iter(self._inflight_by_worker.values()), None)
             self._cv.notify_all()
 
     def get_queue_size(self) -> int:
         with self._cv:
-            if self._legacy_mode:
-                return len(self._legacy_heap)
-            return sum(len(h) for h in self._queues.values())
+            return sum(len(order) for order in self._orders.values())
 
     def is_busy(self) -> bool:
         with self._cv:
@@ -341,18 +415,26 @@ class TaskQueue:
         scope = str(scope).strip()
         return scope or None
 
+    @classmethod
+    def _fair_key(cls, task: "AgentTask") -> Hashable:
+        """Whose turn a task is, for the round robin: a session command is housekeeping, any
+        other task its person's canonical scope (the local admin's aliases are one key), and
+        a task without a scope the "default" bucket, the local admin's."""
+        if is_system_command(task):
+            return HOUSEKEEPING_KEY
+        return _canonical_key(cls._task_scope(task))
+
+    def _iter_queued(self):
+        """Yield every queued AgentTask (caller must hold self._cv)."""
+        for order in self._orders.values():
+            yield from order.items()
+
     def _iter_all_tasks(self):
         """Yield every in-flight and queued AgentTask (caller must hold self._cv)."""
         for task in self._inflight_by_worker.values():
             if task is not None:
                 yield task
-        if self._legacy_mode:
-            for item in self._legacy_heap:
-                yield item[3]
-        else:
-            for heap in self._queues.values():
-                for item in heap:
-                    yield item[3]
+        yield from self._iter_queued()
 
     def sessions_for_scope(self, user_scope_id: str) -> set:
         """The sessions with an in-flight or queued task of this account. For stopping
@@ -412,43 +494,85 @@ class TaskQueue:
         with self._cv:
             if sid in self._session_inflight:
                 return True
-            heaps = [self._legacy_heap] if self._legacy_mode else list(self._queues.values())
-            return any(item[3].session_id == sid for heap in heaps for item in heap)
+            return any(task.session_id == sid for task in self._iter_queued())
 
     def get_queue_stats(self) -> Dict[str, Any]:
         with self._cv:
+            now = time.time()
+            queued = list(self._iter_queued())
+
+            def _oldest_wait(tasks: List[AgentTask]) -> int:
+                if not tasks:
+                    return 0
+                created = min(float(task.created_at) for task in tasks)
+                return int(max(0.0, now - created))
+
             if self._legacy_mode:
-                oldest = 0
-                if self._legacy_heap:
-                    oldest = int(max(0.0, time.time() - float(self._legacy_heap[0][1])))
                 return {
-                    "interactive": len(self._legacy_heap),
+                    "interactive": len(queued),
                     "automation": 0,
                     "background": 0,
                     "inflight_total": len(self._inflight_by_worker),
                     "inflight_sessions": len(self._session_inflight),
-                    "oldest_wait_interactive_sec": oldest,
+                    "oldest_wait_interactive_sec": _oldest_wait(queued),
                     "oldest_wait_automation_sec": 0,
                     "oldest_wait_background_sec": 0,
                     "queue_policy": "legacy",
                 }
-            now = time.time()
-            def _oldest_wait(task_class: str) -> int:
-                heap = self._queues[task_class]
-                if not heap:
-                    return 0
-                created = min(float(item[1]) for item in heap)
-                return int(max(0.0, now - created))
+            by_class = {c: [t for t in queued if t.task_class == c] for c in self._CLASS_ORDER}
             return {
-                "interactive": len(self._queues[self.TASK_CLASS_INTERACTIVE]),
-                "automation": len(self._queues[self.TASK_CLASS_AUTOMATION]),
-                "background": len(self._queues[self.TASK_CLASS_BACKGROUND]),
+                "interactive": len(by_class[self.TASK_CLASS_INTERACTIVE]),
+                "automation": len(by_class[self.TASK_CLASS_AUTOMATION]),
+                "background": len(by_class[self.TASK_CLASS_BACKGROUND]),
                 "inflight_total": len(self._inflight_by_worker),
                 "inflight_sessions": len(self._session_inflight),
-                "oldest_wait_interactive_sec": _oldest_wait(self.TASK_CLASS_INTERACTIVE),
-                "oldest_wait_automation_sec": _oldest_wait(self.TASK_CLASS_AUTOMATION),
-                "oldest_wait_background_sec": _oldest_wait(self.TASK_CLASS_BACKGROUND),
+                "oldest_wait_interactive_sec": _oldest_wait(by_class[self.TASK_CLASS_INTERACTIVE]),
+                "oldest_wait_automation_sec": _oldest_wait(by_class[self.TASK_CLASS_AUTOMATION]),
+                "oldest_wait_background_sec": _oldest_wait(by_class[self.TASK_CLASS_BACKGROUND]),
                 "queue_policy": "weighted_fair",
+            }
+
+    def wait_for_session(self, session_id: str) -> Optional[WaitInfo]:
+        """The place of this chat's first queued task in the pick order (a page reload or a
+        chat switch shows it again), or None when the chat has nothing queued."""
+        sid = str(session_id or "")
+        if not sid:
+            return None
+        with self._cv:
+            for place, task in enumerate(self._pick_order_locked(), start=1):
+                if task.session_id == sid:
+                    return self._wait_info_locked(task, place)
+        return None
+
+    def metrics(self) -> Dict[str, Any]:
+        """The numbers of the health row, in the shape of ResourceQueue.metrics(): counts and
+        durations over the last METRICS_WINDOW_S seconds, never a key or a session. It never
+        refuses, so every refusal count is zero."""
+        with self._cv:
+            now = self._clock()
+            cutoff = now - METRICS_WINDOW_S
+            waits = [v for t, v in self._waits if t >= cutoff]
+            services = [v for t, v in self._services if t >= cutoff]
+            queued = list(self._iter_queued())
+            keys = {self._fair_key(task) for task in queued}
+            keys.discard(HOUSEKEEPING_KEY)
+            return {
+                "name": "chat",
+                "slots": self._workers,
+                "running": len(self._inflight_by_worker),
+                "waiting": len(queued),
+                "waiting_users": len(keys),
+                "served": len(services),
+                "refused": {"timeout": 0, "full": 0, "cancelled": 0},
+                "wait_ms": {"p50": _ms(_percentile(waits, 50)),
+                            "p95": _ms(_percentile(waits, 95)),
+                            "max": _ms(max(waits) if waits else None)},
+                "service_ms": {"p50": _ms(_percentile(services, 50)),
+                               "p95": _ms(_percentile(services, 95))},
+                "last_refusal_age_s": None,
+                "by_class": {c: sum(1 for t in queued if t.task_class == c)
+                             for c in self._CLASS_ORDER},
+                "policy": "legacy" if self._legacy_mode else "weighted_fair",
             }
 
     def _classify_task_class(
@@ -473,88 +597,150 @@ class TaskQueue:
             return self.TASK_CLASS_BACKGROUND
         return self.TASK_CLASS_INTERACTIVE
 
+    def _fresh_budget(self) -> Dict[str, int]:
+        return {cls: max(1, int(weight)) for cls, weight in self._class_weights.items()}
+
     def _reset_scheduler_budget_locked(self) -> None:
-        self._scheduler_budget = {
-            cls: max(1, int(weight))
-            for cls, weight in self._class_weights.items()
-        }
+        self._scheduler_budget = self._fresh_budget()
 
-    def _class_has_runnable_locked(self, task_class: str) -> bool:
-        heap = self._queues[task_class]
-        for _prio, _created, _idx, task in heap:
-            if task.session_id not in self._session_inflight:
-                return True
-        return False
+    # ── selection: ONE routine for the real pop and the place simulation ─────
 
-    def _pop_runnable_from_class_locked(self, task_class: str) -> Optional[AgentTask]:
-        heap = self._queues[task_class]
-        parked = []
-        selected = None
-        while heap:
-            item = heapq.heappop(heap)
-            task = item[3]
-            if task.session_id in self._session_inflight:
-                parked.append(item)
-                continue
-            selected = task
-            break
-        for item in parked:
-            heapq.heappush(heap, item)
-        return selected
+    @staticmethod
+    def _has_eligible(order: FairOrder, eligible: Optional[Callable[[Any], bool]]) -> bool:
+        if not order:
+            return False
+        return eligible is None or any(eligible(task) for task in order.items())
 
-    def _pop_next_task_locked(self) -> Optional[AgentTask]:
-        if self._legacy_mode:
-            parked = []
-            selected = None
-            while self._legacy_heap:
-                item = heapq.heappop(self._legacy_heap)
-                task = item[3]
-                if task.session_id in self._session_inflight:
-                    parked.append(item)
+    def _select_locked(self, orders: Dict[Tuple[str, int], FairOrder], budget: Dict[str, int],
+                       eligible: Optional[Callable[[Any], bool]]) -> Optional[AgentTask]:
+        """Take the next task from ``orders`` (mutated, as is ``budget``): the lowest priority
+        band first; under weighted_fair the class by the budget 5/3/1 first; inside a band
+        the person served least recently (FairOrder). ``eligible`` None takes everything."""
+        def _pop_bands(bands) -> Optional[AgentTask]:
+            for band in bands:
+                order = orders[band]
+                if not self._has_eligible(order, eligible):
                     continue
-                selected = task
-                break
-            for item in parked:
-                heapq.heappush(self._legacy_heap, item)
-            return selected
+                task = order.pop(eligible)
+                if not order:
+                    del orders[band]
+                return task
+            return None
 
-        classes = (
-            self.TASK_CLASS_INTERACTIVE,
-            self.TASK_CLASS_AUTOMATION,
-            self.TASK_CLASS_BACKGROUND,
-        )
-        available = [c for c in classes if self._class_has_runnable_locked(c)]
+        if self._legacy_mode:
+            return _pop_bands(sorted(orders, key=lambda b: (b[1], b[0])))
+
+        def _class_bands(cls: str):
+            return sorted((b for b in orders if b[0] == cls), key=lambda b: b[1])
+
+        available = [c for c in self._CLASS_ORDER
+                     if any(self._has_eligible(orders[b], eligible) for b in _class_bands(c))]
         if not available:
             return None
 
         # Weighted fairness: consume per-class budget; reset once exhausted.
-        class_order = sorted(
-            available,
-            key=lambda c: (-self._scheduler_budget.get(c, 0), c),
-        )
+        class_order = sorted(available, key=lambda c: (-budget.get(c, 0), c))
         for cls in class_order:
-            if self._scheduler_budget.get(cls, 0) <= 0:
+            if budget.get(cls, 0) <= 0:
                 continue
-            task = self._pop_runnable_from_class_locked(cls)
+            task = _pop_bands(_class_bands(cls))
             if task is not None:
-                self._scheduler_budget[cls] = max(
-                    0, self._scheduler_budget.get(cls, 0) - 1
-                )
+                budget[cls] = max(0, budget.get(cls, 0) - 1)
                 return task
 
-        self._reset_scheduler_budget_locked()
-        class_order = sorted(
-            available,
-            key=lambda c: (-self._scheduler_budget.get(c, 0), c),
-        )
+        budget.clear()
+        budget.update(self._fresh_budget())
+        class_order = sorted(available, key=lambda c: (-budget.get(c, 0), c))
         for cls in class_order:
-            task = self._pop_runnable_from_class_locked(cls)
+            task = _pop_bands(_class_bands(cls))
             if task is not None:
-                self._scheduler_budget[cls] = max(
-                    0, self._scheduler_budget.get(cls, 0) - 1
-                )
+                budget[cls] = max(0, budget.get(cls, 0) - 1)
                 return task
         return None
+
+    def _pop_next_task_locked(self) -> Optional[AgentTask]:
+        inflight = self._session_inflight
+        return self._select_locked(self._orders, self._scheduler_budget,
+                                   lambda task: task.session_id not in inflight)
+
+    def _pick_order_locked(self) -> List[AgentTask]:
+        """Every queued task in the order the workers would take them, in-flight chats
+        ignored (the place in line), computed on copies so nothing moves."""
+        orders = {band: order.copy() for band, order in self._orders.items()}
+        budget = dict(self._scheduler_budget)
+        picked: List[AgentTask] = []
+        while orders:
+            task = self._select_locked(orders, budget, None)
+            if task is None:
+                break
+            picked.append(task)
+        return picked
+
+    # ── place reports, ETA, samples ──────────────────────────────────────────
+
+    def _eta_locked(self, position: int) -> Optional[float]:
+        if position <= 0:
+            return None
+        cutoff = self._clock() - METRICS_WINDOW_S
+        samples = [v for t, v in self._services if t >= cutoff]
+        if len(samples) < 3:
+            return None
+        return math.ceil(position / self._workers) * _percentile(samples, 50)
+
+    def _wait_info_locked(self, task: AgentTask, position: int) -> WaitInfo:
+        return WaitInfo("chat", position, self._eta_locked(position),
+                        max(0.0, self._clock() - task.queued_at))
+
+    def _recompute_locked(self, popped: Optional[AgentTask] = None
+                          ) -> List[Tuple[_Watch, int, WaitInfo]]:
+        """The place reports due now, to be delivered OUTSIDE the lock: every watched task
+        whose place changed, position 0 for a watched task a worker just took after it had a
+        place, nothing for one that was dropped (it leaves the watch silently)."""
+        if not self._watch:
+            return []
+        seq = next(self._watch_seq)
+        places = {id(task): place
+                  for place, task in enumerate(self._pick_order_locked(), start=1)}
+        out: List[Tuple[_Watch, int, WaitInfo]] = []
+        for tid, watch in list(self._watch.items()):
+            place = places.get(tid)
+            if place is None:
+                del self._watch[tid]
+                if popped is not None and watch.task is popped and (watch.last_position or 0) > 0:
+                    out.append((watch, seq, WaitInfo(
+                        "chat", 0, None, max(0.0, self._clock() - watch.task.queued_at))))
+                continue
+            if place != watch.last_position:
+                watch.last_position = place
+                out.append((watch, seq, self._wait_info_locked(watch.task, place)))
+        return out
+
+    def _deliver(self, deliveries: List[Tuple[_Watch, int, WaitInfo]]) -> None:
+        """Hand the reports out, outside the queue lock. Two threads can finish their
+        recomputes in one order and deliver in the other; the sequence number makes a report
+        older than the last one a task heard a no-op, so an older place never shows last."""
+        if not deliveries:
+            return
+        with self._notify_lock:
+            for watch, seq, info in deliveries:
+                if seq <= watch.delivered_seq:
+                    continue
+                watch.delivered_seq = seq
+                try:
+                    watch.on_wait(info)
+                except Exception:
+                    pass
+
+    def _end_service_locked(self, worker_key: str) -> None:
+        """The worker's task is over: its service time becomes a sample (session commands
+        are not samples; they take milliseconds and would pull the ETA toward zero)."""
+        started = self._service_start.pop(worker_key, None)
+        if started is None:
+            return
+        since, sample = started
+        if sample:
+            now = self._clock()
+            self._services.append((now, max(0.0, now - since)))
 
     def _cleanup_stale_inflight_locked(self) -> None:
         """
@@ -572,6 +758,7 @@ class TaskQueue:
             return
         for key in stale_keys:
             task = self._inflight_by_worker.pop(key, None)
+            self._service_start.pop(key, None)
             if task is not None:
                 self._session_inflight.discard(task.session_id)
         if self.active_task is not None and self.active_task.session_id not in self._session_inflight:

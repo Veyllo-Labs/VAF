@@ -198,8 +198,10 @@ Where VAF deliberately does not queue, each with the measurement behind it:
 - **Embeddings and speaker ID**: in-process models that answer in milliseconds, with a
   lock around the model load only.
 - **llama.cpp slots across processes** (sub-agents, the coder): llama-server queues
-  internally, and no cross-process primitive exists. vLLM batches with its own
-  scheduler.
+  internally, and no cross-process primitive exists; the server's own chat turns wait in
+  its chat queue, fair per person too ([TOOL_SUPERVISION.md](../agents/TOOL_SUPERVISION.md),
+  Worker and queue model). vLLM batches with its own scheduler, and its waiting count is
+  shown in the `queues` row.
 - **Gotenberg** queues inside the container (one LibreOffice: 0.20, 0.39 and 0.59 s for
   three previews at once against 0.21 s alone), first come first served and without a
   visible place; VAF does not queue the document preview, or the browser agent's runs on
@@ -602,7 +604,7 @@ The repair answers for the containers. Whether the installation works is a wider
 and two failures leave every container healthy while VAF stops working: the disk filling up
 (the database stops writing, a backup cannot be written) and the server's agent loop dying
 (the page loads, every request but the chat is answered, and no chat gets an answer again).
-`vaf/core/health.py` asks all three, whether the scheduled backups run, under vLLM the local engine, and whether the server's fair queues turned somebody away:
+`vaf/core/health.py` asks all three, whether the scheduled backups run, under vLLM the local engine, and how the server's queues are doing (and whether a fair queue turned somebody away):
 
 | Check | What it reads | Down when | Degraded when |
 |---|---|---|---|
@@ -610,7 +612,7 @@ and two failures leave every container healthy while VAF stops working: the disk
 | `disk` | free space on the fullest disk among the data folders, the backup folder and Docker's root directory (named in `docker info`, when it is a path on this machine) | less than 1 GB free | less than 5 GB free |
 | `backup` | the scheduled backups (`backup_schedule.backup_check`) | never | the last scheduled run failed, or the newest backup is older than its interval and a day |
 | `agent` | the agent loops of the server process (`headless_runner.worker_status`) | none is left | some have stopped |
-| `queues` | only in a process that registered a fair queue (the server's speech lanes): per queue the length, the requests served, wait p50/p95 and service p50 over the last 15 minutes, and the refusals; `--json` and `/api/system/health` carry the numbers as `metrics` (counts, never who) | never | a queue turned somebody away (`timeout` or `full`) in the last 15 minutes; a hang-up (`cancelled`) does not count |
+| `queues` | only where there is a queue to show: the fair queues the process registered (the server's speech lanes), the chat-turn queue in the process that runs the agent loops (`chat`: waiting turns, served, wait p50/p95 and service p50), and, while vLLM is the local engine and its server runs, vLLM's own scheduler read from its `/metrics` (`vllm: <n> waiting, <n> running, queue time mean <t> since start`); per queue the length, the requests served, wait p50/p95 and service p50 over the last 15 minutes, and the refusals; `--json` and `/api/system/health` carry the numbers as `metrics` (counts, never who) | never | a queue turned somebody away (`timeout` or `full`) in the last 15 minutes; a hang-up (`cancelled`) does not count, and the chat queue and vLLM never turn anybody away |
 | `engine` | only while vLLM is the local engine (`local_engine = vllm`): the platform verdict, the managed install, the model, whether its server runs, read from `local_engine.status_row`, the row Update and Repair draws ([VLLM_ENGINE.md](../llm/VLLM_ENGINE.md)) | never | vLLM cannot run on this machine, or it is not installed |
 
 The verdict is the worst check. `vaf health` asks the running VAF, because the agent loop

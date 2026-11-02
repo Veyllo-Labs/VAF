@@ -94,6 +94,53 @@ def test_fair_order_alone_is_round_robin_and_never_served_first():
     assert len(order) == 0 and order.keys_waiting() == 0
 
 
+def test_pop_skips_the_ineligible_and_keeps_their_place():
+    """A blocked item is passed, and comes out first once it is eligible again.
+    MUTATION: ignore `eligible` (the blocked head comes out) - red."""
+    order = FairOrder()
+    for key, item in (("a", "a1"), ("a", "a2"), ("b", "b1")):
+        order.push(key, item)
+    assert order.pop(eligible=lambda it: it != "a1") == "a2"
+    assert order.items() == ["a1", "b1"]
+    assert order.pop() == "b1"          # a was served, b never was
+    assert order.pop() == "a1"
+
+
+def test_pop_ranks_by_the_first_eligible_arrival():
+    """Among keys never served, the one whose first ELIGIBLE item arrived first wins.
+    MUTATION: rank by the key's head arrival - a wins with a3, red."""
+    order = FairOrder()
+    for key, item in (("a", "a1"), ("b", "b1"), ("a", "a3")):
+        order.push(key, item)
+    assert order.pop(eligible=lambda it: it != "a1") == "b1"
+    assert order.pop(eligible=lambda it: it != "a1") == "a3"
+
+
+def test_nothing_eligible_raises():
+    order = FairOrder()
+    with pytest.raises(IndexError):
+        order.pop(eligible=lambda it: True)
+    order.push("a", "a1")
+    with pytest.raises(IndexError):
+        order.pop(eligible=lambda it: False)
+    assert len(order) == 1 and order.items() == ["a1"]
+
+
+def test_items_and_copy():
+    """items() lists arrival order; a copy pops on its own, with the same history.
+    MUTATION: copy() sharing the deques - the original loses items, red."""
+    order = FairOrder()
+    for key, item in (("a", "a1"), ("b", "b1"), ("a", "a2"), ("c", "c1")):
+        order.push(key, item)
+    assert order.pop() == "a1"
+    assert order.items() == ["b1", "a2", "c1"]
+    twin = order.copy()
+    assert [twin.pop() for _ in range(3)] == ["b1", "c1", "a2"]
+    assert len(twin) == 0
+    assert order.items() == ["b1", "a2", "c1"] and len(order) == 3
+    assert [order.pop() for _ in range(3)] == ["b1", "c1", "a2"]
+
+
 def test_positions_follow_the_fair_order():
     """Each waiter's on_wait reports the place it holds in the order of the test above.
     MUTATION: compute the position by arrival index (A3 2, B1 3) - red."""

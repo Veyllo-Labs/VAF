@@ -26,13 +26,23 @@ LAN_DEVICE = "192.168.1.77"
 GB = 1024 ** 3
 
 
+_REAL_CHAT_QUEUE = health._chat_queue_metrics
+_REAL_ENGINE_QUEUE = health._engine_queue_metrics
+
+
 @pytest.fixture(autouse=True)
 def _no_queues_of_other_tests(monkeypatch):
     """The queue registry is process-wide; queues an earlier test registered (the speech
     client's) would add a row to every collection here, and a queue registered here must
-    not outlive the test. Each test gets an empty registry of its own."""
+    not outlive the test. Each test gets an empty registry of its own. The chat queue and
+    the engine's queue are probes of their own: off unless a test turns them on, and the
+    TaskQueue singleton an earlier test left behind is dropped (order independence)."""
     from vaf.core import fair_queue
+    from vaf.core.task_queue import TaskQueue
     monkeypatch.setattr(fair_queue, "_registry", {})
+    monkeypatch.setattr(health, "_chat_queue_metrics", lambda: [])
+    monkeypatch.setattr(health, "_engine_queue_metrics", lambda: [])
+    monkeypatch.setattr(TaskQueue, "_instance", None)
 
 
 def _svc(name, state, required=True, needed=True, reason="r"):
@@ -485,3 +495,127 @@ def test_vaf_health_json_carries_the_queue_numbers(monkeypatch):
     assert row["metrics"][0]["name"] == "stt" and row["metrics"][0]["refused"]["timeout"] == 1
     text = CliRunner().invoke(app, [])
     assert "queues" in text.output and "stt: 0 waiting" in text.output
+
+
+# ── the chat queue and the engine's queue ────────────────────────────────────────
+
+def _runner_with_loops(monkeypatch, status):
+    import sys
+    monkeypatch.setitem(sys.modules, "vaf.core.headless_runner",
+                        types.SimpleNamespace(worker_status=lambda: status))
+
+
+def test_the_chat_queue_joins_the_row(monkeypatch):
+    """In the process that runs the turns, the queues row carries a `chat` entry, and a
+    waiting turn never degrades it; elsewhere (no agent loops) it has none.
+    MUTATION: drop the worker_status check - the terminal reports a chat queue, red."""
+    from vaf.core.task_queue import TaskQueue
+    monkeypatch.setattr(health, "_chat_queue_metrics", _REAL_CHAT_QUEUE)
+    tq = TaskQueue()
+    tq._legacy_mode = True
+    tq.add(session_id="chat-1", input_text="x", source="web",
+           metadata={"enqueue_user_scope_id": "ab12cd34-tenant"})
+    tq.add(session_id="chat-2", input_text="y", source="web",
+           metadata={"enqueue_user_scope_id": "ab12cd34-tenant"})
+    assert tq.get(timeout=0.0, worker_id="w") is not None
+    _runner_with_loops(monkeypatch, {"started": 1, "alive": 1})
+    row = next(c for c in health.collect_health(**_quiet_checks())["checks"]
+               if c["name"] == "queues")
+    assert row["status"] == "ok"
+    assert [m["name"] for m in row["metrics"]] == ["chat"]
+    assert "chat: 1 waiting" in row["reason"] and "ab12cd34" not in row["reason"]
+    _runner_with_loops(monkeypatch, None)
+    result = health.collect_health(**_quiet_checks())
+    assert "queues" not in [c["name"] for c in result["checks"]]
+
+
+METRICS_PAGE = """\
+# HELP vllm:num_requests_waiting Number of requests waiting to be processed.
+# TYPE vllm:num_requests_waiting gauge
+vllm:num_requests_waiting{engine="0",model_name="org/model"} 2.0
+vllm:num_requests_waiting{engine="1",model_name="org/model"} 1.0
+# TYPE vllm:num_requests_waiting_by_reason gauge
+vllm:num_requests_waiting_by_reason{engine="0",model_name="org/model",reason="capacity"} 5.0
+vllm:num_requests_waiting_by_reason{engine="1",model_name="org/model",reason="deferred"} 4.0
+vllm:num_requests_running{engine="0",model_name="org/model"} 1.0
+vllm:num_requests_running{engine="1",model_name="org/model"} 1.0
+vllm:request_queue_time_seconds_sum{engine="0",model_name="org/model"} 2.0
+vllm:request_queue_time_seconds_sum{engine="1",model_name="org/model"} 1.0
+vllm:request_queue_time_seconds_count{engine="0",model_name="org/model"} 3.0
+vllm:request_queue_time_seconds_count{engine="1",model_name="org/model"} 1.0
+vllm:request_queue_time_seconds_bucket{engine="0",model_name="org/model",le="0.3"} 3.0
+"""
+
+
+def test_vllm_waiting_is_read_exactly():
+    """Summed over both engines; the `..._by_reason` gauge, whose name starts with the
+    waiting gauge's, is not counted; the mean queue time is since the start.
+    MUTATION: a prefix match on the gauge name - 12 waiting instead of 3, red."""
+    from vaf.core import vllm_server
+    assert vllm_server.parse_request_counts(METRICS_PAGE) == {
+        "waiting": 3, "running": 2, "queue_time_mean_ms": 750}
+    before_first = "vllm:num_requests_waiting 0\nvllm:num_requests_running 0\n"
+    assert vllm_server.parse_request_counts(before_first) == {
+        "waiting": 0, "running": 0, "queue_time_mean_ms": None}
+    assert vllm_server.parse_request_counts("# no gauges\nprocess_cpu_seconds_total 1\n") is None
+
+
+def test_no_metrics_request_without_a_running_vllm(monkeypatch):
+    """No HTTP request at all unless vLLM is the engine, the profile allows local inference
+    and its server process is there; then one, and its counts never degrade the row.
+    MUTATION: probe /metrics when the pid is absent - red."""
+    import requests
+
+    from vaf.core import inference_profile, local_engine, vllm_server
+    monkeypatch.setattr(health, "_engine_queue_metrics", _REAL_ENGINE_QUEUE)
+    asked = []
+    real_get = requests.get
+
+    def get(url, *a, **k):
+        if not str(url).endswith("/metrics"):
+            return real_get(url, *a, **k)
+        asked.append(url)
+        return types.SimpleNamespace(status_code=200, text=METRICS_PAGE)
+
+    monkeypatch.setattr(requests, "get", get)
+    state = {"vllm": False, "local": True, "pid": 4321}
+    monkeypatch.setattr(local_engine, "is_vllm", lambda config=None: state["vllm"])
+    monkeypatch.setattr(inference_profile, "local_inference_allowed",
+                        lambda config=None: state["local"])
+    monkeypatch.setattr(vllm_server, "running_pid", lambda: state["pid"])
+
+    assert health._engine_queue_metrics() == [] and asked == []       # llama.cpp
+    state.update(vllm=True, pid=None)
+    assert health._engine_queue_metrics() == [] and asked == []       # vLLM not running
+    state.update(pid=4321, local=False)
+    assert health._engine_queue_metrics() == [] and asked == []       # the api profile
+    state.update(local=True)
+    entry = health._engine_queue_metrics()
+    assert len(asked) == 1
+    assert entry == [{"name": "vllm", "kind": "engine", "waiting": 3, "running": 2,
+                      "queue_time_mean_ms": 750}]
+    row = next(c for c in health.collect_health(**_quiet_checks())["checks"]
+               if c["name"] == "queues")
+    assert row["status"] == "ok"
+    assert row["reason"] == "vllm: 3 waiting, 2 running, queue time mean 750 ms since start"
+
+
+def test_vaf_health_prints_chat_and_vllm(monkeypatch):
+    """`vaf health` prints both lines as the row's reason, and --json carries the entries."""
+    import json
+
+    from vaf.core.task_queue import TaskQueue
+    app, health_cmd = _health_app()
+    chat = TaskQueue().metrics()
+    chat["waiting"], chat["running"] = 2, 1
+    engine = {"name": "vllm", "kind": "engine", "waiting": 4, "running": 2,
+              "queue_time_mean_ms": 1500}
+    monkeypatch.setattr(health_cmd, "from_running_vaf", lambda timeout=30.0: health.collect_health(
+        **_quiet_checks(), queue_probe=lambda: [chat, engine]))
+    out = CliRunner().invoke(app, [])
+    assert out.exit_code == 0
+    assert "chat: 2 waiting" in out.output
+    assert "vllm: 4 waiting, 2 running, queue time mean 1.5 s since start" in out.output
+    as_json = CliRunner().invoke(app, ["--json"])
+    row = next(c for c in json.loads(as_json.output)["checks"] if c["name"] == "queues")
+    assert [m["name"] for m in row["metrics"]] == ["chat", "vllm"]

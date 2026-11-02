@@ -28,9 +28,12 @@ Checks, each ``{name, status, reason}``:
   degraded when this machine cannot run it or it is not installed, ok otherwise, also when
   its server is idle (the desktop unloads the local model when nobody uses it);
 - ``queues``: the fair queues of this process (vaf/core/fair_queue.py: the speech lanes),
-  only in a process that registered one: degraded when a queue turned somebody away
-  (``timeout`` or ``full``) in the last 15 minutes, never down. The check carries the
-  numbers as ``metrics`` (length, wait and service time, refusals; counts, never who).
+  the chat-turn queue (vaf/core/task_queue.py, in the process that runs the agent loops) and,
+  with vLLM as the running local engine, how many requests wait and run in its own scheduler
+  (its ``/metrics``); only when one of them is there: degraded when a queue turned somebody
+  away (``timeout`` or ``full``) in the last 15 minutes, never down, and neither the chat
+  queue nor vLLM ever turns anybody away. The check carries the numbers as ``metrics``
+  (length, wait and service time, refusals; counts, never who).
 
 The whole is the worst of them: ``ok``; ``degraded`` (VAF works, a part of it does not);
 ``down`` (chats or data are not safe: a required service is unusable, the disk is nearly
@@ -204,6 +207,13 @@ def queues_check(metrics: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         return None
     lines, turned_away = [], 0
     for m in metrics:
+        if m.get("kind") == "engine":
+            # The engine's own scheduler queue: counts only, it never refuses anybody.
+            mean = m.get("queue_time_mean_ms")
+            lines.append(f"{m.get('name')}: {m.get('waiting', 0)} waiting, "
+                         f"{m.get('running', 0)} running, queue time mean "
+                         f"{_format_ms(mean)} since start")
+            continue
         refused = m.get("refused") or {}
         turned_away += int(refused.get("timeout") or 0) + int(refused.get("full") or 0)
         total_refused = sum(int(v or 0) for v in refused.values())
@@ -224,10 +234,45 @@ def queues_check(metrics: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return check
 
 
+def _chat_queue_metrics() -> List[Dict[str, Any]]:
+    """The chat-turn queue (``TaskQueue.metrics``), only in the process whose agent loops
+    take the turns (the agent row's rule): elsewhere the queue is empty by construction."""
+    import sys
+    tasks = sys.modules.get("vaf.core.task_queue")
+    runner = sys.modules.get("vaf.core.headless_runner")
+    if tasks is None or runner is None or tasks.TaskQueue._instance is None:
+        return []
+    if runner.worker_status() is None:
+        return []
+    return [tasks.TaskQueue().metrics()]
+
+
+def _engine_queue_metrics() -> List[Dict[str, Any]]:
+    """The managed vLLM's own queue, read from its ``/metrics``, only when vLLM is the local
+    engine, the profile allows local inference and its server process is there: no HTTP
+    request otherwise. llama-server runs without ``--metrics``, so it has no such entry."""
+    from vaf.core import inference_profile, local_engine, vllm_server
+    if not local_engine.is_vllm() or not inference_profile.local_inference_allowed():
+        return []
+    if vllm_server.running_pid() is None:
+        return []
+    counts = vllm_server.request_counts()
+    if counts is None:
+        return []
+    return [{"name": "vllm", "kind": "engine", **counts}]
+
+
 def _queue_metrics() -> List[Dict[str, Any]]:
+    """The fair queues of this process, then the chat queue, then the engine's queue."""
     import sys
     queues = sys.modules.get("vaf.core.fair_queue")
-    return queues.queue_metrics() if queues is not None else []
+    out = list(queues.queue_metrics()) if queues is not None else []
+    for probe in (_chat_queue_metrics, _engine_queue_metrics):
+        try:
+            out.extend(probe())
+        except Exception:
+            continue
+    return out
 
 
 def _worker_status() -> Optional[Dict[str, int]]:

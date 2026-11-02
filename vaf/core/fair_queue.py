@@ -62,8 +62,19 @@ Named boundaries, each with the measurement that supports it:
 - Embeddings (ONNX MiniLM) and speaker ID (sherpa-onnx) run in-process in milliseconds,
   with a lock only around the model load.
 - llama.cpp slots shared by sub-agents and the coder across processes: llama-server
-  queues internally, and no cross-process primitive exists; the chat-turn queue covers
-  the server's own turns. vLLM batches with its own scheduler.
+  queues internally, and no cross-process primitive exists; the server's own chat turns
+  wait in TaskQueue (vaf/core/task_queue.py), which takes turns by person on FairOrder.
+  vLLM batches with its own scheduler; its waiting count is read for the health row.
+  llama-server runs without ``--metrics``, so its waiting count is not read.
+- Not in the chat-turn queue: thinking and automation runs (their own Agent in their own
+  thread; a thinking run on the local model already yields to every queued or running
+  turn, and moving automations in would change their timeout, room binding and tool
+  stripping, a change of its own) and the voice call reply (a live call cannot wait
+  behind a chat turn; it refuses as busy while the local model is exclusive). Channel
+  turns get the fair order but no waiting message, which would be an extra outbound
+  message on someone's messenger. TaskQueue has no cap per person and never refuses: a
+  dropped chat message is worse than a wait, and the round robin bounds one person's
+  cost to another at one turn per round per band.
 - The browser pool start never waits (admit, or fall back to the shared container);
   sandbox environments are per-person containers; admin jobs (repair, backup, update)
   refuse a second job, which is correct for them; mail and calendar sync run in the
@@ -95,6 +106,11 @@ class FairOrder:
     ``pop()`` takes the head of the key that was served least recently; a key never
     served comes first, and ties go to the earliest-arrived head. The serve stamp is a
     counter, so no clock is involved and the order is deterministic.
+
+    A dispatcher whose items can be blocked for a while (a chat whose previous turn still
+    runs) passes ``pop(eligible=...)``: only eligible items take part, and the blocked
+    ones keep their places for later. ``items()`` and ``copy()`` let it compute every
+    waiting item's place without touching the real order.
     """
 
     def __init__(self) -> None:
@@ -114,13 +130,35 @@ class FairOrder:
     def _rank(self, served: Dict[Hashable, int], queues) -> Hashable:
         return min(queues, key=lambda k: (served.get(k, 0), queues[k][0][0]))
 
-    def pop(self) -> Any:
-        """The next item in fair order; IndexError when nothing waits."""
+    def pop(self, eligible: Optional[Callable[[Any], bool]] = None) -> Any:
+        """The next item in fair order; IndexError when nothing waits.
+
+        With ``eligible``, only the items it accepts take part: among the keys holding one,
+        the least recently served wins (ties: whose first eligible item arrived first), and
+        that key's first eligible item is taken. The others keep their places, and
+        IndexError comes when no waiting item is eligible.
+        """
         if not self._queues:
             raise IndexError("nothing waits")
-        key = self._rank(self._served, self._queues)
-        _, item = self._queues[key].popleft()
-        if not self._queues[key]:
+        if eligible is None:
+            key = self._rank(self._served, self._queues)
+            index = 0
+        else:
+            best: Optional[Tuple[Tuple[int, int], Hashable, int]] = None
+            for k, q in self._queues.items():
+                for i, (arrival, candidate) in enumerate(q):
+                    if eligible(candidate):
+                        rank = (self._served.get(k, 0), arrival)
+                        if best is None or rank < best[0]:
+                            best = (rank, k, i)
+                        break
+            if best is None:
+                raise IndexError("nothing eligible waits")
+            _, key, index = best
+        q = self._queues[key]
+        _, item = q[index]
+        del q[index]
+        if not q:
             del self._queues[key]
         del self._key_of[id(item)]
         self._stamp += 1
@@ -171,6 +209,22 @@ class FairOrder:
     def keys_waiting(self) -> int:
         """How many keys have something waiting: a count, never who."""
         return len(self._queues)
+
+    def items(self) -> List[Any]:
+        """Every waiting item, in arrival order."""
+        entries = [entry for q in self._queues.values() for entry in q]
+        return [item for _, item in sorted(entries, key=lambda e: e[0])]
+
+    def copy(self) -> "FairOrder":
+        """An independent order with the same items, serve history and counters (the items
+        themselves are shared): for working out places without moving anyone."""
+        twin = FairOrder()
+        twin._queues = {k: deque(q) for k, q in self._queues.items()}
+        twin._key_of = dict(self._key_of)
+        twin._served = dict(self._served)
+        twin._arrivals = self._arrivals
+        twin._stamp = self._stamp
+        return twin
 
     def __len__(self) -> int:
         return len(self._key_of)

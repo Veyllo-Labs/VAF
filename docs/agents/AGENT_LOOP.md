@@ -356,11 +356,11 @@ the person (`python_sandbox`, `sandbox_exec`, `sandbox_files`, the file readers,
 `edit_file`, `web_search`, `webfetch`). That is all it promises: the sandbox's network reaches
 the internet and the LAN, a project environment's folder is the real one, a file write is not
 revisioned and for a non-admin may land in a joined room's shared folder, and the web tools
-send a query the model wrote. A forced call runs without the sandbox's tool bridge
-(`with_vaf_tools` is refused at dispatch, `_forced_call_gate`). Only when the tool registered
-under that name is VAF's own (a custom tool can take a listed name), and never one whose
-contract says `dangerous`, `system` or `irreversible`. Everything else is never forced: sends,
-deletes, the room tools (their messages are read by other accounts and agents), `host_process`,
+send a query the model wrote. A listed tool is forced only when the tool registered under that
+name is VAF's own (a custom tool can take a listed name), and never when its contract says
+`dangerous`, `system` or `irreversible`. A forced call runs without the sandbox's tool bridge
+(`with_vaf_tools` is refused at dispatch, `_forced_call_gate`). Everything else is never
+forced: sends, deletes, the room tools (their messages are read by other accounts and agents), `host_process`,
 `execute_workflow`, custom and MCP tools. A list of exclusions read from the contracts was
 measured first and forced `room_send`, `room_invite`, `host_process` and `execute_workflow`.
 Where none is left the re-run runs unforced with the same note. On a provider that restricts

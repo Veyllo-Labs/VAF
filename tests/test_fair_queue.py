@@ -141,6 +141,26 @@ def test_items_and_copy():
     assert [order.pop() for _ in range(3)] == ["b1", "c1", "a2"]
 
 
+def test_has_eligible_remove_where_and_a_limited_copy():
+    """has_eligible() looks without taking; remove_where() takes every match in one pass and
+    keeps the order of the rest; copy(limit) keeps each key's first items only, which still
+    gives the same first `limit` pops.
+    MUTATION: copy(limit) keeping the LAST items of each key - red."""
+    order = FairOrder()
+    for key, item in (("a", "a1"), ("a", "a2"), ("a", "a3"), ("b", "b1"), ("c", "c1")):
+        order.push(key, item)
+    assert order.has_eligible() and order.has_eligible(lambda it: it == "c1")
+    assert not order.has_eligible(lambda it: it == "zz") and len(order) == 5
+    twin = order.copy(limit=2)
+    assert [twin.pop() for _ in range(2)] == ["a1", "b1"]
+    assert len(order) == 5
+    assert order.copy(limit=1).items() == ["a1", "b1", "c1"]
+    assert order.remove_where(lambda it: it in ("a2", "b1")) == ["a2", "b1"]
+    assert order.items() == ["a1", "a3", "c1"]
+    assert [order.pop() for _ in range(3)] == ["a1", "c1", "a3"]
+    assert order.remove_where(lambda it: True) == []
+
+
 def test_positions_follow_the_fair_order():
     """Each waiter's on_wait reports the place it holds in the order of the test above.
     MUTATION: compute the position by arrival index (A3 2, B1 3) - red."""

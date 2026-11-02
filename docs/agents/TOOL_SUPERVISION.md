@@ -279,8 +279,22 @@ Requests are processed by worker threads pulling from a single shared `TaskQueue
   Stop hears nothing more and those behind it move up. The place is the place in line, in-flight
   chats ignored: a turn behind its own chat's running turn also waits for that one. The web chat
   and regenerate enqueues pass it and send `chat_wait` to that chat's subscribers, after a grace of
-  0.5 s (`CHAT_WAIT_GRACE_S`) so a turn an idle worker takes right away shows nothing.
+  0.5 s (`CHAT_WAIT_GRACE_S`) so a turn an idle worker takes right away shows nothing, and only
+  while the chat still has a turn queued (a Stop within the grace sends nothing).
   `wait_for_session` gives the same place to a reload (`history_update.chatWait`).
+- **Bounded cost.** One chat reports one place, its first queued turn's; a later turn of the same
+  chat starts reporting when it becomes the first. Places are counted up to `PLACES_COUNTED` (20);
+  a turn further back hears `PLACES_COUNTED + 1`, "more than 20 ahead", without an ETA. A change
+  works out at most 20 picks on copies limited to each person's first 20 turns, and looks only at
+  the chats within the counted places now or at their last report. Measured on 2000 queued turns
+  of one account: before these bounds every other person's enqueue simulated 2001 picks and fired
+  2000 callbacks (about 9 ms under the queue lock, on the event loop for a web turn); after them,
+  20 picks and at most 21 callbacks (about 0.15 ms), pinned by counts in
+  `tests/test_task_queue_fair_order.py`.
+- **Fairness starts at the second waiting turn.** `FairOrder` forgets who was served when a band
+  runs empty, so with one worker a turn taken from an empty queue does not count against its
+  person: alice's A1 taken at once, then A2 and B1 queued, gives A2 before B1. From then on the
+  round robin holds.
 - **ETA and numbers.** The runner tells the queue its effective worker count (`set_workers`). The
   ETA is `ceil(position / workers) * p50(service time)` over the last 15 minutes, None below three
   turns (session commands are no samples). `TaskQueue.metrics()` feeds the `chat` entry of the

@@ -18,6 +18,7 @@ import pytest
 from vaf.core.fair_queue import WaitInfo
 from vaf.core.task_queue import (
     HOUSEKEEPING_KEY,
+    PLACES_COUNTED,
     TaskQueue,
     enqueue_system_command,
 )
@@ -372,3 +373,84 @@ def test_metrics_shape_and_no_scopes():
     text = json.dumps(m)
     for secret in (ALICE, BOB, CAROL, "alice-1", "bob-1", "busy-chat"):
         assert secret not in text
+
+
+# ── the cost of a backlog ────────────────────────────────────────────────────────
+
+def test_one_chat_reports_one_place():
+    """Several queued turns of one chat report ONE place, its first turn's (what a reload
+    shows); the next turn takes over when the first is taken.
+    MUTATION: watch every turn on its own - t2 and t3 report places of their own, red."""
+    tq = _fresh(True)
+    _busy(tq)
+    t1, on_t1 = _heard()
+    t2, on_t2 = _heard()
+    t3, on_t3 = _heard()
+    _turn(tq, "chat-s", "s1", ALICE, on_wait=on_t1)
+    _turn(tq, "chat-s", "s2", ALICE, on_wait=on_t2)
+    _turn(tq, "chat-s", "s3", ALICE, on_wait=on_t3)
+    _turn(tq, "bob-1", "B1", BOB)
+    assert [i.position for i in t1] == [1] and t2 == [] and t3 == []
+    assert tq.wait_for_session("chat-s").position == 1
+    assert tq.get(timeout=0.0, worker_id="w").input_text == "s1"
+    assert [i.position for i in t1] == [1, 0]
+    assert [i.position for i in t2] == [tq.wait_for_session("chat-s").position] == [2]
+    assert t3 == []
+
+
+def _counting(tq):
+    steps = {"select": 0, "heard": 0}
+    real = tq._select_locked
+
+    def select(*a, **k):
+        steps["select"] += 1
+        return real(*a, **k)
+
+    tq._select_locked = select
+
+    def on_wait(info):
+        steps["heard"] += 1
+
+    return steps, on_wait
+
+
+@pytest.mark.parametrize("one_chat", [False, True], ids=["many_chats", "one_chat"])
+def test_a_backlog_costs_the_others_a_bounded_number_of_steps(one_chat):
+    """2000 queued turns of one account: another person's enqueue and a worker's pop work
+    out at most PLACES_COUNTED picks and tell at most PLACES_COUNTED + 1 chats. Counted,
+    not timed. Measured before the bound: 2001 picks and 2000 callbacks per change.
+    MUTATIONS: simulate the whole order (no PLACES_COUNTED limit); watch every turn on its
+    own - red."""
+    tq = _fresh(True)
+    _busy(tq)
+    steps, on_wait = _counting(tq)
+    for i in range(2000):
+        sid = "flood" if one_chat else f"flood-{i}"
+        _turn(tq, sid, "x", ALICE, on_wait=on_wait)
+    if one_chat:
+        assert steps["heard"] == 1, "one chat reports one place, not one per turn"
+    for key in steps:
+        steps[key] = 0
+    _turn(tq, "bob-1", "B1", BOB, on_wait=on_wait)
+    assert steps["select"] <= PLACES_COUNTED
+    assert steps["heard"] <= PLACES_COUNTED + 1
+    for key in steps:
+        steps[key] = 0
+    assert tq.get(timeout=0.0, worker_id="w") is not None
+    assert steps["select"] <= PLACES_COUNTED + 1
+    assert steps["heard"] <= PLACES_COUNTED + 2
+
+
+def test_a_place_beyond_the_counted_ones_says_more():
+    """Beyond PLACES_COUNTED the place is PLACES_COUNTED + 1 ("more than that") without an
+    ETA, for the report and for a reload alike."""
+    tq = _fresh(True)
+    _busy(tq)
+    for i in range(PLACES_COUNTED + 3):
+        _turn(tq, f"alice-{i}", "x", ALICE)
+    heard, on_wait = _heard()
+    _turn(tq, "alice-last", "x", ALICE, on_wait=on_wait)
+    assert [(i.position, i.eta_s) for i in heard] == [(PLACES_COUNTED + 1, None)]
+    assert tq.wait_for_session("alice-last").position == PLACES_COUNTED + 1
+    assert tq.wait_for_session("alice-0").position == 1
+    assert tq.wait_for_session("nobody") is None

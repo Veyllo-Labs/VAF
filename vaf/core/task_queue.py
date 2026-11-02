@@ -22,7 +22,13 @@ The order, in this precedence:
 A turn queued with ``on_wait`` hears its place (:class:`vaf.core.fair_queue.WaitInfo`,
 resource ``chat``) whenever it changes, and position 0 when a worker takes it after a wait.
 The place is the place in line: it ignores whether the turn's own chat is still busy, so a
-turn behind its own running turn waits for that one too.
+turn behind its own running turn waits for that one too. One chat reports ONE place, its
+first queued turn's (what ``wait_for_session`` answers for a reload); a later turn of the
+same chat starts reporting when it becomes the first. Places are counted up to
+``PLACES_COUNTED``; a turn further back hears ``PLACES_COUNTED + 1``, meaning "more than
+that", with no ETA. Both bounds keep the cost of a change independent of how many turns
+one account queued: measured before them, 2000 queued turns of one account made every
+other person's enqueue simulate 2001 picks and fire 2000 callbacks.
 
 Named boundaries: the queue never refuses and has no cap per person (a dropped chat message
 is worse than a wait, and the round robin already bounds one person's cost to another at one
@@ -53,6 +59,10 @@ from vaf.core.fair_queue import (
 HOUSEKEEPING_KEY = ("housekeeping",)
 # The lane every task shares under queue_policy "legacy" (no class weights).
 _LEGACY_LANE = "all"
+# How many places in line are counted exactly. A turn further back is told
+# PLACES_COUNTED + 1 ("more than PLACES_COUNTED", no ETA): working out every place would make
+# every enqueue and every pop cost as much as the whole backlog, which one account can grow.
+PLACES_COUNTED = 20
 
 
 @dataclass
@@ -84,7 +94,8 @@ class AgentTask:
 
 class _Watch:
     """One task whose place is reported: the last place computed for it (under the queue
-    lock) and the sequence number of the last report delivered (under the notify lock)."""
+    lock) and the sequence number of the last report delivered (under the notify lock).
+    Only the first watched task of a chat reports; the others wait their turn silently."""
     __slots__ = ("task", "on_wait", "last_position", "delivered_seq")
 
     def __init__(self, task: AgentTask, on_wait: Callable[[WaitInfo], None]) -> None:
@@ -145,7 +156,12 @@ class TaskQueue:
                     # Place reports and the numbers behind the ETA and the health row.
                     cls._instance._clock = time.monotonic
                     cls._instance._workers = 1
+                    # session -> its watched tasks in arrival order (the head reports),
+                    # session -> its queued tasks in arrival order, and the sessions whose
+                    # reported place is within PLACES_COUNTED (the only ones a change can move).
                     cls._instance._watch = {}
+                    cls._instance._queued_by_session = {}
+                    cls._instance._shown = set()
                     cls._instance._watch_seq = itertools.count(1)
                     cls._instance._notify_lock = threading.RLock()
                     cls._instance._waits = deque(maxlen=_MAX_SAMPLES)
@@ -185,14 +201,17 @@ class TaskQueue:
         removed = 0
         deliveries: List[Tuple[_Watch, int, WaitInfo]] = []
         with self._cv:
+            if not self._queued_by_session.get(sid):
+                return 0
             for band in list(self._orders):
                 order = self._orders[band]
-                for task in order.items():
-                    if task.session_id == sid:
-                        order.remove(task)
-                        removed += 1
+                removed += len(order.remove_where(lambda task: str(task.session_id) == sid))
                 if not order:
                     del self._orders[band]
+            self._queued_by_session.pop(sid, None)
+            # The dropped turns will never run: their watchers leave without a word.
+            self._watch.pop(sid, None)
+            self._shown.discard(sid)
             if removed:
                 deliveries = self._recompute_locked()
                 self._cv.notify_all()
@@ -243,10 +262,16 @@ class TaskQueue:
             if order is None:
                 order = self._orders[band] = FairOrder()
             order.push(self._fair_key(task), task)
+            sid = str(task.session_id)
+            self._queued_by_session.setdefault(sid, deque()).append(task)
+            touched = ()
             if on_wait is not None:
-                self._watch[id(task)] = _Watch(task, on_wait)
+                watchers = self._watch.setdefault(sid, deque())
+                watchers.append(_Watch(task, on_wait))
+                if len(watchers) == 1:
+                    touched = (sid,)
             if self._watch:
-                deliveries = self._recompute_locked()
+                deliveries = self._recompute_locked(touched=touched)
             self._cv.notify()
         self._deliver(deliveries)
         return task
@@ -292,6 +317,7 @@ class TaskQueue:
                     if sample:
                         self._waits.append((now, max(0.0, now - task.queued_at)))
                     self._service_start[worker_key] = (now, sample)
+                    self._unqueue_locked(task)
                     if self._watch:
                         deliveries = self._recompute_locked(popped=task)
                     break
@@ -315,8 +341,10 @@ class TaskQueue:
             self._service_start.clear()
             if include_queued:
                 self._orders.clear()
+                self._queued_by_session.clear()
                 # The cleared tasks will never run: their watchers leave without a word.
                 self._watch.clear()
+                self._shown.clear()
             self._cv.notify_all()
 
     def try_claim_session(self, session_id: str) -> bool:
@@ -494,7 +522,12 @@ class TaskQueue:
         with self._cv:
             if sid in self._session_inflight:
                 return True
-            return any(task.session_id == sid for task in self._iter_queued())
+            return bool(self._queued_by_session.get(sid))
+
+    def has_queued(self, session_id: str) -> bool:
+        """Whether this chat has a turn waiting in the queue (in flight does not count)."""
+        with self._cv:
+            return bool(self._queued_by_session.get(str(session_id or "")))
 
     def get_queue_stats(self) -> Dict[str, Any]:
         with self._cv:
@@ -539,10 +572,13 @@ class TaskQueue:
         if not sid:
             return None
         with self._cv:
-            for place, task in enumerate(self._pick_order_locked(), start=1):
-                if task.session_id == sid:
+            queued = self._queued_by_session.get(sid)
+            if not queued:
+                return None
+            for place, task in enumerate(self._pick_order_locked(PLACES_COUNTED), start=1):
+                if str(task.session_id) == sid:
                     return self._wait_info_locked(task, place)
-        return None
+            return self._wait_info_locked(queued[0], PLACES_COUNTED + 1)
 
     def metrics(self) -> Dict[str, Any]:
         """The numbers of the health row, in the shape of ResourceQueue.metrics(): counts and
@@ -607,9 +643,7 @@ class TaskQueue:
 
     @staticmethod
     def _has_eligible(order: FairOrder, eligible: Optional[Callable[[Any], bool]]) -> bool:
-        if not order:
-            return False
-        return eligible is None or any(eligible(task) for task in order.items())
+        return order.has_eligible(eligible)
 
     def _select_locked(self, orders: Dict[Tuple[str, int], FairOrder], budget: Dict[str, int],
                        eligible: Optional[Callable[[Any], bool]]) -> Optional[AgentTask]:
@@ -663,13 +697,14 @@ class TaskQueue:
         return self._select_locked(self._orders, self._scheduler_budget,
                                    lambda task: task.session_id not in inflight)
 
-    def _pick_order_locked(self) -> List[AgentTask]:
-        """Every queued task in the order the workers would take them, in-flight chats
-        ignored (the place in line), computed on copies so nothing moves."""
-        orders = {band: order.copy() for band, order in self._orders.items()}
+    def _pick_order_locked(self, limit: Optional[int] = None) -> List[AgentTask]:
+        """The queued tasks in the order the workers would take them (the first ``limit``
+        of them), in-flight chats ignored (the place in line), computed on copies so nothing
+        moves. A limited copy holds each person's first ``limit`` tasks only."""
+        orders = {band: order.copy(limit) for band, order in self._orders.items()}
         budget = dict(self._scheduler_budget)
         picked: List[AgentTask] = []
-        while orders:
+        while orders and (limit is None or len(picked) < limit):
             task = self._select_locked(orders, budget, None)
             if task is None:
                 break
@@ -688,31 +723,68 @@ class TaskQueue:
         return math.ceil(position / self._workers) * _percentile(samples, 50)
 
     def _wait_info_locked(self, task: AgentTask, position: int) -> WaitInfo:
-        return WaitInfo("chat", position, self._eta_locked(position),
-                        max(0.0, self._clock() - task.queued_at))
+        eta = self._eta_locked(position) if position <= PLACES_COUNTED else None
+        return WaitInfo("chat", position, eta, max(0.0, self._clock() - task.queued_at))
 
-    def _recompute_locked(self, popped: Optional[AgentTask] = None
+    def _unqueue_locked(self, task: AgentTask) -> None:
+        """A worker took this task: it leaves its chat's queued list."""
+        sid = str(task.session_id)
+        queued = self._queued_by_session.get(sid)
+        if not queued:
+            return
+        try:
+            queued.remove(task)
+        except ValueError:
+            pass
+        if not queued:
+            del self._queued_by_session[sid]
+
+    def _recompute_locked(self, popped: Optional[AgentTask] = None, touched=()
                           ) -> List[Tuple[_Watch, int, WaitInfo]]:
-        """The place reports due now, to be delivered OUTSIDE the lock: every watched task
-        whose place changed, position 0 for a watched task a worker just took after it had a
-        place, nothing for one that was dropped (it leaves the watch silently)."""
-        if not self._watch:
-            return []
-        seq = next(self._watch_seq)
-        places = {id(task): place
-                  for place, task in enumerate(self._pick_order_locked(), start=1)}
+        """The place reports due now, to be delivered OUTSIDE the lock. Bounded by
+        PLACES_COUNTED, never by the backlog: only the first PLACES_COUNTED picks are worked
+        out, and only chats that can have moved are looked at (those within the counted
+        places now or at their last report, and the ``touched`` ones whose reporting turn
+        just changed). Each chat reports its first watched turn's place when it changed;
+        a watched turn a worker just took hears 0 if it had a place, and the chat's next
+        watched turn takes over. Dropped turns left the watch silently in the drop."""
         out: List[Tuple[_Watch, int, WaitInfo]] = []
-        for tid, watch in list(self._watch.items()):
-            place = places.get(tid)
-            if place is None:
-                del self._watch[tid]
-                if popped is not None and watch.task is popped and (watch.last_position or 0) > 0:
-                    out.append((watch, seq, WaitInfo(
-                        "chat", 0, None, max(0.0, self._clock() - watch.task.queued_at))))
+        seq = next(self._watch_seq)
+        touched = set(touched)
+        if popped is not None:
+            sid = str(popped.session_id)
+            watchers = self._watch.get(sid)
+            for watch in list(watchers or ()):
+                if watch.task is popped:
+                    if watchers[0] is watch:
+                        touched.add(sid)
+                    watchers.remove(watch)
+                    if (watch.last_position or 0) > 0:
+                        out.append((watch, seq, WaitInfo(
+                            "chat", 0, None, max(0.0, self._clock() - popped.queued_at))))
+                    break
+            if watchers is not None and not watchers:
+                del self._watch[sid]
+                self._shown.discard(sid)
+        if not self._watch:
+            return out
+        top = self._pick_order_locked(PLACES_COUNTED)
+        places = {id(task): place for place, task in enumerate(top, start=1)}
+        candidates = touched | self._shown | {str(t.session_id) for t in top}
+        for sid in candidates:
+            watchers = self._watch.get(sid)
+            if not watchers:
+                self._shown.discard(sid)
                 continue
-            if place != watch.last_position:
-                watch.last_position = place
-                out.append((watch, seq, self._wait_info_locked(watch.task, place)))
+            head = watchers[0]
+            place = places.get(id(head.task), PLACES_COUNTED + 1)
+            if place <= PLACES_COUNTED:
+                self._shown.add(sid)
+            else:
+                self._shown.discard(sid)
+            if place != head.last_position:
+                head.last_position = place
+                out.append((head, seq, self._wait_info_locked(head.task, place)))
         return out
 
     def _deliver(self, deliveries: List[Tuple[_Watch, int, WaitInfo]]) -> None:

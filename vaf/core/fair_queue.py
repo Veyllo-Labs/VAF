@@ -82,6 +82,7 @@ Named boundaries, each with the measurement that supports it:
 """
 from __future__ import annotations
 
+import itertools
 import math
 import threading
 import time
@@ -144,17 +145,10 @@ class FairOrder:
             key = self._rank(self._served, self._queues)
             index = 0
         else:
-            best: Optional[Tuple[Tuple[int, int], Hashable, int]] = None
-            for k, q in self._queues.items():
-                for i, (arrival, candidate) in enumerate(q):
-                    if eligible(candidate):
-                        rank = (self._served.get(k, 0), arrival)
-                        if best is None or rank < best[0]:
-                            best = (rank, k, i)
-                        break
-            if best is None:
+            found = self._find(eligible)
+            if found is None:
                 raise IndexError("nothing eligible waits")
-            _, key, index = best
+            key, index = found
         q = self._queues[key]
         _, item = q[index]
         del q[index]
@@ -165,6 +159,48 @@ class FairOrder:
         self._served[key] = self._stamp
         self._trim()
         return item
+
+    def _find(self, eligible: Callable[[Any], bool], first: bool = False
+              ) -> Optional[Tuple[Hashable, int]]:
+        """(key, index) of the item ``pop(eligible)`` would take; with ``first``, of ANY
+        eligible item (enough to know one exists). None when no item is eligible."""
+        best: Optional[Tuple[Tuple[int, int], Hashable, int]] = None
+        for k, q in self._queues.items():
+            for i, (arrival, candidate) in enumerate(q):
+                if eligible(candidate):
+                    if first:
+                        return k, i
+                    rank = (self._served.get(k, 0), arrival)
+                    if best is None or rank < best[0]:
+                        best = (rank, k, i)
+                    break
+        return None if best is None else (best[1], best[2])
+
+    def has_eligible(self, eligible: Optional[Callable[[Any], bool]] = None) -> bool:
+        """Whether ``pop(eligible)`` would find an item, without taking it."""
+        if eligible is None:
+            return bool(self._queues)
+        return self._find(eligible, first=True) is not None
+
+    def remove_where(self, predicate: Callable[[Any], bool]) -> List[Any]:
+        """Take out every waiting item the predicate accepts, in one pass (a Stop that drops
+        all of a chat's turns); returns them in arrival order."""
+        taken: List[Tuple[int, Any]] = []
+        for key in list(self._queues):
+            kept: Deque[Tuple[int, Any]] = deque()
+            for entry in self._queues[key]:
+                if predicate(entry[1]):
+                    taken.append(entry)
+                    del self._key_of[id(entry[1])]
+                else:
+                    kept.append(entry)
+            if kept:
+                self._queues[key] = kept
+            else:
+                del self._queues[key]
+        if taken:
+            self._trim()
+        return [item for _, item in sorted(taken, key=lambda e: e[0])]
 
     def remove(self, item: Any) -> bool:
         """Take a waiting item out (a timeout, a cancel). False when it is not waiting."""
@@ -215,12 +251,20 @@ class FairOrder:
         entries = [entry for q in self._queues.values() for entry in q]
         return [item for _, item in sorted(entries, key=lambda e: e[0])]
 
-    def copy(self) -> "FairOrder":
+    def copy(self, limit: Optional[int] = None) -> "FairOrder":
         """An independent order with the same items, serve history and counters (the items
-        themselves are shared): for working out places without moving anyone."""
+        themselves are shared): for working out places without moving anyone. With
+        ``limit``, each key keeps only its first ``limit`` items, which is all the next
+        ``limit`` pops can reach: the cost of the copy no longer grows with one key's
+        backlog."""
         twin = FairOrder()
-        twin._queues = {k: deque(q) for k, q in self._queues.items()}
-        twin._key_of = dict(self._key_of)
+        if limit is None:
+            twin._queues = {k: deque(q) for k, q in self._queues.items()}
+            twin._key_of = dict(self._key_of)
+        else:
+            twin._queues = {k: deque(itertools.islice(q, max(1, int(limit))))
+                            for k, q in self._queues.items()}
+            twin._key_of = {id(item): k for k, q in twin._queues.items() for _, item in q}
         twin._served = dict(self._served)
         twin._arrivals = self._arrivals
         twin._stamp = self._stamp

@@ -1746,8 +1746,12 @@ def answer(user_scope, prompt, show_place):
   eligible ones take part; the least recently served key holding one wins, and the
   blocked items keep their places); `items()` lists the waiting items in arrival order
   and `copy()` is an independent twin for working out every item's place without
-  moving anyone. VAF's own chat-turn queue (`TaskQueue`) is built on it, with "this
-  chat's previous turn still runs" as the blocked case.
+  moving anyone; `copy(limit=n)` keeps each key's first `n` items, all the next `n`
+  pops can reach, so a long backlog of one key does not make the copy expensive.
+  `has_eligible(eligible)` looks without taking, and `remove_where(predicate)` takes
+  every match in one pass. VAF's own chat-turn queue (`TaskQueue`) is built on it, with
+  "this chat's previous turn still runs" as the blocked case, and counts places only up
+  to 20 so a backlog never makes a change cost more.
 - **Slots.** `slots=1` lets one call in at a time; `slots=None` is an unbounded
   pass-through that only measures (VAF's cloud speech lanes).
 - **A share per person.** `max_waiting` caps all waiters, `max_waiting_per_key` one

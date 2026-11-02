@@ -4574,6 +4574,22 @@ function VAFDashboardContent() {
                 seconds: Math.max(1, Math.round(sttWait.etaMs / 1000)) })
             : tMain('sttWaitingNoEta', { position: sttWait.position }))
         : '';
+    // A queued chat turn's place in line (chat_wait, and history_update.chatWait on a reload
+    // or chat switch): its own place and expected wait only, shown under the loading dots of
+    // that chat, cleared when the turn starts, completes or is stopped.
+    const [chatWait, setChatWait] = useState<{ sessionId: string; position: number; etaMs: number | null } | null>(null);
+    const clearChatWait = useCallback((sessionId?: string | null) => {
+        setChatWait(prev => (prev && (!sessionId || prev.sessionId === sessionId)) ? null : prev);
+    }, []);
+    const chatWaitLine = (chatWait && chatWait.position > 0 && chatWait.sessionId === currentSessionId)
+        ? (chatWait.etaMs === null
+            ? tMain('chatWaitingNoEta', { position: chatWait.position })
+            : chatWait.etaMs < 90000
+                ? tMain('chatWaiting', { position: chatWait.position,
+                    seconds: Math.max(1, Math.round(chatWait.etaMs / 1000)) })
+                : tMain('chatWaitingMinutes', { position: chatWait.position,
+                    minutes: Math.round(chatWait.etaMs / 60000) }))
+        : '';
     const [sttEnabled, setSttEnabled] = useState(false); // Track STT status
     const [memoryLearning, setMemoryLearning] = useState<{ active: boolean; message: string } | null>(null);
     const memoryLearningTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -5541,6 +5557,8 @@ function VAFDashboardContent() {
                     }
                 }
                 else if (data.type === 'agent_message_update') {
+                    // The turn streams, so it no longer waits in line.
+                    if (data.sessionId) clearChatWait(data.sessionId);
                     // CRITICAL: Only update if this message belongs to the current session!
                     // If user switched chats while bot was typing, ignore this update.
                     const activeSessionId = currentSessionIdRef.current;
@@ -5780,6 +5798,7 @@ function VAFDashboardContent() {
                     }
                 }
                 else if (data.type === 'message_complete') {
+                    clearChatWait(data.sessionId);
                     if (data.sessionId) {
                         sessionLoadingStates.current[data.sessionId] = {
                             loading: false,
@@ -6662,6 +6681,13 @@ function VAFDashboardContent() {
                 else if (data.type === 'history_update') {
                     const prevSessionId = currentSessionIdRef.current;
                     setCurrentSessionId(data.sessionId);
+                    // The place of this chat's queued turn, read field by field: a reload or a
+                    // chat switch shows it at once instead of waiting for the next change.
+                    const historyWaitPosition = data.chatWait ? (Number(data.chatWait.position) || 0) : 0;
+                    setChatWait(historyWaitPosition > 0 && data.sessionId
+                        ? { sessionId: data.sessionId, position: historyWaitPosition,
+                            etaMs: typeof data.chatWait.eta_ms === 'number' ? data.chatWait.eta_ms : null }
+                        : null);
                     // New Chat reaches a new session only through here, past handleSessionSwitch.
                     if (data.sessionId !== prevSessionId) {
                         clearBrowserStartWait();
@@ -7244,6 +7270,17 @@ function VAFDashboardContent() {
                         setModelProvider(data.provider);
                     }
                 }
+                else if (data.type === 'chat_wait') {
+                    // A queued chat turn's place in line; position 0 = a worker took it.
+                    const waitSessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
+                    const waitPosition = Number(data.position) || 0;
+                    if (waitPosition > 0 && waitSessionId) {
+                        setChatWait({ sessionId: waitSessionId, position: waitPosition,
+                            etaMs: typeof data.eta_ms === 'number' ? data.eta_ms : null });
+                    } else {
+                        clearChatWait(waitSessionId);
+                    }
+                }
                 else if (data.type === 'stt_wait') {
                     // The dictation waits for the speech recognizer: position 0 = it is its turn now.
                     const position = Number(data.position) || 0;
@@ -7299,6 +7336,8 @@ function VAFDashboardContent() {
                     setTimeout(() => setRegenNotice(null), 4000);
                 }
                 else if (data.type === 'generation_stopped') {
+                    // A stopped turn leaves the line too (Stop drops what was still queued).
+                    clearChatWait(data.sessionId);
                     // Update per-session loading state
                     if (data.sessionId) {
                         sessionLoadingStates.current[data.sessionId] = {
@@ -7898,6 +7937,10 @@ function VAFDashboardContent() {
         isAtBottomRef.current = true;
         expectNewAssistantRef.current = true;
         lastUserSendTimeRef.current = Date.now();
+        // A place from an earlier turn of this chat is over: a turn stopped within the
+        // server's grace can still report its first place after the stop, and this turn
+        // reports its own once it has waited.
+        clearChatWait(currentSessionIdRef.current);
         // The waiting room is NOT cleared here any more. It used to be, because
         // chips were placed on arrival and the list was only a leftover; now a
         // chip waits here for the answer it belongs to, and a coder that is still
@@ -10521,7 +10564,9 @@ function VAFDashboardContent() {
                                                         <span className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce delay-150"></span>
                                                     </div>
                                                 )}
-                                                {statusMessage && /[a-zA-Z0-9]/.test(statusMessage) && <span className="text-[10px] text-gray-400 ml-2">{statusMessage}</span>}
+                                                {chatWaitLine ? (
+                                                    <span role="status" aria-live="polite" className="text-[10px] text-gray-400 ml-2">{chatWaitLine}</span>
+                                                ) : (statusMessage && /[a-zA-Z0-9]/.test(statusMessage) && <span className="text-[10px] text-gray-400 ml-2">{statusMessage}</span>)}
                                             </div>
                                         </div>
                                     </div>

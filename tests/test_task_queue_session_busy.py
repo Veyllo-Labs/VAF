@@ -127,10 +127,15 @@ def test_web_server_history_update_consumes_the_primitive() -> None:
         "web_server no longer consumes TaskQueue.is_busy_for_session - "
         "isActive has lost its per-session authority"
     )
-    active_sites = re.findall(r"is_active\s*=\s*_session_is_active\(", src)
-    assert len(active_sites) == 2, (
-        f"expected the two history_update sites to assign is_active from "
-        f"_session_is_active, found {len(active_sites)}"
+    # The history_update builders share one helper, which asks _session_is_active.
+    helper = src[src.index("def _session_activity("):src.index("def _session_status_label(")]
+    assert re.search(r"active\s*=\s*_session_is_active\(", helper), (
+        "the history_update activity helper no longer takes isActive from _session_is_active"
+    )
+    sites = src.count("**_session_activity(")
+    assert sites == 3, (
+        f"expected the three history_update sites built from the stored transcript to use "
+        f"_session_activity, found {sites}"
     )
     assert not re.search(
         r"latest_state\.get\(\"status\"\)\s*!=\s*\"idle\"", src

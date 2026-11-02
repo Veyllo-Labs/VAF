@@ -1012,6 +1012,18 @@ times, refusals) are counts without any key, and only an admin reads them
 alone. A hang-up cancels only the caller's own waiting request: the cancel event lives on
 the call record of that connection.
 
+Chat turns take turns on the same key: inside every priority band of the TaskQueue the
+next turn goes to the person served least recently (`vaf/core/task_queue.py` on
+`FairOrder`), keyed on the canonical scope of the turn (`enqueue_user_scope_id`, else
+`user_scope_id`), and a session command is keyed as housekeeping, never as its sender. A
+queued web turn's place (`chat_wait`, and `chatWait` in a `history_update`) goes only to
+the connections subscribed to that chat (`broadcast_to_session`), never through
+`_push_session_update`, which reroutes to a room owner while worker 1's agent runs a room
+turn; it is a count of the turns ahead and never says whose. The former
+every-two-seconds `queue_stats` broadcast, which sent the whole queue's counts per class
+to every connection of every account, is gone; an admin reads the chat queue's numbers
+as the `chat` line of the `queues` row.
+
 ## 7. Watchdog and Admin Security APIs
 
 ### Sub-agent watchdog (`vaf/api/supervisor_routes.py`)
@@ -1052,6 +1064,7 @@ The connection map (`/api/network/connections`) lists every connected device's a
 | WhatsApp | Separate subprocess per user | Process |
 | Telegram | Whitelist-based routing | Application |
 | Speech queues | Fair order keyed on the canonical scope, at most 3 waiting places per person so nobody fills the queue; a waiter sees only its own place and ETA; the metrics are keyless counts for an admin | Application |
+| Chat-turn queue | Round robin by canonical scope inside every priority band (no cap: a chat message is never refused); a queued turn's place goes only to that chat's subscribers; the metrics are keyless counts for an admin | Application |
 | Email | Per-user encrypted credentials + scope-based config lookup chain | Application |
 | Calendar (Google/Microsoft) | Same OAuth and `user_scope_id` as Email; no separate credentials | Application |
 | Automations | Per-user task storage and scoped RAG access; max 3 users per time slot (global cap) | Application |

@@ -399,6 +399,9 @@
     "askPickHint": "选择一个回答，或自己输入",
     "sttWaiting": "正在等待语音识别：第 {position} 位，约 {seconds} 秒",
     "sttWaitingNoEta": "正在等待语音识别：第 {position} 位",
+    "chatWaiting": "正在排队等待智能体：第 {position} 位，约 {seconds} 秒",
+    "chatWaitingMinutes": "正在排队等待智能体：第 {position} 位，约 {minutes} 分钟",
+    "chatWaitingNoEta": "正在排队等待智能体：第 {position} 位",
     "sttBusy": "语音识别当前繁忙，请稍后再试。",
     "ttsBusy": "朗读当前繁忙，请稍后再试。"
   },

@@ -399,6 +399,9 @@
     "askPickHint": "Bir cevap seç ya da kendin yaz",
     "sttWaiting": "Konuşma tanıma bekleniyor: {position}. sıra, yaklaşık {seconds} sn",
     "sttWaitingNoEta": "Konuşma tanıma bekleniyor: {position}. sıra",
+    "chatWaiting": "Ajan için sırada: {position}. sıra, yaklaşık {seconds} sn",
+    "chatWaitingMinutes": "Ajan için sırada: {position}. sıra, yaklaşık {minutes} dk",
+    "chatWaitingNoEta": "Ajan için sırada: {position}. sıra",
     "sttBusy": "Konuşma tanıma şu anda meşgul. Lütfen birazdan tekrar dene.",
     "ttsBusy": "Sesli okuma şu anda meşgul. Lütfen birazdan tekrar dene."
   },

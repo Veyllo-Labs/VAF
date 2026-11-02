@@ -76,6 +76,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   and a Telegram voice note no longer stalls the other Telegram chats. `vaf health` reports
   each queue's length, wait and service time. For your own application, `vaf.ResourceQueue`
   puts any scarce resource behind the same fair queue.
+- **Chat messages now take turns fairly too.** When several people write at once, the next
+  answer goes to whoever was served least recently, so one person with many chats no longer
+  holds up the others; your own messages still run in the order you sent them. A message
+  that has to wait shows its place in line and the expected wait under the dots ("In line
+  for the agent: place 2, about 40 s"), also after a reload. `vaf health` also reports the
+  chat queue and, with vLLM, how many requests wait in the engine.
 
 ### Changed
 

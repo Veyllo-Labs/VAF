@@ -854,19 +854,44 @@ def _transcribe_local(path: str, key: Optional[str] = None, *,
         return " ".join(segment.text for segment in segments)
 
 
-def _queue_wait_sender(websocket, loop, msg_type: str, armed=None, resource=None):
+def _queue_wait_sender(websocket, loop, msg_type: str, armed=None, resource=None, *,
+                       send=None, extra=None, throttle_s: float = 1.0, grace_s: float = 0.0):
     """An `on_wait` for a fair queue that tells THIS socket the caller's place.
 
-    Runs in the executor thread that waits, so the send is handed to the loop; a failed
-    send is swallowed (the wait goes on). Throttled to one update per second, except the
-    first and the grant (position 0). `armed` (an asyncio.Event) is set while the caller
-    waits, so the socket may be read ahead (_ReadAhead), and cleared again by the grant:
-    the rest of the work (the call's LLM step) does not read ahead."""
+    Runs in the thread that reports (the executor thread that waits, or a queue worker), so
+    the send is handed to the loop; a failed send is swallowed (the wait goes on). Throttled
+    to one update per `throttle_s` seconds, except the first and the grant (position 0).
+    `armed` (an asyncio.Event) is set while the caller waits, so the socket may be read
+    ahead (_ReadAhead), and cleared again by the grant: the rest of the work (the call's LLM
+    step) does not read ahead.
+
+    `send(payload)` returns the coroutine that delivers it (default: this socket's
+    `send_json`), `extra` is merged into every payload. With `grace_s` the first place is
+    held back that long and dropped when the grant comes first, and the grant is sent only
+    when a place was: a queue whose idle worker takes the turn a moment later must not
+    flash "place 1" before every answer. That state lives on the loop, so it needs no lock."""
     last = {"at": None}
+    deliver = send if send is not None else (lambda payload: websocket.send_json(payload))
+
+    def _payload(info) -> dict:
+        payload = {"type": msg_type, "position": int(info.position),
+                   "eta_ms": None if info.eta_s is None else int(info.eta_s * 1000),
+                   "waited_ms": int(info.waited_s * 1000)}
+        if resource is not None:
+            payload["resource"] = resource(info.resource)
+        if extra:
+            payload.update(extra)
+        return payload
+
+    def _send(info) -> None:
+        try:
+            asyncio.run_coroutine_threadsafe(deliver(_payload(info)), loop)
+        except Exception:
+            pass
 
     def on_wait(info) -> None:
         now = time.monotonic()
-        if info.position > 0 and last["at"] is not None and now - last["at"] < 1.0:
+        if info.position > 0 and last["at"] is not None and now - last["at"] < throttle_s:
             return
         last["at"] = now
         if armed is not None:
@@ -874,17 +899,63 @@ def _queue_wait_sender(websocket, loop, msg_type: str, armed=None, resource=None
                 loop.call_soon_threadsafe(armed.set if info.position > 0 else armed.clear)
             except Exception:
                 pass
-        payload = {"type": msg_type, "position": int(info.position),
-                   "eta_ms": None if info.eta_s is None else int(info.eta_s * 1000),
-                   "waited_ms": int(info.waited_s * 1000)}
-        if resource is not None:
-            payload["resource"] = resource(info.resource)
+        _send(info)
+
+    if grace_s <= 0:
+        return on_wait
+
+    held = {"shown": False, "done": False, "latest": None, "timer": None}
+
+    def _show_held() -> None:
+        held["timer"] = None
+        if held["done"] or held["latest"] is None:
+            return
+        held["shown"] = True
+        on_wait(held["latest"])
+
+    def _on_loop(info) -> None:
+        if held["done"]:
+            return
+        if info.position <= 0:
+            held["done"] = True
+            if held["timer"] is not None:
+                held["timer"].cancel()
+                held["timer"] = None
+            if held["shown"]:
+                on_wait(info)
+            return
+        if held["shown"]:
+            on_wait(info)
+            return
+        held["latest"] = info
+        if held["timer"] is None:
+            held["timer"] = loop.call_later(grace_s, _show_held)
+
+    def on_wait_after_grace(info) -> None:
         try:
-            asyncio.run_coroutine_threadsafe(websocket.send_json(payload), loop)
+            loop.call_soon_threadsafe(_on_loop, info)
         except Exception:
             pass
 
-    return on_wait
+    return on_wait_after_grace
+
+
+# How long a queued chat turn waits before its place is shown: the idle worker polls the
+# queue every 0.1 s plus its housekeeping, so a turn it takes right away shows nothing.
+CHAT_WAIT_GRACE_S = 0.5
+
+
+def _chat_wait_sender(loop, session_id):
+    """The `on_wait` of a queued web chat turn: `chat_wait {sessionId, position, eta_ms,
+    waited_ms}` to the connections subscribed to that chat, after the grace. The session id
+    is bound HERE, when the turn is queued (the WS loop reassigns its own per message).
+    Never `_push_session_update`: that one reroutes to a room owner while worker 1's agent
+    runs a room turn, and a place in line belongs to the chat's own viewers."""
+    sid = str(session_id)
+    return _queue_wait_sender(None, loop, "chat_wait",
+                              send=functools.partial(manager.broadcast_to_session, sid),
+                              extra={"sessionId": sid}, throttle_s=0.0,
+                              grace_s=CHAT_WAIT_GRACE_S)
 
 
 # How long a live call's TTS waits for a slot: the reply text is already decided and goes
@@ -1195,6 +1266,33 @@ def _session_is_active(session_id) -> bool:
         return False
 
 
+def _session_chat_wait(session_id):
+    """`{position, eta_ms}` of this chat's first queued turn, or None: a reload or a chat
+    switch shows the place again at once instead of waiting for the next change."""
+    if not session_id:
+        return None
+    try:
+        from vaf.core.task_queue import TaskQueue
+        info = TaskQueue().wait_for_session(str(session_id))
+    except Exception:
+        return None
+    if info is None:
+        return None
+    return {"position": int(info.position),
+            "eta_ms": None if info.eta_s is None else int(info.eta_s * 1000)}
+
+
+def _session_activity(session_id) -> dict:
+    """The activity fields of a `history_update`: is a turn running or queued, its status
+    label, and the queued turn's place. One helper for every history_update built from the
+    stored transcript, so a new field reaches all of them."""
+    sid = str(session_id or "")
+    active = _session_is_active(sid)
+    return {"isActive": active,
+            "currentStatus": _session_status_label(sid) if active else "idle",
+            "chatWait": _session_chat_wait(sid)}
+
+
 def _session_status_label(session_id) -> str:
     """Status text for an ACTIVE session's history_update.
 
@@ -1225,12 +1323,10 @@ def _refresh_after_forget(session_id=None, transcript_scrubbed=False, **_):
     sid = str(session_id)
     wi = get_web_interface()
     wi._bridge_or_push({"type": "context_checkpoint", "session_id": sid}, sid)
-    active = _session_is_active(sid)
     wi._bridge_or_push({
         "type": "history_update",
         "messages": _history_projection(loaded, sid),
-        "isActive": active,
-        "currentStatus": _session_status_label(sid) if active else "idle",
+        **_session_activity(sid),
     }, sid)
 
 
@@ -4845,14 +4941,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                 loaded = Session(id=sid, name="New Chat")
 
             frontend_messages = _history_projection(loaded, sid)
-            is_active = _session_is_active(sid)
 
             await websocket.send_json({
                 "type": "history_update",
                 "messages": frontend_messages,
                 "sessionId": sid,
-                "isActive": is_active,
-                "currentStatus": _session_status_label(sid) if is_active else "idle"
+                **_session_activity(sid),
             })
             artifact_payload = _build_artifact_payload(loaded, sid)
             if artifact_payload:
@@ -5409,14 +5503,12 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # 3. Send history to Frontend
                         # Serialize messages for JSON (include tool metadata so UI shows tool names, not "Unknown Tool")
                         frontend_messages = _history_projection(loaded, sid)
-                        is_active = _session_is_active(sid)
 
                         await websocket.send_json({
                             "type": "history_update",
                             "messages": frontend_messages,
                             "sessionId": sid,
-                            "isActive": is_active,
-                            "currentStatus": _session_status_label(sid) if is_active else "idle"
+                            **_session_activity(sid),
                         })
                         artifact_payload = _build_artifact_payload(loaded, sid)
                         if artifact_payload:
@@ -6647,7 +6739,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # it belongs to did not exist yet, and the browser could only
                         # attach it to the newest answer it already had.
                         _task = tq.add(session_id=session_id, input_text=content, source="web",
-                                       metadata=metadata)
+                                       metadata=metadata,
+                                       on_wait=_chat_wait_sender(asyncio.get_running_loop(),
+                                                                 session_id))
                         if attached_images:
                             # Surface the stored file(s) to the Web UI so the chat's workspace box
                             # appears (same notify the agent's file-creating tools use). Uploading an
@@ -9491,7 +9585,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         _regen_meta["images"] = _regen_imgs
                     manager.subscribe_to_session(websocket, str(session_id))
                     _tq_regen.add(session_id=str(session_id), input_text=_user_text,
-                                  source="web", metadata=_regen_meta)
+                                  source="web", metadata=_regen_meta,
+                                  on_wait=_chat_wait_sender(asyncio.get_running_loop(),
+                                                            session_id))
                     log("WebServer", f"Regenerate requested for session {session_id}")
 
                 elif type == "browser_interactive_start":

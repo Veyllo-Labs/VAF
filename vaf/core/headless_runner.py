@@ -1563,6 +1563,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
             else:
                 cap = int(cfg.get("max_parallel_api_workers", 5) or 5)
             effective = max(1, min(requested, cap))
+            try:
+                # The chat queue's ETA divides the places ahead by the workers taking turns.
+                tq.set_workers(effective)
+            except Exception as e:
+                append_domain_log_always("headless", f"[STARTUP] queue worker count not set: {e}")
             # Per-session serialization (task_queue) holds in BOTH policies, so >1 worker is safe under
             # 'legacy' too; weighted_fair only adds lane fairness. Imply the parallel spawn when effective>1.
             if effective > 1:
@@ -1690,12 +1695,6 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                     f"inflight_total={qstats.get('inflight_total', 0)} "
                                     f"inflight_sessions={qstats.get('inflight_sessions', 0)}\n"
                                 )
-                        get_web_interface().push_update(
-                            {
-                                "type": "queue_stats",
-                                "stats": qstats,
-                            }
-                        )
                         report_stalls(tq)
                     except Exception:
                         pass

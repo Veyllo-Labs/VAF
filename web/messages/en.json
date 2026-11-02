@@ -399,6 +399,9 @@
     "askPickHint": "Pick an answer or type your own",
     "sttWaiting": "Waiting for speech recognition: place {position}, about {seconds} s",
     "sttWaitingNoEta": "Waiting for speech recognition: place {position}",
+    "chatWaiting": "In line for the agent: place {position}, about {seconds} s",
+    "chatWaitingMinutes": "In line for the agent: place {position}, about {minutes} min",
+    "chatWaitingNoEta": "In line for the agent: place {position}",
     "sttBusy": "Speech recognition is busy right now. Please try again in a moment.",
     "ttsBusy": "Read-aloud is busy right now. Please try again in a moment."
   },

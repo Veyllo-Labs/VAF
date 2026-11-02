@@ -328,8 +328,10 @@ VAF serves many users from one process, in two layers that behave differently:
   is enqueued onto a shared `TaskQueue` and the connection returns immediately, so other users' I/O and
   token streaming keep flowing while a model call runs.
 - **Execution runs in a worker pool.** Worker threads pull turns from the queue and run them. The default is
-  **one** worker (`parallel_main_workers: 1`), so turns execute strictly one at a time - a long reasoning
-  turn by one user blocks the others until it finishes.
+  **one** worker (`parallel_main_workers: 1`), so turns execute one at a time - a long reasoning turn by one
+  user still delays the others until it finishes. They take turns, though: the next turn goes to the person
+  served least recently, so one user with messages in several chats cannot hold up everyone else, and a
+  waiting message shows its place in line and the expected wait under the dots of its chat.
 
 To run users concurrently, raise the pool (admin-only keys; restart to apply):
 
@@ -353,8 +355,10 @@ to stay within provider rate limits.
 session to two workers at once. The guarantee is therefore **per session, not per user**: the in-flight set
 is keyed on the session id alone (`vaf/core/task_queue.py`), so one person's web session and their
 `telegram_...` session can occupy two workers simultaneously, while turns *within* one session always run in
-order. `weighted_fair` additionally schedules the interactive / automation / background task classes fairly.
-The per-session guarantee holds under the `legacy` policy too - `weighted_fair` only adds lane fairness.
+order. The ORDER, by contrast, keys on the person: inside every priority band the next turn goes to the
+user served least recently, in both policies. `weighted_fair` additionally schedules the interactive /
+automation / background task classes fairly. The per-session guarantee holds under the `legacy` policy too -
+`weighted_fair` only adds lane fairness. `vaf health` shows the queue as the `chat` line of its `queues` row.
 
 A session leaves the in-flight set when the worker calls `task_done()`, and also when that same worker asks
 for its next task: one worker holds one task, so the request itself says the previous one is finished. That

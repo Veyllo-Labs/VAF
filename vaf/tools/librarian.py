@@ -2322,8 +2322,11 @@ Remove duplicates and ensure smooth flow.
         #                          process-wide, so per-call identity on it would be a
         #                          cross-user leak the moment a second worker exists.
         #
-        # Six of the thirteen carry both jail keys, and the read ones now install their own
-        # read-mode jail instead of inheriting the librarian's write-mode one. Read mode
+        # Eight of the thirteen form a per-user file jail from both jail keys (seven by
+        # declaring `file_access`, cloud_storage by hand for its save), and the read ones now
+        # install their own read-mode jail instead of inheriting the librarian's write-mode
+        # one. python_sandbox carries both keys too, for its own container and a background
+        # run's report, and forms no file jail: its code reaches no host file. Read mode
         # reaches further by exactly the folders of the skills visible to this user - pinned
         # by tests/test_librarian_shared_dispatch.py, which forces a visible skill to measure
         # it, because a scope with no visible skills shows a delta of zero and would let a

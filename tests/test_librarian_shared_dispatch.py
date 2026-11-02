@@ -7,8 +7,8 @@ The librarian is a tool that drives a second model, and that model calls thirtee
 Those calls used to bypass everything the dispatcher does: `self.tools[name].run(**args)`,
 directly. So the librarian was the one place in VAF where a tool ran with no policy check, no
 declared identity and no execution bound - and the identity part was the sharp end, because
-SIX of those thirteen are file tools whose per-user jail cannot form without a scope and a
-role. They inherited the librarian's own outer jail instead, which is not the same thing.
+several of those thirteen are file tools whose per-user jail cannot form without a scope
+and a role (eight today, measured: FILE_TOOLS_WITH_BOTH_KEYS). They inherited the librarian's own outer jail instead, which is not the same thing.
 
 WHY THIS FILE EXISTS AT ALL: nothing drove that loop. Not one test. The same gap let a
 NameError live inside `multi_tool_use.parallel` through a whole refactor, green the entire
@@ -273,10 +273,23 @@ FILE_TOOLS_WITH_BOTH_KEYS = (
     "read_file", "tree", "write_file",
 )
 
+# Carry both keys and form NO file jail from them. python_sandbox gained user_role (and
+# username, session_id) with its background mode: the scope picks the person's own
+# container, the role goes into the record a background run's report turn is bound from.
+# Its code runs in that container and reaches no host file, so it is not a jailed file tool,
+# and counting it in would make the paragraph below claim a jail that does not exist.
+BOTH_KEYS_WITHOUT_A_FILE_JAIL = ("python_sandbox",)
+
 
 def test_the_file_tools_among_the_thirteen_carry_both_jail_keys():
     """The count is load-bearing for the paragraph below, so it is measured, not written
-    down. A tool losing a key would silently drop out of the jail without failing anything."""
+    down. A tool losing a key would silently drop out of the jail without failing anything.
+
+    Both keys are necessary, not sufficient: a tool forms a file jail from them when it
+    declares `file_access` (the boundary is installed around run()) or builds one itself in
+    its own module (`user_jail` / `compute_user_jail`, as cloud_storage does for its save).
+    A tool with both keys and neither is named in BOTH_KEYS_WITHOUT_A_FILE_JAIL, so a new
+    one fails here until someone says what its keys are for."""
     import importlib
     import inspect
     import pkgutil
@@ -288,7 +301,7 @@ def test_the_file_tools_among_the_thirteen_carry_both_jail_keys():
     block = re.search(r"self\.tools\s*=\s*\{(.*?)\n\s*\}", src, re.S)
     registered = set(re.findall(r'"([a-z_]+)":', block.group(1)))
 
-    both = set()
+    jailed, keys_only = set(), set()
     for mod in pkgutil.iter_modules(vaf.tools.__path__):
         try:
             module = importlib.import_module("vaf.tools." + mod.name)
@@ -297,9 +310,18 @@ def test_the_file_tools_among_the_thirteen_carry_both_jail_keys():
         for _, cls in inspect.getmembers(module, inspect.isclass):
             if issubclass(cls, BaseTool) and getattr(cls, "name", None) in registered:
                 if {"user_role", "user_scope_id"} <= set(getattr(cls, "identity_kwargs", ()) or ()):
-                    both.add(cls.name)
-    assert both == set(FILE_TOOLS_WITH_BOTH_KEYS), (
-        "the set of librarian tools that can form a per-user jail changed: " + repr(sorted(both))
+                    module_src = pathlib.Path(inspect.getfile(cls)).read_bytes().decode()
+                    builds_one = re.search(r"\b(compute_user_jail|user_jail)\(", module_src)
+                    if getattr(cls, "file_access", None) or builds_one:
+                        jailed.add(cls.name)
+                    else:
+                        keys_only.add(cls.name)
+    assert jailed == set(FILE_TOOLS_WITH_BOTH_KEYS), (
+        "the set of librarian tools that can form a per-user jail changed: " + repr(sorted(jailed))
+    )
+    assert keys_only == set(BOTH_KEYS_WITHOUT_A_FILE_JAIL), (
+        "a librarian tool carries both jail keys without forming a file jail: "
+        + repr(sorted(keys_only))
     )
 
 

@@ -43,14 +43,18 @@ through a real ToolCaller whose registry and identity decide what the caller may
 - the sandbox example without its timeout, or with the sandbox's own 30 s ->
   test_the_sandbox_example_has_room;
 - `check=True` back in the sandbox code (stop at the first failure) ->
-  test_the_sandbox_code_runs_every_command;
+  test_the_sandbox_code_runs_every_command; `errors='replace'` or the try/except removed ->
+  test_output_that_is_not_utf8_does_not_end_the_run; `flush=True` dropped ->
+  test_printed_lines_survive_a_timeout_of_the_call;
 - no step-numbers-only fallback, or no cap on the step numbers ->
   test_a_huge_command_and_a_thousand_steps_fit;
 - host_bash rendered with the old quote-only escaping -> test_host_bash_examples_are_json.
 """
 import ast
 import importlib
+import os
 import re
+import signal
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -415,6 +419,48 @@ def test_the_sandbox_code_runs_every_command(tmp_path):
     assert [line.split()[:2] for line in lines] == [["FAILED", "3"], ["OK", "0"], ["FAILED", "4"]]
 
 
+_POSIX_SHELL = pytest.mark.skipif(os.name == "nt", reason="printf and sleep are POSIX shell commands")
+
+
+@_POSIX_SHELL
+def test_output_that_is_not_utf8_does_not_end_the_run(tmp_path):
+    """A command that writes bytes that are not UTF-8 raised UnicodeDecodeError inside
+    subprocess.run and ended the run: the commands after it never ran. Decoded with
+    errors='replace', and any exception is a FAILED line of its own (a NUL byte in a
+    command makes subprocess.run raise ValueError)."""
+    import subprocess
+    import sys
+    from vaf.tools.agent_workflow_builder import _sandbox_code
+    code = _sandbox_code(["echo one", "printf '\\377'; printf '\\377' >&2; exit 1",
+                          "echo a\x00b", "echo three"])
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, cwd=tmp_path,
+                          timeout=60)
+    lines = done.stdout.decode("utf-8", "replace").splitlines()
+    assert done.returncode == 0, done.stderr
+    assert [line.split()[:2] for line in lines] == [["OK", "0"], ["FAILED", "1"],
+                                                    ["FAILED", "-"], ["OK", "0"]], lines
+
+
+@_POSIX_SHELL
+def test_printed_lines_survive_a_timeout_of_the_call(tmp_path):
+    """The sandbox kills a run at its timeout. Each line is flushed as it is printed, so the
+    commands that finished before still report; unflushed, a pipe keeps them in a buffer
+    that dies with the process."""
+    import subprocess
+    import sys
+    from vaf.tools.agent_workflow_builder import _sandbox_code
+    code = _sandbox_code(["echo one", "sleep 20"])
+    proc = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, cwd=tmp_path, start_new_session=True)
+    try:
+        with pytest.raises(subprocess.TimeoutExpired):
+            proc.communicate(timeout=3)
+    finally:
+        os.killpg(proc.pid, signal.SIGKILL)       # the run and its shell, as the sandbox does
+        out, _ = proc.communicate()
+    assert out.decode().splitlines()[:1] == ["OK 0 echo one "], out
+
+
 def test_a_huge_command_and_a_thousand_steps_fit(run_as):
     """No plan can push the refusal past the cut: a command longer than the budget is named
     by its step number only, and a thousand step numbers are capped."""
@@ -466,14 +512,15 @@ def test_network_refusal_variants(run_as, case, caller, advised):
     out = outcome.result
     assert outcome.advised_tools == advised, (case, outcome.advised_tools)
     last = out.splitlines()[-1]
-    sandbox_call = ('`python_sandbox(code="import subprocess\\ndef run(c):\\n r = '
-                    'subprocess.run(c, shell=True, capture_output=True, text=True)\\n')
+    sandbox_call = ('`python_sandbox(code="import subprocess\\ndef run(c):\\n try:\\n  r = '
+                    "subprocess.run(c, shell=True, capture_output=True, text=True, "
+                    "errors='replace')\\n")
     if case == "both":
         assert last.startswith("Run them outside the workflow. python_sandbox has network")
         assert sandbox_call in last
-        assert last.endswith("one call per command in the order of the run(...) calls above, "
-                             'starting with `host_bash(command="pip install pkg0")`; the user '
-                             "confirms each."), last
+        assert last.endswith('once per command in the order above, from `host_bash(command='
+                             '"pip install pkg0")` on; the user confirms each.'), last
+        assert "(a missing line means that command did not finish)" in last
         assert last.index("python_sandbox(") < last.index("host_bash(")
     elif case == "sandbox_only":
         assert sandbox_call in last and last.endswith(_SANDBOX_TAIL), last

@@ -316,7 +316,11 @@ create_agent_workflow(
   `python_sandbox`, which has network and asks nothing but keeps what it installs or
   downloads in the sandbox (one call runs all of them, one `run(...)` per command in its
   code: every command runs even after one failed, and each prints OK or FAILED with its exit
-  code and the end of its stderr, so the model reports each one as it came back; the call
+  code and the end of its stderr, so the model reports each one as it came back. Output that
+  is not UTF-8 is decoded with `errors='replace'` and any other exception is a FAILED line
+  of its own, so one command cannot end the run for the rest; each line is flushed, so the
+  lines already printed survive a timeout of the whole call, and the instruction says that
+  a missing line means that command did not finish; the call
   asks for `timeout=` 60 s plus 45 s per command, at most the sandbox's 600, because the
   sandbox stops a run after 30 s by default), or with `host_bash(command="...")` (the
   command JSON-escaped, so a quote, a backslash or a newline stays one argument), one call
@@ -341,8 +345,8 @@ create_agent_workflow(
   problem, the instruction closes the refusal, because "call create_agent_workflow again"
   would send the model straight back into it; with other problems, "Fix the other steps and
   call create_agent_workflow again." follows. Measured on the live incident's plan, ten
-  times `pip install vaf` and ten clones of the VAF repository: 1761 characters with every
-  command in the sandbox code (1649 for a regular account, sandbox only), where the
+  times `pip install vaf` and ten clones of the VAF repository: 1862 characters with every
+  command in the sandbox code (1782 for a regular account, sandbox only), where the
   per-step wording was 5369 and the chat funnel's 2000-character cut left the model only
   the first and last steps of it. Called
   outside a tool call (a direct run), every tool counts as offered. A `host_bash` step is

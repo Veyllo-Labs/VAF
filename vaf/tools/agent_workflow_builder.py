@@ -175,14 +175,21 @@ def _sandbox_timeout(count: int) -> int:
 
 def _sandbox_code(commands: List[str]) -> str:
     """Runs EVERY command, never stopping at a failed one, and prints one line per command:
-    OK or FAILED, the exit code, the command and, for a failure, the end of its stderr. So
+    OK or FAILED, the exit code, the command and the end of its stderr. So
     the model reports each command as it came back (a repeated clone fails from the second
-    one on) instead of stopping at the first failure or calling all of them done."""
+    one on) instead of stopping at the first failure or calling all of them done.
+
+    A command's output is decoded with ``errors='replace'`` (bytes that are not UTF-8 raised
+    UnicodeDecodeError and ended the run), any other exception is a FAILED line of its own,
+    and every line is flushed, so the lines already printed survive a timeout of the call."""
     return ("import subprocess\n"
             "def run(c):\n"
-            " r = subprocess.run(c, shell=True, capture_output=True, text=True)\n"
-            " print('OK' if r.returncode == 0 else 'FAILED', r.returncode, c,"
-            " r.stderr[-200:].strip() if r.returncode else '')\n"
+            " try:\n"
+            "  r = subprocess.run(c, shell=True, capture_output=True, text=True, errors='replace')\n"
+            "  print('OK' if r.returncode == 0 else 'FAILED', r.returncode, c,"
+            " r.stderr[-200:].strip(), flush=True)\n"
+            " except Exception as e:\n"
+            "  print('FAILED', '-', c, e, flush=True)\n"
             + "".join(f"run({c!r})\n" for c in commands))
 
 
@@ -225,7 +232,8 @@ def _network_instruction(commands: List[str], steps: List[str], offered: tuple, 
         sandbox_call = ("`python_sandbox(code=" + json.dumps(_sandbox_code(shown), ensure_ascii=False)
                         + f", timeout={timeout})`")
         sandbox = (f"{keeps}; one call runs {'all of them' if several else 'it'} and prints OK or "
-                   f"FAILED per command, report each line as it came back: {sandbox_call}." + rest)
+                   f"FAILED per command, report each line as it came back (a missing line means that "
+                   f"command did not finish): {sandbox_call}." + rest)
         host_calls = ", ".join(_host_call(c) for c in shown)
     else:
         sandbox = (f"{keeps}; one call runs all of them, with the commands of steps "
@@ -243,8 +251,8 @@ def _network_instruction(commands: List[str], steps: List[str], offered: tuple, 
             host = ("call host_bash instead, one call per command and in this order; the user "
                     f"confirms each: {host_calls}." + rest)
         else:
-            host = ("call host_bash instead, one call per command in the order of the run(...) "
-                    f"calls above, starting with {_host_call(commands[0])}; the user confirms each.")
+            host = ("call host_bash instead, once per command in the order above, from "
+                    f"{_host_call(commands[0])} on; the user confirms each.")
         return (f"Run {them} outside the workflow. {sandbox} If the result must land on the "
                 f"user's computer, {host}")
     if "python_sandbox" in offered:

@@ -386,28 +386,30 @@ and its exit code are read from the container. At most eight run in one environm
 named. The count and a placeholder record are written in one step under the state lock, so
 starts at the same moment cannot all take the last place (which processes run is read just
 before the lock, and a start docker answered after that read counts as running); the
-placeholder goes when docker refuses the start, and one older than 60 s that never ran (a
-crash in between) stops counting, is listed as "did not start" and is removed on the next
-look. A process stopped while docker is still starting it is ended as soon as docker has
-started it. A background
-start from the agent (`sandbox_exec`, `python_sandbox`, like `host_bash`) is refused where its
-end could not be reported (`processes.background_refusal`): no chat, a messaging-channel chat, a
+placeholder goes when docker refuses the start, and one older than 60 s that never ran (a crash
+in between) stops counting, is listed as "did not start" and is removed on the next look. A
+process stopped while docker is still starting it is ended as soon as docker has started it:
+the stop marks the record before its kill, so the start sees the stop or the kill finds the
+process, in either order. A start whose placeholder was removed while docker was still
+answering is ended too, and the 60 s count from the reservation itself. A background start from
+the agent (`sandbox_exec`, `python_sandbox`, like `host_bash`) is refused where its end could
+not be reported (`processes.background_refusal`): no chat, a messaging-channel chat, a
 sub-agent's process, or a process where no lane runs the turns VAF starts by itself (the modern
-terminal lane `vaf run --web` declines them). The process that started one with a chat to report
-to watches it itself every 5 seconds, so the report lands in that process's own queue (the web
-server's, the full-screen app's). The reaper is the backstop for a process whose watcher is gone
-(a restart, a short `vaf env exec --background`) and for one started without a chat; it leaves
-the report of a record to another live process that watches it. Whoever reports first claims
-the record under the state lock, so one ended process is reported once by intent (without
-`filelock` that lock holds only between threads). A process past
+terminal lane `vaf run --web` declines them). The process that started one with a chat to
+report to watches it itself every 5 seconds, so the report lands in that process's own queue
+(the web server's, the full-screen app's). The reaper is the backstop for a process whose
+watcher is gone (a restart, a short `vaf env exec --background`) and for one started without a
+chat; it leaves the report of a record to another live process that watches it. Whoever reports
+first claims the record under the state lock, so one ended process is reported once by intent
+(without `filelock` that lock holds only between threads). A process past
 `sandbox_env_process_max_hours` is ended by whoever looks, the reaper included, also when
-another process watches it (that watcher may have stopped looking); it counts as ended only when
-the kill succeeded and the process is gone, otherwise the next look tries again. The record
-then says it was ended at the limit, and the report says so. Exit 137 is reported as "killed: out of memory or ended
-from outside". A run folder the process was started with
+another process watches it (that watcher may have stopped looking); it counts as ended only
+when the kill succeeded and the process is gone, otherwise the next look tries again. The
+record then says it was ended at the limit, and the report says so. Exit 137 is reported as
+"killed: out of memory or ended from outside". A run folder the process was started with
 (`/tmp/vaf_<lane>_<hex>` only) is removed when it is reported or stopped; its log stays as long
-as the container, so `host_process(action="log")` still reads it after the report. None of these
-tools is offered to thinking runs or on a 4k context.
+as the container, so `host_process(action="log")` still reads it after the report. None of
+these tools is offered to thinking runs or on a 4k context.
 
 **Housekeeping.**
 - **Reaper.** The web server runs one: it removes expired temporary environments, stops idle project environments, clears records and labelled volumes or networks a crash left behind, and reports background processes that ended with nobody else watching them.

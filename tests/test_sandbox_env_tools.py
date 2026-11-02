@@ -663,9 +663,16 @@ def test_a_stop_during_startup_ends_the_process(procs, monkeypatch):
 
 
 def test_a_stop_during_startup_whose_kill_fails_stays_tracked(procs, monkeypatch):
-    """MUTATION: leave it reported when the kill failed - nothing ever ends it, red."""
+    """MUTATION: leave it reported, or leave it marked stopped, when the kill failed - red."""
     import threading
     m, env, fake, _ = procs
+    monkeypatch.delenv("VAF_SANDBOX_ENV_HOUSEKEEPING_OFF", raising=False)
+    monkeypatch.delenv("VAF_IN_SUBAGENT_TERMINAL", raising=False)
+    monkeypatch.setattr(m, "_start_watch_thread", lambda: None)
+    monkeypatch.setattr(m, "_docker_rows", lambda owner=None, strict=False: [
+        {"container": env.container, "state": "running", "id": env.id, "owner": env.owner,
+         "kind": env.kind, "network": env.network}])
+    monkeypatch.setattr(m, "_from_row", lambda row: env)
     gate, entered = threading.Event(), threading.Event()
 
     def _held(args, timeout=60, **kw):
@@ -677,8 +684,9 @@ def test_a_stop_during_startup_whose_kill_fails_stays_tracked(procs, monkeypatch
         return fake(args, timeout=timeout, **kw)
 
     monkeypatch.setattr(containers, "docker", _held)
-    t = threading.Thread(target=lambda: m.start_process("scope-alice", env.id, "sleep 999",
-                                                        session_id="chat-1"))
+    out = []
+    t = threading.Thread(target=lambda: out.append(
+        m.start_process("scope-alice", env.id, "sleep 999", session_id="chat-1")))
     t.start()
     assert entered.wait(10)
     [row] = m.processes("scope-alice")
@@ -686,7 +694,14 @@ def test_a_stop_during_startup_whose_kill_fails_stays_tracked(procs, monkeypatch
     gate.set()
     t.join(10)
     proc = row["handle"].split("-")[-1]
-    assert proc in fake.alive and m._read_procs(env.id)[proc]["notified"] is False
+    rec = m._read_procs(env.id)[proc]
+    assert proc in fake.alive and rec["notified"] is False
+    assert rec["stopped"] is False, "it runs, so it reads as running (the watcher keeps it)"
+    assert out == [row["handle"]], "the start answers as a start that worked"
+    [row] = m.processes("scope-alice")
+    assert row["state"] == "running"
+    m._watch_tick(now=200.0)
+    assert proc in m._watched[env.id]["procs"], "the watcher keeps it"
 
 
 def test_an_overdue_process_is_reported_only_once_it_ended(procs, monkeypatch):
@@ -787,3 +802,115 @@ def test_a_file_lock_that_fails_releases_the_thread_lock(tmp_path, monkeypatch):
     t.start()
     t.join(5)
     assert got == [True]
+
+
+
+def test_a_stop_whose_kill_ran_before_docker_answered_still_ends_it(procs, monkeypatch):
+    """The stop's kill finds nothing (docker has not started the process yet), docker then
+    answers, and only after that does the stop finish. Because the stop marks `stopped`
+    BEFORE its kill, the start sees it when docker answers. MUTATION: mark after the kill
+    (the earlier order) - the start returns a handle and the process runs untracked, red."""
+    import threading
+    m, env, fake, woken = procs
+    exec_gate, exec_entered = threading.Event(), threading.Event()
+    kill_gate, kill_ran = threading.Event(), threading.Event()
+    kills = []
+
+    def _held(args, timeout=60, **kw):
+        if args[:2] == ["exec", "-d"]:
+            exec_entered.set()
+            exec_gate.wait(10)
+        out = fake(args, timeout=timeout, **kw)
+        if args[0] == "exec" and "kill" in args[-1]:
+            kills.append(1)
+            if len(kills) == 1:                    # the stop's own kill: done, then held
+                kill_ran.set()
+                kill_gate.wait(10)
+        return out
+
+    monkeypatch.setattr(containers, "docker", _held)
+    started = []
+    ts = threading.Thread(target=lambda: started.append(_try_start(m, env)))
+    ts.start()
+    assert exec_entered.wait(10)
+    [row] = m.processes("scope-alice")
+    tk = threading.Thread(target=lambda: m.stop_process("scope-alice", row["handle"]))
+    tk.start()
+    assert kill_ran.wait(10)
+    exec_gate.set()
+    ts.join(10)
+    kill_gate.set()
+    tk.join(10)
+    proc = row["handle"].split("-")[-1]
+    assert isinstance(started[0], envmod.EnvironmentRefused)
+    assert proc not in fake.alive and woken == []
+
+
+def test_a_start_whose_placeholder_was_removed_meanwhile_does_not_run_on(procs, monkeypatch):
+    """A slow start: a look removes its placeholder as a start that never ran while docker is
+    still answering. MUTATION: return the handle when the record is gone (the round-2
+    version) - an unlisted process runs past the cap and the limit, red."""
+    import threading
+    import time as _t
+    m, env, fake, woken = procs
+    gate, entered = threading.Event(), threading.Event()
+
+    def _held(args, timeout=60, **kw):
+        if args[:2] == ["exec", "-d"]:
+            entered.set()
+            gate.wait(10)
+        return fake(args, timeout=timeout, **kw)
+
+    monkeypatch.setattr(containers, "docker", _held)
+    out = []
+    t = threading.Thread(target=lambda: out.append(_try_start(m, env, cleanup="/tmp/vaf_run_00aa11bb22cc")))
+    t.start()
+    assert entered.wait(10)
+    m._watch_processes(env, now=_t.time() + 120)          # past the grace: removed
+    assert m._read_procs(env.id) == {}
+    gate.set()
+    t.join(10)
+    assert isinstance(out[0], envmod.EnvironmentRefused) and "given up" in str(out[0])
+    assert fake.alive == set() and m.processes("scope-alice") == [] and woken == []
+
+
+def test_the_grace_counts_from_the_reservation(procs, monkeypatch):
+    """MUTATION: keep the time stamped before the status read - a slow read eats the grace,
+    red."""
+    import time as _t
+    m, env, fake, _ = procs
+    m.start_process("scope-alice", env.id, "sleep 1", session_id="chat-1")
+    real = m._proc_status
+
+    def _slow(e):
+        _t.sleep(0.3)
+        return real(e)
+
+    monkeypatch.setattr(m, "_proc_status", _slow)
+    before = _t.time()
+    h = m.start_process("scope-alice", env.id, "sleep 2", session_id="chat-1")
+    assert m._read_procs(env.id)[h.split("-")[-1]]["started"] >= before + 0.3
+
+
+def _try_start(m, env, cleanup=None):
+    try:
+        return m.start_process("scope-alice", env.id, "sleep 999", session_id="chat-1",
+                               cleanup_dir=cleanup)
+    except envmod.EnvironmentRefused as e:
+        return e
+
+
+def test_a_look_during_a_stop_does_not_report_its_kill(procs):
+    """Between the stop's `stopped` mark and its `notified` mark the process is killed: a
+    look in that moment must not report the kill as an exit. MUTATION: drop the `stopped`
+    skip from the looks - exit 137 is reported, red."""
+    m, env, fake, woken = procs
+    h = m.start_process("scope-alice", env.id, "sleep 999", session_id="chat-1")
+    proc = h.split("-")[-1]
+    recs = m._read_procs(env.id)
+    recs[proc]["stopped"] = True                           # the stop's first step
+    m._write_procs(env.id, recs)
+    fake.alive.discard(proc)
+    fake.exits[proc] = "137"                               # its kill
+    m._watch_processes(env, now=100.0)
+    assert woken == []

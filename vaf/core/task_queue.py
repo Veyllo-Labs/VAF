@@ -895,8 +895,8 @@ def enqueue_wake_turn(*, kind: str, session_id: str, text: str, source: str = "w
 # runs its report would promise a message that never comes. An embedder whose own loop
 # drains the queue and runs wake turns declares itself the same way.
 _wake_runners: set = set()
-# A runner tied to its thread (declare_wake_runner(thread=...)) counts only while that
-# thread lives: a loop that ends by any path, an exception in its setup included, stops
+# A runner tied to its thread (declare_wake_runner(thread=...)) counts from the declaration
+# until that thread has run and ended: a loop that ends by any path, an exception in its setup included, stops
 # counting without having to withdraw, and its restart declares itself again.
 _wake_runner_threads: Dict[str, threading.Thread] = {}
 _wake_runners_lock = threading.Lock()
@@ -925,7 +925,9 @@ def wake_runner_here() -> bool:
     with _wake_runners_lock:
         for name in list(_wake_runners):
             t = _wake_runner_threads.get(name)
-            if t is not None and not t.is_alive():
+            # Only a thread that ran and ended: one declared before its start() is not
+            # alive yet either, and its loop is about to run.
+            if t is not None and t.ident is not None and not t.is_alive():
                 _wake_runners.discard(name)
                 _wake_runner_threads.pop(name, None)
         return bool(_wake_runners)

@@ -427,7 +427,8 @@ def test_host_bash_background_without_a_chat_is_refused_now(monkeypatch):
 
 def test_a_runner_counts_only_while_its_thread_lives(monkeypatch):
     """The web runner declares itself tied to its thread: a loop that ended by any path, an
-    exception in its setup included, stops counting. MUTATION: ignore the thread - red."""
+    exception in its setup included, stops counting; one declared before its thread started
+    counts. MUTATION: ignore the thread, or drop a thread that has not started yet - red."""
     import threading
     import vaf.core.headless_runner as hr
     import vaf.core.task_queue as tq
@@ -445,8 +446,9 @@ def test_a_runner_counts_only_while_its_thread_lives(monkeypatch):
 
     hold = threading.Event()
     live = threading.Thread(target=hold.wait, args=(10,))
-    live.start()
     tq.declare_wake_runner("headless-1", thread=live)
+    assert tq.wake_runner_here() is True, "declared before start(): its loop is about to run"
+    live.start()
     assert tq.wake_runner_here() is True
     hold.set()
     live.join(10)

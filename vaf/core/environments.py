@@ -1304,6 +1304,9 @@ class EnvironmentManager:
                         f"{self.process_handle(env.id, p)}: "
                         f"{str(known[p].get('label') or known[p].get('command') or '')[:120]}"
                         for p in running))
+            # Grace counts from the reservation, not from before the status read and the
+            # wait for this lock.
+            record["started"] = time.time()
             known[proc] = record
             self._write_procs(env.id, known)
         script = (f'mkdir -p {PROC_DIR} && cd "$VAF_CWD" && '
@@ -1317,23 +1320,29 @@ class EnvironmentManager:
             started = r.returncode == 0
         except Exception:
             started, r = False, None
-        stopped_meanwhile = False
+        stopped_meanwhile = record_gone = False
         with self._locked():
             procs = self._read_procs(env.id)
             if started and proc in procs:
                 procs[proc].pop("starting", None)
                 procs[proc]["running_since"] = time.time()
                 # Stopped while docker was starting it (its handle is listed from the
-                # placeholder on): the stop found nothing to kill, and the record is
-                # already reported, so nobody would ever end or report it. Ended here.
+                # placeholder on): the stop may have found nothing to kill yet, so it is
+                # ended here. stop_process marks `stopped` before it kills, so one of the
+                # two always sees the other.
                 stopped_meanwhile = bool(procs[proc].get("stopped"))
+            elif started:
+                # The placeholder was removed while docker was still answering (a looker
+                # took it for a start that never ran). Running without a record it would
+                # be unlisted, unstoppable, outside the cap and the limit: ended here.
+                record_gone = True
             else:
                 procs.pop(proc, None)
             self._write_procs(env.id, procs)
         if not started:
             reason = (r.stderr or "").strip()[:200] if r is not None else "docker did not answer"
             raise EnvironmentRefused(f"the process could not be started: {reason}")
-        if stopped_meanwhile:
+        if stopped_meanwhile or record_gone:
             try:
                 killed = containers.docker(
                     ["exec", env.container, "sh", "-c",
@@ -1341,14 +1350,19 @@ class EnvironmentManager:
             except Exception:
                 killed = False
             if killed:
-                self._finish(env, procs[proc])
-                raise EnvironmentRefused("it was stopped while it was starting, so it does not run")
-            # Not ended: tracked again, so the limit and the report still reach it.
+                self._finish(env, procs[proc] if proc in procs else record)
+                raise EnvironmentRefused(
+                    "it was stopped while it was starting, so it does not run" if stopped_meanwhile
+                    else "its start took too long and was given up, so it does not run")
+            # Not ended: tracked again as a running process (not stopped, not reported), so
+            # the cap, the limit and the report still reach it, and the start answers as a
+            # start that worked.
             with self._locked():
                 fresh = self._read_procs(env.id)
-                if proc in fresh:
-                    fresh[proc]["notified"] = False
-                    self._write_procs(env.id, fresh)
+                rec = fresh.get(proc) or {k: v for k, v in record.items() if k != "starting"}
+                rec.update(stopped=False, notified=False, running_since=time.time())
+                fresh[proc] = rec
+                self._write_procs(env.id, fresh)
         self._touch(env)
         if watch:
             self._register_watch(env, proc)
@@ -1436,6 +1450,16 @@ class EnvironmentManager:
     def stop_process(self, owner_scope: Any, handle: str) -> str:
         env_id, proc = self._own_process(owner_scope, handle)
         env = self.get(owner_scope, env_id)
+        # `stopped` first, under the lock, THEN the kill: a start still waiting for docker
+        # either sees `stopped` when docker answers and ends the process itself, or has
+        # answered already, and then this kill finds the process. Marked after the kill, one
+        # ordering left a process nobody tracked. A look skips a record being stopped, so
+        # the kill is not reported as an exit.
+        with self._locked():
+            procs = self._read_procs(env.id)
+            if proc in procs:
+                procs[proc]["stopped"] = True
+                self._write_procs(env.id, procs)
         if env.state == "running":
             containers.docker(["exec", env.container, "sh", "-c",
                                containers.kill_marked_cmd("VAF_PROC_ID", proc)], timeout=20)
@@ -1497,7 +1521,8 @@ class EnvironmentManager:
         woken, so a second watcher that saw the same exit finds the record taken."""
         procs = self._read_procs(env.id)
         pending = {p: r for p, r in procs.items()
-                   if not r.get("notified") and not self._starting(r, now)}
+                   if not r.get("notified") and not r.get("stopped")
+                   and not self._starting(r, now)}
         if not pending:
             return
         alive, exits = self._proc_status(env)

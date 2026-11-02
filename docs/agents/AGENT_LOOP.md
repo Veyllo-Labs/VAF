@@ -350,10 +350,17 @@ this turn (for a plain yes it points at their own earlier message in the convers
 quotes nothing stored), says that the reasons the reply gave come from no tool result, and
 names the tools to call. No tool call is pending between the two, so the adjacency invariant
 holds. The next generation is forced where the lane can (`Agent._can_force_tool_call`), and
-only to task tools that may be forced (`model_health.forceable`, read from each tool's
-contract): never one declared `dangerous` or `system`, never an `irreversible` one, never a
-channel or mail send, never a delete. Where none is left the re-run runs unforced with the same
-note. On a provider that restricts callability separately the resident array stays and the
+only to task tools that may be forced (`model_health.forceable`): a fail-closed name list,
+`model_health.FORCEABLE_TOOLS`, of VAF's own tools whose effect stays in the person's own
+sandbox or files or that only read (`python_sandbox`, `sandbox_exec`, `sandbox_files`, the file
+readers, `write_file`, `edit_file`, `web_search`, `webfetch`), only when the tool registered
+under that name is VAF's own (a custom tool can take a listed name), and never one whose
+contract says `dangerous`, `system` or `irreversible`. Everything else is never forced: sends,
+deletes, the room tools (their messages are read by other accounts and agents), `host_process`,
+`execute_workflow`, custom and MCP tools. A list of exclusions read from the contracts was
+measured first and forced `room_send`, `room_invite`, `host_process` and `execute_workflow`.
+Where none is left the re-run runs unforced with the same note. On a provider that restricts
+callability separately the resident array stays and the
 `allowed_tools` dict carries mode `required`; elsewhere the array is narrowed to the forced
 tools and `tool_choice` is `required`. The riders are left out on purpose
 (`ask_user` would let the model ask "shall I start?" again). One helper, `_forced_request`,
@@ -365,8 +372,10 @@ that offers every tool run the same re-run unforced.
 
 **Named boundaries** (with their reasons in the module docstring): no LLM judge, no token
 entropy (llama.cpp refuses `logprobs` with tools and streaming), no hand-over of a stuck local
-turn to a paid API model, and tool-call loops stay with the redundant-call filter, anti-spin and
-the no-progress streak. Not on the facade: no host reads the verdict today, and every lane gets
+turn to a paid API model, no forced `coding_agent` (a heavy sub-agent whose `deploy_to` reaches
+confirmed servers, and a forced coder run on a weak model has frozen a desktop), and tool-call
+loops stay with the redundant-call filter, anti-spin and the no-progress streak. Not on the
+facade: no host reads the verdict today, and every lane gets
 the re-run and the note through `chat_step`.
 
 ## A turn that produces no answer

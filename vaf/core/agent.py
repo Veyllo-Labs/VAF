@@ -2157,21 +2157,24 @@ class Agent:
             pass
 
     def _model_health_forceable(self, names) -> list:
-        """The task tools the re-run may FORCE (`model_health.forceable`): never one a person
-        has to confirm, one that cannot be taken back, one that sends to somebody (a channel
-        send tool, a mail send) or one that deletes, read from each tool's declared contract."""
-        from vaf.core.channels import ALL_SEND_TOOLS
-        from vaf.core.outbound_hold import MAIL_HOLD_TOOLS
+        """The task tools the re-run may FORCE (`model_health.forceable`): only the names on
+        `model_health.FORCEABLE_TOOLS`, only when the tool registered under that name is VAF's
+        own (a custom or entry-point tool is stored under its own `name` and could take a
+        listed one), and never one whose declared contract needs a person's OK or cannot be
+        undone. A tool whose contract cannot be read is not forced; the guard never ends a
+        turn."""
         from vaf.core.tool_contract import resolve_tool_contract
         out = []
         for name in names:
             tool = (self.tools or {}).get(name)
-            if tool is None:
+            if tool is None or not str(getattr(type(tool), "__module__", "")).startswith("vaf.tools."):
                 continue
-            contract = resolve_tool_contract(name, tool)
-            if model_health.forceable(name, contract.permission_level, contract.side_effect_class,
-                                      outward=name in ALL_SEND_TOOLS or name in MAIL_HOLD_TOOLS):
-                out.append(name)
+            try:
+                contract = resolve_tool_contract(name, tool)
+                if model_health.forceable(name, contract.permission_level, contract.side_effect_class):
+                    out.append(name)
+            except Exception:
+                continue
         return out
 
     def _model_health_arm_retry(self, tools_off, verdict=None) -> str:

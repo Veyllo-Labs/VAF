@@ -20,7 +20,8 @@ MUTATIONS, each turns the named test red:
   test_replay_reaches_mid_then_high;
 - delete the `tr` note -> test_stuck_note_languages;
 - let a question fire the action signals -> test_follow_up_questions_about_a_tool_stay_below_mid;
-- force a dangerous, system, irreversible, outward or deleting tool -> test_never_forced;
+- force a tool off the list, or a listed one declared dangerous, system or irreversible ->
+  test_never_forced, test_the_forceable_list_is_pinned_and_fails_closed;
 - no K drain without a scored generation -> test_commit_without_a_scored_generation_drains_by_k;
 - compare only the head of long replies -> test_long_replies_that_only_open_alike_are_no_repeat;
 - key the ledger file by scope, or accept any format -> the ledger tests;
@@ -30,6 +31,7 @@ MUTATIONS, each turns the named test red:
 """
 import ast
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -288,19 +290,52 @@ def test_a_question_still_counts_drift_and_ungrounded(detect):
 
 # ── what may be forced ───────────────────────────────────────────────────────────────────
 
-@pytest.mark.parametrize("name, permission, side_effect, outward, expected", [
-    ("python_sandbox", "write", "reversible", False, True),
-    ("web_search", "read", "none", False, True),
-    ("host_bash", "dangerous", "irreversible", False, False),
-    ("settings_tool", "system", "reversible", False, False),
-    ("send_mail", "write", "irreversible", True, False),
-    ("send_telegram", "write", "reversible", True, False),
-    ("delete_mail", "write", "reversible", False, False),
-    ("remove_member", "write", "reversible", False, False),
-    ("write_file", "write", "irreversible", False, False),
+@pytest.mark.parametrize("name, permission, side_effect, expected", [
+    ("python_sandbox", "write", "reversible", True),
+    ("sandbox_exec", "write", "reversible", True),
+    ("web_search", "read", "none", True),
+    ("write_file", "write", "reversible", True),
+    # not on the list: acts beyond the person's own chat, though declared undoable
+    ("room_send", "write", "none", False),
+    ("room_invite", "write", "reversible", False),
+    ("host_process", "write", "reversible", False),
+    ("execute_workflow", "write", "reversible", False),
+    ("coding_agent", "write", "reversible", False),
+    ("send_telegram", "write", "reversible", False),
+    ("delete_mail", "write", "reversible", False),
+    ("my_custom_tool", "read", "none", False),
+    ("host_bash", "dangerous", "irreversible", False),
+    # on the list, but the contract says otherwise: defence in depth
+    ("python_sandbox", "dangerous", "reversible", False),
+    ("sandbox_exec", "system", "reversible", False),
+    ("write_file", "write", "irreversible", False),
 ])
-def test_never_forced(name, permission, side_effect, outward, expected):
-    assert mh.forceable(name, permission, side_effect, outward=outward) is expected
+def test_never_forced(name, permission, side_effect, expected):
+    assert mh.forceable(name, permission, side_effect) is expected
+
+
+# Pinned word for word: a tool joins the forced set only by a deliberate change here and in
+# vaf/core/model_health.py, never because it was added to the tree or declared harmless.
+PINNED_FORCEABLE = {
+    "python_sandbox", "sandbox_exec", "sandbox_files",
+    "read_file", "list_files", "find_files", "tree", "write_file", "edit_file",
+    "web_search", "webfetch",
+}
+
+
+def test_the_forceable_list_is_pinned_and_fails_closed():
+    assert set(mh.FORCEABLE_TOOLS) == PINNED_FORCEABLE
+    declared = set()
+    for path in (ROOT / "vaf/tools").rglob("*.py"):
+        declared |= set(re.findall(r'^\s+name\s*=\s*"([a-z_0-9]+)"', path.read_text(encoding="utf-8"),
+                                   re.M))
+    assert PINNED_FORCEABLE <= declared, "a listed name is no VAF tool"
+    from vaf.core.agent import _BOOKKEEPING_TOOLS, _TURN_RIDERS
+    assert not PINNED_FORCEABLE & (set(_TURN_RIDERS) | set(_BOOKKEEPING_TOOLS))
+    # Every other tool of the tree is never forced, whatever it declares.
+    others = declared - PINNED_FORCEABLE
+    assert len(others) > 100
+    assert not [n for n in others if mh.forceable(n, "read", "none")]
 
 
 def test_commit_without_a_scored_generation_drains_by_k():

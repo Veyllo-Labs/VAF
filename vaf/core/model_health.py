@@ -52,12 +52,20 @@ drains a turn that only names a tool, so a chat ABOUT tools never climbs. Levels
 none, from 3 mid (the agent re-runs the turn once, forcing a tool call where the lane can),
 from 8 high (after that re-run the turn ends with an honest note).
 
-WHAT IS NEVER FORCED (`forceable`). The forced call is a real call, so the re-run forces only
-task tools a person would not have to confirm and could take back: never a tool declared
-`dangerous` or `system`, never one whose effect is `irreversible`, never one that sends to
-somebody (a channel send tool, a mail send) and never one that deletes. Where the task holds
-only such tools the re-run runs unforced, with the same note naming them; the measured
-incident stays covered, because the sandbox it needed is `write` and `reversible`.
+WHAT MAY BE FORCED (`forceable`, `FORCEABLE_TOOLS`). The forced call is a real call, so the
+re-run forces only VAF's own tools whose effect stays inside the person's own sandbox or files,
+or that only read: a fail-closed name list, checked against the tool's declared contract too
+(a listed tool declared `dangerous`, `system` or `irreversible` is still not forced). Never
+forced, whatever the router picked: a tool that needs the person's OK, cannot be undone,
+sends, deletes, acts in a shared room, types into a host command or starts a saved workflow,
+and any custom or MCP tool. Where the task holds no forceable tool the re-run runs unforced,
+with the same note naming the tools; the measured incident stays covered, because the
+sandbox it needed is on the list.
+
+NAMED BOUNDARY: `coding_agent` is not on the list although a stuck coding request is a likely
+target. It starts a heavy sub-agent of its own, its `deploy_to` reaches servers the person
+confirmed once (ssh, ftp), and a forced coder run on a weak local model has already frozen a
+desktop. A stuck coding request gets the unforced re-run and the note.
 
 MEASURED on every stored chat of one installation (decrypted read-only, nothing written):
 50 chats, 698 turns; 550 person turns scored in 33 chats, 318 of them without a progress
@@ -211,17 +219,28 @@ LANGUAGE_MIN_CHARS = 20
 # The high-confidence half of an <Action> match (`agent._match_action_to_tools`).
 ACTION_MATCH_MIN = 0.7
 
-# Never forced, whatever the router picked: a call that cannot be taken back or that a
-# person has to confirm is never one the model is MADE to emit. A question about such a tool
-# naming it in the answer is the normal case, and a forced call there would turn a question
-# into an action (measured: four German follow-up questions about host_bash climbed to mid,
-# and the request went out with tool_choice "required" narrowed to it). The re-run for those
-# stays unforced, with the same note.
+# The only tools the re-run may FORCE: VAF's own tools whose effect stays inside the person's
+# own sandbox or files, or only reads. A name list that fails closed, in the pattern of the
+# room turn's read list (`Agent._ROOM_READ_TOOLS`): a new tool, a custom tool, an MCP tool and
+# one whose contract cannot be read are never forced until somebody decides they belong here.
+# A list of exclusions read from the declared contracts was measured first and was not enough:
+# `room_send`, `room_invite`, `host_process` and `execute_workflow` are declared write with an
+# undoable or no side effect, and each one was forced after a plain "tell me what X does"
+# (a room message is read by other accounts and foreign agents, `host_process` types into an
+# already approved host command, a saved workflow runs with no turn gate). The incident this
+# feature exists for needed `python_sandbox`, which is on the list.
+FORCEABLE_TOOLS = frozenset({
+    # the person's own code sandbox and sandbox environments (changes stay in the container)
+    "python_sandbox", "sandbox_exec", "sandbox_files",
+    # the person's own files, jailed to what the account may reach (`file_access`)
+    "read_file", "list_files", "find_files", "tree", "write_file", "edit_file",
+    # the open web, read only
+    "web_search", "webfetch",
+})
+# Defence in depth, read from the tool's declared contract: a listed tool that declares it
+# needs a person's OK or cannot be undone is still not forced.
 NEVER_FORCED_PERMISSIONS = ("dangerous", "system")
 NEVER_FORCED_SIDE_EFFECTS = ("irreversible",)
-# Deleting is never forced either, also where a tool files its delete as reversible (a mail to
-# the trash, an automation): the person did not see the call before it ran.
-NEVER_FORCED_PREFIXES = ("delete_", "remove_")
 
 
 @dataclass(frozen=True)
@@ -387,19 +406,17 @@ def evaluate(prev: Optional[State], *, reply: str, user_text: str,
     return Verdict(score, level_of(score), signals, language, asks)
 
 
-def forceable(name: str, permission_level: str, side_effect_class: str, *,
-              outward: bool = False) -> bool:
-    """May the re-run FORCE a call of this tool? Never for a tool a person has to confirm
-    (`dangerous`, `system`), one whose effect cannot be taken back (`irreversible`), one that
-    sends to somebody (``outward``: a channel send tool, a mail send) or deletes something.
-    Read from the tool's declared contract (`tool_contract.resolve_tool_contract`)."""
-    if outward:
+def forceable(name: str, permission_level: str, side_effect_class: str) -> bool:
+    """May the re-run FORCE a call of this tool? Only a tool on `FORCEABLE_TOOLS`, and even
+    then never one whose declared contract (`tool_contract.resolve_tool_contract`) says a
+    person has to confirm it (`dangerous`, `system`) or it cannot be undone (`irreversible`).
+    Everything else fails closed. The caller also makes sure the tool under that name is VAF's
+    own, not a custom tool registered under it."""
+    if str(name or "") not in FORCEABLE_TOOLS:
         return False
     if str(permission_level or "").lower() in NEVER_FORCED_PERMISSIONS:
         return False
-    if str(side_effect_class or "").lower() in NEVER_FORCED_SIDE_EFFECTS:
-        return False
-    return not str(name or "").lower().startswith(NEVER_FORCED_PREFIXES)
+    return str(side_effect_class or "").lower() not in NEVER_FORCED_SIDE_EFFECTS
 
 
 def commit(prev: Optional[State], verdict: Optional[Verdict], progressed: bool) -> State:

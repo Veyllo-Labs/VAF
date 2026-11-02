@@ -172,7 +172,7 @@ def test_a_persons_share_of_the_browser_line(rig):
     out = ba.BrowserAgentTool().run(task="A4", user_scope_id="scope-a")
     assert time.monotonic() - started < 2
     assert out.startswith("Browser agent is busy"), out
-    assert "2 of this person's browser runs are already waiting" in out, out
+    assert "2 of your browser runs for this user are already waiting" in out, out
     assert rig["abandoned"] == [threading.current_thread().name]
     _queue_up(rig, "B1", "scope-b")
     rig["hold"]["A1"].set()

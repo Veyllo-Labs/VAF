@@ -2583,7 +2583,11 @@ async def _open_report_in_viewer(session_id: str, file_path: str, title: Optiona
         if bool(Config.get("attachment_rag_enabled", False)):
             try:
                 await _notify_attachment_index(manager, session_id, "attachment_indexing", count=len(contents))
-                _spawn_attachment_index(manager, session_id, user_scope_id, contents)
+                # The owner as the session records it now, after the wait; the first
+                # read only when this load has none (a session created meanwhile).
+                index_scope = ((getattr(loaded, "metadata", None) or {}).get("user_scope_id")
+                               or user_scope_id)
+                _spawn_attachment_index(manager, session_id, index_scope, contents)
             except Exception as e:
                 log("WebServer", f"report viewer RAG index failed: {e}")
         await manager.broadcast_to_session(session_id, {
@@ -3997,6 +4001,12 @@ GOTENBERG_MAX_WAITING_PER_KEY = 3
 GOTENBERG_WAIT_S = 15.0
 # At 0.2 s per conversion a place shown sooner would flash before nearly every preview.
 PREVIEW_WAIT_GRACE_S = 0.5
+
+
+def _preview_still_waiting(state: dict) -> bool:
+    """`still_waiting` of one file's preview: False once the queue refused it, so a place
+    held back in its grace is not shown after the busy notice."""
+    return not state.get("busy")
 
 
 def _gotenberg_queue():
@@ -10576,11 +10586,16 @@ async def process_files_to_sidebar_list(files: list, session_id: str = None,
                     _event = {"name": filename}
                     if session_id:
                         _event["sessionId"] = session_id
+                    # This file's own outcome, one dict per file: the held-back place
+                    # (shown after the grace) asks it, and a timer of an earlier file must
+                    # not read the next file's flag.
+                    _preview = {"busy": False}
                     on_wait = None
                     if notify is not None:
                         on_wait = _queue_wait_sender(
                             None, asyncio.get_running_loop(), "document_preview_wait",
-                            send=notify, extra=dict(_event), grace_s=PREVIEW_WAIT_GRACE_S)
+                            send=notify, extra=dict(_event), grace_s=PREVIEW_WAIT_GRACE_S,
+                            still_waiting=functools.partial(_preview_still_waiting, _preview))
                     preview_busy = False
                     try:
                         pdf_bytes = await asyncio.to_thread(
@@ -10589,6 +10604,8 @@ async def process_files_to_sidebar_list(files: list, session_id: str = None,
                     except QueueBusy as busy:
                         # No host LibreOffice on busy: a second converter on the same CPU is
                         # what the queue exists to avoid. The simpler layout below is instant.
+                        # A place still held back in its grace is never shown after this.
+                        _preview["busy"] = True
                         pdf_bytes, preview_busy = None, True
                         log("WebServer", f"document preview busy ({busy.reason}) for {filename}")
                         if notify is not None:

@@ -48,6 +48,12 @@ separator, the "Attachments" chip and the file name are `max-md:hidden`, which l
 and the notice. Without a notice the row keeps its old classes, so the desktop is unchanged;
 the same wrap still clips the title of the plain "Ready" row at 390 px, as it did before.
 
+The page's passing toast (`downloadToast` in `page.tsx`: model download, speech busy, the
+preview busy notice) is `fixed left-1/2 -translate-x-1/2` with no width, so a fixed box at
+`left: 50%` only had the right half of a phone as room: the 70-character preview notice
+measured 195 px by 126 px at 390 px. Below `md` it is `max-md:w-[calc(100vw-2rem)]
+max-md:max-w-none`; the desktop toast is unchanged.
+
 ## Reusable patterns (copy the class strings)
 
 ### Full-screen sheet (modals / dialogs with real content)

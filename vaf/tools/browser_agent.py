@@ -418,8 +418,8 @@ def _busy_text(busy: QueueBusy) -> str:
     """The answer for the model when the queue refused a run. Never ``str(busy)`` or the
     queue's name: a pooled browser's name is a scope hash."""
     if busy.reason == "full" and busy.own_share:
-        return (f"Browser agent is busy: {max(busy.position - 1, 0)} of this person's "
-                "browser runs are already waiting for this browser. Wait until they are "
+        return (f"Browser agent is busy: {max(busy.position - 1, 0)} of your browser runs "
+                "for this user are already waiting for this browser. Wait until they are "
                 "done, then try again.")
     if busy.reason == "full":
         return (f"Browser agent is busy: {max(busy.position - 1, 0)} browser runs are "

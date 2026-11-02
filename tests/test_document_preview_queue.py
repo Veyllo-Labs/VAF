@@ -235,6 +235,48 @@ def test_busy_odt_shows_its_text(upload, monkeypatch):
     assert entry["mimeType"] == "application/vnd.oasis.opendocument.text"
 
 
+def test_no_place_is_shown_after_busy(tmp_path, monkeypatch):
+    """A place held back in its grace is never shown once the queue refused that file,
+    also while the next file waits (each file asks its own outcome). Two DOCX behind a
+    held slot, each refused at 0.3 s, inside the 0.5 s grace; the loop runs on past
+    every timer. MUTATIONS: no still_waiting (red); still_waiting reading one flag shared
+    by the files of the loop (red)."""
+    from vaf.core import web_server as ws
+
+    attach_dir = tmp_path / "attachments"
+    attach_dir.mkdir()
+    monkeypatch.setattr("vaf.core.session.get_session_attachments_dir",
+                        lambda session_id, user_scope_id=None, create=True: attach_dir)
+    monkeypatch.setattr("vaf.tools.librarian.LibrarianTool._read_file",
+                        lambda self, path, chunking=True, first_page=None, last_page=None:
+                        "extracted text of the document")
+    monkeypatch.setattr(ws, "_docx_to_pdf_via_libreoffice", lambda path: None)
+    monkeypatch.setattr(ws, "GOTENBERG_WAIT_S", 0.3)
+    monkeypatch.setattr(ws, "PREVIEW_WAIT_GRACE_S", 0.5)
+    _config(monkeypatch)
+    _Converter(monkeypatch)
+    events = []
+
+    async def notify(payload):
+        events.append(dict(payload))
+
+    data = base64.b64encode(_docx_bytes()).decode()
+    files = [{"name": f"{n}.docx", "data": data, "mimeType": DOCX_MIME} for n in ("one", "two")]
+
+    async def main():
+        out = await ws.process_files_to_sidebar_list(files, session_id=SID,
+                                                     user_scope_id=SCOPE, notify=notify)
+        await asyncio.sleep(1.0)        # every held-back timer has fired by now
+        return out
+
+    with _held():
+        out = asyncio.run(main())
+    assert len(out) == 2
+    kinds = [(e["type"], e["name"]) for e in events]
+    assert kinds == [("document_preview_busy", "one.docx"),
+                     ("document_preview_busy", "two.docx")], kinds
+
+
 def test_a_failure_still_tries_the_host_converter(upload, monkeypatch):
     """A converter that answers an error is not a busy queue: the host LibreOffice is
     still tried, as before."""
@@ -431,6 +473,9 @@ def test_the_report_viewer_sends_to_its_session_only(monkeypatch, tmp_path):
                         "extracted text of the document")
     monkeypatch.setattr(ws, "_docx_to_pdf_via_libreoffice", lambda path: None)
     monkeypatch.setattr(ws, "GOTENBERG_WAIT_S", 0.3)
+    # A grace far beyond the test: the exact event list cannot depend on how fast the
+    # busy path runs against the held-back place.
+    monkeypatch.setattr(ws, "PREVIEW_WAIT_GRACE_S", 60.0)
     _config(monkeypatch)
     _Converter(monkeypatch)
     keys = _spy_slot_keys(monkeypatch)
@@ -459,26 +504,92 @@ def test_the_report_viewer_sends_to_its_session_only(monkeypatch, tmp_path):
     assert all(sid == SID for sid, _ in sent)
 
 
+def test_the_report_index_takes_the_owner_recorded_after_the_wait(monkeypatch, tmp_path):
+    """The attachment index is keyed on the owner the session records after the wait: a
+    session that only appears while the preview waits (the first read finds nothing)
+    still indexes under its owner, never in the scope-less bucket.
+    MUTATION: index under the first read's scope - red."""
+    import vaf.core.session as session_mod
+    from vaf.core import web_server as ws
+
+    class _Sessions:
+        def __init__(self):
+            self.reads = 0
+
+        def load(self, session_id):
+            self.reads += 1
+            if self.reads == 1:
+                raise FileNotFoundError(session_id)
+            s = session_mod.Session(id=session_id, name="Report chat")
+            s.metadata = {"user_scope_id": OTHER}
+            return s
+
+        def save(self, session, sync_state=False):
+            pass
+
+    monkeypatch.setattr(ws, "session_mgr", _Sessions())
+    monkeypatch.setattr("vaf.tools.librarian.LibrarianTool._read_file",
+                        lambda self, path, chunking=True, first_page=None, last_page=None:
+                        "extracted text of the document")
+    _config(monkeypatch, url="")
+    real_get = Config.get.__func__
+
+    def get(cls, key, default=None):
+        if key == "attachment_rag_enabled":
+            return True
+        return real_get(cls, key, default)
+
+    monkeypatch.setattr(Config, "get", classmethod(get))
+    indexed = []
+
+    async def quiet(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(ws, "_notify_attachment_index", quiet)
+    monkeypatch.setattr(ws, "_spawn_attachment_index",
+                        lambda manager, session_id, scope, contents: indexed.append(scope))
+    monkeypatch.setattr(ws.manager, "broadcast_to_session", quiet)
+    report = tmp_path / "report.md"
+    report.write_bytes(b"# Report")
+    asyncio.run(ws._open_report_in_viewer(SID, str(report), "report.md"))
+    assert indexed == [OTHER], indexed
+
+
 # ── the page ──────────────────────────────────────────────────────────────────
 
 def test_page_forwards_and_shows_the_preview_place():
     """The page rebuilds every event field by field (an unforwarded field is silently
-    dropped): pin each read, the clears and the prop. MUTATIONS: drop the eta_ms read
-    (red); drop the clear in sidebar_documents_set (red)."""
+    dropped): pin each read, the clears and the prop. The place is kept per chat: the
+    server sends it only when it changes, so a chat switch must not drop it, and the
+    grant or busy of a chat not on screen must still reach the bookkeeping.
+    MUTATIONS: drop the eta_ms read (red); drop the clear in sidebar_documents_set (red);
+    clear every place on a chat switch again (red); drop the events from
+    crossSessionAllowed (red); the red toast again (red)."""
     page = PAGE.read_text(encoding="utf-8")
-    start = page.index("data.type === 'document_preview_wait'")
+    start = page.index("else if (data.type === 'document_preview_wait')")
     branch = page[start:page.index("else if (data.type === 'stt_wait')", start)]
-    wait, busy = branch.split("data.type === 'document_preview_busy'")
+    wait, busy = branch.split("else if (data.type === 'document_preview_busy')")
     for field in ("data.sessionId", "data.name", "data.position", "data.eta_ms"):
         assert field in wait, field
+    assert "[previewSessionId]:" in wait and "clearDocPreviewWait(previewSessionId)" in wait
     assert "data.name" in busy and "tMain('docPreviewBusy'" in busy
-    assert "setDocPreviewWait(null)" in busy
+    assert "clearDocPreviewWait(busySessionId)" in busy
+    assert "busySessionId === activeSessionId" in busy
+    assert "notice: true" in busy
     docs = page.index("data.type === 'sidebar_documents_set'")
-    assert "setDocPreviewWait(null)" in page[docs:docs + 200]
-    assert re.search(r"useEffect\(\(\) => \{ setDocPreviewWait\(null\); \}, \[currentSessionId\]\)",
-                     page)
-    assert "docPreviewWait.sessionId === currentSessionId" in page
+    assert "clearDocPreviewWait(sid)" in page[docs:docs + 400]
+    assert not re.search(r"setDocPreviewWaits?\((null|\{\})\)", page), "a switch drops every place"
+    assert "[currentSessionId]);" not in page[page.index("const [docPreviewWaits"):
+                                              page.index("const docPreviewNotice")]
+    assert "docPreviewWaits[currentSessionId]" in page
+    allowed = page[page.index("const crossSessionAllowed = ("):]
+    allowed = allowed[:allowed.index(");")]
+    assert "'document_preview_wait'" in allowed and "'document_preview_busy'" in allowed
     assert "previewNotice={docPreviewNotice}" in page
+    toast = page[page.index("{downloadToast.show && ("):]
+    toast = toast[:toast.index("{downloadToast.message}")]
+    assert "max-md:w-[calc(100vw-2rem)] max-md:max-w-none" in toast
+    assert 'downloadToast.notice ? "bg-white border-gray-200 text-gray-800"' in toast
     for key in ("docPreviewWaiting", "docPreviewWaitingNoEta"):
         assert f"tMain('{key}'" in page, key
     viewer = VIEWER.read_text(encoding="utf-8")

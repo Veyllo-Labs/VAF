@@ -838,7 +838,7 @@ On it, `browser_agent` serialises all calls - only **one** browser session runs 
   them from one person. Each waiting run holds a thread (a chat worker, an automation, an
   in-process workflow step), and a run takes minutes, so a person's third waiting run would
   almost surely time out anyway. That third run is told at once: "Browser agent is busy: 2
-  of this person's browser runs are already waiting for this browser."
+  of your browser runs for this user are already waiting for this browser."
 - **120 seconds.** A run waits at most 120 seconds, the value the gate always had: a chat
   turn waiting here holds its queue worker that long. A run that gives up says where it
   stood ("This run waited 120 s at place 1 and gave up, the expected wait was about 3

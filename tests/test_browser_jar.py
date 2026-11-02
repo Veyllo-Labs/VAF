@@ -540,7 +540,7 @@ def _two_runs_through_the_gate(box, monkeypatch, *, a_end_waits_for_b_claim):
     pytest.importorskip("browser_use", exc_type=ImportError)
     import vaf.tools.browser_agent as ba
 
-    assert ba._BROWSER_MAX_PARALLEL == 1
+    monkeypatch.setattr(ba, "_BROWSER_MAX_PARALLEL", 1)
     web = box["web"]
     release_a = threading.Event()
     b_claimed = threading.Event()
@@ -757,7 +757,7 @@ def test_a_queued_run_keeps_the_browser_marked_as_driven(box, monkeypatch, momen
     pytest.importorskip("browser_use", exc_type=ImportError)
     import vaf.tools.browser_agent as ba
 
-    assert ba._BROWSER_MAX_PARALLEL == 1
+    monkeypatch.setattr(ba, "_BROWSER_MAX_PARALLEL", 1)
     web = box["web"]
     assert web.start("scope-y", "sess-y", save=False)["status"] == "active"
     release_a, b_here, release_b = threading.Event(), threading.Event(), threading.Event()
@@ -814,6 +814,7 @@ def test_a_run_whose_gate_times_out_gives_its_count_back(box, monkeypatch):
     import vaf.tools.browser_agent as ba
 
     monkeypatch.setattr(ba, "BROWSER_WAIT_S", 0.2)
+    monkeypatch.setattr(ba, "_BROWSER_MAX_PARALLEL", 1)
     web = box["web"]
     # The run ahead holds the browser's slot from a thread of its own, as a real run
     # does: a second slot of one queue in the same thread is refused outright.

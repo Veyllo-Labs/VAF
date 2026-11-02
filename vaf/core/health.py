@@ -27,7 +27,9 @@ Checks, each ``{name, status, reason}``:
 - ``engine``: the managed vLLM (vaf/core/local_engine.py), only when it is the local engine:
   degraded when this machine cannot run it or it is not installed, ok otherwise, also when
   its server is idle (the desktop unloads the local model when nobody uses it);
-- ``queues``: the fair queues of this process (vaf/core/fair_queue.py: the speech lanes),
+- ``queues``: the listed fair queues of this process (vaf/core/fair_queue.py: the speech
+  lanes, the document preview's ``gotenberg`` and the shared browser's
+  ``browser:vaf-browser``; a per-user browser's queue is unlisted),
   the chat-turn queue (vaf/core/task_queue.py, in the process that runs the agent loops) and,
   with vLLM as the running local engine, how many requests wait and run in its own scheduler
   (its ``/metrics``); only when one of them is there: degraded when a queue turned somebody

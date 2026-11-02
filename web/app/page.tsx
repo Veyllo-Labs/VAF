@@ -3277,7 +3277,8 @@ function VAFDashboardContent() {
         repo_id?: string;
     }>({ status: 'idle' });
     const [modelPreviewData, setModelPreviewData] = useState<{ repo_id: string; card_content?: string; gguf_files: { filename: string; size_bytes: number }[]; error?: string } | null>(null);
-    const [downloadToast, setDownloadToast] = useState<{ show: boolean; message: string; success: boolean }>({ show: false, message: '', success: false });
+    // `notice`: a neutral passing note (something works, only differently), neither a success nor an error.
+    const [downloadToast, setDownloadToast] = useState<{ show: boolean; message: string; success: boolean; notice?: boolean }>({ show: false, message: '', success: false });
     // Machine-level maintenance job (memory re-embed today; generic by `kind`).
     // No sessionId on these frames: the job is machine-wide, every client shows it.
     const [maintenanceStatus, setMaintenanceStatus] = useState<{
@@ -4595,11 +4596,22 @@ function VAFDashboardContent() {
                     minutes: Math.round(chatWait.etaMs / 60000) }))
         : '';
     // An Office document's preview waits for the converter (document_preview_wait): its own
-    // place and expected wait, shown in the document viewer's header of that chat, cleared
-    // on the grant (position 0), when the documents arrive and on a chat switch.
-    const [docPreviewWait, setDocPreviewWait] = useState<{ sessionId: string; name: string; position: number; etaMs: number | null } | null>(null);
-    useEffect(() => { setDocPreviewWait(null); }, [currentSessionId]);
-    const docPreviewNotice = (docPreviewWait && docPreviewWait.position > 0 && docPreviewWait.sessionId === currentSessionId)
+    // place and expected wait, kept PER CHAT and shown in the document viewer's header of the
+    // chat on screen. The server sends a place only when it changes, so a chat switched away
+    // from and back to keeps its entry; the entry goes on the grant (position 0), on busy and
+    // when that chat's documents arrive.
+    const [docPreviewWaits, setDocPreviewWaits] = useState<Record<string, { name: string; position: number; etaMs: number | null }>>({});
+    const clearDocPreviewWait = useCallback((sessionId?: string | null) => {
+        if (!sessionId) return;
+        setDocPreviewWaits(prev => {
+            if (!(sessionId in prev)) return prev;
+            const next = { ...prev };
+            delete next[sessionId];
+            return next;
+        });
+    }, []);
+    const docPreviewWait = currentSessionId ? docPreviewWaits[currentSessionId] : undefined;
+    const docPreviewNotice = (docPreviewWait && docPreviewWait.position > 0)
         ? (docPreviewWait.etaMs === null
             ? tMain('docPreviewWaitingNoEta', { position: docPreviewWait.position })
             : tMain('docPreviewWaiting', { position: docPreviewWait.position,
@@ -5171,7 +5183,11 @@ function VAFDashboardContent() {
                         data.type === 'attachment_indexing' ||
                         data.type === 'attachment_indexed' ||
                         data.type === 'attachment_index_error' ||
-                        data.type === 'attachment_index_cancelled'
+                        data.type === 'attachment_index_cancelled' ||
+                        // A preview's place is kept per chat, so the grant or busy of a chat
+                        // switched away from must still clear its entry (the toast is gated).
+                        data.type === 'document_preview_wait' ||
+                        data.type === 'document_preview_busy'
                     );
                     if (!crossSessionAllowed) {
                         console.log(`🔍 [FILTER] Rejecting ${data.type}: backend=${data.sessionId}, frontend=${activeSessionId}`);
@@ -6218,9 +6234,9 @@ function VAFDashboardContent() {
                     setInsertedSelections(prev => prev.filter((_, i) => i !== selectionIndex));
                 }
                 else if (data.type === 'sidebar_documents_set') {
-                    setDocPreviewWait(null);
                     const contents = (data.contents || []) as Array<{ name: string; content: string; data?: string; mimeType?: string; htmlContent?: string }>;
                     const sid = data.sessionId || activeSessionId;
+                    clearDocPreviewWait(sid);
                     const updater = (prev: { isOpen: boolean; documents: DocumentViewerDoc[] }) => {
                         if (contents.length === 0) return { ...prev, documents: [] };
                         return {
@@ -7301,21 +7317,29 @@ function VAFDashboardContent() {
                 }
                 else if (data.type === 'document_preview_wait') {
                     // An Office document's preview waits for the converter; position 0 = its turn now.
+                    // Kept per chat (also for a chat not on screen: crossSessionAllowed).
                     const previewSessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
                     const previewName = typeof data.name === 'string' ? data.name : '';
                     const previewPosition = Number(data.position) || 0;
-                    setDocPreviewWait(previewPosition > 0 && previewSessionId
-                        ? { sessionId: previewSessionId, name: previewName, position: previewPosition,
-                            etaMs: typeof data.eta_ms === 'number' ? data.eta_ms : null }
-                        : null);
+                    if (previewPosition > 0 && previewSessionId) {
+                        setDocPreviewWaits(prev => ({ ...prev, [previewSessionId]: { name: previewName,
+                            position: previewPosition,
+                            etaMs: typeof data.eta_ms === 'number' ? data.eta_ms : null } }));
+                    } else {
+                        clearDocPreviewWait(previewSessionId);
+                    }
                 }
                 else if (data.type === 'document_preview_busy') {
                     // The converter was busy for too long: the document shows in the simpler
-                    // layout. A passing notice, not an error dialog.
-                    setDocPreviewWait(null);
-                    const busyName = typeof data.name === 'string' ? data.name : '';
-                    setDownloadToast({ show: true, message: tMain('docPreviewBusy', { name: busyName }), success: false });
-                    setTimeout(() => setDownloadToast(prev => ({ ...prev, show: false })), 4000);
+                    // layout. A passing notice, not an error: the neutral toast, and only in the
+                    // chat on screen (the bookkeeping runs for every chat).
+                    const busySessionId = typeof data.sessionId === 'string' ? data.sessionId : '';
+                    clearDocPreviewWait(busySessionId);
+                    if (!busySessionId || busySessionId === activeSessionId) {
+                        const busyName = typeof data.name === 'string' ? data.name : '';
+                        setDownloadToast({ show: true, message: tMain('docPreviewBusy', { name: busyName }), success: false, notice: true });
+                        setTimeout(() => setDownloadToast(prev => ({ ...prev, show: false })), 4000);
+                    }
                 }
                 else if (data.type === 'stt_wait') {
                     // The dictation waits for the speech recognizer: position 0 = it is its turn now.
@@ -12467,10 +12491,11 @@ function VAFDashboardContent() {
 
             {/* Model download toast (success / error) */}
             {downloadToast.show && (
-                <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[85] animate-in fade-in slide-in-from-bottom-4 duration-300">
+                <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[85] animate-in fade-in slide-in-from-bottom-4 duration-300 max-md:w-[calc(100vw-2rem)] max-md:max-w-none">
                     <div className={cn(
                         "px-4 py-3 rounded-xl shadow-lg border text-sm font-medium",
-                        downloadToast.success ? "bg-green-50 border-green-200 text-green-800" : "bg-red-50 border-red-200 text-red-800"
+                        downloadToast.notice ? "bg-white border-gray-200 text-gray-800"
+                            : downloadToast.success ? "bg-green-50 border-green-200 text-green-800" : "bg-red-50 border-red-200 text-red-800"
                     )}>
                         {downloadToast.message}
                     </div>

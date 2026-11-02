@@ -320,3 +320,197 @@ def test_hangup_cancels_the_waiting_turn(call_env, monkeypatch):
     assert stt["refused"]["cancelled"] == 1
     assert call_env["box"].urls == []
     assert not call_env["ws_mod"]._VOICE_CALLS
+
+
+# ── round 1: the refused turn, the TTS budget, the read-ahead's limits ────────────
+
+def test_a_refused_turn_always_names_stt(call_env, monkeypatch):
+    """A turn is only refused at its STT step, whatever name the recognizer's queue has.
+    MUTATION: derive the resource from the queue name ("my-asr" -> "tts") - red."""
+    def busy(*a, **kw):
+        raise fair_queue.QueueBusy("my-asr", "timeout", position=2, waited_s=15.0)
+
+    monkeypatch.setattr(sc, "transcribe", busy)
+    sent = _run(call_env, FakeWebSocket([START, _turn()]))
+    err = [p for p in sent if p.get("type") == "voice_call_error"]
+    assert len(err) == 1 and err[0]["error"] == "busy" and err[0]["resource"] == "stt"
+
+
+def test_a_late_tts_slot_still_gets_its_synthesis_time(call_env, monkeypatch):
+    """The outer timeout of a call's TTS is the queue wait PLUS the synthesis budget: a
+    greeting whose slot comes late is still spoken. MUTATION: the synthesis budget alone
+    as the timeout (the greeting times out and is never sent) - red."""
+    from vaf.core.speech import SpeechManager
+    ws_mod = call_env["ws_mod"]
+    monkeypatch.setattr(ws_mod, "_CALL_TTS_WAIT_S", 2.0)
+    monkeypatch.setitem(ws_mod._CALL_TTS_SYNTH_S, "short", 0.8)
+
+    class _QueuedTTS:
+        def synthesize_audio(self, text, lang, **kw):
+            with sc.speech_queue("tts").slot(kw.get("user_key"), deadline_s=kw.get("deadline_s"),
+                                             cancelled=kw.get("cancelled"),
+                                             on_wait=kw.get("on_wait"), poll_s=0.01):
+                time.sleep(0.5)
+            return b"AUDIO"
+
+        def call_lane_speaks(self, lang):
+            return True
+
+    monkeypatch.setattr(SpeechManager, "get_instance", classmethod(lambda cls: _QueuedTTS()))
+    held, release = threading.Event(), threading.Event()
+
+    def hold():
+        with sc.speech_queue("tts").slot("another-person"):
+            held.set()
+            release.wait(0.7)
+
+    t = threading.Thread(target=hold, daemon=True)
+    t.start()
+    assert held.wait(5)
+    try:
+        sent = _run(call_env, _PacedSocket(
+            [START], until=lambda s: "voice_call_reply" in _types(s), timeout=6.0))
+    finally:
+        release.set()
+        t.join(5)
+    greetings = [p for p in sent if p.get("type") == "voice_call_reply" and p.get("greeting")]
+    assert greetings and greetings[0]["audio"]
+
+
+def test_a_reply_whose_voice_runs_out_of_time_arrives_as_text(call_env, monkeypatch):
+    """No audio within the budget is not a silent drop: the reply carries tts_busy and
+    its text. MUTATION: catch only QueueBusy (a timeout loses the text) - red."""
+    from vaf.core.speech import SpeechManager
+    ws_mod = call_env["ws_mod"]
+    monkeypatch.setattr(ws_mod, "_CALL_TTS_WAIT_S", 0.1)
+    monkeypatch.setitem(ws_mod._CALL_TTS_SYNTH_S, "short", 0.2)
+    monkeypatch.setitem(ws_mod._CALL_TTS_SYNTH_S, "reply", 0.2)
+
+    class _SlowTTS:
+        def synthesize_audio(self, text, lang, **kw):
+            time.sleep(0.8)
+            return b"AUDIO"
+
+        def call_lane_speaks(self, lang):
+            return True
+
+    monkeypatch.setattr(SpeechManager, "get_instance", classmethod(lambda cls: _SlowTTS()))
+    sent = _run(call_env, FakeWebSocket([START, _turn()]))
+    replies = [p for p in sent if p.get("type") == "voice_call_reply"]
+    assert len(replies) == 1
+    assert replies[0]["tts_busy"] is True and replies[0]["audio"] is None
+    assert len(replies[0]["reply"]) > 100
+
+
+class _StreamSocket:
+    """Frames on demand: `size` characters each, one every `every` seconds."""
+
+    def __init__(self, size, every=0.0):
+        self.size, self.every, self.reads = size, every, 0
+
+    async def receive_text(self):
+        self.reads += 1
+        await asyncio.sleep(self.every)
+        return "x" * self.size
+
+
+def test_the_read_ahead_stops_at_its_byte_budget():
+    """A waiting turn parks at most a few MiB of frames, not 32 frames of up to 200 MiB.
+    MUTATION: drop the byte check - red."""
+    import vaf.core.web_server as ws_mod
+    sock = _StreamSocket(1024 * 1024)
+    rx = ws_mod._ReadAhead(sock)
+
+    async def main():
+        armed = asyncio.Event()
+        armed.set()
+        await rx.wait(asyncio.sleep(0.3), armed, threading.Event())
+
+    asyncio.run(main())
+    assert rx._buffered_bytes <= ws_mod._READ_AHEAD_MAX_BYTES + 1024 * 1024
+    assert len(rx._buffer) <= 5
+
+
+def test_the_read_ahead_stops_when_the_wait_is_over():
+    """The grant clears `armed`: the rest of the turn (its LLM step) reads nothing ahead.
+    MUTATION: keep reading once anything was buffered - red."""
+    import vaf.core.web_server as ws_mod
+    sock = _StreamSocket(10, every=0.02)
+    rx = ws_mod._ReadAhead(sock)
+
+    async def main():
+        armed = asyncio.Event()
+        armed.set()
+        asyncio.get_running_loop().call_later(0.07, armed.clear)
+        await rx.wait(asyncio.sleep(0.5), armed, threading.Event())
+
+    asyncio.run(main())
+    assert sock.reads <= 6, f"read {sock.reads} frames after the wait was over"
+
+
+def test_the_grant_disarms_the_read_ahead():
+    """MUTATION: arm on every report, the grant included - red."""
+    import vaf.core.web_server as ws_mod
+
+    class _Sock:
+        async def send_json(self, payload):
+            pass
+
+    async def main():
+        loop = asyncio.get_running_loop()
+        armed = asyncio.Event()
+        on_wait = ws_mod._queue_wait_sender(_Sock(), loop, "voice_call_wait", armed=armed)
+        await loop.run_in_executor(None, on_wait, fair_queue.WaitInfo("stt", 1, None, 0.0))
+        await asyncio.sleep(0.01)
+        first = armed.is_set()
+        await loop.run_in_executor(None, on_wait, fair_queue.WaitInfo("stt", 0, None, 0.4))
+        await asyncio.sleep(0.01)
+        return first, armed.is_set()
+
+    assert asyncio.run(main()) == (True, False)
+
+
+# ── round 1: the frontend's half ─────────────────────────────────────────────────
+
+def test_every_call_status_has_its_words():
+    """Each statusKey the call window sets is a `status_<key>` in every locale, and
+    'waiting' never asks for its parametrised string without a place (a refused wait has
+    no grant event). MUTATION: leave 'waiting' in the tts_busy branch, or drop the
+    no-place fallback - red."""
+    import json
+    import re
+    src = (_REPO / "web" / "components" / "VoiceCallLayer.tsx").read_text(encoding="utf-8")
+    keys = set(re.findall(r"statusKey: '(\w+)'", src))
+    assert {"waiting", "busy", "tts_busy"} <= keys
+    for locale in ("de", "en", "ja", "ko", "th", "tr", "zh"):
+        cat = json.loads((_REPO / "web" / "messages" / f"{locale}.json")
+                         .read_text(encoding="utf-8"))["voiceCall"]
+        assert all(f"status_{k}" in cat for k in keys), locale
+    branch = src[src.index("if (data.tts_busy) {"):][:700]
+    assert "statusKey: 'tts_busy'" in branch
+    assert re.search(r": store\.statusKey === 'waiting'\s*\?\s*\(!store\.wait \? t\('status_thinking'\)",
+                     src), "'waiting' without a place reaches the parametrised string"
+
+
+def test_a_text_only_reply_can_be_read_whole():
+    """Small talk never enters the chat, so the caption is the only copy: never clamped,
+    scrollable, and kept while the next turn starts. MUTATION: clamp it, or clear it when
+    the next utterance is accepted - red."""
+    src = (_REPO / "web" / "components" / "VoiceCallLayer.tsx").read_text(encoding="utf-8")
+    caption = src[src.index("store.busyNotice.text && ("):][:600]
+    assert "line-clamp" not in caption and "overflow-y-auto" in caption
+    accept = src[src.index("const prevNotice = useVoiceCallStore.getState().busyNotice;"):][:400]
+    assert "prevNotice?.kind === 'tts' ? prevNotice : null" in accept
+
+
+def test_the_dictation_place_is_outside_the_clipping_form():
+    """The form around the composer clips (overflow-hidden); the place in line is drawn
+    in the row around it, not inside the mic button. MUTATION: move it back into the
+    button - red."""
+    src = (_REPO / "web" / "app" / "page.tsx").read_text(encoding="utf-8")
+    bubble = src.index("{sttWaitText}\n")
+    form = src.index("onSubmit={sendMessage}")
+    assert bubble < form
+    mic = src[src.index("onClick={isRecording ? stopRecording : startRecording}"):][:1500]
+    assert "sttWaitText}" not in mic.split("</button>")[0].replace(
+        "(isProcessingAudio && sttWaitText) ? sttWaitText", "")

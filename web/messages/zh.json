@@ -2673,7 +2673,7 @@
     "resultReady": "任务已完成。详情在对话里。",
     "status_waiting": "排队中：第 {position} 位，约 {seconds} 秒",
     "status_waiting_noeta": "排队中：第 {position} 位",
-    "status_busy": "语音服务繁忙",
+    "status_busy": "语音识别繁忙",
     "status_tts_busy": "语音繁忙，以文字回复"
   },
   "outbox": {

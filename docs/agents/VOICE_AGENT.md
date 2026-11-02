@@ -212,9 +212,12 @@ suffices.
    normal turn.
 7. **TTS** and the `voice_call_reply` payload. Every TTS of the call (greeting, short
    lines, chime, reply, `voice_call_speak`) waits in the TTS queue for at most 20 s
-   under the call's scope; a reply whose voice gets no slot goes out as text with
-   `audio: null` and `tts_busy: true` - nothing already decided is withdrawn, and a
-   greeting that gets no slot is not sent, as a failed one never was. Model-written spoken text is voiced in
+   under the call's scope, and its outer timeout is that wait plus the line's own
+   synthesis budget (30 s short lines, 60 s chime, 110 s reply, 40 s result), so a late
+   slot still gets its full synthesis time. A reply or short line whose voice gets no
+   slot, or no audio within the budget, goes out as text with `audio: null` and
+   `tts_busy: true` - nothing already decided is withdrawn, and a greeting that gets no
+   slot is not sent, as a failed one never was. Model-written spoken text is voiced in
    ITS OWN language, not the input language: `_tts_lang_for` detects the reply text's
    language (`_detect_language_simple`, langid) and, when it differs from the call
    language AND the lane can speak it (`call_lane_speaks`), follows it - so a Turkish
@@ -365,7 +368,8 @@ speaker_ok=... text=... -> reply_len=... delegate=...`).
    cancelled.** The receive loop handles one frame at a time and the turn awaits its
    executor hop inline, so a `voice_call_end` or a disconnect used to be read only
    after the turn. While a turn (or its TTS) WAITS in a speech queue, the handler
-   reads the socket ahead (`web_server._ReadAhead`): an end or a disconnect sets the
+   reads the socket ahead (`web_server._ReadAhead`; the grant stops it again, and it
+   holds at most 32 frames or 4 MiB): an end or a disconnect sets the
    call's `cancel` event, the waiting slot leaves the queue (`refused.cancelled`), the
    container is never called for it and nothing is said. Every frame read ahead is
    still handled afterwards, in arrival order, and a pending receive is never
@@ -402,7 +406,9 @@ carries `resource`, `reason` (`timeout` | `full`), `waited_ms`, `text` (the
 no TTS slot was free within 10 s); a hang-up during the wait sends nothing. The
 frontend shows `status_busy`, plays the audio or the busy earcon (two low tones) and
 keeps listening. A `voice_call_reply` with `tts_busy: true` has its text but no audio;
-the window shows it as a caption under the status until the next turn starts. A `voice_call_reply` may carry
+the status reads `status_tts_busy` and the window shows the whole reply as a caption
+under it (scrollable when long, since small talk never enters the chat), kept until the
+next reply arrives so it can still be read while the person answers. A `voice_call_reply` may carry
 `chime_in: true` (a proactive grounded remark on overheard side talk) or
 `clarify: true` (a "did you mean me?" addressee check); both carry audio and play
 through the existing reply path unchanged, so the frontend needs no special handling.
@@ -420,8 +426,8 @@ Speaker confirmation events (`speaker_confirm_*`) are documented in
 - `web/lib/voiceCallStore.ts` - Zustand store shared by bar and controller
   (`active`, `closing`, `speaker`, `agentMode`, `statusKey`, `mainTask`,
   `muted`, `hangupRequested`, `wait` - the call's own place in a speech queue -
-  and `busyNotice` - a refused turn or a text-only reply, shown until the next
-  turn starts).
+  and `busyNotice` - a refused turn, shown until the next turn starts, or a
+  text-only reply, shown until the next reply arrives).
 - `web/components/VoiceCallLayer.tsx` - controller + agent window (top-left):
   hands-free VAD loop (silence auto-stop, max utterance cap), noise gates,
   mute handling, result callback, enter/exit choreography, red in-call ring.

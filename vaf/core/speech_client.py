@@ -55,6 +55,10 @@ _TTS_TIMEOUT = 60
 STT_SLOTS = 1
 TTS_SLOTS = 1
 SPEECH_MAX_WAITING = 12
+# One person's share of the waiters: a live call turn, a dictation and a read-aloud of the
+# same account can wait at once, a fourth is that account's own "busy". Without it, one
+# account with twelve tabs fills the queue and every other person is refused.
+SPEECH_MAX_WAITING_PER_KEY = 3
 # How long a caller waits for a slot. A person watching (voice call, dictation, read-aloud)
 # gets 15 s, about 25 turns ahead at the measured STT p50 of 0.6 s. Channels and the CLI
 # get 180 s: nobody watches a spinner there, and a voice note answered late beats one dropped.
@@ -69,7 +73,8 @@ _QUEUE_SLOTS: "dict[str, Optional[int]]" = {
 
 def speech_queue(name: str) -> ResourceQueue:
     """The process-wide queue of one speech resource (names in _QUEUE_SLOTS)."""
-    return resource_queue(name, slots=_QUEUE_SLOTS[name], max_waiting=SPEECH_MAX_WAITING)
+    return resource_queue(name, slots=_QUEUE_SLOTS[name], max_waiting=SPEECH_MAX_WAITING,
+                          max_waiting_per_key=SPEECH_MAX_WAITING_PER_KEY)
 
 # ── Per-speaker language cache for the cloud STT hint ─────────────────────────
 # Passing a known language to a cloud STT (Veyllo/OpenAI/ElevenLabs) yields a more

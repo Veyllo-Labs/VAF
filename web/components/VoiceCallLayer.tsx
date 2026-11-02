@@ -503,9 +503,12 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
             }
             // Utterance accepted for processing: give the user an audible "heard you"
             playEarcon('accept');
-            // A new turn starts: a busy caption or a queue place from the last one is over.
+            // A new turn starts: a queue place or a busy line from the last one is over. A
+            // text-only reply stays until the next reply, so it can still be read while
+            // the person answers it.
+            const prevNotice = useVoiceCallStore.getState().busyNotice;
             useVoiceCallStore.getState().set({ speaker: null, agentMode: 'thinking', statusKey: 'thinking',
-                wait: null, busyNotice: null });
+                wait: null, busyNotice: prevNotice?.kind === 'tts' ? prevNotice : null });
             try {
                 const blob = new Blob(chunks, { type: mime });
                 const wav = await toWav16k(blob);
@@ -612,10 +615,15 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
             if (data.type === 'voice_call_reply') {
                 if (data.tts_busy) {
                     // The reply was decided but its voice got no TTS slot: show it as a
-                    // caption instead of playing nothing.
+                    // caption instead of playing nothing. The status leaves 'waiting'
+                    // here: a refused wait ends without the position-0 event.
                     useVoiceCallStore.getState().set({
-                        wait: null, busyNotice: { kind: 'tts', text: String(data.reply || '') },
+                        statusKey: 'tts_busy', wait: null,
+                        busyNotice: { kind: 'tts', text: String(data.reply || '') },
                     });
+                } else if (!data.greeting) {
+                    // A new reply supersedes a text-only one.
+                    useVoiceCallStore.getState().set({ busyNotice: null });
                 }
                 // Voice small talk stays OUT of the chat (user decision): the
                 // conversation lives in audio. Only a DELEGATION appears, on
@@ -832,12 +840,16 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
                         : store.statusKey === 'thinking' ? 'bg-amber-500 animate-pulse'
                         : store.statusKey === 'waiting' ? 'bg-amber-500 animate-pulse'
                         : store.statusKey === 'busy' ? 'bg-red-500'
+                        : store.statusKey === 'tts_busy' ? 'bg-amber-500'
                         : 'bg-gray-400'}`} />
                     <span>{!store.voiceReady
                         ? (store.loadingModel ? t('status_loading_model') : t('status_deaf'))
                         : (store.exclusive && (store.mainTask || mainBusy)) ? t('status_deaf_busy')
-                        : (store.statusKey === 'waiting' && store.wait)
-                            ? (store.wait.etaMs !== null
+                        // 'waiting' needs its place: without one (a wait that ended in a
+                        // refusal) the parametrised string is never asked for.
+                        : store.statusKey === 'waiting'
+                            ? (!store.wait ? t('status_thinking')
+                                : store.wait.etaMs !== null
                                 ? t('status_waiting', {
                                     position: store.wait.position,
                                     seconds: Math.max(1, Math.round(store.wait.etaMs / 1000)),
@@ -847,12 +859,15 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
                 </div>
                 {store.busyNotice && (store.busyNotice.kind === 'tts' || store.busyNotice.text) && (
                     <div className="text-[11px] leading-snug text-gray-600 dark:text-gray-300">
-                        {store.busyNotice.kind === 'tts' && (
+                        {store.busyNotice.kind === 'tts' && store.statusKey !== 'tts_busy' && (
                             <div className="font-medium text-amber-700 dark:text-amber-400">{t('status_tts_busy')}</div>
                         )}
                         {store.busyNotice.text && (
-                            // A reply can be long: three lines. The busy line is one short sentence, whole.
-                            <p className={store.busyNotice.kind === 'tts' ? 'line-clamp-3 break-words' : 'break-words'}>
+                            // The whole reply, scrollable when long: small talk never enters the
+                            // chat, so this caption is the only place it can be read.
+                            <p className={store.busyNotice.kind === 'tts'
+                                ? 'max-h-40 overflow-y-auto whitespace-pre-wrap break-words pr-1'
+                                : 'break-words'}>
                                 {store.busyNotice.text}
                             </p>
                         )}

@@ -996,7 +996,12 @@ The Settings UI shows the **General**, **AI & Model**, **Advanced**, and **Local
 The speech lanes wait in fair queues (`vaf/core/fair_queue.py`; see
 [SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md#waiting-in-line-the-speech-queues)), and
 the fairness keys on the canonical scope (`trust._scope_key`): the local admin's scope and
-no scope at all are one person, so nobody skips ahead by alternating aliases. The web
+no scope at all are one person, so nobody skips ahead by alternating aliases. One person
+may have at most 3 of a queue's 12 waiting places (`max_waiting_per_key`): an account with
+many tabs or a script on its token is refused as its own "busy" once its share is used, and
+everybody else is still admitted. Without the share, measured, one account's 12 waiting
+requests made every other account's request `full` for as long as it kept the queue
+filled. The web
 dictation, read-aloud and voice call key on the connection's scope, Telegram on the
 sender's whitelist scope, WhatsApp and `send_whatsapp` on the account's scope. A waiting
 person learns only their own place and expected wait (`stt_wait`, `voice_call_wait`, sent
@@ -1046,7 +1051,7 @@ The connection map (`/api/network/connections`) lists every connected device's a
 | Live browser (interactive + agent) | Per-scope container, profile volume and docker network for every scope the pool can serve (`browser_pool_max`, default `"auto"`: at least 2 where memory allows, at most 16, admin-only); beyond that a shared container with one lease at a time and a verified, fail-closed profile wipe on every handover to another scope | Container / Application |
 | WhatsApp | Separate subprocess per user | Process |
 | Telegram | Whitelist-based routing | Application |
-| Speech queues | Fair order keyed on the canonical scope; a waiter sees only its own place and ETA; the metrics are keyless counts for an admin | Application |
+| Speech queues | Fair order keyed on the canonical scope, at most 3 waiting places per person so nobody fills the queue; a waiter sees only its own place and ETA; the metrics are keyless counts for an admin | Application |
 | Email | Per-user encrypted credentials + scope-based config lookup chain | Application |
 | Calendar (Google/Microsoft) | Same OAuth and `user_scope_id` as Email; no separate credentials | Application |
 | Automations | Per-user task storage and scoped RAG access; max 3 users per time slot (global cap) | Application |

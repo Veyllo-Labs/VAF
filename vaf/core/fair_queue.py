@@ -47,7 +47,9 @@ Named boundaries, each with the measurement that supports it:
 - No async admission (``await slot_async``). A waiting speech caller already held an
   executor thread inside its HTTP call before this queue existed; three concurrent STT
   calls held three threads for 1.84 s each (5.5 thread-seconds), in the queue the same
-  batch finishes in 3.6. ``max_waiting`` caps the waiters per resource.
+  batch finishes in 3.6. ``max_waiting`` caps the waiters per resource, and
+  ``max_waiting_per_key`` caps one person's share of them, so nobody can fill the queue
+  and lock the others out (several tabs or sockets of one account would otherwise do it).
 - No scale-out of the speech containers and no overflow to an API provider when a queue
   is long: both wait for a pilot that measures the need. The API speech lanes are not
   gated (no local resource), only measured, so that decision has its numbers.
@@ -157,6 +159,11 @@ class FairOrder:
             served[key] = stamp
         return 0
 
+    def waiting_for(self, key: Hashable) -> int:
+        """How many items of this key wait."""
+        q = self._queues.get(key)
+        return len(q) if q else 0
+
     def keys_waiting(self) -> int:
         """How many keys have something waiting: a count, never who."""
         return len(self._queues)
@@ -186,19 +193,25 @@ class WaitInfo:
 
 
 class QueueBusy(Exception):
-    """A queue refused a caller: ``reason`` is ``full`` (too many already wait),
-    ``timeout`` (the deadline passed) or ``cancelled`` (the caller gave up)."""
+    """A queue refused a caller: ``reason`` is ``full`` (too many already wait, or this
+    caller's own share is used up: ``own_share``), ``timeout`` (the deadline passed) or
+    ``cancelled`` (the caller gave up)."""
 
     def __init__(self, resource: str, reason: str, *, position: int = 0,
-                 waited_s: float = 0.0, eta_s: Optional[float] = None) -> None:
+                 waited_s: float = 0.0, eta_s: Optional[float] = None,
+                 own_share: bool = False) -> None:
         self.resource = resource
         self.reason = reason
         self.position = position
         self.waited_s = waited_s
         self.eta_s = eta_s
+        self.own_share = own_share
         super().__init__(self._sentence())
 
     def _sentence(self) -> str:
+        if self.reason == "full" and self.own_share:
+            return (f"{self.resource} is busy: {self.position - 1} of your requests are "
+                    "already waiting, try again when they are done.")
         if self.reason == "full":
             return (f"{self.resource} is busy: {max(self.position - 1, 0)} requests are "
                     "already waiting, try again shortly.")
@@ -246,15 +259,19 @@ _held = threading.local()
 
 class ResourceQueue:
     """Admission to a resource with ``slots`` parallel places (None: unbounded, a
-    pass-through that only measures), at most ``max_waiting`` waiters, in fair order."""
+    pass-through that only measures), at most ``max_waiting`` waiters, of them at most
+    ``max_waiting_per_key`` from one person (None: no share of their own), in fair order."""
 
     def __init__(self, name: str, *, slots: Optional[int] = 1, max_waiting: int = 12,
+                 max_waiting_per_key: Optional[int] = None,
                  clock: Callable[[], float] = time.monotonic) -> None:
         if slots is not None and slots < 1:
             raise ValueError("slots must be at least 1, or None for unbounded")
         self.name = str(name)
         self.slots = slots
         self.max_waiting = max(0, int(max_waiting))
+        self.max_waiting_per_key = (None if max_waiting_per_key is None
+                                    else max(0, int(max_waiting_per_key)))
         self._clock = clock
         self._cond = threading.Condition()
         self._order = FairOrder()
@@ -286,10 +303,11 @@ class ResourceQueue:
             return None
         return math.ceil(position / self.slots) * _percentile(samples, 50)
 
-    def _refuse(self, reason: str, position: int, waited: float) -> QueueBusy:
+    def _refuse(self, reason: str, position: int, waited: float,
+                own_share: bool = False) -> QueueBusy:
         self._refusals.append((self._clock(), reason))
         return QueueBusy(self.name, reason, position=position, waited_s=waited,
-                         eta_s=self._eta(position))
+                         eta_s=self._eta(position), own_share=own_share)
 
     def _release(self, granted_at: float) -> None:
         with self._cond:
@@ -337,6 +355,12 @@ class ResourceQueue:
                 self._waits.append((now, 0.0))
                 held.add(id(self))
                 return now
+            # The person's own share first: one account with many tabs fills its share,
+            # never the whole queue, so everybody else is still admitted.
+            if (self.max_waiting_per_key is not None
+                    and self._order.waiting_for(key) >= self.max_waiting_per_key):
+                raise self._refuse("full", self._order.waiting_for(key) + 1, 0.0,
+                                   own_share=True)
             if len(self._order) >= self.max_waiting:
                 raise self._refuse("full", len(self._order) + 1, 0.0)
             ticket = _Ticket(key, now)
@@ -384,7 +408,13 @@ class ResourceQueue:
             self._waits.append((ticket.granted_at, max(0.0, ticket.granted_at - ticket.enqueued)))
             waited = ticket.granted_at - ticket.enqueued
         held.add(id(self))
-        _call_quietly(on_wait, WaitInfo(self.name, 0, None, waited))
+        try:
+            _call_quietly(on_wait, WaitInfo(self.name, 0, None, waited))
+        except BaseException:
+            # The slot is held but __enter__ never returns, so no __exit__ will free it.
+            held.discard(id(self))
+            self._release(ticket.granted_at)
+            raise
         return ticket.granted_at
 
     def metrics(self) -> Dict[str, Any]:
@@ -459,14 +489,15 @@ _registry: Dict[str, ResourceQueue] = {}
 _registry_lock = threading.Lock()
 
 
-def resource_queue(name: str, *, slots: Optional[int] = 1,
-                   max_waiting: int = 12) -> ResourceQueue:
+def resource_queue(name: str, *, slots: Optional[int] = 1, max_waiting: int = 12,
+                   max_waiting_per_key: Optional[int] = None) -> ResourceQueue:
     """The process-wide queue for ``name``, created on first use. The first creation fixes
     its numbers; a later call with different ones gets the existing queue unchanged."""
     with _registry_lock:
         queue = _registry.get(name)
         if queue is None:
-            queue = _registry[name] = ResourceQueue(name, slots=slots, max_waiting=max_waiting)
+            queue = _registry[name] = ResourceQueue(name, slots=slots, max_waiting=max_waiting,
+                                                    max_waiting_per_key=max_waiting_per_key)
         return queue
 
 

@@ -2673,7 +2673,7 @@
     "resultReady": "งานเสร็จแล้ว รายละเอียดอยู่ในแชท",
     "status_waiting": "กำลังรอคิว: ลำดับที่ {position} ประมาณ {seconds} วินาที",
     "status_waiting_noeta": "กำลังรอคิว: ลำดับที่ {position}",
-    "status_busy": "บริการเสียงไม่ว่าง",
+    "status_busy": "ระบบรู้จำเสียงไม่ว่าง",
     "status_tts_busy": "เสียงไม่ว่าง ตอบเป็นข้อความ"
   },
   "outbox": {

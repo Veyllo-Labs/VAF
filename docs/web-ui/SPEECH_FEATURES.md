@@ -210,7 +210,10 @@ recently, so one person with many requests does not hold up the others.
 Each resource is admitted at exactly one place, so nothing waits twice. The slot
 numbers are constants in `speech_client.py`, not config keys: they are measured, and
 a key arrives with the measurement of a speech server that can do more. At most 12
-requests wait per queue; the thirteenth is refused at once.
+requests wait per queue, and at most 3 of them from one person (a call turn, a dictation
+and a read-aloud of one account fit; a fourth is that person's own "busy"), so several
+tabs of one account cannot fill the queue and lock everybody else out. A refusal comes at
+once.
 
 How long a request waits for its slot (`speech_client.WAIT_LIVE_S` and
 `WAIT_BACKGROUND_S`):
@@ -219,7 +222,8 @@ How long a request waits for its slot (`speech_client.WAIT_LIVE_S` and
   UI. At the measured STT median of 0.6 s that is about 25 requests ahead. After that
   the person hears an honest "busy" instead of silence (see the WebSocket protocol
   below and [VOICE_AGENT.md](../agents/VOICE_AGENT.md)); the call's own TTS waits up
-  to 20 s and sends the reply as text when it gets no slot.
+  to 20 s, gets its full synthesis time on top once the slot is granted, and sends the
+  reply as text when it gets no slot or no audio in time.
 - **180 s for channels and the CLI**: nobody watches a spinner there, and a voice note
   answered late beats one dropped.
 

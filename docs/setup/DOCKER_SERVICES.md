@@ -178,8 +178,9 @@ long each (STT 1.84-1.94 s against 0.54-0.61 s alone, TTS 3.11-3.19 s against 1.
 measured on a 16-core machine) and finished together. VAF therefore sends them one at a
 time through a fair queue per resource (`vaf/core/fair_queue.py`): the next slot goes to
 the person served least recently, a live caller (voice call, dictation, read-aloud)
-waits at most 15 s and then hears "busy", channels and the CLI wait up to 180 s, and at
-most 12 requests wait per queue. The table of queues is in
+waits at most 15 s and then hears "busy", channels and the CLI wait up to 180 s (a
+Telegram voice reply 15 s, since one thread sends every chat), and at most 12 requests
+wait per queue, at most 3 of them from one person. The table of queues is in
 [SPEECH_FEATURES.md](../web-ui/SPEECH_FEATURES.md#waiting-in-line-the-speech-queues);
 their numbers are the `queues` row of `vaf health` (below).
 

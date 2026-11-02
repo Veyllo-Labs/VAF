@@ -292,3 +292,98 @@ def test_the_admin_aliases_are_one_person(monkeypatch):
     monkeypatch.setattr(config, "get_local_admin_scope_id", lambda: "admin-scope-1")
     assert fair_queue._canonical_key("admin-scope-1") == fair_queue._canonical_key(None)
     assert fair_queue._canonical_key(" tenant-b ") == "tenant-b"
+
+
+def test_one_person_cannot_lock_the_others_out():
+    """A fills its own share of the waiters; A's next request is refused as A's own
+    "full", and B is still admitted and served before A's second. MUTATION: drop the
+    per-key check (A's third request waits, B gets the global "full") - red."""
+    q = ResourceQueue("share", slots=1, max_waiting=3, max_waiting_per_key=2)
+    holder = _Holder(q, "C")
+    out = []
+    threads = _enqueue_in_order(q, [("A", "A1"), ("A", "A2")], out)
+    with_a = []
+    t = _waiter(q, "A", with_a, "A3")
+    t.join(2)
+    assert with_a == [("A3", "full")]
+    threads += _enqueue_in_order(q, [("B", "B1")], out)
+    holder.release()
+    for th in threads:
+        th.join(5)
+    assert out == ["A1", "B1", "A2"]
+    assert q.metrics()["refused"]["full"] == 1
+
+
+def test_own_share_says_so():
+    busy = QueueBusy("stt", "full", position=3, own_share=True)
+    assert "2 of your requests" in str(busy) and busy.own_share
+
+
+class _Boom(BaseException):
+    """Not an Exception: the callbacks' quiet guard lets it through, like an interrupt."""
+
+
+def test_a_slot_granted_while_the_waiter_fails_is_handed_on():
+    """The waiter's callback lets the slot go to it and then dies: the slot it was granted
+    in that instant must be handed on, never kept. MUTATION: drop the release in the
+    waiter's cleanup (the queue stays occupied) - red."""
+    q = ResourceQueue("handover", slots=1)
+    holder = _Holder(q)
+    calls = []
+
+    def on_wait(info):
+        calls.append(info.position)
+        if info.position == 1 and len(calls) == 1:
+            holder.release()
+            assert _wait_until(lambda: q.metrics()["running"] == 1 and not q.metrics()["waiting"])
+            raise _Boom()
+
+    caught = []
+
+    def run():
+        try:
+            with q.slot("a", on_wait=on_wait, poll_s=0.01):
+                caught.append("entered")
+        except _Boom:
+            caught.append("boom")
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(5)
+    assert caught == ["boom"]
+    assert q.metrics()["running"] == 0
+    with q.slot("b", deadline_s=0.0):
+        pass
+
+
+def test_a_failing_grant_report_does_not_leak_the_slot():
+    """The report of the grant (position 0) dies: the slot and the thread's hold are
+    released. MUTATION: drop the release around the final report - red."""
+    q = ResourceQueue("leak", slots=1)
+    holder = _Holder(q)
+
+    def on_wait(info):
+        if info.position == 0:
+            raise _Boom()
+
+    result = []
+
+    def run():
+        try:
+            with q.slot("a", on_wait=on_wait, poll_s=0.01):
+                result.append("entered")
+        except _Boom:
+            result.append("boom")
+        try:
+            with q.slot("a", deadline_s=1.0):
+                result.append("again")
+        except RuntimeError:
+            result.append("still held")
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    assert _wait_until(lambda: q.metrics()["waiting"] == 1)
+    holder.release()
+    t.join(5)
+    assert result == ["boom", "again"]
+    assert q.metrics()["running"] == 0

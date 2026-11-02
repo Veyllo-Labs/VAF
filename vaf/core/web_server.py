@@ -858,8 +858,9 @@ def _queue_wait_sender(websocket, loop, msg_type: str, armed=None, resource=None
 
     Runs in the executor thread that waits, so the send is handed to the loop; a failed
     send is swallowed (the wait goes on). Throttled to one update per second, except the
-    first and the grant (position 0). `armed` (an asyncio.Event) is set on the first
-    report: the caller is waiting, so the socket may be read ahead (_ReadAhead)."""
+    first and the grant (position 0). `armed` (an asyncio.Event) is set while the caller
+    waits, so the socket may be read ahead (_ReadAhead), and cleared again by the grant:
+    the rest of the work (the call's LLM step) does not read ahead."""
     last = {"at": None}
 
     def on_wait(info) -> None:
@@ -869,7 +870,7 @@ def _queue_wait_sender(websocket, loop, msg_type: str, armed=None, resource=None
         last["at"] = now
         if armed is not None:
             try:
-                loop.call_soon_threadsafe(armed.set)
+                loop.call_soon_threadsafe(armed.set if info.position > 0 else armed.clear)
             except Exception:
                 pass
         payload = {"type": msg_type, "position": int(info.position),
@@ -888,10 +889,22 @@ def _queue_wait_sender(websocket, loop, msg_type: str, armed=None, resource=None
 # How long a live call's TTS waits for a slot: the reply text is already decided and goes
 # out anyway, so a long wait only delays what the person can already read.
 _CALL_TTS_WAIT_S = 20.0
+# The synthesis budget after the slot is granted, per kind of line; the outer timeout of a
+# call's TTS is the queue wait plus this, so a slot granted late still gets its full
+# synthesis time (the 30/60/110 s the lines had before they waited in a queue).
+_CALL_TTS_SYNTH_S = {"short": 30.0, "chime": 60.0, "reply": 110.0, "speak": 40.0}
+
+
+def _call_tts_budget(kind: str) -> float:
+    return _CALL_TTS_WAIT_S + _CALL_TTS_SYNTH_S[kind]
+
 
 # Frames read ahead while one voice turn waits; the client sends one turn at a time, so a
-# handful is all a live call produces in a wait (an end, a reset, a few chunks).
+# handful is all a live call produces in a wait (an end, a reset, a few chunks). The byte
+# budget keeps a socket from parking more than a few MiB of frames (one frame may be up
+# to WS_MAX_SIZE_BYTES; without read-ahead the transport holds about one).
 _READ_AHEAD_MAX = 32
+_READ_AHEAD_MAX_BYTES = 4 * 1024 * 1024
 
 
 class _ReadAhead:
@@ -901,21 +914,30 @@ class _ReadAhead:
     inline, so a `voice_call_end` (or a disconnect) sent during the turn used to be read
     only after it. While a turn WAITS in a queue (its on_wait set `armed`), `wait()` keeps
     reading frames into a buffer; an end or a disconnect sets the call's cancel event,
-    which the waiting slot polls. Every buffered frame is handed to the receive loop
-    afterwards, in arrival order, and a pending receive is never cancelled. A turn that
-    never waits never reads ahead, so an uncontended call behaves exactly as before.
+    which the waiting slot polls. The grant clears `armed`, so reading ahead stops when the
+    wait is over (a receive already started stays pending for the receive loop). Every
+    buffered frame is handed to the receive loop afterwards, in arrival order, and a
+    pending receive is never cancelled. Reading stops at _READ_AHEAD_MAX frames or
+    _READ_AHEAD_MAX_BYTES. A turn that never waits never reads ahead, so an uncontended
+    call behaves exactly as before.
     """
 
     def __init__(self, websocket) -> None:
         self._ws = websocket
         self._buffer: deque = deque()
+        self._buffered_bytes = 0
         self._pending: Optional[asyncio.Future] = None
+
+    def _has_room(self) -> bool:
+        return (len(self._buffer) < _READ_AHEAD_MAX
+                and self._buffered_bytes < _READ_AHEAD_MAX_BYTES)
 
     async def next_frame(self) -> str:
         if self._buffer:
             item = self._buffer.popleft()
             if isinstance(item, BaseException):
                 raise item
+            self._buffered_bytes -= len(item)
             return item
         if self._pending is not None:
             pending, self._pending = self._pending, None
@@ -930,13 +952,12 @@ class _ReadAhead:
             while not fut.done():
                 waiters = {fut}
                 if armed.is_set():
-                    if (reading and self._pending is None
-                            and len(self._buffer) < _READ_AHEAD_MAX):
+                    if reading and self._pending is None and self._has_room():
                         self._pending = asyncio.ensure_future(self._ws.receive_text())
                     if reading and self._pending is not None:
                         waiters.add(self._pending)
                 else:
-                    if arm_task is None:
+                    if arm_task is None or arm_task.done():
                         arm_task = asyncio.ensure_future(armed.wait())
                     waiters.add(arm_task)
                 await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
@@ -951,6 +972,7 @@ class _ReadAhead:
                     else:
                         frame = pending.result()
                         self._buffer.append(frame)
+                        self._buffered_bytes += len(frame)
                         if _is_call_end(frame):
                             cancel_ev.set()
                             reading = False
@@ -8850,7 +8872,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                             cancelled=_gcancel.is_set, on_wait=_gwait,
                                             busy_raises=True),
                                     ), _garmed, _gcancel),
-                                    timeout=30.0,
+                                    timeout=_call_tts_budget("short"),
                                 )
                                 _call_rec = _VOICE_CALLS.get(_conn_key)
                                 if _gaudio and _call_rec is not None:
@@ -9009,7 +9031,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 _busy_audio = None
                             await websocket.send_json({
                                 "type": "voice_call_error", "error": "busy",
-                                "resource": _call_resource(_b.get("resource") or "stt"),
+                                # A turn is only ever refused at its STT step; an embedder's
+                                # recognizer may carry any resource name.
+                                "resource": "stt",
                                 "reason": _b.get("reason"),
                                 "waited_ms": _b.get("waited_ms", 0),
                                 "text": _busy_text, "audio": _busy_audio,
@@ -9048,10 +9072,13 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                             user_key=_scope, deadline_s=_CALL_TTS_WAIT_S,
                                             cancelled=_cancel.is_set, on_wait=_wait_v,
                                             busy_raises=True)), _armed_v, _cancel),
-                                    timeout=60.0 if _outcome.kind == "chime_in" else 30.0)
+                                    timeout=_call_tts_budget(
+                                        "chime" if _outcome.kind == "chime_in" else "short"))
                                 if _va_out:
                                     _v_audio = _b64v.b64encode(_va_out).decode("utf-8")
-                            except _CallBusy:
+                            except (_CallBusy, asyncio.TimeoutError):
+                                # No slot, or no audio within the budget: the line goes
+                                # out as text, never silently dropped.
                                 _v_busy = True
                             except Exception:
                                 _v_audio = None
@@ -9122,13 +9149,14 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                         cancelled=_cancel.is_set, on_wait=_wait_r,
                                         busy_raises=True),
                                 ), _armed_r, _cancel),
-                                timeout=130.0,
+                                timeout=_call_tts_budget("reply"),
                             )
                             if _audio_out:
                                 _reply_audio = _b64v.b64encode(_audio_out).decode("utf-8")
-                        except _CallBusy:
-                            # The reply was decided and goes out as text; only its voice
-                            # could not get a TTS slot (nothing already decided is withdrawn).
+                        except (_CallBusy, asyncio.TimeoutError):
+                            # The reply was decided and goes out as text; only its voice got
+                            # no TTS slot, or not within its budget (nothing already decided
+                            # is withdrawn).
                             _reply_busy = True
                         except Exception:
                             _reply_audio = None
@@ -9238,7 +9266,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                             user_key=_scope, deadline_s=_CALL_TTS_WAIT_S,
                                             busy_raises=True),
                                     ),
-                                    timeout=60.0,
+                                    timeout=_call_tts_budget("speak"),
                                 )
                                 if _audio:
                                     import base64 as _b64s

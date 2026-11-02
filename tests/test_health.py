@@ -437,7 +437,9 @@ def test_queues_row_degraded_after_refusal(reason, expected):
     result = health.collect_health(**_quiet_checks())
     row = next(c for c in result["checks"] if c["name"] == "queues")
     assert row["status"] == expected
-    assert row["reason"].startswith("stt: 0 waiting, 2 served")
+    assert "stt: 0 waiting, 2 served" in row["reason"]
+    # A degraded row says why first; a hang-up is no reason to.
+    assert row["reason"].startswith("1 turned away") == (expected == "degraded")
     assert [m["name"] for m in row["metrics"]] == ["stt"]
     assert row["metrics"][0]["refused"][reason] == 1
     assert result["status"] == expected

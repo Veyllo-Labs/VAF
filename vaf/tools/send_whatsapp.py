@@ -151,7 +151,14 @@ class SendWhatsAppTool(BaseTool):
             else:
                 return f"File not found or not a file: {file_path_str}"
         elif voice_lang:
-            voice_path = self._synthesize_voice(out, voice_lang[:2].lower(), user_scope_id)
+            from vaf.core.fair_queue import QueueBusy
+            try:
+                voice_path = self._synthesize_voice(out, voice_lang[:2].lower(), user_scope_id)
+            except QueueBusy:
+                # A load problem, not a setup problem: no settings hint.
+                return ("Voice message not sent: the speech service is busy right now. "
+                        "Send the same text as a normal message without voice_lang, "
+                        "or try the voice message again in a minute.")
             if not voice_path:
                 return (
                     "Voice message could not be generated (TTS failed). "
@@ -201,8 +208,11 @@ class SendWhatsAppTool(BaseTool):
         return result
 
     def _synthesize_voice(self, text: str, lang: str, user_key=None):
-        """Synthesize TTS to OGG file, return path. Returns None on failure (and when the
-        TTS queue is busy). `user_key` is the caller's scope, the person it waits for."""
+        """Synthesize TTS to OGG file, return path. Returns None on failure; raises
+        fair_queue.QueueBusy when the TTS queue gave no slot within WAIT_LIVE_S (a tool
+        call has a fixed budget, the agent can fall back to text). `user_key` is the
+        caller's scope, the person it waits for."""
+        from vaf.core.fair_queue import QueueBusy
         try:
             from vaf.core import speech_client
             from vaf.core.config import Config
@@ -212,12 +222,16 @@ class SendWhatsAppTool(BaseTool):
             if not tts_url:
                 return None
             data = speech_client.synthesize(text[:4000], lang, want_format="ogg", docker_url=tts_url,
-                                            user_key=user_key)
+                                            user_key=user_key,
+                                            deadline_s=speech_client.WAIT_LIVE_S,
+                                            busy_raises=True)
             if not data or data[:4] not in (b"OggS", b"RIFF"):
                 return None
             suffix = ".ogg" if data[:4] == b"OggS" else ".wav"
             with tempfile.NamedTemporaryFile(prefix="vaf_wa_", suffix=suffix, delete=False) as f:
                 f.write(data)
                 return f.name
+        except QueueBusy:
+            raise
         except Exception:
             return None

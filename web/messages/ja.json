@@ -2673,7 +2673,7 @@
     "resultReady": "タスクが完了しました。詳細はチャットにあります。",
     "status_waiting": "順番待ち：{position}番目、約{seconds}秒",
     "status_waiting_noeta": "順番待ち：{position}番目",
-    "status_busy": "音声サービスが混雑中",
+    "status_busy": "音声認識が混雑中",
     "status_tts_busy": "音声が混雑中、テキストで返答"
   },
   "outbox": {

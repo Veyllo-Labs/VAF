@@ -2673,7 +2673,7 @@
     "resultReady": "Die Aufgabe ist fertig. Die Details stehen im Chat.",
     "status_waiting": "In der Warteschlange: Platz {position}, etwa {seconds} s",
     "status_waiting_noeta": "In der Warteschlange: Platz {position}",
-    "status_busy": "Sprachdienst ausgelastet",
+    "status_busy": "Spracherkennung ausgelastet",
     "status_tts_busy": "Stimme ausgelastet, Antwort als Text"
   },
   "outbox": {

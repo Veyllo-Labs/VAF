@@ -2673,7 +2673,7 @@
     "resultReady": "작업이 끝났어요. 자세한 내용은 대화에 있어요.",
     "status_waiting": "대기 중: {position}번째, 약 {seconds}초",
     "status_waiting_noeta": "대기 중: {position}번째",
-    "status_busy": "음성 서비스 사용 중",
+    "status_busy": "음성 인식 사용 중",
     "status_tts_busy": "음성 사용 중, 텍스트로 답변"
   },
   "outbox": {

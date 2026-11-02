@@ -11045,6 +11045,16 @@ function VAFDashboardContent() {
                                     would make it narrower than the standard input with an empty gap on the
                                     left; hanging up ends everything, so no separate stop is needed here. */}
                                 <div className={cn(chatWidthClass, "flex items-center relative")}>
+                                    {/* The dictation's place in the speech queue, above the composer's
+                                        right end where the spinning mic is. Here, not in the mic button:
+                                        the form clips everything outside it (overflow-hidden), and a
+                                        button's children are not announced as a live region. */}
+                                    {isProcessingAudio && sttWaitText && (
+                                        <div role="status"
+                                            className="pointer-events-none absolute bottom-full right-0 mb-2 z-20 whitespace-nowrap max-md:whitespace-normal max-md:max-w-[calc(100vw-2rem)] rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-[#1f1f1f] px-2 py-1 text-[11px] font-medium text-gray-600 dark:text-gray-300 shadow-sm">
+                                            {sttWaitText}
+                                        </div>
+                                    )}
                                     {/* Suggestions popup, anchored to the input it completes. bottom-full
                                         grows it UPWARD from just above the box, so it sits where the '@'
                                         or '/' is being typed instead of floating mid-screen. */}
@@ -11234,7 +11244,7 @@ function VAFDashboardContent() {
                                             onClick={isRecording ? stopRecording : startRecording}
                                             disabled={isProcessingAudio || (isGenerating && !isSubAgentRunning)}
                                             className={cn(
-                                                "relative shrink-0 mb-1.5 mr-2 h-10 w-10 flex items-center justify-center rounded-xl transition-colors",
+                                                "shrink-0 mb-1.5 mr-2 h-10 w-10 flex items-center justify-center rounded-xl transition-colors",
                                                 isRecording ? "bg-red-500 text-white" :
                                                     isProcessingAudio ? "text-gray-400" :
                                                         "text-gray-500 hover:text-gray-900 hover:bg-gray-100 disabled:text-gray-300"
@@ -11247,12 +11257,6 @@ function VAFDashboardContent() {
                                                 : (isProcessingAudio && sttWaitText) ? sttWaitText
                                                 : isProcessingAudio ? tMain('processing') : tMain('voiceInput')}
                                         >
-                                            {isProcessingAudio && sttWaitText && (
-                                                <span role="status"
-                                                    className="pointer-events-none absolute bottom-full right-0 mb-1.5 whitespace-nowrap rounded-lg border border-black/10 dark:border-white/10 bg-white dark:bg-[#1f1f1f] px-2 py-1 text-[11px] font-medium text-gray-600 dark:text-gray-300 shadow-sm">
-                                                    {sttWaitText}
-                                                </span>
-                                            )}
                                             {isProcessingAudio ? (
                                                 <Loader2 size={18} className="animate-spin" />
                                             ) : isRecording ? (

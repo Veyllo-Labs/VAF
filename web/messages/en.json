@@ -2673,7 +2673,7 @@
     "resultReady": "The task is done. The details are in the chat.",
     "status_waiting": "In line: place {position}, about {seconds} s",
     "status_waiting_noeta": "In line: place {position}",
-    "status_busy": "Speech service busy",
+    "status_busy": "Speech recognition busy",
     "status_tts_busy": "Voice busy, reply as text"
   },
   "outbox": {

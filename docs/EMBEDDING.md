@@ -1726,7 +1726,7 @@ visible. It is the queue VAF's own speech lanes wait in.
 ```python
 import vaf
 
-gpu = vaf.resource_queue("my-gpu", slots=1, max_waiting=12)
+gpu = vaf.resource_queue("my-gpu", slots=1, max_waiting=12, max_waiting_per_key=3)
 
 def answer(user_scope, prompt, show_place):
     try:
@@ -1743,6 +1743,12 @@ def answer(user_scope, prompt, show_place):
   order alone is `vaf.core.fair_queue.FairOrder` (pure, no threads).
 - **Slots.** `slots=1` lets one call in at a time; `slots=None` is an unbounded
   pass-through that only measures (VAF's cloud speech lanes).
+- **A share per person.** `max_waiting` caps all waiters, `max_waiting_per_key` one
+  person's share of them. Set both where one person can send many requests at once
+  (several tabs, a script): without the share, one person fills the queue and everybody
+  else is refused as `full`; with it, only that person is (`QueueBusy.own_share`), and
+  the others are still admitted while total room is left. VAF's speech queues use 12
+  and 3.
 - **`slot(key, *, deadline_s=None, cancelled=None, on_wait=None, poll_s=0.25)`.** The
   key is canonical: no key and the local admin's scope are one bucket. A free slot
   with nobody waiting is taken at once and `cancelled` is NOT asked: only a caller
@@ -1750,7 +1756,7 @@ def answer(user_scope, prompt, show_place):
   its place on entry, on every change and with position 0 when the slot is granted.
   Exceptions in either callback are swallowed.
 - **`QueueBusy`** carries `resource`, `reason` (`full`: `max_waiting` callers already
-  wait; `timeout`: `deadline_s` passed; `cancelled`: `cancelled()` turned true),
+  wait, or this caller's own share is used up, then `own_share` is true; `timeout`: `deadline_s` passed; `cancelled`: `cancelled()` turned true),
   `position`, `waited_s` and `eta_s`.
 - **`WaitInfo`** is the caller's own `position` (1 is next), `eta_s` (None until the
   queue has three service samples, then `ceil(position / slots)` times the median
@@ -2645,7 +2651,8 @@ Stable public surface (safe to build on):
   `transcribe` seam.
 - `vaf.ResourceQueue` / `vaf.QueueBusy` / `vaf.WaitInfo` / `vaf.resource_queue` /
   `vaf.queue_metrics` - the fair queue: `slot()`'s arguments and its rule that only a
-  waiting caller is cancelled, the three refusal reasons, the `WaitInfo` fields and
+  waiting caller is cancelled, `max_waiting` and `max_waiting_per_key`, the three refusal
+  reasons and `own_share`, the `WaitInfo` fields and
   the metric names. The ETA formula and the 15-minute window may be tuned.
 - `vaf.user_jail` - turning a declared identity into a file boundary by hand. Prefer the
   `file_access` declaration on your tool, which does it on every lane; this remains

@@ -373,3 +373,53 @@ def test_a_busy_whatsapp_voice_reply_goes_out_as_text_without_a_second_wait(monk
     assert wa._enqueue_reply("tenant", "123@s.whatsapp.net", "Hallo!", user_scope_id="wa-scope-1")
     assert calls == ["de"]
     assert out.get_nowait() == ("tenant", "123@s.whatsapp.net", "Hallo!", None)
+
+
+def test_local_tts_counts_no_cloud_request(monkeypatch):
+    """Without a TTS provider, SpeechManager never enters the cloud lane, so `vaf health`
+    shows no tts_api traffic that did not happen. MUTATION: call synthesize_api without
+    asking for a provider - red."""
+    box = _Container(lambda url: _Resp(200, content=RIFF), hold_s=0)
+    monkeypatch.setattr(sc.requests, "post", box.post)
+    sm = _bare_speech_manager()
+    assert sm.synthesize_audio("Hallo du", "de", force_engine="docker", user_key="p") == RIFF
+    assert _metric("tts_api") is None and _metric("tts")["served"] == 1
+
+
+def test_telegram_voice_reply_waits_briefly_on_the_one_sender_thread(monkeypatch):
+    """Every Telegram chat is sent by one thread: a voice reply waits at most WAIT_LIVE_S
+    for a TTS slot, then the caller sends the text. MUTATION: the 180 s default - red."""
+    import vaf.api.telegram_bridge as tg
+    seen = {}
+    monkeypatch.setattr(sc, "synthesize", lambda text, lang, **kw: seen.update(kw) or None)
+    monkeypatch.setitem(tg._voice_reply_scope, "77", "tenant-scope-1")
+    assert asyncio.run(tg._send_voice_reply("token", "77", "Hallo", "de")) is False
+    assert seen["deadline_s"] == sc.WAIT_LIVE_S and seen["user_key"] == "tenant-scope-1"
+
+
+def test_send_whatsapp_says_busy_not_misconfigured(monkeypatch):
+    """A busy TTS queue is a load problem: the tool says so and suggests text or a retry,
+    without the settings hint a failed TTS gets, and waits no longer than WAIT_LIVE_S.
+    MUTATION: drop busy_raises in the tool (the "TTS failed, check settings" answer) - red."""
+    from vaf.tools.send_whatsapp import SendWhatsAppTool
+    seen = {}
+
+    def busy(text, lang, **kw):
+        seen.update(kw)
+        if kw.get("busy_raises"):
+            raise fair_queue.QueueBusy("tts", "timeout", waited_s=15.0)
+        return None
+
+    monkeypatch.setattr(sc, "synthesize", busy)
+    answer = SendWhatsAppTool().run(message="Hallo", to_phone="+491761234567",
+                                    voice_lang="de", user_scope_id="wa-scope-1",
+                                    username="tenant")
+    assert "speech service is busy" in answer and "Settings" not in answer
+    assert seen["deadline_s"] == sc.WAIT_LIVE_S and seen["user_key"] == "wa-scope-1"
+
+
+def test_every_speech_queue_has_a_share_per_person():
+    """MUTATION: build the speech queues without max_waiting_per_key - red."""
+    for name in ("stt", "stt_local", "tts", "tts_chatterbox", "tts_piper"):
+        q = sc.speech_queue(name)
+        assert q.max_waiting == 12 and q.max_waiting_per_key == sc.SPEECH_MAX_WAITING_PER_KEY == 3

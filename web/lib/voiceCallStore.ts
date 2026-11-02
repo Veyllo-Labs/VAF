@@ -17,8 +17,9 @@ export type VoiceAgentMode = 'idle' | 'listening' | 'thinking' | 'talking';
 /** This call's place in a speech queue (voice_call_wait): only its own place and
  *  expected wait, never anything about the others in line. */
 export type VoiceQueueWait = { resource: 'stt' | 'tts'; position: number; etaMs: number | null };
-/** A speech queue turned something away: the turn (stt) was not heard, or a reply
- *  (tts) arrived as text only - `text` is that reply, shown as a caption. */
+/** A speech queue turned something away: the turn (stt) was not heard (cleared when the
+ *  next turn starts), or a reply (tts) arrived as text only - `text` is that reply, shown
+ *  as a caption until the next reply arrives. */
 export type VoiceBusyNotice = { kind: 'stt' | 'tts'; text?: string };
 
 interface VoiceCallState {
@@ -53,7 +54,7 @@ interface VoiceCallState {
   hangupRequested: boolean;
   /** set while a turn or a reply waits in a speech queue (statusKey 'waiting') */
   wait: VoiceQueueWait | null;
-  /** set until the next turn starts */
+  /** stt: until the next turn starts; tts: until the next reply arrives */
   busyNotice: VoiceBusyNotice | null;
 
   start: () => void;

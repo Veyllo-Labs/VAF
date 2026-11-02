@@ -2673,7 +2673,7 @@
     "resultReady": "Görev tamamlandı. Ayrıntılar sohbette.",
     "status_waiting": "Sırada: {position}. sıra, yaklaşık {seconds} sn",
     "status_waiting_noeta": "Sırada: {position}. sıra",
-    "status_busy": "Konuşma hizmeti meşgul",
+    "status_busy": "Konuşma tanıma meşgul",
     "status_tts_busy": "Ses meşgul, yanıt metin olarak"
   },
   "outbox": {

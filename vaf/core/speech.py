@@ -631,8 +631,13 @@ $player.Close()
         # dispatch, mirroring vision_provider. force_engine only selects the local
         # fallback engine; a configured provider takes precedence. Never raises;
         # None falls through to the local engine below.
-        api_audio = _sc.synthesize_api(clean_text, lang_short, want_format="wav",
-                                       user_key=user_key)
+        # Only when a provider is set, as speech_client.synthesize asks: otherwise every
+        # local request would count as a served `tts_api` request in the health numbers.
+        from vaf.core import speech_api as _speech_api
+        api_audio = None
+        if _speech_api.select_tts_backend()[0]:
+            api_audio = _sc.synthesize_api(clean_text, lang_short, want_format="wav",
+                                           user_key=user_key)
         if api_audio:
             print(f"[TTS Debug] Cloud provider TTS SUCCESS ({len(api_audio)} bytes)")
             return api_audio

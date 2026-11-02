@@ -472,8 +472,10 @@ async def _send_voice_reply(bot_token: str, chat_id: str, text: str, language: s
         from vaf.core import speech_client
         with _voice_reply_lock:
             user_key = _voice_reply_scope.get(str(chat_id))
+        # One sender thread serves every chat: a short wait, then the caller sends the text.
         audio_data = speech_client.synthesize(text, language, want_format="ogg",
-                                              user_key=user_key)
+                                              user_key=user_key,
+                                              deadline_s=speech_client.WAIT_LIVE_S)
 
         if not audio_data:
             logger.warning("TTS returned no audio")

@@ -384,8 +384,12 @@ beside the environment's record, so code in the environment cannot rewrite it; w
 and its exit code are read from the container. At most eight run in one environment at a time
 (`processes.MAX_PER_CHAT`, the host lane's number); a ninth is refused with the running ones
 named. The count and a placeholder record are written in one step under the state lock, so
-starts at the same moment cannot all take the last place; the placeholder goes when docker
-refuses the start, and one older than 60 s (a crash in between) stops counting. A background
+starts at the same moment cannot all take the last place (which processes run is read just
+before the lock, and a start docker answered after that read counts as running); the
+placeholder goes when docker refuses the start, and one older than 60 s that never ran (a
+crash in between) stops counting, is listed as "did not start" and is removed on the next
+look. A process stopped while docker is still starting it is ended as soon as docker has
+started it. A background
 start from the agent (`sandbox_exec`, `python_sandbox`, like `host_bash`) is refused where its
 end could not be reported (`processes.background_refusal`): no chat, a messaging-channel chat, a
 sub-agent's process, or a process where no lane runs the turns VAF starts by itself (the modern
@@ -397,8 +401,9 @@ the report of a record to another live process that watches it. Whoever reports 
 the record under the state lock, so one ended process is reported once by intent (without
 `filelock` that lock holds only between threads). A process past
 `sandbox_env_process_max_hours` is ended by whoever looks, the reaper included, also when
-another process watches it (that watcher may have stopped looking); the record says it was ended
-at the limit, and the report says so. Exit 137 is reported as "killed: out of memory or ended
+another process watches it (that watcher may have stopped looking); it counts as ended only when
+the kill succeeded and the process is gone, otherwise the next look tries again. The record
+then says it was ended at the limit, and the report says so. Exit 137 is reported as "killed: out of memory or ended
 from outside". A run folder the process was started with
 (`/tmp/vaf_<lane>_<hex>` only) is removed when it is reported or stopped; its log stays as long
 as the container, so `host_process(action="log")` still reads it after the report. None of these

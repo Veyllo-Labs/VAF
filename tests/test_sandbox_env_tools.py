@@ -620,3 +620,170 @@ def test_the_cleanup_folder_is_matched_whole():
     with pytest.raises(ValueError):
         envmod.EnvironmentManager().start_process("scope-alice", "0a1b2c3d", "x",
                                                   cleanup_dir="/tmp/vaf_run_abcdef\n")
+
+
+# -- round 2: stop during start, a failed limit kill, the lock, a start that never ran ------
+
+def test_a_stop_during_startup_ends_the_process(procs, monkeypatch):
+    """The handle is listed from the placeholder on, so a stop can come while docker is
+    still starting it: nothing to kill yet, and the record is marked reported. MUTATION: do
+    not recheck `stopped` after docker answered - the process runs on unreported and past
+    every limit, red."""
+    import threading
+    m, env, fake, woken = procs
+    gate, entered = threading.Event(), threading.Event()
+
+    def _held(args, timeout=60, **kw):
+        if args[:2] == ["exec", "-d"]:
+            entered.set()
+            gate.wait(10)
+        return fake(args, timeout=timeout, **kw)
+
+    monkeypatch.setattr(containers, "docker", _held)
+    out = []
+
+    def _start():
+        try:
+            out.append(m.start_process("scope-alice", env.id, "sleep 999", session_id="chat-1"))
+        except envmod.EnvironmentRefused as e:
+            out.append(e)
+
+    t = threading.Thread(target=_start)
+    t.start()
+    assert entered.wait(10)
+    [row] = m.processes("scope-alice")
+    assert row["state"] == "starting"
+    m.stop_process("scope-alice", row["handle"])
+    gate.set()
+    t.join(10)
+    assert isinstance(out[0], envmod.EnvironmentRefused) and "stopped while it was starting" in str(out[0])
+    proc = row["handle"].split("-")[-1]
+    assert proc not in fake.alive, "ended once docker had started it"
+    assert m._read_procs(env.id)[proc]["notified"] is True and woken == []
+
+
+def test_a_stop_during_startup_whose_kill_fails_stays_tracked(procs, monkeypatch):
+    """MUTATION: leave it reported when the kill failed - nothing ever ends it, red."""
+    import threading
+    m, env, fake, _ = procs
+    gate, entered = threading.Event(), threading.Event()
+
+    def _held(args, timeout=60, **kw):
+        if args[:2] == ["exec", "-d"]:
+            entered.set()
+            gate.wait(10)
+        if args[0] == "exec" and "kill" in args[-1]:
+            return types.SimpleNamespace(returncode=1, stdout="", stderr="busy")
+        return fake(args, timeout=timeout, **kw)
+
+    monkeypatch.setattr(containers, "docker", _held)
+    t = threading.Thread(target=lambda: m.start_process("scope-alice", env.id, "sleep 999",
+                                                        session_id="chat-1"))
+    t.start()
+    assert entered.wait(10)
+    [row] = m.processes("scope-alice")
+    m.stop_process("scope-alice", row["handle"])
+    gate.set()
+    t.join(10)
+    proc = row["handle"].split("-")[-1]
+    assert proc in fake.alive and m._read_procs(env.id)[proc]["notified"] is False
+
+
+def test_an_overdue_process_is_reported_only_once_it_ended(procs, monkeypatch):
+    """A kill at the limit that fails, or one the process survives, claims nothing: the
+    next look tries again. MUTATION: claim after the kill without checking it, or ignore
+    the kill's own answer - red."""
+    m, env, fake, woken = procs
+    h = m.start_process("scope-alice", env.id, "python3 -u main.py", session_id="chat-1")
+    proc = h.split("-")[-1]
+    recs = m._read_procs(env.id)
+    recs[proc]["started"] = 1.0
+    m._write_procs(env.id, recs)
+    for kill_rc in (1, 0):                              # refused; "worked" but it survived
+        def _kill(args, timeout=60, rc=kill_rc, **kw):
+            if args[0] == "exec" and "kill" in args[-1]:
+                return types.SimpleNamespace(returncode=rc, stdout="", stderr="")
+            return fake(args, timeout=timeout, **kw)
+        monkeypatch.setattr(containers, "docker", _kill)
+        m._watch_processes(env, now=10 * 3600.0)
+        rec = m._read_procs(env.id)[proc]
+        assert woken == [] and not rec.get("notified") and not rec.get("ended_at_limit"), kill_rc
+    # A refused kill and a status read that then fails: an unreadable status reads as
+    # "nothing runs", so only the kill's own answer keeps it from being claimed.
+    reads = []
+
+    def _refused_then_blind(args, timeout=60, **kw):
+        if args[0] == "exec" and "kill" in args[-1]:
+            return types.SimpleNamespace(returncode=1, stdout="", stderr="")
+        if args[0] == "exec" and "alive" in args[-1]:
+            reads.append(1)
+            if len(reads) > 1:
+                raise RuntimeError("docker did not answer")
+        return fake(args, timeout=timeout, **kw)
+
+    monkeypatch.setattr(containers, "docker", _refused_then_blind)
+    m._watch_processes(env, now=10 * 3600.0)
+    assert woken == [] and not m._read_procs(env.id)[proc].get("ended_at_limit")
+    monkeypatch.setattr(containers, "docker", fake)
+    m._watch_processes(env, now=10 * 3600.0)
+    assert proc not in fake.alive and len(woken) == 1
+    assert "ended after 8 h" in woken[0]["text"]
+
+
+def test_the_status_read_is_outside_the_lock_and_the_cap_still_holds(procs, monkeypatch):
+    """The status read (a docker exec, up to 20 s) runs before the state lock. A start that
+    docker answered after that read counts as running whatever the read saw. MUTATION:
+    read under the lock again (the first assert), or drop the running_since rule - a start
+    finished between the read and the count is missed and nine run, red."""
+    from vaf.core.processes import MAX_PER_CHAT
+    m, env, fake, _ = procs
+    for i in range(MAX_PER_CHAT - 1):
+        m.start_process("scope-alice", env.id, f"sleep {i}", session_id="chat-1")
+    real = m._proc_status
+    nested = []
+
+    def _status(e):
+        assert not m._thread_lock._is_owned(), "a docker exec under the state lock"
+        seen = real(e)
+        if not nested:                          # another start runs to its end in between
+            nested.append(None)
+            nested[0] = m.start_process("scope-alice", env.id, "other", session_id="chat-1")
+        return seen
+
+    monkeypatch.setattr(m, "_proc_status", _status)
+    with pytest.raises(envmod.EnvironmentRefused):
+        m.start_process("scope-alice", env.id, "late", session_id="chat-1")
+    assert len(nested) == 1 and len(fake.alive) == MAX_PER_CHAT
+
+
+def test_a_placeholder_that_never_ran_is_removed_on_the_next_look(procs):
+    """MUTATION: leave a never-started placeholder in place - it is listed for ever, red."""
+    m, env, fake, woken = procs
+    m._write_procs(env.id, {"p0011aabb": {"command": "x", "session_id": "chat-1",
+                                          "starting": True, "started": 1.0, "notified": False,
+                                          "cleanup": "/tmp/vaf_run_0011aabbccdd"}})
+    [row] = m.processes("scope-alice")
+    assert row["state"] == "did not start"
+    m._watch_processes(env, now=100.0)
+    assert m._read_procs(env.id) == {} and woken == []
+    assert ["exec", env.container, "rm", "-rf", "/tmp/vaf_run_0011aabbccdd"] in fake.calls
+
+
+def test_a_file_lock_that_fails_releases_the_thread_lock(tmp_path, monkeypatch):
+    """MUTATION: no release in __enter__ - the next operation waits for good, red."""
+    import threading
+    m = envmod.EnvironmentManager(state_dir=tmp_path)
+
+    class _Timeout:
+        def acquire(self):
+            raise TimeoutError("lock held elsewhere")
+
+    monkeypatch.setattr(m, "_file_lock", lambda: _Timeout())
+    with pytest.raises(TimeoutError):
+        with m._locked():
+            pass
+    got = []
+    t = threading.Thread(target=lambda: got.append(m._thread_lock.acquire(timeout=1)))
+    t.start()
+    t.join(5)
+    assert got == [True]

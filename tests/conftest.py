@@ -662,6 +662,18 @@ def _not_inside_an_agent_command():
         os.environ[AGENT_COMMAND_ENV] = previous
 
 
+@pytest.fixture(autouse=True)
+def _no_wake_runner_left_over(monkeypatch):
+    """Every test starts in a process where no lane runs wake turns, as the terminal does.
+
+    The declaration is process-global (vaf/core/task_queue.py): a test that runs the real
+    headless loop declares one, and a later test's background start then passed or was
+    refused depending on test order. A test that needs a runner declares one itself."""
+    from vaf.core import task_queue
+    monkeypatch.setattr(task_queue, "_wake_runners", set())
+    monkeypatch.setattr(task_queue, "_wake_runner_threads", {})
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _sandbox_env_housekeeping_off():
     """No reaper, quit stop or revocation stop for sandbox environments in the suite.

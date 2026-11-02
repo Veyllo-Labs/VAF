@@ -895,24 +895,39 @@ def enqueue_wake_turn(*, kind: str, session_id: str, text: str, source: str = "w
 # runs its report would promise a message that never comes. An embedder whose own loop
 # drains the queue and runs wake turns declares itself the same way.
 _wake_runners: set = set()
+# A runner tied to its thread (declare_wake_runner(thread=...)) counts only while that
+# thread lives: a loop that ends by any path, an exception in its setup included, stops
+# counting without having to withdraw, and its restart declares itself again.
+_wake_runner_threads: Dict[str, threading.Thread] = {}
 _wake_runners_lock = threading.Lock()
 
 
-def declare_wake_runner(name: str) -> None:
-    """Say that a lane of this process runs wake turns (until withdrawn)."""
+def declare_wake_runner(name: str, *, thread: Optional[threading.Thread] = None) -> None:
+    """Say that a lane of this process runs wake turns: until withdrawn, or, with
+    ``thread``, while that thread is alive."""
     with _wake_runners_lock:
         _wake_runners.add(str(name))
+        if thread is not None:
+            _wake_runner_threads[str(name)] = thread
+        else:
+            _wake_runner_threads.pop(str(name), None)
 
 
 def withdraw_wake_runner(name: str) -> None:
     with _wake_runners_lock:
         _wake_runners.discard(str(name))
+        _wake_runner_threads.pop(str(name), None)
 
 
 def wake_runner_here() -> bool:
     """Whether a lane of this process runs wake turns, so a background job's report would
-    become a turn in its chat."""
+    become a turn in its chat. A runner whose thread has ended is dropped here."""
     with _wake_runners_lock:
+        for name in list(_wake_runners):
+            t = _wake_runner_threads.get(name)
+            if t is not None and not t.is_alive():
+                _wake_runners.discard(name)
+                _wake_runner_threads.pop(name, None)
         return bool(_wake_runners)
 
 

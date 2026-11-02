@@ -423,3 +423,38 @@ def test_host_bash_background_without_a_chat_is_refused_now(monkeypatch):
     assert out == ("[BLOCKED] a background run needs a chat to report back to, and this call has "
                    "none. Run it without background.")
     assert processes._registry == {}
+
+
+def test_a_runner_counts_only_while_its_thread_lives(monkeypatch):
+    """The web runner declares itself tied to its thread: a loop that ended by any path, an
+    exception in its setup included, stops counting. MUTATION: ignore the thread - red."""
+    import threading
+    import vaf.core.headless_runner as hr
+    import vaf.core.task_queue as tq
+
+    def _broken():
+        raise RuntimeError("setup failed")
+
+    monkeypatch.setattr(hr, "_WORKER_THREADS", {})          # as test_health's loop test does
+    monkeypatch.setattr(hr, "get_app_log_dir", _broken)
+    t = threading.Thread(target=lambda: _swallow(hr.run_headless_agent))
+    t.start()
+    t.join(10)
+    assert not t.is_alive()
+    assert tq.wake_runner_here() is False and tq._wake_runners == set()
+
+    hold = threading.Event()
+    live = threading.Thread(target=hold.wait, args=(10,))
+    live.start()
+    tq.declare_wake_runner("headless-1", thread=live)
+    assert tq.wake_runner_here() is True
+    hold.set()
+    live.join(10)
+    assert tq.wake_runner_here() is False
+
+
+def _swallow(fn):
+    try:
+        fn()
+    except Exception:
+        pass

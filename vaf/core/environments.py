@@ -80,19 +80,23 @@ LIFECYCLE
   idempotent: several reapers may race.
 - Background processes (`start_process`): at most `processes.MAX_PER_CHAT` (8) run in
   one environment at a time, counted and reserved (a placeholder record) in one step
-  under the state lock. Whether a start may promise a report is the caller's question
-  (`processes.background_refusal`, asked by VAF's tools). The process that started one
-  with a chat to report to watches it itself, every PROCESS_WATCH_INTERVAL_S (5 s), so
-  the wake turn lands in that process's own queue: the web server's, the TUI's. The
-  reaper is the backstop for a process whose watcher is gone (a restart, a short CLI
-  command) and for records without one (no chat, a sub-agent child); it leaves the
-  report of a record another LIVE process watches to that process, but applies
-  `sandbox_env_process_max_hours` to every record, because a live pid does not prove
-  its watcher still looks. Whoever reports claims the record under the state lock first
-  (re-read, `notified` set, written), so one ended process is reported once by intent;
-  without `filelock` that lock holds only between threads. A process started with a
-  `cleanup_dir` has that folder removed when it is reported or stopped; its log under
-  PROC_DIR stays as long as the container, so it can still be read after the wake.
+  under the state lock; the status read before it runs outside the lock, and a start
+  docker answered after that read counts as running. A stop that comes while docker is
+  still starting one ends it once docker has. Whether a start may promise a report is the
+  caller's question (`processes.background_refusal`, asked by VAF's tools). The process
+  that started one with a chat to report to watches it itself, every
+  PROCESS_WATCH_INTERVAL_S (5 s), so the wake turn lands in that process's own queue: the
+  web server's, the TUI's. The reaper is the backstop for a process whose watcher is gone
+  (a restart, a short CLI command) and for records without one (no chat, a sub-agent
+  child); it leaves the report of a record another LIVE process watches to that process,
+  but applies `sandbox_env_process_max_hours` to every record, because a live pid does
+  not prove its watcher still looks; an overdue process counts as ended only once its
+  kill succeeded and docker no longer lists it. Whoever reports claims the record under
+  the state lock first (re-read, `notified` set, written), so one ended process is
+  reported once by intent; without `filelock` that lock holds only between threads. A
+  process started with a `cleanup_dir` has that folder removed when it is reported or
+  stopped; its log under PROC_DIR stays as long as the container, so it can still be read
+  after the wake. A placeholder that never ran is removed on the next look.
 - VAF's quit stops every environment that is not busy (`stop_all_at_quit`); they are
   started with `docker run`, so the stack's `compose stop` never sees them.
 - An account whose access is taken away has its environments stopped (a revocation
@@ -347,9 +351,16 @@ class EnvironmentManager:
         class _Ctx:
             def __enter__(self_inner):
                 manager._thread_lock.acquire()
-                self_inner.lock = manager._file_lock()
-                if self_inner.lock is not None:
-                    self_inner.lock.acquire()
+                try:
+                    self_inner.lock = manager._file_lock()
+                    if self_inner.lock is not None:
+                        self_inner.lock.acquire()
+                except BaseException:
+                    # A file lock that times out (filelock raises after 30 s) must not
+                    # leave the thread lock held: every later operation of this
+                    # process would wait on it for good.
+                    manager._thread_lock.release()
+                    raise
                 return self_inner
 
             def __exit__(self_inner, *exc):
@@ -1273,11 +1284,18 @@ class EnvironmentManager:
             record["watcher_pid"] = os.getpid()
         # Counted and reserved in one step under the state lock: a placeholder record
         # ("starting") counts as running until docker has answered, so starts at the same
-        # moment cannot all pass the count. Rolled back when the start fails.
+        # moment cannot all pass the count. Rolled back when the start fails. Which
+        # processes run is read BEFORE the lock (a docker exec, up to 20 s, that must not
+        # hold up every other start and the watchers); a start docker answered after that
+        # read (`running_since`) counts as running whatever the read saw, so the count
+        # cannot miss a start that finished in between.
+        status_at = time.time()
+        alive = self._proc_status(env)[0] if self._read_procs(env.id) else set()
         with self._locked():
             known = self._read_procs(env.id)
-            alive = self._proc_status(env)[0] if known else set()
-            running = [p for p, r in known.items() if p in alive or self._starting(r)]
+            running = [p for p, r in known.items()
+                       if p in alive or self._starting(r)
+                       or float(r.get("running_since") or 0) >= status_at]
             if len(running) >= MAX_PER_CHAT:
                 raise EnvironmentRefused(
                     f"this sandbox already runs {len(running)} background commands (the limit "
@@ -1299,16 +1317,38 @@ class EnvironmentManager:
             started = r.returncode == 0
         except Exception:
             started, r = False, None
+        stopped_meanwhile = False
         with self._locked():
             procs = self._read_procs(env.id)
             if started and proc in procs:
                 procs[proc].pop("starting", None)
+                procs[proc]["running_since"] = time.time()
+                # Stopped while docker was starting it (its handle is listed from the
+                # placeholder on): the stop found nothing to kill, and the record is
+                # already reported, so nobody would ever end or report it. Ended here.
+                stopped_meanwhile = bool(procs[proc].get("stopped"))
             else:
                 procs.pop(proc, None)
             self._write_procs(env.id, procs)
         if not started:
             reason = (r.stderr or "").strip()[:200] if r is not None else "docker did not answer"
             raise EnvironmentRefused(f"the process could not be started: {reason}")
+        if stopped_meanwhile:
+            try:
+                killed = containers.docker(
+                    ["exec", env.container, "sh", "-c",
+                     containers.kill_marked_cmd("VAF_PROC_ID", proc)], timeout=20).returncode == 0
+            except Exception:
+                killed = False
+            if killed:
+                self._finish(env, procs[proc])
+                raise EnvironmentRefused("it was stopped while it was starting, so it does not run")
+            # Not ended: tracked again, so the limit and the report still reach it.
+            with self._locked():
+                fresh = self._read_procs(env.id)
+                if proc in fresh:
+                    fresh[proc]["notified"] = False
+                    self._write_procs(env.id, fresh)
         self._touch(env)
         if watch:
             self._register_watch(env, proc)
@@ -1371,6 +1411,8 @@ class EnvironmentManager:
                     state = "running"
                 elif self._starting(rec):
                     state = "starting"
+                elif rec.get("starting") and proc not in exits:
+                    state = "did not start"
                 elif rec.get("stopped"):
                     state = "stopped"
                 elif proc in exits:
@@ -1462,19 +1504,20 @@ class EnvironmentManager:
         limit = float(setting("process_max_hours")) * 3600
         ended: Dict[str, str] = {}
         at_limit: List[str] = []
+        overdue: List[str] = []
+        never_started: List[str] = []
         for proc, rec in pending.items():
             if proc in alive:
-                if now - float(rec.get("started") or now) <= limit:
-                    continue
-                containers.docker(["exec", env.container, "sh", "-c",
-                                   containers.kill_marked_cmd("VAF_PROC_ID", proc)], timeout=20)
-                at_limit.append(proc)
-                if not self._watched_elsewhere(rec):
-                    ended[proc] = self._limit_note()
+                if now - float(rec.get("started") or now) > limit:
+                    overdue.append(proc)
             elif rec.get("ended_at_limit"):
                 # Ended at the limit on an earlier look: reported by whoever sees it now,
                 # because the watcher it was left to may be the one that stopped looking.
                 ended[proc] = self._limit_note()
+            elif rec.get("starting") and proc not in exits:
+                # A placeholder past its grace that never ran: its start died between the
+                # reservation and docker's answer. Removed, not reported: nothing ran.
+                never_started.append(proc)
             elif self._watched_elsewhere(rec):
                 continue
             elif proc in exits:
@@ -1484,10 +1527,33 @@ class EnvironmentManager:
                 ended[proc] = note
             elif env.state != "running":
                 ended[proc] = "the environment stopped"
-        if not ended and not at_limit:
+        if overdue:
+            # Ended only once docker confirms it: a kill that failed, or a process that
+            # survived it, stays as it is and gets another attempt on the next look.
+            killed = set()
+            for proc in overdue:
+                try:
+                    r = containers.docker(["exec", env.container, "sh", "-c",
+                                           containers.kill_marked_cmd("VAF_PROC_ID", proc)],
+                                          timeout=20)
+                    if r.returncode == 0:
+                        killed.add(proc)
+                except Exception:
+                    continue
+            still = self._proc_status(env)[0] if killed else set()
+            for proc in overdue:
+                if proc in killed and proc not in still:
+                    at_limit.append(proc)
+                    if not self._watched_elsewhere(pending[proc]):
+                        ended[proc] = self._limit_note()
+        if not ended and not at_limit and not never_started:
             return
+        pruned: List[Dict[str, Any]] = []
         with self._locked():
             fresh = self._read_procs(env.id)
+            for p in never_started:
+                if p in fresh and fresh[p].get("starting") and not self._starting(fresh[p], now):
+                    pruned.append(fresh.pop(p))
             for p in at_limit:
                 if p in fresh:
                     fresh[p]["ended_at_limit"] = True
@@ -1499,6 +1565,8 @@ class EnvironmentManager:
         for proc, note in claimed.items():
             self._wake(env, proc, fresh[proc], note, now)
             self._finish(env, fresh[proc])
+        for rec in pruned:
+            self._finish(env, rec)
 
     def _wake(self, env: Environment, proc: str, rec: Dict[str, Any], note: str,
               now: Optional[float] = None) -> None:

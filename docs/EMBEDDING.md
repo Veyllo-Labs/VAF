@@ -1749,17 +1749,17 @@ def answer(user_scope, prompt, show_place):
   else is refused as `full`; with it, only that person is (`QueueBusy.own_share`), and
   the others are still admitted while total room is left. VAF's speech queues use 12
   and 3.
-- **`slot(key, *, deadline_s=None, cancelled=None, on_wait=None, poll_s=0.25)`.** The
-  key is canonical: no key and the local admin's scope are one bucket. That makes "no
-  key" one person: a lane that serves many people (a bridge, a server route) must pass
-  each person's scope, or they all share that bucket and its `max_waiting_per_key`. A free slot
-  with nobody waiting is taken at once and `cancelled` is NOT asked: only a caller
-  that waits can be cancelled. Otherwise the caller waits; `on_wait(WaitInfo)` hears
-  its place on entry, on every change and with position 0 when the slot is granted.
-  Exceptions in either callback are swallowed.
-- **`QueueBusy`** carries `resource`, `reason` (`full`: `max_waiting` callers already
-  wait, or this caller's own share is used up, then `own_share` is true; `timeout`: `deadline_s` passed; `cancelled`: `cancelled()` turned true),
-  `position`, `waited_s` and `eta_s`.
+- **`slot(key, *, deadline_s=None, cancelled=None, on_wait=None, poll_s=0.25)`.** The key is
+  canonical: no key and the local admin's scope are one bucket. That makes "no key" one
+  person: a lane that serves many people (a bridge, a server route) must pass each person's
+  scope, or they all share that bucket and its `max_waiting_per_key`. A free slot with
+  nobody waiting is taken at once and `cancelled` is NOT asked: only a caller that waits can
+  be cancelled. Otherwise the caller waits; `on_wait(WaitInfo)` hears its place on entry, on
+  every change and with position 0 when the slot is granted. Exceptions in either callback
+  are swallowed.
+- **`QueueBusy`** carries `resource`, `reason` (`full`: `max_waiting` callers already wait,
+  or this caller's own share is used up, then `own_share` is true; `timeout`: `deadline_s`
+  passed; `cancelled`: `cancelled()` turned true), `position`, `waited_s` and `eta_s`.
 - **`WaitInfo`** is the caller's own `position` (1 is next), `eta_s` (None until the
   queue has three service samples, then `ceil(position / slots)` times the median
   service time) and `waited_s`. It carries nothing about anyone else.

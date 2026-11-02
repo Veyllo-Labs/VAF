@@ -486,7 +486,7 @@ def test_every_call_status_has_its_words():
         cat = json.loads((_REPO / "web" / "messages" / f"{locale}.json")
                          .read_text(encoding="utf-8"))["voiceCall"]
         assert all(f"status_{k}" in cat for k in keys), locale
-    branch = src[src.index("if (data.tts_busy) {"):][:700]
+    branch = src[src.index("if (saysSomething && (data.tts_busy || !data.audio)) {"):][:900]
     assert "statusKey: 'tts_busy'" in branch
     assert re.search(r": store\.statusKey === 'waiting'\s*\?\s*\(!store\.wait \? t\('status_thinking'\)",
                      src), "'waiting' without a place reaches the parametrised string"
@@ -506,8 +506,12 @@ def test_a_text_only_reply_can_be_read_whole():
     accept = src[src.index("playEarcon('accept');\n            // A new turn starts"):][:600]
     assert "textReply" not in accept.split("try {")[0].split("//")[-1]
     assert "busyNotice: null" in accept
-    assert re.search(r"else if \(!data\.greeting && !data\.silent && String\(data\.reply \|\| ''\)\.trim\(\)\)"
-                     r"\s*\{[^}]*textReply: null", src)
+    assert "const saysSomething = !data.greeting && !data.silent && !!String(data.reply || '').trim();" in src
+    # Any reply that says something without audio becomes the caption, tts_busy or not;
+    # only a reply that says something WITH audio clears it.
+    assert re.search(r"if \(saysSomething && \(data\.tts_busy \|\| !data\.audio\)\)\s*\{[^}]*"
+                     r"textReply: String\(data\.reply", src)
+    assert re.search(r"\} else if \(saysSomething\) \{[^}]*textReply: null", src)
     busy = src[src.index("data.type === 'voice_call_error' && data.error === 'busy'"):][:700]
     assert "textReply" not in busy
 
@@ -599,3 +603,100 @@ def test_a_reply_whose_budget_ran_out_in_the_queue_leaves_the_line(call_env, mon
     replies = [p for p in sent if p.get("type") == "voice_call_reply" and not p.get("greeting")]
     assert replies and replies[0]["tts_busy"] is True
     assert refused["cancelled"] == 1 and refused["timeout"] == 0
+
+
+# ── round 3 ──────────────────────────────────────────────────────────────────────
+
+import concurrent.futures as _cf
+
+
+class _DeferringExecutor(_cf.ThreadPoolExecutor):
+    """Runs every job at once in a thread, except the Nth synthesize_audio job, which
+    is held back until the test runs it: an executor that reaches a request late."""
+
+    def __init__(self, hold_nth):
+        super().__init__(max_workers=8)
+        self._hold_nth, self._seen, self.held = hold_nth, 0, None
+
+    @staticmethod
+    def _is_tts(fn):
+        func = getattr(fn, "func", None)
+        if getattr(func, "__name__", "") == "synthesize_audio":
+            return True
+        return "synthesize_audio" in getattr(getattr(fn, "__code__", None), "co_names", ())
+
+    def submit(self, fn, *args, **kwargs):
+        if self._is_tts(fn):
+            self._seen += 1
+            if self._seen == self._hold_nth:
+                self.held = fn
+                return _cf.Future()       # never resolves: the request is still queued
+        return super().submit(fn, *args, **kwargs)
+
+
+def test_a_late_request_keeps_its_own_cancel_and_text(call_env, monkeypatch):
+    """A reply TTS whose executor starts only after the call moved on (its budget ran out,
+    the next turn answered) must carry its OWN text and its own expired cancel flag: it
+    leaves the queue at once instead of waiting, or synthesizing the next turn's text.
+    MUTATION: hand the executor a lambda (late binding: it reads the next turn's unset
+    flag and text) - red."""
+    import vaf.core.voice_agent as va
+    from vaf.core.speech import SpeechManager
+    ws_mod = call_env["ws_mod"]
+    monkeypatch.setattr(ws_mod, "_CALL_TTS_WAIT_S", 0.3)
+    monkeypatch.setitem(ws_mod._CALL_TTS_SYNTH_S, "reply", 0.1)
+    replies = iter(["erste antwort " * 10, "zweite antwort " * 10])
+    monkeypatch.setattr(va, "voice_reply",
+                        lambda *a, **kw: {"reply": next(replies), "delegate": None,
+                                          "silent": False})
+    seen = []
+
+    class _QueuedTTS:
+        def synthesize_audio(self, text, lang, **kw):
+            if len(text) < 100:
+                return b"AUDIO"           # greeting
+            seen.append(text)
+            with sc.speech_queue("tts").slot(kw.get("user_key"), deadline_s=kw["deadline_s"],
+                                             cancelled=kw.get("cancelled"), poll_s=0.02):
+                return b"AUDIO"
+
+        def call_lane_speaks(self, lang):
+            return True
+
+    monkeypatch.setattr(SpeechManager, "get_instance", classmethod(lambda cls: _QueuedTTS()))
+    executor = _DeferringExecutor(hold_nth=2)     # 1 = greeting, 2 = the first reply
+
+    async def main():
+        asyncio.get_running_loop().set_default_executor(executor)
+        sock = FakeWebSocket([START, _turn(), _turn()])
+        await ws_mod.websocket_endpoint(sock, token=call_env["token"])
+        return sock.sent
+
+    sent = asyncio.run(main())
+    replies_sent = [p for p in sent if p.get("type") == "voice_call_reply" and not p.get("greeting")]
+    assert len(replies_sent) == 2 and replies_sent[0]["tts_busy"] is True
+    assert executor.held is not None
+    held, release = threading.Event(), threading.Event()
+
+    def hold():
+        with sc.speech_queue("tts").slot("another-person"):
+            held.set()
+            release.wait(5)
+
+    t = threading.Thread(target=hold, daemon=True)
+    t.start()
+    assert held.wait(5)
+    try:
+        started = time.monotonic()
+        try:
+            executor.held()
+        except fair_queue.QueueBusy as busy:
+            refusal = busy.reason
+        else:
+            refusal = "admitted"
+        took = time.monotonic() - started
+    finally:
+        release.set()
+        t.join(5)
+    assert seen[-1].startswith("erste antwort"), "the late request synthesized the next turn's text"
+    assert refusal == "cancelled" and took < 0.2

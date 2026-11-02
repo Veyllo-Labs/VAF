@@ -612,16 +612,18 @@ export function VoiceCallLayer({ ws, sessionId, onLocalMessage, mainBusy = false
                 return;
             }
             if (data.type === 'voice_call_reply') {
-                if (data.tts_busy) {
-                    // The reply was decided but its voice got no TTS slot: show it as a
-                    // caption instead of playing nothing. The status leaves 'waiting'
-                    // here: a refused wait ends without the position-0 event.
+                const saysSomething = !data.greeting && !data.silent && !!String(data.reply || '').trim();
+                if (saysSomething && (data.tts_busy || !data.audio)) {
+                    // The reply was decided but has no voice: no TTS slot in time (tts_busy),
+                    // or a synthesis that returned nothing. Either way the text is the only
+                    // copy, so it becomes the caption instead of nothing. The status leaves
+                    // 'waiting' here: a refused wait ends without the position-0 event.
                     useVoiceCallStore.getState().set({
                         statusKey: 'tts_busy', wait: null, textReply: String(data.reply || ''),
                     });
-                } else if (!data.greeting && !data.silent && String(data.reply || '').trim()) {
-                    // A new reply that says something supersedes a text-only one; a silent
-                    // turn says nothing, so the text stays readable.
+                } else if (saysSomething) {
+                    // A spoken reply supersedes a text-only one; a silent turn says nothing,
+                    // so the text stays readable.
                     useVoiceCallStore.getState().set({ textReply: null });
                 }
                 // Voice small talk stays OUT of the chat (user decision): the

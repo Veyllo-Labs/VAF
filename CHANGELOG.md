@@ -64,17 +64,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   overview already shows changes you have not saved yet; Save still decides. The vision
   option no longer claims that leaving it empty shows an error: it uses the main provider
   when that one can read images.
-- **Speech requests now wait in a fair queue.** One person with many requests no longer holds
-  up the others: the local speech services answer one request at a time, and the next turn
-  always goes to whoever was served least recently. Each person can have at most three
+- **Speech requests now wait in a fair queue.** One person with many requests no longer
+  holds up the others: the local speech services answer one request at a time, and the next
+  turn always goes to whoever was served least recently. Each person can have at most three
   requests waiting, so many open tabs cannot crowd everybody else out. A voice call shows
   its place and the expected wait, and a busy speech service says so (a spoken line or two
   low tones in the call, a short notice for dictation and read-aloud, a reply on Telegram)
   instead of going silent. A reply whose voice could not be made in time arrives as text,
-  shown whole in the call window. Hanging up takes a waiting turn out of the line. Dictation with the local Whisper engine no longer freezes the app for everyone
-  while it transcribes, and a Telegram voice note no longer stalls the other Telegram chats.
-  `vaf health` reports each queue's length, wait and service time. For your own application,
-  `vaf.ResourceQueue` puts any scarce resource behind the same fair queue.
+  shown whole in the call window. Hanging up takes a waiting turn out of the line. Dictation
+  with the local Whisper engine no longer freezes the app for everyone while it transcribes,
+  and a Telegram voice note no longer stalls the other Telegram chats. `vaf health` reports
+  each queue's length, wait and service time. For your own application, `vaf.ResourceQueue`
+  puts any scarce resource behind the same fair queue.
 
 ### Changed
 

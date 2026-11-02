@@ -16,6 +16,7 @@ import html
 import os
 import time
 import queue
+import functools
 from collections import deque
 log("WebServer", "Basic imports done")
 
@@ -899,6 +900,11 @@ def _call_tts_budget(kind: str) -> float:
     return _CALL_TTS_WAIT_S + _CALL_TTS_SYNTH_S[kind]
 
 
+# The call's TTS work goes to the executor as functools.partial, never as a lambda: a
+# lambda reads the handler's locals when the thread RUNS, and a request whose executor
+# starts after its own timeout, once the next turn has rebound `_reply_gone`, `_outcome`
+# and their siblings, would read that turn's event and text and synthesize for nobody.
+# partial binds the text, the language and the cancel callback when the request is made.
 def _call_tts_cancelled(call_cancel: threading.Event, gone: threading.Event):
     """`cancelled` for one TTS request of a call: the call hung up, or this request's own
     outer timeout passed (`gone`). A request whose executor started late can still be in
@@ -8880,7 +8886,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 _gaudio = await asyncio.wait_for(
                                     _rx.wait(loop.run_in_executor(
                                         None,
-                                        lambda: _gsm.synthesize_audio(
+                                        functools.partial(_gsm.synthesize_audio,
                                             _greet, _lang, force_engine="docker",
                                             user_key=_scope, deadline_s=_CALL_TTS_WAIT_S,
                                             cancelled=_call_tts_cancelled(_gcancel, _ggone),
@@ -9037,7 +9043,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 _b_sm = _SMb.get_instance()
                                 _b_out = await asyncio.wait_for(
                                     loop.run_in_executor(
-                                        None, lambda: _b_sm.synthesize_audio(
+                                        None, functools.partial(_b_sm.synthesize_audio,
                                             _busy_text, _busy_lang, force_engine="docker",
                                             user_key=_scope, deadline_s=10.0,
                                             busy_raises=True)),
@@ -9085,7 +9091,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 _armed_v, _wait_v = _call_wait_hooks(websocket, loop)
                                 _va_out = await asyncio.wait_for(
                                     _rx.wait(loop.run_in_executor(
-                                        None, lambda: _v_sm.synthesize_audio(
+                                        None, functools.partial(_v_sm.synthesize_audio,
                                             _outcome.reply, _v_lang, force_engine="docker",
                                             user_key=_scope, deadline_s=_CALL_TTS_WAIT_S,
                                             cancelled=_call_tts_cancelled(_cancel, _v_gone),
@@ -9164,7 +9170,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                             _audio_out = await asyncio.wait_for(
                                 _rx.wait(loop.run_in_executor(
                                     None,
-                                    lambda: _sm.synthesize_audio(
+                                    functools.partial(_sm.synthesize_audio,
                                         _outcome.reply, _tts_lang, force_engine="docker",
                                         user_key=_scope, deadline_s=_CALL_TTS_WAIT_S,
                                         cancelled=_call_tts_cancelled(_cancel, _reply_gone),
@@ -9285,7 +9291,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                 _audio = await asyncio.wait_for(
                                     loop.run_in_executor(
                                         None,
-                                        lambda: _sm.synthesize_audio(
+                                        functools.partial(_sm.synthesize_audio,
                                             _text, _lang, force_engine="docker",
                                             user_key=_scope, deadline_s=_CALL_TTS_WAIT_S,
                                             cancelled=_s_gone.is_set, busy_raises=True),

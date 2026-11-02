@@ -141,11 +141,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   or ignores your "yes", VAF notices, in any language. It then asks the model once more, this
   time telling it which tool to use, and tells you honestly when it stays stuck. A tool that
   ran and failed does not count, and a question you ask is simply answered. VAF only ever makes
-  the model use a small set of tools that stay on your side and can be undone (the sandbox,
-  your own files and web search), never one that needs your OK, cannot be undone, sends
-  something, deletes something or acts in a shared room. The reply you already read stays on
-  screen, and `vaf health` shows how often it happened in the last hour. Admins
-  can switch it off with `model_health_guard_enabled`. The old opt-in false-promise retry is
+  the model use tools it could already use without asking you: the sandbox (whose network
+  reaches the internet and your local network), your own files (and the shared folder of rooms
+  you joined), and web search and fetch. It never makes it use one that needs your OK, sends a
+  message, deletes something or acts in a room's conversation. The reply you already read
+  stays on screen, and `vaf health` shows how often it happened in the last hour. Admins can
+  switch it off with `model_health_guard_enabled`. The old opt-in false-promise retry is
   removed; if you had switched it on, that setting is now ignored.
 - **A long chat with a local model no longer loses its context on every message.** The token
   count before a reply counted the description of every tool, although only the tools chosen for

@@ -703,3 +703,52 @@ def test_a_question_to_the_person_resets_the_ledger(make, monkeypatch):
     _turn(agent, ("ask_user", {"message": "Welche Pakete genau?"}))
     assert agent._turn_closed_by_tool is True
     assert mh.from_payload(agent.main_persistence.get_model_health()).score == 0.0
+
+
+# ── a forced call runs without the sandbox's tool bridge ─────────────────────────────────
+
+class _Sandbox(vaf.BaseTool):
+    """A stand-in for VAF's own python_sandbox with its real arguments: records each run and
+    whether it was asked for the tool bridge (`with_vaf_tools`), which would hand the code
+    every VAF tool."""
+    __module__ = "vaf.tools.python_sandbox"
+    name = TASK
+    description = "Run Python code."
+    permission_level = "write"
+    side_effect_class = "reversible"
+    parameters = {"type": "object", "properties": {
+        "code": {"type": "string"}, "with_vaf_tools": {"type": "boolean"}}, "required": ["code"]}
+
+    def __init__(self):
+        self.calls = []
+
+    def run(self, **kwargs):
+        self.calls.append(kwargs)
+        return "bridge started" if kwargs.get("with_vaf_tools") else "ran"
+
+
+BRIDGED = {"code": "import vaf_tools\nvaf_tools.call('room_send', {'text': 'x'})",
+           "with_vaf_tools": True}
+
+
+def _tool_results(agent):
+    return [str(m.get("content")) for m in agent.history if m.get("role") == "tool"]
+
+
+def test_a_forced_call_never_starts_the_tool_bridge(make):
+    agent = make("openai")
+    agent.tools[TASK] = _Sandbox()
+    _ledger(agent, 5.0)
+    model, _ = _turn(agent, SAY, (TASK, BRIDGED), "Ich habe es ohne Brücke erledigt.")
+    assert _forced(model.calls[1]) == [TASK], "control: the call was the forced one"
+    assert agent.tools[TASK].calls == [], "the forced call reached the sandbox with the bridge"
+    results = _tool_results(agent)
+    assert results and results[0].startswith("Refused:") and "with_vaf_tools" in results[0]
+
+
+def test_an_unforced_call_keeps_the_bridge_choice(make):
+    """The gate is about the forced generation only: the model's own call is unchanged."""
+    agent = make("openai")
+    agent.tools[TASK] = _Sandbox()
+    _turn(agent, (TASK, BRIDGED), "Fertig.")
+    assert agent.tools[TASK].calls and agent.tools[TASK].calls[0].get("with_vaf_tools") is True

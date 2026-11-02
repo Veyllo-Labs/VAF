@@ -53,14 +53,21 @@ none, from 3 mid (the agent re-runs the turn once, forcing a tool call where the
 from 8 high (after that re-run the turn ends with an honest note).
 
 WHAT MAY BE FORCED (`forceable`, `FORCEABLE_TOOLS`). The forced call is a real call, so the
-re-run forces only VAF's own tools whose effect stays inside the person's own sandbox or files,
-or that only read: a fail-closed name list, checked against the tool's declared contract too
+re-run forces only VAF's own tools from a fail-closed name list: tools that already run on any
+turn without asking the person, so forcing one makes the model do nothing it could not do
+unasked. That is all the list promises; it does not promise that the effect is local or can
+be undone. The sandbox's network reaches the internet and the local network, and in a project
+environment `sandbox_exec` writes the real project folder and can leave a process running;
+`write_file` and `edit_file` overwrite without a revision, and for an account other than the
+admin their jail includes the shared folder of a room it joined; `web_search` and `webfetch`
+send a query the model chose. The list is checked against the tool's declared contract too
 (a listed tool declared `dangerous`, `system` or `irreversible` is still not forced). Never
-forced, whatever the router picked: a tool that needs the person's OK, cannot be undone,
-sends, deletes, acts in a shared room, types into a host command or starts a saved workflow,
-and any custom or MCP tool. Where the task holds no forceable tool the re-run runs unforced,
-with the same note naming the tools; the measured incident stays covered, because the
-sandbox it needed is on the list.
+forced, whatever the router picked: a tool that needs the person's OK, sends a message,
+deletes, acts in a room's conversation, types into a host command or starts a saved workflow,
+and any custom or MCP tool. A forced call also runs without the sandbox's tool bridge
+(`Agent._forced_call_gate`): `with_vaf_tools` would hand the code every VAF tool. Where the
+task holds no forceable tool the re-run runs unforced, with the same note naming the tools;
+the measured incident stays covered, because the sandbox it needed is on the list.
 
 NAMED BOUNDARY: `coding_agent` is not on the list although a stuck coding request is a likely
 target. It starts a heavy sub-agent of its own, its `deploy_to` reaches servers the person
@@ -219,8 +226,9 @@ LANGUAGE_MIN_CHARS = 20
 # The high-confidence half of an <Action> match (`agent._match_action_to_tools`).
 ACTION_MATCH_MIN = 0.7
 
-# The only tools the re-run may FORCE: VAF's own tools whose effect stays inside the person's
-# own sandbox or files, or only reads. A name list that fails closed, in the pattern of the
+# The only tools the re-run may FORCE: VAF's own tools that already run on any turn without
+# asking the person (see WHAT MAY BE FORCED above for what they can reach). A name list that
+# fails closed, in the pattern of the
 # room turn's read list (`Agent._ROOM_READ_TOOLS`): a new tool, a custom tool, an MCP tool and
 # one whose contract cannot be read are never forced until somebody decides they belong here.
 # A list of exclusions read from the declared contracts was measured first and was not enough:
@@ -230,11 +238,13 @@ ACTION_MATCH_MIN = 0.7
 # already approved host command, a saved workflow runs with no turn gate). The incident this
 # feature exists for needed `python_sandbox`, which is on the list.
 FORCEABLE_TOOLS = frozenset({
-    # the person's own code sandbox and sandbox environments (changes stay in the container)
+    # the person's own code sandbox and sandbox environments (its network reaches the internet
+    # and the LAN; a project environment writes the project folder)
     "python_sandbox", "sandbox_exec", "sandbox_files",
-    # the person's own files, jailed to what the account may reach (`file_access`)
+    # the person's own files, jailed to what the account may reach (`file_access`; for a
+    # non-admin that includes the shared folder of a joined room); a write is not revisioned
     "read_file", "list_files", "find_files", "tree", "write_file", "edit_file",
-    # the open web, read only
+    # the open web: search and fetch send a query the model wrote
     "web_search", "webfetch",
 })
 # Defence in depth, read from the tool's declared contract: a listed tool that declares it

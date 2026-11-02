@@ -212,6 +212,20 @@ _TURN_RIDERS = (
 )
 
 
+def _is_vaf_own_tool(tool) -> bool:
+    """Is this tool (an instance or a class) VAF's own implementation, a class from
+    `vaf.tools`? An entry-point plugin, a custom tool (loaded as `_custom_tools.<name>`) or an
+    embedder's `add_tool` is stored under its own `name` and may take a built-in's, so a gate
+    that trusts a built-in by name asks this too.
+
+    NAMED BOUNDARY: this guards against a name clash, not against hostile code in this
+    process. A class can declare any `__module__`, and code that does so already runs inside
+    VAF with the power to patch the lists the gates read; custom tools are uploaded by an
+    admin, and the loader only selects classes from their own `_custom_tools.<name>` module."""
+    impl = tool if isinstance(tool, type) else type(tool)
+    return str(getattr(impl, "__module__", "") or "").startswith("vaf.tools.")
+
+
 def _task_tools_first(tools, task_tools, riders=()) -> list:
     """The per-turn tool set in cap order: the tools chosen for this task in the order they
     were chosen (the router ranks its picks, most important first), then the riders in the
@@ -2094,6 +2108,25 @@ class Agent:
             "prev_reply": prev_reply,
         }
 
+    def _forced_call_gate(self, name, args):
+        """A call of the model-health re-run's FORCED generation runs without the sandbox's
+        tool bridge. `python_sandbox` with `with_vaf_tools` hands the code a module that calls
+        any VAF tool (vaf/core/tool_bridge.py), so a forced sandbox call would reach every tool
+        the forced set keeps out (`room_send`, `execute_workflow`, ...). The bridge's own calls
+        do pass the dispatch funnel (`execute_tool`: the allowed set, the policy, the
+        confirmation gate, these turn gates), but those let a plain write through, which is why
+        the forced set exists. Refused, not stripped: code written against `vaf_tools` would
+        fail on its import, and the refusal tells the model what to do. The next generation is
+        no longer forced, and a bridge the model then asks for is its own choice, as on any
+        turn. Enforced here, at dispatch, never by the prompt alone."""
+        if not getattr(self, "_forced_tool_names", None) or not self._forcing_this_generation():
+            return None
+        if isinstance(args, dict) and bool(args.get("with_vaf_tools")):
+            return (f"Refused: '{name}' was called with with_vaf_tools, and the tool bridge is off "
+                    "for this call. Nothing ran. Call it again without with_vaf_tools, with code "
+                    "that does the work directly.")
+        return None
+
     def _model_health_task_tools(self) -> list:
         """The tools this turn is FOR: the router's pick (with the recent tools it merged,
         `_turn_task_tools`) and what a tool result advised this turn, as far as the turn still
@@ -2167,7 +2200,7 @@ class Agent:
         out = []
         for name in names:
             tool = (self.tools or {}).get(name)
-            if tool is None or not str(getattr(type(tool), "__module__", "")).startswith("vaf.tools."):
+            if tool is None or not _is_vaf_own_tool(tool):
                 continue
             try:
                 contract = resolve_tool_contract(name, tool)
@@ -3640,8 +3673,7 @@ class Agent:
                 # from `vaf.tools`: an entry-point plugin, a custom tool or an embedder's
                 # `add_tool` may register under a built-in's name, and its file access is
                 # not the one the narrowed jail was checked against.
-                _impl = tool_instance if isinstance(tool_instance, type) else type(tool_instance)
-                _own = str(getattr(_impl, "__module__", "") or "").startswith("vaf.tools.")
+                _own = _is_vaf_own_tool(tool_instance)
                 if name == "multi_tool_use.parallel":
                     # The wrapper is neither: every call inside it comes back through
                     # this gate on its own.
@@ -14071,6 +14103,9 @@ class Agent:
     def _chat_turn_gates(self, name, tool_instance, args):
         """The five turn gates. Each returns a RESULT string rather than prompting or
         raising (Rule 4.1), and all of them run after the hard policy block, never before."""
+        gate_msg = self._forced_call_gate(name, args)
+        if gate_msg is not None:
+            return gate_msg
         gate_msg = self._plan_gate_decision(name, tool_instance, tool_args=args)
         if gate_msg is not None:
             return gate_msg

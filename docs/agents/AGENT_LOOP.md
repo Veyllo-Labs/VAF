@@ -351,9 +351,13 @@ quotes nothing stored), says that the reasons the reply gave come from no tool r
 names the tools to call. No tool call is pending between the two, so the adjacency invariant
 holds. The next generation is forced where the lane can (`Agent._can_force_tool_call`), and
 only to task tools that may be forced (`model_health.forceable`): a fail-closed name list,
-`model_health.FORCEABLE_TOOLS`, of VAF's own tools whose effect stays in the person's own
-sandbox or files or that only read (`python_sandbox`, `sandbox_exec`, `sandbox_files`, the file
-readers, `write_file`, `edit_file`, `web_search`, `webfetch`), only when the tool registered
+`model_health.FORCEABLE_TOOLS`, of VAF's own tools that already run on any turn without asking
+the person (`python_sandbox`, `sandbox_exec`, `sandbox_files`, the file readers, `write_file`,
+`edit_file`, `web_search`, `webfetch`). That is all it promises: the sandbox's network reaches
+the internet and the LAN, a project environment's folder is the real one, a file write is not
+revisioned and for a non-admin may land in a joined room's shared folder, and the web tools
+send a query the model wrote. A forced call runs without the sandbox's tool bridge
+(`with_vaf_tools` is refused at dispatch, `_forced_call_gate`). Only when the tool registered
 under that name is VAF's own (a custom tool can take a listed name), and never one whose
 contract says `dangerous`, `system` or `irreversible`. Everything else is never forced: sends,
 deletes, the room tools (their messages are read by other accounts and agents), `host_process`,

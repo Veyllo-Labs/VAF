@@ -671,10 +671,17 @@ class _ChatTurnStream:
         """A stop, shown in the round it hit: that round's bubble is updated where it stands
         with its own text and `marker`. Earlier rounds keep their bubbles; the old untagged
         clear-and-replace put the whole stored copy, earlier rounds included, into the newest
-        bubble. Returns the text sent."""
+        bubble. The notice also joins that round's segment and the stored copy, so a turn
+        stored afterwards (`_turn_rounds_meta`, `parts`) holds what the person saw. Only a stop
+        the engine reports is stored, and the engine stops at the top of a round, never after
+        a failure, so the copy has no failure tail for the notice to displace. Returns the
+        text sent."""
         text = _strip_tool_calls_json(self.segment_text(self.current)).strip()
         text = f"{text}\n\n{marker}" if text else marker
         self._send(text, self.current, None)
+        segment = self.segments.setdefault(self.current, [])
+        segment.append(f"\n\n{marker}" if self.segment_text(self.current).strip() else marker)
+        self.parts.append(f"\n\n{marker}" if "".join(self.parts).strip() else marker)
         return text
 
     def _emit_round(self, number, *, throttled: bool) -> None:
@@ -698,6 +705,19 @@ class _ChatTurnStream:
             return True
         except Exception:
             return False
+
+
+def _stop_stream_for(candidate, session_id):
+    """The chat lane's stream of the task that was stopped, or None.
+
+    The stop handler finds the stream as a local of the worker loop, and that name outlives
+    a task: a stream left by an earlier task, maybe of another chat, must never receive this
+    task's stop notice. Every raise of `_StopGenerationRequested` today comes after the
+    task's own stream is built; the session check keeps that true when a new raise site is
+    added. None sends the handler to its untagged emit."""
+    if isinstance(candidate, _ChatTurnStream) and candidate.session_id == session_id:
+        return candidate
+    return None
 
 
 def _turn_rounds_meta(rounds, stream, clean=_clean_for_session):
@@ -3446,8 +3466,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         pass
                     try:
                         final_stop_content = (_partial + "\n\n*[Generation stopped]*").strip() if _partial else "*[Generation stopped]*"
-                        _stopped_stream = locals().get("webui_stream_callback")
-                        if isinstance(_stopped_stream, _ChatTurnStream):
+                        _stopped_stream = _stop_stream_for(locals().get("webui_stream_callback"),
+                                                           task.session_id)
+                        if _stopped_stream is not None:
                             # The chat lane: the notice goes into the round the stop hit,
                             # updated in place, so earlier rounds keep their own bubbles.
                             _stopped_stream.emit_stopped("*[Generation stopped]*")

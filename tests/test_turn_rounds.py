@@ -597,6 +597,28 @@ def test_stop_marks_only_its_round():
     emits.clear()
     stream.emit_stopped("*[Generation stopped]*")
     assert emits == [("Zweiter Teil.\n\n*[Generation stopped]*", 2, None)]
+    # What is stored afterwards holds the notice too, in the same round.
+    assert stream.segment_text(2) == "Zweiter Teil.\n\n*[Generation stopped]*"
+    assert stream.segment_text(1) == "Erster Teil."
+    assert "".join(stream.parts).endswith("Zweiter Teil.\n\n*[Generation stopped]*")
+    empty = _ChatTurnStream(SESSION, emit=lambda *a: None)
+    empty.emit_stopped("*[Generation stopped]*")
+    assert empty.segment_text(1) == "*[Generation stopped]*" and empty.parts == ["*[Generation stopped]*"]
+
+
+def test_a_stop_reaches_only_the_stream_of_its_own_chat():
+    """MUTATION: drop the session comparison in `_stop_stream_for` - red. The stop handler
+    finds the stream as a loop local, which can outlive its task."""
+    from vaf.core.headless_runner import _ChatTurnStream, _stop_stream_for
+    other = _ChatTurnStream("red654321", emit=lambda *a: None)
+    mine = _ChatTurnStream(SESSION, emit=lambda *a: None)
+    assert _stop_stream_for(other, SESSION) is None
+    assert _stop_stream_for(mine, SESSION) is mine
+    assert _stop_stream_for(lambda t: None, SESSION) is None and _stop_stream_for(None, SESSION) is None
+    loop = inspect.getsource(__import__("vaf.core.headless_runner", fromlist=["x"]).run_headless_agent)
+    handler = loop.split("except _StopGenerationRequested:", 1)[1].split("except Exception as e:", 1)[0]
+    assert '_stop_stream_for(locals().get("webui_stream_callback"),' in handler
+    assert "isinstance(_stopped_stream, _ChatTurnStream)" not in handler
 
 
 def _stop_events(run):
@@ -633,6 +655,10 @@ def test_runner_stop_from_the_stream_stays_in_its_round(runner_world, monkeypatc
     assert clears == [], "a stop cleared a bubble by position"
     assert updates[-1]["round"] == 2 and updates[-1]["content"] == "*[Generation stopped]*"
     assert not [u for u in updates if flagged in u["content"] and "stopped" in u["content"]]
+    # Named boundary (WEBUI_WEBSOCKET_FLOW.md): a stop raised while the stream runs leaves
+    # the turn's save behind, so nothing of the turn is stored, as before rounds existed.
+    assert not [m for m in run.stored["messages"] if "Speichere bitte" in str(m.get("content"))
+                or flagged in str(m.get("content"))]
 
 
 def test_runner_engine_stop_stays_in_its_round_and_is_stored_per_round(runner_world, monkeypatch):
@@ -662,7 +688,9 @@ def test_runner_engine_stop_stays_in_its_round_and_is_stored_per_round(runner_wo
     assert (updates[-1]["round"], updates[-1]["content"]) == (2, "Zweiter Schritt.\n\n*[Generation stopped]*")
     answer = [m for m in run.stored["messages"] if m["role"] == "assistant"][-1]
     assert [(r["round"], r["text"], r["tool_call_ids"]) for r in answer["metadata"]["rounds"]] == [
-        (1, "Erster Schritt.", ["c1"]), (2, "Zweiter Schritt.", ["c2"])]
+        (1, "Erster Schritt.", ["c1"]), (2, "Zweiter Schritt.\n\n*[Generation stopped]*", ["c2"])]
+    # The stored text and the reloaded round hold the notice the live bubble showed.
+    assert answer["content"] == "Zweiter Schritt.\n\n*[Generation stopped]*"
 
 
 # ── the projection ────────────────────────────────────────────────────────────────────────

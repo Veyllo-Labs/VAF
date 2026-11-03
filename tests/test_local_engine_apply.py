@@ -601,10 +601,15 @@ def test_support_class_is_worked_out_once_and_never_raises(monkeypatch):
     """A conclusive verdict is kept for the process; an inconclusive one (detection raised, or
     "no GPU" while nvidia-smi is installed: its probe reports a timeout as no GPU) is not, and
     is tried again only after the retry floor, so an unauthenticated poll cannot start the
-    probes on every request."""
+    probes on every request. The verdicts asserted are the Linux ones, and support() decides
+    the platform before the GPU, so the host is pinned: a macOS or Windows runner would answer
+    apple or windows."""
+    import platform
     import shutil
 
     import vaf.core.gpu_detection as gd
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
     clock = {"now": 1000.0}
     monkeypatch.setattr(le.time, "monotonic", lambda: clock["now"])
     monkeypatch.setattr(le, "_SUPPORT_CLASS", None)

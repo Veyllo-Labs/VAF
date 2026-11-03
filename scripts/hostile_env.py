@@ -58,6 +58,27 @@ locally, in the time the suite already takes:
                   thirteen nights (a display name read as the sender) and then
                   again on a test fixture that passed `strict=False`; every
                   local run had a patched stdlib and stayed green.
+  FOREIGN OS      platform.system() reports Darwin and platform.machine() arm64,
+                  on a Linux host only; a real macOS or Windows host has nothing
+                  to add here. Code that detects its host reads these two, and a
+                  test that drives it without pinning them asserts this
+                  workstation's answer: two support_class tests stayed green here
+                  and failed on the macOS runner, where support() answered
+                  "apple" before it looked at the GPU (the Windows runner answers
+                  "windows"). Measured when this was added: the full suite under
+                  this fake failed exactly those two tests, 13821 passed. Darwin
+                  and not Windows, because a faked Windows is incoherent on Linux:
+                  code that believes it takes Windows-only branches, seven engine
+                  tests reach for subprocess.CREATE_NO_WINDOW and five more get
+                  nothing from gpu_detection's Windows probes, artefacts rather
+                  than findings. Named boundary: only these two functions are
+                  faked, not sys.platform or os.name; vaf/ reads
+                  platform.system() at 66 sites in 22 files
+                  and calls neither platform.uname() nor platform.platform(). A
+                  test that is red under this axis but green on a real Mac is an
+                  artefact of the half-faked host; none exists today, and one
+                  that does gets an environment flag set here, the way
+                  VAF_SIMULATED_WINDOWS_HOME serves the windows-home axis.
 
 WHAT IT CANNOT DO. Real Windows file semantics - ACLs, MoveFileEx sharing
 violations, the read-only-flag-only chmod - need a real Windows machine. Those
@@ -169,6 +190,13 @@ if getattr(_email_utils, "supports_strict_parsing", False):
     _email_utils.getaddresses = _old_getaddresses
     _email_utils.parseaddr = _old_parseaddr
     del _email_utils.supports_strict_parsing
+
+
+import platform as _platform
+
+if sys.platform.startswith("linux"):
+    _platform.system = lambda: "Darwin"
+    _platform.machine = lambda: "arm64"
 '''
 
 
@@ -214,6 +242,9 @@ def main() -> int:
                                      else "not available here (no symlinks)"))
         print(f"  no docker       DOCKER_HOST={_NO_DOCKER}")
         print(f"  old mail parser email.utils without strict parsing (3.10.11, 3.11.9)")
+        print(f"  foreign os      " + ("platform.system() reports Darwin (arm64)"
+                                     if sys.platform.startswith("linux")
+                                     else "real host, not faked"))
         print()
         return subprocess.run([sys.executable, "-m", "pytest", *args],
                               cwd=str(ROOT), env=env).returncode

@@ -718,10 +718,15 @@ def test_amd_facts_are_detected_when_left_out(monkeypatch):
 
 def test_support_class_amd_no_gpu_is_inconclusive(monkeypatch):
     """"No GPU" while rocm-smi or amd-smi is installed is not kept: rocm-smi's probe reports a
-    timeout as no GPU, like nvidia-smi's. MUTATION: drop the rocm-smi/amd-smi clause - red."""
+    timeout as no GPU, like nvidia-smi's. MUTATION: drop the rocm-smi/amd-smi clause - red.
+    The verdict asserted is the Linux one, and support() decides the platform before the GPU,
+    so the host is pinned: a macOS or Windows runner would answer apple or windows."""
+    import platform
     import shutil
 
     import vaf.core.gpu_detection as gd
+    monkeypatch.setattr(platform, "system", lambda: "Linux")
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
     monkeypatch.setattr(gd, "get_primary_gpu", lambda: None)
     for tool in ("rocm-smi", "amd-smi"):
         monkeypatch.setattr(le, "_SUPPORT_CLASS", None)

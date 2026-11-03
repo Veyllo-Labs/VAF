@@ -150,7 +150,9 @@ echo "    OK"
 echo ""
 echo "=== 7/9  Hostile environment ==="
 # The same suite in an environment less generous than this machine: narrow
-# output encoding, optional packages hidden, scratch home. Three CI failures in
+# output encoding, optional packages hidden, a scratch home reached through a
+# link and read the Windows way, no docker, the old mail parser and a host that
+# reports macOS (the axes are documented in the script). Three CI failures in
 # a row were environment differences rather than logic errors, and none could
 # be reproduced locally because the suite only ever ran in one environment.
 # The Windows entry takes 27 minutes to answer; this takes the same 2.5 the

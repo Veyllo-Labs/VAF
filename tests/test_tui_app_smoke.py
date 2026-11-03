@@ -258,6 +258,51 @@ def test_transcript_stays_chronological_across_interleaved_events(smoke_app):
     bridge.shutdown()
 
 
+def test_each_generation_round_opens_its_own_bubble(smoke_app):
+    """A model-health re-run streams a second generation with no tool card in between: its
+    reasoning and text belong in a new bubble below, not appended to the first one. Through
+    the bridge's sink and the real events marshalling, as in the turn above. MUTATION: make
+    `next_round` a no-op - red (one bubble); reset `_muted_turn` in it - red."""
+    from vaf.cli.tui_app.widgets import ToolCard
+
+    app, bridge = smoke_app.app, smoke_app.bridge
+
+    def _script(cb):
+        cb("round one.")
+        bridge.on_sink_event({"type": "round_start", "round": 2})
+        cb("round two.")
+        bridge.on_sink_event({"type": "tool_start", "tool": "python_sandbox", "args": {}})
+        bridge.on_sink_event({"type": "tool_end", "tool": "python_sandbox",
+                              "ok": True, "duration_ms": 100})
+        bridge.on_sink_event({"type": "round_start", "round": 3})
+        cb("round three.")
+        return "round three."
+
+    bridge.agent.script = _script
+
+    async def _drive():
+        async with app.run_test(size=(110, 40)) as pilot:
+            await pilot.pause()
+            app._send_user("install please")
+            assert await _settle(pilot, lambda: not bridge.busy)
+            await pilot.pause()
+
+            kids = list(app.transcript.children)
+            order = [type(k).__name__ for k in kids if isinstance(k, (AgentMessage, ToolCard))]
+            assert order == ["AgentMessage", "AgentMessage", "ToolCard", "AgentMessage"], order
+            bubbles = [k for k in kids if isinstance(k, AgentMessage)]
+            assert ["round one." in b._answer for b in bubbles] == [True, False, False]
+            assert "round two." in bubbles[1]._answer and "round three." in bubbles[2]._answer
+
+            # A turn discarded with `clear` stays muted across its rounds.
+            app._muted_turn = True
+            app.next_round()
+            assert app._muted_turn is True and app._live_msg is None
+
+    asyncio.run(_drive())
+    bridge.shutdown()
+
+
 def test_think_renders_as_a_separate_muted_block():
     """The think channel must read as its OWN block: a caption plus the muted
     italic body - not merely slightly dimmed prose inside the answer."""

@@ -90,6 +90,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   is too busy the document opens in a simpler layout instead of waiting. `vaf health`
   reports both queues. For your own application, `vaf.resource_queue(..., listed=False)`
   keeps a queue that belongs to one person out of the health numbers.
+- **Embedding: tell the generation rounds of a turn apart.** A new `round_start` event arrives
+  before each generation of a turn, and after the turn `last_turn.rounds` lists them as
+  `vaf.TurnRound(round, tool_call_ids, answer)`: which tool calls each round made and which
+  rounds were answers. `vaf prompt --output-format stream-json` carries the event too.
 
 ### Changed
 
@@ -144,6 +148,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Chat: each round of thinking gets its own place in the step timeline.** When the model
+  thinks again, after a tool, after a safeguard sent it back or after a correction, each round
+  now gets its own thinking block and its own text in the step timeline, in the order it
+  happened, live and after a reload. Text written before a tool call no longer appears below
+  the tool card. The same holds in the terminal app.
 - **A small model that gets stuck in a long chat is caught.** When the model keeps saying it
   will do something and then does nothing, repeats the same reply, answers in another language
   or ignores your "yes", VAF notices, in any language. It then asks the model once more, this

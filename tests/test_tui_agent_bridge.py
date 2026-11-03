@@ -46,6 +46,7 @@ class Recorder:
     def agent_chunk(self, text):             self._rec("agent_chunk", text)
     def agent_think(self, text):             self._rec("agent_think", text)
     def agent_message_done(self):            self._rec("agent_message_done")
+    def agent_round(self, number):           self._rec("agent_round", number)
     def turn_finished(self, tools_ran):      self._rec("turn_finished", tools_ran)
     def event_note(self, t, m, s):           self._rec("event_note", t, m, s)
     def system_note(self, text):             self._rec("system_note", text)
@@ -388,6 +389,18 @@ def test_sink_events_dispatch_to_ui_events(quiet_run_module):
     assert "hidden char" in _gate[3] and "destructive_removal" in _gate[3]
     assert ("gate_decision", ("allow_once",)) in events.calls
     assert bridge._tools_ran is True
+
+
+def test_round_start_reaches_the_app(quiet_run_module):
+    """A new generation of the turn (`round_start`) reaches the app, so its reasoning and text
+    open a bubble of their own. The first round needs none: the turn's bubble is still to come.
+    MUTATION: drop the round_start branch from `on_sink_event` - red."""
+    events = Recorder()
+    bridge = _make_bridge(FakeAgent(), events)
+    bridge.on_sink_event({"type": "round_start", "round": 1})
+    bridge.on_sink_event({"type": "round_start", "round": 2})
+    bridge.on_sink_event({"type": "round_start", "round": "x"})   # never raises
+    assert [c for c in events.calls if c[0] == "agent_round"] == [("agent_round", (2,))]
 
 
 def test_console_sink_events_become_event_notes(quiet_run_module):

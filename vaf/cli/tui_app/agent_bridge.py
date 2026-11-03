@@ -535,6 +535,13 @@ class AgentBridge:
                                           trusts_folder=evt.get("always_trusts_folder") is not False)
             elif etype == "gate_decision":
                 self.events.gate_decision(str(evt.get("decision", "")))
+            elif etype == "round_start":
+                # A new generation of the turn: its reasoning and text start a bubble of
+                # their own below whatever the previous one left (a re-run without a tool
+                # call in between would otherwise grow the previous bubble).
+                n = evt.get("round")
+                if isinstance(n, int) and n > 1:
+                    self._emit("agent_round", n)
             # llm_start/llm_end: enrichment only (local providers emit none) - ignored.
         except Exception:
             pass                                     # an observer must not fail a run

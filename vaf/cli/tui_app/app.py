@@ -152,6 +152,7 @@ class TuiEvents:
     def agent_chunk(self, text):            self._ui(self._app_call, "feed_agent", text)
     def agent_think(self, text):            self._ui(self._app_call, "feed_think", text)
     def agent_message_done(self):           self._ui(self._app_call, "end_agent_message")
+    def agent_round(self, number):          self._ui(self._app_call, "next_round")
     def turn_finished(self, tools_ran):     self._ui(self._app_call, "turn_finished", tools_ran)
     def event_note(self, t, m, s):          self._ui(self._app_call, "add_event_note", t, m, s)
     def system_note(self, text):            self._ui(self._app_call, "add_system_note", text)
@@ -589,6 +590,14 @@ class VafApp(App):
         self._live_msg = None
         # The discarded turn is over; the next one paints normally again.
         self._muted_turn = False
+
+    def next_round(self) -> None:
+        """A new generation of the same turn (`round_start`): seal the live bubble so the
+        next chunk mounts a new one at the bottom. The turn is not over, so a turn the user
+        discarded with `clear` stays muted."""
+        if self._live_msg is not None:
+            self._live_msg.done()
+        self._live_msg = None
 
     def turn_finished(self, tools_ran: bool) -> None:
         self.end_agent_message()

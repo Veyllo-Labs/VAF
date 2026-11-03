@@ -15,13 +15,13 @@ that looked like initialisation.
 
 The fix is threshold-free because the engine already knows which rounds were
 answers: exactly those that reached the final history append. `kept_turn_answers`
-collects them, `_join_turn_answers` builds the reply from them, and
-`_restream_kept_answers` puts them back into the bubble after every buffer clear.
+collects them, `_join_turn_answers` builds the reply from them, and every buffer clear
+restarts the buffer from them (`stream_callback.clear(_kept_answers_text(...))`).
 """
 import re
 from pathlib import Path
 
-from vaf.core.agent import _join_turn_answers, _restream_kept_answers
+from vaf.core.agent import _join_turn_answers, _kept_answers_text
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -67,27 +67,18 @@ def test_empty_and_none_entries_are_ignored():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# The restream
+# What a cleared buffer starts from
 # ─────────────────────────────────────────────────────────────────────────────
 
 def test_kept_answers_go_back_into_a_cleared_buffer():
-    got = []
-    _restream_kept_answers(got.append, ["The list.", "Step two done."])
-    assert got == ["The list.\n\nStep two done.\n\n"]
+    assert _kept_answers_text(["The list.", "Step two done."]) == "The list.\n\nStep two done.\n\n"
 
 
-def test_nothing_kept_means_nothing_emitted():
+def test_nothing_kept_means_an_empty_buffer():
     """The buffer clear after an ordinary tool round stays exactly as it was:
     announcements do not come back."""
-    got = []
-    _restream_kept_answers(got.append, [])
-    assert got == []
-
-
-def test_a_raising_callback_cannot_break_the_turn():
-    def boom(_):
-        raise RuntimeError("sink gone")
-    _restream_kept_answers(boom, ["kept"])   # must not raise
+    assert _kept_answers_text([]) == ""
+    assert _kept_answers_text(["", None, "   "]) == ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -117,20 +108,21 @@ def test_the_return_builds_the_reply_from_the_accumulator():
 
 
 def test_every_buffer_clear_restores_the_kept_answers():
-    """A new clear site without the restream is the same defect in a new place:
-    the bubble loses what the user was already shown. Adjacency is checked per
-    occurrence, so one covered site cannot vouch for another."""
+    """MUTATION: call `stream_callback.clear()` without the kept text at either site.
+
+    A new clear site without the kept answers is the same defect in a new place: the
+    stored reply loses what the user was already shown. Checked per occurrence, so one
+    covered site cannot vouch for another."""
     src = _agent_source()
-    clears = [m.end() for m in re.finditer(r"stream_callback\.clear\(\)", src)]
-    assert clears, "no clear sites found; the pattern moved"
+    clears = [m.end() for m in re.finditer(r"stream_callback\.clear\(", src)]
+    assert len(clears) == 2, "expected the post-tool clear and the retraction's; the pattern moved"
     for pos in clears:
-        window = src[pos:pos + 120]
-        # The argument is not pinned: the retraction sites collapsed into
+        # The argument's list is not pinned: the retraction sites collapsed into
         # `_retract_streamed_reply`, which is handed the kept list as a parameter. What must
-        # hold per occurrence is that a clear is followed by the restream.
-        assert "_restream_kept_answers(stream_callback, " in window, (
-            "a stream_callback.clear() is not followed by the restream; the web "
-            f"bubble loses validated answers there. Context: {src[pos-200:pos+120]!r}"
+        # hold per occurrence is that the clear is handed the kept answers.
+        assert src[pos:pos + 40].startswith("_kept_answers_text("), (
+            "a stream_callback.clear() is not handed the kept answers; the stored "
+            f"reply loses validated answers there. Context: {src[pos-200:pos+120]!r}"
         )
 
 
@@ -158,7 +150,8 @@ def test_the_buffer_clear_is_keyed_on_the_completed_round_not_the_history_tail()
     i = src.index("if _tool_round_completed:")
     window = src[i:i + 400]
     assert "_tool_round_completed = False" in window, "the flag is not consumed"
-    assert "stream_callback.clear()" in window, "the flag no longer clears the buffer"
+    assert "stream_callback.clear(_kept_answers_text(kept_turn_answers))" in window, (
+        "the flag no longer clears the buffer")
 
 
 def test_the_flag_is_raised_where_the_tool_round_ends():

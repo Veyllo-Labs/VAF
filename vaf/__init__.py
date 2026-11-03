@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from .core.fair_queue import QueueBusy, ResourceQueue, WaitInfo, queue_metrics, resource_queue
     from .core.git_runner import run_project_git
     from .core.pdf_extract import extract_pdf_markdown
-    from .core.session import TurnStatus, model_text, stored_turn_copy
+    from .core.session import TurnRound, TurnStatus, model_text, stored_turn_copy
     from .core.revocation import (add_revocation_listener, remove_revocation_listener,
                                   restore_account, revoke_account, stop_account_work,
                                   stop_session)
@@ -45,6 +45,7 @@ __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_K
            "SOUL_CONTINUITY_ADDENDUM",
            "StoreError", "ToolCallHooks", "ToolCallOutcome", "ToolCaller", "ToolRequest",
            "TurnOutcome",
+           "TurnRound",
            "TurnStatus",
            "UnsafeName",
            "UploadVerdict", "VoiceTurnEngine", "WaitInfo",
@@ -157,7 +158,7 @@ def __getattr__(name):
         # module level. See docs/EMBEDDING.md.
         from .core.completion import is_error_reply
         return is_error_reply
-    if name in ("TurnStatus", "model_text", "stored_turn_copy"):
+    if name in ("TurnRound", "TurnStatus", "model_text", "stored_turn_copy"):
         # How a turn ended, beside its text, and the rule for keeping its failure out of
         # what a model reads later. `Agent.last_turn` / `CoreAgent.last_turn` hand out the
         # TurnStatus; a transcript kept from the stream is stored with `stored_turn_copy`
@@ -166,9 +167,11 @@ def __getattr__(name):
         # CLI and the TUI, `vaf run -p` - read the engine's private turn fields for it, and
         # five in-tree readers of a stored chat already ask `model_text`. Module-level
         # imports are stdlib, typer (a base dependency) and the channel registry, so the
-        # slim base is unaffected. See docs/EMBEDDING.md.
-        from .core.session import TurnStatus, model_text, stored_turn_copy
-        return {"TurnStatus": TurnStatus, "model_text": model_text,
+        # slim base is unaffected. `TurnRound` is one generation round in
+        # `TurnStatus.rounds`: the web chat lane and the TUI each need to tell a turn's
+        # rounds apart to show them in order. See docs/EMBEDDING.md.
+        from .core.session import TurnRound, TurnStatus, model_text, stored_turn_copy
+        return {"TurnRound": TurnRound, "TurnStatus": TurnStatus, "model_text": model_text,
                 "stored_turn_copy": stored_turn_copy}[name]
     if name == "ToolRequest":
         # What an authorizer is handed: the caller's identity, which is trustworthy, and the

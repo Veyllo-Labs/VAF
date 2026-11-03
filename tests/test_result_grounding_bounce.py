@@ -42,9 +42,9 @@ class _Buffer:
     def __call__(self, text):
         self.chunks.append(text)
 
-    def clear(self):
+    def clear(self, keep=""):
         self.clears += 1
-        self.chunks = []
+        self.chunks = [keep] if keep else []
 
 
 def test_the_grounding_region_can_no_longer_retract_anything():
@@ -59,7 +59,7 @@ def test_the_grounding_region_can_no_longer_retract_anything():
     assert "self._guard_keeps_answer(full_content)" in region
     assert "_retract_streamed_reply" not in region
     assert "_clear_last_assistant_ui" not in region
-    assert "stream_callback.clear()" not in region
+    assert "stream_callback.clear(" not in region
     assert "kept_turn_answers.append(self._clean_reasoning(full_content))" in region
     assert "_grounding_correction(_claim)" in region
 
@@ -90,11 +90,11 @@ def test_a_generation_without_an_answer_is_not_judged_at_all():
 
 
 def test_retracting_clears_the_bubble_and_puts_the_validated_answers_back():
-    """MUTATION: drop the restream, or the clear, from `_retract_streamed_reply`.
+    """MUTATION: drop the kept answers from the clear, or the clear, in `_retract_streamed_reply`.
 
     Behavioural, because the sequence is what the other two guards rely on: the buffer is what
-    the web bubble shows and what the turn stores, so a clear without the restream loses an
-    answer the user was already shown, and a restream without the clear shows it twice.
+    the turn stores, so a clear without the kept answers loses an answer the user was already
+    shown, and no clear keeps the retracted reply.
     """
     agent = Agent.__new__(Agent)
     buf = _Buffer()
@@ -113,30 +113,31 @@ def test_retracting_clears_the_bubble_and_puts_the_validated_answers_back():
     agent._retract_streamed_reply(lambda _t: None, ["x"])
 
 
-def test_a_kept_answer_is_not_re_streamed_twice():
-    """MUTATION: drop the containment filter from `_restream_kept_answers`.
+def test_a_kept_answer_is_not_kept_twice():
+    """MUTATION: drop the containment filter from `_kept_answers_text`.
 
     After a kept bounce the answer is in `kept_turn_answers`; if the model restates it in the
     corrected round, the buffer would hold it twice while the joined reply holds it once. The
     two consumers of that list must agree on what counts as already there.
     """
-    from vaf.core.agent import _restream_kept_answers
+    from vaf.core.agent import _kept_answers_text
 
-    buf = _Buffer()
-    _restream_kept_answers(buf, ["Der Entwurf liegt im Ordner.", "Der Entwurf liegt im Ordner."])
-    assert buf.chunks == ["Der Entwurf liegt im Ordner.\n\n"]
+    assert _kept_answers_text(["Der Entwurf liegt im Ordner.", "Der Entwurf liegt im Ordner."]) \
+        == "Der Entwurf liegt im Ordner.\n\n"
+    assert _kept_answers_text(["Der Entwurf liegt im Ordner.", "Entwurf liegt"]) \
+        == "Der Entwurf liegt im Ordner.\n\n"
 
 
 def test_no_guard_clears_the_stream_buffer_by_hand():
     """MUTATION: paste a `stream_callback.clear()` back into any guard.
 
-    The sequence (drop the bubble, clear the buffer, re-stream the validated answers) exists
+    The sequence (drop the bubble, clear the buffer to the validated answers) exists
     once, in `_retract_streamed_reply`. It used to be three hand copies with three policies,
     and they had drifted: one site cleared the bubble only for a short reply but the buffer in
     every case. The only other legitimate clear is the per-round one that removes pre-tool
     announcements, which is not a retraction.
     """
-    clears = SOURCE.count("stream_callback.clear()")
+    clears = SOURCE.count("stream_callback.clear(")
     assert clears == 2, (
         "expected exactly two: the per-round buffer clear and the one inside "
         f"_retract_streamed_reply - found {clears}"
@@ -149,14 +150,14 @@ def test_no_guard_clears_the_stream_buffer_by_hand():
 def test_the_model_health_keep_survives_the_next_round():
     """MUTATION: remove the `kept_turn_answers.append` from the model-health re-run.
 
-    The re-run orders a tool call, and the round after a tool round clears the buffer and
-    re-streams only `kept_turn_answers`. Without the append the reply the user read is gone
-    from the screen and from the stored reply one round later (the behaviour is pinned in
+    The re-run orders a tool call, and the round after a tool round clears the buffer to
+    `kept_turn_answers` alone. Without the append the reply the user read is gone from the
+    stored reply one round later (the behaviour is pinned in
     test_model_health_turn.py::test_mid_forces_one_narrowed_call). It never retracts."""
     region = _region("def _model_health_rerun(", "def _end_turn_without_answer(")
     assert "kept_turn_answers.append(self._clean_reasoning(reply))" in region
     assert "_retract_streamed_reply" not in region
-    assert "stream_callback.clear()" not in region
+    assert "stream_callback.clear(" not in region
 
 
 def test_the_empty_response_retry_still_retracts_unconditionally():

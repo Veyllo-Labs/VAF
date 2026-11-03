@@ -21,7 +21,7 @@ from collections import deque
 log("WebServer", "Basic imports done")
 
 from vaf.core.web_interface import get_web_interface
-from vaf.core.session import SessionManager, Session, default_session_id
+from vaf.core.session import TURN_ROUNDS_KEY, SessionManager, Session, default_session_id
 from vaf.cli.autosuggest import autosuggest_for
 import json
 from vaf.core.config import Config, is_admin_identity
@@ -1198,6 +1198,79 @@ def _clean_history_text(text: str) -> str:
     return text
 
 
+def _round_timestamp(timestamp, offset_ms: int):
+    """The stored timestamp moved by `offset_ms` milliseconds, so the round entries of one
+    turn carry distinct times; the stored value unchanged when it cannot be read."""
+    if not offset_ms or not timestamp:
+        return timestamp
+    from datetime import datetime as _dt, timedelta as _td
+    try:
+        return (_dt.fromisoformat(str(timestamp)) + _td(milliseconds=offset_ms)).isoformat()
+    except (TypeError, ValueError):
+        return timestamp
+
+
+def _expand_turn_rounds(out: list, aux: list) -> list:
+    """Lay out every turn whose stored answer carries its rounds (`TURN_ROUNDS_KEY`).
+
+    For such an answer, the turn's entries since its user message are rebuilt: the stored
+    tool-call messages whose calls all belong to the rounds are replaced by the rounds
+    themselves, one assistant entry per round with text (`round`, `roundAnswer`, the answer's
+    timestamp plus `round - 1` ms), each directly followed by the tool cards of its calls in
+    stored order. Everything else of the turn (a tool no round names, a context row) keeps
+    its stored order ahead of the first round. A round whose tool is missing from the store
+    (the turn-end squash keeps a summary instead) is shown without the card.
+    """
+    if not any(a.get("rounds") for a in aux):
+        return out
+    result: list = []
+    result_aux: list = []
+    for entry, info in zip(out, aux):
+        rounds = info.get("rounds")
+        if not (isinstance(rounds, list) and rounds):
+            result.append(entry)
+            result_aux.append(info)
+            continue
+        start = len(result)
+        while start > 0 and result[start - 1].get("role") != "user":
+            start -= 1
+        covered = {str(i) for r in rounds if isinstance(r, dict)
+                   for i in (r.get("tool_call_ids") or [])}
+        head, tools = [], {}
+        for prior, prior_info in zip(result[start:], result_aux[start:]):
+            calls = prior_info.get("tool_call_ids") or ()
+            if prior.get("role") == "assistant" and calls and all(c in covered for c in calls):
+                continue   # the stored tool-call message: its round stands in for it
+            if prior.get("role") == "tool" and str(prior.get("toolId")) in covered:
+                tools.setdefault(str(prior.get("toolId")), []).append(prior)
+                continue
+            head.append(prior)
+        laid_out = list(head)
+        for r in rounds:
+            if not isinstance(r, dict):
+                continue
+            try:
+                number = int(r.get("round") or 0)
+            except (TypeError, ValueError):
+                number = 0
+            text = _clean_history_text(str(r.get("text") or ""))
+            if text.strip():
+                laid_out.append({
+                    "role": "assistant",
+                    "content": text,
+                    "timestamp": _round_timestamp(entry.get("timestamp"), max(number - 1, 0)),
+                    "round": number,
+                    "roundAnswer": bool(r.get("answer")),
+                })
+            for call_id in (r.get("tool_call_ids") or []):
+                laid_out.extend(tools.pop(str(call_id), []))
+        del result[start:]
+        del result_aux[start:]
+        result.extend(laid_out)
+        result_aux.extend({} for _ in laid_out)
+    return result
+
+
 def _history_projection(loaded, sid) -> list:
     """The stored session as the chat transcript the web UI renders.
 
@@ -1209,8 +1282,17 @@ def _history_projection(loaded, sid) -> list:
     Not pure: for a thinking session it POPS the stored user reply, which is
     what makes that reply appear exactly once. Both copies did this, and moving
     it here keeps that property rather than duplicating the side effect.
+
+    A turn stored per generation round (`TURN_ROUNDS_KEY` on its answer) is shown
+    the way it streamed: one entry per round, each followed by the tool cards of
+    the calls it made (`_expand_turn_rounds`). Every other message projects as it
+    always did.
     """
     out = []
+    # Per entry of `out`: the ids of the tool calls a stored assistant message made, and the
+    # rounds its metadata carries. Kept beside `out`, not in it: the entries are the wire
+    # shape, and these two only decide how a turn stored per round is laid out.
+    aux = []
     for msg in getattr(loaded, "messages", None) or []:
         role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", "user")
         content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", "")
@@ -1256,6 +1338,13 @@ def _history_projection(loaded, sid) -> list:
             entry["toolStatus"] = tool_status or (
                 ("unknown" if _abort_kind(content) else "completed") if content else "running")
         out.append(entry)
+        _calls = (msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)) or []
+        aux.append({
+            "tool_call_ids": tuple(str(c.get("id")) for c in _calls if isinstance(c, dict) and c.get("id")),
+            "rounds": meta.get(TURN_ROUNDS_KEY) if (role == "assistant" and isinstance(meta, dict)) else None,
+        })
+
+    out = _expand_turn_rounds(out, aux)
 
     if sid and str(sid).startswith("thinking_"):
         try:

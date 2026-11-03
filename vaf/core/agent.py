@@ -42,6 +42,7 @@ from vaf.core.tool_dispatch import (
     advise_tools as _advise_tools,
     assign_declared_identity as _assign_declared_identity,
     decode_arguments as _decode_arguments,
+    emit_event,
     event_result,
     is_channel_session as _is_channel_session,
     make_json_serializable,
@@ -405,33 +406,29 @@ def _join_turn_answers(kept: list, tail: str) -> str:
     return "\n\n".join([*extras, (tail or "").strip()])
 
 
-def _restream_kept_answers(stream_callback, kept: list) -> None:
-    """Put already-validated answers back into a just-cleared stream buffer.
+def _kept_answers_text(kept: list) -> str:
+    """What a just-cleared stream buffer starts with: the turn's already-validated answers.
 
-    The web bubble is the joined stream buffer, and the buffer is cleared after
-    every tool round so announcements ("I will check the page...") do not stack
-    up in the reply. That clear is right for announcements and fatal for an
-    answer the user has already been shown: an auto-continue round that calls a
-    tool wiped the validated answer off the screen. Re-emitting the kept answers
-    right after the clear keeps the bubble truthful without touching any
-    consumer - the CLI callback has no clear() and never sees this.
+    A host's stream buffer is what it stores as the turn's answer, and it is cleared after
+    every tool round so announcements ("I will check the page...") do not stack up in the
+    stored reply. That clear is right for announcements and fatal for an answer the user has
+    already been shown: an auto-continue round that calls a tool wiped the validated answer
+    out of the stored reply. So the clear is handed this text (the callback's `clear(keep)`),
+    and the buffer restarts from it. It is not streamed: a host that shows the stream per
+    generation round (`round_start`) still shows the kept answer in its own round. A callback
+    without a clear() (the CLI) never sees this. "" when nothing is kept.
     """
-    if not kept:
-        return
-    try:
-        # Same containment rule `_join_turn_answers` uses, so the bubble and the returned
-        # reply agree about what counts as "already there": a kept answer the model restated
-        # in a later round would otherwise stand twice in the buffer and once in the reply.
-        extras: list = []
-        for text in kept:
-            t = (text or "").strip()
-            if t and not any(t in e for e in extras):
-                extras.append(t)
-        if not extras:
-            return
-        stream_callback("\n\n".join(extras) + "\n\n")
-    except Exception:
-        pass
+    # Same containment rule `_join_turn_answers` uses, so the buffer and the returned reply
+    # agree about what counts as "already there": a kept answer the model restated in a
+    # later round would otherwise stand twice in the buffer and once in the reply.
+    extras: list = []
+    for text in kept or []:
+        t = (text or "").strip()
+        if t and not any(t in e for e in extras):
+            extras.append(t)
+    if not extras:
+        return ""
+    return "\n\n".join(extras) + "\n\n"
 
 
 # Pure lookups whose EXACT-argument repetition within one turn cannot yield new
@@ -10380,6 +10377,14 @@ class Agent:
         # and a host strips this text from its stored copy and from what it sends
         # (session.stored_turn_copy / session.model_text).
         self._turn_failure = ""
+        # One record per generation of this turn (one provider call, one pass of the loop
+        # below): {"round", "tool_call_ids", "answer"}. The loop opens it and emits
+        # `round_start`, the tool-call commit fills in the ids, the final-answer path sets
+        # `answer`. Hosts read it through `last_turn.rounds`. Kept across the fresh-retry
+        # recursion (`auto_retry`), which is the same turn to the host, so the numbers a
+        # host has seen stay unique within the turn.
+        if not (auto_retry and isinstance(getattr(self, "_turn_rounds", None), list)):
+            self._turn_rounds = []
         # Forced-resolution node (thinking-mode decision tree): when the caller forces a tool call, also
         # block the gather tools immediately so "required" can ONLY be satisfied by a decisive/progress
         # tool (ask_user / delete_* / thinking_done) — the model cannot escape into search/prose.
@@ -11007,7 +11012,7 @@ class Agent:
 
         def _model_health_rerun(verdict, reply, tools_off):
             """The turn's one model-health re-run (vaf/core/model_health.py): the reply stays
-            where the user read it (Rule 4 invariant 2: kept, never retracted, re-streamed by
+            where the user read it (Rule 4 invariant 2: kept, never retracted, handed to
             every later buffer clear), the history gets that reply and then a note that names
             what the person asked and which tools do it, and the next generation is forced to
             call one of them where the lane can. Nothing is left pending between the two
@@ -11122,6 +11127,14 @@ class Agent:
             # signatures) for verbatim replay so a thinking-enabled tool loop doesn't 400.
             anthropic_blocks_raw = None
 
+            # This generation's record and the event that marks where its stream begins.
+            # BEFORE the post-tool clear below: a host that keeps one display segment per
+            # round has switched to the new, still empty one when the clear arrives, so the
+            # clear never empties the round the user is reading.
+            _round_no = len(self._turn_rounds) + 1
+            self._turn_rounds.append({"round": _round_no, "tool_call_ids": (), "answer": False})
+            emit_event(getattr(self, "_event_sink", None), {"type": "round_start", "round": _round_no})
+
             # When we're about to stream the next assistant turn after tool execution,
             # clear the Web UI stream buffer so only the final reply is shown (not the
             # pre-tool text like "Ich werde get_contact nutzen..." plus tool blocks).
@@ -11133,8 +11146,7 @@ class Agent:
                 _tool_round_completed = False
                 if stream_callback and hasattr(stream_callback, "clear"):
                     try:
-                        stream_callback.clear()
-                        _restream_kept_answers(stream_callback, kept_turn_answers)
+                        stream_callback.clear(_kept_answers_text(kept_turn_answers))
                     except Exception:
                         pass
 
@@ -12079,8 +12091,8 @@ class Agent:
                                     )
                                 except Exception:
                                     pass
-                            # Validated as shown: a later round's buffer clear re-streams it, so
-                            # the answer the user read cannot vanish from the bubble mid-turn.
+                            # Validated as shown: a later round's buffer clear keeps it, so
+                            # the answer the user read cannot vanish from the stored reply.
                             kept_turn_answers.append(self._clean_reasoning(full_content))
                             _last_kept_is_final = False   # flagged: correction follows
                             self.history.append({"role": "assistant", "content": full_content})
@@ -12422,6 +12434,12 @@ class Agent:
                     msg["_anthropic_blocks"] = anthropic_blocks_raw
 
                 self.history.append(msg)
+                # The round's record names the calls it committed: a host that stores the
+                # turn per round places each tool card under the round that called it.
+                if self._turn_rounds:
+                    self._turn_rounds[-1]["tool_call_ids"] = tuple(
+                        str(tc.get("id")) for tc in tool_calls_detected
+                        if isinstance(tc, dict) and tc.get("id"))
 
                 # Defer system/user messages that tool handlers want to append until
                 # AFTER all tool results are in history. A sys message between two
@@ -13523,6 +13541,10 @@ class Agent:
             # below may loop again, and the next round's reset wipes full_response.
             kept_turn_answers.append(self._clean_reasoning(full_response))
             _last_kept_is_final = True
+            # Only this path marks a round as an answer: a reply a guard kept on screen and
+            # sent back (the model-health re-run, a grounding correction) stays unmarked.
+            if self._turn_rounds:
+                self._turn_rounds[-1]["answer"] = True
             # The chat's model-health ledger, once the turn has answered (a turn that ends
             # without an answer commits nothing; the call is idempotent within the turn).
             self._model_health_commit()
@@ -14722,27 +14744,35 @@ class Agent:
     @property
     def last_turn(self):
         """How this agent's most recent turn ended, beside its text: a frozen
-        ``vaf.TurnStatus(failed, failure)``.
+        ``vaf.TurnStatus(failed, failure, rounds)``.
 
         ``failed``: the turn produced no answer (the backend failed, or loop protection
         stopped it; a reply a guard had sent back for correction is no answer yet); its
         return value is the engine's text, which the history does not hold.
         ``failure``: the failure text as it was streamed, the tail of what the stream
         callback received, also for a turn that answered before a later round failed (that
-        turn is not failed and returns its answer). Before the first turn, both are empty.
+        turn is not failed and returns its answer). ``rounds``: one ``vaf.TurnRound(round,
+        tool_call_ids, answer)`` per generation of the turn, in order, the same numbers the
+        ``round_start`` events carried (outside equality, see ``TurnStatus``). Before the
+        first turn, all three are empty.
 
         Read it right after the turn and before another one runs on this agent: every
         ``chat_step`` resets it at its start. A host that keeps the stream builds its stored
         copy from this reading (``vaf.stored_turn_copy``), and a reader takes the failure off
         it (``vaf.model_text``)."""
-        from vaf.core.session import TurnStatus
+        from vaf.core.session import TurnRound, TurnStatus
+        rounds = tuple(TurnRound(round=r.get("round", 0), tool_call_ids=r.get("tool_call_ids", ()),
+                                 answer=r.get("answer", False))
+                       for r in (getattr(self, "_turn_rounds", None) or []))
         return TurnStatus(failed=getattr(self, "_turn_failed", False),
-                          failure=getattr(self, "_turn_failure", ""))
+                          failure=getattr(self, "_turn_failure", ""),
+                          rounds=rounds)
 
     def set_event_sink(self, sink):
         """Set an optional event sink for structured outputs (e.g. stream-json).
 
-        Also attaches the sink to the API backend so llm_start/llm_end events
+        Carries the tool and gate events and, once per generation of a turn, a
+        ``round_start`` before that generation's first chunk. Also attaches the sink to the API backend so llm_start/llm_end events
         flow through the same callback (schema: docs/OBSERVABILITY.md).
         """
         self._event_sink = sink
@@ -15226,8 +15256,7 @@ class Agent:
         self._clear_last_assistant_ui(sid)
         if stream_callback is not None and hasattr(stream_callback, "clear"):
             try:
-                stream_callback.clear()
-                _restream_kept_answers(stream_callback, kept or [])
+                stream_callback.clear(_kept_answers_text(kept or []))
             except Exception:
                 pass
 
@@ -15242,9 +15271,13 @@ class Agent:
         """
         if not _emit_to_web_ui():
             return
+        # The generation being retracted is the newest round of this turn: naming it keeps an
+        # earlier round's text, which stands in a bubble of its own, on the screen.
+        _rounds = getattr(self, "_turn_rounds", None) or []
+        _round = _rounds[-1].get("round") if _rounds else None
         try:
             from vaf.core.web_interface import get_web_interface
-            get_web_interface().emit_clear_last_assistant(session_id)
+            get_web_interface().emit_clear_last_assistant(session_id, round=_round)
         except Exception:
             pass
 

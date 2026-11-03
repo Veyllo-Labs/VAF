@@ -140,7 +140,7 @@ AGENT_STATE: dict = {
     "_thinking_reply_pending": _STEP, "_thinking_reply_user_text": _STEP,
     "_tool_exec_times": _STEP, "_turn_closed_by_tool": _STEP, "_turn_closing": _STEP,
     "_turn_failed": _STEP, "_turn_failure": _STEP, "_turn_ran_progress_tool": _STEP,
-    "_turn_task_tools": _STEP,
+    "_turn_rounds": _STEP, "_turn_task_tools": _STEP,
     "_workflow_selection_tier": _STEP,
     # chat: one conversation
     "history": _CHAT, "current_session_id": _CHAT, "main_persistence": _CHAT,

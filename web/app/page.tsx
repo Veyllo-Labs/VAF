@@ -39,6 +39,7 @@ import { useChatDrafts } from '@/components/outbox/useChatDrafts';
 import { draftRefOf, isDraftTurnEnd, DRAFT_WAKE_PREFIX } from '@/components/outbox/draftRefs';
 import AskChoices from '@/components/chat/AskChoices';
 import { asksOf, withoutOptions } from '@/components/chat/askContract';
+import { bodyAndSay, placeRoundUpdate, removeRoundBubble } from '@/components/chat/turnRounds';
 import type { SettingsChatJump } from '@/components/SettingsModal';
 import CreateAutomationPopup, { type CreateAutomationPayload, type EditAutomationTask } from '@/components/CreateAutomationPopup';
 import NotificationsModal, { type NotificationItem } from '@/components/NotificationsModal';
@@ -94,6 +95,14 @@ type Message = {
      * belong to no turn.
      */
     turnId?: string;
+    /**
+     * Which generation round of its turn this bubble shows (`agent_message_update.round`,
+     * `history_update`): each round of a turn is its own bubble, placed by this number
+     * (components/chat/turnRounds.ts). Absent on lanes that stream one bubble per turn.
+     */
+    round?: number;
+    /** The round passed the final-answer path: its text belongs to the answer below the rail. */
+    roundAnswer?: boolean;
     /** Code Viewer was open when sent — shown as chip; content is NOT stored here */
     codeViewerFile?: { name: string; path: string; ext: string; lineCount: number };
 };
@@ -5611,6 +5620,48 @@ function VAFDashboardContent() {
                         return;
                     }
 
+                    // A round-tagged update (the chat lane): placed by its round, never by
+                    // position, and never cut down to a delta of the previous bubble. The
+                    // force-append refs are consumed as on the path below, so a later
+                    // untagged update starts from the same state.
+                    if (typeof data.round === 'number') {
+                        const roundUpd = {
+                            round: data.round,
+                            content: String(data.content ?? ''),
+                            answer: typeof data.answer === 'boolean' ? data.answer : undefined,
+                            turnId: data.turnId ?? undefined,
+                        };
+                        const knownRound = placeRoundUpdate(messagesRef.current, { ...roundUpd, now: Date.now() }).created === false;
+                        setLoading(false);
+                        if (!knownRound && !isStoppingGenerationRef.current) {
+                            setIsGenerating(true);
+                            setStatusMessage('');
+                            setActiveToolName('');
+                            if (activeSessionId) {
+                                sessionLoadingStates.current[activeSessionId] = {
+                                    loading: false,
+                                    isGenerating: true,
+                                    statusMessage: '',
+                                    loadingMessageId: null
+                                };
+                            }
+                        }
+                        setMessages(prev => {
+                            expectNewAssistantRef.current = false;
+                            expectNewAssistantAfterToolRef.current = false;
+                            lastUserSendTimeRef.current = 0;
+                            const placed = placeRoundUpdate(prev, { ...roundUpd, now: Date.now() });
+                            if (!placed.created) return placed.messages;
+                            // A new bubble can be where a file announced for this exchange
+                            // belongs (its last assistant message).
+                            const waiting = createdFilesRef.current.filter(f => f.turnId && f.turnId === data.turnId);
+                            const target = chipTargetIndex(placed.messages, data.turnId);
+                            return waiting.length > 0 && target !== undefined
+                                ? withChips(placed.messages, target, waiting) : placed.messages;
+                        });
+                        return;
+                    }
+
                     // Same rules as inside setMessages: detect streaming updates to the existing assistant bubble.
                     const prevMsgs = messagesRef.current;
                     const lastMsg = prevMsgs[prevMsgs.length - 1];
@@ -5707,6 +5758,12 @@ function VAFDashboardContent() {
                     // system log is often appended before this event, so the last message can be system.
                     const activeSessionId = currentSessionIdRef.current;
                     if (!eventBelongsHere(data, activeSessionId, 'chat')) return;
+                    // A named round: only that round's bubble of this turn goes, and nothing
+                    // when it has none (an earlier round's bubble is text already read).
+                    if (typeof data.round === 'number') {
+                        setMessages(prev => removeRoundBubble(prev, data.round));
+                        return;
+                    }
                     setMessages(prev => {
                         const lastAssistantEntry = prev.map((m, i) => ({ m, i })).filter(({ m }) => m.role === 'assistant').pop();
                         if (!lastAssistantEntry) return prev;
@@ -6777,7 +6834,11 @@ function VAFDashboardContent() {
                             _order: idx,
                             toolId: m.toolId,
                             toolName: m.toolName,
-                            toolStatus: m.toolStatus as Message['toolStatus'] | undefined
+                            toolStatus: m.toolStatus as Message['toolStatus'] | undefined,
+                            // A turn stored per generation round (_history_projection): the
+                            // same placement and answer rule as while it streamed.
+                            round: typeof m.round === 'number' ? m.round : undefined,
+                            roundAnswer: typeof m.roundAnswer === 'boolean' ? m.roundAnswer : undefined
                         }));
 
                     // Best practice for reload/network stability:
@@ -6860,9 +6921,15 @@ function VAFDashboardContent() {
                         // so the Thinking / Action panels survive reload (server may store answer-only).
                         if (srvMsg.role === 'assistant') {
                             const srvNorm = normContent(String(srvMsg.content ?? ''));
+                            // A round entry is one round's text: only the cached bubble of the
+                            // same round with the same text is its copy. The time window would
+                            // match every round of the turn, whose times are a millisecond apart.
+                            const sameMsg = (cm: Message) => typeof srvMsg.round === 'number'
+                                ? (cm.round === srvMsg.round && normContent(String(cm.content ?? '')) === srvNorm)
+                                : (normContent(String(cm.content ?? '')) === srvNorm || Math.abs((cm.timestamp ?? 0) - (srvMsg.timestamp ?? 0)) < 2000);
                             const withThink = cachedMsgs.find(cm =>
                                 cm.role === 'assistant' &&
-                                (normContent(String(cm.content ?? '')) === srvNorm || Math.abs((cm.timestamp ?? 0) - (srvMsg.timestamp ?? 0)) < 2000) &&
+                                sameMsg(cm) &&
                                 (/<think>[\s\S]*?<\/think>/i.test(String(cm.content ?? '')) || /<Action>[\s\S]*?<\/Action>/i.test(String(cm.content ?? '')))
                             );
                             if (withThink) {
@@ -9839,7 +9906,10 @@ function VAFDashboardContent() {
                                     // answer rendered below. SAFE FALLBACK: a turn is grouped only if it has ≥1 tool and
                                     // no non-final assistant carries visible answer text (else we'd hide content) — any
                                     // other turn keeps today's per-row rendering.
-                                    type TurnTl = { actions: { kind: 'think' | 'tool' | 'say'; msg: typeof visibleMessages[number] }[]; answerMsg: typeof visibleMessages[number] };
+                                    // bodyLead: the texts of earlier rounds that are answers too (an answer
+                                    // the pending-task auto-continue followed), shown in the answer bubble
+                                    // ahead of answerMsg's text (bodyAndSay).
+                                    type TurnTl = { actions: { kind: 'think' | 'tool' | 'say'; msg: typeof visibleMessages[number] }[]; answerMsg: typeof visibleMessages[number]; bodyLead: string[] };
                                     const turnTimeline = new Map<number, TurnTl>(); // key: visibleMessages idx of the turn's first assistant (anchor)
                                     const consumedVmIdx = new Set<number>();        // tools + non-anchor assistants shown inside a timeline
                                     (() => {
@@ -9869,17 +9939,26 @@ function VAFDashboardContent() {
                                             // rail step, NOT a reason to abandon grouping. Only the FINAL assistant's answer
                                             // (answerIdx) becomes the answer bubble below; every earlier assistant's visible
                                             // text becomes a 'say' step in order, alongside its 'think' if present.
+                                            // Which texts are the answer and which are 'say' steps: a turn shown
+                                            // per generation round keeps an earlier round that answered in the
+                                            // body (turnRounds.ts, bodyAndSay); without round fields every
+                                            // earlier text is a 'say' step, as before.
+                                            const split = bodyAndSay(
+                                                assistants.map(k => ({ text: ans(vm[k]), roundAnswer: vm[k].roundAnswer })),
+                                                assistants.length - 1);
+                                            const sayIdx = new Set(split.say.map(p => assistants[p]));
                                             const actions: TurnTl['actions'] = [];
                                             for (let k = s; k < e; k++) {
                                                 if (isStandalone(vm[k])) continue;
                                                 if (vm[k].role === 'assistant') {
                                                     if ((parseContent(vm[k].content).thought ?? '').trim() !== '') actions.push({ kind: 'think', msg: vm[k] });
-                                                    if (k !== answerIdx && ans(vm[k]) !== '') actions.push({ kind: 'say', msg: vm[k] });
+                                                    if (sayIdx.has(k)) actions.push({ kind: 'say', msg: vm[k] });
                                                 } else if (vm[k].role === 'tool') {
                                                     actions.push({ kind: 'tool', msg: vm[k] });
                                                 }
                                             }
-                                            turnTimeline.set(anchor, { actions, answerMsg: vm[answerIdx] });
+                                            turnTimeline.set(anchor, { actions, answerMsg: vm[answerIdx],
+                                                bodyLead: split.bodyLead.map(p => ans(vm[assistants[p]])) });
                                             for (let k = s; k < e; k++) {
                                                 if (isStandalone(vm[k])) continue;   // renders as its own row, never inside the rail
                                                 if (k !== anchor && (vm[k].role === 'tool' || vm[k].role === 'assistant')) consumedVmIdx.add(k);
@@ -10087,7 +10166,11 @@ function VAFDashboardContent() {
                                                             .filter(f => !seen.has(f.path) && seen.add(f.path));
                                                     })();
                                                     const thought = parsedSelf.thought;
-                                                    const answer = parsedAns.answer;
+                                                    // An earlier round that answered stands in the body too, ahead of
+                                                    // the last round's text (bodyLead; empty for every other turn).
+                                                    const answer = hasTimeline && turnTl!.bodyLead.length > 0
+                                                        ? [...turnTl!.bodyLead, parsedAns.answer].filter(t => t.trim() !== '').join('\n\n')
+                                                        : parsedAns.answer;
                                                     const action = parsedAns.action;
                                                     const isThinkingComplete = parsedSelf.isThinkingComplete;
                                                     const isActionComplete = parsedAns.isActionComplete;

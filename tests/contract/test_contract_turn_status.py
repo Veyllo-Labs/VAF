@@ -71,6 +71,18 @@ def test_the_status_is_a_frozen_value_and_coerces_what_it_is_given():
         status.failed = True  # noqa: B018
 
 
+def test_the_rounds_are_frozen_values_outside_the_status_equality():
+    """`last_turn.rounds`: one `vaf.TurnRound(round, tool_call_ids, answer)` per generation
+    of the turn (docs/EMBEDDING.md, "Streaming"). Equality stays "how the turn ended"."""
+    first = vaf.TurnRound(1, ["c1"], 0)
+    assert (first.round, first.tool_call_ids, first.answer) == (1, ("c1",), False)
+    with pytest.raises(AttributeError):
+        first.answer = True  # noqa: B018
+    status = vaf.TurnStatus(rounds=(first, vaf.TurnRound(2, (), True)))
+    assert status == vaf.TurnStatus() and status.rounds[1].answer is True
+    assert vaf.TurnStatus().rounds == ()
+
+
 def test_last_turn_has_the_same_name_on_the_facade_and_the_engine():
     assert isinstance(vaf.Agent.last_turn, property)
     assert isinstance(vaf.CoreAgent.last_turn, property)

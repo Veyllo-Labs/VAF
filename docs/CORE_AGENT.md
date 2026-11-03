@@ -307,17 +307,20 @@ still runs a hidden tool, but never one outside the allowed set.
 
 ## Observability and accessors
 
-- `set_event_sink(callable)` - structured `tool_start`/`tool_end`/
-  `gate_required`/`gate_decision` events; full schema in
-  [OBSERVABILITY.md](OBSERVABILITY.md).
+- `set_event_sink(callable)` - structured `round_start` (one per generation of a turn,
+  before its first chunk) and `tool_start`/`tool_end`/`gate_required`/`gate_decision`
+  events; full schema in [OBSERVABILITY.md](OBSERVABILITY.md).
 - `get_token_usage(*, include_tools=True) -> (used, max)` - provider-appropriate context usage;
   `include_tools=False` leaves the tool schemas out (the agent's own counts before a turn's
   tools are routed use it).
 - `last_turn` - how the most recent `chat_step` ended, beside its text: a frozen
-  `vaf.TurnStatus(failed, failure)` (see the return contract above). Reset at the start of
-  every `chat_step`; read it right after the turn, before another one runs on this agent.
-  Before the first turn both fields are empty. The facade's `Agent.last_turn` is the same
-  reading.
+  `vaf.TurnStatus(failed, failure, rounds)` (see the return contract above). `rounds` is
+  one `vaf.TurnRound(round, tool_call_ids, answer)` per generation of the turn, numbered
+  as the `round_start` events were; it is outside equality, so `last_turn ==
+  vaf.TurnStatus()` still means "answered, nothing failed". Reset at the start of every
+  `chat_step` (the internal fresh retry keeps counting, it is the same turn); read it
+  right after the turn, before another one runs on this agent. Before the first turn all
+  fields are empty. The facade's `Agent.last_turn` is the same reading.
 - `history` - the OpenAI-style message list (the system prompt is
   `history[0]`).
 - `get_live_session_subagents()` - session-scoped, heartbeat-verified list of

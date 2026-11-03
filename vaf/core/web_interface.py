@@ -536,14 +536,26 @@ class WebInterfaceManager:
         self.latest_state["tasks"] = tasks
         self._push_session_update(session_id, {"type": "tasks_update", "tasks": tasks})
         
-    def emit_agent_message(self, role: str, content: str, session_id: str = None):
-        """Emit a message update. Content is the FULL message so far."""
-        self._push_session_update(session_id, {
+    def emit_agent_message(self, role: str, content: str, session_id: str = None,
+                           round: Optional[int] = None, answer: Optional[bool] = None):
+        """Emit a message update. Content is the FULL message so far.
+
+        `round`: the generation round of the turn this text belongs to (`round_start`); the
+        content is then that round's text alone, and the browser keeps one bubble per round
+        in the order the rounds ran. `answer`: whether that round passed the final-answer
+        path, known only once the turn is over. Both are left out of the payload when not
+        given, so the lanes that stream one bubble per turn send what they always sent."""
+        payload = {
             "type": "agent_message_update",
             "role": role,
             "content": content,
             "turnId": _current_turn_id(),
-        })
+        }
+        if round is not None:
+            payload["round"] = int(round)
+        if answer is not None:
+            payload["answer"] = bool(answer)
+        self._push_session_update(session_id, payload)
 
     def emit_agent_message_append(self, content: str, session_id: str = None, role: str = "assistant", kind: str = None):
         """Emit a COMPLETE, standalone message that must be appended as its own new
@@ -571,9 +583,15 @@ class WebInterfaceManager:
             payload["kind"] = kind
         self._push_session_update(session_id, payload)
 
-    def emit_clear_last_assistant(self, session_id: str = None):
-        """Ask the Web UI to remove the last assistant message (e.g. before empty-response retry)."""
-        self._push_session_update(session_id, {"type": "clear_last_assistant"})
+    def emit_clear_last_assistant(self, session_id: str = None, round: Optional[int] = None):
+        """Ask the Web UI to remove the last assistant message (e.g. before empty-response retry).
+
+        With `round`, only that generation round's bubble of the current turn is removed, and
+        nothing when it has none: an earlier round's bubble is text the user already read."""
+        payload = {"type": "clear_last_assistant"}
+        if round is not None:
+            payload["round"] = int(round)
+        self._push_session_update(session_id, payload)
 
     def emit_message_complete(self, content: str, session_id: str = None):
         """Emit when a message is fully complete (for Auto-TTS trigger)."""

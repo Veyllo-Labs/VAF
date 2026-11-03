@@ -40,6 +40,7 @@ EXPORTED = [
     "ToolCaller",
     "ToolRequest",
     "TurnOutcome",
+    "TurnRound",
     "TurnStatus",
     "UnsafeName",
     "UploadVerdict",

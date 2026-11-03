@@ -28,8 +28,9 @@ from vaf.core.task_queue import TaskQueue, is_system_command
 from vaf.core.turn_binding import (TurnBinding, TurnRefused, bind_turn, end_turn,
                                    room_turn_marker)
 from vaf.core.subagent_ipc import take_result_notification
-from vaf.core.session import (SessionManager, Session, TurnStatus, failed_turn_meta,
-                              stored_turn_copy, turn_context_messages_since_last_user)
+from vaf.core.session import (TURN_ROUNDS_KEY, SessionManager, Session, TurnStatus,
+                              failed_turn_meta, stored_turn_copy,
+                              turn_context_messages_since_last_user)
 from vaf.core.tray_context import TrayContext
 from vaf.core.web_interface import get_web_interface
 from vaf.core.platform import Platform
@@ -577,6 +578,132 @@ def _clean_drain_text(text: str) -> str:
     text = re.sub(r"<think>.*?</think>", "", str(text or ""), flags=re.DOTALL)
     text = _strip_tool_calls_json(text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+class _ChatTurnStream:
+    """The chat lane's stream callback: the turn's stored copy, and one display segment per
+    generation round.
+
+    `parts` is the stored copy, what it always was: every chunk, and a buffer clear
+    (`clear(keep)`, the post-tool clear and the retraction in `chat_step`) restarts it from
+    the turn's already-validated answers. The segments are what the chat shows: the agent's
+    `round_start` event (`on_event`, the agent's event sink for this turn) closes the
+    current segment and opens the next one, so each round's reasoning and text reach the
+    browser as their own bubble, tagged with the round, in the order the rounds ran and
+    between the tool cards of the rounds that called them. A clear empties only the current
+    segment: after a post-tool `round_start` that is the new, still empty one, during a
+    retraction it is the round being retracted. The kept answers are never put into a
+    segment, because the earlier rounds' bubbles still show them.
+
+    Text streamed before the first `round_start` (workflow step lines, a refusal) belongs to
+    round 1. A round whose number is not above the current one (a nested `chat_step`)
+    stays in the current segment.
+
+    Named boundaries, each showing one bubble for its text as before: the sub-agent drain and
+    the room lane (the drain's stored copy has its reasoning removed, so there is nothing to
+    show per round); a turn that ends at a draft, a delegation, a stop and a system note (one
+    message by design, stored as one); and the runner's hallucination correction further
+    down, a second `chat_step` with its own callback that overwrites the newest bubble. That
+    one stays as it is because it does not run in practice: 0 fires in 122,840 lines of the
+    run log, against 3 model-health re-runs and 40 grounding detections.
+    """
+
+    def __init__(self, session_id, should_stop=None, emit=None, clock=None,
+                 throttle: float = STREAM_EMIT_THROTTLE_SEC):
+        self.session_id = session_id
+        self._should_stop = should_stop or (lambda: False)
+        self._emit_fn = emit
+        self._clock = clock or time.time
+        self._throttle = throttle
+        self._last_emit = 0.0
+        self.parts: list = []
+        self.segments: dict = {1: []}
+        self.current = 1
+
+    def __call__(self, text):
+        # Cooperative stop: abort an already-running chat_step turn as soon as the next
+        # stream callback arrives.
+        if self._should_stop():
+            raise _StopGenerationRequested("Stop requested by user")
+        self.parts.append(text)
+        self.segments.setdefault(self.current, []).append(text)
+        self._emit_round(self.current, throttled=True)
+
+    def clear(self, keep: str = ""):
+        self.parts[:] = [keep] if keep else []
+        self.segments[self.current] = []
+
+    def on_event(self, evt) -> None:
+        if not isinstance(evt, dict) or evt.get("type") != "round_start":
+            return
+        try:
+            number = int(evt.get("round"))
+        except (TypeError, ValueError):
+            return
+        if number <= self.current:
+            return
+        # The closed round once more, unthrottled: its last chunks may have fallen inside
+        # the throttle window, and nothing will send that segment again until the turn ends.
+        self._emit_round(self.current, throttled=False)
+        self.current = number
+        self.segments.setdefault(number, [])
+
+    def segment_text(self, number) -> str:
+        return "".join(self.segments.get(number) or [])
+
+    def emit_rounds(self, rounds, clean=None) -> int:
+        """Every round that has text, once, unthrottled, with whether it is an answer
+        (`rounds`: the agent's `last_turn.rounds`). Returns how many went out."""
+        answers = {r.round: r.answer for r in (rounds or ())}
+        sent = 0
+        for number in sorted(self.segments):
+            text = self.segment_text(number)
+            if clean is not None:
+                text = clean(text)
+            if not (text and text.strip()):
+                continue
+            if self._send(text, number, bool(answers.get(number, False))):
+                sent += 1
+        return sent
+
+    def _emit_round(self, number, *, throttled: bool) -> None:
+        text = self.segment_text(number)
+        if not (text and text.strip()):
+            return
+        now = self._clock()
+        if throttled and now - self._last_emit < self._throttle:
+            return
+        if self._send(text, number, None):
+            self._last_emit = now
+
+    def _send(self, text, number, answer) -> bool:
+        try:
+            if self._emit_fn is not None:
+                self._emit_fn(text, number, answer)
+            else:
+                get_web_interface().emit_agent_message(
+                    role="assistant", content=text, session_id=self.session_id,
+                    round=number, answer=answer)
+            return True
+        except Exception:
+            return False
+
+
+def _turn_rounds_meta(rounds, stream, clean=_clean_for_session):
+    """The `TURN_ROUNDS_KEY` value for a chat turn's stored answer, or None.
+
+    One entry per round that streamed text or committed a tool call: its number, its text as
+    shown (`clean`ed the way the stored copy is), the ids of its tool calls and whether it
+    is an answer. None for a turn of fewer than two such rounds: one round is the stored
+    answer itself, and that message stays byte-identical to what it always was."""
+    entries = []
+    for r in rounds or ():
+        text = clean(stream.segment_text(r.round)) if stream is not None else ""
+        if not (text or r.tool_call_ids):
+            continue
+        entries.append({"round": r.round, "text": text or "",
+                        "tool_call_ids": list(r.tool_call_ids), "answer": bool(r.answer)})
+    return entries if len(entries) >= 2 else None
 
 
 def _apply_channel_history_window(agent, source: str) -> None:
@@ -2219,38 +2346,13 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     except Exception:
                         pass
 
-                    # Streaming callback for WebUI - accumulates chunks, throttled emit so UI keeps up.
-                    # Supports .clear() so agent can reset buffer on empty-response retry (only retry content is shown).
-                    response_parts = []
-                    _last_emit_time = [0.0]  # list so nested function can assign
-
-                    def _emit(text):
-                        if not (text and text.strip()):
-                            return
-                        now = time.time()
-                        if now - _last_emit_time[0] >= STREAM_EMIT_THROTTLE_SEC:
-                            try:
-                                get_web_interface().emit_agent_message(
-                                    role="assistant",
-                                    content=text,
-                                    session_id=task.session_id
-                                )
-                                _last_emit_time[0] = now
-                            except Exception:
-                                pass
-
-                    def webui_stream_callback(text):
-                        # Cooperative stop: abort an already-running chat_step turn
-                        # as soon as the next stream callback arrives.
-                        if tq.should_stop(task.session_id):
-                            raise _StopGenerationRequested("Stop requested by user")
-                        response_parts.append(text)
-                        _emit("".join(response_parts))
-
-                    def clear_stream_buffer():
-                        response_parts.clear()
-
-                    webui_stream_callback.clear = clear_stream_buffer
+                    # The turn's stream: throttled emits so the UI keeps up, one bubble per
+                    # generation round (the agent's `round_start`, received through the sink
+                    # installed around chat_step below), and `response_parts` as the stored
+                    # copy, which the agent's clear(keep) restarts (_ChatTurnStream).
+                    webui_stream_callback = _ChatTurnStream(
+                        task.session_id, should_stop=lambda: tq.should_stop(task.session_id))
+                    response_parts = webui_stream_callback.parts
 
                     # The source, the Front Office set, the unattended mark and the contact
                     # record were bound with the turn (_task_turn_binding).
@@ -2721,6 +2823,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     try:
                         if _manage_webui_env:
                             os.environ["VAF_WEBUI_ACTIVE"] = "1"
+                        # For this turn only, and taken off again on every exit path: the
+                        # agent's events tell the stream where each generation round begins.
+                        agent.set_event_sink(webui_stream_callback.on_event)
                         response = agent.chat_step(
                             user_input=effective_input,
                             stream_callback=webui_stream_callback,  # Stream to WebUI!
@@ -2739,6 +2844,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         if tq.should_stop(task.session_id):
                             raise _StopGenerationRequested("Stop requested by user")
                     finally:
+                        try:
+                            agent.set_event_sink(None)
+                        except Exception:
+                            pass
                         if _manage_webui_env:
                             if prev_webui_active is None:
                                 os.environ.pop("VAF_WEBUI_ACTIVE", None)
@@ -2790,6 +2899,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # streamed): read NOW, before anything below runs another chat_step on the
                     # same agent.
                     _turn_status = agent.last_turn
+                    # The turn per round for the stored answer (TURN_ROUNDS_KEY): set only on
+                    # the path that showed it per round. A draft, a stop, a delegation or a
+                    # system note shows one message and is stored as one.
+                    _rounds_meta = None
                     if response_text.startswith("[ASYNC_ACK]"):
                         clean_ack = response_text.replace("[ASYNC_ACK]", "").strip()
                         final_text = clean_ack or response_text
@@ -2840,11 +2953,21 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         else:
                             if not final_text or not str(final_text).strip():
                                 final_text = "[Error] No response was produced. The server may have rejected the request (e.g. context too large). Try closing the Document Editor or starting a new chat."
-                            get_web_interface().emit_agent_message(
-                                role="assistant",
-                                content=str(final_text),
-                                session_id=task.session_id
-                            )
+                            # Nothing of the stored copy streamed (it is the turn's return
+                            # value, or the line above): that text is the last round's. Every
+                            # chunk reaches the copy and the current round alike and a clear
+                            # empties both, so that round holds no other text.
+                            if not "".join(response_parts).strip():
+                                webui_stream_callback.segments[webui_stream_callback.current] = [
+                                    str(final_text)]
+                            # Each round once more, complete and unthrottled, now with
+                            # whether it is an answer; the stored copy below keeps the same
+                            # split (_turn_rounds_meta), so a reload shows what streamed.
+                            # `final_text` stays the joined copy every reader below uses.
+                            webui_stream_callback.emit_rounds(
+                                _turn_status.rounds, clean=_strip_tool_calls_json)
+                            _rounds_meta = _turn_rounds_meta(_turn_status.rounds,
+                                                             webui_stream_callback)
 
                     # Emit message_complete event for Auto-TTS (skip speaking for SYSTEM_LOG_ONLY)
                     try:
@@ -3041,6 +3164,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         _clean_response, _turn_meta = _chat_turn_copy(
                             response_parts, response_text, ends_at_draft=_turn_ends_at_draft,
                             turn=_turn_status)
+                        if _rounds_meta:
+                            _turn_meta = {**(_turn_meta or {}), TURN_ROUNDS_KEY: _rounds_meta}
 
                         if _user_input.strip():
                             # Helper to get role/content from Message object or dict
@@ -3862,9 +3987,12 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                         )
 
                                 # A reply a guard takes back (_retract_streamed_reply) leaves the
-                                # buffer, so it reaches neither the stored copy nor the messenger.
-                                def clear_stream_buffer():
-                                    response_parts.clear()
+                                # buffer, so it reaches neither the stored copy nor the messenger;
+                                # `keep` is the turn's already-validated answers, which stay.
+                                # One bubble for the whole turn here (no round segments): the
+                                # stored copy has no reasoning to show per round.
+                                def clear_stream_buffer(keep=""):
+                                    response_parts[:] = [keep] if keep else []
 
                                 webui_stream_callback.clear = clear_stream_buffer
 

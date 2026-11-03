@@ -54,7 +54,7 @@ def test_facade_exports_exactly_the_documented_surface():
         "PathEscape", "QueueBusy", "RemoteRefused", "RemoteRoom", "ResourceQueue",
         "Room", "RoomError", "RoomTriggerWatch", "SOUL_CONTINUITY_ADDENDUM", "StoreError",
         "ToolCallHooks", "ToolCallOutcome", "ToolCaller", "ToolRequest", "TurnOutcome",
-        "TurnStatus",
+        "TurnRound", "TurnStatus",
         "UnsafeName", "UploadVerdict",
         "VoiceTurnEngine", "WaitInfo",
         "__version__",

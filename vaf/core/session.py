@@ -104,6 +104,45 @@ class Message:
 
 
 @dataclass(frozen=True)
+class TurnRound:
+    """One generation of a turn (one provider call), in `TurnStatus.rounds` (on the facade as
+    `vaf.TurnRound`).
+
+    `round`: its number in the turn, from 1, the same number the `round_start` event carried
+    before the generation streamed its first chunk. `tool_call_ids`: the ids of the tool
+    calls it committed, empty when it called none. `answer`: it passed the final-answer path.
+    A reply a guard kept on screen and sent back (the model-health re-run, a result-grounding
+    correction) is not one; a turn that answered and then auto-continued has more than one.
+    A host that shows a turn per round tells, with these, which round's text is an answer
+    and under which round a tool card belongs. Coerced here, like `TurnStatus`."""
+    round: int = 0
+    tool_call_ids: tuple = ()
+    answer: bool = False
+
+    def __post_init__(self):
+        try:
+            number = int(self.round)
+        except (TypeError, ValueError):
+            number = 0
+        object.__setattr__(self, "round", number)
+        ids = self.tool_call_ids
+        if isinstance(ids, (str, bytes)) or ids is None:
+            ids = (ids,) if ids else ()
+        object.__setattr__(self, "tool_call_ids", tuple(str(i) for i in ids if i))
+        object.__setattr__(self, "answer", bool(self.answer))
+
+
+def _as_turn_round(value) -> TurnRound:
+    """A `TurnRound` from one, from its fields as a dict, or from them in order."""
+    if isinstance(value, TurnRound):
+        return value
+    if isinstance(value, dict):
+        return TurnRound(value.get("round", 0), value.get("tool_call_ids", ()),
+                         value.get("answer", False))
+    return TurnRound(*list(value)[:3])
+
+
+@dataclass(frozen=True)
 class TurnStatus:
     """How an agent's most recent turn ended, beside its text: `Agent.last_turn` and
     `CoreAgent.last_turn` (on the facade as `vaf.TurnStatus`).
@@ -119,13 +158,30 @@ class TurnStatus:
 
     Frozen, so a host reads the turn once, right after it, and keeps that reading while the
     same agent runs its next turn. Values are coerced here, at the boundary, because a host
-    and an embedder build one too (`stored_turn_copy` takes it)."""
+    and an embedder build one too (`stored_turn_copy` takes it).
+
+    `rounds`: the turn's generations, one `TurnRound` each, in order. Deliberately outside
+    equality (`compare=False`): two readings are equal when the turn ENDED the same way, so
+    `last_turn == TurnStatus()` keeps meaning "answered, nothing failed" however many rounds
+    it took."""
     failed: bool = False
     failure: str = ""
+    rounds: tuple = field(default=(), compare=False)
 
     def __post_init__(self):
         object.__setattr__(self, "failed", bool(self.failed))
         object.__setattr__(self, "failure", str(self.failure or ""))
+        object.__setattr__(self, "rounds", tuple(_as_turn_round(r) for r in (self.rounds or ())
+                                                 if isinstance(r, (TurnRound, dict, list, tuple))))
+
+
+# The metadata key of a stored assistant message that holds a turn of two or more generation
+# rounds: a list of {"round", "text", "tool_call_ids", "answer"}, one per round that streamed
+# text or called a tool. Display only: the message's `content` stays the whole turn as it was
+# stored before, which is what every model context reads, and a transcript view uses the
+# rounds to show each round's text at its place between the tool calls. A message without it
+# renders as one answer, as before.
+TURN_ROUNDS_KEY = "rounds"
 
 
 # The metadata key a stored assistant message carries when it stands in for an answer the

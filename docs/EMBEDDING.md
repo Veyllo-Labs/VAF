@@ -96,6 +96,26 @@ may include the model's `<think>...</think>` block; the value returned by `run()
 is always the cleaned final answer. A turn's failure reaches `on_token` too;
 `agent.last_turn` says whether one did (see "A complete example, with error handling").
 
+One turn can be several generations: an answer, a tool call, another answer, or a
+reply a guard sent back for a second try. `on_token` gets them as one stream. To
+show each generation in its own place (a chat UI that puts text written before a
+tool call above that call, and a second round's reasoning in a block of its own),
+watch for `round_start` with `agent.on_event(...)`: it arrives before each round's
+first token and carries the round's number. After the turn, `agent.last_turn.rounds`
+lists the rounds as `vaf.TurnRound(round, tool_call_ids, answer)`: which tool calls
+each made and which rounds were answers. See "Generation rounds" in
+[OBSERVABILITY.md](OBSERVABILITY.md).
+
+```python
+rounds = {}
+current = [1]
+agent.on_event(lambda e: current.__setitem__(0, e["round"]) if e.get("type") == "round_start" else None)
+agent.run("Install the ten packages.",
+          on_token=lambda s: rounds.setdefault(current[0], []).append(s))
+for r in agent.last_turn.rounds:
+    print(r.round, "answer" if r.answer else "step", r.tool_call_ids, "".join(rounds.get(r.round, [])))
+```
+
 ### Stateful conversations
 
 One `Agent` instance keeps one conversation - repeated `run()` calls continue
@@ -2795,7 +2815,9 @@ Stable public surface (safe to build on):
   `[Error] ` status or a provider's `[API Error from` sentinel anywhere in it, also
   after text an earlier round streamed. A reply that quotes either marker counts as a
   failure, the safe side. Never raises; anything but a non-empty string is False.
-- `last_turn` on both `Agent` and `CoreAgent`, a frozen `vaf.TurnStatus(failed, failure)`,
+- `last_turn` on both `Agent` and `CoreAgent`, a frozen `vaf.TurnStatus(failed, failure,
+  rounds)` with `rounds` a tuple of frozen `vaf.TurnRound(round, tool_call_ids, answer)`
+  (outside equality, see "Streaming"),
   with `vaf.stored_turn_copy(stream, turn, clean=None) -> (copy, metadata)` and
   `vaf.model_text(message) -> Optional[str]` - how the most recent turn ended, beside its
   text, and the rule for a transcript kept from the stream. The promise: the two fields
@@ -2814,7 +2836,7 @@ façade, and no embedder has asked for one. If you need it, say so - the export 
 one lazy branch away, and it is not being added on speculation.
 `vaf.ToolCaller`, `vaf.ToolCallOutcome`, `vaf.advise_tools`, `vaf.ToolRequest`, `vaf.set_account_allowlist_resolver`,
 `vaf.extract_pdf_markdown`, `vaf.install_thread_excepthook`, `vaf.is_error_reply`,
-`vaf.TurnStatus`, `vaf.stored_turn_copy` and `vaf.model_text`
+`vaf.TurnStatus`, `vaf.TurnRound`, `vaf.stored_turn_copy` and `vaf.model_text`
 are the deliberate exceptions: they live in `vaf.core` but are re-exported on the façade, and the
 façade names are the ones to import.
 

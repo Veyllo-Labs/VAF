@@ -69,8 +69,8 @@ class _Buffer:
     def __call__(self, text):
         self.chunks.append(str(text))
 
-    def clear(self):
-        self.chunks = []
+    def clear(self, keep=""):
+        self.chunks = [keep] if keep else []
 
     @property
     def text(self):

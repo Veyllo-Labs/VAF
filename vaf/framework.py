@@ -299,7 +299,8 @@ class Agent:
     def on_event(self, callback: Optional[Callable[[dict], None]]) -> None:
         """Attach a structured-event callback (or None to detach).
 
-        Receives one dict per event: tool_start/tool_end (with duration_ms and
+        Receives one dict per event: round_start (one per generation of a turn,
+        before its first token), tool_start/tool_end (with duration_ms and
         a dispatch-level ok flag), gate_required/gate_decision, and
         llm_start/llm_end (with duration_ms, ok, and a best-effort usage
         snapshot on API providers). Full schema: docs/OBSERVABILITY.md.
@@ -473,7 +474,7 @@ class Agent:
     @property
     def last_turn(self):
         """How the most recent ``run()`` ended, beside its text: a frozen
-        ``vaf.TurnStatus(failed, failure)``. Same name on the engine.
+        ``vaf.TurnStatus(failed, failure, rounds)``. Same name on the engine.
 
         ``failed`` is True when the turn produced no answer (a provider failed, or loop
         protection stopped it; a reply a guard had sent back for correction is no answer
@@ -483,8 +484,10 @@ class Agent:
         then, and only the stream carries the failure. Read it after ``run()`` and before the
         next one. A transcript of your own built from ``on_token`` stores
         ``vaf.stored_turn_copy("".join(streamed), agent.last_turn)``, ``streamed`` being the
-        chunks ``on_token`` received, and reads it back with ``vaf.model_text``. Before the
-        first run (no engine yet) nothing failed, and reading this builds no engine.
+        chunks ``on_token`` received, and reads it back with ``vaf.model_text``. ``rounds``
+        lists the turn's generations as ``vaf.TurnRound(round, tool_call_ids, answer)``, the
+        numbers the ``round_start`` events carried. Before the first run (no engine yet)
+        nothing failed, and reading this builds no engine.
         """
         if self._agent is None:
             from vaf.core.session import TurnStatus

@@ -7,12 +7,15 @@ non-Python integrations.
 | Channel | Carries | How to attach |
 |---|---|---|
 | Text stream | the model's output as it is generated | `Agent.run(prompt, on_token=...)` or `chat_step(..., stream_callback=...)` |
-| Event sink | structured tool/gate events (dicts) | `CoreAgent.set_event_sink(callable)` |
+| Event sink | structured tool/gate events and the start of every generation round (dicts) | `CoreAgent.set_event_sink(callable)` |
 
 Audience: developers embedding VAF ([EMBEDDING.md](EMBEDDING.md)) or driving it
 as a subprocess. The Web UI uses its own WebSocket channel (see
-[WEBUI_WEBSOCKET_FLOW.md](web-ui/WEBUI_WEBSOCKET_FLOW.md)); the event sink is
-`None` in web sessions.
+[WEBUI_WEBSOCKET_FLOW.md](web-ui/WEBUI_WEBSOCKET_FLOW.md)); its chat lane
+installs a sink of its own for each turn and takes it off when the turn ends,
+and reads only `round_start` from it, to show each generation round as its own
+bubble. Tool cards and the confirmation dialog reach the browser on the WebSocket
+channel, not through the sink.
 
 ---
 
@@ -27,7 +30,9 @@ deltas on the thread that runs the turn. Expect more than prose:
 - Status strings are injected into the stream: error texts such as
   `[Error] API backend failure: ...`, and `\n\n[Generation stopped by user]`
   when a run is stopped.
-- A trailing `\n` follows each generation.
+- A trailing `\n` follows each generation. Where one generation ends and the
+  next begins is not in the text: the event sink's `round_start` marks it (see
+  "Generation rounds" below).
 
 Treat streamed text as non-final until the call returns: the facade's `run()`
 returns the cleaned final answer (reasoning stripped) regardless of what was
@@ -54,9 +59,9 @@ Contract (all verified against `vaf/core/agent.py`):
   order per call: `[gate_required -> gate_decision] -> tool_start -> tool_end`.
 - A raising sink is swallowed (`try/except`): a broken consumer can never
   break the run.
-- Tool execution and (on API providers) LLM calls emit sink events. There are
-  currently **no** events for context compression (Web UI pushes / log files
-  only).
+- Tool execution, every generation of a turn (`round_start`) and (on API
+  providers) LLM calls emit sink events. There are currently **no** events for
+  context compression (Web UI pushes / log files only).
 
 ### Event types
 
@@ -67,6 +72,7 @@ Contract (all verified against `vaf/core/agent.py`):
 | `gate_required` | `gate_id`, `tool`, `cwd`, `reason`, `args_preview` (max 300 chars), `args_preview_truncated`, `args_preview_neutralized`, `args_preview_redacted`, `command_categories` (shell tools only), `offer_standing`, `always_trusts_folder` | the confirmation gate was reached. The preview is HARDENED, because a dialog is a control only while what it shows equals what will run: hidden and direction-changing characters become visible `[U+XXXX]` markers, credential material becomes `[redacted]` (the surrounding syntax is kept so the reader still sees what was passed), and a cut ends in `... [cut]` INSIDE the 300 characters. The three counters say what had to be changed; `command_categories` carries the offline classifier's verdict (`vaf/core/command_policy.py`). Two causes: a tool whose `permission_level` is `dangerous`, or an embedder's authorizer calling `req.ask()` - which gates a tool of any level and ignores a standing grant, and whose message becomes `reason`. In non-interactive mode the tool then returns an `[ERROR] ... requires confirmation ...` string and **no** `gate_decision` follows. `offer_standing` is false for a question that ignores standing answers (a tool's `ask_reason`, an authorizer's `ask()`): only "once" and "cancel" count there, any other answer is taken as `allow_once`. `always_trusts_folder` is false for a tool that declared `trusted_dir_grants = False`: "always" stores the tool and trusts no folder |
 | `gate_decision` | `gate_id`, `tool`, `decision`: `allow_once` \| `allow_chat` \| `allow_always` \| `cancel` | interactive runs only. `gate_id` is the id the matching `gate_required` carried: an answer belongs to one question. An `allow_chat` answer given with no session to key on is reported as `allow_once`, because that is all it grants |
 | `gate_bypassed` | `tool`, `cwd`, `reason`, `why`: `admin_bypass` \| `user_grant` \| `chat_grant` | a confirmation dialog was skipped by a standing hands-off switch or grant: `admin_bypass` is the machine-wide admin switch (`tool_confirmation_bypass_admins`), `user_grant` is the per-user grant the admin made in the user record (`permissions["confirmation_bypass"]`), `chat_grant` is the person's own "for this chat" answer for this tool in this session. Emitted INSTEAD of `gate_required`, once per skipped dialog - hands-off never means unobserved. An authorizer's explicit `ask()` is never bypassed |
+| `round_start` | `round` | one per generation of a turn (one provider call, one pass of the engine's loop), numbered from 1 within the turn, emitted on every lane BEFORE that generation's first stream chunk. A model-health re-run, a result-grounding correction, an empty-response retry and a pending-task auto-continue each start a new round. Internal calls (routers, compression, validation) emit none, unlike `llm_start`. Text streamed before the first `round_start` of a turn (a workflow's step lines) belongs to round 1. The same numbers come back in `last_turn.rounds` after the turn |
 | `llm_start` | `provider`, `model` | one per chat-completion call on API providers (`model` may be None before default resolution). Note: INTERNAL engine calls (context compression, routers, title generation) also emit llm pairs - do not assume one pair per visible turn |
 | `llm_end` | `provider`, `model`, `duration_ms`, `ok`, `usage` | closes every `llm_start`; `ok` False = errored OR abandoned before completion (e.g. user stop); `usage` is a best-effort snapshot of the serving provider's last request (may lag one call behind when failover served the response). Local-server and in-process lanes do not emit llm events yet |
 
@@ -84,6 +90,29 @@ output limit ended it (`length` on OpenAI-shaped lanes, `max_tokens` on Anthropi
 on a normal ending, so the line stays byte-identical unless something really was
 cut short. Nothing acts on it yet: it is recorded so the question "how often does
 a reply stop mid-thought" has an answer before anything is built on it.
+
+### Generation rounds
+
+A turn is a loop of generations: the model answers, calls a tool, sees the
+result and answers again, and a guard can send a reply back for another
+generation (the model-health re-run, a result-grounding correction). `on_token`
+gets all of it as one text stream. Two things tell the rounds apart:
+
+- `round_start` on the event sink, before each round's first chunk. A host that
+  shows the stream can open a new bubble there, so a re-run's reasoning does not
+  grow the previous round's thinking block, and text written before a tool call
+  stays above that call.
+- `last_turn.rounds` after the turn: one frozen `vaf.TurnRound(round,
+  tool_call_ids, answer)` per round, in order. `tool_call_ids` are the calls the
+  round committed (the ids its `tool_start` events belong to), `answer` is True
+  for a round that passed the final-answer path. A reply a guard kept on screen
+  and sent back is not an answer; a turn that answered and then auto-continued
+  has two. `rounds` is outside `TurnStatus` equality, so
+  `last_turn == vaf.TurnStatus()` still means "answered, nothing failed".
+
+VAF's own web chat uses exactly these two: it streams each round into its own
+bubble, marks the answer rounds when the turn ends, and stores the split with
+the answer so a reloaded chat shows the same order.
 
 Two shapes to handle defensively:
 
@@ -149,8 +178,8 @@ event. Event order:
 2. interleaved, during the turn:
    - `{"type": "text_delta", "text": "..."}` for every stream chunk (including
      `<think>` markers and injected status strings, see above)
-   - the four sink events (`tool_start`, `tool_end`, `gate_required`,
-     `gate_decision`) exactly as specified in the table above
+   - every sink event exactly as specified in the table above (`round_start`,
+     the tool and gate events, and on API providers the llm pair)
 3. `{"type": "session_saved", "id": "<sessionid>"}` (only with `--save-session`)
 4. `{"type": "end"}`
 
@@ -161,9 +190,11 @@ Constructed example (a run that lists a directory):
 
 ```json
 {"type": "start"}
+{"type": "round_start", "round": 1}
 {"type": "text_delta", "text": "I'll check the folder."}
 {"type": "tool_start", "tool": "list_files", "args": {"path": "."}}
 {"type": "tool_end", "tool": "list_files", "ok": true, "duration_ms": 12, "result": "README.md\nvaf/\ntests/"}
+{"type": "round_start", "round": 2}
 {"type": "text_delta", "text": "It contains three files: ..."}
 {"type": "text_delta", "text": "\n"}
 {"type": "end"}

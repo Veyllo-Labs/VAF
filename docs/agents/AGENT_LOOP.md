@@ -149,7 +149,7 @@ grep the symbol names to find them.
 | 7 | Guardrails | model health first (a stuck model is re-run once with a tool call forced, then gets an honest note; see [Model health](#model-health-a-stuck-model-or-a-normal-error)), then result grounding (the last unsupported verdict of a reply chain appends a fixed unconfirmed-claim note instead of another model rewrite); team-await note (a reply claiming completion while a sub-agent runs is KEPT - never erased - and a history note keeps the next turn honest); outbound messenger sends (normal headless path AND runner drain) apply the shared `_prepare_channel_outbound` chain incl. a conservative untagged-CoT prefix guard, with the drain text taken from its stored copy of the stream (the return is a status) |
 | 8 | Tool dispatch. What the answer advises (`ToolCallOutcome.advised_tools`) is added to the turn's tool set, never to the history, and put back after the two mid-turn narrowings (see [TOOL_ROUTER_ARCHITECTURE.md](TOOL_ROUTER_ARCHITECTURE.md#a-tool-result-that-advises-a-tool)) | `execute_tool`, `_take_tool_advice`, `_pin_advised_tools`, `_anti_spin_step` |
 | 9 | Empty-response recovery + final-answer validation (an EMPTY reply only; a reply the provider cut off at the output limit has content, so this phase passes it through and the turn ends there. The provider's `finish_reason` is recorded as `cut=` in `logs/usage_*.log` and acted on nowhere) | `_final_answer_probe` decides what counts as an answer - closed AND unclosed `<think>` blocks are thinking, not answer (an unclosed one once passed as the reply and suppressed the retry) - then `_validate_final_answer` |
-| 10 | Pending-task auto-continue (a continuation round APPENDS to the turn's reply, never replaces it: every answer that passed validation and reached the final history append is collected in `kept_turn_answers`, `_join_turn_answers` builds the returned reply from all of them, and `_restream_kept_answers` puts them back into the web stream buffer after every clear, so the bubble keeps what the user was already shown. Live incident: a 2259-character deliverable was displaced by a 227-character auto-continue confirmation, on the return value AND on screen. The clear itself runs before the round that follows a tool round, keyed on the completed round (`_tool_round_completed`), never on `history[-1]` being a tool result: a deferred error nudge, an anti-spin or no-progress note, a limit reminder or a compaction trim all put something else last, and every such round used to stack into the buffer - which is both the web bubble and the answer the session stores, so a reloaded chat showed seven rounds' think blocks as plain text) | `_reply_needs_user`, `_task_stuck_step` |
+| 10 | Pending-task auto-continue (a continuation round APPENDS to the turn's reply, never replaces it: every answer that passed validation and reached the final history append is collected in `kept_turn_answers`, `_join_turn_answers` builds the returned reply from all of them, and every clear of the web stream buffer is handed them (`stream_callback.clear(_kept_answers_text(...))`), so the stored answer keeps what the user was already shown; the bubbles keep it because each round is shown in its own (see "Generation rounds" below). Live incident: a 2259-character deliverable was displaced by a 227-character auto-continue confirmation, on the return value AND on screen. The clear itself runs before the round that follows a tool round, keyed on the completed round (`_tool_round_completed`), never on `history[-1]` being a tool result: a deferred error nudge, an anti-spin or no-progress note, a limit reminder or a compaction trim all put something else last, and every such round used to stack into the buffer - which is both the web bubble and the answer the session stores, so a reloaded chat showed seven rounds' think blocks as plain text) | `_reply_needs_user`, `_task_stuck_step` |
 | 11 | Finalize (compress / append / TTS / clean) | `summarize_tool_turn`, `_clean_reasoning` |
 
 ### Step 6b - tool calls the model wrote as text
@@ -279,6 +279,36 @@ exist because a *slow* runaway (a reasoning provider grinding many varied tool t
 kept re-verifying an already-created automation) evades the count- and 5-second-based guards. Their
 config keys are in [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md) (the `*_gate_*`, `anti_spin_*`,
 `nonprogress_*`, `chat_step_wall_clock_seconds`, `result_grounding_*` families).
+
+## Generation rounds
+
+One pass of the main loop is one generation, one provider call: a **round**. A turn has one
+round per tool step, and a guard that sends a reply back adds one (the model-health re-run,
+a result-grounding correction, the empty-response retry, the pending-task auto-continue). The
+stream does not say where one ends, so the engine marks it, for every lane:
+
+- **Opened at the loop top**, after the stop check and the per-round resets and BEFORE the
+  post-tool clear: a record `{"round", "tool_call_ids", "answer"}` is appended to
+  `_turn_rounds` (step state, reset with `_turn_failed`; the internal fresh retry
+  `auto_retry` keeps counting, it is the same turn) and `round_start` is emitted on the event
+  sink. Before the clear, because a host that keeps one display segment per round must have
+  switched to the new, empty segment when the clear arrives.
+- **Tool ids** at the tool-call commit, the `self.history.append(msg)` of the assistant
+  message that carries the calls.
+- **`answer`** on the final-answer path, beside `kept_turn_answers.append` and
+  `_last_kept_is_final = True`. A reply a guard keeps and sends back is NOT marked: it stays
+  in `kept_turn_answers` with `_last_kept_is_final = False`.
+
+`last_turn.rounds` hands the records out as `vaf.TurnRound`s ([OBSERVABILITY.md](../OBSERVABILITY.md),
+"Generation rounds"). The retraction names its round too: `_clear_last_assistant_ui` sends the
+newest round's number with `clear_last_assistant`, so the browser drops that round's bubble
+and never an earlier round's text.
+
+What a host does with them is the host's. The web chat lane keeps one display segment per
+round next to its stored copy (`_ChatTurnStream` in `vaf/core/headless_runner.py`), the stored
+copy is unchanged byte for byte, and the turn's answer is stored with the split
+(`TURN_ROUNDS_KEY`), see [WEBUI_WEBSOCKET_FLOW.md](../web-ui/WEBUI_WEBSOCKET_FLOW.md). The TUI
+opens a new bubble on every `round_start` after the first.
 
 ## Model health: a stuck model or a normal error
 

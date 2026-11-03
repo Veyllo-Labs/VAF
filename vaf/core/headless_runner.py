@@ -597,12 +597,13 @@ class _ChatTurnStream:
 
     Text streamed before the first `round_start` (workflow step lines, a refusal) belongs to
     round 1. A round whose number is not above the current one (a nested `chat_step`)
-    stays in the current segment.
+    stays in the current segment. A stop puts its notice into the round it hit
+    (`emit_stopped`).
 
     Named boundaries, each showing one bubble for its text as before: the sub-agent drain and
     the room lane (the drain's stored copy has its reasoning removed, so there is nothing to
-    show per round); a turn that ends at a draft, a delegation, a stop and a system note (one
-    message by design, stored as one); and the runner's hallucination correction further
+    show per round); a turn that ends at a draft, a delegation and a system note (one message
+    by design, stored as one); and the runner's hallucination correction further
     down, a second `chat_step` with its own callback that overwrites the newest bubble. That
     one stays as it is because it does not run in practice: 0 fires in 122,840 lines of the
     run log, against 3 model-health re-runs and 40 grounding detections.
@@ -665,6 +666,16 @@ class _ChatTurnStream:
             if self._send(text, number, bool(answers.get(number, False))):
                 sent += 1
         return sent
+
+    def emit_stopped(self, marker: str) -> str:
+        """A stop, shown in the round it hit: that round's bubble is updated where it stands
+        with its own text and `marker`. Earlier rounds keep their bubbles; the old untagged
+        clear-and-replace put the whole stored copy, earlier rounds included, into the newest
+        bubble. Returns the text sent."""
+        text = _strip_tool_calls_json(self.segment_text(self.current)).strip()
+        text = f"{text}\n\n{marker}" if text else marker
+        self._send(text, self.current, None)
+        return text
 
     def _emit_round(self, number, *, throttled: bool) -> None:
         text = self.segment_text(number)
@@ -2938,18 +2949,16 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         final_text = _strip_tool_calls_json(raw_final)
 
                         # If agent stopped internally (via should_stop check inside chat_step),
-                        # clear the streaming bubble and emit a clean stop notice — same as the
-                        # _StopGenerationRequested path — so no partial text leaks through.
+                        # the stop notice goes into the round it hit, as in the
+                        # _StopGenerationRequested path, and the turn is stored per round like
+                        # any other, so a reload shows what the live chat showed.
                         _agent_stopped_internally = "[Generation stopped by user]" in response_text
                         if _agent_stopped_internally:
                             partial = final_text.replace("[Generation stopped by user]", "").strip()
-                            get_web_interface().emit_clear_last_assistant(task.session_id)
                             final_text = (partial + "\n\n*[Generation stopped]*").strip() if partial else "*[Generation stopped]*"
-                            get_web_interface().emit_agent_message(
-                                role="assistant",
-                                content=final_text,
-                                session_id=task.session_id
-                            )
+                            webui_stream_callback.emit_stopped("*[Generation stopped]*")
+                            _rounds_meta = _turn_rounds_meta(_turn_status.rounds,
+                                                             webui_stream_callback)
                         else:
                             if not final_text or not str(final_text).strip():
                                 final_text = "[Error] No response was produced. The server may have rejected the request (e.g. context too large). Try closing the Document Editor or starting a new chat."
@@ -3436,16 +3445,22 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     except Exception:
                         pass
                     try:
-                        # Clear the streaming bubble so no partial text leaks through
-                        # (chunks already queued in the asyncio loop arrive before this,
-                        # then this wipes them, then the final message appears cleanly)
-                        get_web_interface().emit_clear_last_assistant(task.session_id)
                         final_stop_content = (_partial + "\n\n*[Generation stopped]*").strip() if _partial else "*[Generation stopped]*"
-                        get_web_interface().emit_agent_message(
-                            role="assistant",
-                            content=final_stop_content,
-                            session_id=task.session_id,
-                        )
+                        _stopped_stream = locals().get("webui_stream_callback")
+                        if isinstance(_stopped_stream, _ChatTurnStream):
+                            # The chat lane: the notice goes into the round the stop hit,
+                            # updated in place, so earlier rounds keep their own bubbles.
+                            _stopped_stream.emit_stopped("*[Generation stopped]*")
+                        else:
+                            # Clear the streaming bubble so no partial text leaks through
+                            # (chunks already queued in the asyncio loop arrive before this,
+                            # then this wipes them, then the final message appears cleanly)
+                            get_web_interface().emit_clear_last_assistant(task.session_id)
+                            get_web_interface().emit_agent_message(
+                                role="assistant",
+                                content=final_stop_content,
+                                session_id=task.session_id,
+                            )
                         get_web_interface().emit_message_complete(
                             content=final_stop_content,
                             session_id=task.session_id,

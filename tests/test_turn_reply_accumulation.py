@@ -16,12 +16,12 @@ that looked like initialisation.
 The fix is threshold-free because the engine already knows which rounds were
 answers: exactly those that reached the final history append. `kept_turn_answers`
 collects them, `_join_turn_answers` builds the reply from them, and every buffer clear
-restarts the buffer from them (`stream_callback.clear(_kept_answers_text(...))`).
+restarts the buffer from them (`_clear_stream_buffer`).
 """
 import re
 from pathlib import Path
 
-from vaf.core.agent import _join_turn_answers, _kept_answers_text
+from vaf.core.agent import _clear_stream_buffer, _join_turn_answers, _kept_answers_text
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -108,22 +108,56 @@ def test_the_return_builds_the_reply_from_the_accumulator():
 
 
 def test_every_buffer_clear_restores_the_kept_answers():
-    """MUTATION: call `stream_callback.clear()` without the kept text at either site.
+    """MUTATION: call a stream callback's clear directly at either site.
 
-    A new clear site without the kept answers is the same defect in a new place: the
-    stored reply loses what the user was already shown. Checked per occurrence, so one
-    covered site cannot vouch for another."""
+    Every clear goes through `_clear_stream_buffer`, which hands the kept answers over. A
+    new clear site without them is the same defect in a new place: the stored reply loses
+    what the user was already shown."""
     src = _agent_source()
-    clears = [m.end() for m in re.finditer(r"stream_callback\.clear\(", src)]
-    assert len(clears) == 2, "expected the post-tool clear and the retraction's; the pattern moved"
-    for pos in clears:
-        # The argument's list is not pinned: the retraction sites collapsed into
-        # `_retract_streamed_reply`, which is handed the kept list as a parameter. What must
-        # hold per occurrence is that the clear is handed the kept answers.
-        assert src[pos:pos + 40].startswith("_kept_answers_text("), (
-            "a stream_callback.clear() is not handed the kept answers; the stored "
-            f"reply loses validated answers there. Context: {src[pos-200:pos+120]!r}"
-        )
+    assert "stream_callback.clear(" not in src, "a stream callback is cleared by hand"
+    assert len(re.findall(r"_clear_stream_buffer\(stream_callback, ", src)) == 2, (
+        "expected the post-tool clear and the retraction's; the pattern moved")
+
+
+class _KeepClear:
+    def __init__(self):
+        self.chunks, self.cleared = ["old"], []
+
+    def __call__(self, text):
+        self.chunks.append(text)
+
+    def clear(self, keep=""):
+        self.cleared.append(keep)
+        self.chunks = [keep] if keep else []
+
+
+class _ZeroArgClear(_KeepClear):
+    """A callback written for the older contract: clear() takes nothing."""
+
+    def clear(self):
+        self.cleared.append(None)
+        self.chunks = []
+
+
+def test_a_clear_that_takes_keep_is_handed_the_answers_and_nothing_is_streamed():
+    buf = _KeepClear()
+    _clear_stream_buffer(buf, ["The list."])
+    assert buf.cleared == ["The list.\n\n"] and buf.chunks == ["The list.\n\n"]
+
+
+def test_a_zero_argument_clear_keeps_working():
+    """MUTATION: always call `clear(keep)` - the TypeError is swallowed, nothing is cleared
+    and the announcement stays in the stored reply; or drop the chunk after `clear()` - the
+    validated answer is lost. An embedder's callback on `CoreAgent.chat_step` may be either
+    shape."""
+    buf = _ZeroArgClear()
+    _clear_stream_buffer(buf, ["The list."])
+    assert buf.cleared == [None] and buf.chunks == ["The list.\n\n"]
+    buf = _ZeroArgClear()
+    _clear_stream_buffer(buf, [])
+    assert buf.chunks == []
+    # No clear at all (the CLI): untouched, and nothing raises.
+    _clear_stream_buffer(lambda _t: None, ["x"])
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -150,7 +184,7 @@ def test_the_buffer_clear_is_keyed_on_the_completed_round_not_the_history_tail()
     i = src.index("if _tool_round_completed:")
     window = src[i:i + 400]
     assert "_tool_round_completed = False" in window, "the flag is not consumed"
-    assert "stream_callback.clear(_kept_answers_text(kept_turn_answers))" in window, (
+    assert "_clear_stream_buffer(stream_callback, kept_turn_answers)" in window, (
         "the flag no longer clears the buffer")
 
 

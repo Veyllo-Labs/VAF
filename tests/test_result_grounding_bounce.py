@@ -59,7 +59,7 @@ def test_the_grounding_region_can_no_longer_retract_anything():
     assert "self._guard_keeps_answer(full_content)" in region
     assert "_retract_streamed_reply" not in region
     assert "_clear_last_assistant_ui" not in region
-    assert "stream_callback.clear(" not in region
+    assert "stream_callback.clear(" not in region and "_clear_stream_buffer" not in region
     assert "kept_turn_answers.append(self._clean_reasoning(full_content))" in region
     assert "_grounding_correction(_claim)" in region
 
@@ -137,7 +137,8 @@ def test_no_guard_clears_the_stream_buffer_by_hand():
     every case. The only other legitimate clear is the per-round one that removes pre-tool
     announcements, which is not a retraction.
     """
-    clears = SOURCE.count("stream_callback.clear(")
+    clears = SOURCE.count("_clear_stream_buffer(stream_callback, ")
+    assert SOURCE.count("stream_callback.clear(") == 0
     assert clears == 2, (
         "expected exactly two: the per-round buffer clear and the one inside "
         f"_retract_streamed_reply - found {clears}"
@@ -157,7 +158,7 @@ def test_the_model_health_keep_survives_the_next_round():
     region = _region("def _model_health_rerun(", "def _end_turn_without_answer(")
     assert "kept_turn_answers.append(self._clean_reasoning(reply))" in region
     assert "_retract_streamed_reply" not in region
-    assert "stream_callback.clear(" not in region
+    assert "stream_callback.clear(" not in region and "_clear_stream_buffer" not in region
 
 
 def test_the_empty_response_retry_still_retracts_unconditionally():

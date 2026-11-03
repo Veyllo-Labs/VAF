@@ -413,10 +413,9 @@ def _kept_answers_text(kept: list) -> str:
     every tool round so announcements ("I will check the page...") do not stack up in the
     stored reply. That clear is right for announcements and fatal for an answer the user has
     already been shown: an auto-continue round that calls a tool wiped the validated answer
-    out of the stored reply. So the clear is handed this text (the callback's `clear(keep)`),
-    and the buffer restarts from it. It is not streamed: a host that shows the stream per
-    generation round (`round_start`) still shows the kept answer in its own round. A callback
-    without a clear() (the CLI) never sees this. "" when nothing is kept.
+    out of the stored reply. So the clear is handed this text (`_clear_stream_buffer`), and
+    the buffer restarts from it. A callback without a clear() (the CLI) never sees this. ""
+    when nothing is kept.
     """
     # Same containment rule `_join_turn_answers` uses, so the buffer and the returned reply
     # agree about what counts as "already there": a kept answer the model restated in a
@@ -429,6 +428,43 @@ def _kept_answers_text(kept: list) -> str:
     if not extras:
         return ""
     return "\n\n".join(extras) + "\n\n"
+
+
+def _clear_takes_keep(clear) -> bool:
+    """Whether a stream callback's `clear` accepts the kept text as one positional argument.
+    False when its signature cannot be read: the zero-argument form is the older contract."""
+    import inspect
+    try:
+        inspect.signature(clear).bind("")
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _clear_stream_buffer(callback, kept: list) -> None:
+    """Clear a stream callback's buffer down to the turn's validated answers.
+
+    The optional hook a stream callback may carry (docs/CORE_AGENT.md, `stream_callback`):
+    `clear(keep="")` empties the buffer the host stores as the turn's answer and restarts it
+    from `keep`, the turn's already-validated answers (`_kept_answers_text`, "" when none). It
+    is NOT streamed: a host that shows the stream per generation round (`round_start`) still
+    shows the kept answer in that answer's own round. A callback whose `clear` takes no
+    argument keeps the older contract: it is cleared, and the kept text arrives as one stream
+    chunk right after. Never raises.
+    """
+    clear = getattr(callback, "clear", None)
+    if not callable(clear):
+        return
+    keep = _kept_answers_text(kept)
+    try:
+        if _clear_takes_keep(clear):
+            clear(keep)
+        else:
+            clear()
+            if keep:
+                callback(keep)
+    except Exception:
+        pass
 
 
 # Pure lookups whose EXACT-argument repetition within one turn cannot yield new
@@ -11144,11 +11180,8 @@ class Agent:
             # note above), never on `history[-1]` being a tool result.
             if _tool_round_completed:
                 _tool_round_completed = False
-                if stream_callback and hasattr(stream_callback, "clear"):
-                    try:
-                        stream_callback.clear(_kept_answers_text(kept_turn_answers))
-                    except Exception:
-                        pass
+                if stream_callback:
+                    _clear_stream_buffer(stream_callback, kept_turn_answers)
 
             # Log which LLM backend is used (for debugging: VQ1 vs API vs server)
             try:
@@ -14204,9 +14237,10 @@ class Agent:
         return _choice if _choice in _offered else "cancel"
 
     def _push_gate_to_websocket(self, evt):
-        """The web UI's dialog does not arrive through _event_sink - that is None in the web
-        context - so the gate request is pushed to the session directly. The question is
-        OPENED first, so an answer faster than the agent's wait is kept."""
+        """The web UI's dialog never arrives through `_event_sink`: the web runner installs a
+        sink only around a chat turn, and only to read `round_start` from it, so the gate
+        request is pushed to the session directly. The question is OPENED first, so an answer
+        faster than the agent's wait is kept."""
         from vaf.core.web_interface import get_web_interface as _gwi2
         _session = getattr(self, "current_session_id", None)
         if _session:
@@ -14772,8 +14806,9 @@ class Agent:
         """Set an optional event sink for structured outputs (e.g. stream-json).
 
         Carries the tool and gate events and, once per generation of a turn, a
-        ``round_start`` before that generation's first chunk. Also attaches the sink to the API backend so llm_start/llm_end events
-        flow through the same callback (schema: docs/OBSERVABILITY.md).
+        ``round_start`` before that generation's first chunk. Also attaches the sink
+        to the API backend so llm_start/llm_end events flow through the same callback
+        (schema: docs/OBSERVABILITY.md).
         """
         self._event_sink = sink
         backend = getattr(self, "api_backend", None)
@@ -15254,11 +15289,8 @@ class Agent:
         except Exception:
             sid = session_id
         self._clear_last_assistant_ui(sid)
-        if stream_callback is not None and hasattr(stream_callback, "clear"):
-            try:
-                stream_callback.clear(_kept_answers_text(kept or []))
-            except Exception:
-                pass
+        if stream_callback is not None:
+            _clear_stream_buffer(stream_callback, kept or [])
 
     def _clear_last_assistant_ui(self, session_id) -> None:
         """Ask the Web UI to drop the just-produced (faulty) assistant bubble before a retry/correction.

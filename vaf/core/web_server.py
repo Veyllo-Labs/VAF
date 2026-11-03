@@ -1206,8 +1206,27 @@ def _round_timestamp(timestamp, offset_ms: int):
     from datetime import datetime as _dt, timedelta as _td
     try:
         return (_dt.fromisoformat(str(timestamp)) + _td(milliseconds=offset_ms)).isoformat()
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return timestamp
+
+
+# A turn has one round per provider call, bounded by the loop budget (`max_tool_turns_per_step`,
+# default 75) plus a few guard retries. A stored number outside this range is not one the
+# engine wrote, and it is read as "unknown" (0) rather than trusted.
+_MAX_ROUND_NUMBER = 100_000
+
+
+def _round_number(r: dict) -> int:
+    try:
+        number = int(r.get("round") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return number if 0 < number <= _MAX_ROUND_NUMBER else 0
+
+
+def _round_call_ids(r: dict) -> list:
+    ids = r.get("tool_call_ids")
+    return [str(i) for i in ids if i is not None] if isinstance(ids, (list, tuple)) else []
 
 
 def _expand_turn_rounds(out: list, aux: list) -> list:
@@ -1219,7 +1238,10 @@ def _expand_turn_rounds(out: list, aux: list) -> list:
     timestamp plus `round - 1` ms), each directly followed by the tool cards of its calls in
     stored order. Everything else of the turn (a tool no round names, a context row) keeps
     its stored order ahead of the first round. A round whose tool is missing from the store
-    (the turn-end squash keeps a summary instead) is shown without the card.
+    (the turn-end squash keeps a summary instead) is shown without the card. The rounds are
+    read from a stored file, so every field is checked for its shape (`_round_number`,
+    `_round_call_ids`); `_history_projection` falls back to the stored order if anything
+    still fails.
     """
     if not any(a.get("rounds") for a in aux):
         return out
@@ -1234,8 +1256,7 @@ def _expand_turn_rounds(out: list, aux: list) -> list:
         start = len(result)
         while start > 0 and result[start - 1].get("role") != "user":
             start -= 1
-        covered = {str(i) for r in rounds if isinstance(r, dict)
-                   for i in (r.get("tool_call_ids") or [])}
+        covered = {i for r in rounds if isinstance(r, dict) for i in _round_call_ids(r)}
         head, tools = [], {}
         for prior, prior_info in zip(result[start:], result_aux[start:]):
             calls = prior_info.get("tool_call_ids") or ()
@@ -1249,10 +1270,7 @@ def _expand_turn_rounds(out: list, aux: list) -> list:
         for r in rounds:
             if not isinstance(r, dict):
                 continue
-            try:
-                number = int(r.get("round") or 0)
-            except (TypeError, ValueError):
-                number = 0
+            number = _round_number(r)
             text = _clean_history_text(str(r.get("text") or ""))
             if text.strip():
                 laid_out.append({
@@ -1262,8 +1280,8 @@ def _expand_turn_rounds(out: list, aux: list) -> list:
                     "round": number,
                     "roundAnswer": bool(r.get("answer")),
                 })
-            for call_id in (r.get("tool_call_ids") or []):
-                laid_out.extend(tools.pop(str(call_id), []))
+            for call_id in _round_call_ids(r):
+                laid_out.extend(tools.pop(call_id, []))
         del result[start:]
         del result_aux[start:]
         result.extend(laid_out)
@@ -1344,7 +1362,12 @@ def _history_projection(loaded, sid) -> list:
             "rounds": meta.get(TURN_ROUNDS_KEY) if (role == "assistant" and isinstance(meta, dict)) else None,
         })
 
-    out = _expand_turn_rounds(out, aux)
+    # Display only: a stored rounds entry this cannot lay out must never cost the chat its
+    # history, so the stored order is kept and the reason is logged.
+    try:
+        out = _expand_turn_rounds(out, aux)
+    except Exception as exc:
+        append_domain_log("webui", f"turn rounds not laid out for {sid}: {type(exc).__name__}: {exc}")
 
     if sid and str(sid).startswith("thinking_"):
         try:

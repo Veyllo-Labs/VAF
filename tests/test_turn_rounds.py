@@ -280,6 +280,24 @@ def test_stored_buffer_unchanged(make, monkeypatch):
     assert buf.text == STORED_BEFORE
 
 
+class _ZeroArgBuffer(_Buffer):
+    """A stream callback written for the older hook: `clear()` takes nothing."""
+
+    def clear(self):
+        self.chunks = []
+
+
+def test_a_zero_argument_clear_gets_the_old_buffer(make, monkeypatch):
+    """An embedder's callback on `CoreAgent.chat_step` whose `clear` takes no argument is
+    still cleared, and the kept answer comes back as a chunk: its buffer is the same value
+    the web lane's has. MUTATION: call `clear(keep)` unconditionally in
+    `_clear_stream_buffer` - the TypeError is swallowed and the announcement stays."""
+    agent = make()
+    buf = _ZeroArgBuffer([])
+    _health_turn(agent, monkeypatch, buf)
+    assert buf.text == STORED_BEFORE
+
+
 def test_retraction_names_its_round(make, monkeypatch):
     """The empty-response retry takes back its own round's bubble and nothing else."""
     from vaf.core.agent import Agent
@@ -353,18 +371,19 @@ def test_rounds_metadata_only_for_multi_round():
 
 
 def test_draft_turn_stores_no_rounds():
-    """A turn that ends at a draft (or a stop, a delegation, a system note) shows one message
-    and keeps today's stored shape: the rounds are taken only on the branch that emitted the
-    turn per round. Source-level, because that branch structure is the property."""
+    """A turn that ends at a draft (or a delegation, a system note) shows one message and
+    keeps today's stored shape: the rounds are taken only on the two branches that emitted the
+    turn per round, a stop the engine reported and the normal answer. Source-level, because
+    that branch structure is the property."""
     from vaf.core import headless_runner as hr
     loop = inspect.getsource(hr.run_headless_agent).replace("\r\n", "\n")
     reset = loop.index("_rounds_meta = None")
     draft = loop.index("elif _turn_ends_at_draft:")
     stopped = loop.index("if _agent_stopped_internally:")
-    taken = loop.index("_rounds_meta = _turn_rounds_meta(")
-    assert loop.count("_rounds_meta = _turn_rounds_meta(") == 1
-    assert reset < loop.index('if response_text.startswith("[ASYNC_ACK]"):') < draft < stopped < taken
-    assert loop.index("else:", stopped) < taken < loop.index("# Emit message_complete event", stopped)
+    taken = [i for i in range(len(loop)) if loop.startswith("_rounds_meta = _turn_rounds_meta(", i)]
+    assert len(taken) == 2
+    assert reset < loop.index('if response_text.startswith("[ASYNC_ACK]"):') < draft < stopped < taken[0]
+    assert taken[0] < loop.index("else:", stopped) < taken[1] < loop.index("# Emit message_complete event", stopped)
 
 
 # ── the runner, end to end ────────────────────────────────────────────────────────────────
@@ -374,14 +393,15 @@ class _LoopStop(BaseException):
 
 
 class _Queue:
-    def __init__(self, tasks):
+    def __init__(self, tasks, stop=None):
         self.tasks = list(tasks)
+        self.stop = stop or (lambda: False)
 
     def get(self):
         return self.tasks.pop(0) if self.tasks else None
 
     def should_stop(self, session_id):
-        return False
+        return bool(self.stop())
 
     def try_claim_session(self, session_id):
         return True
@@ -437,7 +457,7 @@ def runner_world(monkeypatch, tmp_path):
         var.reset(token)
 
 
-def _run_one_turn(monkeypatch, world, text, provider, keep_grounding=False):
+def _run_one_turn(monkeypatch, world, text, provider, keep_grounding=False, stop=None):
     import time as _time
 
     import vaf.core.headless_runner as hr
@@ -462,7 +482,7 @@ def _run_one_turn(monkeypatch, world, text, provider, keep_grounding=False):
     task = AgentTask(session_id=SESSION, input_text=text, source="web", metadata={
         "user_scope_id": world.scope, "username": "bobq7", "role": "user",
         "enqueue_session_id": SESSION, "task_class": "interactive"})
-    queue = _Queue([task])
+    queue = _Queue([task], stop)
     web, logs, state = _Web(), [], {"idle": 0, "error": False}
     monkeypatch.setattr(hr, "Agent", lambda *a, **k: agent)
     monkeypatch.setattr(hr, "TaskQueue", lambda: queue)
@@ -566,6 +586,85 @@ def test_runner_stores_a_corrected_turn_whole(runner_world, monkeypatch):
     assert answer["metadata"]["rounds"][0]["text"] == flagged
 
 
+def test_stop_marks_only_its_round():
+    """MUTATION: put the whole stored copy into the notice - red."""
+    from vaf.core.headless_runner import _ChatTurnStream
+    emits = []
+    stream = _ChatTurnStream(SESSION, emit=lambda text, n, answer: emits.append((text, n, answer)))
+    stream("Erster Teil.")
+    stream.on_event({"type": "round_start", "round": 2})
+    stream("Zweiter Teil.")
+    emits.clear()
+    stream.emit_stopped("*[Generation stopped]*")
+    assert emits == [("Zweiter Teil.\n\n*[Generation stopped]*", 2, None)]
+
+
+def _stop_events(run):
+    clears = [e for e in run.web.events if e[0] == "emit_clear_last_assistant"]
+    updates = [kw for name, _, kw in run.web.events if name == "emit_agent_message"]
+    return clears, updates
+
+
+def test_runner_stop_from_the_stream_stays_in_its_round(runner_world, monkeypatch):
+    """Stop pressed while round 2 streams (the stream raises): the notice goes into round 2's
+    bubble, tagged, and round 1's bubble keeps its text alone. MUTATION: restore the untagged
+    clear plus the joined copy in the `_StopGenerationRequested` handler - red."""
+    flagged = "Die Datei liegt jetzt im Projektordner und ist gespeichert."
+    state = {"stop": False}
+
+    def provider(messages=None, **kw):
+        if not kw.get("tools"):
+            yield "ok"
+            return
+        provider.n = getattr(provider, "n", 0) + 1
+        if provider.n == 1:
+            yield flagged
+            return
+        state["stop"] = True
+        yield "Korrektur: gespeichert wurde nichts."
+
+    from vaf.core.agent import Agent
+    verdicts = iter([(True, "Die Datei ist gespeichert.")])
+    monkeypatch.setattr(Agent, "_detect_ungrounded_result_claim",
+                        lambda self, text, res: next(verdicts, (False, None)))
+    run = _run_one_turn(monkeypatch, runner_world, "Speichere bitte die Datei", provider,
+                        keep_grounding=True, stop=lambda: state["stop"])
+    clears, updates = _stop_events(run)
+    assert clears == [], "a stop cleared a bubble by position"
+    assert updates[-1]["round"] == 2 and updates[-1]["content"] == "*[Generation stopped]*"
+    assert not [u for u in updates if flagged in u["content"] and "stopped" in u["content"]]
+
+
+def test_runner_engine_stop_stays_in_its_round_and_is_stored_per_round(runner_world, monkeypatch):
+    """Stop seen by the engine at the top of round 3, after two tool rounds: the notice goes
+    into round 2's bubble, and the stored answer carries both rounds. MUTATION: restore the
+    untagged clear plus the joined copy in the `_agent_stopped_internally` branch - red."""
+    from vaf.core import task_queue as tq_mod
+    state = {"stop": False}
+    monkeypatch.setattr(tq_mod.TaskQueue, "should_stop", lambda self, sid: state["stop"])
+    monkeypatch.setattr(tq_mod.TaskQueue, "clear_stop", lambda self, sid: None)
+
+    def provider(messages=None, **kw):
+        if not kw.get("tools"):
+            yield "ok"
+            return
+        provider.n = getattr(provider, "n", 0) + 1
+        yield ("Erster Schritt." if provider.n == 1 else "Zweiter Schritt.")
+        yield json.dumps({"tool_calls": [{"index": 0, "id": f"c{provider.n}", "type": "function",
+                                          "function": {"name": TASK, "arguments": "{}"}}]})
+        yield json.dumps({"finish_reason": "tool_calls"})
+        if provider.n == 2:
+            state["stop"] = True
+
+    run = _run_one_turn(monkeypatch, runner_world, ASK, provider)
+    clears, updates = _stop_events(run)
+    assert clears == []
+    assert (updates[-1]["round"], updates[-1]["content"]) == (2, "Zweiter Schritt.\n\n*[Generation stopped]*")
+    answer = [m for m in run.stored["messages"] if m["role"] == "assistant"][-1]
+    assert [(r["round"], r["text"], r["tool_call_ids"]) for r in answer["metadata"]["rounds"]] == [
+        (1, "Erster Schritt.", ["c1"]), (2, "Zweiter Schritt.", ["c2"])]
+
+
 # ── the projection ────────────────────────────────────────────────────────────────────────
 
 def _session(messages):
@@ -616,6 +715,39 @@ def test_projection_without_a_stored_tool_keeps_the_round():
     assert [(e["role"], e.get("round"), e.get("toolId")) for e in out] == [
         ("user", None, None), ("tool", None, "x9"),
         ("assistant", 1, None), ("assistant", 2, None), ("assistant", 3, None)]
+
+
+def test_projection_survives_malformed_rounds():
+    """The rounds are read back from a file: a number no engine writes, ids of the wrong
+    shape or a non-dict entry must not cost the chat its history. MUTATION: drop
+    `OverflowError` from `_round_timestamp` - red on the direct call; drop the range check
+    in `_round_number` - red (10**15 ms overflows the date); read `tool_call_ids` without
+    the shape check - red (an int is not iterable)."""
+    from vaf.core.web_server import _history_projection, _round_timestamp
+    assert _round_timestamp("2026-11-03T10:00:02", 10**15) == "2026-11-03T10:00:02"
+    turn = [dict(m) for m in _TURN]
+    turn[3] = dict(turn[3], metadata={"rounds": [
+        {"round": 10**15, "text": "Huge.", "tool_call_ids": 7, "answer": True},
+        "not a round",
+        {"round": float("inf"), "text": "Infinite.", "tool_call_ids": ["c1"]},
+        {"round": "x", "text": "Words.", "tool_call_ids": None},
+    ]})
+    out = _history_projection(_session(turn), SESSION)
+    rounds = [e for e in out if "round" in e]
+    assert [e["content"] for e in rounds] == ["Huge.", "Infinite.", "Words."]
+    assert all(e["round"] == 0 and e["timestamp"] == "2026-11-03T10:00:02" for e in rounds)
+    assert [e.get("toolId") for e in out if e["role"] == "tool"] == ["c1"]
+
+
+def test_projection_falls_back_to_the_stored_order(monkeypatch):
+    """MUTATION: call `_expand_turn_rounds` without the guard - red."""
+    from vaf.core import web_server as ws
+
+    def boom(out, aux):
+        raise RuntimeError("unexpected shape")
+    monkeypatch.setattr(ws, "_expand_turn_rounds", boom)
+    out = ws._history_projection(_session(_TURN), SESSION)
+    assert [e["role"] for e in out] == ["user", "assistant", "tool", "assistant"]
 
 
 def test_projection_legacy_unchanged():

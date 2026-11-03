@@ -108,6 +108,16 @@ it, while the model still sees the enriched `user_input`. Without it, routing re
 `user_input`, which is right for a caller that does not enrich. The suggestion notes
 `chat_step` prepends itself never reach the tool router either way.
 
+**`stream_callback` may carry a `clear(keep="")` method** when you store what it
+received as the turn's answer. The engine calls it before the generation that follows a
+tool round (so announcements like "I will check the page..." do not pile up in the stored
+answer) and when it retracts an empty generation. `keep` is the turn's already-validated
+answers, joined, or "" when there are none: restart your buffer from it, because the person
+has already read that text. It is not streamed again; with `round_start` on the event sink
+you can still show it in the round that wrote it. A `clear()` that takes no argument still
+works: it is called, and the kept text then arrives as one ordinary chunk. A callback
+without `clear` (a plain function) never sees any of this.
+
 Runs one full turn: routing, system-prompt rebuild, context compression, the
 LLM/tool loop (with loop budgets), guardrails, persistence.
 

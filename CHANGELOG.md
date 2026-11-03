@@ -272,6 +272,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   pulls in, parsed a long flat selector such as `.a.a.a...` in quadratic time, so one crafted
   selector could hold a CPU core for seconds. VAF parses only its own stylesheets with it, at
   build time, so no request reached it; the update closes the Dependabot alert.
+- **The WhatsApp bridge's lockfile pins follow-redirects 1.16.2.** Version 1.16.1 checked its
+  `sensitiveHeaders` option with `instanceof Array`, so a list made in another JavaScript
+  realm was ignored and a custom credential header could follow a redirect to another host.
+  The bridge never sets that option, so it was not exposed. A new install of the bridge gets
+  1.16.2; an installed bridge keeps 1.16.1 until its next dependency install, or run `npm ci`
+  in `vaf/whatsapp_node` while VAF is stopped.
 
 ## [0.1.0a34] - 2026-10-29
 

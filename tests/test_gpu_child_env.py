@@ -75,7 +75,9 @@ def test_no_record_without_a_hide(clean_env):
 
 
 def _src(rel: str) -> str:
-    return (_ROOT / rel).read_bytes().decode("utf-8")
+    # CRLF-normalised: git can check these out with CRLF on the Windows CI runner, and a
+    # MULTILINE pattern ending in `$` then never matches, because a \r sits before the \n.
+    return (_ROOT / rel).read_bytes().decode("utf-8").replace("\r\n", "\n")
 
 
 @pytest.mark.parametrize("rel", ["vaf/tray.py", "vaf/core/headless_runner.py"])

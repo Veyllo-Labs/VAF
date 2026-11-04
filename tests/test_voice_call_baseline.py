@@ -138,6 +138,21 @@ def voice_env(monkeypatch, tmp_path):
          "session_id": None},
         "test-secret", algorithm="HS256")
     monkeypatch.setattr(ws, "_ws_client_ip", lambda w: "127.0.0.1")
+    # -- the account store, pinned as unreachable. The front door asks it whether the
+    # token's account and session still stand (token_account_stands), and an unreachable
+    # store keeps the token: that branch, the one every runner without a database took,
+    # stays. Left to the host, the same answer cost twelve refused connects per handshake,
+    # instant on Linux and about two seconds each on Windows, so a timed test measured the
+    # host instead of the handler; with a database up it read this machine's accounts.
+    import vaf.auth.database as auth_db
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def _no_account_store(*a, **kw):
+        raise ConnectionRefusedError("the account store is not reachable in this test")
+        yield  # pragma: no cover - makes this an async generator
+
+    monkeypatch.setattr(auth_db, "get_auth_db", _no_account_store)
 
     # -- config, pinned (fallthrough to the real default for everything unnamed).
     _cfg = {"local_network_enabled": False, "default_language": "de",
@@ -235,6 +250,26 @@ def voice_env(monkeypatch, tmp_path):
 
     env["ws_mod"] = ws
     return env
+
+
+def test_the_front_door_asks_no_database(voice_env, monkeypatch):
+    """The handshake of every test on this fixture is the same length on every host: it
+    opens no database engine, so no refused connect (about two seconds each on Windows,
+    twelve per handshake) is inside any test's timing. Five call-queue tests held their
+    contention for 5 or 10 seconds from before the handshake, and on Windows the
+    handshake alone took 24. MUTATION: drop the account-store pin in voice_env - red."""
+    from vaf.memory import database
+
+    opened = []
+
+    async def no_engine(*a, **kw):
+        opened.append(1)
+        raise ConnectionRefusedError("no database in this test")
+
+    monkeypatch.setattr(database, "get_engine", no_engine)
+    sock = FakeWebSocket([])
+    asyncio.run(voice_env["ws_mod"].websocket_endpoint(sock, token=voice_env["token"]))
+    assert opened == [], "the voice front door asked the database during the handshake"
 
 
 def _drive(env, frames: List[dict]) -> FakeWebSocket:

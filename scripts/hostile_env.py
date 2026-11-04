@@ -79,6 +79,22 @@ locally, in the time the suite already takes:
                   artefact of the half-faked host; none exists today, and one
                   that does gets an environment flag set here, the way
                   VAF_SIMULATED_WINDOWS_HOME serves the windows-home axis.
+  CRLF CHECKOUT   Path.read_bytes hands every tracked text file back with CRLF,
+                  as a Windows checkout with core.autocrlf holds it: text git
+                  stores with LF and no eol attribute of its own, the list read
+                  from `git ls-files --eol` (1851 files when this was added).
+                  read_text needs nothing, its universal newlines read CRLF as
+                  LF on every OS. A test that reads source as bytes and matches
+                  it line by line passed here and failed on every Windows leg:
+                  test_gpu_child_env's MULTILINE `$` sat before the \\r of
+                  `hide()\\r\\n`. tests/test_windows_path_hygiene.py section 2
+                  knows one spelling of that class statically; this catches any
+                  spelling. Measured when this was added: the 133 test modules
+                  that call read_bytes ran under it with exactly those two
+                  failures (3331 passed once fixed). Named boundary: only
+                  Path.read_bytes is converted, not open(path, "rb"), which the
+                  tests use on tracked files only to feed ast.parse or a
+                  substring check without a newline, both indifferent to CRLF.
 
 WHAT IT CANNOT DO. Real Windows file semantics - ACLs, MoveFileEx sharing
 violations, the read-only-flag-only chmod - need a real Windows machine. Those
@@ -94,8 +110,25 @@ suite needs files no fresh checkout has. A test that compares the real home with
 the source tree passed here and failed there (the home's parent also overlapped
 the source tree, and that refusal answered first); such a test gives itself a home
 of its own (HOME and USERPROFILE under tmp_path), as test_refuses_a_folder_above_home
-does. Measured when this was written: no other test compares the two. The
-standing rule: every Windows CI red that the local gates could not have caught
+does. Measured when this was written: no other test compares the two.
+
+Nor does it make a REFUSED CONNECT SLOW. On Windows a connect to a loopback port
+nobody listens on is retried for about two seconds before it is refused; here it
+is refused at once. The voice front door asked the absent account store twelve
+times per handshake, so its handshake took 24 s there, and five call-queue tests
+whose contention was held for 5 or 10 s from before the handshake failed only
+there. An axis that delays every refusal would reproduce it, and it would cost:
+a tenth of the test modules (79 files, 1230 tests) made 66 refused loopback
+connects, 30 of 32 sampled to the database port, so about 22 minutes on this
+serial run. The class is closed where it arose instead: the voice fixture pins
+the store as unreachable, and test_the_front_door_asks_no_database refuses a
+handshake that opens a database engine. Nor does it change the OPENSSL BUILD:
+python.org's 3.13 for Windows and macOS bundles OpenSSL 3.5.9, which loads a
+certificate with a malformed subject alternative name that 3.5.3 refuses
+(measured with both); a test about such a pair runs both verdicts through
+ssl_utils' load seam (test_own_certificate).
+
+The standing rule: every Windows CI red that the local gates could not have caught
 adds its class to one of these three places in the SAME fix - a hostile axis
 here, a simulated branch there, or a static guard.
 
@@ -197,11 +230,53 @@ import platform as _platform
 if sys.platform.startswith("linux"):
     _platform.system = lambda: "Darwin"
     _platform.machine = lambda: "arm64"
+
+
+import pathlib as _pathlib
+
+_crlf_list = _os.environ.get("VAF_HOSTILE_CRLF_FILES")
+if _crlf_list:
+    with open(_crlf_list, encoding="utf-8") as _f:
+        _CRLF_FILES = frozenset(line for line in _f.read().split("\\n") if line)
+    _CRLF_NAMES = frozenset(_os.path.basename(path) for path in _CRLF_FILES)
+    _lf_read_bytes = _pathlib.Path.read_bytes
+
+    def _crlf_read_bytes(self):
+        """A tracked text file as a Windows checkout (core.autocrlf) holds it."""
+        data = _lf_read_bytes(self)
+        if (self.name in _CRLF_NAMES
+                and _os.path.normcase(_os.path.realpath(self)) in _CRLF_FILES):
+            data = data.replace(b"\\n", b"\\r\\n")
+        return data
+
+    _pathlib.Path.read_bytes = _crlf_read_bytes
 '''
 
 
 _NO_DOCKER = ("npipe:////./pipe/vaf-hostile-no-docker" if os.name == "nt"
               else "unix:///nonexistent/vaf-hostile/docker.sock")
+
+
+def _crlf_checkout_files() -> list:
+    """The tracked files a Windows checkout with core.autocrlf holds with CRLF: text git
+    stores with LF, with no eol attribute of its own, and LF in this working tree. Each as
+    the normalised real path the sitecustomize compares with. Empty without git."""
+    try:
+        out = subprocess.run(["git", "ls-files", "--eol", "-z"], cwd=str(ROOT),
+                             capture_output=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return []
+    files = []
+    for record in out.decode("utf-8", errors="replace").split("\0"):
+        meta, _, rel = record.partition("\t")
+        fields = meta.split()
+        if len(fields) < 3 or fields[0] != "i/lf" or fields[1] != "w/lf":
+            continue
+        attrs = meta[meta.index("attr/"):] if "attr/" in meta else ""
+        if "eol=" in attrs or "-text" in attrs:
+            continue
+        files.append(os.path.normcase(os.path.realpath(ROOT / rel)))
+    return files
 
 
 def main() -> int:
@@ -220,6 +295,9 @@ def main() -> int:
         site.mkdir()
         (site / "sitecustomize.py").write_text(
             _BLOCKER.format(names=repr(set(OPTIONAL_PACKAGES))), encoding="utf-8")
+        crlf_files = _crlf_checkout_files()
+        crlf_list = Path(tmp) / "crlf-checkout.txt"
+        crlf_list.write_text("\n".join(crlf_files), encoding="utf-8")
 
         env = dict(
             os.environ,
@@ -231,6 +309,7 @@ def main() -> int:
             PYTHONIOENCODING="cp1252",
             PYTHONPATH=os.pathsep.join([str(site), str(ROOT)]),
             DOCKER_HOST=_NO_DOCKER,
+            VAF_HOSTILE_CRLF_FILES=str(crlf_list),
         )
 
         print("Running the suite with:")
@@ -245,6 +324,9 @@ def main() -> int:
         print(f"  foreign os      " + ("platform.system() reports Darwin (arm64)"
                                      if sys.platform.startswith("linux")
                                      else "real host, not faked"))
+        print(f"  crlf checkout   " + (f"{len(crlf_files)} tracked text files read back with CRLF "
+                                     "through Path.read_bytes" if crlf_files
+                                     else "not available here (no git checkout)"))
         print()
         return subprocess.run([sys.executable, "-m", "pytest", *args],
                               cwd=str(ROOT), env=env).returncode

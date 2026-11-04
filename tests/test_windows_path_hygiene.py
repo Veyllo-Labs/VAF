@@ -72,6 +72,14 @@ that bans `read_text()`/`write_text()` is about bulk REWRITES, where universal
 newlines silently rewrites a CRLF file on save; reading for a static assertion
 is the opposite case, and there the translation is the thing you want.
 
+This scan knows one spelling, a `"...\\n..." in` needle. The class has more: a
+MULTILINE pattern ending in `$` (the Windows leg found that one in
+test_gpu_child_env, where `$` sat before the `\\r`), a `.split("\\n")`, an
+`.index(")\\n")`. Those are caught at run time instead: scripts/hostile_env.py's
+CRLF CHECKOUT axis hands every tracked text file back with CRLF through
+`Path.read_bytes`, as a Windows checkout does, so any newline-sensitive reading
+of unnormalized bytes fails there whatever its spelling.
+
 ## 3. No subprocess environment that Windows cannot start a Python in.
 
 Passing `env=` to a subprocess REPLACES the environment; it does not extend it.

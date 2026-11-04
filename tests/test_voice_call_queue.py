@@ -25,19 +25,30 @@ from test_voice_call_baseline import (SCOPE, SPEECH_WAV, START, FakeWebSocket,  
 _REAL_TRANSCRIBE = sc.transcribe
 _REPO = Path(__file__).resolve().parents[1]
 
+# Every hold and wait below ends on an event; this is only the backstop against a hung test.
+# A wall-clock budget that starts before websocket_endpoint runs includes the handshake, and
+# the handshake is not this file's to time. On the Windows runner it took 24 s (the account
+# store's twelve refused connects, about two seconds each there, before voice_env pinned the
+# store), and a 5 or 10 second hold had ended before the turn queued behind it.
+_BACKSTOP_S = 120.0
+
 
 class _PacedSocket(FakeWebSocket):
     """Like the baseline's socket, but once the script is played it waits (instead of
-    hanging up at once) until `until(sent)` holds - a person who stays on the line."""
+    hanging up at once) until `until(sent)` holds - a person who stays on the line. The
+    timeout counts from the end of the script, so the handshake before it is not part of it."""
 
     def __init__(self, frames, until, timeout=10.0):
         super().__init__(frames)
         self._until = until
-        self._deadline = time.monotonic() + timeout
+        self._timeout = timeout
+        self._deadline = None
 
     async def receive_text(self) -> str:
         if self._frames:
             return self._frames.pop(0)
+        if self._deadline is None:
+            self._deadline = time.monotonic() + self._timeout
         while not self._until(self.sent) and time.monotonic() < self._deadline:
             await asyncio.sleep(0.01)
         raise self._disconnect(code=1000)
@@ -80,7 +91,7 @@ class _Holder:
     def _run(self):
         with sc.speech_queue("stt").slot("another-person"):
             self._held.set()
-            end = time.monotonic() + 10
+            end = time.monotonic() + _BACKSTOP_S
             while not self._release.is_set() and time.monotonic() < end:
                 if self._release_when and self._release_when():
                     time.sleep(0.2)
@@ -114,9 +125,13 @@ def _types(sent):
     return [p.get("type") for p in sent]
 
 
-def _stt_waiting():
-    m = next((m for m in fair_queue.queue_metrics() if m["name"] == "stt"), None)
+def _waiting(name):
+    m = next((m for m in fair_queue.queue_metrics() if m["name"] == name), None)
     return bool(m and m["waiting"])
+
+
+def _stt_waiting():
+    return _waiting("stt")
 
 
 # ── dictation ────────────────────────────────────────────────────────────────────
@@ -368,6 +383,11 @@ def test_a_late_tts_slot_still_gets_its_synthesis_time(call_env, monkeypatch):
     def hold():
         with sc.speech_queue("tts").slot("another-person"):
             held.set()
+            # The slot comes 0.7 s after the greeting queued for it, however long the
+            # handshake before took.
+            end = time.monotonic() + _BACKSTOP_S
+            while not _waiting("tts") and not release.is_set() and time.monotonic() < end:
+                time.sleep(0.01)
             release.wait(0.7)
 
     t = threading.Thread(target=hold, daemon=True)
@@ -591,7 +611,7 @@ def test_a_reply_whose_budget_ran_out_in_the_queue_leaves_the_line(call_env, mon
     def hold():
         with sc.speech_queue("tts").slot("another-person"):
             held.set()
-            release.wait(5)
+            release.wait(_BACKSTOP_S)
 
     t = threading.Thread(target=hold, daemon=True)
     t.start()

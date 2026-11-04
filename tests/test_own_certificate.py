@@ -430,20 +430,34 @@ def _broken_names_certificate():
     return cert, key, root
 
 
+@pytest.mark.parametrize("openssl_loads", [False, True], ids=["openssl-refuses", "openssl-loads"])
 def test_a_certificate_whose_names_do_not_parse_is_unreadable(tmp_path, monkeypatch,
-                                                              no_interfaces):
+                                                              no_interfaces, openssl_loads):
     """cryptography parses extensions on first access, and a broken one raised from the
     middle of the check: a 500 on the routes and a traceback in the terminal. MUTATION: drop
-    the extension parse in _read_bundle - red."""
+    the extension parse in _read_bundle - red.
+
+    Whether OpenSSL serves such a pair is its build's verdict, not VAF's: 3.5.3 refuses it
+    (X509V3 INVALID_CERTIFICATE) and 3.5.9, which python.org's 3.13 builds for Windows and
+    macOS bundle, loads it (both measured). Both verdicts run on every host through the load
+    seam, so the test does not depend on the runner's OpenSSL. VAF's rule holds for either:
+    a pair that loads is served as the person's own, one that does not leaves VAF's own
+    served with the problem said, and the state answers in both cases instead of raising."""
     cert, key, root = _broken_names_certificate()
     report = _inspect(pem(cert, root), key_pem(key))
     assert [i.code for i in report.errors] == ["unreadable"]
     cert_file, key_file = _write_pair(tmp_path / "mine", pem(cert, root), key_pem(key))
     isolated_home(tmp_path, monkeypatch, **TLS_ON, local_network_ssl_cert=str(cert_file),
                   local_network_ssl_key=str(key_file))
-    # OpenSSL does not load it either: VAF's own is served, with the problem said.
+    monkeypatch.setattr(ssl_utils, "_load_problem",
+                        lambda *_a: None if openssl_loads else "unreadable")
     state = ssl_utils.certificate_state()
-    assert state["source"] == "automatic" and state["problem"] is not None
+    if openssl_loads:
+        # Served as it loads; its names do not parse, so no facts are shown, and no error.
+        assert state["source"] == "own" and state["problem"] is None
+        assert state["certificate"] is None
+    else:
+        assert state["source"] == "automatic" and state["problem"] is not None
 
 
 def test_the_pem_scan_is_linear():

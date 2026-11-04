@@ -1008,7 +1008,9 @@ def flashinfer_buildable(env: Optional[Dict[str, str]] = None) -> bool:
         nvcc_on_path = shutil.which("nvcc", path=path)
         cuda_home = (os.path.dirname(os.path.dirname(nvcc_on_path)) if nvcc_on_path
                      else os.path.join(os.sep, "usr", "local", "cuda"))
-    nvcc = shutil.which(os.path.join(cuda_home, "bin", "nvcc"))
+    # The name with the folder as its PATH, never the joined path: Python before 3.12 checks
+    # a command with a directory part literally on Windows, without PATHEXT, and misses nvcc.exe.
+    nvcc = shutil.which("nvcc", path=os.path.join(cuda_home, "bin"))
     return bool(nvcc) and bool(shutil.which("ninja", path=path))
 
 

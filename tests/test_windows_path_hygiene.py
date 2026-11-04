@@ -169,6 +169,20 @@ The Windows leg found exactly this in the backup schedule's prune record, an hou
 the run, while every other job was green. The rule: compare against `str(Path(...))` of
 the same literal, or against `.as_posix()` when the record is meant to be POSIX; the scan
 below refuses a literal that a test both wraps in a Path and asserts bare.
+
+## 10. A program is looked up by its name, never by a path built in place.
+
+`shutil.which(os.path.join(folder, "nvcc"))` names the program with a directory part.
+On Windows, Python 3.10 and 3.11 check such a command exactly as written (their
+`shutil.which` returns early: `if os.path.dirname(cmd): if _access_check(cmd, mode):
+return cmd`), without trying the PATHEXT extensions, so the `nvcc.exe` on disk is never
+found. Python 3.12 splits off the folder and applies PATHEXT, and on Linux and macOS
+there is no extension to miss, so only two of the eight test jobs could see it. The
+Windows legs on 3.10 and 3.11 found exactly this in `vllm_server.flashinfer_buildable`
+while 3.12, 3.13, macOS and Ubuntu were green. The rule: the name goes first and the
+folder goes in as `path=`, `shutil.which("nvcc", path=folder)`, which every version
+resolves with PATHEXT. The scan below refuses a lookup whose command is a path built
+in place (a join, a `/` on a Path, a literal or f-string with a separator).
 """
 import ast
 import ntpath
@@ -1269,3 +1283,64 @@ def test_no_test_expects_a_posix_literal_back_from_a_path():
         "of the literal, or with .as_posix() if the record is meant to be POSIX:\n  "
         + "\n  ".join(hits)
     )
+
+
+# -- 10. a program looked up by a path built in place ------------------------------
+
+_PATH_BUILDERS = {"join", "Path", "PurePath", "PureWindowsPath", "PurePosixPath"}
+
+
+def _built_path(node) -> bool:
+    """True for a command argument that is a path assembled right there."""
+    if isinstance(node, ast.Call):
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+        if name in _PATH_BUILDERS:
+            return True
+        if name in ("str", "fspath") and node.args:
+            return _built_path(node.args[0])
+        return False
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return True
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return "/" in node.value or "\\" in node.value
+    if isinstance(node, ast.JoinedStr):
+        return any(isinstance(v, ast.Constant) and ("/" in v.value or "\\" in v.value)
+                   for v in node.values)
+    return False
+
+
+def _which_of_a_built_path(source: str):
+    hits = []
+    for node in ast.walk(ast.parse(source)):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "which" and node.args and _built_path(node.args[0])):
+            hits.append(node.lineno)
+    return hits
+
+
+def test_the_which_class_is_real():
+    """The scan tells the two spellings apart: the joined path is refused, the name with
+    `path=` passes, and so do a bare name and a variable holding a found program."""
+    assert _which_of_a_built_path('shutil.which(os.path.join(home, "bin", "nvcc"))') == [1]
+    assert _which_of_a_built_path('shutil.which(str(Path(home) / "bin" / "nvcc"))') == [1]
+    assert _which_of_a_built_path('shutil.which(f"{home}/bin/nvcc")') == [1]
+    assert _which_of_a_built_path('shutil.which("nvcc", path=os.path.join(home, "bin"))') == []
+    assert _which_of_a_built_path('shutil.which("ninja", path=path)') == []
+    assert _which_of_a_built_path("shutil.which(found)") == []
+
+
+def test_no_program_is_looked_up_by_a_built_path():
+    """MUTATION: put `shutil.which(os.path.join(cuda_home, "bin", "nvcc"))` back into
+    vaf/core/vllm_server.py's flashinfer_buildable - red."""
+    hits = []
+    for rel, path in _tracked_python_files():
+        if rel == "tests/test_windows_path_hygiene.py":
+            continue
+        try:
+            found = _which_of_a_built_path(path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            continue
+        hits += [f"{rel}:{no}" for no in found]
+    assert hits == [], ("look the program up by its name with the folder as path=, "
+                        "shutil.which(name, path=folder): " + ", ".join(hits))

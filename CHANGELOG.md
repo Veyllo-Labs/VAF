@@ -153,6 +153,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   starting once Docker reports it healthy and it answers. Right after a start the verdict
   becomes ok as soon as the stack is up, instead of staying degraded until the longest start
   period (two minutes for the speech services) has run out.
+- **Existing installs now receive the WhatsApp bridge's dependency fixes.** The bridge
+  compared only the Baileys version with its lockfile, so a patched package further down
+  (follow-redirects, music-metadata) never reached an installed bridge, not through `vaf update`
+  and not at a bridge start. It now compares every package. `vaf update` or the next bridge
+  start installs what the lockfile pins, in a separate folder that replaces the old packages
+  only once it is complete, so a failed install leaves the bridge working with what it had.
 - **Chat: each round of thinking gets its own place in the step timeline.** When the model
   thinks again, after a tool, after a safeguard sent it back or after a correction, each round
   now gets its own thinking block and its own text in the step timeline, in the order it
@@ -280,9 +286,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **The WhatsApp bridge's lockfile pins follow-redirects 1.16.2.** Version 1.16.1 checked its
   `sensitiveHeaders` option with `instanceof Array`, so a list made in another JavaScript
   realm was ignored and a custom credential header could follow a redirect to another host.
-  The bridge never sets that option, so it was not exposed. A new install of the bridge gets
-  1.16.2; an installed bridge keeps 1.16.1 until its next dependency install, or run `npm ci`
-  in `vaf/whatsapp_node` while VAF is stopped.
+  The bridge never sets that option, so it was not exposed. `vaf update` and the next bridge
+  start install it on existing installs.
 
 ## [0.1.0a34] - 2026-10-29
 

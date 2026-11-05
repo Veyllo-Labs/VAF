@@ -76,6 +76,10 @@ def patched(monkeypatch, tmp_path):
 
     monkeypatch.setattr(upd.subprocess, "run", fake_run)
     monkeypatch.setattr(upd, "_run_migrations", lambda: None)
+    # The bridge's install works on the real vaf/whatsapp_node (it stages into a folder next to
+    # node_modules), and the fake subprocess.run above is the global one; its own tests are in
+    # test_whatsapp_outbound_model.py.
+    monkeypatch.setattr(upd, "_install_bridge_deps", lambda: None)
 
     bc = tmp_path / "last_update.json"
     monkeypatch.setattr(uc, "last_update_breadcrumb_path", lambda: bc)
@@ -386,3 +390,13 @@ def test_the_dry_run_names_the_requirements_file_it_would_install(patched, monke
     with pytest.raises(typer.Exit):
         upd._apply(dry_run=True, assume_yes=True, target_tag=None)
     assert "  - pip install -e .  +  pip install -r requirements-headless.txt" in msgs
+
+
+def test_the_dry_run_lists_the_bridge_dependency_step(patched, monkeypatch):
+    """The real run installs the WhatsApp bridge's packages; the plan must say so.
+    MUTATION: drop the line from the plan - red."""
+    msgs = _capture_ui(monkeypatch)
+    with pytest.raises(typer.Exit):
+        upd._apply(dry_run=True, assume_yes=True, target_tag=None)
+    assert ("  - npm ci in vaf/whatsapp_node (only if the bridge's packages differ from its lockfile)"
+            in msgs)

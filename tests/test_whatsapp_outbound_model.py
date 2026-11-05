@@ -12,6 +12,8 @@ the self-chat note, the bare @lid pass, the whitelist-gated process list, and th
 reply window that answered a stranger on a channel the owner had closed.
 """
 import json
+import os
+import shutil
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -322,66 +324,281 @@ def test_security_finding_is_about_the_link_not_the_whitelist(isolated):
 
 
 # ── the bridge installs its own Node dependencies ────────────────────────────
+#
+# The whole lockfile is compared, not Baileys alone: a patched package further down the tree
+# (follow-redirects, music-metadata) is the usual security bump, and the Baileys-only check let
+# it pass every installed bridge by. A failed `npm ci` empties the node_modules it runs in
+# (measured on a scratch copy, offline with an empty cache: 74 entries, then 0), so the install
+# runs in .deps-staging and replaces the tree only once it is complete.
 
-def _bridge_tree(tmp_path: Path, locked: str, installed: str | None) -> Path:
+_LOCK = {
+    "node_modules/@whiskeysockets/baileys": {"version": "6.7.24"},
+    "node_modules/follow-redirects": {"version": "1.16.2"},
+    "node_modules/protobufjs": {"version": "7.5.4"},
+    "node_modules/protobufjs/node_modules/long": {"version": "5.3.2"},
+    "node_modules/@img/sharp-win32-x64": {"version": "0.34.5", "optional": True, "os": ["win32"], "cpu": ["x64"]},
+}
+_IN_SYNC = {k: v["version"] for k, v in _LOCK.items() if not v.get("optional")}
+_BEHIND = {**_IN_SYNC, "node_modules/follow-redirects": "1.16.0"}
+_NPM_CI = ["/usr/bin/npm", "ci", "--omit=dev", "--no-audit", "--no-fund"]
+
+
+def _write_packages(root: Path, packages: dict) -> None:
+    for key, version in packages.items():
+        pkg = root / key
+        pkg.mkdir(parents=True, exist_ok=True)
+        (pkg / "package.json").write_text(json.dumps({"version": version}), encoding="utf-8")
+
+
+def _disk(node_dir: Path, key: str) -> str:
+    try:
+        return json.loads((node_dir / key / "package.json").read_text(encoding="utf-8"))["version"]
+    except OSError:
+        return ""
+
+
+def _leftovers(node_dir: Path) -> list:
+    return sorted(p.name for p in node_dir.iterdir() if p.name.startswith(".deps-"))
+
+
+def _bridge_tree(tmp_path: Path, installed, lock: dict = _LOCK) -> Path:
     node_dir = tmp_path / "whatsapp_node"
     node_dir.mkdir()
     (node_dir / "wa-bridge.js").write_text("// bridge\n", encoding="utf-8")
     (node_dir / "package.json").write_text('{"name": "x"}', encoding="utf-8")
     (node_dir / "package-lock.json").write_text(json.dumps(
-        {"packages": {"node_modules/@whiskeysockets/baileys": {"version": locked}}}), encoding="utf-8")
+        {"lockfileVersion": 3, "packages": {"": {"name": "x"}, **lock}}), encoding="utf-8")
     if installed:
-        pkg = node_dir / "node_modules" / "@whiskeysockets" / "baileys"
-        pkg.mkdir(parents=True)
-        (pkg / "package.json").write_text(json.dumps({"version": installed}), encoding="utf-8")
+        _write_packages(node_dir, installed)
     return node_dir
 
 
-def test_bridge_deps_are_left_alone_when_they_match_the_lockfile(tmp_path, monkeypatch):
-    node_dir = _bridge_tree(tmp_path, "6.7.24", "6.7.24")
-    monkeypatch.setattr(wa, "_wa_bridge_path", lambda: node_dir / "wa-bridge.js")
+@pytest.fixture
+def bridge(tmp_path, monkeypatch):
+    """A scratch bridge folder, no bridge Node running, no failure remembered, the [deps] log
+    lines captured instead of written."""
+    monkeypatch.setattr(wa, "_failed_reinstall_lock", "")
+    monkeypatch.setattr(wa, "_bridge_thread", None)
+    monkeypatch.setattr(wa, "_spawned_nodes", [])
+    logged = []
+    monkeypatch.setattr(wa, "_log_deps", logged.append)
+
+    def make(installed, lock=_LOCK):
+        node_dir = _bridge_tree(tmp_path, installed, lock)
+        monkeypatch.setattr(wa, "_wa_bridge_path", lambda: node_dir / "wa-bridge.js")
+        return node_dir
+
+    return SimpleNamespace(make=make, logged=logged)
+
+
+def _npm(monkeypatch, *, rc: int = 0, writes: dict | None = None):
+    """A fake npm that installs the lockfile into its cwd's node_modules, or, failing, empties it
+    the way the measured `npm ci` does. Returns the (cmd, cwd) of every call."""
+    monkeypatch.setattr(node_runtime, "find", lambda name: "/usr/bin/npm" if name == "npm" else None)
+    calls = []
+
+    def run(cmd, **kwargs):
+        cwd = Path(kwargs["cwd"])
+        calls.append((cmd, cwd))
+        if rc == 0:
+            _write_packages(cwd, _IN_SYNC if writes is None else writes)
+        else:
+            shutil.rmtree(cwd / "node_modules", ignore_errors=True)
+        return SimpleNamespace(returncode=rc, stdout="", stderr="" if rc == 0 else "ENOTFOUND registry")
+
+    monkeypatch.setattr(wa.subprocess, "run", run)
+    return calls
+
+
+def _no_npm(monkeypatch):
     monkeypatch.setattr(wa.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("npm must not run")))
+
+
+def test_bridge_deps_in_sync_runs_no_npm(bridge, monkeypatch):
+    """Every required entry matches, one os-gated optional build is absent, one nested entry
+    matches. MUTATION: drop the optional/os allowance, or report drift always - npm runs, red."""
+    node_dir = bridge.make(_IN_SYNC)
+    _no_npm(monkeypatch)
+    ok, msg = wa.ensure_bridge_deps()
+    assert (ok, msg) == (True, "WhatsApp bridge dependencies present (Baileys 6.7.24)")
+    assert _leftovers(node_dir) == []
+
+
+def test_bridge_deps_reinstall_when_a_transitive_package_is_behind(bridge, monkeypatch):
+    """The live case: Baileys matches, follow-redirects is behind the lock.
+    MUTATION: restore the Baileys-only check - npm never runs, follow-redirects stays 1.16.0, red."""
+    node_dir = bridge.make(_BEHIND)
+    calls = _npm(monkeypatch)
+    ok, msg = wa.ensure_bridge_deps()
+    assert (ok, msg) == (True, "WhatsApp bridge dependencies installed (Baileys 6.7.24)")
+    assert calls == [(_NPM_CI, node_dir / ".deps-staging")]       # the lockfile, never rewritten, staged
+    assert _disk(node_dir, "node_modules/follow-redirects") == "1.16.2"
+    assert _leftovers(node_dir) == []
+    assert any("follow-redirects 1.16.0 -> 1.16.2" in line for line in bridge.logged)
+
+
+@pytest.mark.parametrize("installed", [None, {**_IN_SYNC, "node_modules/@whiskeysockets/baileys": "6.7.23"}],
+                         ids=["missing", "baileys-behind"])
+def test_bridge_deps_are_installed_from_the_lockfile_when_missing_or_behind(bridge, monkeypatch, installed):
+    node_dir = bridge.make(installed)
+    calls = _npm(monkeypatch)
     ok, msg = wa.ensure_bridge_deps()
     assert ok and "6.7.24" in msg
+    assert calls == [(_NPM_CI, node_dir / ".deps-staging")]
+    assert _disk(node_dir, "node_modules/@whiskeysockets/baileys") == "6.7.24"
+    assert _leftovers(node_dir) == []
 
 
-@pytest.mark.parametrize("installed", [None, "6.7.23"])
-def test_bridge_deps_are_installed_from_the_lockfile_when_missing_or_behind(tmp_path, monkeypatch, installed):
-    node_dir = _bridge_tree(tmp_path, "6.7.24", installed)
-    monkeypatch.setattr(wa, "_wa_bridge_path", lambda: node_dir / "wa-bridge.js")
-    monkeypatch.setattr(node_runtime, "find", lambda name: "/usr/bin/npm" if name == "npm" else None)
-    calls = []
-
-    def fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        pkg = node_dir / "node_modules" / "@whiskeysockets" / "baileys"
-        pkg.mkdir(parents=True, exist_ok=True)
-        (pkg / "package.json").write_text(json.dumps({"version": "6.7.24"}), encoding="utf-8")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(wa.subprocess, "run", fake_run)
-    ok, msg = wa.ensure_bridge_deps()
-    assert ok and "6.7.24" in msg
-    assert calls == [["/usr/bin/npm", "ci", "--omit=dev", "--no-audit", "--no-fund"]]   # the lockfile, never rewritten
-
-
-def test_bridge_deps_fall_back_to_npm_install_and_report_a_failure_honestly(tmp_path, monkeypatch):
-    node_dir = _bridge_tree(tmp_path, "6.7.24", None)
-    monkeypatch.setattr(wa, "_wa_bridge_path", lambda: node_dir / "wa-bridge.js")
-    monkeypatch.setattr(node_runtime, "find", lambda name: "/usr/bin/npm" if name == "npm" else None)
-    calls = []
-    monkeypatch.setattr(wa.subprocess, "run", lambda cmd, **k: (calls.append(cmd), SimpleNamespace(returncode=1, stdout="", stderr="ENOTFOUND registry"))[1])
+def test_bridge_deps_fall_back_to_npm_install_and_report_a_failure_honestly(bridge, monkeypatch):
+    node_dir = bridge.make(None)
+    calls = _npm(monkeypatch, rc=1)
     ok, msg = wa.ensure_bridge_deps()
     assert not ok and "ENOTFOUND" in msg and "npm install" in msg
-    assert [c[1] for c in calls] == ["ci", "install"]
+    assert [c[0][1] for c in calls] == ["ci", "install"]
+    assert _leftovers(node_dir) == []
 
 
-def test_bridge_deps_without_npm_say_so(tmp_path, monkeypatch):
-    node_dir = _bridge_tree(tmp_path, "6.7.24", None)
-    monkeypatch.setattr(wa, "_wa_bridge_path", lambda: node_dir / "wa-bridge.js")
-    monkeypatch.setattr(node_runtime, "find", lambda name: None)
+def test_failed_reinstall_keeps_the_installed_tree(bridge, monkeypatch):
+    """Both npm commands fail and empty the node_modules they ran in.
+    MUTATION: run npm with cwd=node_dir (in place) - the fake empties it, Baileys gone, red."""
+    node_dir = bridge.make(_BEHIND)
+    _npm(monkeypatch, rc=1)
     ok, msg = wa.ensure_bridge_deps()
-    assert not ok and "npm not found" in msg
+    assert ok
+    assert "follow-redirects 1.16.0 -> 1.16.2" in msg and "ENOTFOUND" in msg and "stay in use" in msg
+    assert msg.isascii()
+    assert {k: _disk(node_dir, k) for k in _BEHIND} == _BEHIND
+    assert _leftovers(node_dir) == []
+
+
+def test_failed_reinstall_is_not_retried_for_the_same_lock(bridge, monkeypatch):
+    """The reconnect worker restarts the bridge every few minutes while it is disconnected.
+    MUTATION: drop the memo - the second call runs npm again, red."""
+    node_dir = bridge.make(_BEHIND)
+    calls = _npm(monkeypatch, rc=1)
+    wa.ensure_bridge_deps()
+    assert len(calls) == 2
+    ok, msg = wa.ensure_bridge_deps()
+    assert ok and "already failed" in msg and msg.isascii()
+    assert len(calls) == 2
+    # A changed lockfile is a new attempt.
+    (node_dir / "package-lock.json").write_text(json.dumps(
+        {"lockfileVersion": 3, "packages": {"": {"name": "x"}, **_LOCK}}, indent=2), encoding="utf-8")
+    wa.ensure_bridge_deps()
+    assert len(calls) == 4
+
+
+@pytest.mark.parametrize("which", ["aside", "into-place"])
+def test_swap_failure_keeps_the_old_tree(bridge, monkeypatch, which):
+    """Windows refuses a rename while antivirus or a running Node holds a file (PermissionError).
+    MUTATION: skip putting .deps-previous back when the second rename fails - node_modules is
+    missing, red."""
+    node_dir = bridge.make(_BEHIND)
+    _npm(monkeypatch)
+    real_replace = os.replace
+
+    def replace(src, dst):
+        src = Path(src)
+        if (which == "aside" and src == node_dir / "node_modules") or \
+                (which == "into-place" and src.parent.name == ".deps-staging"):
+            raise PermissionError(13, "Access is denied", str(src))
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(wa.os, "replace", replace)
+    ok, msg = wa.ensure_bridge_deps()
+    assert ok and "could not replace node_modules" in msg and msg.isascii()
+    assert {k: _disk(node_dir, k) for k in _BEHIND} == _BEHIND
+    assert _leftovers(node_dir) == []
+
+
+def test_interrupted_swap_is_recovered_without_npm(bridge, monkeypatch):
+    """A process killed between the two renames leaves node_modules in .deps-previous.
+    MUTATION: drop the recovery - the tree reads as missing and npm runs, red."""
+    node_dir = bridge.make(_IN_SYNC)
+    os.replace(node_dir / "node_modules", node_dir / ".deps-previous")
+    (node_dir / ".deps-staging" / "node_modules").mkdir(parents=True)
+    _no_npm(monkeypatch)
+    ok, msg = wa.ensure_bridge_deps()
+    assert (ok, msg) == (True, "WhatsApp bridge dependencies present (Baileys 6.7.24)")
+    assert _leftovers(node_dir) == []
+    assert {k: _disk(node_dir, k) for k in _IN_SYNC} == _IN_SYNC
+
+
+@pytest.mark.parametrize("running", ["bridge-thread", "qr-node"])
+def test_running_bridge_defers_the_reinstall(bridge, monkeypatch, running):
+    """The QR login calls the funnel while the bridge, or another account's QR Node, runs from
+    the tree; it is not swapped under them. MUTATION: drop the check - npm runs, red."""
+    node_dir = bridge.make(_BEHIND)
+    if running == "bridge-thread":
+        monkeypatch.setattr(wa, "_bridge_thread", SimpleNamespace(is_alive=lambda: True))
+    else:
+        monkeypatch.setattr(wa, "_spawned_nodes", [SimpleNamespace(poll=lambda: None)])
+    _no_npm(monkeypatch)
+    ok, msg = wa.ensure_bridge_deps()
+    assert ok and "next bridge start" in msg and "follow-redirects 1.16.0 -> 1.16.2" in msg and msg.isascii()
+    assert _disk(node_dir, "node_modules/follow-redirects") == "1.16.0"
+
+
+def test_a_node_that_has_exited_does_not_defer_the_reinstall(bridge, monkeypatch):
+    """MUTATION: count every Node ever spawned - a finished QR link defers forever, red."""
+    node_dir = bridge.make(_BEHIND)
+    monkeypatch.setattr(wa, "_spawned_nodes", [SimpleNamespace(poll=lambda: 0)])
+    calls = _npm(monkeypatch)
+    ok, _ = wa.ensure_bridge_deps()
+    assert ok and len(calls) == 1 and wa._spawned_nodes == []
+    assert _disk(node_dir, "node_modules/follow-redirects") == "1.16.2"
+
+
+def test_a_drift_npm_cannot_close_is_logged(bridge, monkeypatch, caplog):
+    """A persistent false drift would cost an install at every start; the recheck says so."""
+    bridge.make(_BEHIND)
+    _npm(monkeypatch, writes={**_IN_SYNC, "node_modules/follow-redirects": "1.16.1"})
+    with caplog.at_level("WARNING", logger=wa.logger.name):
+        ok, _ = wa.ensure_bridge_deps()
+    assert ok
+    assert any("still differ" in r.getMessage() and "1.16.1 -> 1.16.2" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("case", ["no-tree", "usable-tree", "usable-not-writable"])
+def test_bridge_deps_without_npm_say_so(bridge, monkeypatch, case):
+    """MUTATION: answer False whenever npm is missing - a working bridge goes down, red."""
+    node_dir = bridge.make(None if case == "no-tree" else _BEHIND)
+    if case == "usable-not-writable":
+        _npm(monkeypatch)
+        monkeypatch.setattr(wa.os, "access", lambda *a, **k: False)
+    else:
+        monkeypatch.setattr(node_runtime, "find", lambda name: None)
+    ok, msg = wa.ensure_bridge_deps()
+    assert msg.isascii()
+    if case == "no-tree":
+        assert not ok and "npm not found" in msg
+        return
+    assert ok and "npm ci --omit=dev" in msg and "follow-redirects 1.16.0 -> 1.16.2" in msg
+    assert ("npm not found" if case == "usable-tree" else "not writable") in msg
+    assert _disk(node_dir, "node_modules/follow-redirects") == "1.16.0"
+
+
+def test_drift_summary_names_three_and_counts_the_rest():
+    d = node_runtime.NpmDrift
+    out = wa._drift_summary([d("node_modules/a", "1.0.0", "1.1.0"), d("node_modules/b", "", "2.0.0"),
+                             d("node_modules/c/node_modules/e", "3.0.0", ""), d("node_modules/f", "1", "2")])
+    assert out == ("4 packages differ from the lockfile: a 1.0.0 -> 1.1.0, b missing -> 2.0.0, "
+                   "c/node_modules/e 3.0.0 not in the lockfile, and 1 more")
+    assert wa._drift_summary([d("node_modules/a", "1", "2")]) == "1 package differs from the lockfile: a 1 -> 2"
+
+
+@pytest.mark.parametrize("drift,level", [([node_runtime.NpmDrift("node_modules/a", "1", "2")], "warning"), ([], "info")])
+def test_update_warns_when_the_bridge_is_still_behind(monkeypatch, drift, level):
+    """The funnel keeps a working tree when the reinstall fails and answers ok; `vaf update`
+    must not report that as done. MUTATION: always UI.info on ok - red."""
+    from vaf.cli.cmd import update as upd
+    shown = []
+    monkeypatch.setattr(wa, "ensure_bridge_deps", lambda: (True, "the message"))
+    monkeypatch.setattr(wa, "bridge_deps_drift", lambda: drift)
+    monkeypatch.setattr(upd.UI, "warning", lambda m, *a, **k: shown.append(("warning", m)))
+    monkeypatch.setattr(upd.UI, "info", lambda m, *a, **k: shown.append(("info", m)))
+    upd._install_bridge_deps()
+    assert shown == [(level, "the message")]
 
 
 def test_conversation_pane_reads_the_message_store_not_the_agent_session(isolated):

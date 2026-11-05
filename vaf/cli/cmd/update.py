@@ -215,16 +215,21 @@ def _install_web_deps(root: Path, prev_sha: str = "", force: bool = False) -> No
 
 
 def _install_bridge_deps() -> None:
-    """The WhatsApp bridge's node_modules follow its lockfile the same way web/ does; the
+    """The WhatsApp bridge's node_modules follow its lockfile, every package of it; the
     bridge owns the install (it also runs it on first start), the update only triggers it
-    so a Baileys bump in the release is live before the bridge next starts. Non-fatal:
-    a failure is a warning, the bridge repeats the attempt on its next start."""
+    so a release's dependency fixes are live before the bridge next starts. Non-fatal: a
+    failure is a warning, the bridge repeats the attempt on its next start. The bridge
+    keeps a working tree when the reinstall fails and still answers ok, so a tree that is
+    still behind its lockfile afterwards is a warning too."""
     try:
-        from vaf.api.whatsapp_bridge import ensure_bridge_deps
+        from vaf.api.whatsapp_bridge import bridge_deps_drift, ensure_bridge_deps
         ok, msg = ensure_bridge_deps()
+        behind = bool(ok and bridge_deps_drift())
     except Exception as e:
-        ok, msg = False, str(e)
-    if ok:
+        ok, msg, behind = False, str(e), False
+    if behind:
+        UI.warning(msg)
+    elif ok:
         UI.info(msg)
     else:
         UI.warning(f"WhatsApp bridge dependencies not updated: {msg}")
@@ -456,6 +461,7 @@ def _apply(dry_run: bool, assume_yes: bool, target_tag: str | None,
             *checkout_steps,
             f"pip install -e .  +  pip install -r {update_check.requirements_file(root).name}",
             "npm install in web/ (only if frontend deps changed)",
+            "npm ci in vaf/whatsapp_node (only if the bridge's packages differ from its lockfile)",
             "invalidate web/.next (lazy rebuild on next start)",
             "run config/state migrations",
             "restart the VAF service",

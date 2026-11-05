@@ -561,6 +561,20 @@ def test_a_staging_leftover_that_cannot_be_removed_does_not_block_the_install(br
     assert _disk(node_dir, "node_modules/follow-redirects") == "1.16.2"
 
 
+def test_a_staging_folder_that_cannot_be_made_is_named_honestly(bridge, monkeypatch):
+    """mkdtemp failing (disk full, permissions) creates no folder, so the message names the
+    place it tried, not a staging path that never existed. MUTATION: name the fixed legacy
+    path - red."""
+    node_dir = bridge.make(_BEHIND)
+    monkeypatch.setattr(node_runtime, "find", lambda name: "/usr/bin/npm" if name == "npm" else None)
+    _no_npm(monkeypatch)
+    monkeypatch.setattr(wa.tempfile, "mkdtemp", lambda **k: (_ for _ in ()).throw(OSError(28, "No space left on device")))
+    ok, msg = wa.ensure_bridge_deps()
+    assert ok and f"could not prepare a staging folder in {node_dir}: " in msg and "No space left" in msg
+    assert ".deps-staging" not in msg
+    assert _disk(node_dir, "node_modules/follow-redirects") == "1.16.0"
+
+
 def test_a_kept_tree_is_logged_once_per_lockfile(bridge, monkeypatch):
     """A deferred or held reinstall leaves a trace in whatsapp_qr.log, but the reconnect
     worker's restarts do not repeat it. MUTATION: no log line - red; a line per call - red."""

@@ -480,12 +480,13 @@ def ensure_bridge_deps(timeout: float = 600.0) -> Tuple[bool, str]:
     The whole lock is compared (node_runtime.lock_drift), not Baileys alone: a patched
     package further down the tree is the usual security bump. In sync costs no npm call.
     Otherwise `npm ci` (exactly the lockfile; `npm install` as the fallback for a lockfile npm
-    refuses) runs in a fresh owner-only `.deps-staging-*/`, and the result replaces node_modules only once Baileys
-    is in it: a failed `npm ci` empties the node_modules it runs in, so an install in place
-    that fails offline would stop a bridge that works. A tree that still has Baileys stays in
-    use, and the call succeeds with a message that says what differs, when the reinstall fails,
-    when npm is missing or the folder is not writable, while a bridge Node of this process runs
-    from it, and once a reinstall for these lockfile bytes has already failed in this process.
+    refuses) runs in a fresh `.deps-staging-*/` (owner-only on POSIX), and the result replaces
+    node_modules only once Baileys is in it: a failed `npm ci` empties the node_modules it runs
+    in, so an install in place that fails offline would stop a bridge that works. A tree that
+    still has Baileys stays in use, and the call succeeds with a message that says what
+    differs, when the reinstall fails, when npm is missing or the folder is not writable, while
+    a bridge Node of this process runs from it, and once a reinstall for these lockfile bytes
+    has already failed in this process.
 
     The lock below serialises callers inside one process only. The other process that calls
     this is `vaf update`, which stops the service before its dependency steps; a caller that
@@ -539,7 +540,7 @@ def ensure_bridge_deps(timeout: float = 600.0) -> Tuple[bool, str]:
                 if (node_dir / name).is_file():
                     shutil.copy2(node_dir / name, staging / name)   # keeps a 0600 .npmrc 0600
         except OSError as e:
-            last_err = f"could not prepare {staging}: {e}"
+            last_err = f"could not prepare a staging folder in {node_dir}: {e}"
         installed = ""
         if not last_err:
             kwargs: dict = {"cwd": str(staging), "capture_output": True, "text": True, "timeout": timeout,

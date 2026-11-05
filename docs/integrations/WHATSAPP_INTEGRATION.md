@@ -10,12 +10,12 @@ Who may write IN is decided per message, in this order:
 
 | Sender | Match | What happens |
 |---|---|---|
-| the linked account itself | - | dropped (`SELF_CHAT dropped` in `whatsapp_inbound.log`) |
+| the linked account itself | - | dropped (`SELF_CHAT dropped` in `whatsapp_inbound_<date>.log`) |
 | your **registered main-user number** (`whatsapp_config.whitelist` entry for your VAF account) | `explicit_pair` | full chat, like Telegram: all tools, session `whatsapp_<user>_<digits>` |
 | a contact you set to **allowed** (**Let the agent reply**) | `contact_allowed` | Front Office (restricted tools, dedicated prompt), on every channel where you have their address and whatever the Inbound switch says; learns into the chat's own memory namespace |
 | anybody you have **not decided about**, while Inbound is on for WhatsApp | `front_office_open` | Front Office; they are added to your contact book with no decision on them, and the prompt says there is no standing permission; learns into the chat's own memory namespace |
 | a contact you set to **blocked** | `contact_denied` | not answered, on any channel and with Inbound on; the message is stored for you like any other |
-| anyone else | `not_paired` | not answered: the message is stored for you (the dashboard shows the chat as read-only, the inbox tools read it), no agent run, one `REJECT` line in `whatsapp_inbound.log` per sender and throttle window (written with debug logging off too; not a security event, a stranger writing to the agent's number is everyday traffic). You can answer such a chat yourself from the dashboard, with or without a draft from the Composer (see Dashboard) |
+| anyone else | `not_paired` | not answered: the message is stored for you (the dashboard shows the chat as read-only, the inbox tools read it), no agent run, one `REJECT` line in `whatsapp_inbound_<date>.log` per sender and throttle window (written with debug logging off too; not a security event, a stranger writing to the agent's number is everyday traffic). You can answer such a chat yourself from the dashboard, with or without a draft from the Composer (see Dashboard) |
 
 Registering your own number is optional. Without it the agent is **outbound only**: `send_whatsapp(to_phone=...)` and contact conversations work, but `send_to_user` and `main_messenger = whatsapp` have no endpoint. Each VAF user links their own account; there is no shared credential set (two Baileys sockets on one credential set evict each other).
 
@@ -105,7 +105,7 @@ Key components:
 
 - **What is compared:** every package on disk against `package-lock.json` (`node_runtime.lock_drift`): a different version, a required package that is missing, a package the lock does not name. Optional and os/cpu/libc-gated platform builds may be absent, and dev entries do not count. A patched package deep in the tree therefore reaches an installed bridge as well as a Baileys bump does. A tree that matches costs no npm call.
 - **How it installs:** npm runs in a fresh `vaf/whatsapp_node/.deps-staging-*/` folder (owner-only on POSIX; on Windows it inherits the permissions of `vaf/whatsapp_node`; a project `.npmrc` copied in keeps its mode), and its result replaces `node_modules` only once it is complete, because a failed `npm ci` empties the folder it runs in. The old tree is moved to `.deps-previous/` for the moment of the swap, and a swap that was interrupted is put back on the next call.
-- **When the installed tree stays:** a tree that still has Baileys stays in use, and the bridge keeps running with it, when the reinstall fails, when npm is missing or the folder is not writable, while a bridge Node of this VAF runs from it (the QR login during a running bridge; the next bridge start installs it), and after a reinstall for the same lockfile already failed in this process (the next VAF start or `vaf update` tries again). The returned message says which packages differ, and `logs/whatsapp_qr.log` gets it once per lockfile.
+- **When the installed tree stays:** a tree that still has Baileys stays in use, and the bridge keeps running with it, when the reinstall fails, when npm is missing or the folder is not writable, while a bridge Node of this VAF runs from it (the QR login during a running bridge; the next bridge start installs it), and after a reinstall for the same lockfile already failed in this process (the next VAF start or `vaf update` tries again). The returned message says which packages differ, and `whatsapp_qr_<date>.log` gets it once per lockfile.
 - **Without a usable tree:** the manual `npm install` in `vaf/whatsapp_node/` remains the fallback when npm is missing or the directory is not writable; the wizard shows that message.
 - **Concurrency:** the install serialises callers within one process only; `vaf update`, the one caller in another process, stops VAF before its dependency steps.
 
@@ -224,18 +224,18 @@ In the dashboard (Settings → Connections → WhatsApp), a chat carries the **O
 
 If the agent wrote to a "number" that is a long digit string and not a real phone number (e.g. `+12345678901234` or similar), it is likely a **WhatsApp LID** (the numeric part of a `…@lid` chat). Unresolved @lid chats are **rejected** unless the sender is matched by resolved E.164 or whitelist/contact, so unknown senders cannot reach the assistant.
 
-**Logs to check:** Under the VAF log directory (e.g. `logs/` in the project, or `Platform.data_dir()/logs`), see:
+**Logs to check:** The files are dated, one per day (`whatsapp_qr_2026-11-05.log`), and live in the VAF log directory: `Platform.data_dir()/logs`, which is `~/.local/share/vaf/logs` on Linux, `~/Library/Application Support/vaf/logs` on macOS and `%LOCALAPPDATA%\vaf\logs` on Windows (`VAF_LOG_DIR` overrides it; the full order is in [Where logs go](../DEBUGGING.md#where-logs-go)). `<date>` below stands for the day's date. See:
 
-- **whatsapp_inbound.log**: each inbound message: `ACCEPT`, `REJECT from=<jid> reason=<reason> access=<allowed|denied|undecided>` (the reason is `not_paired` or `contact_denied`, with `unresolved @lid` appended when the sender is a LID no number is known for), `SELF_CHAT`, etc. The `REJECT` line is written even with debug logging off, one per sender and throttle window; the rest of the lane needs it on.
-- **whatsapp_qr.log**: QR flow and bridge events.
+- **whatsapp_inbound_<date>.log**: each inbound message: `ACCEPT`, `REJECT from=<jid> reason=<reason> access=<allowed|denied|undecided>` (the reason is `not_paired` or `contact_denied`, with `unresolved @lid` appended when the sender is a LID no number is known for), `SELF_CHAT`, etc. The `REJECT` line is written even with debug logging off, one per sender and throttle window; the rest of the lane needs it on.
+- **whatsapp_qr_<date>.log**: QR flow and bridge events.
 
 Search for `from=…@lid` or `unresolved @lid` to confirm rejections. New messages from unknown LIDs are rejected unless you add a manual mapping (see below).
 
 ### Troubleshooting: Bot doesn't reply to a contact (e.g. Bob) – REJECT unresolved @lid
 
-If a **known** Front Office contact (e.g. Bob) uses a chat that WhatsApp sends as **@lid** (e.g. `123456789012345@lid`) and the Node never sends `fromE164`, the bridge **rejects** their messages (`REJECT from=123456789012345@lid reason=not_paired ... unresolved @lid` in `whatsapp_inbound.log`). To allow that contact again, add a **manual LID→E.164 mapping** in config so the bridge can treat that LID as their phone number:
+If a **known** Front Office contact (e.g. Bob) uses a chat that WhatsApp sends as **@lid** (e.g. `123456789012345@lid`) and the Node never sends `fromE164`, the bridge **rejects** their messages (`REJECT from=123456789012345@lid reason=not_paired ... unresolved @lid` in `whatsapp_inbound_<date>.log`). To allow that contact again, add a **manual LID→E.164 mapping** in config so the bridge can treat that LID as their phone number:
 
-1. In **whatsapp_inbound.log** note the rejected JID (e.g. `123456789012345@lid`).
+1. In **whatsapp_inbound_<date>.log** note the rejected JID (e.g. `123456789012345@lid`).
 2. In your VAF config (`~/.vaf/config.json` or `%APPDATA%\\vaf\\config.json`), under `whatsapp_config`, add or extend `lid_to_e164` with that JID as key and the contact’s **real E.164 number** (as in Front Office) as value. Example: `"lid_to_e164": { "123456789012345@lid": "+491702345678" }` (use Bob’s actual number from Contacts).
 3. Save config and restart the WhatsApp bridge (or wait for the next message). Messages from that LID will then be accepted and the bot will reply.
 
@@ -270,7 +270,7 @@ If a voice or text reply to a contact contained literal JSON (e.g. `{"tool_calls
 
 ### Troubleshooting: Reply to contact A had context meant for contact B
 
-Each WhatsApp chat has a **session** `whatsapp_{username}_{digits}` (e.g. `whatsapp_admin_491701234567` for Alice). Context and history are per session. If the agent replied to Alice with content that clearly referred to another contact (e.g. Bob), possible causes: (1) the same LID was used for two different people (e.g. one contact’s chat not yet resolved to E.164), so both shared one session; (2) two messages processed close together and a reply was associated with the wrong chat. Check **whatsapp_inbound.log** and **whatsapp_reply.log** for the order of `ENQUEUED session=…`, `HEADLESS task_source=whatsapp jid=…`, and `REPLY … jid=…` to see which session and JID each reply used. Ensure each contact has a distinct phone/JID in Front Office so they get distinct sessions.
+Each WhatsApp chat has a **session** `whatsapp_{username}_{digits}` (e.g. `whatsapp_admin_491701234567` for Alice). Context and history are per session. If the agent replied to Alice with content that clearly referred to another contact (e.g. Bob), possible causes: (1) the same LID was used for two different people (e.g. one contact’s chat not yet resolved to E.164), so both shared one session; (2) two messages processed close together and a reply was associated with the wrong chat. Check **whatsapp_inbound_<date>.log** and **whatsapp_reply_<date>.log** for the order of `ENQUEUED session=…`, `HEADLESS task_source=whatsapp jid=…`, and `REPLY … jid=…` to see which session and JID each reply used. Ensure each contact has a distinct phone/JID in Front Office so they get distinct sessions.
 
 ---
 
@@ -338,7 +338,7 @@ The speech-to-text lane (the provider, or Whisper on the Full profile) returns t
 ### Incoming Messages
 
 1. **Node** emits a JSON line: `{ "type": "message", "from": "<jid>", "body": "...", "voice_path": "<path or omit>", "fromE164": "+49...", "selfChat": false, ... }`.
-2. **Python** (`_dispatch_bridge_event`): Drops `selfChat` messages first (the linked account is the agent), then anything that is not a person (`status@broadcast`, `@newsletter`, `@broadcast`, groups; the Node already filters these, Python once more) before the ingress decision, so such posts never become `REJECT` lines. Then resolves the sender against the registered main-user number (`explicit_pair`) and their own record in the contact book (`contact_allowed` / `contact_denied`), and asks `channel_ingress_policy.evaluate_ingress`, which admits everybody else exactly while Inbound is on (`front_office_open`). An unresolved `@lid` is refused before the policy is asked: no number, so nothing can match and nothing is enrolled. A rejected sender gets one `REJECT` line in `whatsapp_inbound.log` (written with debug logging off too, one per sender and throttle window) and no security event; the message is stored for the owner like an accepted one (same chat key, name and message id), and nothing runs on it.
+2. **Python** (`_dispatch_bridge_event`): Drops `selfChat` messages first (the linked account is the agent), then anything that is not a person (`status@broadcast`, `@newsletter`, `@broadcast`, groups; the Node already filters these, Python once more) before the ingress decision, so such posts never become `REJECT` lines. Then resolves the sender against the registered main-user number (`explicit_pair`) and their own record in the contact book (`contact_allowed` / `contact_denied`), and asks `channel_ingress_policy.evaluate_ingress`, which admits everybody else exactly while Inbound is on (`front_office_open`). An unresolved `@lid` is refused before the policy is asked: no number, so nothing can match and nothing is enrolled. A rejected sender gets one `REJECT` line in `whatsapp_inbound_<date>.log` (written with debug logging off too, one per sender and throttle window) and no security event; the message is stored for the owner like an accepted one (same chat key, name and message id), and nothing runs on it.
 3. **Voice**: If `voice_path` is set and `body === "<voice>"`, Python transcribes the file and replaces `body` with the transcript (or `<media:audio>` on failure); stores language in `_voice_reply_pending` for TTS reply.
 
 #### LID (Linked ID)
@@ -453,7 +453,7 @@ The dashboard shows **Bridge running, WhatsApp not connected** when the Node pro
 
 **Common causes:**
 
-| Cause | What you see in `logs/whatsapp_qr.log` | Action |
+| Cause | What you see in `whatsapp_qr_<date>.log` | Action |
 |-------|----------------------------------------|--------|
 | Still connecting | `connection=connecting` or no `connection=open` yet | Wait 10–30 s and click Refresh. |
 | **Bad MAC / session keys** | `Failed to decrypt message with any known session` and `Session error: Error: Bad MAC` | **Reset & get new QR code**, scan again. Stored Signal/session keys are invalid or out of sync; only a fresh link fixes it. |
@@ -462,17 +462,17 @@ The dashboard shows **Bridge running, WhatsApp not connected** when the Node pro
 | Logged out | `connection=close` with loggedOut | Reset and scan a new QR code. |
 | Network/firewall | Repeated `connection=close` or timeout | Test [web.whatsapp.com](https://web.whatsapp.com) on the same PC; disable VPN; avoid VPS if WhatsApp blocks the IP. |
 
-**Best practice:** When the status stays amber, open `logs/whatsapp_qr.log`. Search for `connection.update: connection=close` (for status codes) or for **`Bad MAC`** / **`Failed to decrypt`** – in that case the session keys are broken; reset and scan a new QR code. The **status code** (e.g. 401, 515, 516) tells you whether to Reset (401, device_removed, loggedOut) or wait/restart (515/516). VAF automatically restarts the bridge periodically when it detects this state; if reconnection still fails, use **Restart bridge** in the dashboard or Settings → Stop then Start.
+**Best practice:** When the status stays amber, open `whatsapp_qr_<date>.log`. Search for `connection.update: connection=close` (for status codes) or for **`Bad MAC`** / **`Failed to decrypt`** – in that case the session keys are broken; reset and scan a new QR code. The **status code** (e.g. 401, 515, 516) tells you whether to Reset (401, device_removed, loggedOut) or wait/restart (515/516). VAF automatically restarts the bridge periodically when it detects this state; if reconnection still fails, use **Restart bridge** in the dashboard or Settings → Stop then Start.
 
 ### Bridge Not Responding / No Reply
 
 1. **Check bridge is enabled:** `whatsapp_config.enabled` should be `true` in config.
 2. **Ensure bridge process is running:** Settings → Connections → WhatsApp toggle on; after VAF restart the bridge starts automatically when enabled.
-3. **Verify sender is whitelisted:** Your phone number (E.164) must be in the config whitelist, or belong to a contact the agent may answer for (set to **allowed**, or, while Inbound is on for WhatsApp, a record nobody has decided about; a contact set to **blocked** is never answered, Inbound on or off), and that contact must have the WhatsApp number in Channels. Check `logs/whatsapp_inbound.log` for `ACCEPT` vs a `REJECT` line, whose `reason=` says which rule refused them and whose `access=` says what your book holds about them.
-4. **Human takeover:** If somebody recently answered in that contact chat from the agent's phone itself, the agent intentionally does not reply for 10 minutes. Check `logs/whatsapp_inbound.log` or `logs/whatsapp_qr.log` for `owner_control: skip reply (owner has control, 10 min not elapsed)`. After 10 minutes without you sending another message, the next contact message will be answered by the agent again.
-5. **Diagnose in `logs/whatsapp_qr.log`:** Python logs each received event as `[Python] got type='message'` (or `chats`, `connected`, etc.). If Node logs `emitting message to Python` but you never see `[Python] got type='message'`, the read loop may have failed (e.g. encoding). The bridge uses UTF-8 for Node stdout/stderr; restart the **full VAF application** and try again. Look for `[Python] JSON decode error` or `[Python] FATAL read loop` if the loop crashed.
+3. **Verify sender is whitelisted:** Your phone number (E.164) must be in the config whitelist, or belong to a contact the agent may answer for (set to **allowed**, or, while Inbound is on for WhatsApp, a record nobody has decided about; a contact set to **blocked** is never answered, Inbound on or off), and that contact must have the WhatsApp number in Channels. Check `whatsapp_inbound_<date>.log` for `ACCEPT` vs a `REJECT` line, whose `reason=` says which rule refused them and whose `access=` says what your book holds about them.
+4. **Human takeover:** If somebody recently answered in that contact chat from the agent's phone itself, the agent intentionally does not reply for 10 minutes. Check `whatsapp_inbound_<date>.log` or `whatsapp_qr_<date>.log` for `owner_control: skip reply (owner has control, 10 min not elapsed)`. After 10 minutes without you sending another message, the next contact message will be answered by the agent again.
+5. **Diagnose in `whatsapp_qr_<date>.log`:** Python logs each received event as `[Python] got type='message'` (or `chats`, `connected`, etc.). If Node logs `emitting message to Python` but you never see `[Python] got type='message'`, the read loop may have failed (e.g. encoding). The bridge uses UTF-8 for Node stdout/stderr; restart the **full VAF application** and try again. Look for `[Python] JSON decode error` or `[Python] FATAL read loop` if the loop crashed.
 
-### Diagnostic logs (`logs/whatsapp_qr.log`)
+### Diagnostic logs (`whatsapp_qr_<date>.log`)
 
 Both Node stderr and Python bridge logs are written here. Use it to verify that messages reach Python and how they are handled.
 
@@ -494,8 +494,8 @@ Best practice: if the bot does not reply, check that you see `[Python] got type=
 ### QR Code / Linking
 
 - **Node.js not found:** Install Node.js 18+ and ensure it is in your PATH.
-- **Bridge dependency install failed:** the wizard or `logs/whatsapp_qr.log` (`[deps] FAILED ...`) names the npm error. Usual causes: npm missing (install Node.js 18+ with npm), no network, or `vaf/whatsapp_node/` not writable. When a working bridge was installed, a failed reinstall keeps its packages, the bridge keeps running, and the next VAF start or `vaf update` tries again (`vaf update` prints the packages that still differ as a warning). Fallback: run `npm ci --omit=dev` in `vaf/whatsapp_node` with VAF stopped (`npm install` when there is no working tree and `npm ci` refuses the lockfile).
-- **QR or terminal issues:** Stderr of the Node process (including `connection.update` events) is logged to `logs/whatsapp_qr.log`. After scanning, WhatsApp may disconnect with 515/516; the bridge then reconnects with stored credentials. If "logging in" stays stuck, check network/firewall.
+- **Bridge dependency install failed:** the wizard or `whatsapp_qr_<date>.log` (`[deps] FAILED ...`) names the npm error. Usual causes: npm missing (install Node.js 18+ with npm), no network, or `vaf/whatsapp_node/` not writable. When a working bridge was installed, a failed reinstall keeps its packages, the bridge keeps running, and the next VAF start or `vaf update` tries again (`vaf update` prints the packages that still differ as a warning). Fallback: run `npm ci --omit=dev` in `vaf/whatsapp_node` with VAF stopped (`npm install` when there is no working tree and `npm ci` refuses the lockfile).
+- **QR or terminal issues:** Stderr of the Node process (including `connection.update` events) is logged to `whatsapp_qr_<date>.log`. After scanning, WhatsApp may disconnect with 515/516; the bridge then reconnects with stored credentials. If "logging in" stays stuck, check network/firewall.
 - **Session expired:** When the bridge needs a new QR but cannot show it, VAF disables the bridge. Use Reset and scan a new QR code.
 - **Repeated `GET /api/whatsapp/qr` in the server log:** This endpoint is polled by the WhatsApp setup wizard (every ~1.5s before a QR is shown, ~2.5s after) to detect when the QR appears and when your phone finishes linking. Polling runs **only while the setup wizard is open** and stops when you close it. Seeing it continuously means the wizard is open in a browser tab; close it to stop the polling.
 
@@ -517,13 +517,13 @@ Best practice: if the bot does not reply, check that you see `[Python] got type=
 
 ### send_whatsapp Reports Success but No Message on Phone
 
-1. **logs/whatsapp_reply.log:** Look for `SENDER ok` (message was sent to Node) or `DROPPED process_not_running` / `ERROR` (send failed before reaching Node).
+1. **whatsapp_reply_<date>.log:** Look for `SENDER ok` (message was sent to Node) or `DROPPED process_not_running` / `ERROR` (send failed before reaching Node).
 2. **Phone number format:** Whitelist and `to_phone` must use E.164 (e.g. `+491761234567`). Incorrect format can lead to wrong JID and the message not reaching the recipient.
 3. **Bridge/Node:** Restart the bridge (Settings → Connections → Stop then Start). Ensure WhatsApp shows as "Linked" after QR scan.
 
 ### Front Office Contact Does Not Get a Reply
 
-The contact must have their **WhatsApp number** stored in the contact’s **Channels** (type "phone" or "WhatsApp", value E.164). If the contact is set to **allowed** but has no WhatsApp channel, incoming messages are rejected. Add the number in Settings → Connections → Contacts → edit contact → Channels. **Diagnose:** Check `logs/whatsapp_qr.log` for `[inbound] MESSAGE`, `[inbound] REJECT` (with `reason=` and `access=`, the latter being `allowed`, `denied` or `undecided`), or `[inbound] ACCEPT`/`ENQUEUED`. Python also logs each received event as `[Python] got type='message'` and any `[Python] JSON decode error` or `[Python] FATAL read loop` in the same file. If you see "voice downloaded" but no `[inbound]` or `[Python] got type='message'` lines, restart the **full VAF application** (not only the bridge) so the bridge runs with UTF-8 encoding for Node pipes, then try again.
+The contact must have their **WhatsApp number** stored in the contact’s **Channels** (type "phone" or "WhatsApp", value E.164). If the contact is set to **allowed** but has no WhatsApp channel, incoming messages are rejected. Add the number in Settings → Connections → Contacts → edit contact → Channels. **Diagnose:** Check `whatsapp_qr_<date>.log` for `[inbound] MESSAGE`, `[inbound] REJECT` (with `reason=` and `access=`, the latter being `allowed`, `denied` or `undecided`), or `[inbound] ACCEPT`/`ENQUEUED`. Python also logs each received event as `[Python] got type='message'` and any `[Python] JSON decode error` or `[Python] FATAL read loop` in the same file. If you see "voice downloaded" but no `[inbound]` or `[Python] got type='message'` lines, restart the **full VAF application** (not only the bridge) so the bridge runs with UTF-8 encoding for Node pipes, then try again.
 
 ### Chat List Empty or Duplicate Number (e.g. ++49...)
 

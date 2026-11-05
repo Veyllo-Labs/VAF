@@ -329,7 +329,9 @@ def derive_service_status(spec: ServiceSpec,
     # before the probe verdict on purpose: a database that has not finished
     # starting does not answer yet, and calling that "does not answer" sends the
     # user to a repair button for something that only needs a few more seconds.
-    starting = bool(running and (health == "starting" or starting_left > 0))
+    # Docker's own health verdict outranks the window in both directions
+    # (`_counts_as_starting`): a container it calls healthy that answers is up.
+    starting = _counts_as_starting(running, health, starting_left, probe_ok)
     # A stack start under way brings the containers up in phases, the optional ones after
     # a build that can take minutes: one it has not reached yet is on its way, not broken.
     pending = bool(stack_starting and not running and not crashed)
@@ -391,10 +393,40 @@ def derive_service_status(spec: ServiceSpec,
         "probe": probe,
         "probe_ok": probe_ok,
         "starting": starting,
-        "starting_seconds_left": starting_left,
+        # A row that is not starting carries no countdown, even inside its window.
+        "starting_seconds_left": starting_left if starting else 0,
         "state": state,
         "reason": reason,
     }
+
+
+def _counts_as_starting(running: bool, health: str, starting_left: int,
+                        probe_ok: Optional[bool]) -> bool:
+    """Pure: whether a container is booting rather than up or broken.
+
+    Docker's own health verdict decides wherever it exists; the start window
+    (`_startup_seconds_left`) only fills the gap Docker leaves:
+
+    - `starting`: always, inside the window and past it. No check has succeeded yet.
+    - `healthy`: only inside the window AND while VAF's own probe fails. Healthy and
+      answering, or healthy with no probe, is up. The exception is STT: its compose
+      check ends in `|| exit 0`, so Docker calls it healthy at the first check while
+      the webservice is still loading its model and not listening yet.
+    - `unhealthy`: never. Docker reports it only after a check succeeded and then
+      failed `retries` times (failures before the first success do not count, measured
+      on Docker 29), so it is a fault, never a boot.
+    - no `Health` block (`none`): only inside the window. Without a Docker verdict the
+      window is all there is, and a container without a check has no start period.
+    """
+    if not running:
+        return False
+    if health == "starting":
+        return True
+    if health == "unhealthy" or starting_left <= 0:
+        return False
+    if health == "healthy":
+        return probe_ok is False
+    return True
 
 
 def _startup_seconds_left(inspect: Dict[str, Any], health: str) -> int:

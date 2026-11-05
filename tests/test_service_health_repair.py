@@ -234,6 +234,30 @@ def test_a_starting_container_is_left_alone(monkeypatch, recorder):
     assert "still starting" in step["message"]
 
 
+def test_a_healthy_container_still_loading_inside_its_window_is_not_restarted(
+        monkeypatch, recorder):
+    """STT's compose check always passes, so Docker calls it healthy while it still loads
+    its model and refuses connections. The row comes from the real derivation, so this pins
+    that such a container stays "starting" and a repair does not throw the load away."""
+    from datetime import datetime, timedelta, timezone
+    from vaf.core import service_stack as ss
+    stt = next(s for s in ss.SERVICES if s.service_key == "stt")
+    started = datetime.now(timezone.utc) - timedelta(seconds=30)
+    inspect = {"Name": "/vaf-stt",
+               "State": {"Running": True, "Health": {"Status": "healthy"},
+                         "StartedAt": started.isoformat().replace("+00:00", "Z")},
+               "HostConfig": {"PortBindings": {"9000/tcp": [{"HostIp": "127.0.0.1",
+                                                             "HostPort": "5003"}]}},
+               "Config": {"Healthcheck": {"StartPeriod": 120_000_000_000}}}
+    loading = sh.derive_service_status(stt, inspect, 5003,
+                                       {"kind": "tcp", "ok": False, "detail": "refused"})
+    _, probe = _patch_env(monkeypatch, statuses=[_status([loading]), _status([loading]),
+                                                 _status([loading])])
+    result = sh.repair_service_stack(status_probe=probe)
+    assert recorder == [], "a container still loading its model must not be restarted"
+    assert any(s["step"] == "starting:vaf-stt" for s in result["steps"])
+
+
 # ── the host's forwarding switch ─────────────────────────────────────────────────
 
 def _host(ok):

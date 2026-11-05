@@ -148,6 +148,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **A container Docker reports healthy is no longer "still starting".** `vaf health`,
+  `vaf repair --check` and the Update and Repair dialog no longer report a container as still
+  starting once Docker reports it healthy and it answers. Right after a start the verdict
+  becomes ok as soon as the stack is up, instead of staying degraded until the longest start
+  period (two minutes for the speech services) has run out.
 - **Chat: each round of thinking gets its own place in the step timeline.** When the model
   thinks again, after a tool, after a safeguard sent it back or after a correction, each round
   now gets its own thinking block and its own text in the step timeline, in the order it

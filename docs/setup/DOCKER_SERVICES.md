@@ -542,9 +542,17 @@ in `vaf top`), and the dialog draws it as a Personal browsers node below the San
 
 **Still starting is not broken.** Right after a start a database does not answer
 yet, so a status that called that "does not answer" would send someone to a
-repair button for something that needs a few more seconds. A container counts as
-starting while docker's own health status says `starting`, or while it is inside
-the `start_period` from the compose file. Both numbers come from the container:
+repair button for something that needs a few more seconds. Docker's own health
+status decides wherever it exists (`_counts_as_starting`): `starting` always counts,
+inside the `start_period` from the compose file and past it. Inside the start period
+a container counts as starting until it is seen up: `healthy` and answering VAF's
+probe ends the window at once, and `unhealthy` is never "starting", because Docker
+reports it only after a check succeeded and then failed. `healthy` alone is not
+enough, because the STT check ends in `|| exit 0` and so always passes, and the STT
+webservice loads its model before it listens: for that long Docker calls it healthy
+and it refuses connections, and the window is what keeps a repair from restarting it
+mid-load. A container with no health check has no start period and is never
+"starting" on that account. The window's numbers come from the container:
 the start periods differ per service (30s for the database, 120s for the speech
 containers), so any single figure VAF invented would be wrong for most of them.
 A container the stack start has not reached yet counts as starting too: the start brings the optional containers up after a `--build`, so for that long they exist and are stopped, and a status that called that a fault sent people to Repair. `start_in_progress()` in `vaf/core/service_stack.py` answers from this process's own start and from the process table (a compose `up` or `build` of this stack in any process, so `vaf repair --check` in a terminal sees the tray's start), and a crashed start leaves nothing behind. A container that crashed is not counted as on its way up: stopped by a stop ends in 0, 143 or 137 (`compose stop` leaves the speech containers at 143), any other exit code stays the error it is. The snapshot repeats this at the top level as `starting` and

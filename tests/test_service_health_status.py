@@ -195,15 +195,23 @@ def test_configured_port_survives_a_hand_edited_url():
 
 # ── the start window ─────────────────────────────────────────────────────────
 
-def _inspect_starting(health="starting", start_period_ns=30_000_000_000, ago_s=5):
+def _inspect_starting(health="starting", start_period_ns=30_000_000_000, ago_s=5,
+                      name="vaf-redis", host_port="6379"):
+    """`health=None`: no `Health` block. `start_period_ns=None`: no health check at all.
+    `host_port=None`: publishes nothing."""
     from datetime import datetime, timedelta, timezone
     started = (datetime.now(timezone.utc) - timedelta(seconds=ago_s))
+    state = {"Running": True, "StartedAt": started.isoformat().replace("+00:00", "Z")}
+    if health is not None:
+        state["Health"] = {"Status": health}
+    bindings = ({} if host_port is None else
+                {"6379/tcp": [{"HostIp": "127.0.0.1", "HostPort": host_port}]})
     return {
-        "Name": "/vaf-redis",
-        "State": {"Running": True, "Health": {"Status": health},
-                  "StartedAt": started.isoformat().replace("+00:00", "Z")},
-        "HostConfig": {"PortBindings": {"6379/tcp": [{"HostIp": "127.0.0.1", "HostPort": "6379"}]}},
-        "Config": {"Healthcheck": {"StartPeriod": start_period_ns}},
+        "Name": "/" + name,
+        "State": state,
+        "HostConfig": {"PortBindings": bindings},
+        "Config": ({} if start_period_ns is None
+                   else {"Healthcheck": {"StartPeriod": start_period_ns}}),
     }
 
 
@@ -242,6 +250,89 @@ def test_docker_saying_starting_outranks_the_arithmetic():
     row = sh.derive_service_status(REDIS, _inspect_starting(health="starting", ago_s=600),
                                    6379, {"kind": "tcp", "ok": False})
     assert row["starting"] is True
+
+
+STT = next(s for s in ss.SERVICES if s.service_key == "stt")
+
+
+def test_a_healthy_container_inside_its_window_that_answers_is_ok(monkeypatch, tmp_path):
+    """Docker reports every container healthy half a minute after a start, the speech
+    windows run two minutes: a stack that is up must not read degraded until then."""
+    row = sh.derive_service_status(STT, _inspect_starting(
+        health="healthy", start_period_ns=120_000_000_000, ago_s=30, name="vaf-stt",
+        host_port="5003"), 5003, {"kind": "tcp", "ok": True})
+    assert row["starting"] is False
+    assert row["state"] == "ok"
+    assert row["reason"] == "Connected."
+    assert row["starting_seconds_left"] == 0
+    # No probe at all (a service that publishes no port): Docker's verdict alone.
+    portless = sh.derive_service_status(PORTLESS, _inspect_starting(
+        health="healthy", start_period_ns=120_000_000_000, ago_s=30, name="vaf-portless",
+        host_port=None), None, None)
+    assert portless["starting"] is False
+    assert portless["state"] == "ok"
+
+    # The whole snapshot and the verdict `vaf health` prints from it.
+    from vaf.core.health import services_check
+    monkeypatch.setattr(sh, "needed_services", lambda: ss.SERVICES)
+    monkeypatch.setattr(sh, "find_stack_root", lambda: tmp_path)
+    status = sh.collect_service_status(
+        daemon_probe=lambda: {"ok": True, "reason": "ok", "detail": ""},
+        inspect_probe=lambda names: [
+            _inspect_starting(health="healthy", start_period_ns=120_000_000_000, ago_s=30,
+                              name=spec.container_name, host_port=str(spec.default_port))
+            for spec in ss.SERVICES],
+        port_reader=lambda spec: spec.default_port,
+        service_probe=lambda spec, port: {"kind": spec.probe, "ok": True},
+        host_probe=lambda: None,
+        browser_pool_probe=lambda: None,
+        engine_probe=lambda: {},
+    )
+    assert [s["state"] for s in status["services"]] == ["ok"] * len(ss.SERVICES)
+    assert status["starting"] is False
+    assert status["starting_seconds_left"] == 0
+    assert sh.stack_problems(status) == []
+    assert services_check(status)["status"] == "ok"
+
+
+def test_healthy_but_not_answering_inside_the_window_is_still_starting():
+    """STT's compose check ends in `|| exit 0`, so Docker calls it healthy while the
+    webservice still loads its model and does not listen: the window is what keeps that
+    from reading "does not answer" and from being restarted mid-load."""
+    row = sh.derive_service_status(STT, _inspect_starting(
+        health="healthy", start_period_ns=120_000_000_000, ago_s=30, name="vaf-stt",
+        host_port="5003"), 5003, {"kind": "tcp", "ok": False, "detail": "refused"})
+    assert row["starting"] is True
+    assert row["state"] == "warn"
+    assert "still starting up (about " in row["reason"]
+    assert row["starting_seconds_left"] > 0
+
+
+def test_unhealthy_inside_the_window_is_not_starting():
+    """Docker reports unhealthy only after a check succeeded and then failed `retries`
+    times, so inside the window it is a fault, not a boot."""
+    silent = sh.derive_service_status(REDIS, _inspect_starting(health="unhealthy", ago_s=5),
+                                      6379, {"kind": "tcp", "ok": False, "detail": "refused"})
+    assert silent["starting"] is False
+    assert silent["state"] == "error"
+    assert "does not answer" in silent["reason"]
+    answering = sh.derive_service_status(REDIS, _inspect_starting(health="unhealthy", ago_s=5),
+                                         6379, {"kind": "tcp", "ok": True})
+    assert answering["starting"] is False
+    assert answering["state"] == "warn"
+    assert "health check reports unhealthy" in answering["reason"]
+
+
+def test_no_health_block_follows_the_window_alone():
+    """Without a Docker verdict the start window is all there is."""
+    in_window = sh.derive_service_status(REDIS, _inspect_starting(health=None, ago_s=5),
+                                         6379, {"kind": "tcp", "ok": True})
+    assert in_window["starting"] is True
+    assert in_window["state"] == "warn"
+    no_check = sh.derive_service_status(REDIS, _inspect_starting(
+        health=None, start_period_ns=None, ago_s=5), 6379, {"kind": "tcp", "ok": True})
+    assert no_check["starting"] is False
+    assert no_check["state"] == "ok"
 
 
 def test_the_snapshot_says_the_stack_is_coming_up():

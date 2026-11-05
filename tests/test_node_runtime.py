@@ -7,6 +7,7 @@ Measured on a fresh server install with no system Node: the systemd user unit do
 the shell file the installer wrote the portable Node into, the service logged "npm not found
 in PATH", and every page of the web UI answered 502.
 """
+import json
 import os
 import re
 import shutil
@@ -178,3 +179,142 @@ def test_on_windows_the_newest_portable_node_is_tried_first(tmp_path, monkeypatc
         (root / name).mkdir(parents=True)
     assert [p.name for p in node_runtime.portable_dirs()] == [
         "node-v22.11.0-win-x64", "node-v22.9.0-win-x64", "node-v20.18.0-win-x64", "notes"]
+
+
+# ── lock_drift: the tree on disk against its package-lock.json ───────────────
+
+def _npm_tree(tmp_path, lock: dict, on_disk: dict, *, manifest=None, newline="\n") -> Path:
+    """A project with ``lock`` as the packages table of its lockfile and ``on_disk`` as the
+    package.json versions under node_modules, keyed the way the lock keys them."""
+    project = tmp_path / "project"
+    (project / "node_modules").mkdir(parents=True)
+    text = json.dumps({"lockfileVersion": 3, "packages": {"": {"name": "x"}, **lock}}, indent=2)
+    (project / "package-lock.json").write_bytes(text.replace("\n", newline).encode("utf-8"))
+    if manifest is not None:
+        (project / "node_modules" / ".package-lock.json").write_text(
+            json.dumps({"packages": manifest}), encoding="utf-8")
+    for key, version in on_disk.items():
+        pkg = project / key
+        pkg.mkdir(parents=True, exist_ok=True)
+        (pkg / "package.json").write_text(json.dumps({"name": key.rsplit("/", 1)[-1], "version": version}),
+                                          encoding="utf-8")
+    return project
+
+
+def _drift(project, include_dev=False):
+    return node_runtime.lock_drift(project, include_dev=include_dev)
+
+
+def test_lock_drift_a_tree_that_matches_is_empty(tmp_path):
+    lock = {"node_modules/a": {"version": "1.0.0"},
+            "node_modules/@s/b": {"version": "2.0.0"},
+            "node_modules/a/node_modules/c": {"version": "3.0.0"}}
+    project = _npm_tree(tmp_path, lock, {k: v["version"] for k, v in lock.items()})
+    assert _drift(project) == []
+
+
+def test_lock_drift_names_a_transitive_package_that_is_behind(tmp_path):
+    """MUTATION: compare one named package only (the Baileys check) - this one is missed, red."""
+    lock = {"node_modules/@whiskeysockets/baileys": {"version": "6.7.24"},
+            "node_modules/follow-redirects": {"version": "1.16.2"}}
+    project = _npm_tree(tmp_path, lock, {"node_modules/@whiskeysockets/baileys": "6.7.24",
+                                         "node_modules/follow-redirects": "1.16.0"})
+    assert _drift(project) == [node_runtime.NpmDrift("node_modules/follow-redirects", "1.16.0", "1.16.2")]
+
+
+def test_lock_drift_a_wrong_version_counts_even_for_an_optional_entry(tmp_path):
+    """MUTATION: let the optional allowance cover a mismatch - a stale optional build passes, red."""
+    lock = {"node_modules/@img/sharp-linux-x64": {"version": "0.34.5", "optional": True, "os": ["linux"]}}
+    project = _npm_tree(tmp_path, lock, {"node_modules/@img/sharp-linux-x64": "0.34.4"})
+    assert _drift(project) == [node_runtime.NpmDrift("node_modules/@img/sharp-linux-x64", "0.34.4", "0.34.5")]
+
+
+@pytest.mark.parametrize("meta", [{}, {"peer": True}], ids=["plain", "peer-without-optional"])
+def test_lock_drift_a_required_package_missing_from_disk_counts(tmp_path, meta):
+    """MUTATION: skip `peer` entries - npm 7+ installs a peer that is not optional, red."""
+    project = _npm_tree(tmp_path, {"node_modules/semver": {"version": "7.7.3", **meta}}, {})
+    assert _drift(project) == [node_runtime.NpmDrift("node_modules/semver", "", "7.7.3")]
+
+
+@pytest.mark.parametrize("meta", [
+    {"optional": True}, {"devOptional": True}, {"os": ["win32"]}, {"cpu": ["arm64"]}, {"libc": ["musl"]},
+    {"optional": True, "peer": True},
+], ids=["optional", "devOptional", "os", "cpu", "libc", "optional-peer"])
+def test_lock_drift_a_platform_gated_package_may_be_absent(tmp_path, meta):
+    """MUTATION: drop one flag from the allowance - its case reports a build this platform
+    never unpacks, red."""
+    project = _npm_tree(tmp_path, {"node_modules/@img/sharp-win32-arm64": {"version": "0.34.5", **meta}}, {})
+    assert _drift(project) == []
+
+
+def test_lock_drift_an_extraneous_nested_copy_counts(tmp_path):
+    """A stale nested copy shadows a bumped hoisted one for the package that holds it.
+    MUTATION: drop the walk of the tree on disk - it is missed, red."""
+    lock = {"node_modules/a": {"version": "1.0.0"}, "node_modules/follow-redirects": {"version": "1.16.2"}}
+    project = _npm_tree(tmp_path, lock, {"node_modules/a": "1.0.0", "node_modules/follow-redirects": "1.16.2",
+                                         "node_modules/a/node_modules/follow-redirects": "1.16.0",
+                                         "node_modules/@s/stray": "0.1.0"})
+    (project / "node_modules" / ".bin").mkdir()
+    (project / "node_modules" / ".cache" / "x").mkdir(parents=True)
+    (project / "node_modules" / "not-a-package").mkdir()
+    assert sorted(_drift(project)) == [
+        node_runtime.NpmDrift("node_modules/@s/stray", "0.1.0", ""),
+        node_runtime.NpmDrift("node_modules/a/node_modules/follow-redirects", "1.16.0", ""),
+    ]
+
+
+def test_lock_drift_dev_entries_count_only_when_asked(tmp_path):
+    """MUTATION: ignore include_dev (either way) - one of the two asserts goes red."""
+    lock = {"node_modules/typescript": {"version": "5.9.3", "dev": True}}
+    project = _npm_tree(tmp_path, lock, {})
+    assert _drift(project, include_dev=False) == []
+    assert _drift(project, include_dev=True) == [node_runtime.NpmDrift("node_modules/typescript", "", "5.9.3")]
+
+
+def test_lock_drift_skips_link_entries(tmp_path):
+    """A workspace link's version lives at its target; the link has none to compare."""
+    lock = {"node_modules/local": {"resolved": "packages/local", "link": True},
+            "packages/local": {"version": "0.0.1"}}
+    assert _drift(_npm_tree(tmp_path, lock, {})) == []
+
+
+@pytest.mark.parametrize("lock_text", [None, "{not json", json.dumps({"lockfileVersion": 1, "dependencies": {}}),
+                                       json.dumps(["packages"])],
+                         ids=["missing", "invalid", "v1", "not-an-object"])
+def test_lock_drift_cannot_tell_without_a_v2_lock(tmp_path, lock_text):
+    project = tmp_path / "project"
+    (project / "node_modules").mkdir(parents=True)
+    if lock_text is not None:
+        (project / "package-lock.json").write_text(lock_text, encoding="utf-8")
+    assert _drift(project) is None
+
+
+def test_lock_drift_reads_a_crlf_lock_the_same(tmp_path):
+    """A CRLF checkout (Windows, autocrlf) gives the same answer as LF."""
+    lock = {"node_modules/a": {"version": "1.0.0"}, "node_modules/b": {"version": "2.0.0"}}
+    disk = {"node_modules/a": "1.0.0", "node_modules/b": "1.9.0"}
+    lf = _drift(_npm_tree(tmp_path / "lf", lock, disk))
+    crlf_project = _npm_tree(tmp_path / "crlf", lock, disk, newline="\r\n")
+    assert b"\r\n" in (crlf_project / "package-lock.json").read_bytes()
+    assert _drift(crlf_project) == lf == [node_runtime.NpmDrift("node_modules/b", "1.9.0", "2.0.0")]
+
+
+def test_lock_drift_does_not_believe_npms_manifest(tmp_path):
+    """`npm ci --dry-run` rewrites node_modules/.package-lock.json without unpacking anything,
+    so the manifest names the locked version while the disk holds the old one.
+    MUTATION: read versions from the manifest - the drift disappears, red."""
+    lock = {"node_modules/follow-redirects": {"version": "1.16.2"}}
+    project = _npm_tree(tmp_path, lock, {"node_modules/follow-redirects": "1.16.0"}, manifest=lock)
+    assert _drift(project) == [node_runtime.NpmDrift("node_modules/follow-redirects", "1.16.0", "1.16.2")]
+
+
+def test_lock_drift_keys_are_spelled_the_way_the_lock_spells_them(tmp_path):
+    """The keys are entry names joined with "/", never str(Path), which carries the host
+    separator on Windows (that spelling is refused statically by
+    tests/test_windows_path_hygiene.py). A nested scoped package comes out exactly as the
+    lock names it. MUTATION: treat an @scope folder as a package - its key is lost, red."""
+    lock = {"node_modules/a": {"version": "1.0.0"}, "node_modules/a/node_modules/@s/b": {"version": "2.0.0"}}
+    project = _npm_tree(tmp_path, lock, {k: v["version"] for k, v in lock.items()})
+    keys = set(node_runtime._installed_packages(project))
+    assert keys == set(lock)
+    assert not any("\\" in k for k in keys)

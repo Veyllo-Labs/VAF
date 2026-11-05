@@ -200,67 +200,48 @@ if [ -n "$WEB_CHANGED" ]; then
     # a Next minor bump entered the lock, this stage kept building with the
     # months-old copy on disk, and the first machine to resolve the lock was a
     # user's (v0.1.0a24, the frontend never came up). Comparing what is
-    # INSTALLED against what is LOCKED catches that offline and in a second.
-    # Only two signals are used, because a naive set difference is a false-
-    # positive machine: the lock legitimately holds ~80 more entries than any
-    # one platform installs (os/cpu-gated and optional packages).
-    node - <<'NODE'
-const fs = require('fs');
-const lock = JSON.parse(fs.readFileSync('web/package-lock.json', 'utf8')).packages || {};
-let installed;
-try {
-    installed = JSON.parse(fs.readFileSync('web/node_modules/.package-lock.json', 'utf8')).packages || {};
-} catch {
-    console.error('ERROR: web/node_modules is missing or was not installed by npm.');
-    console.error('Run: (cd web && npm ci)');
-    process.exit(1);
-}
-const problems = [];
-for (const [name, meta] of Object.entries(installed)) {
-    if (!name) continue;
-    const want = lock[name];
-    if (!want) { problems.push(`${name}: installed ${meta.version}, absent from the lock`); continue; }
-    if (want.version && meta.version && want.version !== meta.version) {
-        problems.push(`${name}: installed ${meta.version}, lock wants ${want.version}`);
-    }
-}
-// And the manifest can LIE. `npm ci --dry-run` rewrites node_modules/.package-lock.json
-// without unpacking a single package, so the two files agree while the tree on disk is
-// months old - measured, self-inflicted, during a security bump whose whole point was
-// getting new bytes onto the disk. So spot-check what is actually THERE: read the real
-// package.json of every locked package this manifest claims, capped so the stage stays
-// under a second. A mismatch here is the only proof that bytes moved.
-// Optional and platform-gated entries are skipped, for the same reason the set
-// difference above is not used: the lock legitimately names packages this platform
-// never unpacks, and a guard that reports those is a false-positive machine nobody
-// reads twice.
-const claimed = Object.keys(installed).filter(n => {
-    if (!n.startsWith('node_modules/')) return false;
-    const e = lock[n] || {};
-    return !e.optional && !e.os && !e.cpu && !e.libc;
-});
-const step = Math.max(1, Math.floor(claimed.length / 120));
-for (let i = 0; i < claimed.length; i += step) {
-    const name = claimed[i];
-    const want = (lock[name] || {}).version;
-    if (!want) continue;
-    let real;
-    try {
-        real = JSON.parse(fs.readFileSync(`web/${name}/package.json`, 'utf8')).version;
-    } catch {
-        problems.push(`${name}: locked ${want}, NOT UNPACKED on disk`);
-        continue;
-    }
-    if (real && real !== want) problems.push(`${name}: on disk ${real}, lock wants ${want}`);
-}
-if (problems.length) {
-    console.error('ERROR: web/node_modules disagrees with web/package-lock.json:');
-    for (const p of problems.slice(0, 20)) console.error('  ' + p);
-    if (problems.length > 20) console.error(`  ... and ${problems.length - 20} more`);
-    console.error('The build would test something users never get. Run: (cd web && npm ci)');
-    process.exit(1);
-}
-NODE
+    # INSTALLED against what is LOCKED catches that offline.
+    # The comparison is vaf.core.node_runtime.lock_drift, the one the WhatsApp
+    # bridge's install uses too. It reads the real package.json of every package
+    # on disk and never npm's node_modules/.package-lock.json: `npm ci --dry-run`
+    # rewrites that manifest without unpacking anything, so the two lockfiles
+    # agreed while six bumped packages were still old on disk (measured during a
+    # security bump). Optional and os/cpu/libc-gated entries the platform does
+    # not unpack are not reported, or the stage would be a false-positive
+    # machine nobody reads twice. Nothing is sampled: the whole web tree takes
+    # under 150 ms.
+    python - <<'NPMTREE'
+import sys
+from pathlib import Path
+
+from vaf.core.node_runtime import lock_drift
+
+web = Path("web")
+if not (web / "node_modules").is_dir():
+    print("ERROR: web/node_modules is missing.", file=sys.stderr)
+    print("Run: (cd web && npm ci)", file=sys.stderr)
+    sys.exit(1)
+drift = lock_drift(web, include_dev=True)
+if drift is None:
+    print("ERROR: web/package-lock.json is unreadable.", file=sys.stderr)
+    sys.exit(1)
+problems = []
+for d in drift:
+    if not d.locked:
+        problems.append(f"{d.name}: installed {d.installed}, absent from the lock")
+    elif not d.installed:
+        problems.append(f"{d.name}: locked {d.locked}, NOT UNPACKED on disk")
+    else:
+        problems.append(f"{d.name}: on disk {d.installed}, lock wants {d.locked}")
+if problems:
+    print("ERROR: web/node_modules disagrees with web/package-lock.json:", file=sys.stderr)
+    for line in problems[:20]:
+        print("  " + line, file=sys.stderr)
+    if len(problems) > 20:
+        print(f"  ... and {len(problems) - 20} more", file=sys.stderr)
+    print("The build would test something users never get. Run: (cd web && npm ci)", file=sys.stderr)
+    sys.exit(1)
+NPMTREE
     # Whatever the BUILD writes has to be committed or known to the updater, or
     # the next `vaf update` aborts on a dirty tree the user never caused (that
     # deadlock has happened twice: package-lock.json, then next-env.d.ts).

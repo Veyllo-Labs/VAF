@@ -14,28 +14,38 @@ bump whose entire point was getting new bytes onto the disk: the dry run refresh
 manifest, the two files agreed, the stage went green, and all six bumped packages were
 still the old version in node_modules.
 
-So the stage reads the disk now. This file drives the JavaScript out of the shell script
+So the stage reads the disk now, every package of it, through
+vaf.core.node_runtime.lock_drift: the same comparison the WhatsApp bridge's install uses,
+so the rule exists once. This file drives the stage's Python out of the shell script
 against fixture trees, because the failure it guards is one a reader cannot see by
 looking at it.
 """
 import json
+import os
 import re
-import shutil
 import subprocess
+import sys
 from pathlib import Path
 
-import pytest
-
 ROOT = Path(__file__).resolve().parents[1]
-pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
+
+
+def _script() -> str:
+    return (ROOT / "scripts" / "ci_check.sh").read_text(encoding="utf-8")
 
 
 def _guard_source() -> str:
-    """The node program out of the ci_check stage, so the test cannot drift from it."""
-    script = (ROOT / "scripts" / "ci_check.sh").read_text(encoding="utf-8")
-    body = re.search(r"node - <<'NODE'\n(.*?)\nNODE\n", script, re.S)
-    assert body, "the freshness stage is no longer a heredoc named NODE"
+    """The Python program out of the ci_check stage, so the test cannot drift from it."""
+    body = re.search(r"python - <<'NPMTREE'\n(.*?)\nNPMTREE\n", _script(), re.S)
+    assert body, "the freshness stage is no longer a heredoc named NPMTREE"
     return body.group(1)
+
+
+def test_stage_8_has_one_implementation():
+    """MUTATION: put the Node heredoc back next to it - two copies of one rule, red."""
+    script = _script()
+    assert "node - <<" not in script
+    assert "lock_drift(web, include_dev=True)" in _guard_source()
 
 
 def _run(tmp_path, lock: dict, manifest, on_disk: dict) -> subprocess.CompletedProcess:
@@ -49,8 +59,9 @@ def _run(tmp_path, lock: dict, manifest, on_disk: dict) -> subprocess.CompletedP
         pkg = web / name
         pkg.mkdir(parents=True)
         (pkg / "package.json").write_text(json.dumps({"version": version}), encoding="utf-8")
-    (tmp_path / "guard.js").write_text(_guard_source(), encoding="utf-8")
-    return subprocess.run(["node", "guard.js"], cwd=tmp_path, capture_output=True, text=True)
+    (tmp_path / "guard.py").write_text(_guard_source(), encoding="utf-8")
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [str(ROOT), os.environ.get("PYTHONPATH")]))}
+    return subprocess.run([sys.executable, "guard.py"], cwd=tmp_path, capture_output=True, text=True, env=env)
 
 
 def test_a_tree_that_matches_the_lock_passes(tmp_path):
@@ -101,3 +112,21 @@ def test_a_missing_manifest_still_says_run_npm_ci(tmp_path):
     out = _run(tmp_path, {"node_modules/left-pad": {"version": "1.3.0"}}, None, {})
     assert out.returncode == 1
     assert "npm ci" in out.stderr
+
+
+def test_a_package_on_disk_the_lock_does_not_name_is_caught(tmp_path):
+    lock = {"node_modules/left-pad": {"version": "1.3.0"}}
+    out = _run(tmp_path, lock, None, {"node_modules/left-pad": "1.3.0", "node_modules/stray": "0.1.0"})
+    assert out.returncode == 1
+    assert "node_modules/stray: installed 0.1.0, absent from the lock" in out.stderr
+
+
+def test_an_unreadable_lock_fails_the_stage(tmp_path):
+    """MUTATION: treat None (cannot tell) as in sync - a broken lock builds green, red."""
+    web = tmp_path / "web"
+    (web / "node_modules").mkdir(parents=True)
+    (web / "package-lock.json").write_text("{not json", encoding="utf-8")
+    (tmp_path / "guard.py").write_text(_guard_source(), encoding="utf-8")
+    env = {**os.environ, "PYTHONPATH": str(ROOT)}
+    out = subprocess.run([sys.executable, "guard.py"], cwd=tmp_path, capture_output=True, text=True, env=env)
+    assert out.returncode == 1 and "unreadable" in out.stderr

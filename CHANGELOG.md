@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a35] - 2026-11-05
+
 ### Added
 
 - **Local models can now run on vLLM as well as llama.cpp.** `vaf engine vllm` checks your

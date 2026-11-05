@@ -31,6 +31,38 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a35',
+    date: '2026-11-05',
+    sections: [
+      {
+        kind: 'new',
+        items: [
+          'Local models can also run on vLLM, on NVIDIA and AMD GPUs: "vaf engine vllm" checks your machine, installs it and switches. llama.cpp stays the default.',
+          'Settings, AI & Model opens with "Who does what": which provider and model handles each job, and why a job cannot run.',
+          'Fair turns for everyone: chat messages, speech, the browser agent and document previews show your place in line instead of one person holding up the others.',
+        ],
+      },
+      {
+        kind: 'improved',
+        items: [
+          'Long Python runs print as they go and can run in the background; the chat gets the result when they end.',
+          'While a chat or a settings section loads, a grey outline stands in its place, and nothing jumps when the content arrives.',
+          'API models and prices refreshed, with a price for every model you can pick.',
+          'Standing grants and trusted folders moved to Settings, Account.',
+        ],
+      },
+      {
+        kind: 'fixed',
+        items: [
+          'A long chat with a local model no longer loses its context on every message.',
+          'Existing installs now receive the WhatsApp bridge\'s dependency fixes, without a reinstall loop.',
+          'A service Docker reports healthy is no longer shown as still starting.',
+          'Your saved workflows are treated as data, and files and logins in the shared browser no longer cross between accounts.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a34',
     date: '2026-10-29',
     sections: [

@@ -81,7 +81,7 @@ build/
 node_modules/
 .npm
 # The WhatsApp bridge's staged dependency install (vaf/api/whatsapp_bridge.py)
-vaf/whatsapp_node/.deps-staging/
+vaf/whatsapp_node/.deps-staging*/
 vaf/whatsapp_node/.deps-previous/
 
 # Certificates / keys (SECURITY: Never commit!)

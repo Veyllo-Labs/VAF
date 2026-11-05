@@ -14,6 +14,7 @@ reply window that answered a stranger on a channel the owner had closed.
 import json
 import os
 import shutil
+import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -329,7 +330,7 @@ def test_security_finding_is_about_the_link_not_the_whitelist(isolated):
 # (follow-redirects, music-metadata) is the usual security bump, and the Baileys-only check let
 # it pass every installed bridge by. A failed `npm ci` empties the node_modules it runs in
 # (measured on a scratch copy, offline with an empty cache: 74 entries, then 0), so the install
-# runs in .deps-staging and replaces the tree only once it is complete.
+# runs in a fresh .deps-staging-* and replaces the tree only once it is complete.
 
 _LOCK = {
     "node_modules/@whiskeysockets/baileys": {"version": "6.7.24"},
@@ -380,6 +381,7 @@ def bridge(tmp_path, monkeypatch):
     monkeypatch.setattr(wa, "_failed_reinstall_lock", "")
     monkeypatch.setattr(wa, "_bridge_thread", None)
     monkeypatch.setattr(wa, "_spawned_nodes", [])
+    monkeypatch.setattr(wa, "_deps_notes", set())
     logged = []
     monkeypatch.setattr(wa, "_log_deps", logged.append)
 
@@ -410,6 +412,11 @@ def _npm(monkeypatch, *, rc: int = 0, writes: dict | None = None):
     return calls
 
 
+def _staged(node_dir: Path, cwd: Path) -> bool:
+    """npm ran in a fresh staging folder next to node_modules."""
+    return cwd.parent == node_dir and cwd.name.startswith(".deps-staging-")
+
+
 def _no_npm(monkeypatch):
     monkeypatch.setattr(wa.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("npm must not run")))
 
@@ -431,7 +438,8 @@ def test_bridge_deps_reinstall_when_a_transitive_package_is_behind(bridge, monke
     calls = _npm(monkeypatch)
     ok, msg = wa.ensure_bridge_deps()
     assert (ok, msg) == (True, "WhatsApp bridge dependencies installed (Baileys 6.7.24)")
-    assert calls == [(_NPM_CI, node_dir / ".deps-staging")]       # the lockfile, never rewritten, staged
+    assert [c[0] for c in calls] == [_NPM_CI]                     # the lockfile, never rewritten
+    assert _staged(node_dir, calls[0][1])
     assert _disk(node_dir, "node_modules/follow-redirects") == "1.16.2"
     assert _leftovers(node_dir) == []
     assert any("follow-redirects 1.16.0 -> 1.16.2" in line for line in bridge.logged)
@@ -444,7 +452,7 @@ def test_bridge_deps_are_installed_from_the_lockfile_when_missing_or_behind(brid
     calls = _npm(monkeypatch)
     ok, msg = wa.ensure_bridge_deps()
     assert ok and "6.7.24" in msg
-    assert calls == [(_NPM_CI, node_dir / ".deps-staging")]
+    assert [c[0] for c in calls] == [_NPM_CI] and _staged(node_dir, calls[0][1])
     assert _disk(node_dir, "node_modules/@whiskeysockets/baileys") == "6.7.24"
     assert _leftovers(node_dir) == []
 
@@ -500,7 +508,7 @@ def test_swap_failure_keeps_the_old_tree(bridge, monkeypatch, which):
     def replace(src, dst):
         src = Path(src)
         if (which == "aside" and src == node_dir / "node_modules") or \
-                (which == "into-place" and src.parent.name == ".deps-staging"):
+                (which == "into-place" and src.parent.name.startswith(".deps-staging")):
             raise PermissionError(13, "Access is denied", str(src))
         return real_replace(src, dst)
 
@@ -511,12 +519,70 @@ def test_swap_failure_keeps_the_old_tree(bridge, monkeypatch, which):
     assert _leftovers(node_dir) == []
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+def test_staging_is_owner_only_and_keeps_the_npmrc_mode(bridge, monkeypatch):
+    """A project .npmrc can carry a registry token (_authToken). Under umask 022 a plain
+    mkdir and copyfile would leave it 0644 in a 0755 folder for the whole npm run.
+    MUTATION: mkdir the staging folder and copyfile into it - 0755 and 0644, red."""
+    node_dir = bridge.make(_BEHIND)
+    npmrc = node_dir / ".npmrc"
+    npmrc.write_text("//registry.example/:_authToken=t0k3n\n", encoding="utf-8")
+    npmrc.chmod(0o600)
+    calls = _npm(monkeypatch)
+    real_run, seen = wa.subprocess.run, {}
+
+    def run(cmd, **kwargs):
+        cwd = Path(kwargs["cwd"])
+        seen["dir"], seen["npmrc"] = cwd.stat().st_mode & 0o777, (cwd / ".npmrc").stat().st_mode & 0o777
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(wa.subprocess, "run", run)
+    old_umask = os.umask(0o022)
+    try:
+        ok, _ = wa.ensure_bridge_deps()
+    finally:
+        os.umask(old_umask)
+    assert ok and len(calls) == 1
+    assert seen == {"dir": 0o700, "npmrc": 0o600}
+
+
+def test_a_staging_leftover_that_cannot_be_removed_does_not_block_the_install(bridge, monkeypatch):
+    """A Windows scanner holding a file keeps rmtree(ignore_errors=True) from removing an old
+    staging folder. MUTATION: stage into one fixed name - FileExistsError, the install never
+    runs, red."""
+    node_dir = bridge.make(_BEHIND)
+    (node_dir / ".deps-staging").mkdir()
+    real_remove = wa._remove_tree
+    monkeypatch.setattr(wa, "_remove_tree", lambda p: None if p.name.startswith(".deps-staging") else real_remove(p))
+    calls = _npm(monkeypatch)
+    ok, msg = wa.ensure_bridge_deps()
+    assert (ok, msg) == (True, "WhatsApp bridge dependencies installed (Baileys 6.7.24)")
+    assert len(calls) == 1 and _staged(node_dir, calls[0][1])
+    assert _disk(node_dir, "node_modules/follow-redirects") == "1.16.2"
+
+
+def test_a_kept_tree_is_logged_once_per_lockfile(bridge, monkeypatch):
+    """A deferred or held reinstall leaves a trace in whatsapp_qr.log, but the reconnect
+    worker's restarts do not repeat it. MUTATION: no log line - red; a line per call - red."""
+    node_dir = bridge.make(_BEHIND)
+    monkeypatch.setattr(wa, "_bridge_thread", SimpleNamespace(is_alive=lambda: True))
+    _no_npm(monkeypatch)
+    wa.ensure_bridge_deps()
+    wa.ensure_bridge_deps()
+    assert sum("next bridge start" in line for line in bridge.logged) == 1
+    (node_dir / "package-lock.json").write_text(json.dumps(
+        {"lockfileVersion": 3, "packages": {"": {"name": "x"}, **_LOCK}}, indent=2), encoding="utf-8")
+    wa.ensure_bridge_deps()
+    assert sum("next bridge start" in line for line in bridge.logged) == 2
+
+
 def test_interrupted_swap_is_recovered_without_npm(bridge, monkeypatch):
     """A process killed between the two renames leaves node_modules in .deps-previous.
     MUTATION: drop the recovery - the tree reads as missing and npm runs, red."""
     node_dir = bridge.make(_IN_SYNC)
     os.replace(node_dir / "node_modules", node_dir / ".deps-previous")
     (node_dir / ".deps-staging" / "node_modules").mkdir(parents=True)
+    (node_dir / ".deps-staging-k3j9x1" / "node_modules").mkdir(parents=True)
     _no_npm(monkeypatch)
     ok, msg = wa.ensure_bridge_deps()
     assert (ok, msg) == (True, "WhatsApp bridge dependencies present (Baileys 6.7.24)")

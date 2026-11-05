@@ -27,6 +27,7 @@ import queue
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -316,9 +317,12 @@ def _node_path() -> Optional[str]:
 
 _deps_lock = threading.Lock()
 
-# The staged install's two working folders, next to node_modules so the swap is a rename on
-# one file system. A swap that is interrupted between its two renames leaves the old tree in
-# .deps-previous; the next call puts it back.
+# The staged install's working folders, next to node_modules so the swap is a rename on one
+# file system. Each install stages into a fresh `.deps-staging-<random>` (tempfile.mkdtemp:
+# owner-only on POSIX, because a project .npmrc copied in may carry a registry token, and never
+# a name a leftover still holds, which a Windows scanner can keep from being removed). A swap
+# that is interrupted between its two renames leaves the old tree in .deps-previous; the next
+# call puts it back.
 _DEPS_STAGING = ".deps-staging"
 _DEPS_PREVIOUS = ".deps-previous"
 
@@ -326,6 +330,10 @@ _DEPS_PREVIOUS = ".deps-previous"
 # was kept. The reconnect worker restarts the bridge every few minutes while it is
 # disconnected; without this, every restart would run npm again for the same lock.
 _failed_reinstall_lock = ""
+
+# (reason, lockfile sha256) pairs already written to whatsapp_qr.log for a call that kept the
+# old tree: once per lockfile, not once per reconnect-worker restart.
+_deps_notes: set = set()
 
 # Every Node spawn_node_bridge started, the QR-link ones included: while one of them runs from
 # node_modules, the tree is not swapped under it.
@@ -394,9 +402,18 @@ def _recover_interrupted_swap(node_dir: Path) -> None:
         except OSError as e:
             logger.warning("WhatsApp: could not restore %s: %s", previous, e)
             return
-    _remove_tree(node_dir / _DEPS_STAGING)
+    for entry in _staging_leftovers(node_dir):
+        _remove_tree(entry)
     if live.exists():
         _remove_tree(previous)
+
+
+def _staging_leftovers(node_dir: Path) -> List[Path]:
+    try:
+        return [p for p in node_dir.iterdir()
+                if p.name == _DEPS_STAGING or p.name.startswith(_DEPS_STAGING + "-")]
+    except OSError:
+        return []
 
 
 def _swap_in(node_dir: Path, staging: Path) -> str:
@@ -443,6 +460,15 @@ def _log_deps(line: str) -> None:
         pass
 
 
+def _kept(reason: str, digest: str, msg: str) -> Tuple[bool, str]:
+    """(True, msg) for a call that keeps the installed tree, with msg in whatsapp_qr.log the
+    first time for this reason and lockfile."""
+    if (reason, digest) not in _deps_notes:
+        _deps_notes.add((reason, digest))
+        _log_deps(msg)
+    return True, msg
+
+
 def ensure_bridge_deps(timeout: float = 600.0) -> Tuple[bool, str]:
     """Install the Node bridge's dependencies when they are missing or differ from the lockfile.
 
@@ -454,7 +480,7 @@ def ensure_bridge_deps(timeout: float = 600.0) -> Tuple[bool, str]:
     The whole lock is compared (node_runtime.lock_drift), not Baileys alone: a patched
     package further down the tree is the usual security bump. In sync costs no npm call.
     Otherwise `npm ci` (exactly the lockfile; `npm install` as the fallback for a lockfile npm
-    refuses) runs in `.deps-staging/`, and the result replaces node_modules only once Baileys
+    refuses) runs in a fresh owner-only `.deps-staging-*/`, and the result replaces node_modules only once Baileys
     is in it: a failed `npm ci` empties the node_modules it runs in, so an install in place
     that fails offline would stop a bridge that works. A tree that still has Baileys stays in
     use, and the call succeeds with a message that says what differs, when the reinstall fails,
@@ -477,37 +503,41 @@ def ensure_bridge_deps(timeout: float = 600.0) -> Tuple[bool, str]:
             return True, f"WhatsApp bridge dependencies present (Baileys {have})"
         summary = _drift_summary(drift) if drift else "Baileys is not installed"
         behind = f"WhatsApp bridge dependencies differ from the lockfile ({summary})"
+        digest = _lock_digest(node_dir)
         if have and _bridge_node_running():
-            return True, (f"{behind}. Baileys {have} stays in use while the bridge runs; the "
-                          "lockfile's packages are installed at the next bridge start.")
+            return _kept("running", digest, (
+                f"{behind}. Baileys {have} stays in use while the bridge runs; the "
+                "lockfile's packages are installed at the next bridge start."))
         from vaf.core import node_runtime
         npm = node_runtime.find("npm")
         if not npm:
             if have:
-                return True, (f"{behind}; npm not found, so Baileys {have} stays in use. Install "
-                              f"Node.js 18+ (with npm), or run `npm ci --omit=dev` in {node_dir} with VAF stopped.")
+                return _kept("no-npm", digest, (
+                    f"{behind}; npm not found, so Baileys {have} stays in use. Install "
+                    f"Node.js 18+ (with npm), or run `npm ci --omit=dev` in {node_dir} with VAF stopped."))
             return False, (
                 "npm not found. Install Node.js 18+ (with npm), then start WhatsApp again; "
                 f"or run `npm install` in {node_dir} by hand."
             )
         if not os.access(node_dir, os.W_OK):
             if have:
-                return True, (f"{behind}; {node_dir} is not writable, so Baileys {have} stays in use. "
-                              f"Run `npm ci --omit=dev` in {node_dir} with VAF stopped.")
+                return _kept("read-only", digest, (
+                    f"{behind}; {node_dir} is not writable, so Baileys {have} stays in use. "
+                    f"Run `npm ci --omit=dev` in {node_dir} with VAF stopped."))
             return False, f"{node_dir} is not writable; run `npm install` there with the right permissions."
-        digest = _lock_digest(node_dir)
         if have and digest and digest == _failed_reinstall_lock:
-            return True, (f"{behind}; the reinstall for this lockfile already failed, so Baileys {have} "
-                          "stays in use until the next VAF start or `vaf update`.")
+            return _kept("failed-before", digest, (
+                f"{behind}; the reinstall for this lockfile already failed, so Baileys {have} "
+                "stays in use until the next VAF start or `vaf update`."))
         _log_deps(f"installing bridge dependencies (Baileys {have or 'none'}; {summary})")
         logger.info("WhatsApp: installing bridge dependencies in %s (Baileys %s; %s)", node_dir, have or "none", summary)
         staging = node_dir / _DEPS_STAGING
         last_err = ""
         try:
-            staging.mkdir()
+            staging = Path(tempfile.mkdtemp(prefix=_DEPS_STAGING + "-", dir=node_dir))
             for name in ("package.json", "package-lock.json", ".npmrc"):
                 if (node_dir / name).is_file():
-                    shutil.copyfile(node_dir / name, staging / name)
+                    shutil.copy2(node_dir / name, staging / name)   # keeps a 0600 .npmrc 0600
         except OSError as e:
             last_err = f"could not prepare {staging}: {e}"
         installed = ""

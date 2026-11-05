@@ -244,7 +244,9 @@ if _crlf_list:
     def _crlf_read_bytes(self):
         """A tracked text file as a Windows checkout (core.autocrlf) holds it."""
         data = _lf_read_bytes(self)
-        if (self.name in _CRLF_NAMES
+        # normcase on both sides: the list holds normcase'd paths, and on Windows
+        # that lowercases, so a raw README.md would never match readme.md.
+        if (_os.path.normcase(self.name) in _CRLF_NAMES
                 and _os.path.normcase(_os.path.realpath(self)) in _CRLF_FILES):
             data = data.replace(b"\\n", b"\\r\\n")
         return data

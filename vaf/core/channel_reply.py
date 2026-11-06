@@ -14,6 +14,13 @@ account the device row named). The text is sent as given: callers clean it first
 
 Framework, not harness: the per-channel senders are callbacks the bridges register
 (``telegram_reply``, ``discord_reply``, ``whatsapp_reply``); without one, nothing is sent.
+
+NAMED BOUNDARY: one per-channel chain is left, the final reply of a turn
+(``headless_runner._deliver_channel_reply``): it logs per channel, falls back to the stored
+session's WhatsApp jid, and hands the Veyllo App its streamed reply's end, none of which a
+plain-text answer does. ``CHAT_ADDRESS_KEYS`` is a per-channel table on purpose (each bridge
+sets its own key); a channel added later needs a row there or its own branch, and becomes a
+registry field (the address key) once a sixth channel comes.
 """
 from __future__ import annotations
 

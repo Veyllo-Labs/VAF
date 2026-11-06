@@ -581,6 +581,14 @@ async def disconnect_channel(
     from vaf.core.channels import CHANNEL_SECRETS
 
     name = (channel or "").strip().lower()
+    if name == "veyllo_app":
+        # Its credential is the relay instance's secret: dropping it here would orphan the
+        # instance on the relay, so it goes only with the instance itself.
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The Veyllo App relay is dissolved with `vaf relay dissolve` or "
+                   "POST /api/app-link/relay/dissolve, which removes its secret too.",
+        )
     if name not in CHANNEL_SECRETS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

@@ -1026,6 +1026,35 @@ def get_chat_messages(
         conn.close()
 
 
+def get_message(
+    username: str,
+    chat_id: str,
+    message_id: str,
+    *,
+    direction: str = "out",
+    user_scope_id: Optional[str] = None,
+    channel: str = "whatsapp",
+) -> Optional[Dict[str, Any]]:
+    """One message by its key (username, chat, message id, direction, channel), or None. A
+    lane that keeps only ids (the Veyllo App's per-device outbox) reads the text from here,
+    the one copy."""
+    init_store(username, user_scope_id)
+    conn = _get_conn(username, user_scope_id)
+    try:
+        row = conn.execute(
+            """
+            SELECT chat_id, body, direction, ts, content_type, channel, message_id
+            FROM channel_messages
+            WHERE username = ? AND chat_id = ? AND message_id = ? AND direction = ? AND channel = ?
+            """,
+            ((username or "").strip() or "", chat_id or "", str(message_id or ""),
+             direction or "out", channel or "whatsapp"),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def oldest_message(
     username: str,
     chat_id: str,

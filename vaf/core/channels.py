@@ -80,6 +80,14 @@ CHANNELS: Tuple[Channel, ...] = (
     Channel("discord", "Discord", bridge=True, send_tool="send_discord",
             read_tool="read_discord_chat", front_office=True, secrets=("bot_token",),
             accounts="owner"),
+    # The Veyllo App: the bridge is the link manager (vaf/core/app_link/bridge.py), there is
+    # no read tool (the account's one chat is its own history), and one relay instance serves
+    # every account, which pairs its own devices on it. A chat channel like Telegram, so every
+    # tool kept off chats ("channel" in its restrictions) is off here too. NAMED BOUNDARY:
+    # protocol v1 has no confirmation message type, so a tool that needs a person to confirm
+    # cannot ask on the phone; lifting it needs a v2 `confirm` type agreed with the app.
+    Channel("veyllo_app", "Veyllo App", bridge=True, send_tool="send_veyllo_app",
+            secrets=("relay_secret",), accounts="shared"),
     # Known, not built: `send_slack` exists and answers that it cannot send yet.
     Channel("slack", "Slack", bridge=False, send_tool="send_slack"),
 )

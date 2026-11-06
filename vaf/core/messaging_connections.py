@@ -193,6 +193,14 @@ def owner_endpoints(channel: str, username: Optional[str], user_scope_id: Option
         admin_id = str((dc.get("admin_user_id") if isinstance(dc, dict) else "") or "").strip()
         if admin_id:
             out.add(admin_id)
+    elif channel == "veyllo_app" and user_scope_id:
+        # The account's one app chat, filed under its chat key, once a device is paired.
+        try:
+            from vaf.core.app_link import devices as app_devices
+            if app_devices.for_scope(user_scope_id):
+                out.add(app_devices.chat_key(user_scope_id))
+        except Exception:
+            pass
     return out
 
 
@@ -717,6 +725,16 @@ def get_messaging_connections(
         except Exception:
             pass
 
+    # Veyllo App: this account's lane is on and it has a paired device. A device that is not
+    # connected right now still counts: it gets the message after its next connection.
+    if user_scope_id and channel_enabled_for_scope("veyllo_app", user_scope_id):
+        try:
+            from vaf.core.app_link import devices as app_devices
+            if app_devices.for_scope(user_scope_id):
+                available.append("veyllo_app")
+        except Exception:
+            pass
+
     # Slack: not yet configured in config; placeholder for future
     # if Config.get("slack_config", {}).get("enabled"): available.append("slack")
 
@@ -786,10 +804,11 @@ def _record_outbound(
         )
     except Exception:
         pass
-    # Channel store: the WhatsApp bridge already records every outbound send
-    # itself (whatsapp_bridge sender loop) - recording here again would duplicate
+    # Channel store: the WhatsApp bridge and the Veyllo App link manager already record
+    # every outbound send themselves (whatsapp_bridge sender loop, app_link.bridge, whose
+    # row id is the one the devices acknowledge) - recording here again would duplicate
     # entries for read_/find_ tools.
-    if channel != "whatsapp":
+    if channel != "whatsapp" and channel != "veyllo_app":
         try:
             from vaf.core.channel_message_store import append_message
             append_message(
@@ -920,6 +939,16 @@ def send_to_main_messenger(
                         if record:
                             _record_outbound("discord", str(user_id), text or caption, username, user_scope_id, attach, kind=kind)
                         return True, "discord"
+        elif main == "veyllo_app":
+            # Stored once with an outbox entry per device and sent to the connected ones; a
+            # device that is away gets it after its next connection (app_link.bridge).
+            from vaf.core.app_link import bridge as app_bridge
+            from vaf.core.app_link import devices as app_devices
+            if app_bridge.deliver(user_scope_id, username, text, attach):
+                if record:
+                    _record_outbound("veyllo_app", app_devices.chat_key(user_scope_id),
+                                     text or caption, username, user_scope_id, attach, kind=kind)
+                return True, "veyllo_app"
     except Exception:
         pass
     return False, None

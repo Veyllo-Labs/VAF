@@ -196,7 +196,7 @@ def test_secure_status_names_a_token_still_in_config_json_until_it_moves(config_
     assert TOKEN not in json.dumps(status)
 
 
-@pytest.mark.parametrize("channel", sorted(CHANNEL_SECRETS))
+@pytest.mark.parametrize("channel", sorted(set(CHANNEL_SECRETS) - {"veyllo_app"}))
 def test_the_disconnect_route_stops_the_bridge_and_leaves_no_login_behind(config_file, monkeypatch, channel):
     """Discord's disconnect used to save `null`, which the merge keeps, so the token and the
     whole block survived it. The route removes both, after stopping the bridge."""
@@ -217,6 +217,21 @@ def test_the_disconnect_route_stops_the_bridge_and_leaves_no_login_behind(config
     assert cs.channel_secret(channel) == ""
     assert config_file.on_disk().get(f"{channel}_config") is None
     assert TOKEN not in config_file.path.read_text(encoding="utf-8")
+
+
+def test_the_veyllo_app_secret_goes_only_with_its_relay_instance(config_file):
+    """Its secret is the relay instance's: the generic disconnect would orphan the instance on
+    the relay, so it points at the dissolve instead and removes nothing."""
+    import asyncio
+
+    from fastapi import HTTPException
+
+    from vaf.api.config_routes import disconnect_channel
+    cs.set_channel_secret("veyllo_app", "relay_secret", "vrs_test_value")
+    with pytest.raises(HTTPException) as err:
+        asyncio.run(disconnect_channel("veyllo_app", {"role": "admin"}))
+    assert err.value.status_code == 400 and "dissolve" in err.value.detail
+    assert cs.channel_secret("veyllo_app", "relay_secret") == "vrs_test_value"
 
 
 def test_the_disconnect_route_refuses_a_channel_without_a_stored_login(config_file):

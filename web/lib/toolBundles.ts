@@ -20,7 +20,7 @@
  *  third-party tool or an MCP server naming its own bundle) is rendered after
  *  these, before "general". */
 export const TOOL_BUNDLE_ORDER = [
-    'custom', 'github', 'mail', 'whatsapp', 'telegram', 'discord', 'slack',
+    'custom', 'github', 'mail', 'whatsapp', 'telegram', 'discord', 'veyllo_app', 'slack',
     'messaging', 'rooms', 'calendar', 'contacts', 'cloud', 'automations',
     'timers', 'workflows', 'skills', 'memory', 'context', 'code', 'git',
     'files', 'documents', 'web', 'tool_catalog', 'mcp', 'general',
@@ -31,7 +31,8 @@ export const TOOL_BUNDLE_ORDER = [
  *  invisible frame, so the bundle takes the mark's ink instead. */
 export const TOOL_BUNDLE_COLOR: Record<string, string> = {
     custom: '#9333ea', github: '#111827', mail: '#ef4444', whatsapp: '#16a34a',
-    telegram: '#0ea5e9', discord: '#4f46e5', slack: '#9333ea', messaging: '#0891b2',
+    telegram: '#0ea5e9', discord: '#4f46e5', veyllo_app: '#0f766e', slack: '#9333ea',
+    messaging: '#0891b2',
     rooms: '#059669', calendar: '#3b82f6', contacts: '#4b5563', cloud: '#eab308',
     automations: '#f59e0b', timers: '#f97316', workflows: '#0d9488', skills: '#db2777',
     memory: '#7c3aed', context: '#8b5cf6', code: '#1f2937', git: '#ea580c',

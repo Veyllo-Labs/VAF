@@ -11,6 +11,7 @@ from typing import Any, Callable, Mapping, Optional
 
 from vaf.core import model_catalog as _model_catalog
 from vaf.core.channels import CHAT_CHANNELS as _CHAT_CHANNELS
+from vaf.core.channels import KNOWN_CHANNELS as _KNOWN_CHANNELS
 
 # Single source of truth for legacy local-admin scope (before bootstrap sets real admin UUID)
 LEGACY_LOCAL_ADMIN_SCOPE_ID = "00000000-0000-0000-0000-000000000001"
@@ -751,6 +752,16 @@ class Config:
 
         # Connections: Telegram (bot token, whitelist per user_scope_id)
         "telegram_config": None,                                   # { enabled, verified?, whitelist: [...] }; the bot token lives in the key ring (channel_secrets)
+        # Connections: the Veyllo App (vaf/core/app_link). `enabled` is the channel's switch,
+        # `relay_enabled` the admin's switch for the Veyllo relay (on from the factory; off
+        # closes the relay connection and stops claims and push notices), `relay_api_base`
+        # where the relay's API lives (admin-only through this block, never from a QR, the
+        # app or the model), `relay_instance_id` the installation's relay instance (learned
+        # at the first claim), `device_idle_days` after how many days without use a device
+        # is removed. The relay secret lives in the key ring (channel_secrets).
+        "veyllo_app_config": {"enabled": True, "relay_enabled": True,
+                              "relay_api_base": "https://veyllo.app", "relay_instance_id": "",
+                              "device_idle_days": 90},
         # Connections: WhatsApp (Baileys via Node, per-user auth). The linked account is the
         # AGENT's number; `whitelist` holds the numbers users chat FROM (main user per VAF
         # account), never the linked number itself. `reply_window_hours`: a number the agent
@@ -1337,7 +1348,9 @@ class Config:
         return any(key.endswith(s) for s in cls.SECRET_CONFIG_KEY_SUFFIXES)
 
     # Connection config keys that only admin may write (enabled/whitelist etc.). Non-admins write to connection_enabled_by_scope instead.
-    CONNECTION_CONFIG_KEYS = frozenset({"telegram_config", "whatsapp_config", "discord_config"})
+    # Derived from the channel registry: a hand list missed a new channel's block, which a
+    # non-admin save could then rewrite (the Veyllo App's relay address among it).
+    CONNECTION_CONFIG_KEYS = frozenset(f"{c}_config" for c in _KNOWN_CHANNELS)
 
     # Secrets a person MANAGES through Settings - the OAuth client secrets - as opposed to
     # infrastructure secrets (the KEK, the JWT signing secret, DB URLs) that no UI has any
@@ -1549,6 +1562,15 @@ class Config:
             }
         else:
             out["discord_config"] = None
+
+        # Veyllo App: the account's own switch and whether the relay is on; the relay's
+        # address, the instance and any credential stay with the admins.
+        vc = config.get("veyllo_app_config") or {}
+        if isinstance(vc, dict):
+            out["veyllo_app_config"] = {"enabled": bool(user_toggles.get("veyllo_app", False)),
+                                        "relay_enabled": bool(vc.get("relay_enabled", True))}
+        else:
+            out["veyllo_app_config"] = None
 
         return out
 

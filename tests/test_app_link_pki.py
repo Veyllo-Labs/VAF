@@ -141,6 +141,20 @@ def test_server_context_settings(ssl_home):
     assert pki.server_context() is not context
 
 
+def test_server_context_refuses_unknown_names(ssl_home):
+    from tests.cert_factory import handshake
+    ca_pem = x509.load_der_x509_certificate(ssl_utils.app_link_server_files()[2]).public_bytes(
+        serialization.Encoding.PEM).decode()
+    client = ssl.create_default_context(cadata=ca_pem)
+    client.minimum_version = ssl.TLSVersion.TLSv1_3
+    client.set_alpn_protocols(["vaf-link/1"])
+    assert handshake(pki.server_context(), client, server_hostname="pair.vaf.internal")
+    client.check_hostname = False
+    for name in ("evil.vaf.internal", "link.vaf.internal.example"):
+        with pytest.raises(ssl.SSLError):
+            handshake(pki.server_context(), client, server_hostname=name)
+
+
 # ── the one-time codes ───────────────────────────────────────────────────────
 
 def test_pairing_code_size_and_state():

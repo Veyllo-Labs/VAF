@@ -116,7 +116,7 @@ def test_a_stored_main_messenger_outside_the_registry_reads_as_not_set(tmp_path,
 def test_the_settings_picker_offers_exactly_the_main_messengers():
     src = (REPO / "web" / "components" / "SettingsModal.tsx").read_text(encoding="utf-8")
     block = src.split("const MAIN_MESSENGERS: { id: string; label: string }[] = [", 1)[1].split("];", 1)[0]
-    assert tuple(re.findall(r"id: '([a-z]+)'", block)) == MAIN_MESSENGERS
+    assert tuple(re.findall(r"id: '([a-z_]+)'", block)) == MAIN_MESSENGERS
     picker = src.split("tModals('userIdentity.notSet')", 1)[1].split("</select>", 1)[0]
     assert "MAIN_MESSENGERS.map(" in picker and '<option value="' not in picker, \
         "the picker renders the list, it does not repeat it"

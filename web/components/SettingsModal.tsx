@@ -302,6 +302,7 @@ const MAIN_MESSENGERS: { id: string; label: string }[] = [
     { id: 'whatsapp', label: 'WhatsApp' },
     { id: 'telegram', label: 'Telegram' },
     { id: 'discord', label: 'Discord' },
+    { id: 'veyllo_app', label: 'Veyllo App' },
 ];
 
 const VISION_PROVIDERS: { id: string; label: string }[] = [

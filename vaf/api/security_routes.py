@@ -472,6 +472,19 @@ def collect_channels_status() -> Dict[str, Any]:
                 "last_ts": last_ts(cfg),
                 "open": bool(pol.get("open_to_new_senders")),
             })
+        # The Veyllo App: its paired devices; it never opens to new senders (only an
+        # account's own paired device reaches it).
+        try:
+            from vaf.core.app_link import devices as app_devices
+            from vaf.core.app_link import settings as app_settings
+            app_rows = app_devices.all_devices()
+            channels.append({"name": "veyllo_app", "enabled": bool(app_settings().get("enabled")),
+                             "paired": len(app_rows),
+                             "last_ts": max((float(r.get("last_seen_at") or 0) for r in app_rows),
+                                            default=None),
+                             "open": False})
+        except Exception:
+            pass
     except Exception:
         pass
     return derive_channels_status(channels)

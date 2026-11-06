@@ -1451,6 +1451,7 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
       case 'foreign_origin_blocked': return t('ovEvForeignOrigin');
       case 'channel_paired': return t('ovEvChannelPaired');
       case 'channel_unpaired': return t('ovEvChannelUnpaired');
+      case 'app_pairing_refused': return t('ovEvAppPairingRefused');
       case 'owner_endpoint_reset': return t('ovEvOwnerEndpointReset');
       case 'contact_access_changed': return t('ovEvContactAccess');
       case 'front_office_changed': return t('ovEvFrontOffice');
@@ -2677,7 +2678,7 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
                   channels ? (
                     <div>
                       {channels.channels.map(ch => {
-                        const label = ch.name === 'telegram' ? 'Telegram' : ch.name === 'whatsapp' ? 'WhatsApp' : ch.name === 'discord' ? 'Discord' : ch.name;
+                        const label = ch.name === 'telegram' ? 'Telegram' : ch.name === 'whatsapp' ? 'WhatsApp' : ch.name === 'discord' ? 'Discord' : ch.name === 'veyllo_app' ? 'Veyllo App' : ch.name;
                         const parts = ch.enabled
                           ? [
                               ch.open ? t('ovChOpen') : t('ovChPairedOnly'),

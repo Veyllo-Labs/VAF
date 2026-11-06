@@ -1311,9 +1311,9 @@ Then use the results to answer. Do NOT guess from your training data!
                         "can never be the user's main_messenger).\n"
                     )
                 if avail:
-                    channel_names = [c.capitalize() for c in avail]
+                    channel_names = [CHANNEL_LABELS.get(c, c) for c in avail]
                     identity_block += f"\nmessaging_channels: {', '.join(channel_names)}\n"
-                    identity_block += f"preferred_messenger: {main.capitalize() if main else 'not set'}\n"
+                    identity_block += f"preferred_messenger: {CHANNEL_LABELS.get(main, main) if main else 'not set'}\n"
                     if current_source and str(current_source).strip().lower() == "web":
                         identity_block += (
                             "**Web UI active:** User sees your reply in the UI. "

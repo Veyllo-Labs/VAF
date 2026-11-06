@@ -484,6 +484,11 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
             # A Front Office answer on mail: through the outbox, held or sent
             # by the channel's reply mode (see _deliver_email_reply).
             _deliver_email_reply(task, meta, final_text)
+        elif task_source == "veyllo_app":
+            # `done` with the final text to the account's devices, stored once with an outbox
+            # entry per device (app_link.bridge).
+            from vaf.core.app_link import bridge as app_bridge
+            app_bridge.finish_reply(meta, _prepare_channel_outbound(final_text))
         elif task_source == "whatsapp":
             chat_jid = meta.get("whatsapp_chat_jid")
             username = meta.get("username") or "admin"
@@ -694,6 +699,32 @@ class _ChatTurnStream:
             return True
         except Exception:
             return False
+
+
+def _app_link_emit(task):
+    """The stream's emit for a Veyllo App turn: the web UI as always, and the round's text to
+    the account's connected devices as `delta` increments (app_link.bridge). The turn's
+    start is announced here (`read` and `typing`). None for every other source, which keeps
+    the stream's own web emit."""
+    if getattr(task, "source", None) != "veyllo_app":
+        return None
+    meta = task.metadata if isinstance(getattr(task, "metadata", None), dict) else {}
+    try:
+        from vaf.core.app_link import bridge as app_bridge
+        reply_id = app_bridge.turn_started(meta)
+    except Exception:
+        return None
+    session_id = task.session_id
+
+    def _emit(text, number, answer):
+        get_web_interface().emit_agent_message(role="assistant", content=text,
+                                               session_id=session_id, round=number,
+                                               answer=answer)
+        try:
+            app_bridge.stream_round(reply_id, text, number)
+        except Exception:
+            pass
+    return _emit
 
 
 def _stop_stream_for(candidate, session_id):
@@ -2356,7 +2387,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # installed around chat_step below), and `response_parts` as the stored
                     # copy, which the agent's clear(keep) restarts (_ChatTurnStream).
                     webui_stream_callback = _ChatTurnStream(
-                        task.session_id, should_stop=lambda: tq.should_stop(task.session_id))
+                        task.session_id, should_stop=lambda: tq.should_stop(task.session_id),
+                        emit=_app_link_emit(task))
                     response_parts = webui_stream_callback.parts
 
                     # The source, the Front Office set, the unattended mark and the contact
@@ -3445,7 +3477,12 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         if _stopped_stream is not None:
                             # The chat lane: the notice goes into the round the stop hit,
                             # updated in place, so earlier rounds keep their own bubbles.
-                            _stopped_stream.emit_stopped("*[Generation stopped]*")
+                            _stopped_text = _stopped_stream.emit_stopped("*[Generation stopped]*")
+                            if getattr(task, "source", None) == "veyllo_app":
+                                # The app's reply ends too: `done` with what was shown.
+                                from vaf.core.app_link import bridge as app_bridge
+                                app_bridge.finish_reply(task.metadata or {},
+                                                        _prepare_channel_outbound(_stopped_text))
                         else:
                             # Clear the streaming bubble so no partial text leaks through
                             # (chunks already queued in the asyncio loop arrive before this,

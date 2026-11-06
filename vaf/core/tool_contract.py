@@ -61,7 +61,7 @@ ALLOWED_SIDE_EFFECT_CLASSES = {"none", "reversible", "irreversible"}
 TOOL_CATEGORIES = (
     "web", "files", "documents", "memory", "context", "code", "git", "github",
     "workflows", "skills", "automations", "timers", "calendar", "contacts",
-    "mail", "whatsapp", "telegram", "discord", "slack", "messaging", "rooms",
+    "mail", "whatsapp", "telegram", "discord", "veyllo_app", "slack", "messaging", "rooms",
     "tool_catalog", "cloud", "mcp", "general",
 )
 
@@ -112,6 +112,7 @@ CATEGORY_LABELS = {
     "calendar": "Calendar",         "contacts": "Contacts",
     "mail": "Email",                "whatsapp": "WhatsApp",
     "telegram": "Telegram",         "discord": "Discord",
+    "veyllo_app": "Veyllo App",
     "slack": "Slack",               "messaging": "Messaging",
     "rooms": "Agent rooms",         "tool_catalog": "Tool catalogue",
     "cloud": "Cloud storage",       "mcp": "MCP",

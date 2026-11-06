@@ -115,7 +115,12 @@ def test_front_office_channels_are_the_messengers_with_a_contact_lane_plus_mail(
     is the one ingress-only channel (an answering lane in vaf/mail/inbound.py, no bridge, no
     send tool), so it is a Front Office channel without being routable."""
     from vaf.core.channel_ingress_policy import MAIL_CHANNEL, MESSENGER_FRONT_OFFICE_CHANNELS
-    assert set(MESSENGER_FRONT_OFFICE_CHANNELS) == set(_SUPPORTED_CHANNELS) == set(ROUTABLE_CHANNELS)
+    from vaf.core.channels import CHANNELS
+    assert set(_SUPPORTED_CHANNELS) == set(ROUTABLE_CHANNELS)
+    # The Veyllo App is routable without a contact lane: only an account's own paired device
+    # reaches it, so it is no Front Office channel.
+    assert set(MESSENGER_FRONT_OFFICE_CHANNELS) == {c.name for c in CHANNELS if c.bridge and c.front_office}
+    assert set(MESSENGER_FRONT_OFFICE_CHANNELS) == set(ROUTABLE_CHANNELS) - {"veyllo_app"}
     assert set(FRONT_OFFICE_CHANNELS) == set(MESSENGER_FRONT_OFFICE_CHANNELS) | {MAIL_CHANNEL}
     assert MAIL_CHANNEL not in ROUTABLE_CHANNELS
 
@@ -153,6 +158,7 @@ _BRIDGES = {
     "whatsapp": REPO / "vaf" / "api" / "whatsapp_bridge.py",
     "telegram": REPO / "vaf" / "api" / "telegram_bridge.py",
     "discord": REPO / "vaf" / "api" / "discord_bridge.py",
+    "veyllo_app": REPO / "vaf" / "core" / "app_link" / "bridge.py",
 }
 
 

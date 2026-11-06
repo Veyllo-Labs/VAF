@@ -178,6 +178,12 @@ def ca_sha256() -> bytes:
 def _sni_callback(sslobj: Any, name: Optional[str], _context: ssl.SSLContext):
     if name not in (SNI_LINK, SNI_PAIR):
         return ssl.ALERT_DESCRIPTION_UNRECOGNIZED_NAME
+    # The session reads the purpose back from here (a server-side SSLObject does not expose
+    # the name the client sent).
+    try:
+        sslobj.vaf_sni = name
+    except Exception:
+        return ssl.ALERT_DESCRIPTION_INTERNAL_ERROR
     return None
 
 

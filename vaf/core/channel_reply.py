@@ -32,6 +32,10 @@ def chat_source(source: Optional[str], meta: Optional[Dict[str, Any]], *,
     is present answers otherwise."""
     meta = meta or {}
     keys = dict(CHAT_ADDRESS_KEYS)
+    if source == "veyllo_app" and meta.get("user_scope_id"):
+        # The account's own chat: the device row named the account, the link manager knows
+        # its devices.
+        return source
     if source in keys and meta.get(keys[source]):
         return source
     if not infer:
@@ -64,4 +68,7 @@ def reply_to_chat(source: Optional[str], meta: Optional[Dict[str, Any]], text: s
         return bool(send_whatsapp_reply(meta.get("username") or "admin",
                                         str(meta["whatsapp_chat_jid"]), text,
                                         user_scope_id=scope))
+    if channel == "veyllo_app":
+        from vaf.core.app_link import bridge
+        return bridge.send_text(meta, text)
     return False

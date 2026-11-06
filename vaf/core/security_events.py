@@ -113,6 +113,12 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
                       "it, `path` the paired id (so two changes seconds apart stay two events), "
                       "`detail` the role and the id. A write that changes nothing records nothing",
     "channel_unpaired": "A sender lost that access again; same fields",
+    "app_pairing_refused": "A Veyllo App pairing was refused: a wrong, spent or expired "
+                           "one-time code, a bad certificate request, a second pairing while one "
+                           "waits, the account said no or did not confirm in time, the pairing "
+                           "code was used through the relay elsewhere, or too many sessions at "
+                           "once. `detail` the reason and the way (relay, direct). Never the "
+                           "code, the relay value or the request itself",
     "owner_endpoint_reset": "The stored chat where VAF reaches an account on a messenger was "
                             "not that account's own paired chat and was reset; `channel` the "
                             "platform, `username` the account, `path` the discarded id, "

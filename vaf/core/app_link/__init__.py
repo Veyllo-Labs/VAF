@@ -31,3 +31,15 @@ extensions of existing engine modules. Re-measure when an embedder asks.
 """
 
 CHANNEL = "veyllo_app"
+CONFIG_KEY = "veyllo_app_config"
+
+
+def settings() -> dict:
+    """The ``veyllo_app_config`` block with every missing field filled from its default in
+    ``Config.DEFAULTS`` (the one place the defaults are written)."""
+    from vaf.core.config import Config
+    defaults = Config.DEFAULTS.get(CONFIG_KEY)
+    defaults = dict(defaults) if isinstance(defaults, dict) else {}
+    block = Config.get(CONFIG_KEY)
+    block = block if isinstance(block, dict) else {}
+    return {**defaults, **block}

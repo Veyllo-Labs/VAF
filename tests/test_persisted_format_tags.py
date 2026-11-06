@@ -132,6 +132,8 @@ def test_format_identities_are_pinned_literals():
     assert RECIPE_FORMAT_ROCM == "vllmrocm-1-a69536"
     from vaf.core.model_health import LEDGER_FORMAT
     assert LEDGER_FORMAT == "modelhealth-1-d52e8a"
+    from vaf.core.app_link.devices import DEVICES_FORMAT
+    assert DEVICES_FORMAT == "applink-devices-1-06c31c"
 
 
 def test_chain_with_versioned_seed_verifies():

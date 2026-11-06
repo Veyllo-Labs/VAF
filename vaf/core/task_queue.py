@@ -195,9 +195,11 @@ class TaskQueue:
         with self._cv:
             self._workers = max(1, int(workers or 1))
 
-    def drop_queued_tasks_for_session(self, session_id: str) -> int:
+    def drop_queued_tasks_for_session(self, session_id: str, *,
+                                      where: Optional[Callable[[AgentTask], bool]] = None) -> int:
         """
-        Remove all queued (not in-flight) tasks for a given session.
+        Remove the queued (not in-flight) tasks of a given session: all of them, or only
+        those ``where(task)`` accepts (one device's turns in a chat several devices share).
         Returns the number of removed tasks.
         """
         sid = str(session_id or "")
@@ -205,20 +207,42 @@ class TaskQueue:
             return 0
         removed = 0
         deliveries: List[Tuple[_Watch, int, WaitInfo]] = []
+
+        def _drop(task: AgentTask) -> bool:
+            if str(task.session_id) != sid:
+                return False
+            if where is None:
+                return True
+            try:
+                return bool(where(task))
+            except Exception:
+                return False
+
         with self._cv:
             if not self._queued_by_session.get(sid):
                 return 0
+            taken: List[AgentTask] = []
             for band in list(self._orders):
                 order = self._orders[band]
-                removed += len(order.remove_where(lambda task: str(task.session_id) == sid))
+                taken += order.remove_where(_drop)
                 if not order:
                     del self._orders[band]
-            self._queued_by_session.pop(sid, None)
+            removed = len(taken)
+            gone = {id(t) for t in taken}
+            kept = deque(t for t in self._queued_by_session.get(sid, ()) if id(t) not in gone)
+            if kept:
+                self._queued_by_session[sid] = kept
+            else:
+                self._queued_by_session.pop(sid, None)
             # The dropped turns will never run: their watchers leave without a word.
-            self._watch.pop(sid, None)
-            self._shown.discard(sid)
+            watchers = deque(w for w in self._watch.get(sid, ()) if id(w.task) not in gone)
+            if watchers:
+                self._watch[sid] = watchers
+            else:
+                self._watch.pop(sid, None)
+                self._shown.discard(sid)
             if removed:
-                deliveries = self._recompute_locked()
+                deliveries = self._recompute_locked(touched=(sid,) if watchers else ())
                 self._cv.notify_all()
         self._deliver(deliveries)
         return removed

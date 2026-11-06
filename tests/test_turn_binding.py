@@ -30,7 +30,11 @@ MUTATIONS, each turns the named tests red:
 - leave `_room_turn`, `_synthetic_drain_turn` or the allowed set in `end_turn`
   -> test_end_turn_clears_what_gates_and_routes;
 - drop the chat switch's context reset (`cm.reset_chat_state()` in `_reset_chat_state`), the
-  `_recent_tools` reset, or any marker write -> test_nothing_carries_into_another_accounts_turn.
+  `_recent_tools` reset, or any marker write -> test_nothing_carries_into_another_accounts_turn;
+- drop the `is_human` override for `asked_by_agent`, or accept an empty one
+  -> test_an_agent_request_is_never_a_person; let `_task_turn_binding` mark any other source
+  or metadata -> test_only_the_app_lane_marks_an_agent_request; hide nothing for an agent's
+  request in `_write_markers` -> test_an_agent_request_hides_what_its_gate_refuses.
 """
 import ast
 import json
@@ -77,6 +81,7 @@ NEUTRAL = {
     "_excluded_tools": _ABSENT,
     "_chat_project_dir": "",
     "_turn_decision_note": None,
+    "_turn_asked_by_agent": None,
 }
 DIRTY = {
     "_allowed_tools": frozenset({"contact_history"}),
@@ -91,6 +96,7 @@ DIRTY = {
     "_excluded_tools": {"web_search"},
     "_chat_project_dir": "/somewhere/else",
     "_turn_decision_note": "[Context: draft 4 was discarded]",
+    "_turn_asked_by_agent": "veyllo_app",
 }
 
 
@@ -453,7 +459,8 @@ def test_end_turn_clears_what_gates_and_routes(world):
         front_office_chat={"channel": "whatsapp", "chat_id": "x"},
         front_office_contact={"name": "Grace"}, unattended=True, is_human=False,
         wake=("timer", "Erinnerung"), room_turn={"room_id": "room-r", "mode": "assist"},
-        synthetic=True, excluded_tools={"web_search"}, project_dir=str(world.tmp)))
+        synthetic=True, excluded_tools={"web_search"}, project_dir=str(world.tmp),
+        asked_by_agent="veyllo_app"))
     agent._turn_decision_note = "[Context: draft 4 was discarded]"
     history = json.dumps(agent.history, default=str)
 
@@ -571,6 +578,55 @@ def test_nothing_carries_into_another_accounts_turn(world):
     binding = sorted(n for n, kind in AGENT_STATE.items() if kind == "binding")
     assert {a: _value(shared, a) for a in binding} == {a: _value(fresh, a) for a in binding}
     assert _chat_state(shared) == _chat_state(fresh)
+
+
+# ── a request another agent wrote ──────────────────────────────────────────────────────────
+
+def test_an_agent_request_is_never_a_person(world):
+    binding = TurnBinding(identity=BOB, source="veyllo_app", session_id=BOB_SESSION,
+                          is_human=True, asked_by_agent="veyllo_app")
+    assert binding.is_human is False, "an agent's request was bound as a person's turn"
+    for bad in ("", "  "):
+        with pytest.raises(ValueError):
+            TurnBinding(identity=BOB, source="veyllo_app", session_id=BOB_SESSION,
+                        asked_by_agent=bad)
+    agent = world.make()
+    bind_turn(agent, binding)
+    assert agent._turn_asked_by_agent == "veyllo_app" and agent._turn_is_human is False
+    assert not agent._turn_is_from_a_person("Termine morgen?")
+    assert not agent._turn_is_from_the_user("Termine morgen?")
+    end_turn(agent)
+    assert agent._turn_asked_by_agent is None
+
+
+def test_only_the_app_lane_marks_an_agent_request(world):
+    from vaf.core.headless_runner import _task_turn_binding
+    from vaf.core.session import SessionManager
+    mgr = SessionManager()
+    ask = _task(BOB_SESSION, BOB, "Termine morgen?", source="veyllo_app", app_agent_ask=True,
+                app_ask_id="0f8fad5b-d9cb-469f-a165-70867728950e")
+    bound = _task_turn_binding(ask, mgr)
+    assert bound.asked_by_agent == "veyllo_app" and bound.is_human is False
+    for task in (
+        _task(BOB_SESSION, BOB, "Termine morgen?", source="veyllo_app"),
+        _task(BOB_SESSION, BOB, "Termine morgen?", source="veyllo_app", app_agent_ask="yes"),
+        _task(BOB_SESSION, BOB, "Termine morgen?", source="telegram", app_agent_ask=True),
+        _task(BOB_SESSION, BOB, "Termine morgen?", source="web", app_agent_ask=True),
+    ):
+        assert _task_turn_binding(task, mgr).asked_by_agent is None, task.source
+
+
+def test_an_agent_request_hides_what_its_gate_refuses(world):
+    from vaf.core.agent_origin import refused_tool_names
+    agent = world.make()
+    bind_turn(agent, TurnBinding(identity=BOB, source="veyllo_app", session_id=BOB_SESSION,
+                                 excluded_tools={"web_search"}, asked_by_agent="veyllo_app"))
+    refused = refused_tool_names(agent.tools, "veyllo_app")
+    assert {"user_phone", "store_credential", "set_timer", "browser_agent"} <= refused
+    assert agent._excluded_tools == refused | {"web_search"}
+    assert not refused & set(agent.visible_tools())
+    bind_turn(agent, TurnBinding(identity=BOB, source="veyllo_app", session_id=BOB_SESSION))
+    assert not hasattr(agent, "_excluded_tools"), "a person's turn kept the hidden set"
 
 
 # ── AC 15: not on the facade ───────────────────────────────────────────────────────────────

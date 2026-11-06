@@ -582,7 +582,9 @@ Notes:
 when `run()` returned an answer. If you keep your own transcript of that stream, store it
 with `vaf.stored_turn_copy` and hand a model only what `vaf.model_text` returns for each
 message: None for a failed turn, the answer without its failure for a turn that answered
-first, the text otherwise. The stored copy keeps the whole stream, failure included, so
+first, the text otherwise (a user message VAF stored with `kind="app_agent"`, a request of
+the agent in the user's Veyllo App, comes back inside the fence that marks it as that agent's
+text). The stored copy keeps the whole stream, failure included, so
 your record shows what happened. VAF's own runner and terminal store their transcripts
 exactly this way. With `agent` from the example above, and `reply` standing for however
 your application answers the person (`run()` can still raise; wrap it as that example
@@ -1597,6 +1599,7 @@ The supported arguments:
 | `timeout_for` | `f(tool_name) -> seconds`, for your own timeout policy; it replaces the tool's own budget. Accept a `default` keyword instead (`f(tool_name, default=None)`) to ADJUST it: you receive the tool's own budget for this call and return yours. Left out, the tool's declared budget applies (`timeout_seconds` / `budget_seconds`), else `tool_timeout_seconds`. |
 | `stop_check` | `f() -> bool`, polled during the run so you can cancel from outside. |
 | `max_result_chars` | Result cut, `2000` like a chat turn. Pass `None` to switch it off - do that when you chain a result into something else, because a cut result can lose a trailing marker. |
+| `channel_lift` | `True` (the default) lets the admin's `channel_tools_unrestricted` lift the channel restrictions and the confirmations of a chat call, as for every chat. Pass `False` for a lane that runs text another agent wrote on a chat (VAF does for a request of the Veyllo App's agent): the tools kept off chats stay refused and a call that needs a confirmation goes to the gate, which refuses it at once unless `interactive` and `decide` can ask somebody. The lift trusts a person typing on the channel; another agent's text may carry what that agent read elsewhere. |
 | `allowed_tools` | Which tools this caller may run at all: an iterable of names, `None` (the default) for no set. Any other name is refused with `Security Error: ...` before every other stage, registered or not, for every identity (admins and callers with no scope included), and nothing is emitted. An empty iterable allows nothing; a bare string raises `TypeError`. `ToolCaller(..., allowed_tools=names)` is the execution half of what `Agent.set_allowed_tools(names)` installs on an agent (its own section below). |
 | `authorize` | Your per-call decision hook, exactly as in the next section. `ToolCaller(..., authorize=fn)` is the same thing `Agent.set_tool_authorizer(fn)` installs. An account-level ban (the allowlist section below) is checked before it and cannot be lifted by an `allow()`. |
 | `on_event` | `f(dict)` for `tool_start` / `tool_end` / gate events. Same schema as `Agent.on_event` (`CoreAgent.set_event_sink`), documented in [OBSERVABILITY.md](OBSERVABILITY.md). A raising sink is swallowed: a broken observer must not fail a run. |
@@ -2838,7 +2841,9 @@ Stable public surface (safe to build on):
   and what they mean, `last_turn` is empty before the first turn and reset by every turn,
   the copy keeps the whole stream, and `model_text` (a `{"role", "content", "metadata"}`
   dict) returns None for a failed turn, the answer without its failure for a turn that
-  answered first and the content otherwise. The metadata's keys are not.
+  answered first and the content otherwise; a user message with `kind="app_agent"` comes back
+  inside its fence (the fence's wording is not part of the promise). The metadata's keys are
+  not.
 - The `vaf.tools` entry-point group.
 
 Everything else under `vaf.core.*` is internal and may change between releases.

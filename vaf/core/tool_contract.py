@@ -273,6 +273,7 @@ def evaluate_tool_policy(
     is_admin: bool = False,
     gated_lane: bool = True,
     quiet: bool = False,
+    channel_lift: bool = True,
 ) -> ToolPolicyDecision:
     """
     Evaluate whether a tool may run in the current session context.
@@ -295,6 +296,12 @@ def evaluate_tool_policy(
     quiet             : True for a question that is not a call (what the dispatch
                         funnel may OFFER a model, ``ToolCaller._offerable``): the
                         same decision, without the POLICY_* log lines a call writes.
+    channel_lift      : False keeps the admin's ``channel_tools_unrestricted`` lift (1b)
+                        off this call: a turn whose text another agent wrote
+                        (``agent_origin``) gets the channel restrictions and the
+                        confirmations a channel has without the lift. The lift trusts a
+                        person typing on the channel; such a text may carry what that agent
+                        read elsewhere.
 
     Returns
     -------
@@ -305,6 +312,7 @@ def evaluate_tool_policy(
     1. admin_only check      — role-based hard block (new)
     1a. a tool that needs a person, on a channel, in the gated lane: hard block
     1b. channel_tools_unrestricted: admin opt-in that lifts 2-4 on channels
+        (not for a caller with channel_lift=False)
     2. channel_restrictions  — source-based hard block (existing)
     3. permission_level      — confirmation gate (extended: "system" now skips legacy gate)
     4. Legacy risky-tool gate — fallback for tools that predate this contract
@@ -361,7 +369,7 @@ def evaluate_tool_policy(
     # check and 1a above, so a non-admin channel user still cannot reach admin-only
     # tools, nobody reaches a tool that needs a person, and the channel whitelist
     # remains the primary gate upstream.
-    if is_channel_session:
+    if is_channel_session and channel_lift:
         try:
             from vaf.core.config import Config
             if Config.get("channel_tools_unrestricted", True):

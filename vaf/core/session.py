@@ -316,12 +316,20 @@ def model_text(msg) -> Optional[str]:
     `Message` objects where it expects dicts. Accepts a `Message` or its dict form, so an
     application that keeps a transcript of its own (`vaf.stored_turn_copy`, then
     `vaf.model_text({"role": "assistant", "content": copy, "metadata": metadata})`) reads it
-    by the same rule."""
+    by the same rule.
+
+    A user message another agent wrote (``kind`` `agent_origin.APP_AGENT_KIND`: a request of
+    the agent of the user's Veyllo App) is returned inside its fence
+    (`agent_origin.app_agent_request_text`), so no reader of a stored chat takes it for the
+    user's own words: one place instead of one fence per reader."""
     if is_failed_turn(msg):
         return None
     get = msg.get if isinstance(msg, dict) else (lambda k, d=None: getattr(msg, k, d))
     content = get("content")
     content = content if isinstance(content, str) else str(content or "")
+    from vaf.core.agent_origin import APP_AGENT_KIND, app_agent_request_text
+    if get("role") == "user" and get("kind") == APP_AGENT_KIND:
+        return app_agent_request_text(content)
     meta = get("metadata")
     failure = meta.get(TURN_FAILURE_KEY) if isinstance(meta, dict) else None
     if isinstance(failure, str) and failure:

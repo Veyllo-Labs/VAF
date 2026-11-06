@@ -1359,6 +1359,7 @@ class ToolCaller:
         decide=None,
         on_gate_required=None,
         allowed_tools=None,
+        channel_lift: bool = True,
         # RUNTIME CONTROL
         timeout_for=None,
         self_supervised=None,
@@ -1394,6 +1395,10 @@ class ToolCaller:
         # account allowlist below exempts admins and scope-less callers, so it cannot bound
         # an agent that answers a third party under its owner's identity; this does.
         self.allowed_tools = normalize_allowed_tools(allowed_tools)
+        # False: the admin's `channel_tools_unrestricted` does not lift the channel
+        # restrictions and confirmations for this caller (`evaluate_tool_policy`). For a lane
+        # that runs text another agent wrote on a chat: the lift trusts a person typing there.
+        self.channel_lift = bool(channel_lift)
         self.timeout_for = timeout_for
         self.self_supervised = self_supervised
         self.stop_check = stop_check
@@ -1629,6 +1634,7 @@ class ToolCaller:
             gated_lane=self.gate_enabled,
             # An offer check is not a call: same decision, no POLICY_* log line.
             quiet=quiet,
+            channel_lift=self.channel_lift,
         )
 
     def _offerable(self, name: str) -> bool:

@@ -59,7 +59,7 @@ conversation of its own), and last the chat's project folder, which the load res
 FORWARD ONLY. Nothing is rolled back after a turn: the next `bind_turn` replaces every binding
 attribute, so a restore would put a finished turn's values back for nothing.
 `end_turn` clears what gates and routes (the allowed set, the Front Office and room markers,
-the room id) for the code that runs between two turns; the identity, the source and the loaded
+the requesting agent, the room id) for the code that runs between two turns; the identity, the source and the loaded
 conversation stay until the next bind. `identity_binding` ships no context manager for the
 same reason, and neither does this module.
 
@@ -156,6 +156,7 @@ AGENT_STATE: dict = {
     "_turn_is_human": _BINDING, "_turn_wake": _BINDING, "_room_turn": _BINDING,
     "_synthetic_drain_turn": _BINDING, "_excluded_tools": _BINDING,
     "_chat_project_dir": _BINDING, "_turn_decision_note": _BINDING,
+    "_turn_asked_by_agent": _BINDING,
 }
 
 
@@ -193,11 +194,16 @@ class TurnBinding:
     under that key) is given. Every other field has the value a lane that says nothing
     means: no allowed set, no Front Office, attended, a person typing (``is_human=None``,
     because the engine reads an absent marker as a person, `Agent._turn_is_from_a_person`),
-    no wake, no room, not synthetic, nothing hidden, no project folder.
+    no wake, no room, not synthetic, nothing hidden, no project folder, asked by nobody.
+
+    ``asked_by_agent`` names the agent that wrote the turn's text when that was not a person
+    (`vaf.core.agent_origin.APP_AGENT_ORIGIN`, the agent of the user's Veyllo App). Such a turn
+    is never a person's: ``is_human`` is forced to False, so no lane can mark another agent's
+    request as the user's words.
 
     Validated at construction, so a binding that cannot be applied raises before anything
     on the agent changes: ``ValueError`` for an empty source, for both or neither of the
-    session and the conversation, for an empty one of them; ``TypeError`` for an allowed set
+    session and the conversation, for an empty one of them, for an empty ``asked_by_agent``; ``TypeError`` for an allowed set
     given as one string (`tool_dispatch.normalize_allowed_tools`).
     """
 
@@ -223,6 +229,7 @@ class TurnBinding:
     synthetic: bool = False
     excluded_tools: Optional[frozenset] = None
     project_dir: str = ""
+    asked_by_agent: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not str(self.source or "").strip():
@@ -238,11 +245,15 @@ class TurnBinding:
         if self.excluded_tools is not None:
             object.__setattr__(self, "excluded_tools",
                                frozenset(str(n) for n in self.excluded_tools))
+        if self.asked_by_agent is not None:
+            if not isinstance(self.asked_by_agent, str) or not self.asked_by_agent.strip():
+                raise ValueError("an agent's request names the agent that wrote it")
+            object.__setattr__(self, "is_human", False)
 
 
 def _write_markers(agent: Any, binding: Optional[TurnBinding]) -> None:
     """Every binding attribute except the identity triple and the source, from ``binding``,
-    or to the neutral value when ``binding`` is None. The one writer of these twelve: a
+    or to the neutral value when ``binding`` is None. The one writer of these thirteen: a
     marker one place sets and another forgets to clear is how a timer's "nobody is watching"
     or a contact's tool set used to outlive its turn."""
     b = binding
@@ -261,13 +272,22 @@ def _write_markers(agent: Any, binding: Optional[TurnBinding]) -> None:
     agent._turn_wake = b.wake if b else None
     agent._room_turn = dict(b.room_turn) if (b and b.room_turn is not None) else None
     agent._synthetic_drain_turn = bool(b.synthetic) if b else False
-    if b is None or b.excluded_tools is None:
+    asked_by = b.asked_by_agent if b else None
+    agent._turn_asked_by_agent = asked_by
+    hidden = b.excluded_tools if b else None
+    if asked_by:
+        # What the turn gate refuses on another agent's request is not offered either, from
+        # the same predicate (`agent_origin.refused_on_agent_request`).
+        from vaf.core.agent_origin import refused_tool_names
+        hidden = frozenset(hidden or ()) | refused_tool_names(getattr(agent, "tools", None) or {},
+                                                              str(b.source))
+    if hidden is None:
         try:
             del agent._excluded_tools
         except AttributeError:
             pass
     else:
-        agent._excluded_tools = b.excluded_tools
+        agent._excluded_tools = hidden
     # The project folder is the chat's, and the load below resets it; bind_turn writes it
     # once the conversation is in place.
     agent._chat_project_dir = ""
@@ -328,7 +348,7 @@ def bind_turn(agent: Any, binding: TurnBinding) -> None:
 
 def end_turn(agent: Any) -> None:
     """Clear what gates and routes once a turn is over: the allowed set, the Front Office
-    and room markers, the person and the wake, the synthetic flag, the hidden tools, the
+    and room markers, the person, the wake and the requesting agent, the synthetic flag, the hidden tools, the
     project folder, the decision note, and this context's room and conversation of its own
     (what runs between two turns writes into no room's store). The identity, the source and
     the loaded conversation stay until the next `bind_turn` replaces them."""

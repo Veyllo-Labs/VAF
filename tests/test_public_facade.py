@@ -219,6 +219,7 @@ def test_tool_caller_keeps_the_arguments_embedding_md_documents():
         "stop_check": inspect.Parameter.KEYWORD_ONLY,
         "max_result_chars": inspect.Parameter.KEYWORD_ONLY,
         "allowed_tools": inspect.Parameter.KEYWORD_ONLY,
+        "channel_lift": inspect.Parameter.KEYWORD_ONLY,
         "on_event": inspect.Parameter.KEYWORD_ONLY,
     }
     for name, kind in documented.items():
@@ -228,6 +229,7 @@ def test_tool_caller_keeps_the_arguments_embedding_md_documents():
     # Defaults that the documentation states outright.
     assert params["max_result_chars"].default == 2000
     assert params["interactive"].default is False
+    assert params["channel_lift"].default is True
 
 
 def test_a_documented_tool_caller_run_needs_nothing_but_a_registry():

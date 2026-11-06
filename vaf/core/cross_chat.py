@@ -59,6 +59,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
+from vaf.core.agent_origin import APP_AGENT_KIND
 from vaf.core.channels import CHAT_SESSION_PREFIXES
 from vaf.core.session import model_text
 from vaf.core.text_match import fold, fold_all
@@ -119,7 +120,7 @@ _WORD_RE = re.compile(r"[a-z0-9]+")
 # content, not something this user said, so it is cut out before scoring.
 _INLINED_FILE_RE = re.compile(r"---\s*FILE:.*?---.*?(?:\n-{4,}\n|\Z)", re.DOTALL)
 # Machine-written turns that are stored under role "user" but nobody typed.
-_NON_TYPED_KINDS = {"timer", "voice_delegation"}
+_NON_TYPED_KINDS = {"timer", "voice_delegation", APP_AGENT_KIND}
 _DEFAULT_NAME_RE = re.compile(r"^Session \d{4}-\d{2}-\d{2} \d{2}:\d{2}$")
 
 

@@ -1380,6 +1380,12 @@ def _task_turn_binding(task, session_mgr) -> TurnBinding:
         and str(task.input_text or "").strip()
     )
     from_contact = bool(task_meta_for_env.get("from_contact"))
+    # A request the agent of the user's Veyllo App wrote (app_link.bridge queues it with
+    # `app_agent_ask`): never a person's turn, its tools limited (vaf/core/agent_origin.py).
+    # Only that lane produces the marker.
+    from vaf.core.agent_origin import APP_AGENT_ORIGIN
+    asked_by_agent = (APP_AGENT_ORIGIN if getattr(task, "source", None) == "veyllo_app"
+                      and task_meta_for_env.get("app_agent_ask") is True else None)
     return TurnBinding(
         identity=identity_from_metadata(task_meta_for_env),
         source=str(getattr(task, "source", None) or "web"),
@@ -1413,6 +1419,7 @@ def _task_turn_binding(task, session_mgr) -> TurnBinding:
         # under the owner's VAF_Projects, and from it the engine would read the owner's own
         # VAF.md and print its path into the contact's prompt.
         project_dir="" if from_contact else _chat_project_paths(session_mgr, task.session_id).edit_path,
+        asked_by_agent=asked_by_agent,
     )
 
 
@@ -2471,6 +2478,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             "[WhatsApp message.] Respond helpfully; do not repeat or echo the user's message back.\n\n"
                             + effective_input
                         )
+                    elif _binding.asked_by_agent:
+                        # Another agent's request, read inside its fence (agent_origin); the
+                        # stored copy is the raw text, which session.model_text fences again.
+                        from vaf.core.agent_origin import app_agent_request_text
+                        effective_input = app_agent_request_text(effective_input)
                     try:
                         session_for_sidebar = session_mgr.load(task.session_id)
                         sidebar_docs = (getattr(session_for_sidebar, "runtime_state", None) or {}).get("sidebar_documents") or []
@@ -2926,17 +2938,20 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     except Exception:
                         pass
 
-                    # Record this turn as "last interaction" for next turn's system prompt
+                    # Record this turn as "last interaction" for next turn's system prompt.
+                    # Not another agent's request: the record is shown in the user's other
+                    # chats as the user's own last words.
                     try:
-                        from vaf.core.last_interaction import update_last_interaction
-                        meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
-                        update_last_interaction(
-                            user_scope_id=meta.get("user_scope_id"),
-                            source=getattr(task, "source", "web"),
-                            preview=(task.input_text or "")[:80],
-                            voice=bool(meta.get("voice_lang")),
-                            session_id=getattr(task, "session_id", None),
-                        )
+                        if not _binding.asked_by_agent:
+                            from vaf.core.last_interaction import update_last_interaction
+                            meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
+                            update_last_interaction(
+                                user_scope_id=meta.get("user_scope_id"),
+                                source=getattr(task, "source", "web"),
+                                preview=(task.input_text or "")[:80],
+                                voice=bool(meta.get("voice_lang")),
+                                session_id=getattr(task, "session_id", None),
+                            )
                     except Exception:
                         pass
 
@@ -3271,9 +3286,14 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 # reloads: kind drives the red-bordered
                                 # "voice agent" bubble in the Web UI (same
                                 # persisted-kind mechanism as timer/thinking).
+                                # A request of the Veyllo App's agent is stored as
+                                # that agent's (agent_origin), never as the user's words.
                                 _msg_kind = ("voice_delegation"
                                              if (task.metadata or {}).get("origin_channel") == "voice_call"
                                              else None)
+                                if getattr(_binding, "asked_by_agent", None):
+                                    from vaf.core.agent_origin import APP_AGENT_KIND
+                                    _msg_kind = APP_AGENT_KIND
                                 session.add_message(role="user", content=_user_input.strip(),
                                                     metadata=(_user_meta or None), kind=_msg_kind)
                                 # Increment persistent user_turn_count in runtime_state

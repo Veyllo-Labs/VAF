@@ -553,10 +553,27 @@ class TaskQueue:
                 return True
             return bool(self._queued_by_session.get(sid))
 
-    def has_queued(self, session_id: str) -> bool:
-        """Whether this chat has a turn waiting in the queue (in flight does not count)."""
+    def has_queued(self, session_id: str, *, where: Optional[Callable[[AgentTask], bool]] = None,
+                   in_flight: bool = False) -> bool:
+        """Whether this chat has a turn waiting in the queue (in flight does not count): any,
+        or one ``where(task)`` accepts. ``in_flight=True`` counts a turn a worker has taken
+        too (a turn that is about to run or runs). A ``where`` that raises accepts nothing."""
+        sid = str(session_id or "")
         with self._cv:
-            return bool(self._queued_by_session.get(str(session_id or "")))
+            if where is None and not in_flight:
+                return bool(self._queued_by_session.get(sid))
+            tasks = self._iter_all_tasks() if in_flight else self._iter_queued()
+            for task in tasks:
+                if str(task.session_id) != sid:
+                    continue
+                if where is None:
+                    return True
+                try:
+                    if where(task):
+                        return True
+                except Exception:
+                    continue
+            return False
 
     def get_queue_stats(self) -> Dict[str, Any]:
         with self._cv:

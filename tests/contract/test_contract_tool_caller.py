@@ -327,3 +327,29 @@ def test_every_execute_leaves_an_audit_line_including_refused_calls(contract_log
     content = logs[0].read_text(encoding="utf-8")
     assert "tool=echo" in content
     assert "tool=admin" in content
+
+
+class OffChatsTool(EchoTool):
+    name = "contract_off_chats"
+    channel_restrictions = ("channel",)
+
+
+def test_channel_lift_false_keeps_a_chat_call_under_the_channel_rules(tmp_path):
+    """Documented: the admin's `channel_tools_unrestricted` (on by default, which the isolated
+    configuration of this suite keeps) lifts the channel restrictions and confirmations of a
+    chat call; `channel_lift=False` keeps them, so a tool kept off chats is refused and a
+    dangerous one goes to the gate (refused at once headless)."""
+    tools = {"off": OffChatsTool(), "danger": DangerousTool()}
+
+    def caller(**kw):
+        return vaf.ToolCaller(tools, user_scope_id=SCOPE, user_role="user", source="telegram",
+                              trust_dir=tmp_path, **kw)
+
+    lifted = caller()
+    assert lifted.execute("off", {"payload": "a"}) == "echo:a"
+    assert lifted.execute("danger", {"payload": "b"}) == "echo:b"
+    kept = caller(channel_lift=False)
+    assert kept.execute("off", {"payload": "c"}).startswith("Security Error:")
+    assert vaf.markers.TOOL_CONFIRMATION_REQUIRED in kept.execute("danger", {"payload": "d"})
+    assert [c["payload"] for c in tools["off"].calls] == ["a"]
+    assert [c["payload"] for c in tools["danger"].calls] == ["b"]

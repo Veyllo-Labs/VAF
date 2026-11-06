@@ -10307,6 +10307,10 @@ class Agent:
         contact's prompt, and the next background run could close the request on
         the contact's words.
 
+        A request the agent of the user's Veyllo App wrote (`_turn_asked_by_agent`, set
+        with ``_turn_is_human=False`` by the binding) is no person's turn either: it fails
+        `_turn_is_from_a_person` through that marker.
+
         Named boundary: a public chat_step parameter for the turn's origin would
         replace two harness-set attributes with one value. That is an API decision
         for the facade (docs/EMBEDDING.md); until it is taken, the three markers
@@ -14027,6 +14031,11 @@ class Agent:
             # Dispatched: the wrapper emits its own tool_start before its inner calls.
             return _ToolCallOutcome(self._run_multi_tool_use(args, emit), True)
 
+        # A turn another agent asked for (`agent_origin`, the turn binding's `asked_by_agent`)
+        # has nobody to confirm a call: a call that needs a confirmation is refused at once,
+        # with no dialog pushed and nothing waiting, and the admin's channel lift does not
+        # apply. Standing answers the person gave ahead still do (resolve_confirmation_gate).
+        _asked_by_agent = bool(getattr(self, "_turn_asked_by_agent", None))
         caller = _ToolCaller(
             self.tools,
             user_scope_id=getattr(self, "_current_user_scope_id", None),
@@ -14034,11 +14043,12 @@ class Agent:
             user_role=getattr(self, "_current_user_role", None),
             source=current_source,
             session_id=sid,
-            interactive=not self._noninteractive,
+            interactive=not self._noninteractive and not _asked_by_agent,
             gate_enabled=not _ww,
             trust_dir=Path.cwd(),
             decide=self._ask_user_about_gate,
-            on_gate_required=self._push_gate_to_websocket,
+            on_gate_required=None if _asked_by_agent else self._push_gate_to_websocket,
+            channel_lift=not _asked_by_agent,
             stop_check=_session_stop_check(sid),
             authorize=getattr(self, "_tool_authorizer", None),
             # The agent's ceiling (set_allowed_tools): what the schema leaves out is also
@@ -14167,8 +14177,14 @@ class Agent:
             append_domain_log("backend", f"forget_secrets at turn boundary failed: {e}")
 
     def _chat_turn_gates(self, name, tool_instance, args):
-        """The five turn gates. Each returns a RESULT string rather than prompting or
+        """The six turn gates. Each returns a RESULT string rather than prompting or
         raising (Rule 4.1), and all of them run after the hard policy block, never before."""
+        # (e) first: a turn another agent asked for runs no tool that needs the user in
+        # person, and a refused call is no step of the turn (no plan asked for, no progress).
+        if getattr(self, "_turn_asked_by_agent", None):
+            gate_msg = self._agent_request_gate_decision(name, tool_instance)
+            if gate_msg is not None:
+                return gate_msg
         gate_msg = self._forced_call_gate(name, args)
         if gate_msg is not None:
             return gate_msg
@@ -14200,6 +14216,30 @@ class Agent:
         if gate_msg is not None:
             return gate_msg
         return None
+
+    def _agent_request_gate_decision(self, name, tool_instance):
+        """Gate (e): a request another agent wrote (the turn binding's ``asked_by_agent``,
+        today the agent of the user's Veyllo App) runs no tool that
+        `agent_origin.refused_on_agent_request` keeps off: the tools kept off chats, whatever
+        the admin's channel lift says, and the two that would hand the request back to the
+        phone or keep a secret. The same predicate hides them from the schema (the binding),
+        so this answers a name the model writes anyway. FAIL CLOSED: an error while deciding
+        refuses. None outside such a turn and for a tool it may run."""
+        asked_by = getattr(self, "_turn_asked_by_agent", None)
+        if not asked_by or name == "multi_tool_use.parallel":
+            return None
+        try:
+            from vaf.core.agent_origin import refused_on_agent_request
+            tool = tool_instance if tool_instance is not None else (self.tools or {}).get(name)
+            refused = refused_on_agent_request(
+                name, tool, str(getattr(self, "_current_chat_source", "") or ""))
+        except Exception:
+            refused = True
+        if not refused:
+            return None
+        return (f"[APP AGENT] '{name}' does not run on a request of the Veyllo App's agent: it "
+                "needs your user in person. It did NOT run, so do not report it as done; say "
+                "so in your answer.")
 
     def _ask_user_about_gate(self, name, reason, preview=None, choices=None, gate_id=None):
         """How THIS lane reaches a human. Prefer the WebSocket gate when a web session is

@@ -236,6 +236,10 @@ _NAMED_EXCEPTIONS = {
     ("vaf/core/tool_contract.py", "CATEGORY_LABELS"): "the display names of that vocabulary",
     ("vaf/whare_wananga/preconditions.py", "_CONNECTION_CHECKS"):
         "one configured-check FUNCTION per channel, which is code rather than a list",
+    ("vaf/core/channel_reply.py", "CHAT_ADDRESS_KEYS"):
+        "each chat channel is answered by the metadata key its own bridge sets on a turn (a "
+        "Telegram chat id, a Discord channel id, a WhatsApp jid); a channel without such a key "
+        "is answered by its own branch in reply_to_chat",
     ("vaf/api/security_routes.py", "collect_channels_status()"):
         "the security perimeter counts each channel's paired endpoints from that channel's own "
         "config shape (two Telegram whitelists, WhatsApp phone numbers, a verified Discord "

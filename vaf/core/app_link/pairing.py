@@ -150,12 +150,8 @@ def issue(user_scope_id: str, username: str, mode: str) -> Pairing:
         raise PairingRefused("no_direct_path")
     k = channel_pairing.issue_pairing_code(CHANNEL, scope, username, nbytes=pr.K_BYTES)
     exp = int(_clock()) + pr.PAIRING_TTL_SECONDS
-    name = ""
-    try:
-        from vaf.auth.user_workspace import agent_display_name
-        name = agent_display_name(username)
-    except Exception:
-        name = ""
+    from vaf.core.app_link import agent_name
+    name = agent_name(username)
     qr = pr.build_qr("r" if mode == "relay" else "l", k=pr.b64url_decode(k),
                      ca_sha256=pki.ca_sha256(), exp=exp, p=p,
                      api=str(cfg.get("relay_api_base") or "") if mode == "relay" else None,
@@ -358,12 +354,8 @@ def confirm(user_scope_id: str, accept: bool) -> str:
                                   f"{pairing.device.get('fingerprint', '')}")
     except Exception:
         pass
-    agent = ""
-    try:
-        from vaf.auth.user_workspace import agent_display_name
-        agent = agent_display_name(pairing.username)
-    except Exception:
-        agent = ""
+    from vaf.core.app_link import agent_name
+    agent = agent_name(pairing.username)
     import base64
     session.send_json({"t": "paired", "cert": base64.b64encode(der).decode("ascii"),
                        "chain": [base64.b64encode(pki.device_ca_der()).decode("ascii")],

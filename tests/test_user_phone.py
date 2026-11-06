@@ -132,8 +132,9 @@ def test_stop_and_disconnect(app_link_home):
 
 def test_not_in_thinking_or_front_office():
     from vaf.core.front_office_tools import FRONT_OFFICE_ALLOWED_TOOLS
-    from vaf.core.thinking_mode import _SENT_TOOLS
-    assert "user_phone" in _SENT_TOOLS
+    from vaf.core.thinking_mode import _filter_thinking_send_tools
+    tools = {"user_phone": object(), "web_search": object()}
+    assert _filter_thinking_send_tools(tools, "") == ["user_phone"] and "web_search" in tools
     assert "user_phone" not in FRONT_OFFICE_ALLOWED_TOOLS
 
 

@@ -105,6 +105,9 @@ NEWLY_IDENTIFIED = {
     # runner pinned on the live agent; in a workflow step there is no pin, so the tool
     # answers with its refusal, and the identity only scopes that empty read.
     "contact_history": ('user_scope_id', 'username'),
+    # Added with the tool itself. A workflow step's task goes only to the WORKFLOW OWNER's
+    # own connected phone; session_id lets the call see that its turn was stopped.
+    "user_phone": ('session_id', 'user_scope_id', 'username'),
     # Added 2026-08-22 with the tool itself. In the workflow lane a step renders
     # into the WORKFLOW OWNER's browser (pool instance, projects-root jail,
     # workspace mirror) instead of resolving to the machine owner via env.

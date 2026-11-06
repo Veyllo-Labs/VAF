@@ -34,6 +34,27 @@ CHANNEL = "veyllo_app"
 CONFIG_KEY = "veyllo_app_config"
 
 
+_agent_name_resolver = None
+
+
+def set_agent_name_resolver(resolver) -> None:
+    """``resolver(username) -> str``: the name the account's agent goes by, which the QR
+    code (``n``) and the app's greeting show. The application registers it (VAF's web server
+    registers the persona lookup); without one the app shows "VAF". Display only."""
+    global _agent_name_resolver
+    _agent_name_resolver = resolver
+
+
+def agent_name(username: str) -> str:
+    resolver = _agent_name_resolver
+    if resolver is None or not username:
+        return ""
+    try:
+        return str(resolver(username) or "").strip()
+    except Exception:
+        return ""
+
+
 def settings() -> dict:
     """The ``veyllo_app_config`` block with every missing field filled from its default in
     ``Config.DEFAULTS`` (the one place the defaults are written)."""

@@ -28,6 +28,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+def _register_agent_names() -> None:
+    """The app shows the account's agent by its persona name: the harness's lookup, handed
+    to the framework's link (which imports nothing from the auth layer)."""
+    from vaf.auth.user_workspace import agent_display_name
+    from vaf.core.app_link import set_agent_name_resolver
+    set_agent_name_resolver(agent_display_name)
+
+
+_register_agent_names()
+
 MAX_DIRECT_SESSIONS = 64
 _direct_live = {"n": 0}
 _NO_STORE = {"Cache-Control": "no-store"}

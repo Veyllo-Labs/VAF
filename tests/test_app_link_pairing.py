@@ -177,3 +177,23 @@ def test_only_the_first_frame_may_be_pair(app_link_home):
     client.send({"t": "hello", "v": 1, "device_id": "0f8fad5b-d9cb-469f-a165-70867728950e",
                  "caps": []})
     assert client.of("error") == [{"t": "error", "code": "unexpected"}] and pipe.session.closed
+
+
+def test_the_agent_name_comes_from_the_registered_resolver(app_link_home, monkeypatch):
+    import vaf.core.app_link as app_link
+    monkeypatch.setattr(app_link, "_agent_name_resolver", None)
+    p = _issue()
+    assert "n" not in pr.parse_qr(p.qr)
+    app_link.set_agent_name_resolver(lambda username: f"Nova of {username}")
+    p = pairing.issue(SCOPE_A, "alice", "local")
+    assert pr.parse_qr(p.qr)["n"] == "Nova of alice"
+    client, _pipe, _key = _scan(p)
+    pairing.confirm(SCOPE_A, True)
+    client.pump()
+    assert client.of("paired")[0]["agent"] == "Nova of alice"
+    # The framework link imports nothing from the auth layer; the harness registers it.
+    from pathlib import Path
+    for path in (Path(app_link.__file__).parent).glob("*.py"):
+        assert "vaf.auth" not in path.read_text(encoding="utf-8"), path.name
+    routes = Path(app_link.__file__).parents[2] / "api" / "app_link_routes.py"
+    assert "set_agent_name_resolver(agent_display_name)" in routes.read_text(encoding="utf-8")

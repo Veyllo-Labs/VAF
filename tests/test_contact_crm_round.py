@@ -456,7 +456,7 @@ def test_front_office_allow_list_holds_only_the_send_tools_web_search_and_the_pi
     """The one read tool allowed is the one with no free argument: contact_history reads the
     contact the runner pinned on the agent, never a name or an id the model chose."""
     from vaf.core.front_office_tools import FRONT_OFFICE_ALLOWED_TOOLS
-    assert FRONT_OFFICE_ALLOWED_TOOLS == frozenset({"send_whatsapp", "send_telegram", "send_discord", "send_slack", "web_search", "contact_history"})
+    assert FRONT_OFFICE_ALLOWED_TOOLS == frozenset({"send_whatsapp", "send_telegram", "send_discord", "send_veyllo_app", "send_slack", "web_search", "contact_history"})
     from vaf.tools.contact_history import ContactHistoryTool
     assert "contact" not in ContactHistoryTool.parameters["properties"], "no argument names the person"
     assert set(ContactHistoryTool.parameters["properties"]) == {"channel", "query", "limit"}

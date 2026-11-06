@@ -1409,9 +1409,10 @@ When you do send a message:
 Call thinking_done with a brief summary when finished."""
 
 
-# user_phone too: a background thinking run hands nothing to the person's phone.
-_SENT_TOOLS = set(ALL_SEND_TOOLS) | {"send_mail", "reply_mail", "forward_mail", "send_to_user",
-                                     "user_phone"}
+_SENT_TOOLS = set(ALL_SEND_TOOLS) | {"send_mail", "reply_mail", "forward_mail", "send_to_user"}
+# Stripped with the send tools: a background thinking run hands nothing to the person's phone
+# either. Not a send tool itself (it delivers nothing), so not in the automation dedup set.
+_STRIPPED_TOOLS = _SENT_TOOLS | {"user_phone"}
 
 
 def _filter_thinking_send_tools(tools: dict, main_messenger: str) -> list:
@@ -1423,7 +1424,7 @@ def _filter_thinking_send_tools(tools: dict, main_messenger: str) -> list:
     signature stability (callers still pass it). Returns the removed tool names.
     """
     removed = []
-    for tool_name in _SENT_TOOLS:
+    for tool_name in _STRIPPED_TOOLS:
         if tools.pop(tool_name, None) is not None:
             removed.append(tool_name)
     return removed

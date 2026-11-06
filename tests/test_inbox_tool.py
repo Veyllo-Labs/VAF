@@ -79,7 +79,7 @@ def test_every_lane_renders_and_names_its_read_tool(listing):
     assert "  3: account_id=a@x message_id='<q@x>' provider_message_id=18f2 folder=INBOX" in out
     assert "[Room] Phoenix | room_id=r1" in out and "WAITS FOR YOU (invitation)" in out
     assert "Discord: no stored chats yet" in out, "an empty lane says so instead of vanishing"
-    assert listing["kw"]["channels"] == ["whatsapp", "telegram", "discord", "mail", "room"]
+    assert listing["kw"]["channels"] == ["whatsapp", "telegram", "discord", "veyllo_app", "mail", "room"]
 
 
 def test_channel_view_and_toggles_pass_through_and_mail_narrows_by_account_and_folder(listing):

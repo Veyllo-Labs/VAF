@@ -211,12 +211,8 @@ def on_hello(session, hello: Dict[str, Any]) -> None:
     if hello.get("caps") is not None:
         devices.set_caps(did, hello["caps"])
     scope = row["user_scope_id"]
-    agent = ""
-    try:
-        from vaf.auth.user_workspace import agent_display_name
-        agent = agent_display_name(row.get("username"))
-    except Exception:
-        agent = ""
+    from vaf.core.app_link import agent_name
+    agent = agent_name(row.get("username") or "")
     session.send_json({"t": "welcome", "v": pr.PROTOCOL_VERSION,
                        "chat": devices.chat_session_id(scope), "account": row.get("username", ""),
                        "agent": agent or "VAF", "server_time": int(time.time())})
@@ -226,12 +222,7 @@ def on_hello(session, hello: Dict[str, Any]) -> None:
 
 def _dropped_notice(row: Dict[str, Any], count: int) -> str:
     from vaf.core import vocab
-    lang = None
-    try:
-        from vaf.auth.user_workspace import get_user_workspace
-        lang = (get_user_workspace(row.get("username") or "").get_user_identity() or {}).get("language")
-    except Exception:
-        lang = None
+    lang = vocab.resolve_user_language(row.get("user_scope_id"), row.get("username"))
     return vocab.pick("app_outbox_dropped", lang, row.get("user_scope_id"), count=count) or \
         f"{count} older messages are only in VAF's chat history."
 

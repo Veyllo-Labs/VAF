@@ -99,7 +99,7 @@ def test_rows_come_from_every_lane_newest_first(world):
                   "last_ts": NOW - 100, "last": {"sender": "atlas", "text": "Entwurf 3", "mine": False}})
     keys = [r["key"] for r in _rows()["rows"]]
     assert keys == ["room:r1", f"mail:{thread}", "telegram:7", "whatsapp:+491700000042"]
-    assert _rows()["counts"]["per_channel"] == {"whatsapp": 1, "telegram": 1, "discord": 0, "mail": 1, "room": 1}
+    assert _rows()["counts"]["per_channel"] == {"whatsapp": 1, "telegram": 1, "discord": 0, "veyllo_app": 0, "mail": 1, "room": 1}
 
 
 def test_waits_is_the_unanswered_inbound_or_the_agents_question_and_the_agents_reply_lifts_it(world):
@@ -269,12 +269,12 @@ def test_views_groups_and_the_done_toggle(world):
     counts = all_rows["counts"]
     pinned = ("all", "waits", "unread", "agent", "per_channel", "waits_per_channel", "stored_per_channel")
     assert {k: counts[k] for k in pinned} == {"all": 3, "waits": 2, "unread": 2, "agent": 1,
-                                             "per_channel": {"whatsapp": 2, "telegram": 1, "discord": 0, "mail": 0, "room": 0},
-                                             "waits_per_channel": {"whatsapp": 1, "telegram": 1, "discord": 0, "mail": 0, "room": 0},
-                                             "stored_per_channel": {"whatsapp": 3, "telegram": 1, "discord": 0, "mail": 0, "room": 0}}
+                                             "per_channel": {"whatsapp": 2, "telegram": 1, "discord": 0, "veyllo_app": 0, "mail": 0, "room": 0},
+                                             "waits_per_channel": {"whatsapp": 1, "telegram": 1, "discord": 0, "veyllo_app": 0, "mail": 0, "room": 0},
+                                             "stored_per_channel": {"whatsapp": 3, "telegram": 1, "discord": 0, "veyllo_app": 0, "mail": 0, "room": 0}}
     assert sum(counts["unread_per_channel"].values()) == counts["unread"] and counts["invitations"] == 0
     # Every view has its number per channel: the inbox rail nests the views under the open channel.
-    assert counts["agent_per_channel"] == {"whatsapp": 1, "telegram": 0, "discord": 0, "mail": 0, "room": 0}
+    assert counts["agent_per_channel"] == {"whatsapp": 1, "telegram": 0, "discord": 0, "veyllo_app": 0, "mail": 0, "room": 0}
     assert sum(counts["agent_per_channel"].values()) == counts["agent"]
     assert set(counts) == set(pinned) | {"unread_per_channel", "agent_per_channel", "invitations", "bulk_hidden"}, "a new count is a doc and a test, not a surprise"
     assert [r["key"] for r in _rows(include_groups=False)["rows"]] == ["whatsapp:+491700000043", "whatsapp:+491700000042"]
@@ -421,7 +421,7 @@ def test_mark_all_seen_reads_every_lane_at_once_and_respects_the_selection(world
     after = _rows()["counts"]
     assert after["unread"] == 0 and after["waits"] == 0
     assert all(not r["done"] for r in _rows()["rows"]), "read, not done"
-    assert inbox.mark_all_seen("alice", SCOPE) == {"whatsapp": 0, "telegram": 0, "mail": 0, "room": 0}, "a marker never moves backwards, nothing to move twice"
+    assert inbox.mark_all_seen("alice", SCOPE) == {"whatsapp": 0, "telegram": 0, "veyllo_app": 0, "mail": 0, "room": 0}, "a marker never moves backwards, nothing to move twice"
     assert inbox.mark_all_seen("alice", SCOPE, channels=["fax"]) == {}
     # Rooms follow the group toggle, and an invitation is a decision, not a message.
     world.append({"room_id": "r-inv", "name": "Door", "unread": 0, "members": 2, "message_count": 0, "last_ts": 0.0, "last": None, "invited": True})

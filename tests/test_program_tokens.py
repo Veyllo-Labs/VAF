@@ -221,7 +221,8 @@ def test_the_account_tab_reads_on_a_phone_and_in_dark():
     assert "max-md:flex-wrap" in row
     action = re.search(r"const rowAction = `([^`]*)`", page).group(1)
     assert "max-md:basis-full" in action and "max-md:pl-7" in action
-    assert page.count("className={rowAction}") == 2       # the device rows and the token rows
+    # the device rows, the Veyllo App rows in the same list, and the token rows
+    assert page.count("className={rowAction}") == 3
     assert ".format(new Date(iso)).replace(/\\s/g, '\\u00a0')" in page
     assert "text-amber-700 mb-2\">{t('tokenShownOnce')}" in page
     create = page[:page.index("{t('tokenCreate')}")].rsplit("<button", 1)[1]

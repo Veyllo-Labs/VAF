@@ -15,14 +15,19 @@ can be the one linked.
 
 The codes live in this process (the Telegram bridge runs in the web server's process), for
 `PAIRING_TTL_SECONDS`, one per account and channel, and a code is spent by its first use.
-72 random bits, so a guess is not a way in; the bot answers only a sender whose code is live,
-so a stranger learns nothing from trying.
+72 random bits by default, so a guess is not a way in; the bot answers only a sender whose
+code is live, so a stranger learns nothing from trying. The second user is the Veyllo App
+link (vaf/core/app_link/pairing.py), which asks for 32 bytes (``nbytes``), the size its
+protocol fixes for the one-time value in the QR, and asks ``pairing_code_state`` to tell a
+spent code from one that never existed. A spent code is remembered only as its SHA-256 and
+only until its original expiry.
 
 NAMED BOUNDARY: first-party only, like the channel registry (`vaf/core/channels.py`): no
 facade export, no embedder has a shared bot of their own to pair on. Re-measure when one does.
 """
 from __future__ import annotations
 
+import hashlib
 import secrets
 import threading
 import time
@@ -31,21 +36,30 @@ from typing import Any, Dict, Optional, Tuple
 PAIRING_TTL_SECONDS = 600
 
 _codes: Dict[str, Dict[str, Any]] = {}
+# sha256(code) -> (channel, original expiry) of a spent code, so a second use is "used".
+_spent: Dict[str, Tuple[str, float]] = {}
 _lock = threading.Lock()
+
+
+def _digest(code: str) -> str:
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()
 
 
 def _drop_expired(now: float) -> None:
     for code in [c for c, rec in _codes.items() if rec["expires"] <= now]:
         del _codes[code]
+    for digest in [d for d, (_ch, until) in _spent.items() if until <= now]:
+        del _spent[digest]
 
 
-def issue_pairing_code(channel: str, user_scope_id: str, username: str) -> str:
-    """A fresh code for this account on this channel; an earlier one of theirs is withdrawn."""
+def issue_pairing_code(channel: str, user_scope_id: str, username: str, *, nbytes: int = 9) -> str:
+    """A fresh code for this account on this channel; an earlier one of theirs is withdrawn.
+    ``nbytes`` random bytes, URL-safe base64 (9 for Telegram's code, 32 for the app link)."""
     scope = str(user_scope_id or "").strip()
     if not scope:
         raise ValueError("a pairing needs the account's scope")
     now = time.time()
-    code = secrets.token_urlsafe(9)
+    code = secrets.token_urlsafe(int(nbytes))
     with _lock:
         _drop_expired(now)
         for old in [c for c, rec in _codes.items() if rec["channel"] == channel and rec["scope"] == scope]:
@@ -66,7 +80,35 @@ def redeem_pairing_code(channel: str, code: str) -> Optional[Tuple[str, str]]:
         if rec is None or rec["channel"] != channel:
             return None
         del _codes[code]
+        _spent[_digest(code)] = (channel, rec["expires"])
     return rec["scope"], rec["username"]
+
+
+def pairing_code_state(channel: str, code: str) -> str:
+    """"live", "used" (spent, its original lifetime not over) or "unknown" (never issued,
+    expired or withdrawn), without spending it."""
+    code = str(code or "").strip()
+    if not code:
+        return "unknown"
+    with _lock:
+        _drop_expired(time.time())
+        rec = _codes.get(code)
+        if rec is not None and rec["channel"] == channel:
+            return "live"
+        spent = _spent.get(_digest(code))
+        if spent is not None and spent[0] == channel:
+            return "used"
+    return "unknown"
+
+
+def withdraw_pairing_code(channel: str, user_scope_id: str) -> bool:
+    """Withdraw this account's live code on this channel. Whether there was one."""
+    scope = str(user_scope_id or "").strip()
+    with _lock:
+        mine = [c for c, rec in _codes.items() if rec["channel"] == channel and rec["scope"] == scope]
+        for code in mine:
+            del _codes[code]
+    return bool(mine)
 
 
 def pairing_pending(channel: str, user_scope_id: str) -> bool:

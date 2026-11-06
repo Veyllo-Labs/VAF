@@ -981,6 +981,93 @@ def fingerprints_match(left: str, right: str) -> bool:
     return hmac.compare_digest(a, b)
 
 
+# ── the app-link leaf ────────────────────────────────────────────────────────
+
+APP_LINK_NAMES = ("link.vaf.internal", "pair.vaf.internal")
+_APP_LINK_CERT = "app-link.pem"
+_APP_LINK_KEY = "app-link-key.pem"
+
+
+def _app_link_leaf_usable(cert_path: Path, key_path: Path, ca_key, ca_cert) -> bool:
+    """Whether the stored app-link leaf can be served on: present, its key belongs to it,
+    signed by the CURRENT authority, at least ``RENEW_BEFORE_DAYS`` left, and naming exactly
+    the two link names."""
+    try:
+        cert = x509.load_pem_x509_certificate(cert_path.read_bytes())
+        key = serialization.load_pem_private_key(key_path.read_bytes(), password=None)
+    except Exception:
+        return False
+    if not _key_belongs_to(cert, key):
+        return False
+    try:
+        cert.verify_directly_issued_by(ca_cert)
+    except Exception:
+        return False
+    if cert.not_valid_after_utc - datetime.now(timezone.utc) < timedelta(days=RENEW_BEFORE_DAYS):
+        return False
+    try:
+        names = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    except x509.ExtensionNotFound:
+        return False
+    return sorted(names.get_values_for_type(x509.DNSName)) == sorted(APP_LINK_NAMES) \
+        and not names.get_values_for_type(x509.IPAddress)
+
+
+def _issue_app_link_leaf(ssl_dir: Path, ca_key, ca_cert) -> None:
+    constraints = _constraints_of(ca_cert)
+    for name in APP_LINK_NAMES:
+        if not _permits(constraints, x509.DNSName(name)):
+            raise ValueError(f"the local CA may not vouch for {name}, so it cannot serve the "
+                             "app link; renew the authority (vaf server ca renew)")
+    key = ec.generate_private_key(ec.SECP256R1())
+    now = datetime.now(timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "VAF App Link"),
+                                 x509.NameAttribute(NameOID.ORGANIZATION_NAME, "VAF")]))
+        .issuer_name(ca_cert.subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5))
+        .not_valid_after(now + timedelta(days=365))
+        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+        .add_extension(x509.KeyUsage(
+            digital_signature=True, key_encipherment=False, content_commitment=False,
+            data_encipherment=False, key_agreement=False, key_cert_sign=False, crl_sign=False,
+            encipher_only=False, decipher_only=False), critical=True)
+        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+        # Strict verifiers need both identifiers (see _generate_server_cert).
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False)
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key()),
+                       critical=False)
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName(n) for n in APP_LINK_NAMES]),
+                       critical=False)
+        .sign(ca_key, hashes.SHA256())
+    )
+    _write_secret(ssl_dir / _APP_LINK_KEY, key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption()))
+    _write_public(ssl_dir / _APP_LINK_CERT, cert.public_bytes(serialization.Encoding.PEM)
+                  + ca_cert.public_bytes(serialization.Encoding.PEM))
+    logger.info("Issued the app-link certificate: %s", ssl_dir / _APP_LINK_CERT)
+
+
+def app_link_server_files() -> Tuple[Path, Path, bytes]:
+    """(chain path, key path, CA DER) of the certificate the app link serves inside its own
+    TLS: a leaf of the LOCAL CA for ``link.vaf.internal`` and ``pair.vaf.internal``, chain
+    ``[leaf, CA]``. Never the web certificate, which can be the person's own: the app pins
+    this machine's CA (its SHA-256 is the QR's ``ca``). Creates the CA when TLS was never on,
+    and reissues the leaf when it is missing, near its end, from another authority (after
+    ``renew_authority``, which breaks every app's pin) or names anything else."""
+    with _CHANGE_LOCK:
+        ssl_dir = _get_ssl_dir()
+        ca_key, ca_cert = _load_or_create_ca(ssl_dir)
+        cert_path, key_path = ssl_dir / _APP_LINK_CERT, ssl_dir / _APP_LINK_KEY
+        if not _app_link_leaf_usable(cert_path, key_path, ca_key, ca_cert):
+            _issue_app_link_leaf(ssl_dir, ca_key, ca_cert)
+        return cert_path, key_path, ca_cert.public_bytes(serialization.Encoding.DER)
+
+
 def _loaded_chain() -> Optional[bytes]:
     """The certificate bytes a running listener of this process loaded, or None."""
     with _LISTENERS_LOCK:

@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "vectors": {
+    "envelope_empty": {
+      "cid": "ffeeddccbbaa99887766554433221100",
+      "hex": "01ffeeddccbbaa99887766554433221100"
+    },
+    "split_2mib": {
+      "total": 2097152,
+      "pieces": [
+        1048559,
+        1048559,
+        34
+      ],
+      "max_piece": 1048559
+    },
+    "refused": [
+      {
+        "why": "short",
+        "hex": "01000000000000000000000000000000"
+      },
+      {
+        "why": "head",
+        "hex": "0200000000000000000000000000000000aa"
+      },
+      {
+        "why": "empty",
+        "hex": ""
+      }
+    ]
+  }
+}

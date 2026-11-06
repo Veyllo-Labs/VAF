@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "note": "inputs base64url without padding; build_qr(**input) == qr",
+  "vectors": [
+    {
+      "name": "relay_without_direct",
+      "input": {
+        "mode": "r",
+        "p": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+        "api": "https://veyllo.app",
+        "k": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "ca_sha256": "7fK1j-4iz3jmjFpWJ0aZMOZzH50BDl4FJab-TVes4rg",
+        "exp": 1794000000
+      },
+      "qr": "https://veyllo.app/link#v=1&m=r&p=ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8&api=https%3A%2F%2Fveyllo.app&k=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&ca=7fK1j-4iz3jmjFpWJ0aZMOZzH50BDl4FJab-TVes4rg&exp=1794000000"
+    },
+    {
+      "name": "relay_with_direct",
+      "input": {
+        "mode": "r",
+        "p": "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8",
+        "api": "https://veyllo.app",
+        "direct": [
+          "wss://10.66.66.1:8443/api/app-link"
+        ],
+        "name": "Firma XY",
+        "k": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "ca_sha256": "7fK1j-4iz3jmjFpWJ0aZMOZzH50BDl4FJab-TVes4rg",
+        "exp": 1794000000
+      },
+      "qr": "https://veyllo.app/link#v=1&m=r&p=ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8&api=https%3A%2F%2Fveyllo.app&k=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&ca=7fK1j-4iz3jmjFpWJ0aZMOZzH50BDl4FJab-TVes4rg&d=wss%3A%2F%2F10.66.66.1%3A8443%2Fapi%2Fapp-link&n=Firma%20XY&exp=1794000000"
+    },
+    {
+      "name": "local_two_direct",
+      "input": {
+        "mode": "l",
+        "direct": [
+          "wss://192.168.1.20:8443/api/app-link",
+          "wss://[fd00::20]:8443/api/app-link"
+        ],
+        "name": "Büro Müller",
+        "k": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "ca_sha256": "7fK1j-4iz3jmjFpWJ0aZMOZzH50BDl4FJab-TVes4rg",
+        "exp": 1794000000
+      },
+      "qr": "https://veyllo.app/link#v=1&m=l&k=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&ca=7fK1j-4iz3jmjFpWJ0aZMOZzH50BDl4FJab-TVes4rg&d=wss%3A%2F%2F192.168.1.20%3A8443%2Fapi%2Fapp-link,wss%3A%2F%2F%5Bfd00%3A%3A20%5D%3A8443%2Fapi%2Fapp-link&n=B%C3%BCro%20M%C3%BCller&exp=1794000000"
+    }
+  ]
+}

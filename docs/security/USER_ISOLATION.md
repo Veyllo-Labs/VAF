@@ -961,6 +961,21 @@ Where VAF reaches an account on Telegram (`messaging_endpoints.json`, `by_scope`
   other device and 90 days without use; a password change does not.
 - **`user_phone` addresses only the scope it runs for**: the connected devices of that
   account, and only the device a task went to may answer it.
+- **A request of the app's own agent (`agent_ask`) is an agent's text, not the user's.** It
+  runs as the device row's account in that account's chat (a `chat` naming another is refused,
+  fields of the message decide nothing), and its answer goes to the asking device only, by the
+  device's id: the account's other devices get no `delta`, `done`, outbox entry or push of it,
+  and only the asking device can cancel it. The turn is bound with `asked_by_agent`
+  (`vaf/core/turn_binding.py`), which makes it no person's turn: it does not answer the
+  ask-first latch or a waiting background question, does not set the intent, and does not
+  become the last interaction shown in the user's other chats. Its text is stored with
+  `kind="app_agent"` and read by every model inside a fence (`session.model_text`,
+  `vaf/core/agent_origin.py`). The tools kept off chats, `user_phone` and `store_credential` are
+  hidden and refused whatever `channel_tools_unrestricted` says, and a call that needs a
+  confirmation is refused at once. NAMED BOUNDARY: the fence reduces confusion, it does not
+  contain; what the app chat may do without a confirmation stays reachable for the request,
+  and answers the person gave ahead (an "always", a trusted folder, a grant for this chat, the
+  admin bypass) still hold.
 
 ### Discord
 

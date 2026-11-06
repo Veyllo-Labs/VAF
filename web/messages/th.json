@@ -177,6 +177,7 @@
     "tokens": "โทเค็น",
     "attachmentsShort": "ไฟล์แนบ",
     "voiceAgentTag": "เอเจนต์เสียง",
+    "appAgentTag": "จากเอเจนต์ใน Veyllo App",
     "chatHeaderRename": "เปลี่ยนชื่อแชทนี้",
     "msgActionSpeak": "อ่านออกเสียง",
     "msgActionSpeakStop": "หยุดอ่านออกเสียง",

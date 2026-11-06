@@ -23,6 +23,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   hand tasks to your phone (`user_phone`). The Veyllo App can be your main messenger in
   Settings. Your paired phones are listed under Settings, Account, where you can remove one;
   admins switch the relay, replace its secret or dissolve it in the same window.
+- **Veyllo App: the app's own agent can ask your agent.** When the app is connected, its agent
+  can hand your agent a task and read the answer; only the phone that asked gets that answer.
+  Your agent's chat shows such a task as coming from the app's agent, not from you, and tools
+  that need you in person or a confirmation (timers, the browser agent, the sandbox
+  environments, the builders, tasks for the phone, storing a credential) do not run on it.
 - **DeepSeek: choose how long the model thinks before it answers.** Settings > AI & Model has a
   **DeepSeek thinking effort** setting (Standard, Low, High, Max), also available as the config
   key `deepseek_reasoning_effort`. It applies to every DeepSeek call, whichever job makes it

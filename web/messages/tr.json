@@ -177,6 +177,7 @@
     "tokens": "token",
     "attachmentsShort": "Ekler",
     "voiceAgentTag": "Ses ajanı",
+    "appAgentTag": "Veyllo App'teki ajandan",
     "chatHeaderRename": "Bu sohbeti yeniden adlandır",
     "msgActionSpeak": "Sesli oku",
     "msgActionSpeakStop": "Okumayı durdur",

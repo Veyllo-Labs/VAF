@@ -10354,7 +10354,10 @@ function VAFDashboardContent() {
                                                                                 // Voice-call delegation: the voice agent (not the
                                                                                 // user) wrote this - red ring + soft STATIC glow
                                                                                 // (never an animated shadow, GPU-leak rule).
-                                                                                !isBot && msg.kind === 'voice_delegation' && "border border-red-500/60 shadow-[0_0_10px_2px_rgba(239,68,68,0.22)]")}>
+                                                                                !isBot && msg.kind === 'voice_delegation' && "border border-red-500/60 shadow-[0_0_10px_2px_rgba(239,68,68,0.22)]",
+                                                                                // A request the agent of the user's Veyllo App
+                                                                                // wrote (not the user): a static sky ring.
+                                                                                !isBot && msg.kind === 'app_agent' && "border border-sky-500/70")}>
                                                                                 {!isBot && displayAnswer.length > 1169 ? (
                                                                                     <>
                                                                                         <div className="chat-markdown">
@@ -10444,11 +10447,15 @@ function VAFDashboardContent() {
 
                                                             {/* Subtle timestamp below the bubble (messenger style);
                                                                 voice-call delegations carry a "voice agent" tag left
-                                                                of the time so the sender is obvious. */}
+                                                                of the time so the sender is obvious, and so does a
+                                                                request of the Veyllo App's agent. */}
                                                             {(msg.role === 'user' || msg.role === 'assistant') && (
                                                                 <div className={cn("w-full mt-0.5", isBot ? "text-left" : "text-right")}>
                                                                     {!isBot && msg.kind === 'voice_delegation' && (
                                                                         <span className="text-[10px] font-medium text-red-500/80 mr-1.5">{tMain('voiceAgentTag')}</span>
+                                                                    )}
+                                                                    {!isBot && msg.kind === 'app_agent' && (
+                                                                        <span className="text-[10px] font-medium text-sky-600 dark:text-sky-400 mr-1.5">{tMain('appAgentTag')}</span>
                                                                     )}
                                                                     <span className="text-[10px] text-gray-400" title={new Date(msg.timestamp).toLocaleString('en-US', userTimeFormat ? { hour12: userTimeFormat === '12h' } : undefined)}>{formatMessageTime(msg.timestamp, userTimeFormat)}</span>
                                                                     {/* Actions on the answer itself, next to its time. `cleanAnswer` is the

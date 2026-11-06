@@ -177,6 +177,7 @@
     "tokens": "トークン",
     "attachmentsShort": "添付ファイル",
     "voiceAgentTag": "音声エージェント",
+    "appAgentTag": "Veyllo Appのエージェントから",
     "chatHeaderRename": "このチャットの名前を変更",
     "msgActionSpeak": "読み上げ",
     "msgActionSpeakStop": "読み上げを停止",

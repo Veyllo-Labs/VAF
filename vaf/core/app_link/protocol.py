@@ -46,7 +46,7 @@ MAX_JSON_DEPTH = 4
 # The message types the app may send in a link session, and in a pairing session. The ONE
 # list: the validator, the dispatcher and the tests read it.
 MESSAGE_TYPES_FROM_APP = ("hello", "msg", "ack", "read", "typing", "cancel", "caps",
-                          "task_result", "error", "bye")
+                          "task_result", "error", "bye", "agent_ask")
 PAIR_TYPES_FROM_APP = ("pair",)
 TASK_ERRORS = ("declined", "unavailable", "timeout", "failed")
 PAIR_ERRORS = ("expired", "used", "denied", "bad_csr", "busy")
@@ -408,6 +408,19 @@ def validate_from_app(obj: Dict[str, Any], allowed: Iterable[str] = MESSAGE_TYPE
         if not out["text"].strip() and not out["attachments"]:
             # Nothing to hand the agent: an empty turn is refused, not queued.
             raise ProtocolError("bad_field", "text")
+        return out
+    if t == "agent_ask":
+        # A task the app's own agent gives VAF (protocol section 10): its own type, so a VAF
+        # without it answers `unknown_type` instead of taking it for the person's words. No
+        # files in v1: an announced attachment is refused, so no transfer ever starts.
+        out = {"t": t, "id": _uuid(obj.get("id")),
+               "chat": _label(obj.get("chat") if obj.get("chat") != "" else None, "chat",
+                              required=False),
+               "text": _text(obj.get("text"))}
+        if not out["text"].strip():
+            raise ProtocolError("bad_field", "text")
+        if obj.get("attachments"):
+            raise ProtocolError("bad_field", "attachments")
         return out
     if t in ("ack", "read", "cancel"):
         return {"t": t, "id": _uuid(obj.get("id"))}

@@ -177,6 +177,7 @@
     "tokens": "토큰",
     "attachmentsShort": "첨부파일",
     "voiceAgentTag": "음성 에이전트",
+    "appAgentTag": "Veyllo App의 에이전트가 보냄",
     "chatHeaderRename": "이 대화 이름 바꾸기",
     "msgActionSpeak": "읽어주기",
     "msgActionSpeakStop": "읽어주기 중지",

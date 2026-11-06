@@ -65,6 +65,12 @@ Singleton pattern manager that:
 - **Message Display**: User and assistant messages with distinct styling. Messages are shown in conversation order (oldest first). On session reload (`history_update`), messages are sorted by server order (`_order` index), **not** by timestamp - this prevents ordering issues for network clients where client-side and server-side timestamps differ. A final turn-based role sort ensures correct ordering within each turn: system → tool → assistant.
 - **Streaming Responses**: Live updates as agent generates responses. When the agent uses a tool, the text *after* the tool is shown in a **separate** assistant bubble (so you see: first answer → tool card → follow-up answer), instead of one bubble that keeps updating.
 - **Thinking Process**: Collapsible accordion showing agent's reasoning (`<think>` blocks)
+- **User messages nobody typed**: a stored user message carries a `kind` that `history_update`
+  keeps. `voice_delegation` (a task the voice agent handed over in a live call) gets a red ring
+  with a static glow and the tag "Voice agent" left of its time; `app_agent` (a request of the
+  agent in the user's Veyllo App, [VEYLLO_APP.md](../integrations/VEYLLO_APP.md#the-apps-agent-can-ask-your-agent))
+  gets a static sky ring and the tag `main.appAgentTag` ("From your app's Veyllo agent").
+  Both are static on purpose: an animated shadow repaints every frame.
 - **System Steps**: Timeline visualization of agent workflow steps
 - **Actions on a reply**: next to the timestamp under every agent reply sit four small buttons. **Read aloud** speaks it through TTS (it used to float beside the bubble on its own, which read as a different kind of control than the rest). **Save** writes that reply to a Markdown file through the host's own Save dialog (the desktop window's `save_text_as` bridge, a browser download elsewhere; both through `web/lib/download.ts`). **Copy** puts the same Markdown on the clipboard (`copyText` in `web/lib/clipboard.ts`, which falls back to a hidden textarea because `navigator.clipboard` does not exist outside a secure context, and a LAN user on plain HTTP is exactly that case). **Ask again** appears only on the NEWEST reply and only while the chat is idle: it arms on the first click and fires on the second, then discards that exchange and asks the same question again (see `regenerate_last_reply` in [WEBUI_WEBSOCKET_FLOW.md](WEBUI_WEBSOCKET_FLOW.md)). All three read the cleaned answer, never the stored message text, which still carries the thinking block and the tool-call JSON.
 

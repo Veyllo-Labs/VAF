@@ -177,6 +177,7 @@
     "tokens": "Token",
     "attachmentsShort": "附件",
     "voiceAgentTag": "语音智能体",
+    "appAgentTag": "来自 Veyllo App 中的智能体",
     "chatHeaderRename": "重命名这个对话",
     "msgActionSpeak": "朗读",
     "msgActionSpeakStop": "停止朗读",

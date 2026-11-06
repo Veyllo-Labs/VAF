@@ -19,6 +19,17 @@ entries in order, as ``msg`` with the stored text (streamed deltas are never rep
 Every send asks whether the device still stands, so a device removed mid-turn receives
 nothing more of it.
 
+A request of the app's own agent (``agent_ask``, protocol section 10) is a turn of the same
+chat with two differences. Its text is another agent's (vaf/core/agent_origin.py: marked,
+fenced, the tools that need the person off), so it is not stored as the person's message.
+And it is answered on the DEVICE that asked, never the account: ``delta`` and ``done`` carry
+the request's own id and go to that device only, with no ``read`` and no ``typing``, the
+stored answer is put into that device's outbox only, and only that device is notified. The
+device is addressed by its id at every send, so after a drop the answer reaches the session
+it connected again with (the app sends the same id again and gets ``ack``). A device holds
+at most ``AGENT_ASK_OPEN_MAX`` requests queued or running; one that ends without a reply (a
+stop, a cancel, a removal) is answered with ``done`` and its place freed by the sweep.
+
 NAMED BOUNDARY: a file sent while a device is away reaches it as its text line only; the
 file itself goes to the devices connected at the time (the outbox keeps ids, not bytes).
 """
@@ -54,6 +65,7 @@ _lock = threading.RLock()
 _sessions: Dict[str, Any] = {}          # device_id -> its authenticated link session
 _all: set = set()                        # every session alive, handshakes included
 _replies: Dict[str, "Reply"] = {}
+_asks: Dict[str, Dict[str, "OpenAsk"]] = {}  # device_id -> ask id -> the open request
 _seen_ids: Dict[str, Dict[str, float]] = {}
 _msg_times: Dict[str, Deque[float]] = {}
 _touched: Dict[str, float] = {}
@@ -76,6 +88,17 @@ class Reply:
     sent: str = ""
     seq: int = 0
     streaming: bool = True
+    # A request of the app's agent: answered on the device that asked, with its id.
+    ask: bool = False
+    device_id: str = ""
+
+
+@dataclass
+class OpenAsk:
+    chat_sid: str
+    started: float = field(default_factory=time.time)
+    # Set once the turn is in the queue: until then the sweep cannot tell it from a dropped one.
+    queued: bool = False
 
 
 def _clean(text: str) -> str:
@@ -201,6 +224,15 @@ def _to_account(scope: str, obj: Dict[str, Any]) -> List[str]:
     return sent
 
 
+def _to_reply(reply: "Reply", obj: Dict[str, Any]) -> List[str]:
+    """A reply's message: to the device that asked for an agent's request (by its id, so a
+    device that reconnected gets it on its new session; nobody when none is named), to every
+    device of the account otherwise."""
+    if reply.ask:
+        return [reply.device_id] if reply.device_id and _send(reply.device_id, obj) else []
+    return _to_account(reply.scope, obj)
+
+
 # ── hello and what follows ───────────────────────────────────────────────────
 
 def on_hello(session, hello: Dict[str, Any]) -> None:
@@ -223,9 +255,12 @@ def on_hello(session, hello: Dict[str, Any]) -> None:
     scope = row["user_scope_id"]
     from vaf.core.app_link import agent_name
     agent = agent_name(row.get("username") or "")
+    # `agent_ask` is always taken (protocol section 10: no switch); the protocol's reserved
+    # switch message and refusal code for it are never sent.
     session.send_json({"t": "welcome", "v": pr.PROTOCOL_VERSION,
                        "chat": devices.chat_session_id(scope), "account": row.get("username", ""),
-                       "agent": agent or "VAF", "server_time": int(time.time())})
+                       "agent": agent or "VAF", "server_time": int(time.time()),
+                       "agent_ask": True})
     _came_online(did)
     replay(session)
 
@@ -271,10 +306,12 @@ def on_message(session, message: Dict[str, Any], files: List[Dict[str, Any]]) ->
         session.close("removed", bye=True)
         return
     t = message["t"]
-    if t in ("msg", "ack"):
+    if t in ("msg", "ack", "agent_ask"):
         _touch_now_and_then(did, session)
     if t == "msg":
         _on_msg(session, row, message, files)
+    elif t == "agent_ask":
+        _on_agent_ask(session, row, message)
     elif t == "ack":
         devices.outbox_ack(did, message["id"])
     elif t == "read":
@@ -420,31 +457,167 @@ def _on_msg(session, row, message, files) -> None:
     session.send_json({"t": "ack", "id": mid})
 
 
-def _on_cancel(row: Dict[str, Any], ref: str) -> None:
+def _take_ask_slot(device_id: str, ask_id: str, chat_sid: str) -> bool:
+    """Hold one of the device's places for open requests, or False when all are taken."""
+    from vaf.core.app_link.session import AGENT_ASK_OPEN_MAX
+    with _lock:
+        held = _asks.setdefault(device_id, {})
+        if len(held) >= AGENT_ASK_OPEN_MAX:
+            return False
+        held[ask_id] = OpenAsk(chat_sid=chat_sid)
+        return True
+
+
+def _release_ask(device_id: str, ask_id: str) -> bool:
+    """Free a request's place. Whether it was held."""
+    with _lock:
+        held = _asks.get(device_id)
+        if not held or held.pop(ask_id, None) is None:
+            return False
+        if not held:
+            del _asks[device_id]
+        return True
+
+
+def _id_taken(row: Dict[str, Any], ask_id: str) -> bool:
+    """Whether a request id already names a reply of the account, running or stored: an
+    answer stored under it would replace that one."""
+    with _lock:
+        if ask_id in _replies:
+            return True
+    try:
+        from vaf.core import channel_message_store as store
+        return store.get_message(row.get("username") or "", devices.chat_key(row["user_scope_id"]),
+                                 ask_id, direction="out", user_scope_id=row["user_scope_id"],
+                                 channel=CHANNEL) is not None
+    except Exception:
+        return False
+
+
+def _on_agent_ask(session, row, message) -> None:
+    """A task the app's own agent gives VAF: one turn of the account's chat, marked as an
+    agent's request (``app_agent_ask``), answered on this device (module docstring)."""
+    from vaf.core.app_link import settings
     scope = row["user_scope_id"]
+    username = row.get("username") or ""
+    did = row["device_id"]
+    key = devices.chat_key(scope)
+    chat_sid = f"{CHANNEL}_{key}"
+    aid = message["id"]
+    chat = message.get("chat") or ""
+    if chat and chat not in (chat_sid, key):
+        session.send_json({"t": "error", "code": "wrong_chat", "ref": aid})
+        return
+    # Seen, queued or running already: the app sends the same id again after a drop.
+    if _seen_before(did, aid) or _id_taken(row, aid):
+        session.send_json({"t": "ack", "id": aid})
+        return
+    if not _take_ask_slot(did, aid, chat_sid):
+        session.send_json({"t": "error", "code": "rate_limited", "ref": aid})
+        return
+    if not _rate_ok(did):
+        _release_ask(did, aid)
+        session.send_json({"t": "error", "code": "rate_limited", "ref": aid})
+        return
+    from vaf.core.channel_ingress_policy import evaluate_ingress
+    from vaf.core.config import Config
+    allowed, _reason = evaluate_ingress(CHANNEL, Config.get("channel_ingress_policy"),
+                                        explicit_match=True)
+    if not allowed or not settings().get("enabled", True):
+        _release_ask(did, aid)
+        session.send_json({"t": "error", "code": "refused", "ref": aid})
+        return
+    # Not stored as a message of the person (no inbox entry, no unread count, no hit of the
+    # read tools): the chat's history holds it, marked as the app agent's.
+    try:
+        from vaf.core.task_queue import TaskQueue
+        TaskQueue().add(session_id=chat_sid, input_text=message["text"], source=CHANNEL,
+                        metadata={"user_scope_id": scope, "username": username,
+                                  "origin_channel": CHANNEL, "task_class": "interactive",
+                                  "app_device_id": did, "app_agent_ask": True,
+                                  "app_ask_id": aid})
+    except Exception:
+        _release_ask(did, aid)
+        raise
+    with _lock:
+        held = _asks.get(did, {}).get(aid)
+        if held is not None:
+            held.queued = True
+    _remember(did, aid)
+    session.send_json({"t": "ack", "id": aid})
+
+
+def _drop_queued_asks(chat_sid: str, accept: Callable[[Dict[str, Any]], bool]) -> int:
+    """Take the queued requests ``accept(metadata)`` names out of the queue, free their places
+    and answer each with ``done`` (no text) on its device. How many were dropped."""
+    from vaf.core.task_queue import TaskQueue
+    dropped: Dict[tuple, None] = {}
+
+    def _where(task) -> bool:
+        meta = task.metadata or {}
+        if not meta.get("app_agent_ask") or not accept(meta):
+            return False
+        dropped[(str(meta.get("app_device_id") or ""), str(meta.get("app_ask_id") or ""))] = None
+        return True
+
+    TaskQueue().drop_queued_tasks_for_session(chat_sid, where=_where)
+    for did, aid in dropped:
+        _release_ask(did, aid)
+        if did and aid:
+            _send(did, {"t": "done", "id": aid})
+    return len(dropped)
+
+
+def _on_cancel(row: Dict[str, Any], ref: str) -> None:
+    """Stop a running reply of the account (an agent's request only from the device that
+    asked), or drop a queued request of this device. Another device cannot touch a request."""
+    scope = row["user_scope_id"]
+    did = row["device_id"]
+    chat_sid = devices.chat_session_id(scope)
     with _lock:
         running = [r for r in _replies.values() if r.scope == scope
-                   and ref in (r.id, r.app_message_id)]
-    if not running:
+                   and ref in (r.id, r.app_message_id)
+                   and (not r.ask or r.device_id == did)]
+        queued_mine = ref in _asks.get(did, {})
+    if running:
+        from vaf.core import revocation
+        revocation.stop_session(chat_sid, include_subagents=False)
         return
-    from vaf.core import revocation
-    revocation.stop_session(devices.chat_session_id(scope), include_subagents=False)
+    if queued_mine:
+        _drop_queued_asks(chat_sid, lambda meta: meta.get("app_ask_id") == ref
+                          and meta.get("app_device_id") == did)
 
 
 # ── the turn's reply ─────────────────────────────────────────────────────────
 
+def _reply_for(meta: Dict[str, Any], scope: str) -> Reply:
+    """The reply of a turn: an agent's request answers under its own id on the device that
+    asked; every other turn under a new id, to the account."""
+    username = str(meta.get("username") or "")
+    key = devices.chat_key(scope)
+    if meta.get("app_agent_ask"):
+        return Reply(id=str(meta.get("app_ask_id") or uuid.uuid4()), scope=scope,
+                     username=username, chat_key=key, ask=True,
+                     device_id=str(meta.get("app_device_id") or ""))
+    return Reply(id=str(uuid.uuid4()), scope=scope, username=username, chat_key=key,
+                 app_message_id=str(meta.get("app_message_id") or ""))
+
+
 def turn_started(meta: Dict[str, Any]) -> Optional[str]:
     """A queued turn of the account's chat starts: ``read`` for the message that started it
-    and ``typing on``. Mints the reply id and remembers it in ``meta`` (``app_reply_id``)."""
+    and ``typing on``. Mints the reply id and remembers it in ``meta`` (``app_reply_id``).
+    An agent's request answers under its own id and gets neither: the asking agent waits for
+    its ``done``."""
     scope = str(meta.get("user_scope_id") or "").strip()
     if not scope:
         return None
-    key = devices.chat_key(scope)
-    reply = Reply(id=str(uuid.uuid4()), scope=scope, username=str(meta.get("username") or ""),
-                  chat_key=key, app_message_id=str(meta.get("app_message_id") or ""))
+    reply = _reply_for(meta, scope)
     with _lock:
         _replies[reply.id] = reply
     meta["app_reply_id"] = reply.id
+    if reply.ask:
+        return reply.id
+    key = reply.chat_key
     chat = f"{CHANNEL}_{key}"
     if reply.app_message_id:
         _to_account(scope, {"t": "read", "id": reply.app_message_id})
@@ -470,7 +643,7 @@ def stream_round(reply_id: Optional[str], text: str, number: int) -> None:
         return
     reply.sent = full
     reply.seq += 1
-    _to_account(reply.scope, {"t": "delta", "id": reply.id, "seq": reply.seq, "text": increment})
+    _to_reply(reply, {"t": "delta", "id": reply.id, "seq": reply.seq, "text": increment})
 
 
 def standing_devices(user_scope_id: Any) -> List[Dict[str, Any]]:
@@ -480,42 +653,54 @@ def standing_devices(user_scope_id: Any) -> List[Dict[str, Any]]:
     return [r for r in devices.for_scope(scope) if devices.row_stands(r)] if scope else []
 
 
-def _store_out(scope: str, username: str, message_id: str, text: str, *, document: bool = False) -> None:
+def _store_out(scope: str, username: str, message_id: str, text: str, *, document: bool = False,
+               device_id: Optional[str] = None) -> None:
+    """Stored once; an outbox entry for every standing device, or for ``device_id`` only."""
     from vaf.core.channel_message_store import append_message
     append_message(username=username, chat_id=devices.chat_key(scope), body=text, direction="out",
                    message_id=message_id, content_type="document" if document else "text",
                    channel=CHANNEL, user_scope_id=scope)
     now = time.time()
     for row in standing_devices(scope):
-        devices.outbox_add(row["device_id"], message_id, ts=now)
+        if device_id is None or row["device_id"] == device_id:
+            devices.outbox_add(row["device_id"], message_id, ts=now)
 
 
 def finish_reply(meta: Dict[str, Any], final_text: str) -> bool:
     """The turn ended: ``done`` with the final text to every connected device of the account
     and the reply stored once with an outbox entry per device (an absent device gets it as
-    one ``msg`` after its next ``welcome``)."""
+    one ``msg`` after its next ``welcome``). An agent's request: all of that for the device
+    that asked only, under the request's id, and its place freed."""
     scope = str(meta.get("user_scope_id") or "").strip()
     if not scope:
         return False
     with _lock:
         reply = _replies.pop(str(meta.get("app_reply_id") or ""), None)
     if reply is None:
-        reply = Reply(id=str(uuid.uuid4()), scope=scope, username=str(meta.get("username") or ""),
-                      chat_key=devices.chat_key(scope))
+        reply = _reply_for(meta, scope)
     meta.pop("app_reply_id", None)
     text = str(final_text or "").strip()
     chat = f"{CHANNEL}_{reply.chat_key}"
     if text:
-        _store_out(scope, reply.username, reply.id, text)
+        _store_out(scope, reply.username, reply.id, text,
+                   device_id=reply.device_id if reply.ask else None)
     done = {"t": "done", "id": reply.id}
     if text:
         done["final_text"] = text
-    reached = set(_to_account(scope, done))
-    _to_account(scope, {"t": "typing", "chat": chat, "on": False})
+    reached = set(_to_reply(reply, done))
+    if not reply.ask:
+        _to_account(scope, {"t": "typing", "chat": chat, "on": False})
     if text:
         for row in devices.for_scope(scope):
+            if reply.ask and row["device_id"] != reply.device_id:
+                continue
             if row["device_id"] not in reached:
                 _went_offline(row)
+    if reply.ask:
+        _release_ask(reply.device_id, reply.id)
+        # Answered once: a later text of the same turn (an error after the answer) goes
+        # nowhere rather than to every device.
+        meta["app_ask_closed"] = True
     return True
 
 
@@ -576,10 +761,16 @@ def file_fits(path: str) -> bool:
 
 def send_text(meta: Dict[str, Any], text: str) -> bool:
     """The plain-text answer of ``channel_reply.reply_to_chat``: the end of the running reply
-    when there is one, else a message."""
+    when there is one, else a message. An agent's request is always answered as its reply,
+    on the device that asked (a turn that failed before its reply started included), and
+    never twice."""
     with _lock:
         running = str(meta.get("app_reply_id") or "") in _replies
     if running:
+        return finish_reply(meta, text)
+    if meta.get("app_agent_ask"):
+        if meta.get("app_ask_closed"):
+            return False
         return finish_reply(meta, text)
     return deliver(meta.get("user_scope_id"), meta.get("username"), text)
 
@@ -603,6 +794,7 @@ def sweep(now: Optional[float] = None) -> None:
     with _lock:
         for rid in [r.id for r in _replies.values() if wall_now - r.started > REPLY_MAX_SECONDS]:
             del _replies[rid]
+    settle_asks(wall_now)
     try:
         from vaf.core.app_link import pairing
         pairing.sweep()
@@ -615,6 +807,31 @@ def sweep(now: Optional[float] = None) -> None:
             devices.expire_idle(wall)
         except Exception:
             logger.debug("app link: expiring idle devices failed", exc_info=True)
+
+
+def settle_asks(now: Optional[float] = None) -> int:
+    """Requests of the app's agent that ended without a reply: no longer queued, taken by a
+    worker or replying (the web UI's stop, a removal, a turn that never started), or open
+    longer than ``REPLY_MAX_SECONDS``. Each is answered with ``done`` on its device and its
+    place freed. How many."""
+    from vaf.core.task_queue import TaskQueue
+    wall = time.time() if now is None else now
+    with _lock:
+        held = [(did, aid, ask) for did, asks in _asks.items() for aid, ask in asks.items()]
+        replying = set(_replies)
+    ended = 0
+    for did, aid, ask in held:
+        if wall - ask.started <= REPLY_MAX_SECONDS:
+            if aid in replying or not ask.queued:
+                continue
+            if TaskQueue().has_queued(ask.chat_sid, in_flight=True, where=lambda t, d=did, a=aid: (
+                    (t.metadata or {}).get("app_ask_id") == a
+                    and (t.metadata or {}).get("app_device_id") == d)):
+                continue
+        if _release_ask(did, aid):
+            ended += 1
+            _send(did, {"t": "done", "id": aid})
+    return ended
 
 
 def _run() -> None:
@@ -652,6 +869,7 @@ def reset() -> None:
         _sessions.clear()
         _all.clear()
         _replies.clear()
+        _asks.clear()
         _seen_ids.clear()
         _msg_times.clear()
         _touched.clear()

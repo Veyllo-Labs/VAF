@@ -177,6 +177,7 @@
     "tokens": "Tokens",
     "attachmentsShort": "Anhänge",
     "voiceAgentTag": "Voice-Agent",
+    "appAgentTag": "Vom Veyllo-Agenten deiner App",
     "chatHeaderRename": "Diesen Chat umbenennen",
     "msgActionSpeak": "Vorlesen",
     "msgActionSpeakStop": "Vorlesen beenden",

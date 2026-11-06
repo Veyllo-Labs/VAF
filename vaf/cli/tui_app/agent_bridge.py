@@ -115,6 +115,10 @@ class _DrainSurface:
 # ordinary "@name:value" still captures just "name" as it always did.
 _ATTACH_RE = re.compile(r"@((?:[A-Za-z]:)?[\w\./\\-]+)")
 
+# The line before a request the agent of the user's Veyllo App wrote, in a replayed
+# transcript (`_transcript_entries`).
+APP_AGENT_TUI_LABEL = "[from the Veyllo agent of your app]"
+
 
 def _inline_attachments(text: str, on_error=None) -> str:
     def _read(match):
@@ -760,13 +764,18 @@ class AgentBridge:
         """(role, text, HH:MM) rows for a transcript replay - user/assistant
         only, empty bodies dropped. The persisted timestamp is local ISO; its
         HH:MM is shown so a replayed head does not claim the message happened
-        just now."""
+        just now. A request the agent of the user's Veyllo App wrote is stored
+        as a user message too; it gets a label line, so it does not read as the
+        user's own words."""
+        from vaf.core.agent_origin import APP_AGENT_KIND
         entries = []
         for m in getattr(session, "messages", []) or []:
             role = cls._message_field(m, "role")
             text = (cls._message_field(m, "content") or "").strip()
             if role not in ("user", "assistant") or not text:
                 continue
+            if role == "user" and cls._message_field(m, "kind") == APP_AGENT_KIND:
+                text = f"{APP_AGENT_TUI_LABEL}\n{text}"
             ts = str(cls._message_field(m, "timestamp") or "")
             when = ts[11:16] if len(ts) >= 16 else ""
             entries.append((role, text, when))

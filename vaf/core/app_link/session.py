@@ -47,6 +47,9 @@ PAIR_WAIT_SECONDS = 180
 PRE_OPEN_MAX_PAYLOAD = 16 * 1024
 MAX_BUFFERED = 4 * 1024 * 1024
 MSG_PER_MINUTE = 30
+# Requests of the app's own agent (`agent_ask`) one device may have queued or running at once;
+# they count against MSG_PER_MINUTE too.
+AGENT_ASK_OPEN_MAX = 3
 MAX_TRANSFERS = 4
 TRANSFER_SILENCE_SECONDS = 60
 SESSIONS_PER_MINUTE_PER_CONNECTION = 30

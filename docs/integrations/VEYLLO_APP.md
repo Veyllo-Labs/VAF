@@ -111,9 +111,52 @@ reminder) and waits for its answer, up to its timeout. With no phone connected i
 once and nothing is sent or kept for later. Its answer reaches your agent marked as data the
 phone reported, never as instructions. The phone asks you itself before sensitive actions.
 
-**Tools that need you to confirm** (the shell, Python, SSH, FTP, the sandbox environments, the
-browser agent, the builders, timers) stay off in the app chat, as on Telegram: protocol v1 has
-no confirmation message. They come once a confirmation type is agreed with the app.
+**Tools in the app chat** follow the rules of every messaging channel
+(`vaf/core/tool_contract.py`, `evaluate_tool_policy`), because protocol v1 has no confirmation
+message. The host shell, host Python, SSH and FTP never run there: they act on a computer and
+need a confirmation only the web UI can show. The other tools kept off chats (the sandbox
+environments, the browser agent, the builders, background commands, timers) depend on the
+admin's `channel_tools_unrestricted`: on, the default, they run in the app chat without a
+confirmation, as on Telegram; off, they stay off. A request of the app's own agent never gets
+them (next section).
+
+## The app's agent can ask your agent
+
+The agent in the Veyllo app can hand your agent a task while the app is connected
+(`agent_ask`, its own message type, so an older VAF answers "unknown type" and the app's tool
+stays away). There is no switch for it: every `welcome` says that VAF takes it. Such a request
+is a turn of your account's app chat, with these differences
+(`vaf/core/app_link/bridge.py`, `vaf/core/agent_origin.py`):
+
+- **It is the agent's text, not yours.** VAF's chat shows it with the tag "From your app's
+  Veyllo agent" and a sky-blue ring, the terminal with a label line. Your agent reads it inside
+  a fence that says the app's agent wrote it on your behalf and that it may carry text that
+  agent read elsewhere; every later reader of the chat (a reload, the compaction, the chat
+  history tools) reads it the same way. It is not stored as your message in the inbox, does not
+  become your last words shown in your other chats, and does not answer a question your agent
+  is waiting on.
+- **Tools that need you stay off.** Every tool kept off chats, whatever
+  `channel_tools_unrestricted` says, plus `user_phone` (it would hand the task back to the
+  phone that is waiting) and `store_credential`. A call that needs a confirmation is refused at
+  once; no dialog appears in the web UI and nothing waits. Answers you gave ahead still hold: a
+  tool you allowed always, a trusted folder, an "allow for this chat" in the app chat, and the
+  admin bypass. Everything the app chat may do without a confirmation stays possible,
+  memory writes and sending mail included.
+- **The answer goes to the phone that asked.** It streams as `delta` and ends with `done`, both
+  under the request's own id, to that device only, without "read" or "typing"; it is held in
+  that device's outbox only, and only that device gets a push. Your other phones see nothing
+  of it in the app (VAF's chat history keeps both). After a dropped connection the app sends the
+  same id again and gets only an acknowledgement; the answer reaches the device on its new
+  connection, or later from the outbox as a message with that id.
+- **Limits.** At most three requests per device are queued or running at once, and they count
+  against the device's 30 messages per minute; an id seen in the last 24 hours, or one that
+  already names a stored answer, is only acknowledged. A request that fails answers with
+  `done` and the failure; the app cancels one with its id (only the device that asked can), and
+  one that ends without an answer (stopped in the web UI, dropped with its device) gets an empty
+  `done`.
+- **Who reads the answers.** The app's agent reads VAF's answers with the app's own chat
+  model, so with Veyllo's models in the app, what VAF answers goes to Veyllo, even when VAF
+  itself runs fully local.
 
 ## Cost
 

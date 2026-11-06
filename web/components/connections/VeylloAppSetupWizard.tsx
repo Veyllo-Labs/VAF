@@ -44,6 +44,11 @@ const api = (path: string) => `/api/app-link${path}`;
  *  linked: VAF never fetches it. */
 const PRIVACY_URL = 'https://veyllo.app/legal/privacy';
 
+/** Withdraw the account's live code on the server (its K and the relay claim). */
+const withdrawCurrent = () => {
+    void fetch(api('/pairings/current'), { method: 'DELETE', credentials: 'include', keepalive: true }).catch(() => {});
+};
+
 /** Every state GET /api/app-link/pairings/current can answer (vaf/core/app_link/pairing.py),
  *  and the view it is shown in. The key set is held against the server by a test. */
 const PAIRING_VIEWS = {
@@ -226,6 +231,8 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
     const pairingRef = useRef<Pairing>({ state: 'none' });
     pairingRef.current = pairing;
     const pollSeq = useRef(0);
+    // The newest issue() call: a stale answer of the newest one is a code nobody shows.
+    const issueSeq = useRef(0);
 
     const relayAllowed = status?.relay.enabled !== false;
     const directAvailable = !!status?.direct.available;
@@ -276,6 +283,7 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
 
     const issue = useCallback(async (mode: Way) => {
         const seq = ++pollSeq.current;
+        issueSeq.current = seq;
         setBusy('issue');
         setIssueRefusal(null);
         setQrPng(null);
@@ -287,11 +295,18 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
                 body: JSON.stringify({ mode }),
             });
             const data = await res.json().catch(() => ({}));
-            if (seq !== pollSeq.current) return;
+            if (seq !== pollSeq.current) {
+                // Overtaken while the server was issuing (the window closed, or the code ran
+                // out): the code it just issued is on nobody's screen, so it is withdrawn. Not
+                // when a newer issue() started, which replaces it on the server and may be the
+                // account's current code by now.
+                if (res.ok && issueSeq.current === seq) withdrawCurrent();
+                return;
+            }
             if (!res.ok) {
                 // A refused QR leaves the account's earlier one live on the server (a refusal
                 // withdraws nothing): withdraw it, since it is no longer on screen.
-                void fetch(api('/pairings/current'), { method: 'DELETE', credentials: 'include' }).catch(() => {});
+                withdrawCurrent();
                 if (data.code === 'window_closed') {
                     setPairing({ state: 'none' });
                     setView('explain');
@@ -370,7 +385,7 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
         pairingRef.current = { state: 'none' };
         ++pollSeq.current;
         if (state === 'issued' || state === 'claimed') {
-            void fetch(api('/pairings/current'), { method: 'DELETE', credentials: 'include', keepalive: true }).catch(() => {});
+            withdrawCurrent();
         } else if (state === 'awaiting_confirm') {
             void fetch(api('/pairings/current/confirm'), {
                 method: 'POST', credentials: 'include', keepalive: true,
@@ -909,8 +924,9 @@ function RelayAdminSection({ onChanged }: { onChanged: () => void }) {
                                                     <p className={meta}>{tAccount('appLastConnected', { when: format(row.last_seen_at) })}</p>
                                                     <p className={meta}>
                                                         {tAccount('appPaired', { when: format(row.created_at) })}
-                                                        {' · '}
-                                                        <span className="font-mono whitespace-nowrap">{tAccount('appFingerprint', { fingerprint: row.fingerprint })}</span>
+                                                        {/* Below md the fingerprint takes a line of its own, so no dot ends a line. */}
+                                                        <span className="max-md:hidden">{' · '}</span>
+                                                        <span className="font-mono whitespace-nowrap max-md:block">{tAccount('appFingerprint', { fingerprint: row.fingerprint })}</span>
                                                     </p>
                                                 </div>
                                                 <button type="button" disabled={busy !== null} onClick={() => setAsking({ remove: row })}

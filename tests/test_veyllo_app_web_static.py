@@ -262,7 +262,9 @@ def test_the_poll_and_the_close():
     assert re.search(r"\}, 2000\);", poll)
     leave = _between(src, "const leave = useCallback(() => {", "}, []);")
     withdraw = _between(leave, "if (state === 'issued' || state === 'claimed') {", "} else if")
-    assert "api('/pairings/current'), { method: 'DELETE'" in withdraw
+    assert "withdrawCurrent();" in withdraw
+    helper = _between(src, "const withdrawCurrent = () => {", "};")
+    assert "api('/pairings/current'), { method: 'DELETE'" in helper
     deny = _between(leave, "} else if (state === 'awaiting_confirm') {", "setPairing(")
     assert "api('/pairings/current/confirm')" in deny and "JSON.stringify({ accept: false })" in deny
     # The QR and the device leave the page's state with the window.
@@ -272,6 +274,21 @@ def test_the_poll_and_the_close():
     # X, Escape and the backdrop all go through close; so does a close from outside.
     assert "useEscapeLayer({ active: isOpen, level: 60, onEscape: close });" in src
     assert "onClick={close}>" in src and "return () => leave();" in src
+
+
+def test_a_code_nobody_shows_is_withdrawn():
+    """Two ways a code stays live on the server while no screen shows it: a refused new code
+    (the server keeps the earlier one), and an answer that arrives after the window closed.
+    Both withdraw it; an answer overtaken by a newer issue() does not, since the newer code
+    replaces it on the server. MUTATION: drop the DELETE in the refusal branch; drop the
+    one in the overtaken branch; withdraw also when a newer issue() started - red."""
+    src = _src(WIZARD)
+    issue = _between(src, "const issue = useCallback(async (mode: Way) => {", "}, [refusalText, t]);")
+    assert "issueSeq.current = seq;" in issue
+    overtaken = _between(issue, "if (seq !== pollSeq.current) {", "return;")
+    assert "if (res.ok && issueSeq.current === seq) withdrawCurrent();" in overtaken
+    refused = _between(issue, "if (!res.ok) {", "if (data.code === 'window_closed') {")
+    assert "withdrawCurrent();" in refused
 
 
 def test_the_switch_is_the_d14_switch():
@@ -359,3 +376,35 @@ def test_admin_section_is_admins_only():
     dissolve = _between(section, "const dissolve = async", "\n    };\n")
     assert "api('/relay/dissolve')" in dissolve and "JSON.stringify({ code: code.trim() })" in dissolve
     assert "<Switch on={relay.enabled}" in section and "{row.username}" in section
+
+
+def test_the_window_promises_what_each_way_delivers():
+    """Push reaches a phone only when it paired through the Veyllo relay (no relay member, no
+    notify), a task for the phone costs half a cent per direction, 2FA is set up at sign-in or
+    after an admin's reset, and the switch that gives the phone a direct address is named as the
+    Local Network tab names it. MUTATION: the old Local text without the push sentence in one
+    locale; the cost sentence without the task price - red."""
+    for locale in LOCALES:
+        cat = _catalog(locale)
+        keys = cat["settings"]["veylloApp"]
+        assert "veyllo relay" in keys["canReceive"].lower(), locale
+        assert "Veyllo Relay" in keys["explainLocal"], locale
+        for key in ("costSentence", "explainRelay"):
+            assert any(w in keys[key] for w in ("half", "halbe", "0.5", "yarım")), (locale, key)
+        hosting = cat["settings"]["localNetwork"]["enableHosting"]
+        for text in (keys["impossibleAdmin"], keys["refusalNoDirectAdmin"], keys["refusals"]["no_direct_path"]):
+            assert hosting in text, (locale, text)
+        assert "2FA" in keys["refusals"]["twofa_not_set_up"], locale
+    en = _catalog("en")["settings"]["veylloApp"]
+    assert "User Management" in en["refusals"]["twofa_not_set_up"]
+    assert "(으)로" not in _catalog("ko")["settings"]["veylloApp"]["appName"]
+    assert "Wähle Lokal" in _catalog("de")["settings"]["veylloApp"]["relayErrors"]["relay_unavailable"]
+
+
+def test_no_dot_ends_a_device_line_on_a_phone():
+    """Below md the fingerprint takes a line of its own and the separator before it goes, in the
+    Account rows and in the admin list. MUTATION: show the dot below md again - red."""
+    for path in (SESSIONS, WIZARD):
+        src = _src(path)
+        assert "<span className=\"max-md:hidden\">{' · '}</span>" in src, path.name
+        assert "font-mono whitespace-nowrap max-md:block\">" in src, path.name

@@ -342,8 +342,9 @@ export default function SessionsSection() {
                                 </p>
                                 <p className={meta}>
                                     {t('appPaired', { when: day(fromUnix(row.created_at)) })}
-                                    {' · '}
-                                    <span className="font-mono whitespace-nowrap">{t('appFingerprint', { fingerprint: row.fingerprint })}</span>
+                                    {/* Below md the fingerprint takes a line of its own, so no dot ends a line. */}
+                                    <span className="max-md:hidden">{' · '}</span>
+                                    <span className="font-mono whitespace-nowrap max-md:block">{t('appFingerprint', { fingerprint: row.fingerprint })}</span>
                                 </p>
                             </div>
                             <button type="button" onClick={() => setAsking(row)} disabled={busy !== null} className={rowAction}>

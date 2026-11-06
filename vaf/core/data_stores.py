@@ -370,8 +370,21 @@ def is_vaf_state(path: Any) -> bool:
     and resolved, for the path and for each root, normalised by `_norm_parts`. Fail-closed:
     any error answers True.
 
-    NAMED BOUNDARIES. A hard link and a swap between this check and the open need a lane
-    that already runs code on the host. Windows 8.3 short names are expanded by the resolved
+    NAMED BOUNDARIES. This answers for a path, and a path can change after it is asked.
+    Code in a sandbox environment (``sandbox_exec``, the coder's jailed ``bash``) creates
+    links in its mounted folder, which the host sees as ordinary entries: a link at the
+    name a writer is about to open, or a folder swapped for a link between this check and
+    the open. The mitigation is `vaf.core.path_jail.open_for_write`, which opens the folder
+    first, refuses a link as the last component and asks this question again on the real
+    path of the folder it opened; every writer of a name a model chose goes through it. Two
+    gaps stay. On Windows there is no open relative to a folder handle and no
+    ``O_NOFOLLOW``, so a link or junction swapped in between the check and the open is
+    followed for that one open (a file created in VAF's state that way is removed again).
+    And ``write_file``/``edit_file`` write a temporary file beside the target and rename it
+    into place, which resolves the folder again at the rename; a folder swapped for a link
+    in that window carries the rename with it. A hard link is not seen at all, but a sandbox
+    environment cannot make one to a file outside its mount, and a mount that holds VAF's
+    state is refused (`holds_vaf_state`). Windows 8.3 short names are expanded by the resolved
     half (``realpath`` asks for the final path); a short name of a folder that does not exist
     yet has nothing to expand and stays unseen. The web UI's own save routes let a signed-in
     admin save into the data directory on purpose (``_allowed_file_path`` in web_server.py):

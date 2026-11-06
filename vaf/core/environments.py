@@ -650,7 +650,8 @@ class EnvironmentManager:
             raise EnvironmentRefused(f"{project_path} is not a directory")
         if is_unsafe_project_dir(p):
             raise EnvironmentRefused(f"{p} cannot be mounted: it is the home directory, a "
-                                     f"standard folder itself, VAF's own data or VAF's code")
+                                     f"standard folder itself, VAF's own data or VAF's code; "
+                                     f"choose a folder under Documents")
         try:
             assert_safe_workspace(p)
         except ValueError as e:
@@ -1146,7 +1147,8 @@ class EnvironmentManager:
         from vaf.core.data_stores import holds_vaf_state, is_vaf_state
         dest_root = Path(host_dir).resolve()
         if is_vaf_state(dest_root):
-            raise EnvironmentRefused(f"cannot copy into {dest_root}: it is VAF's own data")
+            raise EnvironmentRefused(f"cannot copy into {dest_root}: it is VAF's own data; "
+                                     "pick another folder")
         dest_root.mkdir(parents=True, exist_ok=True)
         written: List[str] = []
         # A target outside dest_root is dropped, so only a dest_root that holds state can
@@ -1159,7 +1161,7 @@ class EnvironmentManager:
                 return None
             if check and is_vaf_state(target):
                 raise EnvironmentRefused(f"cannot copy {member.name} into {dest_root}: it "
-                                         f"would write into VAF's own data")
+                                         f"would write into VAF's own data; pick another folder")
             return target
 
         with tarfile.open(fileobj=io.BytesIO(r.stdout), mode="r") as tar:

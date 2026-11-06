@@ -507,12 +507,32 @@ def _resolve_folder_alias(path_str: str) -> str:
     
     return path_str
 
-# The answer to a write into VAF's own state. It names the dedicated tools so the model
-# switches to them instead of retrying the file tool.
+# The answers to a write into VAF's own state. They name what to use instead, so the model
+# switches to it rather than retrying the file tool: the dedicated tools for the three kinds
+# of content that have one, and the settings' own commands for everything else (the MCP
+# server list, the tool permissions, the configuration), which none of those tools changes.
 VAF_STATE_WRITE_REFUSAL = (
     "Access denied: VAF's own data (tools, skills, workflows, settings) is changed through its "
     "own tools - create_agent_tool, create_skill/update_skill, create_agent_workflow - not the "
     "file tools")
+VAF_SETTINGS_WRITE_REFUSAL = (
+    "Access denied: this is VAF's own data (settings such as the MCP servers, tool permissions "
+    "or the configuration), which the file tools do not change; settings have their own "
+    "commands")
+_STATE_CONTENT_FOLDERS = frozenset({"custom_tools", "skills", "workflows"})
+
+
+def _vaf_state_refusal(path) -> str:
+    """The refusal for a write into VAF's state at ``path``: the content kinds that have a tool
+    of their own get those tools named, everything else the settings answer. Both spellings:
+    a link in Documents that points at custom_tools names no content folder itself, its
+    target does."""
+    try:
+        real = os.path.realpath(path)
+    except (OSError, ValueError):
+        real = ""
+    parts = {c.casefold() for p in (str(path), real) for c in p.replace("\\", "/").split("/")}
+    return VAF_STATE_WRITE_REFUSAL if parts & _STATE_CONTENT_FOLDERS else VAF_SETTINGS_WRITE_REFUSAL
 
 
 def is_safe_path(path, *, read_only=False):
@@ -538,7 +558,7 @@ def is_safe_path(path, *, read_only=False):
         if not read_only:
             from vaf.core.data_stores import is_vaf_state
             if is_vaf_state(abs_path):
-                return False, VAF_STATE_WRITE_REFUSAL
+                return False, _vaf_state_refusal(abs_path)
 
         # CRITICAL: Never allow access to VAF program root (source, config, secrets)
         try:
@@ -1691,10 +1711,18 @@ class MoveFileTool(BaseTool):
         # Into an existing folder shutil.move puts the entry BELOW it, under its own name:
         # moving a folder named "vaf" into the data directory's parent creates the data
         # directory. That is the path the move writes, so it is the one asked about.
+        landing = res_dst
         if os.path.isdir(res_dst):
-            safe_in, res_in = is_safe_path(os.path.join(res_dst, os.path.basename(
-                os.path.normpath(res_src))))
+            landing = os.path.join(res_dst, os.path.basename(os.path.normpath(res_src)))
+            safe_in, res_in = is_safe_path(landing)
             if not safe_in: return f"Dest Error: {res_in}"
+        # A FOLDER that lands where a missing parent of VAF's state belongs brings that state
+        # with it (Documents/.config holding vaf/trust/ moved to ~/.config).
+        if os.path.isdir(res_src) and not os.path.islink(res_src):
+            from vaf.core.data_stores import holds_vaf_state
+            if holds_vaf_state(landing):
+                return (f"Dest Error: Access denied: the folder would become {landing}, which "
+                        "holds VAF's own data; move it somewhere else")
 
         try:
             shutil.move(res_src, res_dst)

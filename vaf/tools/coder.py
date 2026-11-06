@@ -3426,7 +3426,10 @@ Thumbs.db
 *.tmp
 *.log
 """
-            with open(gitignore_path, 'w', encoding='utf-8') as f:
+            # The project folder is the coder's bash workspace, where a jailed command can
+            # leave a link; exists() is False for a dangling one, and open() would follow it.
+            from vaf.core.path_jail import open_for_write
+            with open_for_write(gitignore_path, 'w', encoding='utf-8') as f:
                 f.write(gitignore_content)
 
         # Initial commit if there are files; with none, the commit fails harmlessly.
@@ -3532,9 +3535,11 @@ Thumbs.db
             if not _doc_write_allowed(target) or not _doc_target_is_safe(base_dir, target):
                 return ""
             try:
-                (Path(base_dir) / target).write_text(
-                    content if content.endswith("\n") else content + "\n", encoding="utf-8"
-                )
+                # Opened without following a link at the name and checked on the folder that
+                # is really opened: the check above and this write are two moments.
+                from vaf.core.path_jail import open_for_write
+                with open_for_write(Path(base_dir) / target, "w", encoding="utf-8") as fh:
+                    fh.write(content if content.endswith("\n") else content + "\n")
             except Exception:
                 return ""
             note = f"DOCUMENT phase: {'created' if create_mode else 'updated'} {target}"
@@ -7149,7 +7154,10 @@ Task {task_idx + 1}: {current_task}
                                 elif partial_content and len(partial_content) > 50:
                                     # Actually truncated — save partial so agent can resume from it
                                     try:
-                                        with open(os.path.join(base_dir, partial_filename), 'w', encoding='utf-8') as f:
+                                        # Model text at a name in the bash workspace, where a
+                                        # jailed command can leave a link: never followed.
+                                        from vaf.core.path_jail import open_for_write
+                                        with open_for_write(os.path.join(base_dir, partial_filename), 'w', encoding='utf-8') as f:
                                             f.write(partial_content)
                                         tui.append_stream(f"[INFO] Saved {len(partial_content)} bytes to {partial_filename}")
                                         

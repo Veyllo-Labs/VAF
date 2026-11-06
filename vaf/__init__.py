@@ -49,7 +49,7 @@ __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_K
            "TurnRound",
            "TurnStatus",
            "UnsafeName",
-           "UploadVerdict", "VoiceTurnEngine", "WaitInfo",
+           "UploadVerdict", "VoiceTurnEngine", "WaitInfo", "WriteRefused",
            "account_allows_tool", "add_revocation_listener", "advise_tools",
            "build_capability_addendum",
            "code_audit", "contained_path", "derive_peer_id",
@@ -59,6 +59,7 @@ __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_K
            "install_thread_excepthook", "invited_rooms", "is_error_reply", "is_vaf_state",
            "jail_allows", "joined_rooms",
            "list_standing_grants", "mark_trusted_dir", "markers", "model_text",
+           "open_for_write",
            "participant_key", "queue_metrics", "record_threat", "remove_revocation_listener",
            "resource_queue", "restore_account", "revoke_account", "revoke_standing_grants",
            "room_invitation",
@@ -91,15 +92,21 @@ def __getattr__(name):
         # same blind spot - and log_helper itself is internal (see docs/EMBEDDING.md).
         from .core.log_helper import install_thread_excepthook
         return install_thread_excepthook
-    if name in ("PathEscape", "contained_path", "safe_entry_name"):
+    if name in ("PathEscape", "WriteRefused", "contained_path", "open_for_write",
+                "safe_entry_name"):
         # Keep a caller-supplied path inside the directory it may touch. The
         # jail above answers WHICH roots a caller owns; this answers whether a
         # fragment or a name stays inside the one root you opened it against,
         # decided on RESOLVED paths so a symlink planted in that root cannot
         # carry a write out of it. Any tool that takes a path from a model, a
         # request body or a peer needs this before it opens anything.
-        from .core.path_jail import PathEscape, contained_path, safe_entry_name
-        return {"PathEscape": PathEscape, "contained_path": contained_path,
+        # open_for_write is the open itself: checking a path and then calling open() on it
+        # decides one thing and writes another (a link at the name, a folder swapped on the
+        # way). Seven of VAF's own writers did exactly that.
+        from .core.path_jail import (PathEscape, WriteRefused, contained_path, open_for_write,
+                                     safe_entry_name)
+        return {"PathEscape": PathEscape, "WriteRefused": WriteRefused,
+                "contained_path": contained_path, "open_for_write": open_for_write,
                 "safe_entry_name": safe_entry_name}[name]
     if name in ("EnvironmentManager", "get_environment_manager"):
         # A container, a volume and a network of one's own to run, install and test code

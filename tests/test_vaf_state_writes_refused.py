@@ -17,6 +17,7 @@ never the real home. Each test names the mutation that turns it red.
 """
 import ast
 import os
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -25,8 +26,8 @@ import pytest
 from vaf.core import data_stores
 from vaf.core.data_stores import holds_vaf_state, is_vaf_state
 from vaf.core.platform import Platform
-from vaf.tools.filesystem import (VAF_STATE_WRITE_REFUSAL, EditFileTool, MoveFileTool,
-                                  WriteFileTool, is_safe_path)
+from vaf.tools.filesystem import (VAF_SETTINGS_WRITE_REFUSAL, VAF_STATE_WRITE_REFUSAL,
+                                  EditFileTool, MoveFileTool, WriteFileTool, is_safe_path)
 
 _REPO = Path(__file__).resolve().parents[1]
 
@@ -55,24 +56,32 @@ def _paths(r, *relatives):
 
 # -- 1. the write rule ------------------------------------------------------------------
 
+# The content kinds with a tool of their own get those tools named; the settings (the MCP
+# list, the grants, the data root itself) get the answer that they have their own commands.
+TOOLS, SETTINGS = VAF_STATE_WRITE_REFUSAL, VAF_SETTINGS_WRITE_REFUSAL
 STATE_WRITES = [
-    ("data", "custom_tools/x.py"), ("data", "custom_tools"), ("data", "custom_tools/manifest.json"),
-    ("data", "mcp_servers.json"), ("data", ""),
-    ("config", "trust/x.json"),
-    ("vaf", "skills/demo/SKILL.md"), ("vaf", "skills/manifest.json"), ("vaf", "workflows/wf.py"),
+    ("data", "custom_tools/x.py", TOOLS), ("data", "custom_tools", TOOLS),
+    ("data", "custom_tools/manifest.json", TOOLS),
+    ("data", "mcp_servers.json", SETTINGS), ("data", "", SETTINGS),
+    ("config", "trust/x.json", SETTINGS),
+    ("vaf", "skills/demo/SKILL.md", TOOLS), ("vaf", "skills/manifest.json", TOOLS),
+    ("vaf", "workflows/wf.py", TOOLS),
 ]
 
 
-@pytest.mark.parametrize("root,relative", STATE_WRITES)
-def test_a_write_into_vafs_state_is_refused_for_the_owner(roots, root, relative):
+@pytest.mark.parametrize("root,relative,answer", STATE_WRITES)
+def test_a_write_into_vafs_state_is_refused_for_the_owner(roots, root, relative, answer):
     """No jail is installed: the owner's case, where this screen is the whole rule.
 
-    MUTATION: remove the is_vaf_state branch from is_safe_path - red."""
+    MUTATION: remove the is_vaf_state branch from is_safe_path - red. Answer every state
+    write with the tools text - the settings cases go red."""
     (path,) = _paths(roots, (root, relative))
     ok, verdict = is_safe_path(path)
     assert ok is False, path
-    assert verdict == VAF_STATE_WRITE_REFUSAL
-    assert "create_agent_tool" in verdict and "\u2014" not in verdict
+    assert verdict == answer
+    assert "\u2014" not in verdict
+    assert ("create_agent_tool" in verdict) == (answer is TOOLS)
+    assert ("settings have their own commands" in verdict) == (answer is SETTINGS)
 
 
 def test_the_docker_mode_config_folder_is_state_too(roots):
@@ -155,8 +164,11 @@ def test_a_link_in_documents_to_custom_tools_is_refused(roots):
     (roots.data / "custom_tools").mkdir(parents=True)
     link = roots.docs / "tools"
     _symlink(link, roots.data / "custom_tools")
-    ok, _ = is_safe_path(str(link / "x.py"))
+    ok, verdict = is_safe_path(str(link / "x.py"))
     assert ok is False
+    # MUTATION: choose the refusal text on the spelling as given only - red (the link's
+    # name holds no content folder, its target does).
+    assert verdict == VAF_STATE_WRITE_REFUSAL
 
 
 def test_the_data_root_behind_a_symlinked_home_in_both_spellings(tmp_path, monkeypatch):
@@ -295,7 +307,7 @@ READ_ONLY_CALLERS = {
 
 
 def _read_only_callers():
-    found = set()
+    found = Counter()
     for path in sorted((_REPO / "vaf").rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         rel = path.relative_to(_REPO).as_posix()
@@ -311,7 +323,7 @@ def _read_only_callers():
                     if name == "is_safe_path":
                         for kw in child.keywords:
                             if kw.arg == "read_only" or kw.arg is None:
-                                found.add((rel, ".".join(stack), ast.unparse(kw.value)))
+                                found[(rel, ".".join(stack), ast.unparse(kw.value))] += 1
                 walk(child, stack)
 
         walk(tree, [])
@@ -319,10 +331,35 @@ def _read_only_callers():
 
 
 def test_exactly_the_reading_callers_pass_read_only():
-    """Every other is_safe_path call in vaf/ is judged as a write.
+    """Every other is_safe_path call in vaf/ is judged as a write. Counted per key: a second
+    reading call inside a listed function is a new decision too.
 
-    MUTATION: add read_only=True to WriteFileTool.run's call - red."""
-    assert _read_only_callers() == set(READ_ONLY_CALLERS)
+    MUTATION: add read_only=True to WriteFileTool.run's call - red. Add a second
+    read_only=True call to ListFilesTool.run - red."""
+    assert dict(_read_only_callers()) == {key: 1 for key in READ_ONLY_CALLERS}
+
+
+def test_is_safe_path_is_reached_only_by_its_own_name():
+    """The freeze above matches calls by name. An alias (`import is_safe_path as check`),
+    a `functools.partial(is_safe_path, ...)` or a function handed around as a value would
+    carry a read_only past it, so any use of the name other than a call, its definition or
+    a plain import is refused.
+
+    MUTATION: import it under another name in one module - red."""
+    odd = []
+    for path in sorted((_REPO / "vaf").rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        rel = path.relative_to(_REPO).as_posix()
+        called = {id(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.alias) and node.name == "is_safe_path" \
+                    and node.asname not in (None, "is_safe_path"):
+                odd.append((rel, node.lineno, f"imported as {node.asname}"))
+            named = ((isinstance(node, ast.Name) and node.id == "is_safe_path")
+                     or (isinstance(node, ast.Attribute) and node.attr == "is_safe_path"))
+            if named and id(node) not in called:
+                odd.append((rel, node.lineno, "used as a value"))
+    assert odd == []
 
 
 # -- 10. the dedicated writers still write -------------------------------------------------

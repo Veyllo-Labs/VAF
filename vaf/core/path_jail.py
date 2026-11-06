@@ -32,8 +32,10 @@ is broken - so they are a follow-up, not a silent drive-by inside this one.
 import os
 import unicodedata
 from pathlib import Path
+from typing import Optional
 
-__all__ = ["PathEscape", "contained_path", "is_rooted", "safe_entry_name"]
+__all__ = ["PathEscape", "WriteRefused", "contained_path", "is_rooted", "open_for_write",
+           "safe_entry_name"]
 
 
 class PathEscape(ValueError):
@@ -181,3 +183,151 @@ def walk_without_links(root, skip=(), *, onerror=None):
             out.append(((rel_here / name).as_posix(), False))
     return sorted(out)
 
+
+
+class WriteRefused(PermissionError):
+    """`open_for_write` would have written through a link, into something that is not a
+    regular file, or into VAF's own state. A PermissionError, so a caller that already turns
+    an OSError of its open into a refusal reports this one the same way."""
+
+
+# The safe branch needs to open a file relative to a directory handle and refuse a link in
+# the last component, both in the kernel. Read at call time, so a test can take the other
+# branch on a host that has both.
+_DIR_FD = (hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY")
+           and os.open in os.supports_dir_fd)
+
+
+def _fd_path(fd: int, fallback: str) -> str:
+    """The path an open directory handle really names: the kernel's answer where there is
+    one (/proc on Linux, F_GETPATH on macOS), else ``fallback`` resolved, accepted only when
+    it is the same directory as the handle."""
+    try:
+        return os.readlink(f"/proc/self/fd/{fd}")
+    except OSError:
+        pass
+    try:
+        import fcntl
+        if hasattr(fcntl, "F_GETPATH"):
+            raw = fcntl.fcntl(fd, fcntl.F_GETPATH, b"\0" * 1024)
+            return os.fsdecode(raw.split(b"\0", 1)[0])
+    except (ImportError, OSError):
+        pass
+    real = os.path.realpath(fallback)
+    if not os.path.samestat(os.fstat(fd), os.stat(real)):
+        raise WriteRefused(f"refusing to write into {fallback}: it changed while it was opened")
+    return real
+
+
+def open_for_write(path, mode: str = "wb", *, exclusive: bool = False,
+                   encoding: Optional[str] = None, newline: Optional[str] = None):
+    """Open ``path`` to write it, as a file object, or raise `WriteRefused`.
+
+    For a path a model, a request or a peer chose, and for a temporary ``.part`` beside one.
+    Checking a path and then calling ``open()`` on it decides one thing and writes another:
+    ``open`` follows a link in the last component, and a folder on the way can be swapped for
+    a link between the check and the open. A sandbox environment's code can do both in its
+    mounted folder, which the host sees as ordinary entries. So the decision is made on what
+    is actually opened:
+
+    - The folder is opened first and the file is created relative to that handle, so the
+      folder that was checked is the folder that is written, whatever is renamed meanwhile.
+    - The last component is opened with ``O_NOFOLLOW``: a link there is refused, never
+      followed (an existing link is not replaced either; delete it first).
+    - The folder's real path (the kernel's, from the handle) plus the name must not be VAF's
+      own state (`vaf.core.data_stores.is_vaf_state`), and neither may the path as given.
+    - Only a regular file is written; a pipe or a device is refused without blocking.
+    - An existing file is truncated only after all of that, so a refusal changes nothing.
+
+    ``mode`` is "wb" or "w" (then ``encoding``/``newline`` as for ``open``). ``exclusive``
+    refuses an existing file (``O_EXCL``).
+
+    NAMED BOUNDARY, Windows (no ``O_NOFOLLOW``, no directory handles): a link at the path is
+    refused (``islink``), the resolved path is checked before and after the open, and a file
+    created in VAF's state by a swap in between is removed again. A link or junction swapped
+    in between the check and the open is followed for that one open. A hard link is a second
+    name of the same file and is not seen on any platform; making one needs a process on the
+    host with access to both folders (a sandbox environment cannot link to a file outside its
+    mount)."""
+    from vaf.core.data_stores import is_vaf_state
+    if mode not in ("w", "wb"):
+        raise ValueError(f"open_for_write writes ('w' or 'wb'), not {mode!r}")
+    raw = os.path.abspath(os.path.expanduser(os.fspath(path)))
+    parent, name = os.path.split(raw)
+    if not name:
+        raise WriteRefused(f"refusing to write {raw}: it names a folder, not a file")
+    if is_vaf_state(raw):
+        raise WriteRefused(f"refusing to write {raw}: it is VAF's own data")
+    flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0)
+    if exclusive:
+        flags |= os.O_EXCL
+    if _DIR_FD:
+        fd = _open_in_folder(parent, name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, raw)
+    else:
+        fd = _open_without_dir_fd(raw, flags)
+    try:
+        info = os.fstat(fd)
+        import stat as _stat
+        if not _stat.S_ISREG(info.st_mode):
+            raise WriteRefused(f"refusing to write {raw}: it is not a regular file")
+        if not exclusive:
+            os.ftruncate(fd, 0)
+        if _DIR_FD and hasattr(os, "set_blocking"):
+            os.set_blocking(fd, True)
+        if mode == "wb":
+            return os.fdopen(fd, "wb")
+        return os.fdopen(fd, "w", encoding=encoding, newline=newline)
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _open_in_folder(parent: str, name: str, flags: int, raw: str) -> int:
+    from vaf.core.data_stores import is_vaf_state
+    import errno
+    try:
+        dfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0))
+    except NotADirectoryError:
+        raise WriteRefused(f"refusing to write {raw}: {parent} is not a folder") from None
+    try:
+        real = os.path.join(_fd_path(dfd, parent), name)
+        if is_vaf_state(real):
+            raise WriteRefused(f"refusing to write {raw}: it lands in VAF's own data ({real})")
+        try:
+            return os.open(name, flags, 0o666, dir_fd=dfd)
+        except OSError as e:
+            if e.errno in (errno.ELOOP, errno.EMLINK):  # EMLINK: FreeBSD's O_NOFOLLOW
+                raise WriteRefused(f"refusing to write {raw}: it is a link") from None
+            if e.errno == errno.ENXIO:
+                raise WriteRefused(f"refusing to write {raw}: it is not a regular file") from None
+            raise
+    finally:
+        os.close(dfd)
+
+
+def _open_without_dir_fd(raw: str, flags: int) -> int:
+    """The Windows branch (see the named boundary in `open_for_write`)."""
+    from vaf.core.data_stores import is_vaf_state
+    if os.path.islink(raw):
+        raise WriteRefused(f"refusing to write {raw}: it is a link")
+    # Created by THIS call or not: only a file this call created may be removed again below.
+    try:
+        fd, created = os.open(raw, flags | os.O_EXCL, 0o666), True
+    except FileExistsError:
+        if flags & os.O_EXCL:
+            raise
+        fd, created = os.open(raw, flags & ~os.O_CREAT, 0o666), False
+    real = os.path.realpath(raw)
+    if os.path.islink(raw) or is_vaf_state(real):
+        try:
+            if created and os.path.samestat(os.fstat(fd), os.stat(real)):
+                os.close(fd)
+                fd = -1
+                os.unlink(real)
+        except OSError:
+            pass
+        finally:
+            if fd >= 0:
+                os.close(fd)
+        raise WriteRefused(f"refusing to write {raw}: it lands in VAF's own data or is a link")
+    return fd

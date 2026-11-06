@@ -1228,7 +1228,10 @@ Hard limits you must respect (they are architecture, not fine print):
   Before you STORE, also ask `vaf.is_vaf_state(path)` and refuse on True, for every
   caller, an admin included: `jail_allows` lets an admin reach everything, and VAF's own
   state (the custom tools it runs, the MCP commands it starts, the tool grants, the skills
-  and workflows) is written by its own registries, never by a generic save.
+  and workflows) is written by its own registries, never by a generic save. Then open the
+  file with `vaf.open_for_write(path, mode)` instead of `open()`: a check and a later
+  `open()` decide one thing and write another when a link sits at the name or a folder is
+  swapped on the way.
 - **Which tools an account may use at all is YOUR backend's answer.** Register
   one resolver process-wide with `set_account_allowlist_resolver` (its own
   section below) and every scoped, non-admin call is checked against it in the
@@ -2766,6 +2769,21 @@ Stable public surface (safe to build on):
   (as given and resolved, case-folded, Windows' trailing dots and stream suffixes cut),
   fail-closed: an error answers True. It answers nothing about reading. The path need not
   exist.
+- `vaf.open_for_write(path, mode="wb", *, exclusive=False, encoding=None, newline=None)` /
+  `vaf.WriteRefused` - the open that goes with that answer, for a file under a name a
+  model, a request or a peer chose (and the `.part` beside one). It opens the folder first
+  and the file relative to it, refuses a link as the last component instead of following
+  it, asks `is_vaf_state` again on the folder's real path (the kernel's answer for the open
+  handle), writes only a regular file (a pipe or a device is refused without blocking) and
+  truncates an existing file only after all of that, so a refusal changes nothing. `mode` is
+  `"w"` or `"wb"`; `exclusive=True` refuses an existing file. `WriteRefused` is a
+  `PermissionError`, so code that already reports an `OSError` of its open reports this one
+  the same way. An existing link at the name is refused, not replaced: delete it first.
+  Code in a sandbox environment creates links in its mounted folder, and the host sees them
+  as ordinary entries, which is why VAF's own writers use this and not `open()`. On Windows
+  (no `O_NOFOLLOW`, no open relative to a folder handle) a link swapped in between the
+  check and the open is followed for that one open; a file it creates in VAF's state is
+  removed again.
 - `vaf.revoke_account(scope)` / `vaf.restore_account(scope)` /
   `vaf.stop_account_work(scope)` / `vaf.stop_session(session_id, *,
   include_subagents=True)` / `vaf.add_revocation_listener(fn)` /

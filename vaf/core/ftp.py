@@ -495,8 +495,11 @@ def download(session: Session, remote: str, local: Path, *,
     Returns the number of bytes."""
     stop = _stop_check(check_stop)
     part = local.with_name(local.name + ".part")
+    from vaf.core.path_jail import open_for_write
     try:
-        sink = open(part, "wb")
+        # Never through a link at the .part name, never into VAF's own data (WriteRefused
+        # is an OSError, so it is reported like any other target that cannot be written).
+        sink = open_for_write(part, "wb")
     except OSError as e:
         raise FtpError(f"the download target cannot be written: {e}") from None
     block, seen = _guard(limit, stop)

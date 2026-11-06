@@ -201,7 +201,10 @@ class TemplateManager:
             
             # Write file
             file_path = os.path.join(output_dir, file_info["name"])
-            with open(file_path, 'w', encoding='utf-8') as f:
+            # The project folder may already hold what a jailed command left there, a link
+            # at one of these names included: never followed.
+            from vaf.core.path_jail import open_for_write
+            with open_for_write(file_path, 'w', encoding='utf-8') as f:
                 f.write(content)
             
             created_files.append(file_path)

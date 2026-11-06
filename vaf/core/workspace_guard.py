@@ -86,7 +86,8 @@ def assert_safe_workspace(ws: str) -> None:
         raise ValueError(f"refusing to run: workspace {p} overlaps the VAF source tree {root}")
     from vaf.core.data_stores import holds_vaf_state, is_vaf_state
     if is_vaf_state(p) or holds_vaf_state(p):
-        raise ValueError(f"refusing to run: workspace {p} is or contains VAF's own data")
+        raise ValueError(f"refusing to run: workspace {p} is or contains VAF's own data; "
+                         "choose a folder under Documents")
     # Never root a jail at the real HOME, anything above it (/home holds every account's home)
     # or the filesystem root: that would bind-mount a home (incl. ~/.vaf secrets) or the
     # whole system read-write. The same rule as is_unsafe_project_dir.

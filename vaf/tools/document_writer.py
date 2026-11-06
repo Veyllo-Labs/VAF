@@ -11,6 +11,7 @@ For complex/large documents, use document_agent instead.
 import os
 from pathlib import Path
 
+from vaf.core.path_jail import open_for_write
 from vaf.tools.base import BaseTool
 from vaf.core.document_formatting import (
     estimate_document_length,
@@ -178,7 +179,7 @@ For large/complex documents, use document_agent instead."""
         """Create plain text document."""
         model = infer_document_model(title="", document_type=doc_type, content=content)
         rendered_text = render_text(model)
-        with open(file_path, 'w', encoding='utf-8') as f:
+        with open_for_write(file_path, 'w', encoding='utf-8') as f:
             f.write(rendered_text)
         
         return f"""### {doc_type.capitalize()} created!
@@ -194,7 +195,7 @@ Document saved successfully."""
         """Create Markdown document."""
         model = infer_document_model(title="", document_type=doc_type, content=content)
         rendered_markdown = render_markdown(model)
-        with open(file_path, 'w', encoding='utf-8') as f:
+        with open_for_write(file_path, 'w', encoding='utf-8') as f:
             f.write(rendered_markdown)
         
         return f"""### {doc_type.capitalize()} created!

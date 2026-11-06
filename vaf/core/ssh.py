@@ -459,8 +459,10 @@ def run(target: Target, remote_command: str, *, user_scope_id: Optional[str],
         kwargs["start_new_session"] = True
     # The download target is opened before ssh starts: one that cannot be written is an error
     # while nothing runs yet, never an exception with a live child, its timer and its readers.
+    # Not through a link and not into VAF's own data (open_for_write raises an OSError).
+    from vaf.core.path_jail import open_for_write
     try:
-        sink = open(stdout_path, "wb") if stdout_path is not None else None
+        sink = open_for_write(stdout_path, "wb") if stdout_path is not None else None
     except OSError as e:
         raise SshError(f"the download target cannot be written: {e}") from None
     try:

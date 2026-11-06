@@ -765,13 +765,15 @@ Text:
     
     def _save_as_text(self, content: DocumentModel, file_path: Path) -> Path:
         """Save as plain text file."""
-        with open(file_path, 'w', encoding='utf-8') as f:
+        from vaf.core.path_jail import open_for_write
+        with open_for_write(file_path, 'w', encoding='utf-8') as f:
             f.write(render_text(content))
         return file_path
 
     def _save_as_markdown(self, content: DocumentModel, file_path: Path) -> Path:
         """Save as Markdown file."""
-        with open(file_path, 'w', encoding='utf-8') as f:
+        from vaf.core.path_jail import open_for_write
+        with open_for_write(file_path, 'w', encoding='utf-8') as f:
             f.write(render_markdown(content))
         return file_path
 

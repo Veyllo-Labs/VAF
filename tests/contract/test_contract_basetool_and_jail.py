@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""Contract: BaseTool declarations, the file_access hard error, self.log(), user_jail, is_vaf_state.
+"""Contract: BaseTool declarations, the file_access hard error, self.log(), user_jail, is_vaf_state,
+open_for_write.
 
 docs/EMBEDDING.md ("Writing a tool" plus the multi-tenant identity_kwargs /
 file_access block) promises a stranger three things pinned here: the declarative
@@ -319,3 +320,38 @@ def test_is_vaf_state_answers_for_the_data_and_config_folders(tmp_path, monkeypa
     assert vaf.is_vaf_state(tmp_path / "home" / ".vaf" / "skills" / "s" / "SKILL.md")
     assert not vaf.is_vaf_state(tmp_path / "home" / "Documents" / "VAF_Projects" / "p" / "a.py")
     assert not vaf.is_vaf_state(tmp_path / "data" / "other" / "x.py")
+
+
+# -- 8. open_for_write ---------------------------------------------------------
+
+
+def test_open_for_write_writes_an_ordinary_file_and_refuses_a_link(tmp_path, monkeypatch):
+    """The documented open for a path someone else chose: a regular file is written (text
+    and binary), a link at the name is refused as WriteRefused (a PermissionError) and its
+    target is left untouched."""
+    for var in ("XDG_DATA_HOME", "LOCALAPPDATA"):
+        monkeypatch.setenv(var, str(tmp_path / "data"))
+    with vaf.open_for_write(tmp_path / "a.txt", "w", encoding="utf-8") as fh:
+        fh.write("hello")
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == "hello"
+    with vaf.open_for_write(str(tmp_path / "b.bin")) as fh:
+        fh.write(b"\x00")
+    target = tmp_path / "elsewhere.txt"
+    target.write_text("kept")
+    try:
+        os.symlink(target, tmp_path / "link.txt")
+    except (OSError, NotImplementedError):
+        pytest.skip("this host cannot create symlinks")
+    with pytest.raises(vaf.WriteRefused):
+        vaf.open_for_write(tmp_path / "link.txt")
+    assert isinstance(vaf.WriteRefused("x"), PermissionError)
+    assert target.read_text() == "kept"
+
+
+def test_open_for_write_refuses_vafs_own_data(tmp_path, monkeypatch):
+    for var in ("XDG_DATA_HOME", "LOCALAPPDATA"):
+        monkeypatch.setenv(var, str(tmp_path / "data"))
+    (tmp_path / "data" / "vaf" / "custom_tools").mkdir(parents=True)
+    with pytest.raises(vaf.WriteRefused):
+        vaf.open_for_write(tmp_path / "data" / "vaf" / "custom_tools" / "x.py")
+    assert not (tmp_path / "data" / "vaf" / "custom_tools" / "x.py").exists()

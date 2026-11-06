@@ -118,7 +118,10 @@ class DownloadFileTool(BaseTool):
                     return (f"Error: the file is {declared} bytes, more than the "
                             f"{MAX_DOWNLOAD_BYTES} a download may be; nothing was saved.")
                 kind = res.headers.get("Content-Type", "")
-                with open(tmp, "wb") as fh:
+                # Not open(): a link planted at the .part name would carry the bytes to its
+                # target, and os.replace below moves only the link.
+                from vaf.core.path_jail import open_for_write
+                with open_for_write(tmp, "wb") as fh:
                     for chunk in res.iter_content(chunk_size=256 * 1024):
                         if not chunk:
                             continue

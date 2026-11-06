@@ -1363,7 +1363,8 @@ class ResearchAgentTool(BaseTool):
                         _debug_lg.event("docx_save_failed_fallback_md", error=str(e))
                     UI.warning(f"DOCX export failed ({e}); saving as Markdown instead.")
                     output_path = output_dir / f"research_{safe_topic}_{timestamp}.md"
-                    with open(output_path, 'w', encoding='utf-8') as f:
+                    from vaf.core.path_jail import open_for_write
+                    with open_for_write(output_path, 'w', encoding='utf-8') as f:
                         f.write(self._assemble_markdown(topic, rendered_sections, all_sources))
 
                 webui_mode = os.environ.get("VAF_WEBUI_ACTIVE", "").strip().lower() in ("1", "true", "yes")
@@ -1427,7 +1428,8 @@ class ResearchAgentTool(BaseTool):
                     _debug_lg.event("saving_report", output_path=str(output_path), html_len=len(html),
                                    num_sections=len(rendered_sections), num_sources=len(all_sources))
 
-                with open(output_path, 'w', encoding='utf-8') as f:
+                from vaf.core.path_jail import open_for_write
+                with open_for_write(output_path, 'w', encoding='utf-8') as f:
                     f.write(html)
 
                 if _debug_lg:

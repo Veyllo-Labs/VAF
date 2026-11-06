@@ -219,7 +219,8 @@ class RenderCheckTool(BaseTool):
             import time as _time
             stamp = _time.strftime("%Y%m%d-%H%M%S") + f"-{int(_time.time() * 1000) % 1000:03d}"
             path = os.path.join(str(ws), f"render_check_{stamp}.{ext}")
-            with open(path, "wb") as f:
+            from vaf.core.path_jail import open_for_write
+            with open_for_write(path, "wb") as f:
                 f.write(base64.b64decode(b64))
             try:
                 from vaf.core.web_interface import notify_file_created

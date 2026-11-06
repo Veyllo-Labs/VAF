@@ -56,7 +56,7 @@ def test_facade_exports_exactly_the_documented_surface():
         "ToolCallHooks", "ToolCallOutcome", "ToolCaller", "ToolRequest", "TurnOutcome",
         "TurnRound", "TurnStatus",
         "UnsafeName", "UploadVerdict",
-        "VoiceTurnEngine", "WaitInfo",
+        "VoiceTurnEngine", "WaitInfo", "WriteRefused",
         "__version__",
         "account_allows_tool", "add_revocation_listener", "advise_tools",
         "build_capability_addendum", "code_audit", "contained_path",
@@ -66,7 +66,7 @@ def test_facade_exports_exactly_the_documented_surface():
         "install_thread_excepthook", "invited_rooms", "is_error_reply", "is_vaf_state",
         "jail_allows", "joined_rooms",
         "list_standing_grants", "mark_trusted_dir",
-        "markers", "model_text", "participant_key", "queue_metrics", "record_threat",
+        "markers", "model_text", "open_for_write", "participant_key", "queue_metrics", "record_threat",
         "remove_revocation_listener", "resource_queue",
         "restore_account", "revoke_account", "revoke_standing_grants", "room_invitation",
         "run_project_git", "safe_entry_name", "set_account_allowlist_resolver",
@@ -119,6 +119,14 @@ def test_the_state_question_is_the_one_vafs_own_file_tools_ask():
     import vaf.core.data_stores as ds
 
     assert vaf.is_vaf_state is ds.is_vaf_state
+
+
+def test_the_write_open_is_the_one_vafs_own_writers_use():
+    """MUTATION: drop open_for_write from the lazy export - red."""
+    import vaf.core.path_jail as pj
+
+    assert vaf.open_for_write is pj.open_for_write
+    assert vaf.WriteRefused is pj.WriteRefused and issubclass(vaf.WriteRefused, PermissionError)
 
 
 def test_the_authorizer_has_the_same_name_on_the_facade_and_the_engine():

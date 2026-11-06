@@ -443,6 +443,33 @@ passes `read_only=True`. The writers of those stores are their own tools, which 
 they save: `create_agent_tool` and the Web UI's custom-tool upload, `create_skill` and
 `update_skill`, `create_agent_workflow`, the MCP and trust registries. Reading is unchanged.
 
+A path is checked at one moment and written at the next, and code in a sandbox environment
+(`sandbox_exec`, the coder's jailed `bash`) can create links in its mounted folder, which the
+host sees as ordinary entries: a link at the name a tool is about to write, or a folder
+swapped for a link in between. So every tool that writes a file under a name a model chose
+opens it with `vaf.open_for_write`: the folder is opened first, a link as the last component
+is refused instead of followed, the folder's real path (the kernel's answer for the open
+handle) is asked `is_vaf_state` again, and only a regular file is written (a pipe is refused
+without blocking). That covers `download_file` and the `.part` files of the `ssh` and `ftp`
+downloads, `document_writer`, `document_agent` and `research_agent` (text, Markdown and Word),
+`render_check`'s screenshot, and the coder's own writes into its project (the `PARTIAL_` backup,
+the default `.gitignore`, the README of the document phase, the template files). A guard test
+(`tests/test_writes_do_not_follow_links.py`) refuses a new raw write in `vaf/tools` that is not
+on its reviewed list.
+
+**Named boundaries.** On Windows there is no open relative to a folder handle and no
+`O_NOFOLLOW`: a link at the name is refused and the real path is checked before and after the
+open, but a link or junction swapped in between is followed for that one open (a file it
+creates in VAF's state is removed again). `write_file` and `edit_file` write a temporary file
+beside the target and rename it into place; the rename resolves the folder again, so a folder
+swapped for a link between the check and the rename carries the file with it. That takes a
+process racing the write from inside a mounted folder. A hard link is not seen, but a sandbox
+environment cannot make one to a file outside its mount, and a mount that holds VAF's state is
+refused. When neither `Documents/VAF` nor `Downloads/VAF` can be created,
+`Platform.get_vaf_output_dir()` falls back to `~/.vaf/output`, inside VAF's own state. Its one
+writer, `write_file`'s reroute of a new folder at the top of the home folder, then puts the
+file there without asking again; VAF neither loads nor runs anything from that folder.
+
 **Named boundary: `create_agent_tool`.** It is `admin_only`, refused on messaging channels,
 and runs without a confirmation, so in the admin's own web chat it still writes and loads
 Python that the agent composed, as it is meant to. That is the one remaining agent lane to

@@ -3,10 +3,7 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 from __future__ import annotations
 
-import os
 import re
-import shutil
-import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -458,21 +455,17 @@ def save_document_model_as_docx(model: DocumentModel, file_path: Path) -> Path:
                 for item in block.items:
                     doc.add_paragraph(sanitize_inline_text(item), style="List Number")
 
-    parent = file_path.parent.resolve()
-    parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(prefix="vaf_", suffix=".docx", dir=str(parent))
-    try:
-        os.close(fd)
-        doc.save(tmp_path)
-        if file_path.exists():
-            file_path.unlink()
-        shutil.move(tmp_path, str(file_path))
-        Document(str(file_path))
-    finally:
-        if os.path.exists(tmp_path):
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+    # Built and re-read in memory, then written through open_for_write: the name is chosen by
+    # a model, and a rename of a temp file into place resolves the folder again at the
+    # rename, so a folder swapped for a link in between carried the file into VAF's own data.
+    import io
+    from vaf.core.path_jail import open_for_write
+    buf = io.BytesIO()
+    doc.save(buf)
+    data = buf.getvalue()
+    Document(io.BytesIO(data))
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    with open_for_write(file_path, "wb") as fh:
+        fh.write(data)
 
     return file_path

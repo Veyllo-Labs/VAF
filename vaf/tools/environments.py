@@ -325,7 +325,8 @@ class SandboxTransferTool(BaseTool):
         host_path = str(kwargs.get("host_path") or "").strip()
         if not host_path:
             return _refused(self.name, "host_path is required")
-        ok, why = is_safe_path(host_path)
+        # copy_in reads host_path; copy_out writes into it.
+        ok, why = is_safe_path(host_path, read_only=(action == "copy_in"))
         if not ok:
             return _refused(self.name, why)
         try:

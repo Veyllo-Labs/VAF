@@ -42,18 +42,18 @@ VAF_DIR = Path(Platform.vaf_dir())
     "logs/queue.log",
 ])
 def test_credential_store_is_denied(relative):
-    ok, _ = is_safe_path(str(VAF_DIR / relative))
+    ok, _ = is_safe_path(str(VAF_DIR / relative), read_only=True)
     assert ok is False, f"{relative} under the VAF data dir must not be readable"
 
 
 def test_the_data_dir_itself_is_denied():
-    ok, _ = is_safe_path(str(VAF_DIR))
+    ok, _ = is_safe_path(str(VAF_DIR), read_only=True)
     assert ok is False
 
 
 def test_a_new_folder_under_the_data_dir_is_denied_without_being_listed():
     """The point of deny-by-default: nobody has to remember to add it."""
-    ok, _ = is_safe_path(str(VAF_DIR / "some_future_feature" / "tokens.json"))
+    ok, _ = is_safe_path(str(VAF_DIR / "some_future_feature" / "tokens.json"), read_only=True)
     assert ok is False
 
 
@@ -65,25 +65,45 @@ def test_user_created_content_stays_reachable():
 
     Concretely: use_skill hands the model absolute paths to a skill's bundled files and tells
     it to open them with read_file (use_skill.py:33, :92).
+
+    Reachable for READING. Writing them through the file tools is refused for everyone:
+    create_skill, update_skill and create_agent_workflow are their writers, and they check
+    what they save (tests/test_vaf_state_writes_refused.py).
     """
     for p in (
         VAF_DIR / "skills", VAF_DIR / "skills" / "demo" / "reference.md",
         VAF_DIR / "workflows", VAF_DIR / "workflows" / "my_flow.py",
     ):
-        ok, _ = is_safe_path(str(p))
+        ok, _ = is_safe_path(str(p), read_only=True)
         assert ok is True, f"{p} is user content and must stay reachable"
+        ok, _ = is_safe_path(str(p))
+        assert ok is False, f"{p} must not be writable through the file tools"
 
 
 def test_ordinary_paths_are_unaffected():
     """The block must not spill over: this is about one directory, not about home."""
     home = Path.home()
     for p in (home / "Documents", home / "Downloads", home / "Documents" / "VAF_Projects"):
-        ok, _ = is_safe_path(str(p))
-        assert ok is True, f"{p} must remain reachable"
+        for read_only in (True, False):
+            ok, _ = is_safe_path(str(p), read_only=read_only)
+            assert ok is True, f"{p} must remain reachable (read_only={read_only})"
 
 
 def test_a_dot_vaf_folder_inside_a_user_project_is_also_denied():
     """Component match, deliberately: a stray .vaf directory anywhere is treated as a data
     dir rather than risking a miss. Fail-closed is the right side to err on here."""
-    ok, _ = is_safe_path(str(Path.home() / "Documents" / "myproject" / ".vaf" / "config.json"))
+    ok, _ = is_safe_path(str(Path.home() / "Documents" / "myproject" / ".vaf" / "config.json"),
+                         read_only=True)
+    assert ok is False
+
+
+@pytest.mark.parametrize("spelled", [".VAF/config.json", ".Vaf/secrets/a.enc",
+                                     ".vaf/Skills/demo/SKILL.md"])
+def test_a_differently_cased_spelling_is_denied_too(spelled):
+    """macOS (APFS) and Windows (NTFS) are case-insensitive by default, so ``~/.VAF`` opens
+    the credential store. The folder name is case-folded; the skills/workflows exception is
+    not, so a cased spelling of it errs towards refusing.
+
+    MUTATION: compare ".vaf" against the components without casefold() - red."""
+    ok, _ = is_safe_path(str(Path.home() / spelled), read_only=True)
     assert ok is False

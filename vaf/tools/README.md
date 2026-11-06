@@ -623,7 +623,9 @@ A: Not inside the package: in-tree tools must be directly in `vaf/tools/`. Tools
 not have to live in the repo at all, though. For a local tool that survives VAF
 updates, put it in the `custom_tools/` folder of the VAF data directory (e.g.
 `~/.local/share/vaf/custom_tools/` on Linux) with a `manifest.json` entry - normally
-created by uploading the tool in the Web UI. For distribution, ship it as a pip
+created by uploading the tool in the Web UI, or by the agent's `create_agent_tool`. The
+agent's file tools (`write_file`, `edit_file`, `move_file`) cannot write that folder: VAF
+runs what is in it, so only those two writers put tools there. For distribution, ship it as a pip
 package via the `vaf.tools` entry-point group (see "Shipping a tool as a pip package"
 above). Use in-tree `vaf/tools/*.py` when contributing a tool to VAF itself.
 

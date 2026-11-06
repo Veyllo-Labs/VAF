@@ -149,7 +149,8 @@ def compute_user_jail(user_scope_id, user_role=None, *, mode="write"):
     writing: "read" adds the folders of the skills visible to this user (see
     _visible_skill_roots). "write" - the default, and what every existing caller gets -
     stays at the caller's own project tree. A tool installs the jail for the operation it
-    performs; is_safe_path itself cannot tell a read from a write.
+    performs. is_safe_path knows the difference only for VAF's own state (its
+    ``read_only`` flag); the per-account roots come from the jail installed here.
 
     Admin means the same thing here as everywhere else in VAF (is_admin_identity):
     the DB role, OR the configured local-admin scope. The scope half is not
@@ -506,11 +507,38 @@ def _resolve_folder_alias(path_str: str) -> str:
     
     return path_str
 
-def is_safe_path(path):
+# The answer to a write into VAF's own state. It names the dedicated tools so the model
+# switches to them instead of retrying the file tool.
+VAF_STATE_WRITE_REFUSAL = (
+    "Access denied: VAF's own data (tools, skills, workflows, settings) is changed through its "
+    "own tools - create_agent_tool, create_skill/update_skill, create_agent_workflow - not the "
+    "file tools")
+
+
+def is_safe_path(path, *, read_only=False):
+    """The static screen behind every path-taking tool: (True, absolute path) or (False, the
+    refusal). ``read_only=True`` says the caller only reads; the default is the write rule,
+    so a caller that forgets the flag can only lose access to VAF's state, never gain a
+    write into it."""
     try:
         # First resolve folder aliases
         resolved = _resolve_folder_alias(path)
         abs_path = os.path.abspath(os.path.expanduser(resolved))
+
+        # VAF's own state is written by its own registries and never by a file tool, for
+        # every caller, the machine owner included: the custom tools there are executed at
+        # the next agent load, the MCP server list names commands VAF starts, the trust
+        # store holds standing tool grants, and skills and workflows steer later turns.
+        # Each registry (create_agent_tool, create_skill, create_agent_workflow) checks what
+        # it saves; a generic write would skip that and work on every lane at once, the
+        # messenger chats, workflows and automations included. The roots are
+        # data_stores.roots() less the projects (one list), compared in every spelling.
+        # Before the ~/.vaf screen below, so a write into skills/ or workflows/ gets this
+        # answer and not the credential-store one.
+        if not read_only:
+            from vaf.core.data_stores import is_vaf_state
+            if is_vaf_state(abs_path):
+                return False, VAF_STATE_WRITE_REFUSAL
 
         # CRITICAL: Never allow access to VAF program root (source, config, secrets)
         try:
@@ -559,14 +587,14 @@ def is_safe_path(path):
         #
         # Deny-by-default, so a new folder under ~/.vaf is protected the day it is added
         # rather than the day someone remembers to list it. The exceptions are the folders
-        # holding USER-CREATED CONTENT, which is ordinary material the agent works with and
-        # which is governed by the per-user jail below like anything else - not by this
-        # block, whose job is only the credential store:
+        # holding USER-CREATED CONTENT, which the agent READS and which is governed by the
+        # per-user jail below like anything else - not by this block, whose job is only the
+        # credential store. Writing them is refused further up (VAF's own state), so these
+        # exceptions only ever reach a read_only caller:
         #   skills/    - use_skill hands the model absolute paths to a skill's bundled
         #                files and tells it to open them with read_file (use_skill.py:33,92)
         #   workflows/ - agent-created workflows; the same category as skills and as the
-        #                custom tools in data_dir/custom_tools, which this block never
-        #                touched because they live outside ~/.vaf
+        #                custom tools in data_dir/custom_tools
         # Fail-closed: if the data dir cannot be resolved, nothing under .vaf is allowed.
         #
         # BOTH spellings of the data dir, like _TEMP_ROOTS: `norm` is not resolved
@@ -575,7 +603,10 @@ def is_safe_path(path):
         # starts with the RESOLVED root, and every skill file was refused. The
         # link-following recheck at the end of this function never ran, because
         # the refusal came first.
-        if ".vaf" in components:
+        # Case-folded, because macOS and Windows open ~/.VAF as ~/.vaf. The skills and
+        # workflows exception below stays exact, so a differently cased spelling of them is
+        # refused rather than let through.
+        if ".vaf" in (c.casefold() for c in components):
             _content_ok = False
             try:
                 from vaf.core.platform import Platform as _PlatFS
@@ -606,7 +637,7 @@ def is_safe_path(path):
         # abs_path - callers pin that.
         real = str(Path(abs_path).resolve())
         if real != abs_path:
-            ok, verdict = is_safe_path(real)
+            ok, verdict = is_safe_path(real, read_only=read_only)
             if not ok:
                 return False, verdict
         return True, abs_path
@@ -638,7 +669,7 @@ class ListFilesTool(BaseTool):
         sort_by = kwargs.get('sort_by', 'name')
         limit = kwargs.get('limit', 100)
         
-        safe, res = is_safe_path(path)
+        safe, res = is_safe_path(path, read_only=True)
         if not safe: return res
         
         try:
@@ -722,7 +753,7 @@ class FolderSizeTool(BaseTool):
         if not path:
             return "Error: No path provided."
 
-        safe, abs_path = is_safe_path(path)
+        safe, abs_path = is_safe_path(path, read_only=True)
         if not safe:
             return abs_path
 
@@ -883,7 +914,7 @@ For semantic analysis across many files, consider librarian_agent instead."""
         path = kwargs.get('path', '')
         start_line = kwargs.get('start_line')
         end_line = kwargs.get('end_line')
-        safe, res = is_safe_path(path)
+        safe, res = is_safe_path(path, read_only=True)
         if not safe: return res
         try:
             if not os.path.exists(res): return "Error: File not found."
@@ -1657,7 +1688,14 @@ class MoveFileTool(BaseTool):
         
         safe_dst, res_dst = is_safe_path(dst)
         if not safe_dst: return f"Dest Error: {res_dst}"
-        
+        # Into an existing folder shutil.move puts the entry BELOW it, under its own name:
+        # moving a folder named "vaf" into the data directory's parent creates the data
+        # directory. That is the path the move writes, so it is the one asked about.
+        if os.path.isdir(res_dst):
+            safe_in, res_in = is_safe_path(os.path.join(res_dst, os.path.basename(
+                os.path.normpath(res_src))))
+            if not safe_in: return f"Dest Error: {res_in}"
+
         try:
             shutil.move(res_src, res_dst)
             return f"Moved {res_src} to {res_dst}"
@@ -1688,7 +1726,7 @@ class TreeTool(BaseTool):
             depth = int(kwargs.get('depth', 2))
         except: depth = 2
         
-        safe, res = is_safe_path(path)
+        safe, res = is_safe_path(path, read_only=True)
         if not safe: return res
         
         if not os.path.exists(res): return "Error: Path not found."
@@ -1741,7 +1779,7 @@ class FinderTool(BaseTool):
         path = kwargs.get('path', '.')
         pattern = kwargs.get('pattern', '*')
         
-        safe, res = is_safe_path(path)
+        safe, res = is_safe_path(path, read_only=True)
         if not safe: return res
         
         matches = []

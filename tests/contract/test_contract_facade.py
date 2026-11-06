@@ -65,6 +65,7 @@ EXPORTED = [
     "install_thread_excepthook",
     "invited_rooms",
     "is_error_reply",
+    "is_vaf_state",
     "jail_allows",
     "joined_rooms",
     "list_standing_grants",

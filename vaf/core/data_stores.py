@@ -59,15 +59,19 @@ NAMED BOUNDARY: the working memory under the launch directory (``<cwd>/.vaf/main
 per-session scratch state that the garbage collector removes by age; it is not a root
 here. Neither is the desktop window's browser storage (``.vaf_webview`` beside the code,
 vaf/core/desktop_window.py): the window's size and the web login, which signing in again
-recreates. Not on the facade: the stores are VAF's own; an embedder's application keeps its
-own, and no embedder has asked for a shared registry.
+recreates. The list itself is not on the facade: the stores are VAF's own; an embedder's
+application keeps its own, and no embedder has asked for a shared registry. One question
+over it is: `is_vaf_state` (``vaf.is_vaf_state``), which every surface that writes a file on
+someone else's behalf asks before it writes, VAF's file tools first among them. A
+third-party write tool needs the same answer and had nothing to ask.
 """
 from __future__ import annotations
 
 import fnmatch
+import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 KEY = "key"
 DATA = "data"
@@ -289,6 +293,114 @@ def hardened_dirs() -> Dict[str, Path]:
 def projects_dir() -> Path:
     from vaf.core.platform import Platform
     return Platform.documents_dir() / "VAF_Projects"
+
+
+# The roots whose files VAF itself writes and later obeys: every root except ``projects``,
+# which holds the people's own folders.
+STATE_ROOTS = ("app", "vaf", "data", "config")
+
+# The path module the state check spells paths with. A seam, so the Windows spelling rules
+# can be proven from another host (tests/test_at_rest_cross_platform.py hands in ntpath).
+_pathmod = os.path
+
+
+def _norm_parts(spelled: str) -> Tuple[str, ...]:
+    """A path as comparable components, the same way on every host: separators unified,
+    every component case-folded, an NTFS stream suffix (``name:stream``, ``name::$DATA``)
+    cut, trailing dots and spaces stripped, the Windows device prefixes (``//?/`` and
+    ``//./`` once the separators are unified) dropped. Lexical on purpose: macOS APFS and NTFS are case-insensitive by default, and
+    Windows opens ``vaf.`` and ``vaf::$INDEX_ALLOCATION`` as the folder ``vaf``, so a
+    comparison that only matched the spelling a root was created with would miss the same
+    folder written another way. On a case-sensitive host it refuses a differently cased
+    sibling as well, which only ever errs towards refusing."""
+    norm = spelled.replace("\\", "/")
+    if norm.startswith(("//?/", "//./")):
+        norm = norm[4:]
+        if norm[:4].casefold() == "unc/":
+            norm = "//" + norm[4:]
+    parts = []
+    for i, part in enumerate(norm.split("/")):
+        drive = i == 0 and len(part) == 2 and part[1] == ":" and part[0].isalpha()
+        if not drive:
+            part = part.split(":", 1)[0]
+        part = part.rstrip(". ").casefold()
+        if part:
+            parts.append(part)
+    return tuple(parts)
+
+
+def _spellings(path: Any) -> List[Tuple[str, ...]]:
+    """The path as given (made absolute) and as resolved (links followed, non-strict). Both,
+    because a root reached through a symlink (a home on another disk, macOS /var ->
+    /private/var) is spelled one way by the settings that name it and the other way by a
+    path the links were followed for."""
+    raw = _pathmod.expanduser(os.fspath(path))
+    out: List[Tuple[str, ...]] = []
+    for spelled in (_pathmod.abspath(raw), _pathmod.realpath(raw)):
+        parts = _norm_parts(spelled)
+        if parts not in out:
+            out.append(parts)
+    return out
+
+
+def _state_root_spellings() -> List[Tuple[str, ...]]:
+    named = roots()
+    out: List[Tuple[str, ...]] = []
+    for name in STATE_ROOTS:
+        for parts in _spellings(named[name]):
+            if parts and parts not in out:
+                out.append(parts)
+    return out
+
+
+def is_vaf_state(path: Any) -> bool:
+    """Whether ``path`` is one of VAF's own state roots or lies inside one: ``~/.vaf`` (or
+    ``$VAF_CONFIG_DIR`` in Docker mode), ``Platform.data_dir()`` and ``Platform.config_dir()``,
+    taken from `roots()` at call time.
+
+    Those folders hold what VAF executes or obeys later: the custom tools, whose Python runs
+    at every agent load; the MCP server list, whose commands VAF starts; the standing tool
+    grants; the messaging endpoints; the skills and workflows, matched against later
+    messages. Each is written by its own registry, which checks what it saves, and never by
+    a generic file write. So a surface that writes a file on a model's, a request's or a
+    peer's behalf asks this first and refuses on True. Reading is a different question and
+    is not answered here.
+
+    Compared component by component, never as a string prefix, in every spelling: as given
+    and resolved, for the path and for each root, normalised by `_norm_parts`. Fail-closed:
+    any error answers True.
+
+    NAMED BOUNDARIES. A hard link and a swap between this check and the open need a lane
+    that already runs code on the host. Windows 8.3 short names are expanded by the resolved
+    half (``realpath`` asks for the final path); a short name of a folder that does not exist
+    yet has nothing to expand and stays unseen. The web UI's own save routes let a signed-in
+    admin save into the data directory on purpose (``_allowed_file_path`` in web_server.py):
+    a person's authenticated save, not a lane a model drives, and not decided here."""
+    try:
+        mine = _spellings(path)
+        for root in _state_root_spellings():
+            for parts in mine:
+                if parts[:len(root)] == root:
+                    return True
+        return False
+    except Exception:
+        return True
+
+
+def holds_vaf_state(path: Any) -> bool:
+    """Whether a state root (see `is_vaf_state`) lies strictly inside ``path``: a folder
+    that contains VAF's own data, such as the parent of the data directory. A project, a
+    mount or a copy target there would reach the state below it. Fail-closed: any error
+    answers True."""
+    try:
+        mine = _spellings(path)
+        for root in _state_root_spellings():
+            for parts in mine:
+                if len(parts) < len(root) and root[:len(parts)] == parts:
+                    return True
+        return False
+    except Exception:
+        return True
 
 
 def _rows_for(root_path: Path, named: Dict[str, Path]) -> List[Store]:

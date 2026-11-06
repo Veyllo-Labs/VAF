@@ -132,7 +132,7 @@ Examples:
         # Ask the shared rule on the RESOLVED path, before existence is probed: answering
         # "not found" for a blocked path still tells the caller what lives there.
         from vaf.tools.filesystem import is_safe_path
-        _safe, _resolved = is_safe_path(str(search_path))
+        _safe, _resolved = is_safe_path(str(search_path), read_only=True)
         if not _safe:
             return f"[ERROR] {_resolved}"
         search_path = Path(_resolved)

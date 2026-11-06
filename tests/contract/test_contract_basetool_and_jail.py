@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""Contract: BaseTool declarations, the file_access hard error, self.log(), user_jail.
+"""Contract: BaseTool declarations, the file_access hard error, self.log(), user_jail, is_vaf_state.
 
 docs/EMBEDDING.md ("Writing a tool" plus the multi-tenant identity_kwargs /
 file_access block) promises a stranger three things pinned here: the declarative
@@ -299,3 +299,23 @@ def test_jail_allows_takes_the_identity_by_keyword_only():
     wrong account."""
     with pytest.raises(TypeError):
         vaf.jail_allows("/tmp/x", SYNTHETIC_SCOPE)
+
+
+# -- 7. is_vaf_state -----------------------------------------------------------
+
+
+def test_is_vaf_state_answers_for_the_data_and_config_folders(tmp_path, monkeypatch):
+    """The documented question a write surface asks: VAF's data folder (where its custom
+    tools run from), its config folder (the tool grants) and ~/.vaf are VAF's own state,
+    the people's Documents are not. The path need not exist yet."""
+    for var in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(var, str(tmp_path / "home"))
+    for var in ("XDG_DATA_HOME", "LOCALAPPDATA"):
+        monkeypatch.setenv(var, str(tmp_path / "data"))
+    for var in ("XDG_CONFIG_HOME", "APPDATA"):
+        monkeypatch.setenv(var, str(tmp_path / "config"))
+    assert vaf.is_vaf_state(tmp_path / "data" / "vaf" / "custom_tools" / "x.py")
+    assert vaf.is_vaf_state(str(tmp_path / "config" / "vaf" / "trust" / "a.json"))
+    assert vaf.is_vaf_state(tmp_path / "home" / ".vaf" / "skills" / "s" / "SKILL.md")
+    assert not vaf.is_vaf_state(tmp_path / "home" / "Documents" / "VAF_Projects" / "p" / "a.py")
+    assert not vaf.is_vaf_state(tmp_path / "data" / "other" / "x.py")

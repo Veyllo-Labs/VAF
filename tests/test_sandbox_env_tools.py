@@ -214,7 +214,7 @@ def test_exec_in_the_background_returns_a_handle(mgr, monkeypatch):
 def test_transfer_checks_the_host_side_first(mgr, monkeypatch):
     """MUTATION: drop the is_safe_path check - red."""
     import vaf.tools.filesystem as fs
-    monkeypatch.setattr(fs, "is_safe_path", lambda p: (False, "Access denied: outside your own data"))
+    monkeypatch.setattr(fs, "is_safe_path", lambda p, **_k: (False, "Access denied: outside your own data"))
     out = tools.SandboxTransferTool().run(action="copy_out", environment="0a1b2c3d",
                                           host_path="/etc", path="out", user_scope_id="s")
     assert "outside your own data" in out and mgr.calls == []

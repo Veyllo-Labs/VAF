@@ -162,12 +162,14 @@ def test_a_skill_kept_private_to_someone_else_is_not(home, skills):
 
 def test_seeing_a_skill_is_not_permission_to_rewrite_it(home, skills):
     """Visibility (shared_with) and edit authority (can_user_edit_skill) are different
-    questions. The skill roots are added in READ mode only, so the write jail is unchanged."""
+    questions. The skill roots are added in READ mode only, so the write jail is unchanged
+    (pinned on the jail below); the file tools refuse a write into the skills folder for
+    every account in the first place, because skills are changed through update_skill."""
     out = WriteFileTool().run(
         path=str(skills / "shared_skill" / "reference.md"), content="overwritten",
         user_scope_id=TENANT, user_role="user",
     )
-    assert _denied(out), out
+    assert out.startswith("Access denied"), out
     assert (skills / "shared_skill" / "reference.md").read_text() == SECRET
 
 

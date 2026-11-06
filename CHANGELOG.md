@@ -74,6 +74,17 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   stopped answering, the web interface included. It now refuses oversized values and reads any
   input in time proportional to its length (a few milliseconds for a 16 KiB error body). This
   affects every API provider.
+- **The agent's file tools can no longer change VAF's own data.** Writing, editing or moving
+  files into the folders where VAF keeps its custom tools, skills, workflows, MCP server list,
+  tool permissions and other settings is now refused for every account, the owner included,
+  and on every lane (chat, messengers, workflows, automations). Custom tools, skills and
+  workflows are still created and changed through their own tools, which check what they
+  save. The cloud-storage "save" action keeps its target inside the sync folder, copying a
+  folder out of a sandbox environment refuses to land in VAF's own data, and a project or a
+  sandbox mount can no longer be one of those folders or a folder that contains them. Reading
+  these folders is unchanged; a differently cased spelling of `~/.vaf` (macOS, Windows) is
+  now refused for reading too. For applications built on VAF, `vaf.is_vaf_state(path)`
+  answers the same question.
 
 ## [0.1.0a35] - 2026-11-05
 

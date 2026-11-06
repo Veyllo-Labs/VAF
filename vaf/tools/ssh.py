@@ -56,7 +56,8 @@ def transfer_local_path(kwargs: Dict[str, Any], *, download: bool) -> Path:
             raise ValueError("a relative local_path needs a chat workspace; pass an "
                              "absolute path")
         path = Path(ws) / path
-    safe, resolved = is_safe_path(str(path))
+    # An upload only reads the local file; a download writes it.
+    safe, resolved = is_safe_path(str(path), read_only=not download)
     if not safe:
         raise ValueError(str(resolved))
     return Path(resolved)

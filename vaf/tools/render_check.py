@@ -112,7 +112,7 @@ class RenderCheckTool(BaseTool):
             # a project's own .env is inside the jail and still not a page
             # anyone should render into a report.
             from vaf.tools.filesystem import is_safe_path
-            ok, msg = is_safe_path(target)
+            ok, msg = is_safe_path(target, read_only=True)
             if not ok:
                 return f"render_check refused: {msg}"
 

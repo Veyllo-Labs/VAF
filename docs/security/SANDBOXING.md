@@ -323,7 +323,7 @@ services (`vaf repair --check`, `vaf top`, the Update and Repair dialog; see
 | **Ownership** | The owner label, checked on every operation. Another person's environment answers like a missing one, so ids cannot be probed. An admin may list and delete it, never run anything in it. A missing scope means the machine owner (the rule of `config.resolve_caller_username`); with no owner configured the call is refused. The shared "no scope" bucket of the old sandbox does not come back. |
 | **Process** | Non-root: the caller's uid:gid on Linux, so files in a mounted project stay theirs, and the image's uid 10001 elsewhere. `--init`, `--cap-drop ALL`, `no-new-privileges`, `--pids-limit`, `--memory`, `--cpus`. No docker socket, no host path besides the project, no host secret. |
 | **Root lane** | For the coder only: `bash(as_root=true)` runs ONE command as root inside a temporary or project environment, so it can install system packages for what it builds. Such an environment is created with six capabilities added back (`ROOT_LANE_CAPS`: CHOWN, DAC_OVERRIDE, FOWNER, FSETID, SETUID, SETGID), which only a root process can use: the environment's own user has no ambient capabilities and `no-new-privileges` keeps setuid from granting any. Measured: with every capability dropped a root `apt-get` fails; with these six it updates and installs, while the environment's user still cannot write a system folder. What a root command leaves in `/workspace` is handed back to the environment's user at once, because a mounted project is the person's own folder and a root-owned file there could not be removed without sudo. First the setuid and setgid bits come off every file there, whoever owns it: a mounted project is a folder on the host, and a setuid file left in it would be a way to root on this machine (measured: a root-copied `sh` with mode 4755 ends up the person's, without the bit). A give-back that fails is reported in the command's result, never swallowed. The root command and its give-back carry a run marker like every other run, and the reaper asks for markers as root as well as as the environment's user, because each reads only its own processes' environment (no `CAP_SYS_PTRACE`): asked as the user alone, it stopped an environment in the middle of a root `apt-get`. The `registries` network lets the image's own apt sources through (`deb.debian.org`, `security.debian.org`). **Named boundaries:** the main agent's `sandbox_exec` and `vaf env exec` have no root lane, the scratch environment has none, an environment created before the lane existed refuses (create a new one), and nothing ever runs as root on the host. |
-| **Project mount** | `-v <project>:/workspace:z`. `:z` relabels the directory for SELinux, which is enforcing on Fedora-family hosts. The path must pass `is_unsafe_project_dir`, `assert_safe_workspace` (VAF's code, the home directory, every folder above it such as `/home`, and `/` are refused, which is what keeps `:z` away from them) and the person's file jail. |
+| **Project mount** | `-v <project>:/workspace:z`. `:z` relabels the directory for SELinux, which is enforcing on Fedora-family hosts. The path must pass `is_unsafe_project_dir`, `assert_safe_workspace` (VAF's code and VAF's own state, each in either direction, the home directory, every folder above it such as `/home`, and `/` are refused, which is what keeps `:z` away from them) and the person's file jail. |
 | **Limits** | `sandbox_env_*` in [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md), all admin-only. A refusal names its reason. |
 
 **Network profiles, measured on Docker 29.7.** Every environment has its own network.
@@ -342,7 +342,8 @@ network's gateway.
 **The agent's tools** (`vaf/tools/environments.py`), each acting as the caller and refused
 on messaging channels:
 - `sandbox_manage`: create, list, stop, delete. A project path runs through `is_safe_path` and
-  the write jail before the manager's own checks. A project environment asked for without a
+  the write jail before the manager's own checks; a path that is VAF's own state or contains it
+  is refused (see "File tools and VAF's own state" below). A project environment asked for without a
   path gets a new, empty folder in the chat's own project area (`VAF_Projects/<account>/<chat>/`,
   where the coder makes its projects too; removed again if the create is refused); without a
   chat, the path is required. The answer names the call that puts the coder to work in it:
@@ -355,8 +356,11 @@ on messaging channels:
   `/tmp/vaf-env-proc/` inside the container; it carries the marker `VAF_PROC_ID`.
 - `sandbox_files`: read, write, list inside the environment.
 - `sandbox_transfer`: `copy_in` and `copy_out` between the environment and the caller's own
-  folders; the host side runs through `is_safe_path` and the write jail, and only regular
-  files and folders arrive.
+  folders; the host side runs through `is_safe_path` (the read rule for `copy_in`, the write
+  rule for `copy_out`) and the write jail, and only regular files and folders arrive.
+  `copy_out` checks every entry of the stream before it writes the first: the folder names
+  come from inside the environment, so into the parent of the data directory an entry named
+  `vaf/custom_tools/...` would land in VAF's own state. One such entry refuses the whole copy.
 
 - `sandbox_preview`: one look at a page the environment serves or holds. `localhost` is
   the environment itself, so a dev server bound to `127.0.0.1` works. You get a screenshot
@@ -424,6 +428,25 @@ these tools is offered to thinking runs or on a 4k context.
 - `open` is not "internet only". Through the gateway it reaches whatever listens on the host's `0.0.0.0` (the Tool Bridge, token-protected; VAF in LAN mode, login-protected), and the LAN is reachable.
 - `registries` does not stop data leaving through the allowed hosts themselves (`npm publish`, a push with a token the code brought along).
 - No disk quota. overlay2 has none without xfs project quotas, so the number of environments per person is limited instead, and their size is shown.
+
+## File tools and VAF's own state
+
+VAF keeps what it executes or obeys later in its state roots (`vaf.core.data_stores.roots()`
+without the projects): `~/.vaf` (or `$VAF_CONFIG_DIR` in Docker mode) with the skills and
+workflows, the data directory with `custom_tools/*.py` (run at every agent load) and
+`mcp_servers.json` (commands VAF starts), and the config directory with the tool grants under
+`trust/`. The agent's file tools (`write_file`, `edit_file`, `move_file`, `download_file`, the
+librarian's renames, `cloud_storage` save, the local side of `ssh` and `ftp` downloads,
+`sandbox_transfer` `copy_out`) refuse to write there for every account, the owner included,
+on every lane. The decision is `vaf.is_vaf_state`; `is_safe_path` asks it unless its caller
+passes `read_only=True`. The writers of those stores are their own tools, which check what
+they save: `create_agent_tool` and the Web UI's custom-tool upload, `create_skill` and
+`update_skill`, `create_agent_workflow`, the MCP and trust registries. Reading is unchanged.
+
+**Named boundary: `create_agent_tool`.** It is `admin_only`, refused on messaging channels,
+and runs without a confirmation, so in the admin's own web chat it still writes and loads
+Python that the agent composed, as it is meant to. That is the one remaining agent lane to
+code VAF loads; text injected into the admin's web chat can reach it.
 
 ## Shell execution surfaces
 

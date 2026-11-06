@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from vaf.core.config import Config
+from vaf.core.path_jail import PathEscape, contained_path
 from vaf.core.platform import Platform
 from vaf.tools.base import BaseTool
 from vaf.tools.filesystem import is_safe_path, user_jail
@@ -253,7 +254,7 @@ def _action_save(username: str, account_id: str, provider: str, file_path: Optio
 
     source = Path(file_path).expanduser().resolve()
     with user_jail(user_scope_id, user_role, mode="read"):
-        allowed, detail = is_safe_path(str(source))
+        allowed, detail = is_safe_path(str(source), read_only=True)
     if not allowed:
         return f"Access denied: {detail}"
     if not source.exists():
@@ -263,7 +264,13 @@ def _action_save(username: str, account_id: str, provider: str, file_path: Optio
 
     sync_dir = _get_sync_dir(username, account_id)
     dest_name = remote_path or source.name
-    dest = sync_dir / dest_name
+    # The model names the destination too, and pathlib swallows the base for an absolute
+    # name while `..` walks out: unchecked, "save" copied any readable file to any place,
+    # VAF's own custom tools included. Held inside the sync folder, like `retrieve`.
+    try:
+        dest = contained_path(sync_dir, dest_name)
+    except PathEscape:
+        return "Access denied: 'remote_path' is a name inside the sync folder, not a path."
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     try:

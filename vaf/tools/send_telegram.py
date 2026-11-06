@@ -29,7 +29,7 @@ def _resolve_path(path_str: str) -> tuple[Path | None, str | None]:
         return None, None
     if s.lower().startswith("file://"):
         s = s[7:]
-    safe, result = is_safe_path(s)
+    safe, result = is_safe_path(s, read_only=True)
     if not safe:
         return None, result  # result = error message
     return Path(result), None

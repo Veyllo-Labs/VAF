@@ -170,7 +170,7 @@ class LinterTool(BaseTool):
         # The shared rule on the RESOLVED path, asked before existence is probed so a refusal
         # cannot double as an existence oracle.
         from vaf.tools.filesystem import is_safe_path
-        _safe, _resolved = is_safe_path(str(target_path))
+        _safe, _resolved = is_safe_path(str(target_path), read_only=True)
         if not _safe:
             return f"[ERROR] {_resolved}"
         target_path = Path(_resolved)

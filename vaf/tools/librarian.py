@@ -1345,7 +1345,7 @@ Remove duplicates and ensure smooth flow.
     
     def _count_files(self, path: Path, file_type: str = None) -> str:
         """Count files in directory, optionally filtered by extension."""
-        safe, res = is_safe_path(str(path))
+        safe, res = is_safe_path(str(path), read_only=True)
         if not safe:
             return f"[ERROR] {res}"
         path = Path(res)
@@ -1419,7 +1419,7 @@ Remove duplicates and ensure smooth flow.
     
     def _list_files(self, path: Path, limit: int = 30) -> str:
         """List files in directory."""
-        safe, res = is_safe_path(str(path))
+        safe, res = is_safe_path(str(path), read_only=True)
         if not safe:
             return f"[ERROR] {res}"
         path = Path(res)
@@ -1473,7 +1473,7 @@ Remove duplicates and ensure smooth flow.
     
     def _find_files(self, path: Path, pattern: str) -> str:
         """Find files matching pattern."""
-        safe, res = is_safe_path(str(path))
+        safe, res = is_safe_path(str(path), read_only=True)
         if not safe:
             return f"[ERROR] {res}"
         path = Path(res)
@@ -1556,7 +1556,7 @@ Remove duplicates and ensure smooth flow.
                 cap: extraction streams page by page now, so "read pages
                 100-120 of an 85 MB PDF" must extract that slice, not preview.
         """
-        safe, res = is_safe_path(str(file_path))
+        safe, res = is_safe_path(str(file_path), read_only=True)
         if not safe:
             return f"[ERROR] {res}"
         file_path = Path(res)
@@ -1895,7 +1895,7 @@ Remove duplicates and ensure smooth flow.
     
     def _show_tree(self, path: Path, caller, max_depth: int = 3) -> str:
         """Show directory tree."""
-        safe, res = is_safe_path(str(path))
+        safe, res = is_safe_path(str(path), read_only=True)
         if not safe:
             return f"[ERROR] {res}"
         path = Path(res)

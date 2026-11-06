@@ -1225,6 +1225,10 @@ Hard limits you must respect (they are architecture, not fine print):
   authenticated account whose identity carries no scope must be refused before you ask.
   And it does not look at the disk: ask before you check whether the file exists, or
   "not found" versus "refused" tells a caller which files exist outside its boundary.
+  Before you STORE, also ask `vaf.is_vaf_state(path)` and refuse on True, for every
+  caller, an admin included: `jail_allows` lets an admin reach everything, and VAF's own
+  state (the custom tools it runs, the MCP commands it starts, the tool grants, the skills
+  and workflows) is written by its own registries, never by a generic save.
 - **Which tools an account may use at all is YOUR backend's answer.** Register
   one resolver process-wide with `set_account_allowlist_resolver` (its own
   section below) and every scoped, non-admin call is checked against it in the
@@ -2640,7 +2644,8 @@ usable from an embedded engine too, documented in their own pages:
   [MCP_INTEGRATION.md](agents/MCP_INTEGRATION.md).
 - **Update-surviving local tools** - a `custom_tools/` folder in the platform
   data dir (managed via the Web UI, admin-only), see
-  [vaf/tools/README.md](../vaf/tools/README.md).
+  [vaf/tools/README.md](../vaf/tools/README.md). The agent's file tools cannot write it
+  (`vaf.is_vaf_state`); tools arrive through the Web UI upload or `create_agent_tool`.
 
 ### A note on custom OpenAI-compatible endpoints
 
@@ -2750,7 +2755,17 @@ Stable public surface (safe to build on):
   identity and mode, fail-closed, on the RESOLVED path, so a link is judged by its
   target; it neither reads nor changes the jail of the run it is called from. It is only
   the per-account half: it does not screen system folders or VAF's own data directory,
-  and it does not refuse a scope-less caller (see the multi-tenant section).
+  and it does not refuse a scope-less caller (see the multi-tenant section). For VAF's own
+  data ask `vaf.is_vaf_state`.
+- `vaf.is_vaf_state(path) -> bool` - whether a path is VAF's own state or lies inside it:
+  `~/.vaf` (or `$VAF_CONFIG_DIR` in Docker mode), the platform data directory (with
+  `custom_tools/` and `mcp_servers.json`) and the config directory (with the tool grants).
+  A tool or a route that writes a file on a model's, a request's or a peer's behalf asks it
+  and refuses on True, whoever the caller is; VAF's own file tools, project checks and
+  sandbox copy-out do. Read at call time, compared by whole components in every spelling
+  (as given and resolved, case-folded, Windows' trailing dots and stream suffixes cut),
+  fail-closed: an error answers True. It answers nothing about reading. The path need not
+  exist.
 - `vaf.revoke_account(scope)` / `vaf.restore_account(scope)` /
   `vaf.stop_account_work(scope)` / `vaf.stop_session(session_id, *,
   include_subagents=True)` / `vaf.add_revocation_listener(fn)` /

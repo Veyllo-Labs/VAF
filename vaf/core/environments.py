@@ -1115,7 +1115,13 @@ class EnvironmentManager:
         """A file or folder out of the environment into a host folder. Only regular
         files and folders arrive: a link, a device or a name that climbs out of the
         target is dropped, so code in the environment cannot plant a pointer to a host
-        file (docker cp would have copied a link as a link)."""
+        file (docker cp would have copied a link as a link).
+
+        Nothing lands in VAF's own state (`data_stores.is_vaf_state`): the folders of the
+        stream are chosen inside the environment, so a host folder that only CONTAINS that
+        state (the parent of the data directory) would let a member named
+        ``vaf/custom_tools/...`` plant code VAF runs. Every member is checked before the
+        first one is written, and one that would land there refuses the whole copy."""
         env = self.get(owner_scope, env_id)
         self._ensure_running(env)
         p = _container_path(path)
@@ -1137,15 +1143,34 @@ class EnvironmentManager:
                                      f"{(r.stderr or b'').decode(errors='replace').strip()[:200]}")
         if len(r.stdout) > TRANSFER_LIMIT_BYTES:
             raise EnvironmentRefused(f"{p} is larger than {TRANSFER_LIMIT_BYTES // (1024 * 1024)} MB")
+        from vaf.core.data_stores import holds_vaf_state, is_vaf_state
         dest_root = Path(host_dir).resolve()
+        if is_vaf_state(dest_root):
+            raise EnvironmentRefused(f"cannot copy into {dest_root}: it is VAF's own data")
         dest_root.mkdir(parents=True, exist_ok=True)
         written: List[str] = []
+        # A target outside dest_root is dropped, so only a dest_root that holds state can
+        # receive a member inside it; the per-member state check is skipped otherwise.
+        check = holds_vaf_state(dest_root)
+
+        def _target(member: tarfile.TarInfo) -> Optional[Path]:
+            target = (dest_root / member.name).resolve()
+            if target != dest_root and dest_root not in target.parents:
+                return None
+            if check and is_vaf_state(target):
+                raise EnvironmentRefused(f"cannot copy {member.name} into {dest_root}: it "
+                                         f"would write into VAF's own data")
+            return target
+
         with tarfile.open(fileobj=io.BytesIO(r.stdout), mode="r") as tar:
-            for member in tar.getmembers():
-                if not (member.isfile() or member.isdir()):
-                    continue
-                target = (dest_root / member.name).resolve()
-                if target != dest_root and dest_root not in target.parents:
+            members = [m for m in tar.getmembers() if m.isfile() or m.isdir()]
+            for member in members:
+                _target(member)  # the whole stream is judged before anything is written
+            for member in members:
+                # Resolved again right before the write, as before the pass existed: a
+                # mounted project can change while the earlier members are written.
+                target = _target(member)
+                if target is None:
                     continue
                 if member.isdir():
                     target.mkdir(parents=True, exist_ok=True)

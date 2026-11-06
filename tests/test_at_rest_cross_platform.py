@@ -551,3 +551,67 @@ def test_a_queue_read_that_meets_a_sharing_violation_is_retried_not_empty(tmp_pa
     monkeypatch.setattr(Path, "read_bytes", flaky)
     assert q._read_json(q.active_file) == [{"task_id": "t1", "status": "running"}]
     assert fails["n"] == 0
+
+
+# ── VAF's own state, as Windows and macOS spell it ───────────────────────────────
+
+_WIN_ROOTS = {"app": r"C:\Users\Alice\.vaf", "vaf": r"C:\Users\Alice\.vaf",
+              "data": r"C:\Users\Alice\AppData\Local\vaf",
+              "config": r"C:\Users\Alice\AppData\Roaming\vaf",
+              "projects": r"C:\Users\Alice\Documents\VAF_Projects"}
+
+
+@pytest.mark.parametrize("spelled", [
+    r"c:\users\alice\appdata\local\VAF\custom_tools\x.py",            # NTFS ignores case
+    r"C:\Users\Alice\AppData\Local\vaf.\custom_tools\x.py",           # trailing dot dropped
+    r"C:\Users\Alice\AppData\Local\vaf \custom_tools\x.py",           # trailing space dropped
+    r"C:\Users\Alice\AppData\Local\vaf::$INDEX_ALLOCATION\x.py",      # the folder's stream
+    r"C:\Users\Alice\AppData\Local\vaf:stream",                       # a stream of the folder
+    "C:/Users/Alice/AppData/Roaming/vaf/trust/a.json",                # forward slashes
+    r"\\?\C:\Users\Alice\AppData\Local\vaf\mcp_servers.json",         # the device prefix
+    r"C:\Users\Alice\.VAF\skills\demo\SKILL.md",
+    r"C:\Users\Alice\AppData\Local\x\..\vaf\custom_tools\y.py",
+])
+def test_windows_spellings_of_a_state_root_are_state(monkeypatch, spelled):
+    """Windows opens every one of these as a file inside VAF's data. The rules are lexical,
+    so they are proven here with Windows' own path module behind the seam.
+
+    MUTATION: drop casefold(), the trailing dot/space strip, the stream cut or the device
+    prefix in data_stores._norm_parts - the matching case goes red."""
+    import ntpath
+
+    from vaf.core import data_stores
+    monkeypatch.setattr(data_stores, "_pathmod", ntpath)
+    monkeypatch.setattr(data_stores, "roots", lambda: dict(_WIN_ROOTS))
+    assert data_stores.is_vaf_state(spelled)
+
+
+def test_windows_neighbours_and_parents_of_a_state_root(monkeypatch):
+    """A drive letter is not a stream, a sibling with a longer name is not the root, and the
+    folders above a root contain state (no project or copy target there)."""
+    import ntpath
+
+    from vaf.core import data_stores
+    monkeypatch.setattr(data_stores, "_pathmod", ntpath)
+    monkeypatch.setattr(data_stores, "roots", lambda: dict(_WIN_ROOTS))
+    for other in (r"C:\Users\Alice\AppData\Local\vaffle\x.py",
+                  r"C:\Users\Alice\Documents\VAF_Projects\site\a.py",
+                  r"D:\Users\Alice\AppData\Local\vaf\x.py"):
+        assert not data_stores.is_vaf_state(other), other
+    assert data_stores.holds_vaf_state(r"C:\Users\Alice\AppData")
+    assert data_stores.holds_vaf_state(r"c:\users\alice\appdata\local")
+    assert not data_stores.holds_vaf_state(r"C:\Users\Alice\AppData\Local\vaf")
+    assert not data_stores.holds_vaf_state(r"C:\Users\Alice\Documents")
+
+
+def test_a_macos_case_variant_of_the_data_root_is_state(monkeypatch):
+    """APFS is case-insensitive by default and keeps the case a path was typed in, so
+    resolving does not repair it: ``.../Application Support/VAF/custom_tools`` is the real
+    folder there. MUTATION: drop casefold() in data_stores._norm_parts - red."""
+    from vaf.core import data_stores
+    support = "/Users/alice/Library/Application Support/vaf"
+    monkeypatch.setattr(data_stores, "roots", lambda: {
+        "app": "/Users/alice/.vaf", "vaf": "/Users/alice/.vaf", "data": support,
+        "config": support, "projects": "/Users/alice/Documents/VAF_Projects"})
+    assert data_stores.is_vaf_state("/Users/alice/Library/Application Support/VAF/custom_tools/x.py")
+    assert data_stores.is_vaf_state("/users/ALICE/.Vaf/skills/demo/SKILL.md")

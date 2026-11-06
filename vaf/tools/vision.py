@@ -172,7 +172,7 @@ class AnalyzeImageTool(BaseTool):
                     "has none yet. Pass the image's absolute path."
                 )
             p = Path(ws) / image_path
-        safe, resolved = is_safe_path(str(p))
+        safe, resolved = is_safe_path(str(p), read_only=True)
         if not safe:
             return resolved
         p = Path(resolved)

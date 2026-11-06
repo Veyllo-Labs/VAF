@@ -92,7 +92,7 @@ Pass the full file path. The document appears in the right-hand Document Viewer 
         # by BaseTool on every lane. What stays here is the DECISION: is_safe_path answers the
         # static blocks and the jail in one question, and its RESOLVED path is what everything
         # below uses.
-        safe, resolved = is_safe_path(str(path))
+        safe, resolved = is_safe_path(str(path), read_only=True)
         if not safe:
             return f"[ERROR] {resolved}"
         path = Path(resolved)

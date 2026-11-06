@@ -31,6 +31,7 @@ itself. Measured - inside a tenant jail a path in the system temp directory is r
 a class-wide declaration would break those two actions on the tool's own scratch file,
 which no tenant boundary has any business containing.
 """
+import os
 import shutil
 from pathlib import Path
 from unittest.mock import patch
@@ -162,6 +163,38 @@ def test_the_refusal_is_not_an_existence_oracle(tenant_home, cloud_config):
     assert "not found" not in present.lower()
     assert "not found" not in absent.lower()
     assert present.split(":")[0] == absent.split(":")[0]
+
+
+def test_save_keeps_its_destination_inside_the_sync_folder(tmp_path, monkeypatch, cloud_config):
+    """`remote_path` is model-chosen too. The sync folder lives inside the data directory, so
+    four `..` reach the data directory itself, where `custom_tools/*.py` runs at the next
+    agent load. Asked as the machine owner: the per-account jail does not apply, so this
+    refusal is the whole protection. A plain name, and a name with a subfolder, still save.
+
+    MUTATION: back to `sync_dir / dest_name` - red: c.py was written into custom_tools."""
+    xdg = tmp_path / "xdg-data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(xdg))
+    monkeypatch.setenv("LOCALAPPDATA", str(xdg))
+    from vaf.core.platform import Platform
+    data = Platform.data_dir()
+    source = tmp_path / "Documents" / "notes.txt"
+    source.parent.mkdir(parents=True)
+    source.write_text("x = 1")
+    escape = "../../../../custom_tools/c.py"
+    sync = data / "users" / OWNER / "cloud_sync" / "owner-acct"
+    assert os.path.normpath(str(sync / escape)) == str(data / "custom_tools" / "c.py")
+
+    for remote in (escape, str(data / "custom_tools" / "d.py")):
+        out = CloudStorageTool().run(action="save", file_path=str(source), remote_path=remote,
+                                     account_id="owner-acct", username=OWNER, user_role="admin")
+        assert out.startswith("Access denied"), out
+    assert not (data / "custom_tools").exists()
+
+    for name in ("notes.txt", "sub/notes.txt"):
+        out = CloudStorageTool().run(action="save", file_path=str(source), remote_path=name,
+                                     account_id="owner-acct", username=OWNER, user_role="admin")
+        assert "saved to cloud sync folder" in out, out
+        assert (sync / name).read_text() == "x = 1"
 
 
 # ── the second untrusted door, found by refutation and not by me ─────────────

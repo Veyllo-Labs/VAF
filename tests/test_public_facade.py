@@ -63,8 +63,8 @@ def test_facade_exports_exactly_the_documented_surface():
         "derive_peer_id", "describe_room_entry", "egress_session", "extract_pdf_markdown",
         "fold_room_owners", "fold_room_tasks", "fold_room_votes", "get_environment_manager",
         "inspect_upload",
-        "install_thread_excepthook", "invited_rooms", "is_error_reply", "jail_allows",
-        "joined_rooms",
+        "install_thread_excepthook", "invited_rooms", "is_error_reply", "is_vaf_state",
+        "jail_allows", "joined_rooms",
         "list_standing_grants", "mark_trusted_dir",
         "markers", "model_text", "participant_key", "queue_metrics", "record_threat",
         "remove_revocation_listener", "resource_queue",
@@ -111,6 +111,14 @@ def test_the_resolver_setter_is_the_same_object_on_facade_and_engine():
     assert vaf.account_allows_tool is td.account_allows_tool
     assert vaf.advise_tools is td.advise_tools
     assert vaf.set_account_allowlist_resolver is td.set_account_allowlist_resolver
+
+
+def test_the_state_question_is_the_one_vafs_own_file_tools_ask():
+    """A stranger's write tool asks the function is_safe_path asks, not a copy of it.
+    MUTATION: drop the lazy export - red."""
+    import vaf.core.data_stores as ds
+
+    assert vaf.is_vaf_state is ds.is_vaf_state
 
 
 def test_the_authorizer_has_the_same_name_on_the_facade_and_the_engine():

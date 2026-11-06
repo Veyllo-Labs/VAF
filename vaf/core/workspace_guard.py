@@ -7,12 +7,17 @@ Two questions, asked by everything that hands a directory to an agent:
 
 - `is_unsafe_project_dir(path)`: may this be a project at all? Refuses the
   filesystem root and the home directory (and anything above home), the standard user
-  folders themselves (their subfolders are fine), VAF's own data directory and VAF's
-  own code.
+  folders themselves (their subfolders are fine), VAF's own state and VAF's own code.
 - `assert_safe_workspace(path)`: may this be bound read-write into a jail or a
-  container? Refuses VAF's code in either direction (containing it or inside it), the
-  home directory and the filesystem root. For a container mount on an SELinux host
-  this is what keeps `:z` from relabelling the home directory.
+  container? Refuses VAF's code and VAF's own state, each in either direction
+  (containing it or inside it), the home directory and the filesystem root. For a
+  container mount on an SELinux host this is what keeps `:z` from relabelling the home
+  directory.
+
+VAF's own state is every root `vaf.core.data_stores.is_vaf_state` names: ``~/.vaf`` (or
+``$VAF_CONFIG_DIR`` in Docker mode), the data directory and the config directory. A
+project there, or one that contains them, would let the agent's own project tools write
+the custom tools VAF executes and the settings it obeys.
 
 They lived in the coder (11,000 lines) and the coder's shell, so the core modules that
 asked them - the session store, the web server, the headless runner - imported the
@@ -38,7 +43,8 @@ def is_unsafe_project_dir(path: str) -> bool:
     - the filesystem root and the user's home directory itself
     - the standard user directories themselves (Documents, Desktop, Downloads, ...)
       (subdirectories of them are fine, e.g. Documents/VAF_Projects/...)
-    - anything inside the VAF config dir (~/.vaf)
+    - VAF's own state (`data_stores.is_vaf_state`: ~/.vaf, the data and the config
+      directory) and every folder that contains part of it
     - anything inside the VAF program/source tree
 
     Also used by web_server/headless_runner to refuse persisting or re-injecting
@@ -60,9 +66,9 @@ def is_unsafe_project_dir(path: str) -> bool:
     if p in {home / d for d in _STANDARD_DIRS}:
         return True
 
-    # VAF config dir (~/.vaf) and everything inside it
-    vaf_cfg = home / ".vaf"
-    if p == vaf_cfg or p.is_relative_to(vaf_cfg):
+    # VAF's own state and every folder that contains part of it
+    from vaf.core.data_stores import holds_vaf_state, is_vaf_state
+    if is_vaf_state(p) or holds_vaf_state(p):
         return True
 
     # VAF program/source tree and everything inside it
@@ -78,6 +84,9 @@ def assert_safe_workspace(ws: str) -> None:
     root = _VAF_ROOT
     if p == root or root.is_relative_to(p) or p.is_relative_to(root):
         raise ValueError(f"refusing to run: workspace {p} overlaps the VAF source tree {root}")
+    from vaf.core.data_stores import holds_vaf_state, is_vaf_state
+    if is_vaf_state(p) or holds_vaf_state(p):
+        raise ValueError(f"refusing to run: workspace {p} is or contains VAF's own data")
     # Never root a jail at the real HOME, anything above it (/home holds every account's home)
     # or the filesystem root: that would bind-mount a home (incl. ~/.vaf secrets) or the
     # whole system read-write. The same rule as is_unsafe_project_dir.

@@ -813,6 +813,49 @@ def test_copy_out_drops_links_and_escapes(docker, mgr, monkeypatch, tmp_path):
     assert not (tmp_path / "escape.txt").exists()
 
 
+def test_copy_out_refuses_a_member_that_lands_in_vafs_own_data(docker, mgr, monkeypatch, tmp_path):
+    """The folders of the tar stream are chosen inside the environment. Into the PARENT of
+    the data directory (not itself VAF's data, so the tool's own host check passes) a member
+    named vaf/custom_tools/... would plant code VAF executes at the next agent load. The
+    whole stream is judged before anything is written, so the harmless member ahead of it
+    is not written either.
+
+    MUTATION: drop the pass over the members before the writes in copy_out - red."""
+    import io
+    import tarfile
+    xdg = tmp_path / "xdg-data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(xdg))
+    monkeypatch.setenv("LOCALAPPDATA", str(xdg))
+    from vaf.core.platform import Platform
+    data = Platform.data_dir()
+    host_dir = data.parent
+    host_dir.mkdir(parents=True)
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        for name, body in (("fonts/a.txt", b"harmless"),
+                           (f"{data.name}/custom_tools/e.py", b"print('planted')")):
+            info = tarfile.TarInfo(name)
+            info.size = len(body)
+            tar.addfile(info, io.BytesIO(body))
+    payload = buf.getvalue()
+    env = mgr.create(ALICE)
+    real = docker.__call__
+
+    def _docker(args, timeout=60, **kw):
+        if args[0] == "exec" and "tar" in args and "-cf" in args:
+            return types.SimpleNamespace(returncode=0, stdout=payload, stderr=b"")
+        return real(args, timeout, **kw)
+
+    monkeypatch.setattr(containers, "docker", _docker)
+    with pytest.raises(envmod.EnvironmentRefused, match="VAF's own data"):
+        mgr.copy_out(ALICE, env.id, "out", str(host_dir))
+    assert [p for p in host_dir.rglob("*") if p.is_file()] == []
+    # Straight into a state root is refused before anything is read from the stream.
+    with pytest.raises(envmod.EnvironmentRefused, match="VAF's own data"):
+        mgr.copy_out(ALICE, env.id, "out", str(data / "custom_tools"))
+    assert not (data / "custom_tools").exists()
+
+
 def test_copy_out_refuses_an_oversized_source_before_reading_it(docker, mgr, monkeypatch, tmp_path):
     """The tar stream is held in memory whole. MUTATION: drop the measurement inside the
     container - red: the stream was read first and measured afterwards."""

@@ -262,7 +262,10 @@ skill's bundled files, for example:
   user (`user_scope_id`); an unknown or out-of-scope id returns an actionable
   error listing the available skills.
 - `~/.vaf/skills` is readable by the existing `read_file` safety check
-  (`is_safe_path`), so no special file-access path is introduced.
+  (`is_safe_path`), so no special file-access path is introduced. It is not writable
+  by the file tools (`write_file`, `edit_file`, `move_file`), for any account: a skill
+  steers later turns, so it is changed only by `create_skill`, `update_skill` and
+  `delete_skill`, which check what they save, and by the admin import, which scans.
 
 ---
 

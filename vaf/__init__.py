@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from .core.automation_triggers import RoomTriggerWatch
     from .core.code_audit import AuditFinding, AuditReport, code_audit
     from .core.completion import is_error_reply
+    from .core.data_stores import is_vaf_state
     from .core.environments import EnvironmentManager, get_environment_manager
     from .core.fair_queue import QueueBusy, ResourceQueue, WaitInfo, queue_metrics, resource_queue
     from .core.git_runner import run_project_git
@@ -55,8 +56,8 @@ __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_K
            "describe_room_entry", "egress_session", "extract_pdf_markdown",
            "fold_room_owners", "fold_room_tasks", "fold_room_votes", "get_environment_manager",
            "inspect_upload",
-           "install_thread_excepthook", "invited_rooms", "is_error_reply", "jail_allows",
-           "joined_rooms",
+           "install_thread_excepthook", "invited_rooms", "is_error_reply", "is_vaf_state",
+           "jail_allows", "joined_rooms",
            "list_standing_grants", "mark_trusted_dir", "markers", "model_text",
            "participant_key", "queue_metrics", "record_threat", "remove_revocation_listener",
            "resource_queue", "restore_account", "revoke_account", "revoke_standing_grants",
@@ -130,6 +131,14 @@ def __getattr__(name):
         # the account folder and not the rest, and the save routes carried none.
         from .tools.filesystem import jail_allows
         return jail_allows
+    if name == "is_vaf_state":
+        # Is this path VAF's own state (the custom tools it executes, the MCP commands it
+        # starts, the grants and skills it obeys)? The other static half of a write screen,
+        # beside jail_allows' per-account half. VAF's file tools, its project and mount checks
+        # and the sandbox copy-out ask it; a third-party write tool run for an admin got no
+        # screen at all without it. Stdlib at module level. See docs/EMBEDDING.md.
+        from .core.data_stores import is_vaf_state
+        return is_vaf_state
     if name in ("VoiceTurnEngine", "TurnOutcome"):
         # The live-call turn pipeline as an object: audio bytes in, ONE decided
         # TurnOutcome back - noise gate, STT, speaker verification with the

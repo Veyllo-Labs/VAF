@@ -379,7 +379,7 @@ class LearnDocumentTool(BaseTool):
         from vaf.tools.filesystem import is_safe_path
 
         # Jail already installed via the file_access declaration; this is the decision only.
-        safe, resolved = is_safe_path(str(path))
+        safe, resolved = is_safe_path(str(path), read_only=True)
         if not safe:
             return f"[ERROR] {resolved}"
         path = Path(resolved)

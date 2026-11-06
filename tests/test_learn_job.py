@@ -349,7 +349,7 @@ def test_async_path_spawns_learn_agent_with_json_payload(pdf, monkeypatch):
         return SpawnedSubagent(task_id="t1", marker=f"[SUBAGENT_ASYNC:t1:{agent_type}] x")
 
     monkeypatch.setattr("vaf.core.subagent_spawn.spawn_subagent", _fake_spawn)
-    monkeypatch.setattr("vaf.tools.filesystem.is_safe_path", lambda p: (True, str(p)))
+    monkeypatch.setattr("vaf.tools.filesystem.is_safe_path", lambda p, **_k: (True, str(p)))
     monkeypatch.setattr("vaf.core.config.Config.get",
                         classmethod(lambda cls, k, d=None:
                                     True if k == "sub_agents_in_separate_terminals" else d))
@@ -375,7 +375,7 @@ def test_async_path_spawns_learn_agent_with_json_payload(pdf, monkeypatch):
 def test_duplicate_learn_for_the_session_is_refused(pdf, monkeypatch):
     from vaf.tools.learn_document import LearnDocumentTool
 
-    monkeypatch.setattr("vaf.tools.filesystem.is_safe_path", lambda p: (True, str(p)))
+    monkeypatch.setattr("vaf.tools.filesystem.is_safe_path", lambda p, **_k: (True, str(p)))
     monkeypatch.setattr("vaf.core.config.Config.get",
                         classmethod(lambda cls, k, d=None:
                                     True if k == "sub_agents_in_separate_terminals" else d))
@@ -400,7 +400,7 @@ def test_duplicate_learn_for_the_session_is_refused(pdf, monkeypatch):
 def test_scanned_pdf_without_ocr_is_refused_before_any_spawn(pdf, monkeypatch):
     from vaf.tools.learn_document import LearnDocumentTool
 
-    monkeypatch.setattr("vaf.tools.filesystem.is_safe_path", lambda p: (True, str(p)))
+    monkeypatch.setattr("vaf.tools.filesystem.is_safe_path", lambda p, **_k: (True, str(p)))
     monkeypatch.setattr("vaf.core.pdf_extract.extract_pdf_markdown",
                         lambda path, max_pages=None, ocr_fallback=True, first_page=1, cancel=None:
                         {"markdown": "--- Page 1 ---\n\n--- Page 2 ---",

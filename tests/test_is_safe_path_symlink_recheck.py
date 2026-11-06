@@ -63,9 +63,32 @@ def test_escaping_symlink_is_refused_for_an_unjailed_caller(home):
     link.parent.mkdir(parents=True, exist_ok=True)
     os.symlink(target, link)
 
-    safe, verdict = is_safe_path(str(link))
+    safe, verdict = is_safe_path(str(link), read_only=True)
     assert not safe
     assert "VAF's own data directory" in verdict
+
+
+def test_a_link_to_the_custom_tools_is_refused_for_a_write_and_allowed_for_a_read(
+        home, tmp_path, monkeypatch):
+    """The recheck asks the same question the caller asked. A link in Documents to the
+    folder whose Python VAF executes is no write target, and stays readable.
+
+    MUTATION: do not forward read_only in the recheck - the read half goes red."""
+    for var in ("XDG_DATA_HOME", "LOCALAPPDATA"):
+        monkeypatch.setenv(var, str(tmp_path / "xdg-data"))
+    from vaf.core.platform import Platform
+    tools = Platform.data_dir() / "custom_tools"
+    tools.mkdir(parents=True)
+    (tools / "x.py").write_text("x = 1")
+    link = home / "Documents" / "tools"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(tools, link, target_is_directory=True)
+
+    safe, verdict = is_safe_path(str(link / "x.py"))
+    assert not safe and "VAF's own data" in verdict
+    safe, result = is_safe_path(str(link / "x.py"), read_only=True)
+    assert safe, result
+    assert result == str(link / "x.py")
 
 
 def test_symlink_inside_the_allowed_tree_is_allowed_and_returns_the_unresolved_path(home):

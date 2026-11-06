@@ -19,13 +19,15 @@ Security is the primary design constraint for VAF's network features. The system
 
 ### Scope: private networks only
 
-VAF is served to this machine, the local network and VPNs, never to the public internet. That is a design decision, not a default: an agent's login page guards credentials, messages, files and an agent that acts, and on the internet it would be attacked without pause. Putting an agent's login page on the internet is close to negligent. Every layer below assumes it:
+The sign-in, the web UI and the API are served to this machine, the local network and VPNs, never to the public internet. That is a design decision, not a default: an agent's login page guards credentials, messages, files and an agent that acts, and on the internet it would be attacked without pause. Putting an agent's login page on the internet is close to negligent. Every layer below assumes it:
 
 - The admission check refuses every address that is not admitted at the HTTPS door, before any page, and again in the backend, for HTTP and WebSocket alike ([Layer 2](#layer-2-admission-check)). There is no setting that admits a public network: an admitted network can only be private (`normalize_allowed_networks`), and "VPN only" off still refuses every public address. With Local Network off the HTTPS door and the backend serve this machine only. A person refused in a browser sees a short page that says which networks VAF answers and what to do (connect through the VPN, or run `vaf server status` on the machine VAF runs on), with no address or internal name on it.
 - The firewall rules open the access port only to the admitted networks, and a switched-off ufw is said, not counted ([Layer 1](#layer-1-os-firewall-automation)).
 - `vaf server provision` starts a machine with a public address in "VPN only" when it first sets it up as a server, and `vaf doctor`, `vaf server status` and the settings warn while the machine has a public address; the doctor also reports public addresses that reached the port.
 
 A port forward on the router, a tunnel that publishes the access port (Cloudflare Tunnel, Tailscale Funnel, ngrok) or a reverse proxy that faces the internet is outside what VAF supports; remote access is a VPN ([Remote access over a VPN](#remote-access-over-a-vpn)).
+
+The one thing that reaches VAF from anywhere is the link protocol of paired Veyllo App devices, and it comes through an OUTBOUND connection VAF opens to the Veyllo relay, only while a device needs it: no port is opened, nothing passes the HTTP stack, and the relay's bytes are fed in this process into a TLS session that only a paired device's certificate opens ([VEYLLO_APP.md](../integrations/VEYLLO_APP.md)).
 
 Named boundaries:
 - **The TLS handshake.** It happens before any HTTP check, so a client that reaches the access port still receives the certificate, whose names list the LAN and VPN addresses and the host name. Only a firewall, or a bind to the admitted interfaces only, closes that; a per-interface bind is not built, because a VPN that comes up later would need a rebind.
@@ -119,6 +121,7 @@ Every HTTP request and every WebSocket handshake passes through `AdmissionGuard`
 
 - Rejects any address outside the admitted networks with HTTP 403, a WebSocket with close 4003 before accept, before any route or socket handler runs (recorded as `ip_blocked` with the device's address and the path in `detail`, so a scanner walking many paths is one line per address per 5 seconds); under "VPN only" that includes the home network
 - Says what to do. A browser that loads a page (a GET or HEAD outside `/api` whose `Accept` names `text/html`) gets a short HTML page: VAF answers only this machine and the networks it admits, its local network or a VPN; connect through the VPN, or run `vaf server status` on the machine VAF runs on. It names no address, runs no script and is never cached (`refusal_page` in `vaf/network/admission.py`; English only, since no session or language exists yet, and in the system's color scheme, since reading VAF's theme from the browser's storage would take a script). An API call keeps the JSON answer, `{"detail": ...}` with the same first sentence, and a socket a short close reason. The refusal used to be one JSON sentence, "only local network clients are allowed", which is false under "VPN only" and gave a person who opened the login page from a network not admitted yet (a mesh VPN before `vaf server networks tailscale on`, the home network under "VPN only") no way forward
+- Judges the Veyllo App's direct socket `/api/app-link` like every other one: the proxy relays it through its WebSocket allowlist, and the route grants nothing by the client's address (this machine neither); only the inner TLS with a paired device's certificate opens anything ([VEYLLO_APP.md](../integrations/VEYLLO_APP.md)).
 - Judges WebSockets too. The check used to be a `BaseHTTPMiddleware`, and Starlette passes every scope that is not HTTP through such a middleware unjudged (measured: HTTP 403 while a WebSocket route behind the same check opened and answered). Only `/ws` checked the address itself; the room socket (`/ws/a2a/{room_id}`) and the interactive browser's stream checked none, and `vaf run --web` serves the backend on `0.0.0.0:8001` in network mode, so there they faced the network directly
 - Judges the REAL client, not the socket peer: the integrated proxy relays every device over loopback, so the peer is `127.0.0.1` for all of them. The address comes from `connection_client_ip` in `vaf/network/binding.py`, which honors `X-Forwarded-For` only when the peer is loopback (see [Who the client is](#who-the-client-is)). This check used to read the peer and therefore passed every relayed request, a public address on the proxy port included (measured: 200 through the proxy, 403 only on a direct connection), while the WebSocket handshake already refused it.
 - Admitted are this machine, the local networks (RFC 1918) and the networks an admin added; with "VPN only" the networks of the detected VPN interfaces replace the local ones. WireGuard and OpenVPN clients (`10.x`) pass by default; mesh VPNs that hand out `100.64.0.0/10` (Tailscale, Headscale, NetBird) pass once that network is admitted. The decision is `inbound_policy()` in `vaf/network/binding.py`, read on every request, so a change applies without a restart - see [Remote access over a VPN](#remote-access-over-a-vpn).
@@ -405,6 +408,11 @@ The system actively tracks all connections (WebSocket and HTTP) to the VAF backe
 VAF does not run a VPN server: that needs root, and the router (a Fritzbox has WireGuard
 built in), Tailscale or the hosting's provisioning already do it well. What VAF does is
 recognise the VPN, admit its devices and name its address.
+
+**The Veyllo App over a VPN.** With Local Network and TLS on, a Veyllo App QR code lists
+`wss://<address>:<https port>/api/app-link` for every admitted address, a VPN's included;
+the phone with your VPN on reaches VAF there directly, without the relay and without cost
+([VEYLLO_APP.md](../integrations/VEYLLO_APP.md)).
 
 **Detection.** `local_interfaces()` in `vaf/network/binding.py` lists this machine's
 addresses through psutil: interfaces that are up, IPv4, inside a private range or the

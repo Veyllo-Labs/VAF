@@ -50,6 +50,16 @@ Docker volume `vaf_memory_pgdata`), the Docker volumes of the project sandbox
 environments and of the personal browsers, and credentials kept in the operating
 system's keyring (`EXTERNAL` in the same module).
 
+**The Veyllo App** is in the backup in three parts: the paired devices with their outboxes
+(`~/.vaf/app_link`, data), the device authority and the app link's server certificate (in
+the TLS authority's folder, recreatable), and the relay secret (in the keyring). A backup
+restored onto a SECOND machine while the first still runs holds the same relay secret: the
+two take the relay connection from each other (the relay closes the older one; each waits
+five minutes before it tries again, and `vaf relay status` says `replaced`). Rotate the
+secret on one of them (`vaf relay rotate`) or dissolve the relay connection on one
+([VEYLLO_APP.md](../integrations/VEYLLO_APP.md)). A restore without the keyring leaves the
+relay instance without its secret: `vaf doctor` reports it.
+
 **Named boundary:** the working memory under the launch directory
 (`<cwd>/.vaf/main`) is per-session scratch state that the garbage collector
 removes by age; it is not a root.

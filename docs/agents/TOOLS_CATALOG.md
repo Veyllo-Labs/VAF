@@ -206,6 +206,8 @@ runs its model call with no tools at all - see
 | `read_telegram_chat` | read | Read messages from a Telegram chat. |
 | `find_telegram_messages` | read | Search Telegram messages. |
 | `send_discord` | write | Send a Discord message, optionally with a document attachment (irreversible). |
+| `send_veyllo_app` | write | Send a message to the user's own paired Veyllo App devices, optionally with a file; no recipient parameter, so never held by the outward hold. A phone that is away gets it when it connects again (irreversible). |
+| `user_phone` | write | Hand a task to the user's own connected phone (the Veyllo App's agent: a calendar entry, a reminder, a contact lookup) and wait for its answer up to `timeout_s` (10-600 s). Only devices of the caller's account; nothing is sent or kept when none is connected; the answer comes back fenced as data. Off in background thinking runs and in the Front Office (irreversible). |
 | `read_discord_chat` | read | Read messages from a Discord chat. |
 | `find_discord_messages` | read | Search Discord messages. |
 | `send_slack` | write | Placeholder: Slack is a known channel without a bridge, so the tool answers that it cannot send yet. |

@@ -17,6 +17,7 @@ Connect external apps and services to interact with your VAF agent.
 | Microsoft Teams | Coming Soon | Bot Framework for Teams integration |
 | Matrix (Element) | Coming Soon | Open-source chat protocol |
 | IRC | Coming Soon | Classic IRC for communities |
+| **Veyllo App** | Available | Chat with your agent from your phone, through the Veyllo relay or directly over your VPN; your agent can hand tasks to the phone ([VEYLLO_APP.md](VEYLLO_APP.md)) |
 | **Contacts** | Available | Central contact list with personal file and assistant whitelist |
 
 ### Calendar
@@ -570,7 +571,7 @@ For questions like “Has [Name] written to me?” in your own chat, the agent c
 When you have one or more messaging connections (e.g. Telegram, Discord), the agent can **send you proactive messages**, for example when you ask it to "send me the result via Telegram" or "tell me how full my desktop is and send that to me".
 
 - **System prompt**: The agent is informed which channels are available for the current user and whether a preferred channel (`main_messenger`) is set. This is stored in User Identity (see [USER_IDENTITY.md](../memory/USER_IDENTITY.md)).
-- **Tool availability**: Only tools for **configured** connections are exposed to the agent: `send_telegram` when Telegram is connected, `send_discord` when Discord is connected, and `send_whatsapp` when WhatsApp is linked (`send_slack` exists but answers that Slack cannot send yet: Slack is a known channel without a bridge). The agent never sees a per-channel send tool for a channel you do not have. The channel-agnostic `send_to_user` is additionally pinned whenever at least one messenger is connected (it resolves the platform itself at run time, see *Channel model* below).
+- **Tool availability**: Only tools for **configured** connections are exposed to the agent: `send_telegram` when Telegram is connected, `send_discord` when Discord is connected, `send_whatsapp` when WhatsApp is linked, and `send_veyllo_app` when a Veyllo App of the account is paired (`send_slack` exists but answers that Slack cannot send yet: Slack is a known channel without a bridge). The agent never sees a per-channel send tool for a channel you do not have. The channel-agnostic `send_to_user` is additionally pinned whenever at least one messenger is connected (it resolves the platform itself at run time, see *Channel model* below).
 - **First time**: If you have not set a preferred channel, the agent will ask once (e.g. "Should I send it via WhatsApp, Telegram or Discord?") and store your answer in User Identity as `main_messenger` (via the `update_user_identity` tool). Only a channel VAF can deliver to can be the main messenger (`MAIN_MESSENGERS` in `vaf/core/channels.py`); any other stored value reads as "not set", so the agent asks again rather than delivering somewhere the setting does not name.
 - **Sending**: When you named a platform ("send it via Telegram"), the agent uses the matching tool (`send_telegram`, `send_discord` or `send_whatsapp`). When no platform was named - and always in automations/workflows - it uses `send_to_user`, which resolves `main_messenger` at run time. For **Telegram**, the agent can send to you once your Telegram is paired with your account; it writes to your own paired Telegram (the one you last wrote from, when you paired two), never to a contact who wrote to the bot. For **WhatsApp**, the whitelist phone number is used. Chat IDs / endpoints are stored in `messaging_endpoints.json` under the platform data directory.
 - **Discord**: Proactive send is implemented via `send_discord` (with the same user-scope checks used by other messaging tools).
@@ -696,6 +697,27 @@ What a new channel still needs, because it differs per channel:
    (`tests/test_front_office_settings.py` holds the Front Office list against the bridges).
 6. Its window in the web UI, and its entry in the web's `MAIN_MESSENGERS` picker list
    (the test holds that list against the registry).
+
+## Veyllo App
+
+The Veyllo App is a chat channel in the registry like Telegram: `Channel("veyllo_app",
+"Veyllo App", bridge=True, send_tool="send_veyllo_app", secrets=("relay_secret",),
+accounts="shared")`. What differs ([VEYLLO_APP.md](VEYLLO_APP.md) for the whole picture):
+
+- **The bridge is the link manager** (`vaf/core/app_link/bridge.py`), in the web server's
+  process: a paired device's message becomes a turn in the account's one chat
+  (`veyllo_app_<key>`) in process, and the reply streams back to the device. The account
+  comes from the device row its certificate names, never from the message.
+- **No read tool**: the account's one chat is its own history.
+- **`accounts="shared"`**: one relay instance serves every account; `veyllo_app_config.enabled`
+  is the channel's switch, admins ride it, every other account has its own switch, which a
+  confirmed pairing turns on.
+- **The secret field** is the relay secret S of the installation's relay instance, in the
+  key ring like a bot token. The generic disconnect refuses it: it goes only with the
+  instance (`vaf relay dissolve`).
+- **No Front Office**: only an account's own paired devices reach the channel.
+- **Delivery**: the `send_to_main_messenger` branch stores the message once and lists it in
+  every device's outbox; a device that is away gets it when it connects again.
 
 ## Architecture
 

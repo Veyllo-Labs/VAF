@@ -555,7 +555,9 @@ there too - cleared before the commit, a lookup in between re-cached the old ans
   old role. Deactivation and deletion also end the account's interactive browser lease on
   every browser, which closes its stream sockets (a revocation listener in
   `vaf/core/browser_interactive.py`); a demotion or a narrowed allowlist leaves the browser
-  alone, because a lease carries neither the role nor the allowlist.
+  alone, because a lease carries neither the role nor the allowlist. Deactivation and
+  deletion also remove every Veyllo App device of the account and cut their sessions off (a
+  revocation listener in `vaf/core/app_link/devices.py`); a narrowing keeps them.
 - **Nothing more runs.** While the mark stands, the tool funnel refuses the account's calls
   BEFORE the admin exemption (a turn queued before a demotion still carries the old role),
   a tool call already running ends through the funnel's own stop check, and the runner drops
@@ -940,6 +942,25 @@ Every account can pair its own Telegram without the wizard: `POST /api/telegram/
 Each account's own Telegram switch is enforced, by one rule (`messaging_connections.channel_enabled_for_scope`, which reads `channels.Channel.accounts`): nothing is on while the bot is off; the local admin and every admin account ride the bot's switch (an admin's save writes the bot's switch, never one of their own, so a rule by scope alone would have cut a second admin off; the account directory's `role` says who is an admin, `config.is_admin_account`); every other account needs its own switch on. The bridge answers a paired account, its relay contacts and its contacts only while that account's lane is on, and `get_telegram_chat_id` delivers to it only then (`telegram_chat_id_of` still finds the chat for reading). It used to be the switch shown and stored while the bot answered everybody. A pairing by code turns the account's switch on.
 
 Where VAF reaches an account on Telegram (`messaging_endpoints.json`, `by_scope` and `by_username`) is only ever one of that account's own paired Telegram ids (`messaging_connections.telegram_paired_ids`: its whitelist entries, by scope alone, a missing scope on the entry or the lane read as the local admin's, as the bot's lane switch reads it (`is_local_admin_lane`); a name never decides, so neither a lane that falls back to another name nor the Discord bridge's "admin" lane without a scope is handed an account's pairing by its name; never a relay entry, never a contact, and for the local admin never another account's pairing). Both halves of the store hold it. `save_telegram_chat_id` writes nothing else, and it writes only under the name the account is paired under, never the name a caller passed, so a background lane of one account that falls back to the local admin's name cannot file its chat under the admin's key. `telegram_chat_id_of` returns nothing else, and only reads or clears name keys that are the account's own: a name that another account's entry is filed under is not (an entry without a scope is the local admin's), and for every account but the local admin neither is the local admin's name or "admin", which stay the admin's keys even after the admin's own pairing was removed, unless the account's own pairing is filed under that name (an ordinary account named "admin" keeps its own key, and the local admin's lane leaves it alone). Before this, the bridge stored the chat of every sender it admitted under the OWNER's scope and name, because an allowed contact, a relay contact and a stranger the open Front Office answers all resolve to an entry carrying them: measured through the real bridge, after one Telegram message from an allowed contact the owner's stored endpoint was the contact's chat id, and every owner delivery lane (reminders, automations, background questions, `send_to_user`, the Front Office back-channel `send_telegram`) went to the contact and was mirrored into the contact's own chat session. A stored chat that is not a paired id of the account is removed from the account's keys on the first read after the update, before anything is sent, and recorded once as the security event `owner_endpoint_reset` (`detail` names the contact when the account's book has one). The inbox and the Telegram window decide "owner" from the whitelist itself (`owner_endpoints`), not from this store, which is why nothing on screen showed it. Guarded by `tests/test_telegram_owner_endpoint.py`. WhatsApp's writer stores only the owner's registered number; its reader makes no such repair, a named boundary in the docstrings of `save_whatsapp_chat_jid` and `get_whatsapp_chat_jid`.
+
+### Veyllo App
+
+- **The account comes only from the device row.** A link session's account is the one the
+  device row names that its client certificate's public key and serial match
+  (`vaf/core/app_link/session.py`); no message field, relay connection id or client address
+  ever decides it, and a turn is queued with that row's scope and username.
+- **One chat per account**, `veyllo_app_<key>` with a random key minted once, so no scope id
+  reaches the phone; every device of the account shares it.
+- **Pairing is the account's own**: the window opens with the account's own 2FA code, no
+  route takes another account's id, and the device exists only after the account confirmed
+  its fingerprint in the web UI.
+- **Removal per device**, by its account or an admin (`DELETE /api/app-link/devices/{id}`,
+  `vaf devices remove`): its session closes at once and its queued turns are dropped while
+  the account's other devices keep theirs; a turn already running answers no removed device.
+  Deactivation and deletion remove all of the account's devices, so does signing out every
+  other device and 90 days without use; a password change does not.
+- **`user_phone` addresses only the scope it runs for**: the connected devices of that
+  account, and only the device a task went to may answer it.
 
 ### Discord
 

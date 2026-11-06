@@ -47,6 +47,11 @@ purpose - so a reader of this document does not have to wonder which rules apply
 | Carried by the proxy | `WebSocketRoute("/ws")` | `WebSocketRoute("/ws/a2a/{room_id})`, and the relay carries the PATH through against an allowlist |
 | What it speaks | the message types below | the A2A frame, see the room modules under `vaf/core/a2a/` |
 
+A third socket, `/api/app-link`, carries the Veyllo App's direct path: binary frames with the
+bytes of a TLS session that ends in VAF, no credential, no cookie and no fallback for this
+machine; the relay's allowlist carries it, and the device certificate inside decides
+(`vaf/api/app_link_routes.py`, [VEYLLO_APP.md](../integrations/VEYLLO_APP.md)).
+
 Three things about the proxy are worth knowing before adding another socket, because each
 failed in a way that looked like success:
 

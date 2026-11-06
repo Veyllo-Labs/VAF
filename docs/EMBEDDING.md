@@ -1587,7 +1587,7 @@ The supported arguments:
 |---|---|
 | `tools` | Your registry, `{name: BaseTool instance}`. Positional. |
 | `user_scope_id`, `username`, `user_role` | Who is calling. Assigned into whatever the tool declares in `identity_kwargs`, overwriting anything a model put there. **Pass `username` if you serve more than one tenant.** With none, the name is resolved from the SCOPE: no scope or the owner's scope gives the configured owner (`local_admin_username`, whatever registration wrote there - never the literal `"admin"`), and any other scope gives a stable synthetic name for that tenant, so a caller whose name you did not pass never lands on the owner's name-keyed data. That synthetic name is isolated, not their account name - if a tenant must reach data stored under their real username, pass it. |
-| `source`, `session_id` | Where the call comes from. Feeds `channel_restrictions`: a `source` that names a chat channel (`"whatsapp"`, `"telegram"`, `"discord"`) or a session id with that channel's prefix makes the call a chat call, which a tool's `("channel",)` refuses. `session_id` is also the chat a "for this chat" grant is kept for, and what a tool that declares `session_id` in `identity_kwargs` receives. Leave them out if you have no messaging channels and no chats. |
+| `source`, `session_id` | Where the call comes from. Feeds `channel_restrictions`: a `source` that names a chat channel (`"whatsapp"`, `"telegram"`, `"discord"`, `"veyllo_app"`) or a session id with that channel's prefix makes the call a chat call, which a tool's `("channel",)` refuses. `session_id` is also the chat a "for this chat" grant is kept for, and what a tool that declares `session_id` in `identity_kwargs` receives. Leave them out if you have no messaging channels and no chats. |
 | `interactive`, `decide` | Set `interactive=True` and pass `decide(tool_name, reason) -> "allow_once" \| "allow_chat" \| "allow_always" \| "cancel"` to plug your own confirmation UI into the gate. `allow_chat` remembers the tool for this person in this chat (`session_id`), in memory only. A decider that accepts the optional keywords gets them: `preview`, `choices`, and `gate_id` - the id `gate_required` carries; a UI that can show a dialog late or twice should send it back with the answer and accept only the open question's id, so a stale answer cannot approve a later command. Left out, gated tools are refused rather than run. |
 | `trust_dir` | Which directory a standing grant applies to. Defaults to the process's current one. |
 | `timeout_for` | `f(tool_name) -> seconds`, for your own timeout policy; it replaces the tool's own budget. Accept a `default` keyword instead (`f(tool_name, default=None)`) to ADJUST it: you receive the tool's own budget for this call and return yours. Left out, the tool's declared budget applies (`timeout_seconds` / `budget_seconds`), else `tool_timeout_seconds`. |
@@ -2173,6 +2173,16 @@ vaf.stop_session(session_id)    # your Stop button for one chat
 - The mark is process-local. Another process learns of the change through its own
   resolvers: an account your directory resolver no longer lists as active starts no queued
   turn and no automation there.
+
+**The Veyllo App link is not on the facade (named boundary).** `vaf/core/app_link/` pairs a
+phone with an account and carries its chat over the Veyllo relay or a direct WebSocket. It is
+first-party like the channel registry: the relay is Veyllo's service and the app is closed, so
+no embedder can pair an app of their own on it (measured embedders asking for it: 0;
+re-measured when one does). What it is built from is reachable to you as engine modules: the
+sized one-time codes of `vaf.core.channel_pairing`, a revocation listener as above, the
+plain-text answer on a chat's own channel (`vaf.core.channel_reply.reply_to_chat`), and
+`TaskQueue.drop_queued_tasks_for_session(session_id, where=...)` to drop only some of a chat's
+queued turns.
 
 ---
 

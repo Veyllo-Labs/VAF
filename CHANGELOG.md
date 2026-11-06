@@ -11,6 +11,23 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+
+- **Veyllo App: pair the Veyllo App with your own account by QR code (after your 2FA code)
+  and chat with your agent from anywhere through the Veyllo relay, or directly over your own
+  VPN.** The relay only carries end-to-end encrypted traffic of paired devices; the web UI
+  and the API stay private. Messages your agent sends while the phone is away arrive when it
+  connects again, with a push notice through the relay. Manage devices with `vaf devices`
+  and the relay with `vaf relay`; `vaf health` and `vaf doctor` report on both. Your agent
+  can also hand tasks to your phone (`user_phone`). The Veyllo App can be your main
+  messenger in Settings.
+
+### Changed
+
+- Signing out every other device also removes your Veyllo App devices; they pair again.
+- Answering a speaker confirmation on Discord now replies in the Discord channel the message
+  came from.
+
 ## [0.1.0a35] - 2026-11-05
 
 ### Added

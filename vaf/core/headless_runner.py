@@ -727,6 +727,23 @@ def _app_link_emit(task):
     return _emit
 
 
+def _close_app_reply(task) -> None:
+    """The end of every Veyllo App turn: a reply `_app_link_emit` opened and no path closed
+    (a `[SYSTEM_LOG_ONLY]` turn, a path added later) ends with `done` and `typing off`, so
+    the phone does not show its agent typing forever. A reply already closed is not touched
+    (`finish_reply` takes the id out of the metadata). Never raises."""
+    if getattr(task, "source", None) != "veyllo_app":
+        return
+    meta = task.metadata if isinstance(getattr(task, "metadata", None), dict) else {}
+    if not meta.get("app_reply_id"):
+        return
+    try:
+        from vaf.core.app_link import bridge as app_bridge
+        app_bridge.finish_reply(meta, "")
+    except Exception:
+        pass
+
+
 def _stop_stream_for(candidate, session_id):
     """The chat lane's stream of the task that was stopped, or None.
 
@@ -3551,6 +3568,7 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                     # pinned for THIS turn (still set: end_turn clears it once the task ends).
                     _send_turn_error_reply(
                         task, e, contact=getattr(agent, "_front_office_contact", None))
+                _close_app_reply(task)
                 try:
                     if is_debug_logging_enabled():
                         from datetime import datetime as _dt

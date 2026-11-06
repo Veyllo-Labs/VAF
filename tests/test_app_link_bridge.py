@@ -405,3 +405,99 @@ def test_no_secret_anywhere(app_link_home, caplog):
     for value in secrets_seen:
         assert value not in haystack
         assert base64.b64decode(paired["cert"]).hex() not in haystack
+
+
+def test_send_to_user_falls_back_when_no_device_may_receive(app_link_home, monkeypatch):
+    from vaf.auth import user_workspace
+    from vaf.core import messaging_connections as mc
+    monkeypatch.setattr(user_workspace, "get_user_workspace", lambda name: SimpleNamespace(
+        get_user_identity=lambda: {"main_messenger": "veyllo_app"}))
+    row = paired_device(SCOPE_A)[0]
+    assert mc.send_to_main_messenger(SCOPE_A, "alice", "hello")[0] is True
+    # Stale for 100 days: the device does not stand, the caller must fall back to the web UI.
+    with devices._locked():
+        state = devices._load()
+        for d in state["devices"]:
+            d["last_seen_at"] = d["created_at"] = time.time() - 100 * 86400
+        devices._save(state)
+    before = len(devices.get(row["device_id"])["outbox"])
+    assert bridge.deliver(SCOPE_A, "alice", "again") is False
+    assert len(devices.get(row["device_id"])["outbox"]) == before
+
+
+def test_a_refused_message_can_be_sent_again_with_its_id(app_link_home, monkeypatch):
+    import vaf.core.channel_ingress_policy as ip
+    client, _pipe, row = link(SCOPE_A)
+    with monkeypatch.context() as m:
+        m.setattr(ip, "evaluate_ingress", lambda *a, **k: (False, "closed"))
+        client.send(_msg(row, "first try"))
+    assert client.of("error")[-1] == {"t": "error", "code": "refused", "ref": UID}
+    client.send(_msg(row, "first try"))
+    assert [t.input_text for t in _queued(devices.chat_session_id(SCOPE_A))] == ["first try"]
+    assert {"t": "ack", "id": UID} in client.frames
+
+
+def test_a_failure_before_the_queue_releases_the_id(app_link_home, monkeypatch):
+    from vaf.core import task_queue
+    client, pipe, row = link(SCOPE_A)
+    real_add = task_queue.TaskQueue.add
+    calls = {"n": 0}
+
+    def _flaky(self, *a, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("queue down")
+        return real_add(self, *a, **k)
+    monkeypatch.setattr(task_queue.TaskQueue, "add", _flaky)
+    client.send(_msg(row, "try"))
+    assert calls["n"] == 1 and not bridge._seen_before(row["device_id"], UID)
+
+
+def test_a_file_too_big_for_the_app_is_refused_with_a_reason(app_link_home, monkeypatch, tmp_path):
+    import hashlib
+
+    from vaf.core.app_link import protocol as pr
+    from vaf.tools.send_veyllo_app import SendVeylloAppTool
+    paired_device(SCOPE_A)
+    big = tmp_path / "big.bin"
+    big.write_bytes(b"x" * 2048)
+    monkeypatch.setattr(pr, "MAX_FILE_BYTES", 1024)
+    assert bridge.deliver(SCOPE_A, "alice", "see", str(big)) is False
+    import vaf.tools.send_veyllo_app as tool_mod
+    monkeypatch.setattr(tool_mod, "_resolve_path", lambda s: (big, None))
+    out = SendVeylloAppTool().run(message="see", file_path=str(big), user_scope_id=SCOPE_A,
+                                  username="alice")
+    assert "larger than 25 MiB" in out
+    monkeypatch.setattr(pr, "MAX_FILE_BYTES", 26214400)
+    client, _pipe, _row = link(SCOPE_A)
+    assert bridge.deliver(SCOPE_A, "alice", "see", str(big)) is True
+    client.pump()
+    att = client.of("msg")[-1]["attachments"][0]
+    assert att["size"] == 2048 and att["sha256"] == hashlib.sha256(b"x" * 2048).hexdigest()
+    assert b"".join(c.data for c in client.chunks) == b"x" * 2048
+
+
+def test_an_open_reply_is_closed_at_the_end_of_every_turn(app_link_home):
+    import vaf.core.headless_runner as hr
+    client, _pipe, row = link(SCOPE_A)
+    task = _task_for(row)
+    hr._app_link_emit(task)
+    rid = task.metadata["app_reply_id"]
+    hr._close_app_reply(task)          # a [SYSTEM_LOG_ONLY] turn: nothing else closed it
+    hr._close_app_reply(task)          # and twice is once
+    client.pump()
+    assert client.of("done") == [{"t": "done", "id": rid}]
+    assert client.of("typing")[-1]["on"] is False and rid not in bridge._replies
+    src = open(hr.__file__, encoding="utf-8").read()
+    assert src.count("                _close_app_reply(task)\n") == 1, "the chat lane closes it at its end"
+
+
+def test_a_reply_nothing_ended_is_forgotten(app_link_home):
+    import vaf.core.headless_runner as hr
+    _client, _pipe, row = link(SCOPE_A)
+    task = _task_for(row)
+    hr._app_link_emit(task)
+    rid = task.metadata["app_reply_id"]
+    bridge._replies[rid].started -= bridge.REPLY_MAX_SECONDS + 1
+    bridge.sweep()
+    assert rid not in bridge._replies

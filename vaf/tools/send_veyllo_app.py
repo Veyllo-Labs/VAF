@@ -52,6 +52,10 @@ class SendVeylloAppTool(BaseTool):
             file_path = resolved
         if file_path and not file_path.is_file():
             return f"File not found or not a file: {file_path}"
+        from vaf.core.app_link import bridge as app_bridge
+        if file_path and not app_bridge.file_fits(str(file_path)):
+            return ("The file is empty or larger than 25 MiB, the most the Veyllo App takes in "
+                    "one message. Send a smaller file or a link to it.")
         scope = kwargs.get("user_scope_id")
         username = kwargs.get("username") or ""
         from vaf.core.app_link import devices
@@ -71,7 +75,9 @@ class SendVeylloAppTool(BaseTool):
                     "user-facing message without any internal context markers.")
         from vaf.core.app_link import bridge
         if not bridge.deliver(scope, username, out, str(file_path) if file_path else None):
-            return "The message could not be stored for the Veyllo App."
+            return ("No Veyllo App of this account can receive messages now (removed, switched "
+                    "off or unused for too long). The user pairs one in Settings, Connections, "
+                    "Veyllo App.")
         try:
             from vaf.core.messaging_connections import _record_outbound
             _record_outbound("veyllo_app", devices.chat_key(scope), out, username, scope,

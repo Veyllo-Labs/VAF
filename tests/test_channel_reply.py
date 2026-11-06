@@ -92,3 +92,11 @@ def test_the_speaker_ack_on_discord_answers_the_turns_channel(sent):
     assert channel_reply.reply_to_chat("discord", {**META["discord"], "user_scope_id": SCOPE},
                                        "ok") is True
     assert sent == [("discord", "2002", "ok")]
+
+
+def test_the_telegram_answer_says_whether_it_was_taken(monkeypatch):
+    import vaf.core.telegram_reply as tr
+    monkeypatch.setattr(tr, "send_telegram_reply", lambda chat_id, text, *a, **k: False)
+    assert channel_reply.reply_to_chat("telegram", META["telegram"], "hi") is False
+    monkeypatch.setattr(tr, "send_telegram_reply", lambda chat_id, text, *a, **k: None)
+    assert channel_reply.reply_to_chat("telegram", META["telegram"], "hi") is True

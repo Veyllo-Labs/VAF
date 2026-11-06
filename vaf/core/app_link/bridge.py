@@ -42,6 +42,9 @@ logger = logging.getLogger(__name__)
 
 SWEEP_SECONDS = 5
 DUPLICATE_WINDOW_SECONDS = 24 * 3600
+# A reply no path ended (the runner closes every turn; this is the last net) is forgotten
+# after this long.
+REPLY_MAX_SECONDS = 24 * 3600
 EXPIRY_EVERY_SECONDS = 3600
 # How often a device that stays connected refreshes its last use (an idle expiry counts
 # from it), at most: once per hour, not a sealed-file write per message.
@@ -69,6 +72,7 @@ class Reply:
     chat_key: str
     app_message_id: str = ""
     rounds: Dict[int, str] = field(default_factory=dict)
+    started: float = field(default_factory=time.time)
     sent: str = ""
     seq: int = 0
     streaming: bool = True
@@ -319,15 +323,20 @@ def _rate_ok(device_id: str) -> bool:
 
 
 def _seen_before(device_id: str, message_id: str) -> bool:
+    """Whether this message id was queued already (within 24 hours)."""
     now = time.time()
     with _lock:
         seen = _seen_ids.setdefault(device_id, {})
         for key in [k for k, ts in seen.items() if now - ts > DUPLICATE_WINDOW_SECONDS]:
             del seen[key]
-        if message_id in seen:
-            return True
-        seen[message_id] = now
-        return False
+        return message_id in seen
+
+
+def _remember(device_id: str, message_id: str) -> None:
+    """Marked only once the turn is queued: a message refused or failed on the way may be
+    sent again with the same id."""
+    with _lock:
+        _seen_ids.setdefault(device_id, {})[message_id] = time.time()
 
 
 def save_files(scope: str, username: str, chat_sid: str, files: List[Dict[str, Any]],
@@ -376,8 +385,6 @@ def _on_msg(session, row, message, files) -> None:
         session.send_json({"t": "ack", "id": mid})
         return
     if not _rate_ok(did):
-        with _lock:
-            _seen_ids.get(did, {}).pop(mid, None)
         session.send_json({"t": "error", "code": "rate_limited", "ref": mid})
         return
     from vaf.core.channel_ingress_policy import evaluate_ingress
@@ -391,8 +398,6 @@ def _on_msg(session, row, message, files) -> None:
     if files:
         saved = save_files(scope, username, chat_sid, files)
         if saved is None:
-            with _lock:
-                _seen_ids.get(did, {}).pop(mid, None)
             for item in message.get("attachments") or []:
                 session.send_json({"t": "error", "code": "xfer_abort", "ref": pr.b64url(item["xfer"])})
             return
@@ -411,6 +416,7 @@ def _on_msg(session, row, message, files) -> None:
                               "origin_channel": CHANNEL, "task_class": "interactive",
                               "app_device_id": did, "app_message_id": mid,
                               "channel_message_id": mid})
+    _remember(did, mid)
     session.send_json({"t": "ack", "id": mid})
 
 
@@ -467,13 +473,20 @@ def stream_round(reply_id: Optional[str], text: str, number: int) -> None:
     _to_account(reply.scope, {"t": "delta", "id": reply.id, "seq": reply.seq, "text": increment})
 
 
+def standing_devices(user_scope_id: Any) -> List[Dict[str, Any]]:
+    """The account's devices that may still receive (removed, switched-off and long-unused
+    ones excluded), connected or not."""
+    scope = str(user_scope_id or "").strip()
+    return [r for r in devices.for_scope(scope) if devices.row_stands(r)] if scope else []
+
+
 def _store_out(scope: str, username: str, message_id: str, text: str, *, document: bool = False) -> None:
     from vaf.core.channel_message_store import append_message
     append_message(username=username, chat_id=devices.chat_key(scope), body=text, direction="out",
                    message_id=message_id, content_type="document" if document else "text",
                    channel=CHANNEL, user_scope_id=scope)
     now = time.time()
-    for row in devices.for_scope(scope):
+    for row in standing_devices(scope):
         devices.outbox_add(row["device_id"], message_id, ts=now)
 
 
@@ -510,13 +523,17 @@ def deliver(user_scope_id: Any, username: Optional[str], text: str,
             file_path: Optional[str] = None) -> bool:
     """A message VAF sends by itself (``send_to_user``, the send tool). Stored once with an
     outbox entry per device; sent to the connected devices now. True when it is stored and
-    the account has a device (an absent one gets it after its next ``welcome``)."""
+    the account has a device that may still receive (an absent one gets it after its next
+    ``welcome``); False when none may, so the caller falls back to the web UI. A file larger
+    than the protocol's 25 MiB is refused (``file_fits``)."""
     scope = str(user_scope_id or "").strip()
-    rows = devices.for_scope(scope) if scope else []
+    rows = standing_devices(scope)
     if not rows:
         return False
     text = str(text or "").strip()
     attach = file_path if file_path and os.path.isfile(file_path) else None
+    if attach and not file_fits(attach):
+        return False
     if not text and not attach:
         return False
     mid = str(uuid.uuid4())
@@ -529,11 +546,14 @@ def deliver(user_scope_id: Any, username: Optional[str], text: str,
     xfer = None
     if attach:
         import hashlib
-        data = Path(attach).read_bytes()
+        digest = hashlib.sha256()
+        with open(attach, "rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
         xfer = os.urandom(pr.XFER_ID_BYTES)
         message["attachments"] = [{"xfer": pr.b64url(xfer), "name": os.path.basename(attach)[:255],
                                    "mime": mimetypes.guess_type(attach)[0] or "application/octet-stream",
-                                   "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}]
+                                   "size": os.path.getsize(attach), "sha256": digest.hexdigest()}]
     for row in rows:
         did = row["device_id"]
         if _send(did, message):
@@ -544,6 +564,14 @@ def deliver(user_scope_id: Any, username: Optional[str], text: str,
         else:
             _went_offline(row)
     return True
+
+
+def file_fits(path: str) -> bool:
+    """Whether a file can travel as one attachment (1 byte to 25 MiB)."""
+    try:
+        return 1 <= os.path.getsize(path) <= pr.MAX_FILE_BYTES
+    except OSError:
+        return False
 
 
 def send_text(meta: Dict[str, Any], text: str) -> bool:
@@ -571,6 +599,10 @@ def sweep(now: Optional[float] = None) -> None:
             close_device(did)
     for session in everything:
         session.check_timeouts()
+    wall_now = time.time()
+    with _lock:
+        for rid in [r.id for r in _replies.values() if wall_now - r.started > REPLY_MAX_SECONDS]:
+            del _replies[rid]
     try:
         from vaf.core.app_link import pairing
         pairing.sweep()

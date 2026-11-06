@@ -209,7 +209,7 @@ def test_settings_lane_list_covers_every_chat_provider_role():
     assert "deepseekInUse(localConfig, providerHasKey('deepseek'))" in modal
 
 
-# ── The one check every writer shares (round 1, UX finding 1) ─────────────────
+# ── The one check every writer shares ─────────────────────────────────────────
 
 from vaf.core.api_backend import check_deepseek_reasoning_effort  # noqa: E402
 
@@ -251,7 +251,8 @@ def _cli(monkeypatch, *args):
 def test_the_cli_refuses_a_value_the_api_would_refuse(monkeypatch):
     result, written = _cli(monkeypatch, "deepseek_reasoning_effort", "bogus")
     assert result.exit_code == 2
-    assert "low, high or max" in result.output and "empty value" in result.output
+    shown = " ".join(result.output.split())
+    assert "low, high or max" in shown and "empty value" in shown
     assert written == {}, "a refused value must not be stored"
 
 
@@ -268,7 +269,44 @@ def test_the_cli_refuses_digits_before_the_number_parse(monkeypatch):
     assert result.exit_code == 2 and written == {}
 
 
-# ── The web helpers, run for real in node (round 1) ───────────────────────────
+def test_a_value_with_a_line_break_logs_one_line(caplog, monkeypatch):
+    # The message quotes the value with repr, so a newline in a hand-edited value cannot
+    # forge a second log line.
+    monkeypatch.setattr(api_backend, "_deepseek_effort_warned", set())
+    with caplog.at_level(logging.WARNING, logger="vaf.api_backend"):
+        deepseek_reasoning_effort({"deepseek_reasoning_effort": "x\n[deepseek] FORGED line"})
+    hits = [r.getMessage() for r in caplog.records if "deepseek_reasoning_effort" in r.getMessage()]
+    assert len(hits) == 1 and "\n" not in hits[0], hits
+
+
+@pytest.mark.parametrize("raw", ["[/bold]", "[red]x[/red]"])
+def test_the_cli_refuses_markup_like_any_other_bad_value(monkeypatch, raw):
+    # Rich renders markup in UI.error: "[/bold]" raised a MarkupError (exit 1, traceback),
+    # and "[red]x[/red]" was drawn red instead of shown as typed.
+    result, written = _cli(monkeypatch, "deepseek_reasoning_effort", raw)
+    assert result.exit_code == 2, (result.exit_code, result.exception)
+    shown = " ".join(result.output.split())  # Rich wraps at the terminal width
+    assert raw in shown and "low, high or max" in shown
+    assert written == {}
+
+
+def test_set_model_shows_a_markup_like_name_as_typed(monkeypatch):
+    from typer.testing import CliRunner
+    from vaf.cli.cmd import models
+    written = {}
+    monkeypatch.setattr(Config, "set", classmethod(lambda cls, k, v: written.__setitem__(k, v)))
+    result = CliRunner().invoke(models.app, ["set", "[/bold]"])
+    assert result.exit_code == 0, (result.exit_code, result.exception)
+    assert "[/bold]" in result.output and written == {"model": "[/bold]"}
+
+
+def test_the_generic_setter_shows_markup_like_values_as_typed(monkeypatch):
+    result, written = _cli(monkeypatch, "some_key", "[/bold]")
+    assert result.exit_code == 0, (result.exit_code, result.exception)
+    assert "[/bold]" in result.output and written == {"some_key": "[/bold]"}
+
+
+# ── The web helpers, run for real in node ─────────────────────────────────────
 
 _TS = _ROOT / "web" / "node_modules" / "typescript"
 
@@ -326,7 +364,7 @@ def test_the_select_shows_a_stale_value_as_ignored():
 def test_the_ai_tab_loads_the_stored_key_state_and_shows_the_ignored_hint():
     modal = (_ROOT / "web" / "components" / "SettingsModal.tsx").read_bytes().decode("utf-8")
     # Opened directly on the AI tab, storedKeys stayed null and a stored DeepSeek key read as
-    # none, hiding the select (CodeRabbit). One fetch, the existing one, on both tabs.
+    # none, hiding the select. One fetch, the existing one, on both tabs.
     assert "(activeTab !== 'general' && activeTab !== 'ai')" in modal
     assert modal.count("fetch('/api/config/api-keys'") == 1
     assert "effortSelectValue(localConfig.deepseek_reasoning_effort)" in modal

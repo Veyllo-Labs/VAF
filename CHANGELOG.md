@@ -23,12 +23,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   messenger in Settings.
 - **DeepSeek: choose how long the model thinks before it answers.** Settings > AI & Model has a
   **DeepSeek thinking effort** setting (Standard, Low, High, Max), also available as the config
-  key `deepseek_reasoning_effort`. It applies to every DeepSeek call, whichever job makes it (chat,
-  sub-agents, the Thinker, the browser agent, the voice call, a failover backup, the coder), and the
-  setting is shown whenever a DeepSeek key is set or any job uses DeepSeek. Standard keeps
-  DeepSeek's default (`high`). `vaf models config deepseek_reasoning_effort` refuses any other
-  value instead of storing one DeepSeek would reject. Higher levels think longer and use more output tokens, which DeepSeek
-  bills.
+  key `deepseek_reasoning_effort`. It applies to every DeepSeek call, whichever job makes it
+  (chat, sub-agents, the Thinker, the browser agent, the voice call, a failover backup, the
+  coder), and the setting is shown whenever a DeepSeek key is set or any job uses DeepSeek.
+  Standard keeps DeepSeek's default (`high`). `vaf models config deepseek_reasoning_effort`
+  refuses any other value instead of storing one DeepSeek would reject. Higher levels think
+  longer and use more output tokens, which DeepSeek bills.
 
 ### Changed
 

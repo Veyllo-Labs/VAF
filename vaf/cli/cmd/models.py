@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 import typer
+from rich.markup import escape
 from rich.table import Table
 from vaf.core.config import Config
 from vaf.cli.ui import UI
@@ -37,7 +38,9 @@ def list_models():
 def set_model(model_name: str):
     """Set the active model."""
     Config.set("model", model_name)
-    UI.success(f"Active model set to: {model_name}")
+    # escape(): the name is the caller's text, and UI renders Rich markup; "[/bold]" raised
+    # a MarkupError traceback here instead of storing the name.
+    UI.success(f"Active model set to: {escape(model_name)}")
     from vaf.core import local_engine
     if local_engine.is_vllm():
         # The GGUF setting is llama.cpp's; under vLLM it is stored and not run.
@@ -49,7 +52,7 @@ def set_config(key: str, value: str):
     """Set arbitrary config value (e.g., gpu_layers)."""
     from vaf.core import local_engine
     if key.strip().lower() in local_engine.SWITCH_KEYS:
-        UI.error(f"{key} changes through `vaf engine` (it installs, downloads the model and "
+        UI.error(f"{escape(key)} changes through `vaf engine` (it installs, downloads the model and "
                  "checks that it fits): `vaf engine vllm --model owner/name` or "
                  "`vaf engine llama`.")
         raise typer.Exit(2)
@@ -61,7 +64,9 @@ def set_config(key: str, value: str):
         try:
             effort = check_deepseek_reasoning_effort(value)
         except ValueError as exc:
-            UI.error(str(exc))
+            # The message quotes the caller's value; escaped so "[/bold]" is refused with
+            # exit 2 like any other bad value, not a MarkupError, and "[red]" is not rendered.
+            UI.error(escape(str(exc)))
             raise typer.Exit(2)
         Config.set("deepseek_reasoning_effort", effort)
         UI.success("DeepSeek thinking effort set to "
@@ -74,4 +79,4 @@ def set_config(key: str, value: str):
         val = value
     
     Config.set(key, val)
-    UI.success(f"Config '{key}' set to '{val}'")
+    UI.success(escape(f"Config '{key}' set to '{val}'"))

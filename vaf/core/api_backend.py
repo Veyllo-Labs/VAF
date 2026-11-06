@@ -258,7 +258,7 @@ def check_deepseek_reasoning_effort(value: Any) -> str:
     effort = _normalized_deepseek_effort(text)
     if effort is None:
         raise ValueError(
-            f"'{text}' is not a DeepSeek thinking effort. Use "
+            f"{text!r} is not a DeepSeek thinking effort. Use "
             f"{', '.join(DEEPSEEK_REASONING_EFFORTS[:-1])} or {DEEPSEEK_REASONING_EFFORTS[-1]}, "
             "or an empty value for DeepSeek's default (high).")
     return effort

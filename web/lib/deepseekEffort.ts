@@ -43,3 +43,18 @@ export function deepseekInUse(config: Record<string, unknown>, hasDeepseekKey: b
         return String(config[key] ?? '').trim().toLowerCase() === 'deepseek';
     });
 }
+
+/**
+ * What the select shows for a stored value, and whether that value is ignored.
+ * The backend accepts '' and low/high/max in any case and spacing
+ * (api_backend.check_deepseek_reasoning_effort), so `MAX` shows as Max. Anything
+ * else (a hand-edited config) is ignored by the backend; the select keeps showing
+ * it as the stale "(current)" entry so that choosing Standard is a real change
+ * and saves '', and `invalid` drives the hint that says it is ignored.
+ */
+export function effortSelectValue(raw: unknown): { value: string; invalid: boolean } {
+    const text = String(raw ?? '').trim();
+    const lowered = text.toLowerCase();
+    if ((DEEPSEEK_EFFORTS as readonly string[]).includes(lowered)) return { value: lowered, invalid: false };
+    return { value: text, invalid: true };
+}

@@ -1428,6 +1428,7 @@
       "deepseekEffortLow": "Low",
       "deepseekEffortHigh": "High",
       "deepseekEffortMax": "Max",
+      "deepseekEffortInvalid": "\"{value}\" is not a thinking effort and is ignored, so DeepSeek uses its default (high). Choose a level to replace it.",
       "gpuLayers": "GPU layers",
       "promptCacheAuto": "Prompt cache (auto)",
       "promptCacheAutoDesc": "Choose cache size automatically.",

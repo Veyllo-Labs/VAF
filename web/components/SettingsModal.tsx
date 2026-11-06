@@ -50,7 +50,7 @@ import { PickerSelect } from '@/components/ui/PickerDialog';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Skeleton, { SkeletonBar, SkeletonRows } from '@/components/ui/Skeleton';
 import { groupToolsIntoBundles, bundleColor, bundleLabel, bundleIconKey } from '@/lib/toolBundles';
-import { deepseekInUse } from '@/lib/deepseekEffort';
+import { deepseekInUse, effortSelectValue } from '@/lib/deepseekEffort';
 import type { SkillSaveData } from './settings/SkillsEditor';
 import type { CreateAutomationPayload } from './CreateAutomationPopup';
 
@@ -1017,8 +1017,11 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     // effect keyed on `activeTab` alone it never ran again - a key saved while the modal was
     // open kept reading "no key stored" until the tab was switched away and back, or the
     // page was reloaded. Live-found immediately after shipping the state line it belongs to.
+    // The AI & Model tab reads the same state (the DeepSeek thinking effort is shown when a
+    // DeepSeek key is stored, the vision picker greys out keyless providers), so it loads it
+    // too: opened directly, `storedKeys` was still null there and a stored key read as none.
     useEffect(() => {
-        if (!isOpen || activeTab !== 'general' || currentUser?.role !== 'admin') return;
+        if (!isOpen || (activeTab !== 'general' && activeTab !== 'ai') || currentUser?.role !== 'admin') return;
         refreshStoredKeys();
     }, [isOpen, activeTab, currentUser?.role, refreshStoredKeys]);
 
@@ -4144,22 +4147,30 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 {/* DeepSeek thinking effort. Shown whenever any job can reach DeepSeek
                                     (a key, or any lane naming it), not only as the main provider: the
                                     backend sends it on every DeepSeek call (web/lib/deepseekEffort.ts). */}
-                                {deepseekInUse(localConfig, providerHasKey('deepseek')) && (
-                                    <Section title={tAi('deepseekEffort')}>
-                                        <p className="text-xs text-gray-500 mb-3">{tAi('deepseekEffortDesc')}</p>
-                                        <Select
-                                            label={tAi('deepseekEffortLevel')}
-                                            value={String(localConfig.deepseek_reasoning_effort ?? '')}
-                                            onChange={(v: string) => handleChange('deepseek_reasoning_effort', v)}
-                                            options={[
-                                                { value: '', label: tAi('deepseekEffortDefault') },
-                                                { value: 'low', label: tAi('deepseekEffortLow') },
-                                                { value: 'high', label: tAi('deepseekEffortHigh') },
-                                                { value: 'max', label: tAi('deepseekEffortMax') },
-                                            ]}
-                                        />
-                                    </Section>
-                                )}
+                                {deepseekInUse(localConfig, providerHasKey('deepseek')) && (() => {
+                                    const effort = effortSelectValue(localConfig.deepseek_reasoning_effort);
+                                    return (
+                                        <Section title={tAi('deepseekEffort')}>
+                                            <p className="text-xs text-gray-500 mb-3">{tAi('deepseekEffortDesc')}</p>
+                                            <Select
+                                                label={tAi('deepseekEffortLevel')}
+                                                value={effort.value}
+                                                onChange={(v: string) => handleChange('deepseek_reasoning_effort', v)}
+                                                options={[
+                                                    { value: '', label: tAi('deepseekEffortDefault') },
+                                                    { value: 'low', label: tAi('deepseekEffortLow') },
+                                                    { value: 'high', label: tAi('deepseekEffortHigh') },
+                                                    { value: 'max', label: tAi('deepseekEffortMax') },
+                                                ]}
+                                            />
+                                            {effort.invalid && (
+                                                <p className="text-xs text-amber-700 ml-1 mt-2">
+                                                    {tAi('deepseekEffortInvalid', { value: effort.value })}
+                                                </p>
+                                            )}
+                                        </Section>
+                                    );
+                                })()}
 
                                 {/* Context effort: the per-reply token budget. Deliberately OUTSIDE the
                                     local-model section - it is the setting that matters most for a paid

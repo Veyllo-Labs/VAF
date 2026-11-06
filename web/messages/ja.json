@@ -1428,6 +1428,7 @@
       "deepseekEffortLow": "低",
       "deepseekEffortHigh": "高",
       "deepseekEffortMax": "最大",
+      "deepseekEffortInvalid": "「{value}」は思考レベルではないため無視され、DeepSeekは既定（高）を使います。置き換えるにはレベルを選んでください。",
       "gpuLayers": "GPUレイヤー数",
       "promptCacheAuto": "プロンプトキャッシュ（自動）",
       "promptCacheAutoDesc": "キャッシュのサイズを自動で決めます。",

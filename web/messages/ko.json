@@ -1428,6 +1428,7 @@
       "deepseekEffortLow": "낮음",
       "deepseekEffortHigh": "높음",
       "deepseekEffortMax": "최대",
+      "deepseekEffortInvalid": "\"{value}\"은(는) 사고 수준이 아니어서 무시되고, DeepSeek은 기본값(높음)을 써요. 바꾸려면 수준을 골라 주세요.",
       "gpuLayers": "GPU 레이어 수",
       "promptCacheAuto": "프롬프트 캐시(자동)",
       "promptCacheAutoDesc": "캐시 크기를 저절로 정해요.",

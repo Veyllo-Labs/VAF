@@ -1428,6 +1428,7 @@
       "deepseekEffortLow": "ต่ำ",
       "deepseekEffortHigh": "สูง",
       "deepseekEffortMax": "สูงสุด",
+      "deepseekEffortInvalid": "\"{value}\" ไม่ใช่ระดับการคิด จึงถูกข้ามไป และ DeepSeek จะใช้ค่าเริ่มต้น (สูง) เลือกระดับเพื่อแทนที่ค่านี้",
       "gpuLayers": "เลเยอร์บน GPU",
       "promptCacheAuto": "แคชพรอมต์ (อัตโนมัติ)",
       "promptCacheAutoDesc": "เลือกขนาดแคชให้อัตโนมัติ",

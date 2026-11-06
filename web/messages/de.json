@@ -1428,6 +1428,7 @@
       "deepseekEffortLow": "Niedrig",
       "deepseekEffortHigh": "Hoch",
       "deepseekEffortMax": "Maximal",
+      "deepseekEffortInvalid": "„{value}“ ist keine gültige Stufe und wird ignoriert, DeepSeek nutzt also seine Vorgabe (hoch). Wähle eine Stufe, um den Wert zu ersetzen.",
       "gpuLayers": "GPU-Layer",
       "promptCacheAuto": "Prompt-Cache (automatisch)",
       "promptCacheAutoDesc": "Cache-Größe automatisch wählen.",

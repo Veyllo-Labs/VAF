@@ -207,3 +207,127 @@ def test_settings_lane_list_covers_every_chat_provider_role():
     assert roles <= listed, f"Settings would hide the effort for: {sorted(roles - listed)}"
     modal = (_ROOT / "web" / "components" / "SettingsModal.tsx").read_bytes().decode("utf-8")
     assert "deepseekInUse(localConfig, providerHasKey('deepseek'))" in modal
+
+
+# ── The one check every writer shares (round 1, UX finding 1) ─────────────────
+
+from vaf.core.api_backend import check_deepseek_reasoning_effort  # noqa: E402
+
+
+@pytest.mark.parametrize("raw,stored", [
+    ("", ""), ("   ", ""), (None, ""), ("low", "low"), (" High ", "high"), ("MAX", "max"),
+])
+def test_check_returns_what_may_be_stored(raw, stored):
+    assert check_deepseek_reasoning_effort(raw) == stored
+
+
+@pytest.mark.parametrize("raw", ["bogus", "ultra", "none", "0", 0, "medium"])
+def test_check_refuses_with_the_accepted_values_named(raw):
+    with pytest.raises(ValueError) as exc:
+        check_deepseek_reasoning_effort(raw)
+    text = str(exc.value)
+    assert f"'{raw}'" in text and "low, high or max" in text and "empty value" in text
+
+
+@pytest.mark.parametrize("raw", ["", "low", "HIGH", " max", "bogus", "ultra", "0", "none"])
+def test_the_resolver_and_the_check_accept_the_same_set(raw, monkeypatch):
+    monkeypatch.setattr(api_backend, "_deepseek_effort_warned", set())
+    try:
+        expected = check_deepseek_reasoning_effort(raw) or None
+    except ValueError:
+        expected = None
+    assert deepseek_reasoning_effort({"deepseek_reasoning_effort": raw}) == expected
+
+
+def _cli(monkeypatch, *args):
+    from typer.testing import CliRunner
+    from vaf.cli.cmd import models
+    written = {}
+    monkeypatch.setattr(Config, "set", classmethod(lambda cls, k, v: written.__setitem__(k, v)))
+    result = CliRunner().invoke(models.app, ["config", *args])
+    return result, written
+
+
+def test_the_cli_refuses_a_value_the_api_would_refuse(monkeypatch):
+    result, written = _cli(monkeypatch, "deepseek_reasoning_effort", "bogus")
+    assert result.exit_code == 2
+    assert "low, high or max" in result.output and "empty value" in result.output
+    assert written == {}, "a refused value must not be stored"
+
+
+@pytest.mark.parametrize("raw,stored", [("MAX", "max"), ("", ""), ("low", "low")])
+def test_the_cli_stores_the_checked_value(monkeypatch, raw, stored):
+    result, written = _cli(monkeypatch, "deepseek_reasoning_effort", raw)
+    assert result.exit_code == 0, result.output
+    assert written == {"deepseek_reasoning_effort": stored}
+
+
+def test_the_cli_refuses_digits_before_the_number_parse(monkeypatch):
+    # The generic setter turns "0" into int 0; checked first, it is refused, not stored.
+    result, written = _cli(monkeypatch, "deepseek_reasoning_effort", "0")
+    assert result.exit_code == 2 and written == {}
+
+
+# ── The web helpers, run for real in node (round 1) ───────────────────────────
+
+_TS = _ROOT / "web" / "node_modules" / "typescript"
+
+
+def _run_ts(expr_cases):
+    import json
+    import shutil
+    import subprocess
+    if shutil.which("node") is None or not _TS.is_dir():
+        pytest.skip("node or web/node_modules/typescript is not installed")
+    script = (
+        "const ts = require(process.argv[1]);"
+        "const fs = require('fs');"
+        "const src = fs.readFileSync(process.argv[2], 'utf8');"
+        "const js = ts.transpileModule(src, {compilerOptions: {module: ts.ModuleKind.CommonJS,"
+        " target: ts.ScriptTarget.ES2019}}).outputText;"
+        "const m = {exports: {}}; new Function('module', 'exports', js)(m, m.exports);"
+        "const cases = JSON.parse(process.argv[3]);"
+        "process.stdout.write(JSON.stringify(cases.map(([fn, args]) => m.exports[fn](...args))));"
+    )
+    out = subprocess.run(["node", "-e", script, str(_TS), str(_ROOT / "web" / "lib" / "deepseekEffort.ts"),
+                          json.dumps(expr_cases)], capture_output=True, text=True, check=True).stdout
+    return json.loads(out)
+
+
+def test_deepseek_in_use_covers_a_key_and_every_lane():
+    cases = [
+        ["deepseekInUse", [{}, True]],                                   # a key alone
+        ["deepseekInUse", [{"provider": "openai"}, False]],              # nothing
+        ["deepseekInUse", [{"thinking_provider": "DeepSeek"}, False]],
+        ["deepseekInUse", [{"failover_backup_provider": "deepseek"}, False]],
+        ["deepseekInUse", [{"voice_agent_provider": "deepseek"}, False]],
+        ["deepseekInUse", [{"subagent_provider": "deepseek"}, False]],   # gate off: inert
+        ["deepseekInUse", [{"subagent_provider": "deepseek",
+                            "subagent_use_separate_provider": True}, False]],
+    ]
+    assert _run_ts(cases) == [True, False, True, True, True, False, True]
+
+
+def test_the_select_shows_a_stale_value_as_ignored():
+    cases = [
+        ["effortSelectValue", [""]],
+        ["effortSelectValue", [None]],
+        ["effortSelectValue", [" MAX "]],
+        ["effortSelectValue", ["bogus"]],
+    ]
+    assert _run_ts(cases) == [
+        {"value": "", "invalid": False},
+        {"value": "", "invalid": False},
+        {"value": "max", "invalid": False},
+        {"value": "bogus", "invalid": True},
+    ]
+
+
+def test_the_ai_tab_loads_the_stored_key_state_and_shows_the_ignored_hint():
+    modal = (_ROOT / "web" / "components" / "SettingsModal.tsx").read_bytes().decode("utf-8")
+    # Opened directly on the AI tab, storedKeys stayed null and a stored DeepSeek key read as
+    # none, hiding the select (CodeRabbit). One fetch, the existing one, on both tabs.
+    assert "(activeTab !== 'general' && activeTab !== 'ai')" in modal
+    assert modal.count("fetch('/api/config/api-keys'") == 1
+    assert "effortSelectValue(localConfig.deepseek_reasoning_effort)" in modal
+    assert re.search(r"\{effort\.invalid && \(\s*<p[^>]*>\s*\{tAi\('deepseekEffortInvalid'", modal)

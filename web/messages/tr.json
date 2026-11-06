@@ -1428,6 +1428,7 @@
       "deepseekEffortLow": "Düşük",
       "deepseekEffortHigh": "Yüksek",
       "deepseekEffortMax": "Maksimum",
+      "deepseekEffortInvalid": "\"{value}\" bir düşünme düzeyi değil ve yok sayılıyor, bu yüzden DeepSeek varsayılanını (yüksek) kullanıyor. Değiştirmek için bir düzey seçin.",
       "gpuLayers": "GPU katmanları",
       "promptCacheAuto": "Prompt önbelleği (otomatik)",
       "promptCacheAutoDesc": "Önbellek boyutunu otomatik seç.",

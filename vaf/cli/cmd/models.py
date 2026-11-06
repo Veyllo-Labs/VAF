@@ -53,6 +53,20 @@ def set_config(key: str, value: str):
                  "checks that it fits): `vaf engine vllm --model owner/name` or "
                  "`vaf engine llama`.")
         raise typer.Exit(2)
+    if key.strip().lower() == "deepseek_reasoning_effort":
+        # Checked BEFORE the number parse below, and with the framework's own check, so the
+        # CLI stores exactly what the backend will send. A value the API would refuse (422)
+        # is refused here instead of "set" and then silently ignored.
+        from vaf.core.api_backend import check_deepseek_reasoning_effort
+        try:
+            effort = check_deepseek_reasoning_effort(value)
+        except ValueError as exc:
+            UI.error(str(exc))
+            raise typer.Exit(2)
+        Config.set("deepseek_reasoning_effort", effort)
+        UI.success("DeepSeek thinking effort set to "
+                   + (f"'{effort}'" if effort else "DeepSeek's default (high)"))
+        return
     # Try to parse number
     try:
         val = int(value)

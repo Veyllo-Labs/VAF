@@ -1428,6 +1428,7 @@
       "deepseekEffortLow": "低",
       "deepseekEffortHigh": "高",
       "deepseekEffortMax": "最高",
+      "deepseekEffortInvalid": "“{value}”不是有效的思考强度，已被忽略，DeepSeek 使用默认值（高）。请选择一个强度来替换它。",
       "gpuLayers": "GPU 层数",
       "promptCacheAuto": "提示词缓存（自动）",
       "promptCacheAutoDesc": "自动决定缓存大小。",

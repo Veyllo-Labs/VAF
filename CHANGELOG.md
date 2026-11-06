@@ -26,7 +26,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   key `deepseek_reasoning_effort`. It applies to every DeepSeek call, whichever job makes it (chat,
   sub-agents, the Thinker, the browser agent, the voice call, a failover backup, the coder), and the
   setting is shown whenever a DeepSeek key is set or any job uses DeepSeek. Standard keeps
-  DeepSeek's default (`high`). Higher levels think longer and use more output tokens, which DeepSeek
+  DeepSeek's default (`high`). `vaf models config deepseek_reasoning_effort` refuses any other
+  value instead of storing one DeepSeek would reject. Higher levels think longer and use more output tokens, which DeepSeek
   bills.
 
 ### Changed

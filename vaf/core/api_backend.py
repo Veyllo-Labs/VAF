@@ -242,6 +242,28 @@ def _normalized_deepseek_effort(value: Any) -> Optional[str]:
     return text if text in DEEPSEEK_REASONING_EFFORTS else None
 
 
+def check_deepseek_reasoning_effort(value: Any) -> str:
+    """`value` as it may be stored in `deepseek_reasoning_effort`, or ValueError.
+
+    Returns "" for an empty value (DeepSeek's default) and one of
+    DEEPSEEK_REASONING_EFFORTS, lowercased, for a valid one. The one check every
+    writer and the resolver share: the CLI refuses with this message, and the
+    resolver turns it into its once-per-process warning, so the two cannot accept
+    different sets. `0` or `False` are not empty here: they are values nobody chose
+    as "default", and the CLI parses digits to int before storing.
+    """
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return ""
+    effort = _normalized_deepseek_effort(text)
+    if effort is None:
+        raise ValueError(
+            f"'{text}' is not a DeepSeek thinking effort. Use "
+            f"{', '.join(DEEPSEEK_REASONING_EFFORTS[:-1])} or {DEEPSEEK_REASONING_EFFORTS[-1]}, "
+            "or an empty value for DeepSeek's default (high).")
+    return effort
+
+
 def deepseek_reasoning_effort(config: Any) -> Optional[str]:
     """The thinking effort to send DeepSeek, or None to send nothing.
 
@@ -255,14 +277,14 @@ def deepseek_reasoning_effort(config: Any) -> Optional[str]:
         raw = config.get("deepseek_reasoning_effort", "") if config is not None else ""
     except Exception:
         return None
-    effort = _normalized_deepseek_effort(raw)
-    text = str(raw or "").strip()
-    if effort is None and text and text not in _deepseek_effort_warned:
-        _deepseek_effort_warned.add(text)
-        logger.warning(
-            "[deepseek] deepseek_reasoning_effort=%r is not one of %s; sending no effort "
-            "(DeepSeek's default, high)", text, ", ".join(DEEPSEEK_REASONING_EFFORTS))
-    return effort
+    try:
+        return check_deepseek_reasoning_effort(raw) or None
+    except ValueError as exc:
+        text = str(raw).strip()
+        if text not in _deepseek_effort_warned:
+            _deepseek_effort_warned.add(text)
+            logger.warning("[deepseek] deepseek_reasoning_effort ignored, sending no effort: %s", exc)
+        return None
 
 
 def openai_request_params(provider_name: str, model: str, *, temperature: float,

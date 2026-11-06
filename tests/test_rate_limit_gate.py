@@ -16,7 +16,10 @@ request leaves the machine and no test sleeps.
 """
 import ast
 import logging
+import os
 import pathlib
+import subprocess
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -164,11 +167,66 @@ def _veyllo(key="vk-test-key"):
     (200, {"x-ratelimit-remaining-requests": "zero", "x-ratelimit-reset-requests": "soon"}, 0.0),
     (429, {"retry-after": "Wed, 21 Oct"}, 0.0),
     (None, "not headers", 0.0),
+    # A 429 waits what it names, even with remaining 0 and no reset beside it.
+    (429, {"retry-after": "5", "x-ratelimit-remaining-requests": "0"}, 5.0),
+    (429, {"retry-after": "5", "x-ratelimit-remaining-requests": "0",
+           "x-ratelimit-reset-requests": "41s"}, 5.0),
+    # Outside the one-minute contract: at most ten windows.
+    (429, {"retry-after": "86400"}, 600.0),
+    (429, {"retry-after": "1e308"}, 600.0),
+    (200, {"x-ratelimit-remaining-requests": "0", "x-ratelimit-reset-requests": "3h"}, 600.0),
 ])
 def test_observe_parses_every_contract_header(clock, config, status, headers, expected):
     gate = _gate(clock)
     gate.observe(status, headers)
     assert gate.closed_for() == pytest.approx(expected)
+
+
+_HOSTILE_PROBE = r"""
+import time
+from vaf.core.rate_limit_gate import RateLimitGate, rate_limit_wait_seconds
+K = 16 * 1024
+cases = [
+    lambda: rate_limit_wait_seconds({"retry-after": "1h" + " " * K + "x"}, ""),
+    lambda: RateLimitGate("Veyllo").observe(200, {
+        "x-ratelimit-remaining-requests": "0",
+        "x-ratelimit-reset-requests": "1h" + " " * K + "x"}),
+    lambda: rate_limit_wait_seconds(None, "try again in 1h" + " " * K + "hh"),
+    lambda: rate_limit_wait_seconds(None, "try again in 1 " * (K // 15)),
+]
+worst = 0.0
+for case in cases:
+    t = time.perf_counter()
+    case()
+    worst = max(worst, time.perf_counter() - t)
+print(worst)
+"""
+
+
+def test_hostile_duration_values_parse_in_milliseconds():
+    """A 16 KiB header or error body built to make the duration parser backtrack.
+
+    The regex engine holds the GIL while it matches, so a slow match stops every
+    thread in the process, the web server included. Run in a child process with a
+    timeout, so a regression fails here instead of hanging the suite.
+    """
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join(p for p in (str(ROOT), env.get("PYTHONPATH", "")) if p)
+    try:
+        out = subprocess.run([sys.executable, "-c", _HOSTILE_PROBE], env=env, cwd=str(ROOT),
+                             capture_output=True, text=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        pytest.fail("parsing a 16 KiB hostile duration did not finish in 30 s")
+    assert out.returncode == 0, out.stderr[-2000:]
+    worst = float(out.stdout.strip().splitlines()[-1])
+    assert worst < 0.25, f"slowest hostile parse took {worst:.3f} s"
+
+
+def test_the_body_phrase_still_reads_real_messages():
+    assert rl.rate_limit_wait_seconds(None, "Please try again in 1m 5s. Visit x") == pytest.approx(65.0)
+    assert rl.rate_limit_wait_seconds(None, "Rate limited, try again in 20s.") == pytest.approx(20.0)
+    assert rl._parse_duration_seconds("1h 2m") == pytest.approx(3720.0)
+    assert rl._parse_duration_seconds("4" * 40) is None
 
 
 def test_an_answer_without_headers_closes_nothing(clock):
@@ -206,6 +264,17 @@ def test_one_log_line_per_closed_window(clock, gate_log):
     # The window reopened; the next closed one is announced again.
     gate.observe(429, {"retry-after": "12"})
     assert gate_log[1:] == ["Veyllo API limit reached, continuing in 12 s"]
+
+
+def test_a_deadline_creeping_forward_is_announced_once(clock, gate_log):
+    """Answers of one window seconds apart move the deadline in small steps;
+    together they pass 1 s, each alone does not."""
+    gate = _gate(clock)
+    for t in (0.0, 0.6, 1.2, 1.8, 2.4):
+        clock.t = t
+        gate.observe(200, CLOSED)
+    assert gate.closed_for() == pytest.approx(41.0)
+    assert gate_log == ["Veyllo API limit reached, continuing in 41 s"]
 
 
 # ── AC4: one gate per key in the process, Veyllo only, no raw key kept ────────
@@ -343,6 +412,15 @@ def test_send_gated_waits_raises_and_observes(clock):
     assert gate.closed_for() == pytest.approx(41.0)
 
 
+def test_send_gated_reports_each_sleep_before_it(clock):
+    gate = _gate(clock)
+    gate.observe(429, {"retry-after": "10"})
+    seen = []
+    send_gated(gate, lambda: SimpleNamespace(status_code=200, headers={}), max_wait=60,
+               on_sleep=lambda s: seen.append((clock.t, s)))
+    assert seen == [(0.0, 10.0)] and clock.sleeps == [10.0]
+
+
 # ── AC11: the coder waits the gate's hold, and every chat POST is gated ───────
 
 def test_coder_rate_limit_wait_exact_for_gate(clock):
@@ -362,6 +440,46 @@ def _call_name(node):
     if isinstance(f, ast.Attribute):
         return f.attr if not isinstance(f.value, ast.Name) else f"{f.value.id}.{f.attr}"
     return f.id if isinstance(f, ast.Name) else ""
+
+
+def _coder_tree():
+    return ast.parse((ROOT / "vaf" / "tools" / "coder.py").read_bytes().decode("utf-8"))
+
+
+def _stream_send(tree):
+    """The try statement around the coder's streamed chat request."""
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        for stmt in node.body:
+            if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Call) \
+                    and _call_name(stmt.value) == "send_gated" \
+                    and any(isinstance(t, ast.Name) and t.id == "stream_response"
+                            for t in stmt.targets):
+                return node, stmt.value
+    raise AssertionError("the streamed chat request is not sent through send_gated")
+
+
+def test_coder_stream_ends_cleanly_when_the_window_stays_closed():
+    try_node, call = _stream_send(_coder_tree())
+    handlers = [h for h in try_node.handlers
+                if isinstance(h.type, ast.Name) and h.type.id == "RateLimitHeld"]
+    assert len(handlers) == 1, "the stream must catch RateLimitHeld itself"
+    returns = [n for n in ast.walk(handlers[0]) if isinstance(n, ast.Return)]
+    assert returns, "a held window must end the run, not fall through to a send"
+    assert "nothing was sent" in ast.unparse(returns[0])
+    # The wait before sending is shown and counted against the 429 budget.
+    assert [k.arg for k in call.keywords] == ["max_wait", "on_sleep"]
+    assert "rate_limit_waited" in ast.unparse(call.keywords[0].value)
+
+
+def test_coder_429_wait_comes_from_the_gate():
+    calls = [n for n in ast.walk(_coder_tree())
+             if isinstance(n, ast.Call) and _call_name(n) == "coder_rate_limit_wait"]
+    assert len(calls) == 1
+    first = calls[0].args[0]
+    assert isinstance(first, ast.Name) and first.id == "_rate_gate"
+    assert _call_name(calls[0].args[1]) == "rate_limit_wait_seconds"
 
 
 def test_every_coder_chat_post_is_gated():

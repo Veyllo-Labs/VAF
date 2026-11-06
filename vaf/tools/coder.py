@@ -6793,6 +6793,20 @@ Task {task_idx + 1}: {current_task}
                     _req_body.setdefault("stream_options", {"include_usage": True})
                 except Exception:
                     pass
+                def _on_gate_sleep(_secs: float) -> None:
+                    # A window closed before this request (by an earlier answer or the
+                    # chat lane) is waited out here: shown, and counted against the same
+                    # 429 budget, so a 429 right after it gets only what is left.
+                    loop.rate_limit_waited = getattr(loop, "rate_limit_waited", 0.0) + _secs
+                    tui.set_action(f"Request limit reached - waiting {_secs:.0f}s...")
+                    append_with_context(
+                        f"[WARN] Request limit reached - waiting {_secs:.0f}s before sending "
+                        f"({loop.rate_limit_waited:.0f}s/{_rate_budget:.0f}s used)")
+                    try:
+                        live.update(tui.render())
+                    except Exception:
+                        pass
+
                 try:
                     stream_response = send_gated(
                         _rate_gate,
@@ -6803,7 +6817,8 @@ Task {task_idx + 1}: {current_task}
                             timeout=300,
                             stream=True
                         ),
-                        max_wait=_rate_budget - getattr(loop, "rate_limit_waited", 0.0))
+                        max_wait=_rate_budget - getattr(loop, "rate_limit_waited", 0.0),
+                        on_sleep=_on_gate_sleep)
                 except RateLimitHeld as _held:
                     # The window stays closed past what is left of the 429 budget: end the
                     # run like a 429 that outlasted it, without sending into the window.

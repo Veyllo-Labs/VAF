@@ -19,8 +19,10 @@ caches the limit itself; only the deadline the latest answer names is kept.
 The rules (``RateLimitGate.observe``):
   * remaining 0 closes the gate until the reset has passed (60 s, the length of
     the per-minute window, when no reset can be read);
-  * a 429 closes it for exactly ``retry-after`` seconds, uncapped and without
-    jitter, else for the reset;
+  * a 429 closes it for exactly ``retry-after`` seconds, without jitter and
+    without ``api_retry_after_max``, else for the reset (the remaining-0 rule
+    applies only when a 429 names no wait);
+  * one answer holds for at most MAX_HOLD_SECONDS (600 s, ten windows);
   * the deadline only moves forward, and every lane sending with the same key in
     this process waits on the same object (``rate_limit_gate``), so the chat
     lane, the coder and speech-to-text share one window as the API does.
@@ -75,6 +77,12 @@ _sleep = time.sleep
 # names no reset holds for one whole window.
 WINDOW_SECONDS = 60.0
 
+# The longest hold one answer can set. The contract describes a window of one
+# minute, so every wait it allows is honoured exactly; a longer value is outside
+# it, and capping it makes such a value cost one probe request every ten minutes
+# instead of failing every request on the key until the process restarts.
+MAX_HOLD_SECONDS = 10 * WINDOW_SECONDS
+
 # A deadline that moves less than this past the announced one is the same window
 # seen again (a second answer, a waiting thread) and is not announced again.
 _ANNOUNCE_STEP = 1.0
@@ -97,20 +105,28 @@ _ANNOUNCE_STEP = 1.0
 # backoff waited 1s+2s and the attempt budget (2) ran out while the window was
 # still saturated. 186ms of patience would have saved the turn.
 
-_DURATION_RE = re.compile(r"(?:(\d+)\s*h)?\s*(?:(\d+)\s*m(?!s))?\s*(?:(\d+(?:\.\d+)?)\s*s)?\s*(?:(\d+(?:\.\d+)?)\s*ms)?\s*$")
-_TRY_AGAIN_RE = re.compile(r"try again in\s+([0-9hms\. ]+?)[\.\s]*(?:$|Visit)", re.IGNORECASE)
+# Both patterns are bounded so that a hostile header or error body cannot make
+# them backtrack: the duration pattern runs only on at most _DURATION_MAX_CHARS
+# characters with every space removed (it had adjacent optional `\s*` runs, and
+# "1h", 500 spaces and an "x" took 26 s while holding the GIL, which stopped
+# every thread in the process), and the body phrase captures and skips a bounded
+# number of characters, so one search stays linear in the length of the text.
+_DURATION_MAX_CHARS = 32
+_DURATION_RE = re.compile(r"(?:(\d+)h)?(?:(\d+)m(?!s))?(?:(\d+(?:\.\d+)?)s)?(?:(\d+(?:\.\d+)?)ms)?")
+_TRY_AGAIN_RE = re.compile(r"try again in\s{1,4}([0-9hms. ]{1,32}?)[.\s]{0,8}(?:$|Visit)", re.IGNORECASE)
+_SPACE_RE = re.compile(r"\s+")
 
 
 def _parse_duration_seconds(raw: str) -> Optional[float]:
     """'186ms' / '6.13s' / '6m0s' / '1h2m' / bare '30' -> seconds, else None."""
     s = str(raw or "").strip()
-    if not s:
+    if not s or len(s) > _DURATION_MAX_CHARS:
         return None
     try:  # bare number = seconds (the Retry-After header form, fractions included)
         return float(s)
     except ValueError:
         pass
-    m = _DURATION_RE.fullmatch(s)
+    m = _DURATION_RE.fullmatch(_SPACE_RE.sub("", s))
     if not m or not any(m.groups()):
         return None
     h, mins, secs, ms = m.groups()
@@ -171,7 +187,7 @@ def _header_seconds(headers, name: str) -> Optional[float]:
 
 def _remaining_is_zero(headers) -> bool:
     raw = _header(headers, "x-ratelimit-remaining-requests")
-    if raw is None:
+    if raw is None or len(str(raw)) > _DURATION_MAX_CHARS:
         return False
     try:
         return float(str(raw).strip()) == 0
@@ -231,13 +247,14 @@ class RateLimitGate:
                 hold = rate_limit_wait_seconds(headers, "")
                 if hold is None:
                     hold = _header_seconds(headers, "x-ratelimit-reset-requests")
-            if _remaining_is_zero(headers):
+            # Only when a 429 named no wait of its own: a 429 waits what it names,
+            # not the whole window a missing reset would stand for.
+            if hold is None and _remaining_is_zero(headers):
                 reset = _header_seconds(headers, "x-ratelimit-reset-requests")
-                window = WINDOW_SECONDS if reset is None else reset
-                hold = window if hold is None else max(hold, window)
-            if not hold or hold <= 0 or math.isinf(hold):
+                hold = WINDOW_SECONDS if reset is None else reset
+            if not hold or hold != hold or hold <= 0 or math.isinf(hold):
                 return
-            self._extend(hold)
+            self._extend(min(hold, MAX_HOLD_SECONDS))
         except Exception:
             return
 
@@ -249,9 +266,11 @@ class RateLimitGate:
             if until <= self._until:
                 return
             self._until = until
+            # Every extension moves the mark, so a deadline that creeps forward in
+            # small steps (answers of one window, seconds apart) is announced once.
             if until - self._announced >= _ANNOUNCE_STEP:
-                self._announced = until
                 announce = math.ceil(until - now)
+            self._announced = max(self._announced, until)
         if announce is not None:
             _log.warning("%s API limit reached, continuing in %d s", self.label, announce)
 
@@ -260,12 +279,14 @@ class RateLimitGate:
         with self._lock:
             return max(0.0, self._until - self._now())
 
-    def wait(self, max_wait: float) -> float:
+    def wait(self, max_wait: float,
+             on_sleep: Optional[Callable[[float], Any]] = None) -> float:
         """Sleep until the window is open; return the seconds slept.
 
         Raises RateLimitHeld, without sleeping, when the hold left is longer than
         what remains of max_wait. Checks again after every sleep, because another
-        lane may have pushed the deadline out meanwhile.
+        lane may have pushed the deadline out meanwhile. ``on_sleep(seconds)`` runs
+        before each sleep, so a lane can show and count the wait.
         """
         waited = 0.0
         while True:
@@ -274,21 +295,24 @@ class RateLimitGate:
                 return waited
             if left > max(0.0, float(max_wait) - waited):
                 raise RateLimitHeld(left, self.label)
+            if on_sleep is not None:
+                on_sleep(left)
             self._do_sleep(left)
             waited += left
 
 
 def send_gated(gate: Optional[RateLimitGate], request_fn: Callable[[], Any], *,
-               max_wait: float):
+               max_wait: float, on_sleep: Optional[Callable[[float], Any]] = None):
     """Run request_fn() behind the gate and feed its answer back to it.
 
     For the lanes that send by hand (requests or httpx, both answer with
     ``status_code`` and ``headers``). ``gate=None`` calls request_fn unchanged.
-    Raises RateLimitHeld when the window stays closed longer than max_wait.
+    Raises RateLimitHeld when the window stays closed longer than max_wait;
+    ``on_sleep`` is passed to ``RateLimitGate.wait``.
     """
     if gate is None:
         return request_fn()
-    gate.wait(max_wait)
+    gate.wait(max_wait, on_sleep)
     resp = request_fn()
     gate.observe(getattr(resp, "status_code", None), getattr(resp, "headers", None))
     return resp

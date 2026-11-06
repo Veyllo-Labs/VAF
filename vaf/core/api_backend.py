@@ -485,7 +485,8 @@ class BaseAIProvider(ABC):
     def _with_retry(self, make_request):
         """Run make_request() with a bounded retry on transient errors (429/5xx/timeout). Wraps ONLY
         request initiation (before any token), so it can never duplicate streamed output. Sits on top
-        of each SDK's own retries.
+        of each SDK's own retries, except for a provider with a request gate (Veyllo), whose SDK
+        client runs without them.
 
         Two budgets, because the two failure kinds recover differently. 5xx/timeouts get
         `api_retry_attempts` COUNTED retries with backoff - a broken server is not made whole by

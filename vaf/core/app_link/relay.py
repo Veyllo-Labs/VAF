@@ -822,6 +822,14 @@ def start() -> None:
     connector().start()
 
 
+def stop() -> None:
+    """Close the relay connection (1000) and end the connector's thread, if one runs."""
+    with _connector_lock:
+        current = _connector
+    if current is not None:
+        current.stop()
+
+
 def wake() -> None:
     connector().wake()
 

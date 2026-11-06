@@ -2140,6 +2140,19 @@ async def start_app_link():
         log("WebServer", f"Veyllo App link manager not started: {e}")
 
 
+@app.on_event("shutdown")
+async def stop_app_link():
+    # The relay connection closes with 1000 and every app session gets its bye, instead of
+    # the process ending under them.
+    try:
+        from vaf.core.app_link import bridge as app_link_bridge
+        from vaf.core.app_link import relay as app_link_relay
+        app_link_relay.stop()
+        app_link_bridge.stop()
+    except Exception as e:
+        log("WebServer", f"Veyllo App link manager not stopped cleanly: {e}")
+
+
 @app.on_event("startup")
 async def start_skills_rescan():
     # Periodic skill re-scan (post-install tamper detection for the security

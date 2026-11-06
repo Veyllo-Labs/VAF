@@ -480,8 +480,8 @@ def collect_channels_status() -> Dict[str, Any]:
             app_rows = app_devices.all_devices()
             channels.append({"name": "veyllo_app", "enabled": bool(app_settings().get("enabled")),
                              "paired": len(app_rows),
-                             "last_ts": max((float(r.get("last_seen_at") or 0) for r in app_rows),
-                                            default=None),
+                             "last_ts": max((float(r["last_seen_at"]) for r in app_rows
+                                             if r.get("last_seen_at")), default=None),
                              "open": False})
         except Exception:
             pass

@@ -259,3 +259,43 @@ def test_relay_routes_are_for_admins_and_dissolve_needs_the_code(app_link_home, 
     assert admin.post("/api/app-link/relay/dissolve", json={"code": "123456"}).status_code == 200
     assert admin.post("/api/app-link/relay/rotate").status_code == 200
     assert calls == [("dissolve", "alice"), ("rotate", "alice")]
+
+
+def test_a_signed_in_caller_without_a_scope_gets_nothing(app_link_home, monkeypatch):
+    from vaf.api import app_link_routes as r
+
+    class _NoScope(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            request.state.user = {"username": "ghost", "role": "admin", "user_scope_id": ""}
+            return await call_next(request)
+    paired_device(SCOPE_A)
+    app = FastAPI()
+    app.include_router(r.router)
+    app.add_middleware(_NoScope)
+    client = TestClient(app)
+    for method, path in (("GET", "/api/app-link/status"), ("GET", "/api/app-link/devices?all=1"),
+                         ("GET", "/api/app-link/pairings/current"), ("PUT", "/api/app-link/relay")):
+        response = client.request(method, path, json={"enabled": False} if method == "PUT" else None)
+        assert response.status_code == 403, path
+    from vaf.core.app_link import settings
+    assert settings()["relay_enabled"] is True
+
+
+def test_status_shows_an_account_only_the_relay_fields_it_may_know(app_link_home, monkeypatch):
+    from vaf.core.app_link import relay
+    monkeypatch.setattr(relay, "status", lambda: {
+        "enabled": True, "state": "connected", "instance": True, "connected_since": 1.0,
+        "last_error": "", "members": 7, "devices_on_relay": 5, "secret": True, "down_since": None})
+    user = _app(monkeypatch, as_scope=SCOPE_B, role="user")
+    assert set(user.get("/api/app-link/status").json()["relay"]) == {
+        "enabled", "state", "instance", "connected_since", "last_error"}
+    admin = _app(monkeypatch, as_scope=SCOPE_A, role="admin")
+    assert admin.get("/api/app-link/relay").json()["members"] == 7
+
+
+def test_refusals_say_what_to_do_next(app_link_home, monkeypatch):
+    client = _app(monkeypatch)
+    r = client.post("/api/app-link/pairings", json={"mode": "local"})
+    assert r.json()["code"] == "window_closed" and "2FA code" in r.json()["detail"]
+    assert " " in client.post("/api/app-link/pairings", json={"mode": "fax"}).json()["detail"]
+    assert "vaf devices list" in client.delete("/api/app-link/devices/nope").json()["detail"]

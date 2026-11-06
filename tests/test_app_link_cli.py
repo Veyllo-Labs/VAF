@@ -125,3 +125,22 @@ def test_ca_renew_warning(app_link_home, monkeypatch):
     out = runner.invoke(server.ca_app, ["renew"], input="n\n")
     assert "2 Veyllo App devices pin this authority and will have to pair again" in out.output
     assert "Nothing was changed" in out.output
+
+
+def test_the_perimeter_row_has_no_time_before_a_device_was_seen(app_link_home):
+    from vaf.api.security_routes import collect_channels_status
+    paired_device(SCOPE_A)
+    with devices._locked():
+        state = devices._load()
+        for d in state["devices"]:
+            d["last_seen_at"] = None
+        devices._save(state)
+    row = [c for c in collect_channels_status()["channels"] if c["name"] == "veyllo_app"][0]
+    assert row["paired"] == 1 and row["last_ts"] is None
+
+
+def test_the_web_server_stops_the_link_at_shutdown():
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
+    block = src.split('@app.on_event("shutdown")\nasync def stop_app_link():', 1)[1].split("\n\n\n", 1)[0]
+    assert "app_link_relay.stop()" in block and "app_link_bridge.stop()" in block

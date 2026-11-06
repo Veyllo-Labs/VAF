@@ -44,6 +44,16 @@ _direct_live = {"n": 0}
 _NO_STORE = {"Cache-Control": "no-store"}
 
 
+# A sentence with the next step for each refusal; `code` stays the catalogue's key.
+_REFUSALS = {
+    "window_closed": "The pairing window is closed. Confirm with your 2FA code to open it again.",
+    "relay_off": "The Veyllo relay is switched off on this VAF. Pair over your network or VPN "
+                 "instead, or ask an admin to switch the relay on.",
+    "no_direct_path": "There is no direct address for the phone: switch Local Network and its "
+                      "TLS on in Settings, or pair through the Veyllo relay.",
+}
+
+
 class CodeBody(BaseModel):
     code: str = ""
 
@@ -61,16 +71,22 @@ class RelaySwitch(BaseModel):
 
 
 def _caller(request: Request) -> Dict[str, Any]:
+    """The caller as authenticated. Only the tokenless desktop, which has no identity on the
+    request at all, is the machine owner; an authenticated caller without a scope is
+    refused, never filled in with the owner's scope."""
     from vaf.api.user_routes import _current_user
-    from vaf.core.config import get_local_admin_scope_id
     user = dict(_current_user(request))
-    user["user_scope_id"] = str(user.get("user_scope_id") or get_local_admin_scope_id() or "")
+    if not str(user.get("user_scope_id") or "").strip():
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="This sign-in carries no account, so it cannot use the "
+                                   "Veyllo App. Sign in again.")
+    user["user_scope_id"] = str(user["user_scope_id"]).strip()
     return user
 
 
-def _is_admin(user: Dict[str, Any]) -> bool:
-    from vaf.core.config import is_admin_identity
-    return bool(is_admin_identity(user.get("role"), user.get("user_scope_id")))
+def _is_admin(request: Request) -> bool:
+    from vaf.api.user_routes import caller_is_admin
+    return bool(caller_is_admin(request))
 
 
 def _no_store(content: Dict[str, Any], code: int = 200) -> JSONResponse:
@@ -93,6 +109,11 @@ def _device_view(row: Dict[str, Any], *, with_user: bool = False) -> Dict[str, A
 def _fingerprint_of(row: Dict[str, Any]) -> str:
     head = str(row.get("spki_sha256") or "")[:16].upper()
     return " ".join(head[i:i + 4] for i in range(0, len(head), 4))
+
+
+# What a signed-in account may know about the relay: the spec's status fields. The counts
+# across accounts (members, devices on the relay) are the admin route's.
+_STATUS_FIELDS = ("enabled", "state", "instance", "connected_since", "last_error")
 
 
 def _relay_status() -> Dict[str, Any]:
@@ -119,7 +140,7 @@ async def app_link_status(request: Request):
     return _no_store({
         "channel_enabled": bool(settings().get("enabled", True))
         and channel_enabled_for_scope("veyllo_app", scope),
-        "relay": _relay_status(),
+        "relay": {k: v for k, v in _relay_status().items() if k in _STATUS_FIELDS},
         "direct": {"available": bool(direct), "addresses": direct},
         "my_devices": [_device_view(r) for r in devices.for_scope(scope)],
     })
@@ -134,7 +155,9 @@ async def open_pairing_window(body: CodeBody, request: Request):
     async with get_auth_db() as db:
         account = await _caller_account(db, request)
         if account is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No account to pair a device for")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail="There is no active account to pair a device for. Sign "
+                                       "in with your account.")
         refused = own_second_factor_refusal(account, body.code, ip=_client_ip(request),
                                             where="Veyllo App pairing", what="a pairing")
         if refused is not None:
@@ -156,11 +179,13 @@ async def issue_pairing(body: PairingBody, request: Request):
     from vaf.core.app_link import pairing
     scope, username = _own(request)
     if body.mode not in ("relay", "local"):
-        return _no_store({"detail": "mode is relay or local", "code": "bad_mode"}, 400)
+        return _no_store({"detail": "Choose how the phone connects: \"relay\" (through the "
+                                    "Veyllo relay) or \"local\" (directly, on your network or "
+                                    "VPN).", "code": "bad_mode"}, 400)
     try:
         issued = pairing.issue(scope, username, body.mode)
     except pairing.PairingRefused as e:
-        return _no_store({"detail": e.code, "code": e.code}, 409)
+        return _no_store({"detail": _REFUSALS.get(e.code, e.code), "code": e.code}, 409)
     try:
         from vaf.core.app_link import relay
         relay.wake()
@@ -198,8 +223,9 @@ async def list_devices(request: Request, all: int = 0):  # noqa: A002 - the quer
     from vaf.core.app_link import devices
     user = _caller(request)
     if all:
-        if not _is_admin(user):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only an admin can list every device.")
+        if not _is_admin(request):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                                detail="Only an admin can list every account's devices.")
         return _no_store({"devices": [_device_view(r, with_user=True) for r in devices.all_devices()]})
     return _no_store({"devices": [_device_view(r) for r in devices.for_scope(user["user_scope_id"])]})
 
@@ -210,8 +236,10 @@ async def remove_device(device_id: str, request: Request):
     from vaf.core.app_link import devices
     user = _caller(request)
     row = devices.get(device_id)
-    if row is None or (row.get("user_scope_id") != user["user_scope_id"] and not _is_admin(user)):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No such device")
+    if row is None or (row.get("user_scope_id") != user["user_scope_id"] and not _is_admin(request)):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                            detail="No such device of this account. List them with "
+                                   "GET /api/app-link/devices or `vaf devices list`.")
     removed = await asyncio.to_thread(devices.remove_device, device_id,
                                       by=str(user.get("username") or ""), reason="removed")
     return {"removed": bool(removed)}
@@ -221,8 +249,9 @@ async def remove_device(device_id: str, request: Request):
 
 def _admin(request: Request) -> Dict[str, Any]:
     user = _caller(request)
-    if not _is_admin(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only an admin can change the relay.")
+    if not _is_admin(request):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Only an admin can change the Veyllo relay.")
     return user
 
 
@@ -263,7 +292,9 @@ async def dissolve_relay(body: CodeBody, request: Request):
     async with get_auth_db() as db:
         account = await _caller_account(db, request)
         if account is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No account")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
+                                detail="There is no active admin account behind this sign-in. "
+                                       "Sign in with your admin account.")
         refused = own_second_factor_refusal(account, body.code, ip=_client_ip(request),
                                             where="Veyllo relay dissolve", what="dissolving the relay")
         if refused is not None:

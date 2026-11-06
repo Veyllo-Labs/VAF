@@ -566,7 +566,9 @@ async def setup_2fa(request: Request):
 
     # `secret` (base32) is returned so the UI can show it under the QR for manual entry
     # in an authenticator app. The QR already encodes it; this endpoint is auth-required.
-    return {"qr_code_base64": qr_png_base64(uri), "secret": secret}
+    # The answer carries the TOTP secret twice, so no cache may keep it.
+    return JSONResponse(content={"qr_code_base64": qr_png_base64(uri), "secret": secret},
+                        headers={"Cache-Control": "no-store"})
 
 
 @router.post("/verify-2fa")

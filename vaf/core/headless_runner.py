@@ -356,20 +356,9 @@ def _send_turn_error_reply(task, error, contact=None) -> None:
         meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
         text = _turn_error_text(meta, error, contact)
         _drop_pending_voice_reply(source, meta)
-        if source == "telegram" and meta.get("telegram_chat_id"):
-            from vaf.core.telegram_reply import send_telegram_reply
-            send_telegram_reply(str(meta["telegram_chat_id"]), text)
-        elif source == "discord" and meta.get("discord_channel_id"):
-            from vaf.core.discord_reply import send_discord_reply
-            send_discord_reply(str(meta["discord_channel_id"]), text)
-        elif source == "whatsapp" and meta.get("whatsapp_chat_jid"):
-            from vaf.core.whatsapp_reply import send_whatsapp_reply
-            username = meta.get("username") or "admin"
-            jid = str(meta["whatsapp_chat_jid"])
-            send_whatsapp_reply(
-                username, jid, text,
-                user_scope_id=meta.get("user_scope_id") and str(meta["user_scope_id"]) or None,
-            )
+        if source in CHAT_CHANNELS:
+            from vaf.core.channel_reply import reply_to_chat
+            reply_to_chat(source, meta, text)
         elif source == "email":
             from vaf.core.log_helper import append_lane_log
             append_lane_log("email_inbound",
@@ -1984,12 +1973,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 session.metadata["whatsapp_chat_jid"] = meta["whatsapp_chat_jid"]
                             if meta.get("voice_lang"):
                                 session.metadata["voice_lang"] = meta["voice_lang"]
-                            if getattr(task, "source", None) == "telegram":
-                                session.metadata["source"] = "telegram"
-                            if getattr(task, "source", None) == "discord":
-                                session.metadata["source"] = "discord"
-                            if getattr(task, "source", None) == "whatsapp":
-                                session.metadata["source"] = "whatsapp"
+                            if getattr(task, "source", None) in CHAT_CHANNELS:
+                                session.metadata["source"] = task.source
                             session_mgr.save(session)
                         except Exception:
                             pass
@@ -2033,19 +2018,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         _ack = None
                     if _ack:
                         try:
-                            if task.source == "telegram" and meta.get("telegram_chat_id"):
-                                from vaf.core.telegram_reply import send_telegram_reply
-                                send_telegram_reply(str(meta["telegram_chat_id"]), _ack)
-                            elif task.source == "whatsapp" and meta.get("whatsapp_chat_jid"):
-                                from vaf.core.whatsapp_reply import send_whatsapp_reply
-                                send_whatsapp_reply(meta.get("username") or "admin",
-                                                    str(meta["whatsapp_chat_jid"]), _ack,
-                                                    user_scope_id=meta.get("user_scope_id"))
-                            elif task.source == "discord":
-                                from vaf.core.messaging_connections import send_to_main_messenger
-                                send_to_main_messenger(str(meta.get("user_scope_id")),
-                                                       meta.get("username") or "admin",
-                                                       _ack, record=False)
+                            from vaf.core.channel_reply import reply_to_chat
+                            reply_to_chat(task.source, meta, _ack)
                         except Exception as _sc_e:
                             print(f"[Headless] speaker_confirm ack send failed: {_sc_e}")
                         try:
@@ -4135,25 +4109,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                             _mb_body = (combined_results or "").strip()[:2000] or (
                                                 "(kein Text-Ergebnis)" if user_lang == "de" else "(no textual result payload)")
                                             out = _prepare_channel_outbound(f"{_mb_head}\n\n{_mb_body}") or _mb_head
-                                        chat_id = session.metadata.get("telegram_chat_id")
-                                        if chat_id:
-                                            from vaf.core.telegram_reply import send_telegram_reply
-                                            send_telegram_reply(str(chat_id), out)
-                                        else:
-                                            discord_channel_id = session.metadata.get("discord_channel_id")
-                                            if discord_channel_id:
-                                                from vaf.core.discord_reply import send_discord_reply
-                                                send_discord_reply(str(discord_channel_id), out)
-                                            else:
-                                                whatsapp_chat_jid = session.metadata.get("whatsapp_chat_jid")
-                                                if whatsapp_chat_jid:
-                                                    from vaf.core.whatsapp_reply import send_whatsapp_reply
-                                                    send_whatsapp_reply(
-                                                        session.metadata.get("username") or "admin",
-                                                        str(whatsapp_chat_jid),
-                                                        out,
-                                                        user_scope_id=session.metadata.get("user_scope_id") and str(session.metadata["user_scope_id"]) or None,
-                                                    )
+                                        from vaf.core.channel_reply import reply_to_chat
+                                        _smeta = session.metadata or {}
+                                        reply_to_chat(_smeta.get("source"), _smeta, out, infer=True)
                                 except Exception as e:
                                     logging.getLogger(__name__).warning(
                                         "Failed to send subagent summary to Telegram/Discord: %s", e

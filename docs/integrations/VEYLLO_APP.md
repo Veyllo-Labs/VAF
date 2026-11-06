@@ -145,8 +145,10 @@ is a turn of your account's app chat, with these differences
   `room_react`); changes to how VAF works for you from now on (`create_skill`, `update_skill`,
   `delete_skill`, `update_user_identity`, `create_contact`, `update_contact`, and the notes
   later automation and thinking runs act on, `add_automation_note`, `add_automation_todo`,
-  `thinking_note_add`, and any file written into the folders VAF loads as its own behaviour:
-  your custom tools, skills and workflows, however the path is spelled); the librarian
+  `thinking_note_add`, a context checkpoint, `checkpoint_context`, whose summary later turns
+  read as yours, and any file written into the folders VAF keeps its own state and behaviour
+  in: its data folder (custom tools, MCP servers, messaging endpoints, each account's settings
+  and contacts), its config folder, your skills and workflows, however the path is spelled); the librarian
   (`librarian_agent`), whose own file tools would run outside these limits; and what needs
   your confirmation for another reason (`user_phone`, `store_credential`,
   `github_create_issue`, `github_update_file`, and every MCP tool an administrator has not
@@ -168,7 +170,8 @@ is a turn of your account's app chat, with these differences
   the same fence in every later turn and background run (the chat's own memory learning skips
   these requests and their answers); a project's codex and the coder's scratchpad
   (`update_codex`, `add_memory`), which only the coder reads later; the app chat's own goal and plan
-  (`update_intent`, `update_working_memory`), which later turns of that chat read unfenced; a
+  (`update_intent`, `update_working_memory`), which later turns of that chat read unfenced (so
+  does the context VAF compresses on its own if such a request ever fills the chat's context); a
   question back (`ask_user`: the question goes out as the answer, and the app's agent puts it
   to you); the MCP tools set to read; and the research and document agents, whose own tools
   hold nothing a request is refused.

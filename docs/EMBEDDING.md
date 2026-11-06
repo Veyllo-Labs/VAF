@@ -1471,8 +1471,8 @@ Key declarative rules the runtime enforces:
   five refuses. A tool kept off chats is refused there whatever this says. A tool whose answer
   depends on its arguments overrides `agent_request_for(args)` (same five values; VAF's
   `mcp_call` answers by the level of the server tool it reaches), and a tool with
-  `file_access = "write"` is refused when a path argument lands in VAF's custom tools, skills
-  or workflows.
+  `file_access = "write"` is refused when a path argument (as the funnel repairs it) lands in
+  VAF's data or config folder, skills or workflows.
 - `category` - which bundle the tool appears under in the human-facing tool
   lists (the web tools window, the CLI table, the TUI overlay, `list_tools`).
   The in-tree vocabulary is `TOOL_CATEGORIES` in `vaf/core/tool_contract.py`,

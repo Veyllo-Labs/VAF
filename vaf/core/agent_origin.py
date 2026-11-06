@@ -47,7 +47,11 @@ NAMED BOUNDARIES, measured on the full registry (139 tools):
 - the registered MCP server tools an administrator set to read, and ``mcp_call`` reaching
   one, stay allowed; every other MCP tool needs the user's confirmation;
 - ``update_intent`` and ``update_working_memory`` stay allowed: they write the app chat's own
-  persistence (its goal, its plan), and later turns of that chat read it unfenced;
+  persistence (its goal, its plan), and later turns of that chat read it unfenced.
+  ``checkpoint_context`` does not (``refuse_standing``): its summary becomes the chat's restored
+  context, a user line without a fence. The automatic compression that runs inside such a turn
+  when the context fills up builds the same restored context: a short request rarely fills it,
+  and its input is the fenced request;
 - ``ask_user`` stays allowed: its question goes out as the answer text, which the requesting
   agent reads and puts to the user;
 - ``research_agent`` and ``document_agent`` stay allowed: they start work too, but with tool
@@ -222,13 +226,16 @@ _PATH_ARGS = ("path", "save_to", "filename", "file_path", "dst", "dest", "destin
 
 
 def standing_roots() -> Tuple[Path, ...]:
-    """Folders whose files VAF loads as its own behaviour later: the custom tools (their Python
-    runs at every agent load), the skills and the workflows (matched against later messages,
-    their steps run with no chat source). A file written there changes how VAF works from now
-    on, which is what ``refuse_standing`` keeps off a request."""
+    """Folders whose files VAF loads as its own behaviour later: the whole data folder (the
+    custom tools, whose Python runs at every agent load; the MCP server manifest, whose
+    commands `mcp_call` starts; the messaging endpoints; each account's config and contacts),
+    the whole config folder (the trust store), the skills and the workflows (matched against
+    later messages, their steps run with no chat source). A file written there changes how VAF
+    works from now on, which is what ``refuse_standing`` keeps off a request. The chat's
+    workspace lies under the documents folder, outside all of them, on every platform."""
     from vaf.core.platform import Platform
     home = Path.home()
-    return (Platform.data_dir() / "custom_tools", home / ".vaf" / "skills",
+    return (Platform.data_dir(), Platform.config_dir(), home / ".vaf" / "skills",
             home / ".vaf" / "workflows")
 
 
@@ -246,17 +253,19 @@ def _inside(root: Path, target: Path) -> bool:
         return False
 
 
-def _target_values(args: Mapping[str, Any]) -> List[str]:
-    out: List[str] = []
+def _target_values(args: Mapping[str, Any]) -> List[Any]:
+    """The values under path-like keys. A value that is no string is kept as it is, so the
+    caller refuses it rather than skipping what it cannot read."""
+    out: List[Any] = []
     for key, value in dict(args or {}).items():
         key = str(key)
         if key in _PATH_ARGS or key.endswith(("_path", "_dir")):
             values = [value]
-        elif key.endswith(("_paths", "_dirs")) and isinstance(value, (list, tuple)):
-            values = list(value)
+        elif key.endswith(("_paths", "_dirs")):
+            values = list(value) if isinstance(value, (list, tuple)) else [value]
         else:
             continue
-        out += [str(v) for v in values if isinstance(v, str) and v.strip()]
+        out += [v for v in values if not (isinstance(v, str) and not v.strip()) and v is not None]
     return out
 
 
@@ -266,11 +275,14 @@ def standing_write_target(tool: Any, args: Optional[Mapping[str, Any]],
     `standing_roots`, or None. Every path argument is resolved (``~``, ``..``, symlinks) the
     way a write would reach it: an absolute one as it is, a relative one against each of
     ``bases`` (the chat's workspace, the process's working folder). Fail closed: a target
-    that cannot be resolved counts as inside."""
+    that cannot be resolved, or a path argument that is no string, counts as inside. The
+    caller hands the arguments as the tool will receive them (repaired by the funnel)."""
     if getattr(tool, "file_access", None) != "write" or not args:
         return None
     roots = standing_roots()
     for value in _target_values(args):
+        if not isinstance(value, str):
+            return repr(value)
         expanded = os.path.expanduser(value.strip())
         try:
             candidates = ([Path(expanded)] if os.path.isabs(expanded) else

@@ -14264,6 +14264,12 @@ class Agent:
             if call_args is None:
                 import json as _json
                 call_args = _json.loads(args) if isinstance(args, str) and args.strip() else {}
+            if tool is not None and call_args:
+                # Decide on what the tool will receive: the funnel repairs the model's arguments
+                # after this gate (aliases, a placeholder dict unwrapped), so the gate repairs
+                # its own copy the same way, with the same function.
+                from vaf.core.tool_dispatch import repair_arguments
+                call_args, _errors = repair_arguments(tool, dict(call_args), tool_name=name)
             return agent_request_refusal(
                 name, tool, str(getattr(self, "_current_chat_source", "") or ""),
                 args=call_args, bases=self._write_bases())

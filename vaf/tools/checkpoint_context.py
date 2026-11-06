@@ -20,6 +20,8 @@ class CheckpointContextTool(BaseTool):
     """Reset conversation context after completing a major step."""
 
     name = "checkpoint_context"
+    # Its summary becomes the chat's restored context, read later as the user's words.
+    agent_request = "refuse_standing"
     category    = "context"
     permission_level = "system"
     side_effect_class = "reversible"

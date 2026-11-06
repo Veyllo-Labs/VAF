@@ -229,12 +229,13 @@ The Veyllo API names the key's request window on every answer, streams and the 4
 
 A provider whose registry row sets `request_limit_headers` (`vaf/core/provider_registry.py`; only `veyllo`) is paced by a request gate, `vaf/core/rate_limit_gate.py`, one per key and per process:
 
-- an answer with `remaining-requests: 0` closes the gate until the reset has passed (60 s, one whole window, when no reset is named);
-- a 429 closes it for exactly `retry-after` seconds, uncapped and without jitter (`api_retry_after_max` does not apply), else for the reset;
+- a 429 closes it for exactly `retry-after` seconds, at most 600 s, without jitter (`api_retry_after_max` does not apply), else for the reset;
+- an answer with `remaining-requests: 0` that names no 429 wait closes the gate until the reset has passed (60 s, one whole window, when no reset is named);
+- one answer holds the gate for at most 600 s (ten windows): the contract's window is one minute, so a longer value is outside it and costs one probe request every ten minutes instead of a lockout until restart;
 - the deadline only moves forward, and every lane sending with the key in that process waits on the same gate: the SDK lane through the client's `send()` (a closed gate answers a local 429 marked `x-vaf-held: 1`, nothing is sent), the coder's three chat requests and speech-to-text through `send_gated`;
 - while it holds, one warning per closed window goes to the log: "Veyllo API limit reached, continuing in 41 s".
 
-The Veyllo SDK client runs with `max_retries=0`, so `_with_retry` is the only scheduler and `api_rate_limit_wait_max` is the real total wait. Measured before the gate, against a 429 that kept naming `retry-after: 41`: one call sent 6 requests and waited 194 s against the 60 s budget, because the SDK honours `retry-after` only up to 60 s and VAF's own wait was capped at 30 s (11 s early). Now it sends at 0 s and 41 s and then reports the error; a hold longer than what is left of the budget fails the call at once, without sending. Speech-to-text never waits on the gate: a closed window returns at once and the voice turn falls back to the local engine.
+The Veyllo SDK client runs with `max_retries=0`, so `_with_retry` is the only scheduler and `api_rate_limit_wait_max` is the real total wait. Measured before the gate, against a 429 that kept naming `retry-after: 41`: one call sent 6 requests and waited 194 s against the 60 s budget, because the SDK honours `retry-after` only up to 60 s and VAF's own wait was capped at 30 s (11 s early). Now it sends at 0 s and 41 s and then reports the error; a hold longer than what is left of the budget fails the call at once, without sending, and the log line still marks the window. Speech-to-text never waits on the gate: a closed window returns at once and the voice turn falls back to the local engine.
 
 Two named boundaries: the `/v1/models` listings are not gated (the backend's contract does not list them, every caller is started by a person, and a 429 there falls back to the static model list), and the gate is per process, so each live process (the main one, each sub-agent process) sends at most one request into a closed window (plus what it already had in flight) before it learns the deadline from that answer. Both are written in the module docstring with what would reopen them.
 

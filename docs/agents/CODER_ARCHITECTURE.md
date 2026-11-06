@@ -319,8 +319,9 @@ answer crosses instead).
     limits (`veyllo`), all three chat requests (the stream, `_llm_verify_call`, the audit
     calls) go through `send_gated` with the key's request gate (`vaf/core/rate_limit_gate.py`,
     shared with the chat lane in the same process): nothing is sent while the window is
-    closed, and the 429 wait is the gate's exact hold (`coder_rate_limit_wait`), uncapped by
-    `api_retry_after_max`. A hold longer than what is left of the budget ends the run at once
+    closed, and the 429 wait is the gate's exact hold (`coder_rate_limit_wait`), not capped by
+    `api_retry_after_max` (one answer holds at most 600 s). A wait for a window that was
+    already closed before the request is shown in the TUI and counted against the same budget. A hold longer than what is left of the budget ends the run at once
     without sending (`rate_limit_exhausted` with `held`).
 *   **400 (context):** a 400 whose text mentions context/length/tokens triggers the
     compression ladder (3 levels, down to system prompt plus one sentence), capped by

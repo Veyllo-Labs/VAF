@@ -39,6 +39,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - Answering a speaker confirmation on Discord now replies in the Discord channel the message
   came from.
 
+### Fixed
+
+- **Veyllo API: VAF now respects your key's request limit.** When the Veyllo API reports the
+  per-minute limit as used up, VAF sends nothing until the window resets, and after a 429 it
+  waits exactly the time the API names (at most 10 minutes) instead of retrying early. The log
+  shows one line while it waits ("Veyllo API limit reached, continuing in 41 s").
+
+### Security
+
+- **A malformed rate-limit value can no longer stall VAF.** The parser that reads the wait an
+  AI provider names after a rate limit (a header, or the "try again in" phrase of the error
+  message) could take minutes on some malformed values, and while it ran the whole VAF process
+  stopped answering, the web interface included. It now refuses oversized values and needs
+  well under a millisecond for any input. This affects every API provider.
+
 ## [0.1.0a35] - 2026-11-05
 
 ### Added
@@ -178,10 +193,6 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
-- **Veyllo API: VAF now respects your key's request limit.** When the Veyllo API reports the
-  per-minute limit as used up, VAF sends nothing until the window resets, and after a 429 it
-  waits exactly the time the API names instead of retrying early. The log shows one line while
-  it waits ("Veyllo API limit reached, continuing in 41 s").
 - **A container Docker reports healthy is no longer "still starting".** `vaf health`,
   `vaf repair --check` and the Update and Repair dialog no longer report a container as still
   starting once Docker reports it healthy and it answers. Right after a start the verdict

@@ -236,3 +236,30 @@ def test_the_sweep_and_a_confirm_never_both_own_a_pairing(app_link_home, monkeyp
     client.pump()
     assert client.of("pair_error") == [{"t": "pair_error", "code": "expired"}]
     assert devices.all_devices() == []
+
+
+def test_a_failing_confirm_ends_the_pairing_and_tells_the_phone(app_link_home, monkeypatch):
+    p = _issue()
+    client, pipe, _key = _scan(p)
+
+    def _broken(*a, **k):
+        raise RuntimeError("the device CA cannot be read")
+    monkeypatch.setattr(pki, "issue_device_cert", _broken)
+    with pytest.raises(RuntimeError):
+        pairing.confirm(SCOPE_A, True)
+    client.pump()
+    assert pairing.current(SCOPE_A)["state"] == "failed"
+    assert client.of("pair_error") == [{"t": "pair_error", "code": "expired"}]
+    assert pipe.session.closed and devices.all_devices() == []
+
+
+def test_a_waiting_pairing_session_has_a_hard_end(app_link_home):
+    from vaf.core.app_link import session as sess
+    p = _issue()
+    client, pipe, _key = _scan(p)
+    session = pipe.session
+    assert session.state == "pair_wait"
+    session.check_timeouts(session.pair_wait_since + sess.PAIR_WAIT_SECONDS - 1)
+    assert not session.closed
+    session.check_timeouts(session.pair_wait_since + sess.PAIR_WAIT_SECONDS + 1)
+    assert session.closed and session.close_reason == "pair_wait_timeout"

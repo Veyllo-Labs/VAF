@@ -242,3 +242,15 @@ def test_a_long_connected_device_keeps_counting_as_used(app_link_home, monkeypat
     client.send({"t": "ack", "id": "0f8fad5b-d9cb-469f-a165-70867728950e"})
     client.send({"t": "ack", "id": "0f8fad5b-d9cb-469f-a165-70867728950e"})
     assert touched == [row["device_id"]]
+
+
+def test_a_big_frame_right_after_hello_in_one_read_is_taken(app_link_home):
+    from vaf.core.app_link import session as sess
+    client, pipe, row = link(SCOPE_A, hello=False)
+    text = "y" * (sess.PRE_OPEN_MAX_PAYLOAD + 2000)
+    both = pr.encode_json({"t": "hello", "v": 1, "device_id": row["device_id"], "caps": []}) \
+        + pr.encode_json({"t": "msg", "id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+                          "chat": devices.chat_session_id(SCOPE_A), "text": text})
+    client.send_raw(both)              # one TLS write: both frames arrive in one read
+    assert not pipe.session.closed, pipe.session.close_reason
+    assert client.of("welcome") and {"t": "ack", "id": "0f8fad5b-d9cb-469f-a165-70867728950e"} in client.frames

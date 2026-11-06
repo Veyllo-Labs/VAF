@@ -311,9 +311,6 @@ def _finish(pairing: Pairing, state: str) -> None:
 
 def confirm(user_scope_id: str, accept: bool) -> str:
     """The account's answer to "is this your device?". Only the account's own pairing."""
-    from cryptography import x509
-
-    from vaf.core.app_link import devices, pki
     scope = str(user_scope_id or "").strip()
     # Taken out under the lock: exactly one caller (a double click, the sweep) owns it.
     with _lock:
@@ -335,6 +332,23 @@ def confirm(user_scope_id: str, accept: bool) -> str:
         if session is not None and not session.closed:
             _pair_error(session, "expired", "confirmation too late", pairing.username)
         return "expired"
+    try:
+        return _accept(pairing, scope)
+    except Exception:
+        # Taken out of the waiting list already: without this it stayed "confirming" for
+        # good and its session open. The phone hears to start again; the error is raised on.
+        if pairing.state != "paired":
+            _finish(pairing, "failed")
+            if session is not None and not session.closed:
+                _pair_error(session, "expired", "internal error", pairing.username)
+        raise
+
+
+def _accept(pairing: Pairing, scope: str) -> str:
+    from cryptography import x509
+
+    from vaf.core.app_link import devices, pki
+    session = pairing.session
     device_id = str(uuid.uuid4())
     der = pki.issue_device_cert(pairing.public_key, device_id)
     serial = str(x509.load_der_x509_certificate(der).serial_number)

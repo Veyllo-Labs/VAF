@@ -39,6 +39,9 @@ HANDSHAKE_MAX_BYTES = 64 * 1024
 # After the handshake, the first message (`pair` on the pairing name, `hello` on the link
 # name) must come within this time; nobody is known yet, so nothing else may hold a slot.
 FIRST_MESSAGE_SECONDS = 20
+# A pairing waits for the person's confirmation in the web UI (pairing.CONFIRM_SECONDS, 120 s,
+# ended by the sweep); whatever happens to the pairing, its session ends after this long.
+PAIR_WAIT_SECONDS = 180
 # Until a device is known (state "open"), a frame is at most this big: `pair` is about 6 KiB
 # (a 4 KiB CSR in base64 and short labels), `hello` far less. 1 MiB frames are for a device.
 PRE_OPEN_MAX_PAYLOAD = 16 * 1024
@@ -147,6 +150,7 @@ class LinkSession:
         self._reader = pr.FrameReader(PRE_OPEN_MAX_PAYLOAD)
         self.started_at = clock()
         self.handshake_done_at: Optional[float] = None
+        self.pair_wait_since: Optional[float] = None
         self.state = "handshake"
         self.purpose: Optional[str] = None
         self.device: Optional[Dict[str, Any]] = None
@@ -233,13 +237,15 @@ class LinkSession:
         self._flush()
         if not chunks:
             return
-        try:
-            frames = self._reader.feed(b"".join(chunks))
-        except pr.FrameError:
-            self.close("bad_frame", bye=False)
-            return
-        for frame in frames:
-            if self.closed:
+        self._reader.push(b"".join(chunks))
+        while not self.closed:
+            # One frame at a time: a hello raises the frame limit for what follows it.
+            try:
+                frame = self._reader.next_frame()
+            except pr.FrameError:
+                self.close("bad_frame", bye=False)
+                return
+            if frame is None:
                 return
             try:
                 self._dispatch(frame)
@@ -319,6 +325,10 @@ class LinkSession:
                     and now - self.handshake_done_at > FIRST_MESSAGE_SECONDS:
                 self.close("first_message_timeout", bye=False)
                 return
+            if self.state == "pair_wait" and self.pair_wait_since is not None \
+                    and now - self.pair_wait_since > PAIR_WAIT_SECONDS:
+                self.close("pair_wait_timeout", bye=False)
+                return
             for transfer in list(self._transfers.values()):
                 # A finished file waits for the other files of its message: no more chunks
                 # come for it, so its silence means nothing.
@@ -341,6 +351,7 @@ class LinkSession:
                 self.close("unexpected", bye=False)
                 return
             self.state = "pair_wait"
+            self.pair_wait_since = self._clock()
             self.dispatched += 1
             from vaf.core.app_link import pairing
             pairing.on_pair(self, message)

@@ -256,28 +256,39 @@ class FrameReader:
     def buffered(self) -> int:
         return len(self._buf)
 
-    def feed(self, data: bytes) -> List[Frame]:
+    def push(self, data: bytes) -> None:
         self._buf += data
+
+    def next_frame(self) -> Optional[Frame]:
+        """The next complete frame, judged against the limit that holds NOW, or None. A
+        reader that dispatches each frame before asking for the next one lets a message (a
+        device's hello) change the limit for the frames after it."""
+        if len(self._buf) < _HEAD.size:
+            return None
+        kind, length = _HEAD.unpack_from(self._buf)
+        if kind not in (FRAME_JSON, FRAME_CHUNK):
+            raise FrameError("unknown frame type")
+        if length > min(self.max_payload, MAX_FRAME_PAYLOAD):
+            raise FrameError("payload too large")
+        if len(self._buf) < _HEAD.size + length:
+            return None
+        payload = bytes(self._buf[_HEAD.size:_HEAD.size + length])
+        del self._buf[:_HEAD.size + length]
+        if kind == FRAME_JSON:
+            return Frame(FRAME_JSON, obj=decode_json_payload(payload))
+        if length < _CHUNK_HEAD.size or length - _CHUNK_HEAD.size > CHUNK_DATA_MAX:
+            raise FrameError("bad chunk")
+        xfer, index = _CHUNK_HEAD.unpack_from(payload)
+        return Frame(FRAME_CHUNK, xfer=xfer, index=index, data=payload[_CHUNK_HEAD.size:])
+
+    def feed(self, data: bytes) -> List[Frame]:
+        self.push(data)
         frames: List[Frame] = []
-        while len(self._buf) >= _HEAD.size:
-            kind, length = _HEAD.unpack_from(self._buf)
-            if kind not in (FRAME_JSON, FRAME_CHUNK):
-                raise FrameError("unknown frame type")
-            if length > min(self.max_payload, MAX_FRAME_PAYLOAD):
-                raise FrameError("payload too large")
-            if len(self._buf) < _HEAD.size + length:
-                break
-            payload = bytes(self._buf[_HEAD.size:_HEAD.size + length])
-            del self._buf[:_HEAD.size + length]
-            if kind == FRAME_JSON:
-                frames.append(Frame(FRAME_JSON, obj=decode_json_payload(payload)))
-            else:
-                if length < _CHUNK_HEAD.size or length - _CHUNK_HEAD.size > CHUNK_DATA_MAX:
-                    raise FrameError("bad chunk")
-                xfer, index = _CHUNK_HEAD.unpack_from(payload)
-                frames.append(Frame(FRAME_CHUNK, xfer=xfer, index=index,
-                                    data=payload[_CHUNK_HEAD.size:]))
-        return frames
+        while True:
+            frame = self.next_frame()
+            if frame is None:
+                return frames
+            frames.append(frame)
 
 
 # ── the relay envelope ───────────────────────────────────────────────────────

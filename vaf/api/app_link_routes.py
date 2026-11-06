@@ -24,6 +24,8 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from vaf.api.user_routes import caller_is_admin
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -82,11 +84,6 @@ def _caller(request: Request) -> Dict[str, Any]:
                                    "Veyllo App. Sign in again.")
     user["user_scope_id"] = str(user["user_scope_id"]).strip()
     return user
-
-
-def _is_admin(request: Request) -> bool:
-    from vaf.api.user_routes import caller_is_admin
-    return bool(caller_is_admin(request))
 
 
 def _no_store(content: Dict[str, Any], code: int = 200) -> JSONResponse:
@@ -223,7 +220,7 @@ async def list_devices(request: Request, all: int = 0):  # noqa: A002 - the quer
     from vaf.core.app_link import devices
     user = _caller(request)
     if all:
-        if not _is_admin(request):
+        if not caller_is_admin(request):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                                 detail="Only an admin can list every account's devices.")
         return _no_store({"devices": [_device_view(r, with_user=True) for r in devices.all_devices()]})
@@ -236,7 +233,7 @@ async def remove_device(device_id: str, request: Request):
     from vaf.core.app_link import devices
     user = _caller(request)
     row = devices.get(device_id)
-    if row is None or (row.get("user_scope_id") != user["user_scope_id"] and not _is_admin(request)):
+    if row is None or (row.get("user_scope_id") != user["user_scope_id"] and not caller_is_admin(request)):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,
                             detail="No such device of this account. List them with "
                                    "GET /api/app-link/devices or `vaf devices list`.")
@@ -249,7 +246,7 @@ async def remove_device(device_id: str, request: Request):
 
 def _admin(request: Request) -> Dict[str, Any]:
     user = _caller(request)
-    if not _is_admin(request):
+    if not caller_is_admin(request):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN,
                             detail="Only an admin can change the Veyllo relay.")
     return user

@@ -487,7 +487,7 @@ def test_an_open_reply_is_closed_at_the_end_of_every_turn(app_link_home):
     hr._close_app_reply(task)          # and twice is once
     client.pump()
     assert client.of("done") == [{"t": "done", "id": rid}]
-    assert client.of("typing")[-1]["on"] is False and rid not in bridge._replies
+    assert client.of("typing")[-1]["on"] is False and (SCOPE_A, rid) not in bridge._replies
     src = open(hr.__file__, encoding="utf-8").read()
     assert src.count("                _close_app_reply(task)\n") == 1, "the chat lane closes it at its end"
 
@@ -498,6 +498,6 @@ def test_a_reply_nothing_ended_is_forgotten(app_link_home):
     task = _task_for(row)
     hr._app_link_emit(task)
     rid = task.metadata["app_reply_id"]
-    bridge._replies[rid].started -= bridge.REPLY_MAX_SECONDS + 1
+    bridge._replies[(SCOPE_A, rid)].started -= bridge.REPLY_MAX_SECONDS + 1
     bridge.sweep()
-    assert rid not in bridge._replies
+    assert (SCOPE_A, rid) not in bridge._replies

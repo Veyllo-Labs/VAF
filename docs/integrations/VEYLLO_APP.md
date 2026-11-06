@@ -118,7 +118,7 @@ need a confirmation only the web UI can show. The other tools kept off chats (th
 environments, the browser agent, the builders, background commands, timers) depend on the
 admin's `channel_tools_unrestricted`: on, the default, they run in the app chat without a
 confirmation, as on Telegram; off, they stay off. A request of the app's own agent never gets
-them (next section).
+them, nor anything that would start them later (next section).
 
 ## The app's agent can ask your agent
 
@@ -135,13 +135,29 @@ is a turn of your account's app chat, with these differences
   history tools) reads it the same way. It is not stored as your message in the inbox, does not
   become your last words shown in your other chats, and does not answer a question your agent
   is waiting on.
-- **Tools that need you stay off.** Every tool kept off chats, whatever
-  `channel_tools_unrestricted` says, plus `user_phone` (it would hand the task back to the
-  phone that is waiting) and `store_credential`. A call that needs a confirmation is refused at
-  once; no dialog appears in the web UI and nothing waits. Answers you gave ahead still hold: a
-  tool you allowed always, a trusted folder, an "allow for this chat" in the app chat, and the
-  admin bypass. Everything the app chat may do without a confirmation stays possible,
-  memory writes and sending mail included.
+- **Tools that need you stay off, and so does work that would run later.** Refused and not
+  offered (`vaf/core/agent_origin.py`, each with a reason the app's agent can pass on):
+  every tool kept off chats, whatever `channel_tools_unrestricted` says; `user_phone` (it would
+  hand the task back to the phone that is waiting) and `store_credential`; the tools that start
+  work of their own which would run later without these limits, `coding_agent`,
+  `create_automation`, `update_automation`, `restore_automation` and `execute_workflow`; and the
+  ones that change how VAF works for you from now on, `create_skill`, `update_skill` and
+  `update_user_identity`. You can ask for any of these by writing to VAF yourself in the app's
+  chat. A call that needs a confirmation is refused at once; no dialog appears in the web UI and
+  nothing waits. Answers you gave ahead still hold: a tool you allowed always, a trusted
+  folder, an "allow for this chat" in the app chat, and the admin bypass.
+- **A message to somebody else waits for you.** A mail (`send_mail`, `reply_mail`,
+  `forward_mail`) or a WhatsApp message to a number (`send_whatsapp` with `to_phone`) is parked
+  as a draft, as when you ask for one in the web chat ([`outbound_hold`](../../vaf/core/outbound_hold.py)),
+  whatever `outward_send_hold` says; the card waits in the web UI's Veyllo App chat, and the
+  app's agent is told that the message is prepared and not sent. Messages to yourself (your own
+  messenger) are not held.
+- **What stays possible, deliberately.** Everything else the app chat may do without a
+  confirmation: reading your mail, calendar and contacts, memory writes (`memory_save`,
+  `memory_update`, `update_codex`, `thinking_note_add`; the fence tells your agent to keep only
+  what is clearly your own statement passed on), a question back (`ask_user`: the question
+  goes out as the answer, and the app's agent puts it to you), and the research, librarian and
+  document agents, whose own tools hold nothing a request is refused.
 - **The answer goes to the phone that asked.** It streams as `delta` and ends with `done`, both
   under the request's own id, to that device only, without "read" or "typing"; it is held in
   that device's outbox only, and only that device gets a push. Your other phones see nothing

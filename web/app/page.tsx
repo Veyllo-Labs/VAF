@@ -10356,8 +10356,8 @@ function VAFDashboardContent() {
                                                                                 // (never an animated shadow, GPU-leak rule).
                                                                                 !isBot && msg.kind === 'voice_delegation' && "border border-red-500/60 shadow-[0_0_10px_2px_rgba(239,68,68,0.22)]",
                                                                                 // A request the agent of the user's Veyllo App
-                                                                                // wrote (not the user): a static sky ring.
-                                                                                !isBot && msg.kind === 'app_agent' && "border border-sky-500/70")}>
+                                                                                // wrote (not the user): a sky ring + soft STATIC glow.
+                                                                                !isBot && msg.kind === 'app_agent' && "border border-sky-500/70 shadow-[0_0_10px_2px_rgba(14,165,233,0.22)]")}>
                                                                                 {!isBot && displayAnswer.length > 1169 ? (
                                                                                     <>
                                                                                         <div className="chat-markdown">

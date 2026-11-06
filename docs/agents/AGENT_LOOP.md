@@ -123,12 +123,14 @@ account, binding), and only the binding class is written per turn.
 
 A turn whose text another agent wrote carries `asked_by_agent` (today the agent of the user's
 Veyllo App, `agent_ask`; `vaf/core/agent_origin.py`). The binding forces `is_human` to False for
-it and adds the tools `agent_origin.refused_on_agent_request` names to the hidden ones (the tools
-kept off chats, `user_phone`, `store_credential`). While it holds, the first turn gate (gate e,
+it and adds the tools `agent_origin.agent_request_refusal` names to the hidden ones (the tools
+kept off chats, `user_phone`, `store_credential`, the tools that start work running later, the
+ones that change skills or identity). While it holds, the first turn gate (gate e,
 `_agent_request_gate_decision`) refuses those names with an `[APP AGENT]` result, and the
 tool call runs with `interactive=False`, no dialog push and `ToolCaller(channel_lift=False)`: a
 call that needs a confirmation is refused at once, and the admin's `channel_tools_unrestricted`
-does not lift anything for it. The runner wraps the turn's input in the fence
+does not lift anything for it; a policy refusal reaches the model in gate (e)'s words, and a send
+to a third party is parked by `outbound_hold` (`asked_by_agent`). The runner wraps the turn's input in the fence
 (`app_agent_request_text`), stores the raw text with `kind="app_agent"` and skips the last
 interaction record.
 

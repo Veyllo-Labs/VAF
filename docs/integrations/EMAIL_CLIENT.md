@@ -301,7 +301,9 @@ discards it, and so do `vaf outbox send|discard|edit`
 and the mail window's own draft buttons (a send from the card or the mail window wakes the chat
 the draft came from, `outbound_hold.wake_after_send`); the decision itself is
 [`vaf/core/outbound_hold.py`](../../vaf/core/outbound_hold.py) and the switch is
-`outward_send_hold`. Every other lane is untouched: automations, workflow steps, channel
+`outward_send_hold`. A request of the Veyllo App's own agent is held the same way, whatever the
+switch says (its text may carry what that agent read elsewhere; the card waits in the web UI's
+Veyllo App chat). Every other lane is untouched: automations, workflow steps, other channel
 turns, the Front Office answer and a timer the person scheduled all send as before, because
 nobody is there to click.
 

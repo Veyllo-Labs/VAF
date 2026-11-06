@@ -48,6 +48,12 @@ the engine dispatches through the same tool funnel with no chat source and nobod
 its send steps would wait for a click that never comes. Voice calls are a named boundary for
 the same reason: `voice_call` is a person, but not a person looking at the card.
 
+AND WHEN ANOTHER AGENT ASKED. A turn the agent of the user's Veyllo App wrote (the turn
+binding's `asked_by_agent`, vaf/core/agent_origin.py) holds every call that can reach a third
+party too, whatever its chat source, and whatever `outward_send_hold` says: that switch is the
+person's trust in their own word, and such a request may carry text its agent read elsewhere.
+The card waits in the web UI's chat of that request.
+
 Front Office answers need no exclusion here: a Front Office turn is restricted to its own
 allow-list, its mail answer goes through `queue_send` in the runner rather than a tool, and
 `send_whatsapp` refuses any recipient but the owner in that mode.
@@ -200,8 +206,12 @@ def reaches_a_third_party(tool_name: str, args: Optional[Dict[str, Any]] = None)
 
 def holds_outward_send(tool_name: str, args: Optional[Dict[str, Any]] = None, *,
                        source: Optional[str] = None, unattended: bool = False,
+                       asked_by_agent: bool = False,
                        config_get: Optional[Callable[[str, Any], Any]] = None) -> bool:
     """Should this call be parked for the person instead of sent?
+
+    A turn another agent asked for (``asked_by_agent``) holds every call that can reach a third
+    party, on any source and whatever the switch says (module docstring).
 
     Four conditions, all of them necessary: the turn belongs to a surface that can show the
     decision, somebody is actually there for it, the call can reach a third party, and the
@@ -215,6 +225,8 @@ def holds_outward_send(tool_name: str, args: Optional[Dict[str, Any]] = None, *,
     source, except a run a room message started, which is bound as a room turn and marked
     unattended the same way.
     """
+    if asked_by_agent:
+        return reaches_a_third_party(tool_name, args)
     if unattended:
         return False
     if str(source or "").strip().lower() not in HOLD_SOURCES:

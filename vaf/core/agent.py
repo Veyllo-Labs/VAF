@@ -14077,6 +14077,15 @@ class Agent:
                 authorizer_scope(getattr(self, "_tool_authorizer", None)), \
                 self._room_file_scope():
             outcome = caller.call(name, args)
+        if _asked_by_agent and not outcome.dispatched \
+                and str(outcome.result or "").startswith("Security Error:"):
+            # The policy refused a tool kept off chats before gate (e) could: the requesting
+            # agent gets gate (e)'s words (why, and what the user can do) instead of the
+            # policy's internal ones. The refusal itself stays the policy's.
+            refusal = self._agent_request_gate_decision(name, None)
+            if refusal:
+                from dataclasses import replace as _replace
+                outcome = _replace(outcome, result=refusal)
         self._take_tool_advice(name, outcome.advised_tools)
         return outcome
 
@@ -14220,26 +14229,23 @@ class Agent:
     def _agent_request_gate_decision(self, name, tool_instance):
         """Gate (e): a request another agent wrote (the turn binding's ``asked_by_agent``,
         today the agent of the user's Veyllo App) runs no tool that
-        `agent_origin.refused_on_agent_request` keeps off: the tools kept off chats, whatever
-        the admin's channel lift says, and the two that would hand the request back to the
-        phone or keep a secret. The same predicate hides them from the schema (the binding),
-        so this answers a name the model writes anyway. FAIL CLOSED: an error while deciding
-        refuses. None outside such a turn and for a tool it may run."""
+        `agent_origin.agent_request_refusal` keeps off: the tools kept off chats, whatever the
+        admin's channel lift says, the ones that need the person, start work of their own or
+        change how VAF works from now on. The same predicate hides them from the schema (the
+        binding), so this answers a name the model writes anyway, with the reason and what the
+        user can do instead. FAIL CLOSED: an error while deciding refuses. None outside such a
+        turn and for a tool it may run."""
         asked_by = getattr(self, "_turn_asked_by_agent", None)
         if not asked_by or name == "multi_tool_use.parallel":
             return None
         try:
-            from vaf.core.agent_origin import refused_on_agent_request
+            from vaf.core.agent_origin import agent_request_refusal
             tool = tool_instance if tool_instance is not None else (self.tools or {}).get(name)
-            refused = refused_on_agent_request(
+            return agent_request_refusal(
                 name, tool, str(getattr(self, "_current_chat_source", "") or ""))
         except Exception:
-            refused = True
-        if not refused:
-            return None
-        return (f"[APP AGENT] '{name}' does not run on a request of the Veyllo App's agent: it "
-                "needs your user in person. It did NOT run, so do not report it as done; say "
-                "so in your answer.")
+            return (f"[APP AGENT] '{name}' does not run on a request of the Veyllo App's agent. "
+                    "It did NOT run, so do not report it as done; say so in your answer.")
 
     def _ask_user_about_gate(self, name, reason, preview=None, choices=None, gate_id=None):
         """How THIS lane reaches a human. Prefer the WebSocket gate when a web session is
@@ -14481,6 +14487,7 @@ class Agent:
                 name, tool_args,
                 source=str(getattr(self, "_current_chat_source", "") or "").strip().lower(),
                 unattended=bool(getattr(self, "_unattended_turn", False)),
+                asked_by_agent=bool(getattr(self, "_turn_asked_by_agent", None)),
             ):
                 if name in outbound_hold.MAIL_HOLD_TOOLS:
                     tool_args["hold"] = True

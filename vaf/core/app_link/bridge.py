@@ -44,7 +44,7 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Deque, Dict, List, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 from vaf.core.app_link import CHANNEL, devices
 from vaf.core.app_link import protocol as pr
@@ -64,7 +64,9 @@ TOUCH_EVERY_SECONDS = 3600
 _lock = threading.RLock()
 _sessions: Dict[str, Any] = {}          # device_id -> its authenticated link session
 _all: set = set()                        # every session alive, handshakes included
-_replies: Dict[str, "Reply"] = {}
+# Keyed by (account scope, reply id): a request's reply id is the id its device chose, so
+# two accounts may use the same one.
+_replies: Dict[Tuple[str, str], "Reply"] = {}
 _asks: Dict[str, Dict[str, "OpenAsk"]] = {}  # device_id -> ask id -> the open request
 _seen_ids: Dict[str, Dict[str, float]] = {}
 _msg_times: Dict[str, Deque[float]] = {}
@@ -96,6 +98,7 @@ class Reply:
 @dataclass
 class OpenAsk:
     chat_sid: str
+    scope: str = ""
     started: float = field(default_factory=time.time)
     # Set once the turn is in the queue: until then the sweep cannot tell it from a dropped one.
     queued: bool = False
@@ -224,12 +227,24 @@ def _to_account(scope: str, obj: Dict[str, Any]) -> List[str]:
     return sent
 
 
+def _rkey(scope: Any, reply_id: Any) -> Tuple[str, str]:
+    return (str(scope or "").strip(), str(reply_id or ""))
+
+
+def _device_of(scope: str, device_id: str) -> bool:
+    """Whether the device row exists and belongs to the account ``scope``."""
+    row = devices.get(device_id) if device_id else None
+    return bool(row) and str(row.get("user_scope_id") or "") == str(scope)
+
+
 def _to_reply(reply: "Reply", obj: Dict[str, Any]) -> List[str]:
     """A reply's message: to the device that asked for an agent's request (by its id, so a
-    device that reconnected gets it on its new session; nobody when none is named), to every
-    device of the account otherwise."""
+    device that reconnected gets it on its new session; nobody when none is named or the
+    device is not the account's), to every device of the account otherwise."""
     if reply.ask:
-        return [reply.device_id] if reply.device_id and _send(reply.device_id, obj) else []
+        if not _device_of(reply.scope, reply.device_id):
+            return []
+        return [reply.device_id] if _send(reply.device_id, obj) else []
     return _to_account(reply.scope, obj)
 
 
@@ -457,14 +472,15 @@ def _on_msg(session, row, message, files) -> None:
     session.send_json({"t": "ack", "id": mid})
 
 
-def _take_ask_slot(device_id: str, ask_id: str, chat_sid: str) -> bool:
-    """Hold one of the device's places for open requests, or False when all are taken."""
+def _take_ask_slot(device_id: str, ask_id: str, chat_sid: str, scope: str = "") -> bool:
+    """Hold one of the device's places for open requests, or False when all are taken or
+    this id holds one already (two copies of one request arriving at once queue once)."""
     from vaf.core.app_link.session import AGENT_ASK_OPEN_MAX
     with _lock:
         held = _asks.setdefault(device_id, {})
-        if len(held) >= AGENT_ASK_OPEN_MAX:
+        if ask_id in held or len(held) >= AGENT_ASK_OPEN_MAX:
             return False
-        held[ask_id] = OpenAsk(chat_sid=chat_sid)
+        held[ask_id] = OpenAsk(chat_sid=chat_sid, scope=scope)
         return True
 
 
@@ -480,10 +496,15 @@ def _release_ask(device_id: str, ask_id: str) -> bool:
 
 
 def _id_taken(row: Dict[str, Any], ask_id: str) -> bool:
-    """Whether a request id already names a reply of the account, running or stored: an
-    answer stored under it would replace that one."""
+    """Whether a request id already names a reply of the account, running, open on any of its
+    devices or stored: an answer stored under it would replace that one."""
+    scope = str(row["user_scope_id"])
     with _lock:
-        if ask_id in _replies:
+        if _rkey(scope, ask_id) in _replies:
+            return True
+        open_ids = {aid for did, asks in _asks.items()
+                    for aid, ask in asks.items() if ask.scope == scope}
+        if ask_id in open_ids:
             return True
     try:
         from vaf.core import channel_message_store as store
@@ -512,8 +533,12 @@ def _on_agent_ask(session, row, message) -> None:
     if _seen_before(did, aid) or _id_taken(row, aid):
         session.send_json({"t": "ack", "id": aid})
         return
-    if not _take_ask_slot(did, aid, chat_sid):
-        session.send_json({"t": "error", "code": "rate_limited", "ref": aid})
+    if not _take_ask_slot(did, aid, chat_sid, scope):
+        with _lock:
+            again = aid in _asks.get(did, {})
+        # The same request arriving twice at once: the copy that holds the place is the one.
+        session.send_json({"t": "ack", "id": aid} if again
+                          else {"t": "error", "code": "rate_limited", "ref": aid})
         return
     if not _rate_ok(did):
         _release_ask(did, aid)
@@ -613,7 +638,7 @@ def turn_started(meta: Dict[str, Any]) -> Optional[str]:
         return None
     reply = _reply_for(meta, scope)
     with _lock:
-        _replies[reply.id] = reply
+        _replies[_rkey(scope, reply.id)] = reply
     meta["app_reply_id"] = reply.id
     if reply.ask:
         return reply.id
@@ -625,12 +650,12 @@ def turn_started(meta: Dict[str, Any]) -> Optional[str]:
     return reply.id
 
 
-def stream_round(reply_id: Optional[str], text: str, number: int) -> None:
+def stream_round(reply_id: Optional[str], text: str, number: int, *, scope: Any = "") -> None:
     """One round's full text so far: the increment of the cleaned accumulated text goes out
     as a ``delta``. A text that no longer extends what was sent (a clear, a retraction)
     stops the deltas of this reply; ``done`` still carries the final text."""
     with _lock:
-        reply = _replies.get(str(reply_id or ""))
+        reply = _replies.get(_rkey(scope, reply_id))
     if reply is None or not reply.streaming:
         return
     reply.rounds[int(number)] = str(text or "")
@@ -675,7 +700,7 @@ def finish_reply(meta: Dict[str, Any], final_text: str) -> bool:
     if not scope:
         return False
     with _lock:
-        reply = _replies.pop(str(meta.get("app_reply_id") or ""), None)
+        reply = _replies.pop(_rkey(scope, meta.get("app_reply_id")), None)
     if reply is None:
         reply = _reply_for(meta, scope)
     meta.pop("app_reply_id", None)
@@ -765,7 +790,7 @@ def send_text(meta: Dict[str, Any], text: str) -> bool:
     on the device that asked (a turn that failed before its reply started included), and
     never twice."""
     with _lock:
-        running = str(meta.get("app_reply_id") or "") in _replies
+        running = _rkey(meta.get("user_scope_id"), meta.get("app_reply_id")) in _replies
     if running:
         return finish_reply(meta, text)
     if meta.get("app_agent_ask"):
@@ -792,8 +817,8 @@ def sweep(now: Optional[float] = None) -> None:
         session.check_timeouts()
     wall_now = time.time()
     with _lock:
-        for rid in [r.id for r in _replies.values() if wall_now - r.started > REPLY_MAX_SECONDS]:
-            del _replies[rid]
+        for key in [k for k, r in _replies.items() if wall_now - r.started > REPLY_MAX_SECONDS]:
+            del _replies[key]
     settle_asks(wall_now)
     try:
         from vaf.core.app_link import pairing
@@ -822,7 +847,7 @@ def settle_asks(now: Optional[float] = None) -> int:
     ended = 0
     for did, aid, ask in held:
         if wall - ask.started <= REPLY_MAX_SECONDS:
-            if aid in replying or not ask.queued:
+            if _rkey(ask.scope, aid) in replying or not ask.queued:
                 continue
             if TaskQueue().has_queued(ask.chat_sid, in_flight=True, where=lambda t, d=did, a=aid: (
                     (t.metadata or {}).get("app_ask_id") == a

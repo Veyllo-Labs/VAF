@@ -158,7 +158,8 @@ reply-window check to do it. Ordered in the web chat, the call is parked instead
 turn ends there: the card in the conversation sends, edits or discards it (an edit replaces the
 call's `message` argument and the preview together, `channel_message_store.revise_held_send`),
 `vaf outbox` does the same from a terminal, and the switch is
-`outward_send_hold` (see [`vaf/core/outbound_hold.py`](../../vaf/core/outbound_hold.py)). The park
+`outward_send_hold` (see [`vaf/core/outbound_hold.py`](../../vaf/core/outbound_hold.py)). A
+request of the Veyllo App's own agent is held the same way, whatever the switch says. The park
 stores the CALL, never an outbound message row, because a message row is a message that left, for a message
 nobody has agreed to send, and the approval runs the tool again with the approving person's
 identity so the file jail and the bridge path stay the tool's own. What the send answered decides

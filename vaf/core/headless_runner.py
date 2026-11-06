@@ -488,6 +488,13 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
             # `done` with the final text to the account's devices, stored once with an outbox
             # entry per device (app_link.bridge).
             from vaf.core.app_link import bridge as app_bridge
+            from vaf.core.outbound_hold import TURN_ENDS_AT_DRAFT
+            if str(final_text or "").strip() == TURN_ENDS_AT_DRAFT:
+                # The turn stopped at a draft (only a request of the app's agent holds a send
+                # on this channel): the web UI's sentence means nothing to the phone, so its
+                # agent is told where the message waits.
+                from vaf.core.agent_origin import APP_AGENT_DRAFT_TEXT
+                final_text = APP_AGENT_DRAFT_TEXT
             app_bridge.finish_reply(meta, _prepare_channel_outbound(final_text))
         elif task_source == "whatsapp":
             chat_jid = meta.get("whatsapp_chat_jid")
@@ -721,7 +728,7 @@ def _app_link_emit(task):
                                                session_id=session_id, round=number,
                                                answer=answer)
         try:
-            app_bridge.stream_round(reply_id, text, number)
+            app_bridge.stream_round(reply_id, text, number, scope=meta.get("user_scope_id"))
         except Exception:
             pass
     return _emit

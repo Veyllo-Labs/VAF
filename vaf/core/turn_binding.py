@@ -59,9 +59,9 @@ conversation of its own), and last the chat's project folder, which the load res
 FORWARD ONLY. Nothing is rolled back after a turn: the next `bind_turn` replaces every binding
 attribute, so a restore would put a finished turn's values back for nothing.
 `end_turn` clears what gates and routes (the allowed set, the Front Office and room markers,
-the requesting agent, the room id) for the code that runs between two turns; the identity, the source and the loaded
-conversation stay until the next bind. `identity_binding` ships no context manager for the
-same reason, and neither does this module.
+the requesting agent, the room id) for the code that runs between two turns; the identity,
+the source and the loaded conversation stay until the next bind. `identity_binding` ships no
+context manager for the same reason, and neither does this module.
 
 NAMED BOUNDARY: not on the public facade. The facade fixes its scope and session at
 construction (`vaf.Agent(user_scope=..., session=...)`) and never moves its engine between
@@ -203,8 +203,9 @@ class TurnBinding:
 
     Validated at construction, so a binding that cannot be applied raises before anything
     on the agent changes: ``ValueError`` for an empty source, for both or neither of the
-    session and the conversation, for an empty one of them, for an empty ``asked_by_agent``; ``TypeError`` for an allowed set
-    given as one string (`tool_dispatch.normalize_allowed_tools`).
+    session and the conversation, for an empty one of them, for an empty ``asked_by_agent``;
+    ``TypeError`` for an allowed set given as one string
+    (`tool_dispatch.normalize_allowed_tools`).
     """
 
     identity: Identity
@@ -348,10 +349,11 @@ def bind_turn(agent: Any, binding: TurnBinding) -> None:
 
 def end_turn(agent: Any) -> None:
     """Clear what gates and routes once a turn is over: the allowed set, the Front Office
-    and room markers, the person, the wake and the requesting agent, the synthetic flag, the hidden tools, the
-    project folder, the decision note, and this context's room and conversation of its own
-    (what runs between two turns writes into no room's store). The identity, the source and
-    the loaded conversation stay until the next `bind_turn` replaces them."""
+    and room markers, the person, the wake and the requesting agent, the synthetic flag, the
+    hidden tools, the project folder, the decision note, and this context's room and
+    conversation of its own (what runs between two turns writes into no room's store). The
+    identity, the source and the loaded conversation stay until the next `bind_turn`
+    replaces them."""
     from vaf.core.subagent_ipc import set_current_conversation_id, set_current_room_id
 
     _write_markers(agent, None)

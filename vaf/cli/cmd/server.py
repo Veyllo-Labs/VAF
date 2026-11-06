@@ -937,6 +937,18 @@ def _left_out_line(left: list) -> None:
                f"{escape(instead)} instead.")
 
 
+def _app_devices_line() -> None:
+    """Paired Veyllo App devices pin this authority: each of them has to pair again."""
+    try:
+        from vaf.core.app_link import devices
+        n = len(devices.all_devices())
+    except Exception:
+        return
+    if n:
+        UI.warning(f"{n} Veyllo App device{'s' if n != 1 else ''} pin{'' if n != 1 else 's'} this "
+                   "authority and will have to pair again (`vaf devices list`).")
+
+
 @ca_app.command("renew")
 def ca_renew(yes: bool = typer.Option(False, "--yes", help="Do not ask")):
     """Replace the local authority with a new one that only vouches for private names."""
@@ -948,6 +960,7 @@ def ca_renew(yes: bool = typer.Option(False, "--yes", help="Do not ask")):
                "the new authority is installed on it.")
     from vaf.network.ssl_utils import names_a_new_authority_leaves_out
     _left_out_line(names_a_new_authority_leaves_out())
+    _app_devices_line()
     if not yes and not typer.confirm("Renew the authority now?"):
         UI.info("Nothing was changed.")
         raise typer.Exit(0)

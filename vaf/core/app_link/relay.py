@@ -238,6 +238,8 @@ class RelayConnector:
         self._stopping = False
         self._lock = threading.Lock()
         self._http = None
+        # Since when the relay should be connected and is not (for `vaf health`).
+        self.down_since: Optional[float] = None
 
     # ── the thread ──────────────────────────────────────────────────────────
 
@@ -321,6 +323,10 @@ class RelayConnector:
         if now < self._hold_until:
             return
         want = self.should_connect()
+        if not want or self.state == "connected":
+            self.down_since = None
+        elif self.down_since is None:
+            self.down_since = self._wall()
         running = self._ws_task is not None and not self._ws_task.done()
         if want and not running:
             self._ws_task = asyncio.ensure_future(self._connection())
@@ -692,6 +698,7 @@ class RelayConnector:
         return {"enabled": bool(cfg.get("relay_enabled", True)), "state": state,
                 "instance": bool(cfg.get("relay_instance_id")), "secret": bool(_secret()),
                 "connected_since": self.connected_since, "last_error": self.last_error,
+                "down_since": self.down_since,
                 "members": sum(1 for r in rows if r.get("relay_member")),
                 "devices_on_relay": sum(1 for r in rows if r.get("last_transport") == "relay")}
 

@@ -316,6 +316,51 @@ def _worker_status() -> Optional[Dict[str, int]]:
     return runner.worker_status() if runner is not None else None
 
 
+APP_LINK_GRACE_SECONDS = 300
+
+
+def app_link_check(status: Optional[Dict[str, Any]] = None, *,
+                   now: Optional[float] = None) -> Optional[Dict[str, str]]:
+    """The Veyllo App link: no row while there is no device and no relay instance; degraded
+    when the relay was refused (revoked, secret rejected, replaced by another VAF with the
+    same secret) or should be connected and has not been for five minutes."""
+    import time as _time
+
+    from vaf.core.app_link import devices, settings
+    rows = devices.all_devices()
+    cfg = settings()
+    if not rows and not cfg.get("relay_instance_id"):
+        return None
+    n = len(rows)
+    count = f"{n} device{'s' if n != 1 else ''}"
+    if not cfg.get("relay_enabled", True):
+        return _check("app_link", OK, f"Relay off, direct path only, {count}.")
+    if status is None:
+        from vaf.core.app_link import relay
+        status = relay.status()
+    state = status.get("state")
+    refusals = {
+        "revoked": "The relay refused this installation (revoked): pair again or dissolve the "
+                   "relay connection (`vaf relay dissolve`).",
+        "secret_rejected": "The relay does not accept this installation's relay secret: rotate "
+                           "it (`vaf relay rotate`), or dissolve and pair again.",
+        "replaced": "Another VAF with this relay secret took the relay connection over (a "
+                    "backup restored elsewhere?): rotate the secret on one of them.",
+    }
+    if state in refusals:
+        return _check("app_link", DEGRADED, refusals[state])
+    now = _time.time() if now is None else now
+    down = status.get("down_since")
+    if down and now - float(down) > APP_LINK_GRACE_SECONDS:
+        minutes = int((now - float(down)) // 60)
+        error = status.get("last_error") or state or "not connected"
+        return _check("app_link", DEGRADED, f"The relay should be connected and has not been for "
+                                            f"{minutes} minutes ({error}), {count}.")
+    if state == "connected":
+        return _check("app_link", OK, f"Relay connected, {count}.")
+    return _check("app_link", OK, f"Relay idle until a device needs it, {count}.")
+
+
 def _backup_check() -> Dict[str, str]:
     from vaf.core.backup_schedule import backup_check
     return backup_check()
@@ -328,6 +373,7 @@ def collect_health(status_probe: Optional[Callable[[], Dict[str, Any]]] = None,
                    engine_probe: Callable[[], Optional[Dict[str, str]]] = engine_check,
                    queue_probe: Callable[[], List[Dict[str, Any]]] = _queue_metrics,
                    model_probe: Callable[[], Optional[Dict[str, Any]]] = _model_metrics,
+                   app_link_probe: Callable[[], Optional[Dict[str, str]]] = app_link_check,
                    ) -> Dict[str, Any]:
     """Every check and the verdict: {status, checks, checked_at}. Never raises: a check that
     cannot run says so as its own result."""
@@ -373,6 +419,12 @@ def collect_health(status_probe: Optional[Callable[[], Dict[str, Any]]] = None,
             checks.append(model)
     except Exception as e:
         checks.append(_check("model", OK, f"The model-health counts could not be read: {e}"))
+    try:
+        app_link = app_link_probe()
+        if app_link is not None:
+            checks.append(app_link)
+    except Exception as e:
+        checks.append(_check("app_link", DEGRADED, f"The Veyllo App link could not be read: {e}"))
     return {"status": worst(c["status"] for c in checks), "checks": checks,
             "checked_at": datetime.now(timezone.utc).isoformat()}
 

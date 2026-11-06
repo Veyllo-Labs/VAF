@@ -366,6 +366,8 @@ from vaf.cli.cmd import backup as backup_cmd
 from vaf.cli.cmd import profile as profile_cmd
 from vaf.cli.cmd import engine as engine_cmd
 from vaf.cli.cmd import providers as providers_cmd
+from vaf.cli.cmd import devices as devices_cmd
+from vaf.cli.cmd import relay as relay_cmd
 from vaf.core.session import session_app
 from vaf.core.snapshot import snapshot_app
 from vaf.core.automation import automation_app
@@ -446,6 +448,12 @@ app.add_typer(ssh.app, name="ssh", help="The SSH key and servers your agent uses
               callback=_terminal_door)
 # The FTP servers it confirmed: the same door, because `forget` changes what it trusts.
 app.add_typer(ftp.app, name="ftp", help="The FTP servers your agent confirmed",
+              callback=_terminal_door)
+# The Veyllo App's devices and its relay: the same door, because they cut devices off and
+# change the relay's secret.
+app.add_typer(devices_cmd.app, name="devices", help="Paired Veyllo App devices",
+              callback=_terminal_door)
+app.add_typer(relay_cmd.app, name="relay", help="The Veyllo relay for the Veyllo App",
               callback=_terminal_door)
 # Sandbox environments hold the owner's code and run commands: the same door.
 app.add_typer(env_cmd.app, name="env", help="Your sandbox environments: run, install and test code",

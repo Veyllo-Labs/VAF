@@ -174,6 +174,35 @@ def _certificate_findings(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
     return found
 
 
+def _app_link_findings(cfg: Dict[str, Any]) -> List[Dict[str, str]]:
+    """The Veyllo relay: that it carries devices (what passes it), and an instance without its
+    secret (a restore without the key ring)."""
+    block = cfg.get("veyllo_app_config") if isinstance(cfg.get("veyllo_app_config"), dict) else {}
+    instance = str(block.get("relay_instance_id") or "")
+    try:
+        from vaf.core.app_link import devices
+        from vaf.core.channel_secrets import channel_secret
+        on_relay = [d for d in devices.all_devices() if d.get("relay_member")]
+        secret = bool(channel_secret("veyllo_app", "relay_secret"))
+    except Exception:
+        return []
+    found: List[Dict[str, str]] = []
+    if on_relay and block.get("relay_enabled", True):
+        n = len(on_relay)
+        found.append(_finding(
+            "low", "app_relay_active",
+            f"The Veyllo relay carries the app link for {n} device{'s' if n != 1 else ''}. Only "
+            "the paired devices' end-to-end encrypted link passes it, never the sign-in, the "
+            "web UI or the API."))
+    if instance and not secret:
+        found.append(_finding(
+            "medium", "app_relay_secret_missing",
+            "A Veyllo relay instance is set up but its secret is missing (a restore without the "
+            "key ring?): the relay cannot be reached. Pair a device again, or dissolve the relay "
+            "connection with `vaf relay dissolve`."))
+    return found
+
+
 def collect_security_findings(config: Dict[str, Any] | None = None) -> List[Dict[str, str]]:
     """
     Return security findings derived from config.
@@ -239,6 +268,8 @@ def collect_security_findings(config: Dict[str, Any] | None = None) -> List[Dict
                     f"unless you blocked them in the contact book.{qualifier}",
                 )
             )
+
+    findings.extend(_app_link_findings(cfg))
 
     telegram_cfg = cfg.get("telegram_config") if isinstance(cfg.get("telegram_config"), dict) else {}
     if telegram_cfg.get("enabled"):

@@ -206,6 +206,25 @@ class BaseTool(ABC):
     # The check runs before the tool executes — no confirmation, hard block.
     channel_restrictions: tuple[str, ...] = ()
 
+    # agent_request: how this tool answers a turn ANOTHER AGENT asked for (today a request of
+    # the agent in the user's Veyllo App; vaf/core/agent_origin.py). Such a text may carry
+    # what that agent read elsewhere, so what a person's word is needed for stays off:
+    #   "allow"           - runs as in any other turn of that chat (the default)
+    #   "refuse_work"     - starts work that keeps running after the request, without its
+    #                       limits (a coder run, an automation, a workflow, a timer's wake, a
+    #                       message that makes another agent act)
+    #   "refuse_standing" - changes how VAF works for the user from now on (a skill, the
+    #                       user's identity, a contact's access, a note later runs act on)
+    #   "refuse_person"   - needs the user's own confirmation for another reason
+    #   "hold"            - a send that can reach a third party: parked for the user's
+    #                       approval where VAF has a park lane for it (vaf/core/outbound_hold),
+    #                       refused like "refuse_person" for any other tool
+    # Refused tools are hidden from such a turn too. A tool kept off chats
+    # (channel_restrictions) is refused there whatever this says. A value outside the five
+    # counts as "refuse_person": a typo must not open a tool.
+    agent_request: Literal["allow", "refuse_work", "refuse_standing", "refuse_person",
+                           "hold"] = "allow"
+
     # identity_kwargs: which parts of the CALLER's identity the dispatcher passes
     # into run(). Declare what the tool actually consumes; execute_tool assigns
     # exactly these keys before dispatch:
@@ -214,6 +233,9 @@ class BaseTool(ABC):
     #   "user_role"     - the caller's DB role, e.g. "admin"
     #   "session_id"    - the chat the call belongs to (None in a lane with no chat), for a
     #                     tool whose answer depends on the conversation, not only the person
+    #   "request_origin"- who wrote the turn's request when that was another agent (e.g.
+    #                     "veyllo_app"), None for a person's turn; a tool that STORES what
+    #                     the turn says marks it with this, so it can be read back fenced
     #
     # This is the only SUPPORTED way for a tool to learn who is calling it, and it
     # works the same for a tool you register yourself via Agent.add_tool() as for a

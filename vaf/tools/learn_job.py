@@ -76,12 +76,17 @@ class LearnJobSpec:
     # The memory lane the sections land in: the owner's long-term lane, or the Front
     # Office knowledge (`vaf.memory.lanes.FRONT_OFFICE_SOURCE`) a contact's turn reads.
     source: str = "learn_document"
+    # Who wrote the request the learning was started on, when that was another agent
+    # (BaseTool identity key "request_origin"): every stored row carries it as
+    # `metadata.origin`, so it is read back fenced (vaf/core/agent_origin.py).
+    request_origin: Optional[str] = None
 
     def to_json(self) -> str:
         return json.dumps({
             "path": self.path, "document_title": self.document_title,
             "doc_tag": self.doc_tag, "resume": bool(self.resume),
             "force_relearn": bool(self.force_relearn), "source": self.source,
+            "request_origin": self.request_origin,
         })
 
     @classmethod
@@ -92,7 +97,8 @@ class LearnJobSpec:
                    doc_tag=str(d.get("doc_tag") or ""),
                    resume=bool(d.get("resume", True)),
                    force_relearn=bool(d.get("force_relearn", False)),
-                   source=str(d.get("source") or "learn_document"))
+                   source=str(d.get("source") or "learn_document"),
+                   request_origin=(str(d["request_origin"]) if d.get("request_origin") else None))
 
 
 @dataclass
@@ -412,6 +418,7 @@ async def _learn_batches_async(
                         doc_title=doc_title,
                         doc_tag=doc_tag,
                         source=spec.source or "learn_document",
+                        request_origin=spec.request_origin,
                         mem_type="document",
                         generate_fn=generate_fn,
                         user_scope_id=user_scope_id,
@@ -449,7 +456,7 @@ async def _learn_batches_async(
             await _finalize_root(
                 doc_tag=doc_tag, doc_title=doc_title, ledger=ledger,
                 generate_fn=generate_fn, user_scope_id=user_scope_id,
-                source=spec.source or "learn_document")
+                source=spec.source or "learn_document", origin=spec.request_origin)
             ledger.status = "complete"
             ledger.save()
             ledger.delete()  # the document_index root is the durable record
@@ -475,7 +482,8 @@ async def _learn_batches_async(
 
 
 async def _finalize_root(*, doc_tag: str, doc_title: str, ledger: LearnLedger,
-                         generate_fn, user_scope_id, source: str = "learn_document") -> None:
+                         generate_fn, user_scope_id, source: str = "learn_document",
+                         origin: Optional[str] = None) -> None:
     """ONE document_index root upsert for the whole job. Built from the STORED
     section titles so it is correct after a resume, and stamped with the
     coverage facts the UI's learn-status reads."""
@@ -499,6 +507,8 @@ async def _finalize_root(*, doc_tag: str, doc_title: str, ledger: LearnLedger,
             "content_sha256": ledger.content_sha256,
             "learned_at": user_now().isoformat(timespec="seconds"),
         }
+        if origin:
+            stamp["origin"] = str(origin)
         conditions = [
             Memory.is_deleted == False,  # noqa: E712
             Memory.meta["type"].as_string() == "document_index",

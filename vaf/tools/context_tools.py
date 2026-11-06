@@ -603,7 +603,7 @@ class MemorySaveTool(BaseTool):
     """
     name = "memory_save"
     category    = "memory"
-    identity_kwargs = ("user_scope_id",)
+    identity_kwargs = ("user_scope_id", "request_origin")
     permission_level = "write"
     side_effect_class = "irreversible"
     description = (
@@ -704,6 +704,9 @@ class MemorySaveTool(BaseTool):
 
         title = (kwargs.get("title") or "").strip() or None
         metadata = {"source": "memory_save", "type": "note"}
+        if kwargs.get("request_origin"):
+            # Saved on a request of another agent: read back fenced (vaf/core/agent_origin.py).
+            metadata["origin"] = str(kwargs["request_origin"])
         if title:
             metadata["title"] = title
         if tags:
@@ -770,7 +773,7 @@ class MemoryUpdateTool(BaseTool):
     """
     name = "memory_update"
     category    = "memory"
-    identity_kwargs = ("user_scope_id",)
+    identity_kwargs = ("user_scope_id", "request_origin")
     permission_level = "write"
     # Irreversible like memory_save: the previous content is overwritten and
     # re-embedded; there is no version history to roll back to.
@@ -843,6 +846,10 @@ class MemoryUpdateTool(BaseTool):
             metadata["title"] = title
         if tags and isinstance(tags, list) and any(str(t).strip() for t in tags):
             metadata["tags"] = tags
+        if kwargs.get("request_origin"):
+            # Rewritten on a request of another agent: the whole text is that request's now,
+            # so it is read back fenced (vaf/core/agent_origin.py). The metadata is merged.
+            metadata["origin"] = str(kwargs["request_origin"])
 
         async def _update() -> str:
             from vaf.memory.database import get_db

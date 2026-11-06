@@ -21,6 +21,7 @@ from vaf.tools.base import BaseTool
 
 class StoreCredentialTool(BaseTool):
     name = "store_credential"
+    agent_request = "refuse_person"
     category = "context"
     # Bookkeeping like memory_save: the person handed the value over to be kept, so neither a
     # confirmation nor the plan gate stands between the chat and the store - every round the

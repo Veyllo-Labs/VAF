@@ -970,12 +970,13 @@ Where VAF reaches an account on Telegram (`messaging_endpoints.json`, `by_scope`
   ask-first latch or a waiting background question, does not set the intent, and does not
   become the last interaction shown in the user's other chats. Its text is stored with
   `kind="app_agent"` and read by every model inside a fence (`session.model_text`,
-  `vaf/core/agent_origin.py`). The tools kept off chats, `user_phone`, `store_credential`, the
-  tools that start work running later without these limits (`coding_agent`, the automation
-  writers, `execute_workflow`) and the ones that change skills or the user's identity are
-  hidden and refused whatever `channel_tools_unrestricted` says, a call that needs a
-  confirmation is refused at once, and a mail or WhatsApp message to a third party is parked
-  for the user's approval (`outbound_hold`). The reply id is the device's, so replies are kept
+  `vaf/core/agent_origin.py`). The tools kept off chats and every tool whose
+  `BaseTool.agent_request` refuses (work that keeps running after the request, changes to how
+  VAF works from now on, what needs the person) are hidden and refused whatever
+  `channel_tools_unrestricted` says, a call that needs a confirmation is refused at once, and a
+  mail or WhatsApp message to a third party is parked for the user's approval (`outbound_hold`;
+  a park that fails refuses). A memory stored in such a turn carries `metadata.origin` and is
+  read back fenced (`rag._format_sources`). The reply id is the device's, so replies are kept
   per account (`(scope, id)`) and a request's reply goes only to a device row of that account. NAMED BOUNDARY: the fence reduces confusion, it does not
   contain; what the app chat may do without a confirmation stays reachable for the request,
   and answers the person gave ahead (an "always", a trusted folder, a grant for this chat, the

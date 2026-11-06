@@ -86,6 +86,7 @@ class SendMailTool(BaseTool):
     When sending a document (invoice, contract, PDF), pass attachment_paths with full paths.
     """
     name = "send_mail"
+    agent_request = "hold"
     category    = "mail"
     identity_kwargs = ("user_role", "user_scope_id", "username")
     # "write", not "read", although attachments are READ - the mode names the ROOT SET, not

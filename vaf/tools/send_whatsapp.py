@@ -20,6 +20,7 @@ class SendWhatsAppTool(BaseTool):
     Use to_phone when the user asks to send a message to someone (e.g. Alice); get the number from get_contact(name='Alice').
     """
     name = "send_whatsapp"
+    agent_request = "hold"
     category    = "whatsapp"
     identity_kwargs = ("user_role", "user_scope_id", "username")
     # "write", not "read" - the mode names the ROOT SET, not the operation: "read" would
@@ -94,7 +95,8 @@ class SendWhatsAppTool(BaseTool):
         except ImportError as e:
             return f"WhatsApp send unavailable: {e}"
 
-        to_phone = (kwargs.get("to_phone") or kwargs.get("phone_number") or "").strip()
+        from vaf.core.outbound_hold import whatsapp_recipient
+        to_phone = whatsapp_recipient(kwargs)
         allow_contact_send = False
         if to_phone:
             chat_jid = _e164_to_jid(to_phone)

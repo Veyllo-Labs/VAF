@@ -14,6 +14,7 @@ from vaf.tools.base import BaseTool
 
 class DeleteSkillTool(BaseTool):
     name = "delete_skill"
+    agent_request = "refuse_standing"
     category    = "skills"
     identity_kwargs = ("user_scope_id", "username")
     description = (

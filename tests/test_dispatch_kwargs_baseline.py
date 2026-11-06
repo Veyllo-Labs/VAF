@@ -144,7 +144,9 @@ KWARGS_BASELINE = {
     "ftp":                       ("chat", ["user_role", "user_scope_id", "username"]),
     "label_mail":                ("chat", ["user_scope_id", "username"]),
     "learn_attached_knowledge":  ("chat", ["_agent", "session_id", "user_scope_id"]),
-    "learn_document":            ("chat", ["_agent", "user_role", "user_scope_id"]),
+    # request_origin: what the tool stores on another agent's request is marked, so it is
+    # read back fenced (vaf/core/agent_origin.py). Same for memory_save and memory_update.
+    "learn_document":            ("chat", ["_agent", "request_origin", "user_role", "user_scope_id"]),
     "librarian_agent":           ("chat", ["user_role", "user_scope_id"]),
     "linter":                    ("chat", ["user_role", "user_scope_id"]),
     "list_automation_notes":     ("chat", ["user_scope_id"]),
@@ -167,10 +169,10 @@ KWARGS_BASELINE = {
     "list_workflows":            ("chat", []),
     "mark_mail_answered":        ("chat", ["user_scope_id", "username"]),
     "mcp_call":                  ("chat", ["user_role", "user_scope_id"]),
-    "memory_save":               ("chat", ["user_scope_id"]),
+    "memory_save":               ("chat", ["request_origin", "user_scope_id"]),
     # Measured 2026-08-21 when the tool was added (the update sibling of memory_save;
     # same single identity key, remeasured rather than copied).
-    "memory_update":             ("chat", ["user_scope_id"]),
+    "memory_update":             ("chat", ["request_origin", "user_scope_id"]),
     # username was added deliberately: memory_search also searches the caller's other
     # chats, and the contact lookup that keeps other people's conversations out of that
     # answer is keyed on the caller's account.
@@ -270,7 +272,7 @@ KWARGS_BASELINE = {
 }
 
 
-IDENTITY_KEYS = {"user_scope_id", "username", "user_role"}
+IDENTITY_KEYS = {"user_scope_id", "username", "user_role", "request_origin"}
 PLUMBING_KEYS = {"_agent", "_session_id", "session_id", "_session_workspace",
                  "with_vaf_tools",
                  # The chat stage's own two: on a web turn the mail send tools are told to

@@ -97,12 +97,13 @@ def policy_admin_flag(role: str | None, scope_id: str | None) -> bool:
         return False
 
 
-IDENTITY_KEYS = ("user_scope_id", "username", "user_role", "session_id")
+IDENTITY_KEYS = ("user_scope_id", "username", "user_role", "session_id", "request_origin")
 
 
 def assign_declared_identity(tool: Any, args: dict, *, user_scope_id: str | None,
                              username: str | None, user_role: str | None,
-                             session_id: str | None = None) -> dict:
+                             session_id: str | None = None,
+                             request_origin: str | None = None) -> dict:
     """Give a tool exactly the identity keys it declares, and nothing else.
 
     ``session_id`` is WHICH CHAT the call belongs to, for a tool whose answer depends on the
@@ -110,6 +111,11 @@ def assign_declared_identity(tool: Any, args: dict, *, user_scope_id: str | None
     to it). It was handed out by name, like the identity once was, so a tool an embedder
     registers could never learn its chat. A lane with no chat passes None, and a tool that
     declared the key is told exactly that.
+
+    ``request_origin`` is WHO WROTE the turn's request when that was another agent (the
+    agent of the user's Veyllo App: ``"veyllo_app"``, vaf/core/agent_origin.py), None for a
+    person's turn. A tool that stores what the turn says declares it and marks what it stores,
+    so a later reader can fence it.
 
     A tool states its needs through ``BaseTool.identity_kwargs``. That declaration replaced
     roughly forty hardcoded name lists, which had two costs: they drifted apart (a tool added
@@ -148,6 +154,7 @@ def assign_declared_identity(tool: Any, args: dict, *, user_scope_id: str | None
         "username": resolve_caller_username(username, user_scope_id),
         "user_role": user_role,
         "session_id": session_id,
+        "request_origin": request_origin,
     }
     for key in (getattr(tool, "identity_kwargs", ()) or ()):
         if key in available:
@@ -1360,6 +1367,7 @@ class ToolCaller:
         on_gate_required=None,
         allowed_tools=None,
         channel_lift: bool = True,
+        request_origin: str | None = None,
         # RUNTIME CONTROL
         timeout_for=None,
         self_supervised=None,
@@ -1399,6 +1407,9 @@ class ToolCaller:
         # restrictions and confirmations for this caller (`evaluate_tool_policy`). For a lane
         # that runs text another agent wrote on a chat: the lift trusts a person typing there.
         self.channel_lift = bool(channel_lift)
+        # Who wrote the turn's request when that was another agent: handed to a tool that
+        # declares "request_origin" in identity_kwargs (`assign_declared_identity`).
+        self.request_origin = str(request_origin) if request_origin else None
         self.timeout_for = timeout_for
         self.self_supervised = self_supervised
         self.stop_check = stop_check
@@ -1756,6 +1767,7 @@ class ToolCaller:
         assign_declared_identity(
             tool, tool_args, user_scope_id=self.user_scope_id,
             username=self.username, user_role=self.user_role, session_id=self.session_id,
+            request_origin=self.request_origin,
         )
         if getattr(tool, "accepts_call_confirmation", False):
             # ASSIGNED like an identity key, never defaulted: the model's own

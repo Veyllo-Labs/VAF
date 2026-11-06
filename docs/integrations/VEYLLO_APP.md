@@ -118,7 +118,7 @@ need a confirmation only the web UI can show. The other tools kept off chats (th
 environments, the browser agent, the builders, background commands, timers) depend on the
 admin's `channel_tools_unrestricted`: on, the default, they run in the app chat without a
 confirmation, as on Telegram; off, they stay off. A request of the app's own agent never gets
-them, nor anything that would start them later (next section).
+them, nor the tools that start work which keeps running after it (next section).
 
 ## The app's agent can ask your agent
 
@@ -135,29 +135,37 @@ is a turn of your account's app chat, with these differences
   history tools) reads it the same way. It is not stored as your message in the inbox, does not
   become your last words shown in your other chats, and does not answer a question your agent
   is waiting on.
-- **Tools that need you stay off, and so does work that would run later.** Refused and not
-  offered (`vaf/core/agent_origin.py`, each with a reason the app's agent can pass on):
-  every tool kept off chats, whatever `channel_tools_unrestricted` says; `user_phone` (it would
-  hand the task back to the phone that is waiting) and `store_credential`; the tools that start
-  work of their own which would run later without these limits, `coding_agent`,
-  `create_automation`, `update_automation`, `restore_automation` and `execute_workflow`; and the
-  ones that change how VAF works for you from now on, `create_skill`, `update_skill` and
-  `update_user_identity`. You can ask for any of these by writing to VAF yourself in the app's
-  chat. A call that needs a confirmation is refused at once; no dialog appears in the web UI and
-  nothing waits. Answers you gave ahead still hold: a tool you allowed always, a trusted
-  folder, an "allow for this chat" in the app chat, and the admin bypass.
+- **Tools that need you stay off, and so does work that would run later.** Each tool declares
+  how it answers such a request (`BaseTool.agent_request`, read by
+  `vaf/core/agent_origin.py`); refused ones are not offered either, and the app's agent is
+  told why. Refused: every tool kept off chats, whatever `channel_tools_unrestricted` says;
+  work that keeps running after the request (`coding_agent`, `create_automation`,
+  `update_automation`, `restore_automation`, `execute_workflow`, `set_timer`, and the room
+  tools that make other agents act, `room_send`, `room_open`, `room_invite`, `room_join`,
+  `room_react`); changes to how VAF works for you from now on (`create_skill`, `update_skill`,
+  `delete_skill`, `update_user_identity`, `create_contact`, `update_contact`, and the notes
+  later automation and thinking runs act on, `add_automation_note`, `add_automation_todo`,
+  `thinking_note_add`); and what needs your confirmation for another reason (`user_phone`,
+  `store_credential`, `github_create_issue`, `github_update_file`). Confirming these from the
+  app comes with a later update. A call that needs a confirmation is refused at once; no dialog
+  appears in the web UI and nothing waits. Answers you gave ahead still hold: a tool you
+  allowed always, a trusted folder, an "allow for this chat" in the app chat, and the admin
+  bypass.
 - **A message to somebody else waits for you.** A mail (`send_mail`, `reply_mail`,
-  `forward_mail`) or a WhatsApp message to a number (`send_whatsapp` with `to_phone`) is parked
-  as a draft, as when you ask for one in the web chat ([`outbound_hold`](../../vaf/core/outbound_hold.py)),
-  whatever `outward_send_hold` says; the card waits in the web UI's Veyllo App chat, and the
-  app's agent is told that the message is prepared and not sent. Messages to yourself (your own
-  messenger) are not held.
+  `forward_mail`) or a WhatsApp message to a number (`send_whatsapp` with `to_phone` or
+  `phone_number`) is parked as a draft, as when you ask for one in the web chat
+  ([`outbound_hold`](../../vaf/core/outbound_hold.py)), whatever `outward_send_hold` says; the
+  card waits in the web UI's Veyllo App chat, and the app's agent is told that the message is
+  prepared and not sent. When it cannot be parked, it is not sent either. Messages to yourself
+  (your own messenger) are not held.
 - **What stays possible, deliberately.** Everything else the app chat may do without a
-  confirmation: reading your mail, calendar and contacts, memory writes (`memory_save`,
-  `memory_update`, `update_codex`, `thinking_note_add`; the fence tells your agent to keep only
-  what is clearly your own statement passed on), a question back (`ask_user`: the question
-  goes out as the answer, and the app's agent puts it to you), and the research, librarian and
-  document agents, whose own tools hold nothing a request is refused.
+  confirmation: reading your mail, calendar and contacts; memory entries (`memory_save`,
+  `memory_update`, `learn_document`), which carry a mark of their origin and come back inside
+  the same fence in every later turn and background run; the app chat's own goal and plan
+  (`update_intent`, `update_working_memory`), which later turns of that chat read unfenced; a
+  question back (`ask_user`: the question goes out as the answer, and the app's agent puts it
+  to you); and the research, librarian and document agents, whose own tools hold nothing a
+  request is refused.
 - **The answer goes to the phone that asked.** It streams as `delta` and ends with `done`, both
   under the request's own id, to that device only, without "read" or "typing"; it is held in
   that device's outbox only, and only that device gets a push. Your other phones see nothing
@@ -168,8 +176,8 @@ is a turn of your account's app chat, with these differences
   against the device's 30 messages per minute; an id seen in the last 24 hours, or one that
   already names a stored answer, is only acknowledged. A request that fails answers with
   `done` and the failure; the app cancels one with its id (only the device that asked can), and
-  one that ends without an answer (stopped in the web UI, dropped with its device) gets an empty
-  `done`.
+  one that ends without an answer (stopped in the web UI, or its device removed) gets an empty
+  `done` from the next cleanup, within seconds, or its place is freed after 24 hours.
 - **Who reads the answers.** The app's agent reads VAF's answers with the app's own chat
   model, so with Veyllo's models in the app, what VAF answers goes to Veyllo, even when VAF
   itself runs fully local.

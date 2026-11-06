@@ -159,7 +159,9 @@ CONDITIONAL_BY_DESIGN = {"ask_user"}
 # declaration later: it used to be handed to two tools by NAME, and the kwargs baseline in
 # tests/test_dispatch_kwargs_baseline.py pins that those two still receive it.
 PERSON_KEYS = {"user_scope_id", "username", "user_role"}
-VALID_KEYS = PERSON_KEYS | {"session_id"}
+# `request_origin` (who wrote the turn's request when that was another agent) joined with the
+# Veyllo App's agent requests; tests/test_app_link_agent_ask.py pins its assignment.
+VALID_KEYS = PERSON_KEYS | {"session_id", "request_origin"}
 
 
 def _all_tool_classes():

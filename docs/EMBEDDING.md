@@ -1166,8 +1166,10 @@ Hard limits you must respect (they are architecture, not fine print):
       parameters = {"type": "object", "properties": {"path": {"type": "string"}}}
 
       # Ask for exactly what you consume. Valid keys: "user_scope_id",
-      # "username", "user_role", and "session_id" (which chat the call belongs
-      # to; None where there is no chat). Declaring nothing means receiving nothing.
+      # "username", "user_role", "session_id" (which chat the call belongs
+      # to; None where there is no chat) and "request_origin" (who wrote the
+      # turn's request when that was another agent, else None; mark what you
+      # store with it). Declaring nothing means receiving nothing.
       identity_kwargs = ("user_scope_id", "user_role")
 
       # Declare the MODE your tool needs, and the per-user file boundary is installed
@@ -1459,6 +1461,14 @@ Key declarative rules the runtime enforces:
   channel even when the admin's `channel_tools_unrestricted` lifts the other channel
   restrictions, in the lane that would ask a person (a `ToolCaller` with its gate on).
   Declare the two and nothing else is needed - there is no per-tool guard to write.
+- `agent_request` - how the tool answers a turn ANOTHER AGENT asked for (a request of the
+  agent in the user's Veyllo App): `"allow"` (the default), `"refuse_work"` (it starts work
+  that keeps running after the request), `"refuse_standing"` (it changes how the agent works
+  for the user from now on), `"refuse_person"` (it needs the user's own confirmation), or
+  `"hold"` (a send to a third party; parked for approval where VAF has a park lane for it,
+  which today are its own mail and WhatsApp tools, and refused for any other tool). Refused
+  tools are hidden from such a turn and answer the model with the reason. A value outside the
+  five refuses. A tool kept off chats is refused there whatever this says.
 - `category` - which bundle the tool appears under in the human-facing tool
   lists (the web tools window, the CLI table, the TUI overlay, `list_tools`).
   The in-tree vocabulary is `TOOL_CATEGORIES` in `vaf/core/tool_contract.py`,
@@ -1600,6 +1610,7 @@ The supported arguments:
 | `stop_check` | `f() -> bool`, polled during the run so you can cancel from outside. |
 | `max_result_chars` | Result cut, `2000` like a chat turn. Pass `None` to switch it off - do that when you chain a result into something else, because a cut result can lose a trailing marker. |
 | `channel_lift` | `True` (the default) lets the admin's `channel_tools_unrestricted` lift the channel restrictions and the confirmations of a chat call, as for every chat. Pass `False` for a lane that runs text another agent wrote on a chat (VAF does for a request of the Veyllo App's agent): the tools kept off chats stay refused and a call that needs a confirmation goes to the gate, which refuses it at once unless `interactive` and `decide` can ask somebody. The lift trusts a person typing on the channel; another agent's text may carry what that agent read elsewhere. |
+| `request_origin` | Who wrote the request this call serves when that was another agent (VAF passes `"veyllo_app"` for a request of the Veyllo App's agent), `None` (the default) for a person. Assigned to a tool that declares `"request_origin"` in `identity_kwargs`, overwriting anything the model put there; a tool that stores what the turn says marks it with this, so it can be read back as that agent's. |
 | `allowed_tools` | Which tools this caller may run at all: an iterable of names, `None` (the default) for no set. Any other name is refused with `Security Error: ...` before every other stage, registered or not, for every identity (admins and callers with no scope included), and nothing is emitted. An empty iterable allows nothing; a bare string raises `TypeError`. `ToolCaller(..., allowed_tools=names)` is the execution half of what `Agent.set_allowed_tools(names)` installs on an agent (its own section below). |
 | `authorize` | Your per-call decision hook, exactly as in the next section. `ToolCaller(..., authorize=fn)` is the same thing `Agent.set_tool_authorizer(fn)` installs. An account-level ban (the allowlist section below) is checked before it and cannot be lifted by an `allow()`. |
 | `on_event` | `f(dict)` for `tool_start` / `tool_end` / gate events. Same schema as `Agent.on_event` (`CoreAgent.set_event_sink`), documented in [OBSERVABILITY.md](OBSERVABILITY.md). A raising sink is swallowed: a broken observer must not fail a run. |

@@ -394,6 +394,7 @@ curl -X POST http://localhost:8000/api/memory/search \
         "chat_key": "session id, only on a memory learned inside one messenger chat",
         "chat_channel": "whatsapp | telegram | discord, with chat_key",
         "chat_label": "the person's name as the bridge knew it, with chat_key",
+        "origin": "veyllo_app, only on a memory stored on a request of the Veyllo App's agent",
         "preview": "string (first 200 chars)",
         "created_at": "ISO datetime"
     },
@@ -403,6 +404,13 @@ curl -X POST http://localhost:8000/api/memory/search \
     "updated_at": "ISO datetime"
 }
 ```
+
+`metadata.origin` marks a memory stored in a turn another agent asked for (a request of the
+agent in the user's Veyllo App): `memory_save`, `memory_update` and `learn_document` declare the
+`request_origin` identity key and set it. Every model reads such a row inside the fence of that
+request (`rag._format_sources`, which builds a turn's memory block, `memory_search` and the
+user-profile cache, and the memory page's question lane), so it is never taken for the user's
+own words; see `vaf/core/agent_origin.py`.
 
 ### Connection
 

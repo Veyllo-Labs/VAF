@@ -115,6 +115,8 @@ HOLD_SOURCES = ("web",)
 
 # The mail tools, all of which funnel into MailService.queue_send.
 MAIL_HOLD_TOOLS = ("send_mail", "reply_mail", "forward_mail")
+# Every tool this module can park, and so every tool whose `agent_request = "hold"` holds.
+THIRD_PARTY_SEND_TOOLS = MAIL_HOLD_TOOLS + ("send_whatsapp",)
 
 CONFIG_KEY = "outward_send_hold"
 
@@ -189,6 +191,16 @@ def _config_get(config_get: Optional[Callable[[str, Any], Any]], key: str, defau
         return default
 
 
+def whatsapp_recipient(args: Optional[Dict[str, Any]] = None) -> str:
+    """The number a `send_whatsapp` call is addressed to, "" for the account owner's own.
+
+    The ONE reading of it: the tool takes `to_phone` and its older name `phone_number`, and
+    the dispatcher does not strip arguments outside the schema, so a hold that read only
+    `to_phone` let the same message to a stranger leave under the other name."""
+    a = args or {}
+    return str(a.get("to_phone") or a.get("phone_number") or "").strip()
+
+
 def reaches_a_third_party(tool_name: str, args: Optional[Dict[str, Any]] = None) -> bool:
     """True when this call can put a message in front of somebody other than the person.
 
@@ -200,7 +212,7 @@ def reaches_a_third_party(tool_name: str, args: Optional[Dict[str, Any]] = None)
     if name in MAIL_HOLD_TOOLS:
         return True
     if name == "send_whatsapp":
-        return bool(str((args or {}).get("to_phone") or "").strip())
+        return bool(whatsapp_recipient(args))
     return False
 
 
@@ -247,7 +259,7 @@ def preview_of(tool_name: str, args: Optional[Dict[str, Any]] = None) -> Dict[st
         if str(a.get("file_path") or "").strip():
             extra.append("attachment")
         return {
-            "recipient": str(a.get("to_phone") or "").strip(),
+            "recipient": whatsapp_recipient(a),
             "subject": ", ".join(extra),
             "body": str(a.get("message") or ""),
         }

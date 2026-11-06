@@ -199,10 +199,12 @@ NEWLY_IDENTIFIED = {
     "ftp": ('user_role', 'user_scope_id', 'username'),
     # session_id: the chat is a declared key now (None in a step, which has no chat).
     "learn_attached_knowledge": ('session_id', 'user_scope_id'),
-    "learn_document": ('user_role', 'user_scope_id'),
+    # request_origin: who wrote a turn's request when that was another agent; the workflow
+    # lane passes none, so a step always hands None (the memory row is not marked).
+    "learn_document": ('request_origin', 'user_role', 'user_scope_id'),
     # Added 2026-08-21 with the tool itself (memory_save's update sibling): a workflow
     # step updates the WORKFLOW OWNER's memory, never an unscoped row.
-    "memory_update": ('user_scope_id',),
+    "memory_update": ('request_origin', 'user_scope_id'),
     "librarian_agent": ('user_role', 'user_scope_id'),
     "list_automations": ('user_role', 'user_scope_id'),
     "list_files": ('user_role', 'user_scope_id'),

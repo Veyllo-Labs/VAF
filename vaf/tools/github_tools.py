@@ -630,6 +630,7 @@ class GitHubListPullsTool(BaseTool):
 class GitHubCreateIssueTool(BaseTool):
     """Create a new issue in a GitHub repository."""
     name = "github_create_issue"
+    agent_request = "refuse_person"
     identity_kwargs = ("user_scope_id", "username")
     permission_level = "write"
     side_effect_class = "irreversible"
@@ -689,6 +690,7 @@ class GitHubCreateIssueTool(BaseTool):
 class GitHubUpdateFileTool(BaseTool):
     """Create or update a file in a GitHub repository."""
     name = "github_update_file"
+    agent_request = "refuse_person"
     identity_kwargs = ("user_scope_id", "username")
     permission_level = "write"
     side_effect_class = "irreversible"

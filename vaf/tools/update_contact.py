@@ -15,6 +15,7 @@ class UpdateContactTool(BaseTool):
     You must use contact_id (from list_contacts or get_contact). If get_contact returns multiple contacts with the same name, do NOT guess – ask the user which one to update and use the contact_id they confirm.
     """
     name = "update_contact"
+    agent_request = "refuse_standing"
     category    = "contacts"
     identity_kwargs = ("user_scope_id", "username")
     permission_level = "write"

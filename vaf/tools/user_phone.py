@@ -13,6 +13,7 @@ from vaf.tools.base import BaseTool
 class UserPhoneTool(BaseTool):
     """Ask the phone agent of the user's Veyllo App to do something on the phone."""
     name = "user_phone"
+    agent_request = "refuse_person"
     category = "veyllo_app"
     identity_kwargs = ("user_scope_id", "username", "session_id")
     permission_level = "write"

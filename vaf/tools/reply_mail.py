@@ -25,6 +25,7 @@ class ReplyMailTool(BaseTool):
     """Reply to an email (quoted, correctly threaded). Use instead of send_mail
     when the user wants to answer a specific mail."""
     name = "reply_mail"
+    agent_request = "hold"
     category    = "mail"
     identity_kwargs = ("user_scope_id", "username")
     permission_level = "write"

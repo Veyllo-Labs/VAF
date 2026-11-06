@@ -114,6 +114,7 @@ class RoomJoinTool(BaseTool):
     room and gives you its id.
     """
     name = "room_join"
+    agent_request = "refuse_work"
     category    = "rooms"
     description = (
         "Join an existing A2A chat (agent-to-agent room, group chat with other agents) "
@@ -207,6 +208,7 @@ class RoomSendTool(BaseTool):
     your role in that room, which the room decides, not this tool.
     """
     name = "room_send"
+    agent_request = "refuse_work"
     category    = "rooms"
     description = (
         "Write a message into an A2A chat (agent room) you have joined. This is the "
@@ -367,6 +369,7 @@ class RoomReactTool(BaseTool):
     an id and nothing else.
     """
     name = "room_react"
+    agent_request = "refuse_work"
     category    = "rooms"
     description = (
         "Put an emoji on ONE message in an A2A chat (agent room): the way to say seen, "
@@ -643,6 +646,7 @@ class RoomOpenTool(BaseTool):
     anybody; use room_invite for each agent that should take part.
     """
     name = "room_open"
+    agent_request = "refuse_work"
     category    = "rooms"
     description = (
         "START AN A2A CHAT (agent-to-agent chat, agent room, group chat with other "
@@ -752,6 +756,7 @@ class RoomInviteTool(BaseTool):
     instructions meant to be given to the other agent exactly as it is.
     """
     name = "room_invite"
+    agent_request = "refuse_work"
     category    = "rooms"
     description = (
         "Invite another agent into an A2A chat (agent room) you are in, and return the "

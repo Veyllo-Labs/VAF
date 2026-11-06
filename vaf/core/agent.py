@@ -83,6 +83,16 @@ def _vision_switch_sentence(provider: str) -> str:
     return f"{lead}, or switch the primary provider to one that accepts images."
 
 
+def _reaches_a_third_party_or_unknown(name, tool_args) -> bool:
+    """Whether a call can reach somebody other than the user (`outbound_hold`), True when even
+    that cannot be decided: the fail-closed side for a turn another agent asked for."""
+    try:
+        from vaf.core.outbound_hold import reaches_a_third_party
+        return bool(reaches_a_third_party(name, tool_args))
+    except Exception:
+        return True
+
+
 def _emit_to_web_ui() -> bool:
     """False when running a background pass (thinking mode or a scheduled automation) - do not push
     tool/log/status updates into any live chat session. Automations deliver only their final result
@@ -14049,6 +14059,7 @@ class Agent:
             decide=self._ask_user_about_gate,
             on_gate_required=None if _asked_by_agent else self._push_gate_to_websocket,
             channel_lift=not _asked_by_agent,
+            request_origin=getattr(self, "_turn_asked_by_agent", None) or None,
             stop_check=_session_stop_check(sid),
             authorize=getattr(self, "_tool_authorizer", None),
             # The agent's ceiling (set_allowed_tools): what the schema leaves out is also
@@ -14501,6 +14512,14 @@ class Agent:
                     )
                     return outbound_hold.held_result(name, tool_args, entry_id=entry_id)
         except Exception as _hold_exc:
+            # In a turn another agent asked for, fail CLOSED: there the hold is the only thing
+            # between a passed-on text and a stranger's inbox (vaf/core/agent_origin.py), so a
+            # send it could not park is not sent at all, and the requesting agent is told.
+            if getattr(self, "_turn_asked_by_agent", None) \
+                    and _reaches_a_third_party_or_unknown(name, tool_args):
+                from vaf.core.agent_origin import APP_AGENT_HOLD_FAILED
+                append_domain_log("backend", f"[OUTBOUND_HOLD] refused, park failed: {_hold_exc}")
+                return APP_AGENT_HOLD_FAILED.format(name=name, error=type(_hold_exc).__name__)
             # Fail OPEN: a guard that parks messages must never swallow one. But it says so
             # out loud, on the two surfaces that do not depend on the debug-log switch: a
             # silent skip is how a hold that does not hold looks exactly like a hold that

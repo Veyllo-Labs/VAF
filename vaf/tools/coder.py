@@ -3107,6 +3107,7 @@ def _ends_background_with_the_run(run):
 
 class CodingAgentTool(BaseTool):
     name = "coding_agent"
+    agent_request = "refuse_work"
     # A large edit legitimately takes many minutes; the agentic loop governs itself (idle-based
     # safety timeout, stuck detection, a final commit on every exit path) and polls
     # should_stop each iteration, so a flat wall-clock bound would ABANDON it mid-edit and

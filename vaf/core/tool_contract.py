@@ -45,6 +45,8 @@ SideEffectClass = Literal["none", "reversible", "irreversible"]
 
 ALLOWED_PERMISSION_LEVELS = {"read", "write", "dangerous", "system"}
 ALLOWED_SIDE_EFFECT_CLASSES = {"none", "reversible", "irreversible"}
+# BaseTool.agent_request: how a tool answers a turn another agent asked for.
+AGENT_REQUEST_KINDS = ("allow", "refuse_work", "refuse_standing", "refuse_person", "hold")
 
 # Human-facing bundles for tool lists (the web tools window, the CLI table, the
 # TUI overlay, list_tools). The order is the display order.
@@ -166,6 +168,9 @@ class ToolContract:
     # Presentation only: which bundle the tool appears under in tool lists.
     # No policy reads this field.
     category: str = "general"
+    # How the tool answers a turn another agent asked for (BaseTool.agent_request);
+    # read by vaf.core.agent_origin.
+    agent_request: str = "allow"
 
 
 @dataclass(frozen=True)
@@ -226,6 +231,12 @@ def resolve_tool_contract(tool_name: str, tool: Any | None) -> ToolContract:
     if not raw_category.replace("_", "").replace("-", "").isalnum():
         raw_category = "general"
 
+    # A value outside the vocabulary refuses (as "refuse_person"): unlike the category, a
+    # typo here would otherwise open a tool to another agent's request.
+    raw_agent_request = str(getattr(tool, "agent_request", "allow") or "allow").strip().lower()
+    if raw_agent_request not in AGENT_REQUEST_KINDS:
+        raw_agent_request = "refuse_person"
+
     return ToolContract(
         name=str(getattr(tool, "name", tool_name) or tool_name),
         permission_level=raw_permission,     # type: ignore[arg-type]
@@ -233,6 +244,7 @@ def resolve_tool_contract(tool_name: str, tool: Any | None) -> ToolContract:
         side_effect_class=raw_side_effect,   # type: ignore[arg-type]
         admin_only=admin_only,
         category=raw_category,
+        agent_request=raw_agent_request,
     )
 
 

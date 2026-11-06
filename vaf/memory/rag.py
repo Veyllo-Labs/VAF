@@ -735,7 +735,8 @@ class RagPipeline:
         # Build context
         context_parts = []
         for i, source in enumerate(sources):
-            context_parts.append(f"[Source {i+1}] (Relevance: {source.score:.0%})\n{source.text}")
+            context_parts.append(f"[Source {i+1}] (Relevance: {source.score:.0%})\n"
+                                 f"{_readable_memory_text(source)}")
         
         context = "\n\n---\n\n".join(context_parts)
         context_tokens = self.chunker.estimate_tokens(context)
@@ -785,7 +786,8 @@ Always cite which source(s) you used in your answer."""
         
         context_parts = []
         for i, source in enumerate(sources):
-            context_parts.append(f"[Source {i+1}] (Relevance: {source.score:.0%})\n{source.text}")
+            context_parts.append(f"[Source {i+1}] (Relevance: {source.score:.0%})\n"
+                                 f"{_readable_memory_text(source)}")
         
         context = "\n\n---\n\n".join(context_parts)
         
@@ -2031,11 +2033,26 @@ def _format_sources(sources: List[RagSource], *, include_ids: bool = False,
     inside the chat a turn runs in, so the model can tell whose facts it is reading."""
     parts = []
     for i, s in enumerate(sources):
+        text = _readable_memory_text(s)
         if include_ids:
-            parts.append(f"[{label} {i+1}] (Relevance: {s.score:.0%}, memory_id: {s.memory_id})\n{s.text}")
+            parts.append(f"[{label} {i+1}] (Relevance: {s.score:.0%}, memory_id: {s.memory_id})\n{text}")
         else:
-            parts.append(f"[{label} {i+1}] (Relevance: {s.score:.0%})\n{s.text}")
+            parts.append(f"[{label} {i+1}] (Relevance: {s.score:.0%})\n{text}")
     return "\n\n---\n\n".join(parts)
+
+
+def _readable_memory_text(source: "RagSource") -> str:
+    """A snippet's text as a model reads it: a memory stored on a request of another agent
+    (`metadata.origin`, vaf/core/agent_origin.py) inside that request's fence, in every later
+    turn and background run; every other memory as stored. The one place, because every
+    reader of memories asks it: the memory block of a turn and `memory_search`
+    (`_format_sources`, which also builds the user-profile cache) and the memory page's
+    question lane (`query`, `query_stream`)."""
+    meta = getattr(source, "metadata", None) or {}
+    if isinstance(meta, dict) and meta.get("origin"):
+        from vaf.core.agent_origin import app_agent_memory_text
+        return app_agent_memory_text(source.text)
+    return source.text
 
 
 def count_sources(block: str) -> int:

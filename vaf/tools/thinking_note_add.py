@@ -20,6 +20,7 @@ class ThinkingNoteAddTool(BaseTool):
     """Persist a note for the next thinking run (from a thinking run or a chat turn)."""
 
     name = "thinking_note_add"
+    agent_request = "refuse_standing"
     category    = "automations"
     permission_level = "system"
     side_effect_class = "reversible"

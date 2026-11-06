@@ -55,6 +55,7 @@ class SetTimerTool(BaseTool):
     """Schedule a short, one-shot timer that fires proactively in the current chat."""
 
     name = "set_timer"
+    agent_request = "refuse_work"
     category    = "timers"
     permission_level = "write"
     side_effect_class = "reversible"

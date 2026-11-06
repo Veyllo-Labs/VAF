@@ -87,6 +87,7 @@ class AutomationTool(BaseTool):
     
     identity_kwargs = ("user_role", "user_scope_id")
     name = "create_automation"
+    agent_request = "refuse_work"
     category    = "automations"
     permission_level = "write"
     side_effect_class = "reversible"
@@ -1108,6 +1109,7 @@ class UpdateAutomationTool(BaseTool):
     
     identity_kwargs = ("user_role", "user_scope_id")
     name = "update_automation"
+    agent_request = "refuse_work"
     category    = "automations"
     permission_level = "write"
     side_effect_class = "reversible"
@@ -1369,6 +1371,7 @@ class RestoreAutomationTool(BaseTool):
     
     identity_kwargs = ("user_role", "user_scope_id")
     name = "restore_automation"
+    agent_request = "refuse_work"
     category    = "automations"
     permission_level = "write"
     side_effect_class = "reversible"

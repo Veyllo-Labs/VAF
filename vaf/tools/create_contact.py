@@ -15,6 +15,7 @@ class CreateContactTool(BaseTool):
     If multiple contacts already have the same name, creating another is allowed; use contact_id to disambiguate for update/delete.
     """
     name = "create_contact"
+    agent_request = "refuse_standing"
     category    = "contacts"
     identity_kwargs = ("user_scope_id", "username")
     permission_level = "write"

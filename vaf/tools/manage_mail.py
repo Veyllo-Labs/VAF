@@ -33,6 +33,7 @@ def _write_note() -> str:
 class ForwardMailTool(BaseTool):
     """Forward an email to someone. Original attachments are not included."""
     name = "forward_mail"
+    agent_request = "hold"
     category    = "mail"
     identity_kwargs = ("user_scope_id", "username")
     permission_level = "write"

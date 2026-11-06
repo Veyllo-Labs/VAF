@@ -220,6 +220,7 @@ def test_tool_caller_keeps_the_arguments_embedding_md_documents():
         "max_result_chars": inspect.Parameter.KEYWORD_ONLY,
         "allowed_tools": inspect.Parameter.KEYWORD_ONLY,
         "channel_lift": inspect.Parameter.KEYWORD_ONLY,
+        "request_origin": inspect.Parameter.KEYWORD_ONLY,
         "on_event": inspect.Parameter.KEYWORD_ONLY,
     }
     for name, kind in documented.items():
@@ -230,6 +231,26 @@ def test_tool_caller_keeps_the_arguments_embedding_md_documents():
     assert params["max_result_chars"].default == 2000
     assert params["interactive"].default is False
     assert params["channel_lift"].default is True
+    assert params["request_origin"].default is None
+
+
+def test_base_tool_declares_how_it_answers_another_agents_request():
+    """EMBEDDING.md's `agent_request`: the default and the five values are the promise; the
+    contract refuses a value outside them."""
+    from vaf.core.tool_contract import AGENT_REQUEST_KINDS, resolve_tool_contract
+    assert vaf.BaseTool.agent_request == "allow"
+    assert set(AGENT_REQUEST_KINDS) == {"allow", "refuse_work", "refuse_standing",
+                                        "refuse_person", "hold"}
+
+    class _Typo(vaf.BaseTool):
+        name = "typo_tool"
+        description = "x"
+        agent_request = "permit"
+
+        def run(self, **kwargs):
+            return ""
+
+    assert resolve_tool_contract("typo_tool", _Typo()).agent_request == "refuse_person"
 
 
 def test_a_documented_tool_caller_run_needs_nothing_but_a_registry():

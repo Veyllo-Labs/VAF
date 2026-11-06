@@ -141,6 +141,7 @@ async def ingest_document_knowledge(
     mem_type: str,
     generate_fn,
     user_scope_id,
+    request_origin=None,
     extra_tags=None,
     attachment_name=None,
     session_id=None,
@@ -247,6 +248,9 @@ async def ingest_document_knowledge(
             meta["attachment_name"] = attachment_name
         if session_id:
             meta["attachment_session_id"] = session_id
+        if request_origin:
+            # Learned on a request of another agent: read back fenced (agent_origin).
+            meta["origin"] = str(request_origin)
         body = f"{context}\n\n{sec_text}"
         await pipeline.ingest(content=body, metadata=meta, auto_connect=True, user_scope_id=user_scope_id,
                               **lane_kw)
@@ -288,6 +292,8 @@ async def ingest_document_knowledge(
             }
             if doc_summary:
                 index_meta["doc_summary"] = doc_summary
+            if request_origin:
+                index_meta["origin"] = str(request_origin)
             await pipeline.ingest(content=index_content, metadata=index_meta,
                                   user_scope_id=user_scope_id, auto_connect=False, **lane_kw)
         append_domain_log("memory", (
@@ -304,7 +310,7 @@ async def ingest_document_knowledge(
 class LearnDocumentTool(BaseTool):
     name = "learn_document"
     category    = "memory"
-    identity_kwargs = ("user_scope_id", "user_role")
+    identity_kwargs = ("user_scope_id", "user_role", "request_origin")
     file_access = "read"
     permission_level = "write"
     side_effect_class = "irreversible"
@@ -443,6 +449,7 @@ class LearnDocumentTool(BaseTool):
             doc_tag=doc_tag,
             resume=bool(kwargs.get("resume", True)),
             force_relearn=bool(kwargs.get("force_relearn", False)),
+            request_origin=kwargs.get("request_origin") or None,
         )
 
         # ── Async default: the batched job in a child process ───────────────

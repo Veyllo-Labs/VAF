@@ -130,6 +130,17 @@ def test_the_web_ui_knows_every_bundle():
     )
 
 
+def test_the_web_ui_gives_every_bundle_an_icon():
+    """A bundle without an icon falls back to the generic chip, so one messenger shelf looks
+    unlike the others (the Veyllo App's did)."""
+    source = (REPO / "web" / "lib" / "toolBundles.ts").read_bytes().decode("utf-8")
+    start = source.index("export const TOOL_BUNDLE_ICON")
+    body = source[start:source.index("};", start)]
+    keys = set(re.findall(r"([a-z0-9_]+):\s*'", body))
+    missing = sorted(set(TOOL_CATEGORIES) - keys)
+    assert not missing, f"bundles without an icon in TOOL_BUNDLE_ICON: {missing}"
+
+
 def test_both_message_catalogues_label_every_bundle():
     """An unlabelled bundle would render its raw key as a heading. Both locales
     must carry every key - the parity guard only compares the two catalogues

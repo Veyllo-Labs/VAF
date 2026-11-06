@@ -796,7 +796,15 @@ Every listener VAF serves TLS on (the HTTPS port, the desktop's TLS port, `vaf r
   custom/           # Your own certificate, when you set one (0700)
     <fp>.pem        #   the certificate and its chain
     <fp>.key        #   its private key (0600 from creation)
+  app-link.pem      # The Veyllo App link's own certificate from the local CA, with the CA after it
+  app-link-key.pem  # Its private key (0600 from creation)
+  device-ca.pem     # The separate authority that signs paired Veyllo App devices
+  device-ca-key.pem # Its private key (0600 from creation)
 ```
+
+The app link pins the local CA (`ca.pem`): whoever copies `ca-key.pem` can issue a link
+certificate and pass as this VAF to every paired Veyllo App, and with the relay in hand read
+that traffic; see [VEYLLO_APP.md](../integrations/VEYLLO_APP.md#named-boundaries).
 
 Implementation: `vaf/network/ssl_utils.py` (`served_certificate`, `ensure_ssl_certificates`, `inspect_certificate`, `install_certificate`, `reset_certificate`, `renew_authority`, `reload_certificate`, `served_authority`, `certificate_state`)
 

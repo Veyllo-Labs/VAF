@@ -10,6 +10,11 @@ Two authorities, kept apart on purpose:
   only), and it is the only verify location of the link's server context, so a certificate
   of the local CA, a browser's certificate or anything self-signed never passes as a device.
 
+NAMED BOUNDARY: the local CA's key (``ca-key.pem``) is the app link's identity. The app pins
+that CA, so whoever copies the key can issue a link leaf and pass as this VAF to every paired
+app (and, holding the relay, read that traffic). It is an owner-only file, not sealed, like
+every TLS key VAF serves; sealing it would touch every TLS listener and is not done here.
+
 NAMED BOUNDARY: the device CA key sits owner-only in the ssl directory beside the server CA
 key, like it. A stolen device CA key mints certificates that still need a device row with
 that exact public key and serial (devices.py), so it opens nothing alone. There is no

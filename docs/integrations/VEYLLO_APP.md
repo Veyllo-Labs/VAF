@@ -59,7 +59,9 @@ The protocol's vectors (the QR code, the frames, the fingerprint) are in
   content and cannot act as VAF: the app checks VAF's certificate against the authority from
   the QR code, and VAF knows a device only by its certificate. A relay that changes, replays,
   reorders or cuts bytes ends the session; a relay that moves one device's stream to another
-  connection id still gets that device, because the id never decides who is talking.
+  connection id still gets that device, because the id never decides who is talking. VAF
+  dials only the relay's own host and only public addresses, whatever the relay answers.
+  A session that has not said who it is gets 20 seconds and small frames only.
 - **Google and Apple** see when a push notice reaches the phone (it carries no content).
 - **The app is closed source.** The end-to-end promise holds against the relay, not against a
   changed app. When you use Veyllo's models in the app, that content goes to Veyllo.
@@ -113,6 +115,11 @@ results), and half a cent per direction for a task for the phone. The direct way
 
 ## Named boundaries
 
+- **The local CA's key is the app link's identity.** The app pins this machine's local CA;
+  its key (`~/.vaf/ssl/ca-key.pem`) is an owner-only file, not sealed, like the device CA's
+  key beside it. Whoever copies `ca-key.pem` can pass as this VAF to every paired app, and
+  with the relay in hand read that traffic. The key is in the encrypted backup; replacing it
+  (`vaf server ca renew`) means every device pairs again.
 - **Renewing the certificate authority** (`vaf server ca renew`) means every device pairs
   again: the app pins that authority. So does an authority VAF had to replace because its
   files were damaged.

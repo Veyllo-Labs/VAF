@@ -44,7 +44,7 @@ export const TOOL_BUNDLE_COLOR: Record<string, string> = {
  *  already imports. Anything unmapped falls back to the generic tool icon. */
 export const TOOL_BUNDLE_ICON: Record<string, string> = {
     custom: 'sparkles', github: 'github', mail: 'mail', whatsapp: 'phone',
-    telegram: 'chat', discord: 'chat', slack: 'chat', messaging: 'send',
+    telegram: 'chat', discord: 'chat', veyllo_app: 'chat', slack: 'chat', messaging: 'send',
     rooms: 'network', calendar: 'calendar', contacts: 'users', cloud: 'cloud',
     automations: 'zap', timers: 'clock', workflows: 'workflow', skills: 'sparkles',
     memory: 'database', context: 'brain', code: 'terminal', git: 'branch',

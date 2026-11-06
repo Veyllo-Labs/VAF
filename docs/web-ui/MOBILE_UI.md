@@ -54,6 +54,16 @@ preview busy notice) is `fixed left-1/2 -translate-x-1/2` with no width, so a fi
 measured 195 px by 126 px at 390 px. Below `md` it is `max-md:w-[calc(100vw-2rem)]
 max-md:max-w-none`; the desktop toast is unchanged.
 
+## The Veyllo App window
+
+The pairing window (`web/components/connections/VeylloAppSetupWizard.tsx`) is a full-screen sheet
+below `md` (the pattern below: the header row stays, the body scrolls with `min-h-0`). The QR code
+is `w-64 h-64`, 256 px, which leaves room on a 390 px screen after the sheet's padding; the
+Veyllo Relay / Local switch is a two-column grid over the full width, and the confirmation's
+fingerprint drops from `text-2xl` to `max-md:text-xl` so its four groups stay on one line. Button
+pairs stack (`max-md:flex-col`), and the code field takes the full width like the token field
+under Account. On a desktop it is the centred `max-w-md` card of the other setup windows.
+
 ## Reusable patterns (copy the class strings)
 
 ### Full-screen sheet (modals / dialogs with real content)

@@ -719,6 +719,11 @@ accounts="shared")`. What differs ([VEYLLO_APP.md](VEYLLO_APP.md) for the whole 
 - **No Front Office**: only an account's own paired devices reach the channel.
 - **Delivery**: the `send_to_main_messenger` branch stores the message once and lists it in
   every device's outbox; a device that is away gets it when it connects again.
+- **The card in Settings, Connections** opens the Veyllo App window, where the account pairs a
+  phone and an admin manages the relay ([VEYLLO_APP.md](VEYLLO_APP.md#pairing)). It shows how
+  many phones the account has paired and whether the relay is on, and it has no on/off switch
+  and no disconnect: access ends per device (Settings, Account), the channel's switch is the
+  installation's, and the relay secret goes only with the relay instance.
 
 ## Architecture
 

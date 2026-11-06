@@ -29,22 +29,39 @@ direct way later without pairing again.
 
 ## Pairing
 
-1. In the web UI (Settings, Connections, Veyllo App) you confirm with **your own** 2FA code.
-   That opens a pairing window for your account for ten minutes; nobody can create a QR code
-   for another account, an admin neither.
-2. VAF shows a QR code (relay or local). It carries a one-time value of 32 random bytes, the
-   fingerprint of this machine's local certificate authority, and for the relay a separate
-   relay value. Everything secret sits in the URL's fragment, which a browser never sends; the
-   code is valid for ten minutes and is neither logged nor stored on disk.
+Pairing happens in the web UI, in **Settings, Connections, Veyllo App**
+(`web/components/connections/VeylloAppSetupWizard.tsx`):
+
+1. The window first says what the app can do, what Veyllo sees on each way and what each way
+   costs, and then asks for **your own** 2FA code. That opens a pairing window for your account
+   for ten minutes; nobody can create a QR code for another account, an admin neither.
+   With the relay switched off and no direct address either, the window says pairing is not
+   possible and asks for no code.
+2. VAF shows a QR code, drawn on this machine (the routes answer it as a PNG; no renderer
+   elsewhere ever sees it), with the time it is still valid. Below it a switch chooses the way:
+   **Veyllo Relay** (from anywhere, one cent per message, Veyllo sees only metadata) or
+   **Local** (only on your own network or over your VPN, free, nothing through Veyllo).
+   Switching issues a new QR code without a second 2FA code and withdraws the earlier one.
+   While an admin has the relay switched off there is no switch, only the Local code. The QR
+   code carries a one-time value of 32 random bytes, the fingerprint of this machine's local
+   certificate authority, and for the relay a separate relay value. Everything secret sits in
+   the URL's fragment, which a browser never sends; the code is valid for ten minutes and is
+   neither logged nor stored on disk.
 3. The app creates a key in the phone's hardware store, checks VAF's certificate against the
    authority's fingerprint from the QR code, and sends a certificate request with the
    one-time value. VAF checks the request first (a bad one does not use up the code), then
    the code: a code used once is "used", an unknown or expired one "expired", a second
    pairing while one waits for confirmation "busy".
-4. The web UI asks "Is this your device?" and shows the phone's model and its key
-   fingerprint (four groups of hex, the same the app shows). Only after you confirm, within
-   two minutes, is the device created, its certificate issued by VAF's separate device
-   authority, and the Veyllo App switched on for your account.
+4. The window asks "Is this your device?" and shows the phone's model, platform and app version
+   and its key fingerprint (four groups of hex, exactly as the app shows them). Only after you
+   confirm, within two minutes, is the device created, its certificate issued by VAF's separate
+   device authority, and the Veyllo App switched on for your account. The window then says
+   "Connected" with the phone's model; in the app, your VAF is called "Main-Agent (VAF)".
+
+The window asks the server every two seconds while it is open, visible and the pairing is still
+running. Closing it (the X, Escape, a click beside it) withdraws a QR code that is still live
+and refuses a phone that is waiting for the confirmation, so no pairing nobody watches stays
+open. Refused, expired and failed pairings each say what happened and offer a new code.
 
 Every refused pairing is a security event (`app_pairing_refused`), every paired and removed
 device too (`channel_paired`, `channel_unpaired`).
@@ -64,6 +81,9 @@ The protocol's vectors (the QR code, the frames, the fingerprint) are in
   at an address VAF resolved and checked as public itself, with TLS checked against the
   name; behind a site proxy the proxy resolves the name, as for every outbound fetch.
   A session that has not said who it is gets 20 seconds and small frames only.
+- **The agent in the Veyllo app** uses your VAF as a tool and reads its answers with the app's
+  own chat model; there is no switch for that. The pairing window says so in one sentence and
+  links Veyllo's privacy policy (https://veyllo.app/legal/privacy), which names it.
 - **Google and Apple** see when a push notice reaches the phone (it carries no content).
 - **The app is closed source.** The end-to-end promise holds against the relay, not against a
   changed app. When you use Veyllo's models in the app, that content goes to Veyllo.
@@ -103,15 +123,25 @@ results), and half a cent per direction for a task for the phone. The direct way
 
 ## Managing devices and the relay
 
-- Remove a device in the web UI or with `vaf devices remove <id>`: its access ends at once,
-  also when its certificate is still valid (a lost phone too). `vaf devices list` lists them.
+- Your paired phones are rows of **Settings, Account, Signed-in devices**, with the way they
+  last used (relay or direct), whether one is connected now, when it last connected, when it
+  was paired and its fingerprint. **Remove** asks first; its access then ends at once, also
+  when its certificate is still valid (a lost phone too). In the terminal: `vaf devices list`,
+  `vaf devices remove <id>`.
+- An admin sees every account's devices, with the account, in the admin section of the Veyllo
+  App window ("Veyllo relay (for every account)") and removes one there.
 - Devices also go when their account is deactivated or deleted, after 90 days without use
   (`device_idle_days`), and when the account signs out every other device. A password change
   does not remove them: the device key, not the password, is their credential.
-- An admin switches the relay off and on (`vaf relay off`, `vaf relay on`): off keeps the
-  instance, its secret and the devices, so on again needs no new pairing. `vaf relay rotate`
-  replaces the relay secret. `vaf relay dissolve` deletes the instance; the devices stay for
-  the direct way and need a new pairing for the relay.
+- An admin switches the relay off and on (`vaf relay off`, `vaf relay on`, or the switch in
+  the admin section of the Veyllo App window, which also shows the relay's state and how many
+  devices are members and use it now): off keeps the instance, its secret and the devices, so
+  on again needs no new pairing. `vaf relay rotate` (or "Replace relay secret" in the window,
+  after a question) replaces the relay secret. `vaf relay dissolve` (or "Dissolve relay
+  instance" in the window, with the admin's own 2FA code) deletes the instance; the devices
+  stay for the direct way and need a new pairing for the relay. A failed action says whether
+  no relay is set up, the relay could not be reached or it refused (`reason` in the route's
+  answer).
 - `vaf health` has an `app_link` row, `vaf doctor` reports a relay that carries devices and an
   instance whose secret is missing.
 
@@ -134,3 +164,6 @@ results), and half a cent per direction for a task for the phone. The direct way
   key from the QR code in every session.
 - **Pairing from the terminal** is not offered: the one-time value lives in the web server's
   process and the confirmation is a step of the signed-in account in the web UI.
+- **The pairing window learns of a scan by asking**, every two seconds, not by a push over the
+  WebSocket: the state lives in the web server's process, and the shortest deadline (two
+  minutes for the confirmation) is sixty of those polls long.

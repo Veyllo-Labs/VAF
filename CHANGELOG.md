@@ -13,14 +13,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
-- **Veyllo App: pair the Veyllo App with your own account by QR code (after your 2FA code)
-  and chat with your agent from anywhere through the Veyllo relay, or directly over your own
-  VPN.** The relay only carries end-to-end encrypted traffic of paired devices; the web UI
+- **Veyllo App: pair the Veyllo App with your own account by QR code in Settings,
+  Connections, Veyllo App (after your 2FA code), through the Veyllo relay or locally, and chat
+  with your agent from anywhere through the Veyllo relay, or directly over your own VPN.** The relay only carries end-to-end encrypted traffic of paired devices; the web UI
   and the API stay private. Messages your agent sends while the phone is away arrive when it
   connects again, with a push notice through the relay. Manage devices with `vaf devices`
   and the relay with `vaf relay`; `vaf health` and `vaf doctor` report on both. Your agent
   can also hand tasks to your phone (`user_phone`). The Veyllo App can be your main
-  messenger in Settings.
+  messenger in Settings. Your paired phones are listed under Settings, Account, where you can
+  remove one; admins switch the relay, replace its secret or dissolve it in the same window.
 - **DeepSeek: choose how long the model thinks before it answers.** Settings > AI & Model has a
   **DeepSeek thinking effort** setting (Standard, Low, High, Max), also available as the config
   key `deepseek_reasoning_effort`. It applies to every DeepSeek call, whichever job makes it
@@ -32,7 +33,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
-- Signing out every other device also removes your Veyllo App devices; they pair again.
+- Signing out every other device also removes your Veyllo App devices; they pair again. "Sign
+  out all other devices" now says so, and asks in the app's own dialog.
 - Answering a speaker confirmation on Discord now replies in the Discord channel the message
   came from.
 

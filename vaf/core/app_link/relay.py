@@ -56,9 +56,13 @@ REPLACED_WAIT_SECONDS = 300
 TOO_FAST_WAIT_SECONDS = 60
 BACKOFF_MAX_SECONDS = 300
 _ZERO_CID = bytes(pr.CID_BYTES)
+# The hosts a relay connection may go to besides the host of `relay_api_base`: the relay
+# contract serves its WebSocket on its own name (wss://relay.veyllo.com/v1/connect/<iid>)
+# while the API lives at the base.
+RELAY_WS_HOSTS = ("relay.veyllo.com",)
 
 STATES = ("off", "idle", "connecting", "connected", "backoff", "replaced", "revoked",
-          "secret_rejected", "unavailable")
+          "secret_rejected", "secret_not_stored", "unavailable")
 
 
 def _member(value: Any) -> Optional[str]:
@@ -116,6 +120,30 @@ def set_relay_enabled(enabled: bool, *, username: str = "") -> None:
     connector().wake(reset_hold=True)
 
 
+def ws_url_allowed(url: str, api_base: str) -> bool:
+    """Whether the WebSocket URL a token answer names may be dialled: wss without userinfo,
+    to the API base's host or the contract's relay host, and resolving to public addresses
+    only. A hostile relay must not point VAF's outbound connection at this machine or the
+    LAN (the egress guard's classifier, without its LAN allowance)."""
+    parts = urlsplit(str(url or ""))
+    host = (parts.hostname or "").lower().rstrip(".")
+    if parts.scheme != "wss" or parts.username or parts.password or not host:
+        return False
+    allowed = {h.lower() for h in RELAY_WS_HOSTS}
+    base_host = (urlsplit(str(api_base or "")).hostname or "").lower().rstrip(".")
+    if base_host:
+        allowed.add(base_host)
+    if host not in allowed:
+        return False
+    from vaf.network.egress import EgressPolicy, EgressRefused, check_destination
+    try:
+        check_destination(f"https://{parts.netloc.rsplit('@', 1)[-1]}/",
+                          EgressPolicy(allow_private=False))
+    except (EgressRefused, ValueError, OSError):
+        return False
+    return True
+
+
 def _parse_expiry(value: Any, now: float) -> float:
     try:
         number = float(value)
@@ -138,11 +166,15 @@ def _retry_after(response, default: float) -> float:
 class RelayLink:
     """One relay connection's sessions: binary frames to and from link sessions by cid."""
 
-    def __init__(self, send_frame: Callable[[bytes], None], connection_id: str):
+    def __init__(self, send_frame: Callable[[bytes], None], connection_id: str, *,
+                 run: Optional[Callable[[bytes, Callable[[], None]], None]] = None):
         self._send_frame = send_frame
         self.connection_id = connection_id
         self.sessions: Dict[bytes, Any] = {}
         self.online: set = set()
+        # `run(cid, fn)` runs a session's work off the connection's loop, in order per cid
+        # (the connector's executor); without one it runs here.
+        self._run = run
 
     def _session(self, cid: bytes):
         session = self.sessions.get(cid)
@@ -168,12 +200,22 @@ class RelayLink:
             return
         if cid == _ZERO_CID:
             return
+        for gone in [c for c, s in self.sessions.items() if s.closed]:
+            del self.sessions[gone]
         session = self._session(cid)
         if session is None:
             return
-        session.feed(data)
-        if session.closed:
-            self.sessions.pop(cid, None)
+
+        def _feed(session=session, cid=cid, data=data) -> None:
+            # Decryption, a file check and a disk write can take a while: never on the
+            # loop that carries the pings and every other device's bytes.
+            session.feed(data)
+            if session.closed and self.sessions.get(cid) is session:
+                self.sessions.pop(cid, None)
+        if self._run is None:
+            _feed()
+        else:
+            self._run(cid, _feed)
 
     def on_control(self, message: Dict[str, Any]) -> None:
         from vaf.core.app_link import bridge
@@ -333,7 +375,8 @@ class RelayConnector:
         elif not want:
             if running:
                 await self.disconnect(1000)
-            if self.state not in ("replaced", "revoked", "secret_rejected", "unavailable"):
+            if self.state not in ("replaced", "revoked", "secret_rejected", "secret_not_stored",
+                                  "unavailable"):
                 self.state = "idle"
 
     # ── claims ──────────────────────────────────────────────────────────────
@@ -408,13 +451,26 @@ class RelayConnector:
             pairing.set_relay_error("instance_mismatch")
             return
         secret = str(body.get("secret") or "")
+        fresh = False
         if secret and not _secret():
-            set_channel_secret(CHANNEL, "relay_secret", secret)
+            try:
+                set_channel_secret(CHANNEL, "relay_secret", secret)
+            except Exception as exc:
+                # The relay sends S once: without it stored the instance cannot be reached.
+                logger.warning("app link: the relay secret could not be stored in the key "
+                               "ring (%s); pair again once the key ring works",
+                               type(exc).__name__)
+                self.state, self.last_error = "secret_not_stored", "secret_not_stored"
+                pairing.set_relay_error("secret_not_stored")
+                return
+            fresh = True
         if not stored:
             _set_instance(instance)
             _event("claimed")
+            fresh = True
         pairing.mark_claimed(item.p, member, _cid_hex(body.get("cid")))
-        self.wake()
+        # A new instance or secret ends the hold a revoked or rejected old one left behind.
+        self.wake(reset_hold=fresh)
 
     # ── the connection ──────────────────────────────────────────────────────
 
@@ -431,8 +487,7 @@ class RelayConnector:
             raise _Refused("backoff")
         body = response.json()
         url = str(body.get("url") or "")
-        parts = urlsplit(url)
-        if parts.scheme != "wss" or parts.username or parts.password or not parts.hostname:
+        if not ws_url_allowed(url, base):
             raise _Refused("backoff", reason="bad_url")
         self._token_expires = _parse_expiry(body.get("expiresAt"), self._wall())
         return {"token": str(body.get("token") or ""), "url": url}
@@ -456,12 +511,36 @@ class RelayConnector:
                 self.connected_since = self._wall()
                 self.last_error = ""
                 self._attempts = 0
-                link = RelayLink(_send_frame, uuid.uuid4().hex[:12])
+                feeders: Dict[bytes, asyncio.Queue] = {}
+                workers: List[asyncio.Task] = []
+
+                async def _feed_worker(queue: asyncio.Queue) -> None:
+                    while True:
+                        work = await queue.get()
+                        if work is None:
+                            return
+                        try:
+                            await loop.run_in_executor(None, work)
+                        except Exception:
+                            logger.debug("app link: a relay session's work failed", exc_info=True)
+
+                def _run(cid: bytes, work) -> None:
+                    queue = feeders.get(cid)
+                    if queue is None:
+                        queue = feeders[cid] = asyncio.Queue()
+                        workers.append(asyncio.ensure_future(_feed_worker(queue)))
+                    queue.put_nowait(work)
+
+                link = RelayLink(_send_frame, uuid.uuid4().hex[:12], run=_run)
                 self._link = link
                 pong = {"at": self._clock()}
                 try:
                     await self._pump(ws, link, outgoing, pong)
                 finally:
+                    for queue in feeders.values():
+                        queue.put_nowait(None)
+                    for worker in workers:
+                        worker.cancel()
                     link.close_all()
                     self._link = None
                     close_code = getattr(ws, "close_code", None)

@@ -346,6 +346,9 @@ def app_link_check(status: Optional[Dict[str, Any]] = None, *,
                            "it (`vaf relay rotate`), or dissolve and pair again.",
         "replaced": "Another VAF with this relay secret took the relay connection over (a "
                     "backup restored elsewhere?): rotate the secret on one of them.",
+        "secret_not_stored": "The relay secret could not be stored in the key ring, so the "
+                             "relay cannot be reached: check the key ring (`vaf doctor`), then "
+                             "pair the device again.",
     }
     if state in refusals:
         return _check("app_link", DEGRADED, refusals[state])

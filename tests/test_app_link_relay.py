@@ -34,6 +34,11 @@ def _fresh(monkeypatch):
     bridge.reset()
     pairing.reset()
     monkeypatch.setattr(pairing, "direct_addresses", lambda: [])
+    # The test relay's name resolves to a public address; every other name as it really does.
+    from vaf.network import egress
+    real_resolve = egress._resolve
+    monkeypatch.setattr(egress, "_resolve", lambda host, port: ["93.184.216.34"]
+                        if host in ("relay.test", "relay.veyllo.com") else real_resolve(host, port))
     yield
     pairing.reset()
     bridge.reset()
@@ -453,3 +458,105 @@ def test_no_relay_secret_or_token_in_logs_or_events(app_link_home, caplog):
     text = caplog.text + repr(app_link_home.events) + json.dumps(c.status())
     for value in ("vrs_secret_value", "tok-secret-value"):
         assert value not in text
+
+
+@pytest.mark.parametrize("url,ok", [
+    ("wss://relay.test/v1/connect/i", True),
+    ("wss://relay.veyllo.com/v1/connect/i", True),
+    ("wss://127.0.0.1:8443/ws", False),
+    ("wss://localhost/api/x", False),
+    ("wss://192.168.1.10:8001/ws", False),
+    ("wss://169.254.169.254/latest", False),
+    ("wss://[::1]/ws", False),
+    ("wss://evil.example/v1/connect/i", False),
+    ("ws://relay.test/v1/connect/i", False),
+    ("wss://user:pw@relay.test/x", False),
+])
+def test_a_hostile_relay_cannot_point_the_connection_elsewhere(url, ok):
+    assert relay.ws_url_allowed(url, "https://relay.test") is ok
+
+
+def test_a_token_answer_pointing_at_this_machine_is_never_dialled(app_link_home):
+    set_channel_secret("veyllo_app", "relay_secret", "vrs_known")
+    paired_device(SCOPE_A, relay_member=MEMBER)
+    connect = FakeConnect()
+    c = _connector(FakeHttp({"POST /v1/relay/token": [FakeResponse(200, {
+        "token": "t", "url": "wss://127.0.0.1:8443/ws", "expiresAt": 1_800_000_600})]}), connect)
+
+    async def _go():
+        await c.tick()
+        for _ in range(10):
+            await asyncio.sleep(0)
+    asyncio.run(_go())
+    assert connect.upgrades == [] and c.last_error == "bad_url"
+
+
+def test_a_fresh_claim_ends_the_hold_of_a_revoked_instance(app_link_home):
+    c = _connector(FakeHttp({"POST /v1/relay/claim": [_claimed(secret="vrs_new", instance="inst-2")]}))
+    c.after_close(4003)
+    assert c._hold_until == float("inf")
+    _relay_qr()
+    _run(lambda: c.claim_tick(c.clock()))
+    assert c._hold_until == 0.0 and channel_secret("veyllo_app", "relay_secret") == "vrs_new"
+
+
+def test_a_secret_that_cannot_be_stored_is_a_visible_state(app_link_home, monkeypatch):
+    import vaf.core.channel_secrets as cs
+
+    def _broken(*a, **k):
+        raise OSError("key ring locked")
+    monkeypatch.setattr(cs, "set_channel_secret", _broken)
+    _relay_qr()
+    c = _connector(FakeHttp({"POST /v1/relay/claim": [_claimed()]}))
+    _run(lambda: c.claim_tick(c.clock()))
+    assert c.state == "secret_not_stored" and c.status()["last_error"] == "secret_not_stored"
+    assert pairing.current(SCOPE_A)["relay_error"] == "secret_not_stored"
+    assert pairing.current(SCOPE_A)["state"] == "issued"
+    from vaf.core import health
+    paired_device(SCOPE_A)
+    row = health.app_link_check({"state": "secret_not_stored"})
+    assert row["status"] == health.DEGRADED and "key ring" in row["reason"]
+
+
+def test_relay_bytes_are_fed_off_the_connection_loop(app_link_home, monkeypatch):
+    import threading
+
+    from vaf.core.app_link import session as sess
+    seen = []
+    real_feed = sess.LinkSession.feed
+    monkeypatch.setattr(sess.LinkSession, "feed",
+                        lambda self, data: (seen.append(threading.current_thread().name),
+                                            real_feed(self, data)))
+    http, connect = _connected(app_link_home)
+    c = _connector(http, connect)
+
+    async def _go():
+        await c.tick()
+        for _ in range(10):
+            await asyncio.sleep(0)
+        connect.last.push(b"\x01" + bytes.fromhex(CID) + b"\x16\x03\x01\x02\x00" + b"\x01" * 3)
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+        connect.last.close_from_relay(1000)
+        await asyncio.sleep(0.05)
+    asyncio.run(_go())
+    assert seen and threading.main_thread().name not in seen
+
+
+def test_closed_sessions_leave_the_link(app_link_home):
+    link = relay.RelayLink(lambda frame: None, "r9")
+    link.on_binary(b"\x01" + bytes.fromhex(CID) + b"\x16\x03\x01\x02\x00" + b"\x01" * 3)
+    session = link.sessions[bytes.fromhex(CID)]
+    session.close("gone", bye=False)
+    link.on_binary(b"\x01" + bytes.fromhex("cd" * 16) + b"\x16\x03\x01\x02\x00" + b"\x01" * 3)
+    assert bytes.fromhex(CID) not in link.sessions
+
+
+def test_each_half_of_the_url_check_holds_on_its_own(monkeypatch):
+    from vaf.network import egress
+    answers = {"evil.example": ["93.184.216.34"], "relay.test": ["192.168.1.10"]}
+    monkeypatch.setattr(egress, "_resolve", lambda host, port: answers[host])
+    # A public host that is not the relay: refused by the host rule alone.
+    assert relay.ws_url_allowed("wss://evil.example/v1/connect/i", "https://relay.test") is False
+    # The relay's own name resolving into the LAN (DNS rebinding): refused by the address rule.
+    assert relay.ws_url_allowed("wss://relay.test/v1/connect/i", "https://relay.test") is False

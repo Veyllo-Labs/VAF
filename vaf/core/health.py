@@ -321,24 +321,26 @@ APP_LINK_GRACE_SECONDS = 300
 
 def app_link_check(status: Optional[Dict[str, Any]] = None, *,
                    now: Optional[float] = None) -> Optional[Dict[str, str]]:
-    """The Veyllo App link: no row while there is no device and no relay instance; degraded
-    when the relay was refused (revoked, secret rejected, replaced by another VAF with the
-    same secret) or should be connected and has not been for five minutes."""
+    """The Veyllo App link: no row while there is no device and no relay instance (unless the
+    first claim's secret could not be stored, which leaves exactly that); degraded when the
+    relay was refused (revoked, secret rejected, replaced by another VAF with the same
+    secret) or should be connected and has not been for five minutes."""
     import time as _time
 
     from vaf.core.app_link import devices, settings
     rows = devices.all_devices()
     cfg = settings()
-    if not rows and not cfg.get("relay_instance_id"):
+    if status is None and (rows or cfg.get("relay_instance_id") or cfg.get("relay_enabled", True)):
+        from vaf.core.app_link import relay
+        status = relay.status()
+    status = status or {}
+    state = status.get("state")
+    if not rows and not cfg.get("relay_instance_id") and state != "secret_not_stored":
         return None
     n = len(rows)
     count = f"{n} device{'s' if n != 1 else ''}"
     if not cfg.get("relay_enabled", True):
         return _check("app_link", OK, f"Relay off, direct path only, {count}.")
-    if status is None:
-        from vaf.core.app_link import relay
-        status = relay.status()
-    state = status.get("state")
     refusals = {
         "revoked": "The relay refused this installation (revoked): pair again or dissolve the "
                    "relay connection (`vaf relay dissolve`).",
@@ -346,9 +348,9 @@ def app_link_check(status: Optional[Dict[str, Any]] = None, *,
                            "it (`vaf relay rotate`), or dissolve and pair again.",
         "replaced": "Another VAF with this relay secret took the relay connection over (a "
                     "backup restored elsewhere?): rotate the secret on one of them.",
-        "secret_not_stored": "The relay secret could not be stored in the key ring, so the "
-                             "relay cannot be reached: check the key ring (`vaf doctor`), then "
-                             "pair the device again.",
+        "secret_not_stored": "The relay secret could not be stored in the key store, so the "
+                             "relay cannot be reached: check that the key store works (`vaf "
+                             "secure status`), then pair the device again.",
     }
     if state in refusals:
         return _check("app_link", DEGRADED, refusals[state])

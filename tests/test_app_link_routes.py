@@ -299,3 +299,19 @@ def test_refusals_say_what_to_do_next(app_link_home, monkeypatch):
     assert r.json()["code"] == "window_closed" and "2FA code" in r.json()["detail"]
     assert " " in client.post("/api/app-link/pairings", json={"mode": "fax"}).json()["detail"]
     assert "vaf devices list" in client.delete("/api/app-link/devices/nope").json()["detail"]
+
+
+def test_every_pairing_refusal_has_a_sentence():
+    """A new refusal code in pairing.py without a sentence would reach the person as a bare
+    code."""
+    import ast
+    from pathlib import Path
+
+    from vaf.core.app_link import pairing as pairing_mod
+    tree = ast.parse(Path(pairing_mod.__file__).read_text(encoding="utf-8"))
+    codes = {node.args[0].value for node in ast.walk(tree)
+             if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "PairingRefused"
+             and node.args and isinstance(node.args[0], ast.Constant)}
+    assert codes == {"window_closed", "relay_off", "no_direct_path"}, codes
+    assert codes <= set(app_link_routes._REFUSALS)
+    assert all(app_link_routes._REFUSALS[c].endswith(".") for c in codes)

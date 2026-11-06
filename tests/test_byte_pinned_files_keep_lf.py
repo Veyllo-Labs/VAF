@@ -89,9 +89,10 @@ def byte_pinned_tracked_files():
 
 def _tracked_files(rel: str):
     """The tracked files a pinned path names: itself, or every match of a directory glob."""
-    out = subprocess.run(["git", "ls-files", "--", rel], cwd=ROOT, capture_output=True,
-                         text=True).stdout.split()
-    return out
+    out = subprocess.run(["git", "ls-files", "-z", "--", rel], cwd=ROOT, capture_output=True,
+                         text=True).stdout
+    # NUL-separated: a tracked name with a space stays one name.
+    return [name for name in out.split("\0") if name]
 
 
 def _eol(rel: str) -> str:
@@ -119,3 +120,10 @@ def test_the_scan_sees_the_known_case():
     # A directory joined with a name known only at run time (the vector generator's loop).
     assert "tests/fixtures/app_link/*" in found
     assert "tests/fixtures/app_link/qr_vectors.json" in _tracked_files("tests/fixtures/app_link/*")
+
+
+def test_a_tracked_name_with_a_space_stays_one_name(monkeypatch):
+    class _Done:
+        stdout = "tests/fixtures/a b.json\0tests/fixtures/c.json\0"
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: _Done())
+    assert _tracked_files("tests/fixtures/*") == ["tests/fixtures/a b.json", "tests/fixtures/c.json"]

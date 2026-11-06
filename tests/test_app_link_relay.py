@@ -514,9 +514,11 @@ def test_a_secret_that_cannot_be_stored_is_a_visible_state(app_link_home, monkey
     assert pairing.current(SCOPE_A)["relay_error"] == "secret_not_stored"
     assert pairing.current(SCOPE_A)["state"] == "issued"
     from vaf.core import health
-    paired_device(SCOPE_A)
-    row = health.app_link_check({"state": "secret_not_stored"})
-    assert row["status"] == health.DEGRADED and "key ring" in row["reason"]
+    # Exactly as the failure leaves it: the first claim, no device and no instance yet.
+    assert devices.all_devices() == []
+    row = health.app_link_check(c.status())
+    assert row is not None and row["status"] == health.DEGRADED
+    assert "`vaf secure status`" in row["reason"]
 
 
 def test_relay_bytes_are_fed_off_the_connection_loop(app_link_home, monkeypatch):

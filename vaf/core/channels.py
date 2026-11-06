@@ -114,6 +114,9 @@ CHANNEL_SEND_TOOLS: Dict[str, str] = {c.name: c.send_tool for c in CHANNELS}
 ALL_SEND_TOOLS: Tuple[str, ...] = tuple(c.send_tool for c in CHANNELS)
 # The send tools that can actually reach somebody today.
 CHAT_SEND_TOOLS: Tuple[str, ...] = tuple(c.send_tool for c in CHANNELS if c.bridge)
+# The send tools that reach the user themselves: each chat channel's own, and `send_to_user`,
+# which delivers to the main messenger.
+OWNER_SEND_TOOLS: Tuple[str, ...] = CHAT_SEND_TOOLS + ("send_to_user",)
 CHANNEL_READ_TOOLS: Dict[str, str] = {c.name: c.read_tool for c in CHANNELS if c.read_tool}
 CHANNEL_LABELS: Dict[str, str] = {c.name: c.label for c in CHANNELS}
 # channel -> its credential fields, for the channels that have any.

@@ -977,7 +977,8 @@ Where VAF reaches an account on Telegram (`messaging_endpoints.json`, `by_scope`
   mail or WhatsApp message to a third party is parked for the user's approval (`outbound_hold`;
   a park that fails refuses). Every tool that writes files is refused, for every role and
   wherever it would write: by its `file_access = "write"` declaration (only a send the park
-  lane holds stays open) or by its own `agent_request`. A memory stored in such a turn carries `metadata.origin` and
+  lane holds stays open) or by its own `agent_request` (per call: `agent_request_for`,
+  `cloud_storage`'s save and downloads). A memory stored in such a turn carries `metadata.origin` and
   is read back fenced (`rag._readable_memory_text`); a stored request is replayed fenced
   (`session.model_text`), and the chat's compaction leaves requests and their answers out. The reply id is the device's, so replies are kept
   per account (`(scope, id)`) and a request's reply goes only to a device row of that account. NAMED BOUNDARY: the fence reduces confusion, it does not

@@ -97,6 +97,11 @@ class PythonSandboxTool(BaseTool):
     # and a background run reports back to it with the person's name and role.
     identity_kwargs = ("user_scope_id", "username", "user_role", "session_id")
     name = "python_sandbox"
+    # Every run, with export_files or without: the scratch environment is the caller's own
+    # long-lived container, its HOME is writable, and what one run leaves there (a file in
+    # the Python user site) runs again in every later run, those that export to the host
+    # workspace or call VAF tools included.
+    agent_request = "refuse_work"
     # A stop-aware poll loop with its own deadline that kills the docker exec the moment Stop
     # is requested. Abandoned by a bounded run instead, the thread could lose the stop flag
     # to clear_stop before it gets to kill the exec.
@@ -637,13 +642,6 @@ class PythonSandboxTool(BaseTool):
             lines.append(f"To look before then: host_process(action=\"log\", id=\"{handle}\"); "
                          f"to stop it: host_process(action=\"stop\", id=\"{handle}\").")
         return "\n".join(lines)
-
-    def agent_request_for(self, args: Dict[str, Any]) -> str:
-        """On another agent's request, a run that exports files is refused: ``export_files``
-        writes them into the chat's workspace under a name the code chose (``VAF.md``
-        passes the basename filter). A run without it touches only the container's scratch
-        volume, so it stays offered."""
-        return "refuse_person" if (args or {}).get("export_files") else self.agent_request
 
     def run(self, **kwargs) -> str:
         """Execute Python code in Docker sandbox (per-user isolated workspace)."""

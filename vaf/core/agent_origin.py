@@ -26,15 +26,16 @@ user did not type it, and the phone's agent may pass on text it read elsewhere. 
 - every tool that writes files is refused, for every role and wherever it would write: by its
   declaration ``file_access = "write"`` (``refuse_write``, whatever the path), or by its own
   ``agent_request`` for a writer that does not declare that mode (the git tools, the codex and
-  the scratchpad, the document agent, ``python_sandbox`` with ``export_files``).
+  the scratchpad, the document agent, ``python_sandbox``), or per call (``cloud_storage``
+  ``save``, ``download`` and ``retrieve``: ``agent_request_for`` answers ``refuse_write``).
 
 WHAT IS REFUSED is each tool's own declaration, ``BaseTool.agent_request`` (``refuse_work``,
 ``refuse_standing``, ``refuse_person``; ``hold`` is refused for a tool VAF has no park lane
 for), every tool with ``file_access = "write"`` but a call a park lane holds (``send_mail``,
 ``send_whatsapp`` to somebody else: the park is the user's confirmation; the sends to the
-user's own messengers, ``send_whatsapp`` to the user's own number included, are refused with
-the other writers), plus every tool kept off chats (``channel_restrictions``)
-whatever the admin's lift says. A tool a stranger builds on ``BaseTool`` places itself the
+user's own messengers, ``channels.OWNER_SEND_TOOLS`` with ``send_whatsapp`` to the user's own
+number, are refused with their own reason, ``refuse_own_messenger``), plus every tool kept
+off chats (``channel_restrictions``) whatever the admin's lift says. A tool a stranger builds on ``BaseTool`` places itself the
 same way. The guards in tests/test_app_link_agent_ask.py make every write-level tool of the
 categories that start or steer later work (automations, workflows, timers, rooms, skills,
 contacts) and every sub-agent spawner declare itself or name its reason, and every tool a
@@ -57,11 +58,15 @@ NAMED BOUNDARIES, measured on the full registry (139 tools):
   writes a file is named here, each with a name the request does not choose:
   ``research_agent`` writes its report as ``research_<sanitized topic>_<timestamp>`` (``.docx``,
   ``.md`` or ``.html``) into the chat's workspace, and its section checkpoints into its own
-  folder; ``web_search`` and ``webfetch`` write VAF's own cache and debug files.
-  ``cloud_storage`` with ``download`` or ``retrieve`` still writes into the user's Downloads
-  folder, which is no ancestor of a chat's project folder, so the project context never reads
-  from it; the file's name comes from the user's own cloud. It is the one pending entry of the
-  writer guard, to be decided per call like ``python_sandbox``;
+  folder; ``web_search`` and ``webfetch`` write VAF's own cache and debug files;
+  ``code_audit`` writes its last result as ``vaf-audit/last.json`` inside the git folder of the
+  project it audits (a fixed name, through a helper in vaf/core/code_audit.py the writer guard
+  does not read). ``cloud_storage`` stays offered for its read actions (``browse``, ``read``,
+  ``search``, ...); ``show_in_viewer`` puts the file into the chat's document viewer, session
+  state the user sees, and writes no file;
+- ``python_sandbox`` does not (``refuse_work``), whatever its arguments: the scratch
+  environment is the user's own long-lived container with a writable HOME, so what one run
+  leaves there (a file in the Python user site) runs again in the user's later runs;
 - the editor tools (``replace_editor_selection``, ``replace_editor_text``) only send an edit to
   the document open in the browser, and the user saves it;
 - the registered MCP server tools an administrator set to read, and ``mcp_call`` reaching
@@ -109,6 +114,8 @@ _WHY = {
     "refuse_standing": ("it changes how VAF works for your user from now on, which needs your "
                         "user's confirmation.", _CONFIRM_LATER),
     "refuse_write": ("it writes files, which needs your user's confirmation.", _CONFIRM_LATER),
+    "refuse_own_messenger": ("it sends a message to your user's own messenger, which needs your "
+                             "user's confirmation.", _CONFIRM_LATER),
 }
 
 #: What the requesting agent is told when the turn stopped at a draft the user has to approve
@@ -249,16 +256,18 @@ def agent_request_kind(name: str, tool: Any, source: str = "",
     ``refuse_person`` for ``hold`` on a tool no park lane holds; else ``"refuse_write"`` for a
     tool that declares ``file_access = "write"``, whatever its arguments, its target and the
     caller's role, and whatever ``agent_request = "allow"`` says: only a send a park lane holds
-    is exempt, because the park is the user's confirmation. With the call's ``args``: the
-    tool's answer for this very call (``BaseTool.agent_request_for``, e.g. ``mcp_call`` by the
-    level of the server tool it reaches). Fail closed: a contract that cannot be read
+    is exempt, because the park is the user's confirmation; ``"refuse_own_messenger"`` for
+    such a tool that sends to the user's own messenger (``channels.OWNER_SEND_TOOLS``). With
+    the call's ``args``: the tool's answer for this very call (``BaseTool.agent_request_for``,
+    e.g. ``mcp_call`` by the level of the server tool it reaches, ``cloud_storage`` by its
+    action, which may also be ``"refuse_write"``). Fail closed: a contract that cannot be read
     refuses."""
     try:
         from vaf.core.tool_contract import normalize_agent_request, resolve_tool_contract
         contract = resolve_tool_contract(name, tool)
         kind = contract.agent_request
         if args is not None and callable(getattr(tool, "agent_request_for", None)):
-            kind = normalize_agent_request(tool.agent_request_for(dict(args)))
+            kind = normalize_agent_request(tool.agent_request_for(dict(args)), per_call=True)
     except Exception:
         return "refuse_person"
     restrictions = set(contract.channel_restrictions or ())
@@ -276,6 +285,13 @@ def agent_request_kind(name: str, tool: Any, source: str = "",
     if kind == "allow" and not parked \
             and str(getattr(tool, "file_access", "") or "").strip().lower() == "write":
         kind = "refuse_write"
+    if kind == "refuse_write":
+        # A send to the user's own messenger carries the mode for the attachment it reads, not
+        # for a file it writes: refused alike, told truthfully (the channel registry says
+        # which sends reach the user).
+        from vaf.core.channels import OWNER_SEND_TOOLS
+        if name in OWNER_SEND_TOOLS:
+            kind = "refuse_own_messenger"
     return None if kind == "allow" else kind
 
 

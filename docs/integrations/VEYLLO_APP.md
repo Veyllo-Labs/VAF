@@ -151,16 +151,18 @@ is a turn of your account's app chat, with these differences
   whose own file tools would run outside these limits; every tool that writes files, for every
   account and wherever it writes (`write_file`, `edit_file`, `download_file`,
   `document_writer`, the document agent `document_agent`, the git tools `git_init` and
-  `git_add_commit`, and `python_sandbox` with `export_files`; a tool declaring
-  `file_access = "write"` is refused whatever its path), so no request writes a `VAF.md` or a
-  file that runs later (`.git/hooks`, `package.json` scripts, a `Makefile`, `.envrc`,
-  `.vscode/tasks.json`, `~/.bashrc`, an autostart entry); a message to your own messenger
-  (`send_to_user`, `send_telegram`, `send_discord`, `send_veyllo_app`, and `send_whatsapp`
-  without a number, which goes to your own); and what needs your
-  confirmation for another reason (`user_phone`, `store_credential`, `github_create_issue`,
-  `github_update_file`, and every MCP tool an administrator has not set to read, `mcp_call`
-  included). Confirming these from the
-  app comes with a later update. A call that needs a confirmation is refused at once; no dialog
+  `git_add_commit`, and `cloud_storage` with `save`, `download` or `retrieve`; a tool
+  declaring `file_access = "write"` is refused whatever its path), so no request writes a
+  `VAF.md` or a file that runs later (`.git/hooks`, `package.json` scripts, a `Makefile`,
+  `.envrc`, `.vscode/tasks.json`, `~/.bashrc`, an autostart entry); code in the Python sandbox
+  (`python_sandbox`, whatever its arguments: your sandbox container lives on between runs, so
+  what a request leaves there would run again in your later runs); a message to your own
+  messenger (`send_to_user`, `send_telegram`, `send_discord`, `send_veyllo_app`, and
+  `send_whatsapp` without a number, which goes to your own; the app's agent is told that it
+  sends a message, not that it writes files); and what needs your confirmation for another
+  reason (`user_phone`, `store_credential`, `github_create_issue`, `github_update_file`, and
+  every MCP tool an administrator has not set to read, `mcp_call` included). Confirming these
+  from the app comes with a later update. A call that needs a confirmation is refused at once; no dialog
   appears in the web UI and nothing waits. Answers you gave ahead still hold: a tool you
   allowed always, a trusted folder, an "allow for this chat" in the app chat, and the admin
   bypass.
@@ -181,8 +183,10 @@ is a turn of your account's app chat, with these differences
   to you); the MCP tools set to read; and the research agent, whose own tools hold nothing a
   request is refused. A few tools still write a file whose name the request does not choose:
   the research agent's report (`research_<topic>_<time>` in the chat's workspace), VAF's own
-  caches of web searches and fetched pages, and a file `cloud_storage` downloads from your own
-  cloud into your Downloads folder, which no project's `VAF.md` search reaches.
+  caches of web searches and fetched pages, and the code audit's last result
+  (`vaf-audit/last.json` inside the git folder of the project it audits). Your cloud storage
+  stays readable (`cloud_storage` browse, search, read, and showing a file in the document
+  viewer).
 - **The answer goes to the phone that asked.** It streams as `delta` and ends with `done`, both
   under the request's own id, to that device only, without "read" or "typing"; it is held in
   that device's outbox only, and only that device gets a push. Your other phones see nothing

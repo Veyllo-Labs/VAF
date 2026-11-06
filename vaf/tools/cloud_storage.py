@@ -659,6 +659,18 @@ class CloudStorageTool(BaseTool):
     # written out in `_action_save`, where the boundary is applied narrowly instead.
     identity_kwargs = ("user_scope_id", "username", "user_role")
 
+    #: The actions that only read: from the cloud, into the reply or the open document viewer.
+    _READ_ACTIONS = ("browse", "list", "read", "search", "search_all", "show_in_viewer",
+                     "status")
+
+    def agent_request_for(self, args: Dict[str, Any]) -> str:
+        """On another agent's request, a call that writes files is refused: ``save`` copies a
+        file to a destination the call names, ``download`` and ``retrieve`` write into the
+        user's Downloads folder. Read by the action as `run` dispatches it (the exact value, so
+        an unknown one is refused too); the read actions stay offered."""
+        action = (args or {}).get("action", "browse")
+        return self.agent_request if action in self._READ_ACTIONS else "refuse_write"
+
     def run(self, **kwargs) -> str:
         return run_cloud_storage(
             action=kwargs.get("action", "browse"),

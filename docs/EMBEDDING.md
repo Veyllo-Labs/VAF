@@ -1469,8 +1469,9 @@ Key declarative rules the runtime enforces:
   which today are its own mail and WhatsApp tools, and refused for any other tool). Refused
   tools are hidden from such a turn and answer the model with the reason. A value outside the
   five refuses. A tool kept off chats is refused there whatever this says. A tool whose answer
-  depends on its arguments overrides `agent_request_for(args)` (same five values; VAF's
-  `mcp_call` answers by the level of the server tool it reaches). A tool with
+  depends on its arguments overrides `agent_request_for(args)` (the same five values, plus
+  `"refuse_write"` for a call that writes files; VAF's `mcp_call` answers by the level of the
+  server tool it reaches, `cloud_storage` by its action). A tool with
   `file_access = "write"` is refused in such a turn whatever its arguments, unless it declares
   `"hold"` and VAF's park lane holds the call; a tool that writes files without that mode
   declares a refusal here.

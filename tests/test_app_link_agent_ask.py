@@ -72,7 +72,11 @@ MUTATIONS, each turns the named test red:
   drop the declaration of a writer without the mode (git_init, update_codex, set_git_coauthor,
   document_agent, ...) -> test_no_tool_writes_files_on_a_request_unseen and its
   test_each_refused_tool_declares_itself case, a stale reviewed entry -> the same guard;
-  drop or widen `python_sandbox.agent_request_for` -> test_python_sandbox_exports_nothing_on_a_request;
+  drop `python_sandbox`'s refusal -> test_python_sandbox_runs_nothing_on_a_request; drop
+  `cloud_storage.agent_request_for` or open an action it does not list
+  -> test_cloud_storage_writes_nothing_on_a_request; refuse "refuse_write" from a call, or
+  accept it from a class -> test_only_a_call_may_answer_refuse_write; tell an own-messenger
+  send it writes files -> test_a_request_sends_nothing_to_the_users_own_messengers;
   bring back the path resolution -> test_the_path_part_is_gone;
 - replay a stored user message raw -> test_a_stored_request_is_replayed_inside_its_fence;
 - let the compaction keep a request or its answer -> test_the_compaction_learns_nothing_from_a_request;
@@ -761,7 +765,7 @@ def test_the_phone_fence_shares_the_helper():
 _DECLARED = {
     "refuse_work": ["librarian_agent", "coding_agent", "create_automation", "update_automation", "restore_automation",
                     "execute_workflow", "set_timer", "room_send", "room_open", "room_invite",
-                    "room_join", "room_react"],
+                    "room_join", "room_react", "python_sandbox"],
     "refuse_standing": ["checkpoint_context", "create_skill", "update_skill", "delete_skill",
                         "update_user_identity",
                         "create_contact", "update_contact", "add_automation_note",
@@ -834,13 +838,14 @@ def test_the_sends_declare_the_hold_and_only_parkable_ones_hold():
             agent_src_tools["send_whatsapp"].file_access} == {"write"}
     for cls in (SendToUserTool, SendTelegramTool, SendDiscordTool, SendVeylloAppTool):
         assert cls.file_access == "write"
-        assert agent_request_kind(cls.name, cls, "veyllo_app") == "refuse_write", cls.name
+        assert agent_request_kind(cls.name, cls, "veyllo_app") == "refuse_own_messenger", \
+            cls.name
     # Per call: a WhatsApp message to a number is parked; one to the user's own number is not,
     # so it is refused like the other sends to the user's own messengers.
     whatsapp = agent_src_tools["send_whatsapp"]()
     for args, kind in (({"to_phone": "+491700000001", "message": "hi"}, None),
                        ({"phone_number": "+491700000002", "message": "hi"}, None),
-                       ({"message": "to myself"}, "refuse_write")):
+                       ({"message": "to myself"}, "refuse_own_messenger")):
         assert agent_request_kind("send_whatsapp", whatsapp, "veyllo_app", args) == kind, args
     assert agent_request_kind("send_mail", agent_src_tools["send_mail"](), "veyllo_app",
                               {"to": "x@example.org"}) is None
@@ -1419,6 +1424,13 @@ def _refused_for_writing(out) -> bool:
             and "later update" in str(out))
 
 
+def _refused_as_own_messenger(out) -> bool:
+    return (str(out).startswith("[APP AGENT]")
+            and "it sends a message to your user's own messenger, which needs your user's "
+                "confirmation." in str(out)
+            and "it writes files" not in str(out) and "later update" in str(out))
+
+
 _FILE_TOOLS = ("write_file", "edit_file", "download_file", "document_writer")
 _ROLE_TURNS = {"user": lambda agent: _ask_turn(agent), "admin": lambda agent: _admin_ask_turn(agent)}
 
@@ -1536,8 +1548,9 @@ _SELF_SENDS = ("send_to_user", "send_telegram", "send_discord", "send_veyllo_app
 @pytest.mark.parametrize("role", ["user", "admin"])
 def test_a_request_sends_nothing_to_the_users_own_messengers(agent_world, monkeypatch, role):
     """The sends to the user's own messengers declare `file_access = "write"` (the root set an
-    attachment is read from) and hold nothing, so they are refused with the other writers; the
-    parked sends are covered by test_a_request_holds_sends_in_the_agent."""
+    attachment is read from) and hold nothing, so they are refused with the other writers, and
+    told what they really do: send a message, not write a file. The parked sends are covered
+    by test_a_request_holds_sends_in_the_agent."""
     agent = agent_world.make()
     sent = []
     for name in _SELF_SENDS + ("send_whatsapp",):
@@ -1546,12 +1559,12 @@ def test_a_request_sends_nothing_to_the_users_own_messengers(agent_world, monkey
     _ROLE_TURNS[role](agent)
     for name in _SELF_SENDS:
         out = agent.execute_tool(name, {"message": "hi"})
-        assert _refused_for_writing(out), (name, out)
+        assert _refused_as_own_messenger(out), (name, out)
         assert name not in agent.visible_tools()
     # WhatsApp to the user's own number: not parked, so refused too; the tool stays offered
     # for a message to somebody else, which is parked.
     out = agent.execute_tool("send_whatsapp", {"message": "to myself"})
-    assert _refused_for_writing(out), out
+    assert _refused_as_own_messenger(out), out
     assert "send_whatsapp" in agent.visible_tools()
     assert sent == []
 
@@ -1571,11 +1584,12 @@ def test_every_file_access_write_tool_is_refused_on_a_request(agent_world):
             assert name in THIRD_PARTY_SEND_TOOLS and \
                 resolve_tool_contract(name, writers[name]).agent_request == "hold", name
         else:
-            assert kind in ("refuse_write", "off_chats"), (name, kind)
-    assert {n for n, k in kinds.items() if k == "refuse_write"} >= set(_FILE_TOOLS) | set(_SELF_SENDS)
+            assert kind in ("refuse_write", "refuse_own_messenger", "off_chats"), (name, kind)
+    assert {n for n, k in kinds.items() if k == "refuse_write"} >= set(_FILE_TOOLS)
+    assert {n for n, k in kinds.items() if k == "refuse_own_messenger"} == set(_SELF_SENDS)
     assert {n for n, k in kinds.items() if k is None} == {"send_mail", "send_whatsapp"}
     assert agent_request_kind("send_whatsapp", writers["send_whatsapp"], "veyllo_app",
-                              {"message": "to myself"}) == "refuse_write"
+                              {"message": "to myself"}) == "refuse_own_messenger"
 
 
 # What a static read of a module counts as writing a file (or VAF's settings).
@@ -1586,12 +1600,10 @@ _WRITES = re.compile(
 
 # Reviewed: a request may run it although its module writes, with the reason.
 _WRITES_REVIEWED = {
-    "python_sandbox": "decided per call: a run with export_files is refused, a run without "
-                      "touches only the container's scratch volume",
     "research_agent": "writes its report under a name VAF builds, research_<topic>_<time>, "
                       "and its own checkpoints",
-    "cloud_storage": "download and retrieve write into the user's Downloads folder, no "
-                     "ancestor of a project folder; pending: to be decided per call",
+    "cloud_storage": "decided per call: save, download and retrieve answer refuse_write "
+                     "(agent_request_for); only the read actions run",
     "web_search": "VAF's own cache and debug files, named by VAF",
     "webfetch": "VAF's own cache and debug files, named by VAF",
     "read_file": "a read tool; its module holds write_file and edit_file, which are refused",
@@ -1635,20 +1647,78 @@ def test_no_tool_writes_files_on_a_request_unseen(agent_world):
 
 
 @pytest.mark.parametrize("role", ["user", "admin"])
-def test_python_sandbox_exports_nothing_on_a_request(agent_world, monkeypatch, role):
-    from vaf.core.agent_origin import agent_request_kind
+def test_python_sandbox_runs_nothing_on_a_request(agent_world, monkeypatch, role):
+    """The scratch container outlives the run: a request's code may run in none of it, with
+    exports or without. The person's own turn runs as before."""
     agent = agent_world.make()
     tool = agent.tools["python_sandbox"]
     runs = []
     monkeypatch.setattr(tool, "run", lambda **k: runs.append(k) or "ran")
     _ROLE_TURNS[role](agent)
-    for exports in (["VAF.md"], "VAF.md"):
-        out = agent.execute_tool("python_sandbox", {"code": "open('VAF.md', 'w').write('x')",
-                                                    "export_files": exports})
-        assert out.startswith("[APP AGENT]"), (exports, out)
-    assert runs == []
-    assert agent_request_kind("python_sandbox", tool, "veyllo_app", {"code": "print(1)"}) is None
-    assert "python_sandbox" in agent.visible_tools()
+    for args in ({"code": "print(1)"}, {"code": "open('VAF.md', 'w').write('x')",
+                                         "export_files": ["VAF.md"]}):
+        out = agent.execute_tool("python_sandbox", args)
+        assert out.startswith("[APP AGENT]") and "keeps running after this request" in out, out
+    assert runs == [] and "python_sandbox" not in agent.visible_tools()
+    _ask_turn(agent, asked=False)
+    assert agent.execute_tool("python_sandbox", {"code": "print(1)"}) == "ran"
+
+
+@pytest.mark.parametrize("role", ["user", "admin"])
+def test_cloud_storage_writes_nothing_on_a_request(ask_home, agent_world, monkeypatch, role):
+    """`save` copies a file to the destination the call names, `download` and `retrieve` write
+    into Downloads: on a request each one is refused as a write and nothing is written, for a
+    user and an admin; the read actions stay offered."""
+    import vaf.tools.cloud_storage as cloud
+    from vaf.core.agent_origin import agent_request_kind
+    monkeypatch.setattr(cloud, "_get_first_connected_account", lambda username: ("gdrive", "acc1"))
+    source = ask_home.workspace / "notes.md"
+    source.write_text("rule", encoding="utf-8")
+    targets = [ask_home.projects / "VAF.md", ask_home.home / ".bashrc",
+               ask_home.data / "custom_tools" / "evil.py"]
+    agent = agent_world.make()
+    _ROLE_TURNS[role](agent)
+    for target in targets:
+        out = agent.execute_tool("cloud_storage", {"action": "save", "file_path": str(source),
+                                                   "remote_path": str(target)})
+        assert _refused_for_writing(out), (target, out)
+    for args in ({"action": "download", "file_id": "f1"},
+                 {"action": "retrieve", "file_path": "notes.md"},
+                 {"action": " Save", "file_path": str(source)}):
+        assert _refused_for_writing(agent.execute_tool("cloud_storage", args)), args
+    for target in targets:
+        assert not target.exists(), target
+    assert not Platform.downloads_dir().exists() or not any(Platform.downloads_dir().iterdir())
+    tool = agent.tools["cloud_storage"]
+    for action in ("browse", "list", "read", "search", "search_all", "show_in_viewer", "status"):
+        assert agent_request_kind("cloud_storage", tool, "veyllo_app", {"action": action}) \
+            is None, action
+    assert agent_request_kind("cloud_storage", tool, "veyllo_app", {}) is None
+    assert "cloud_storage" in agent.visible_tools()
+
+
+def test_only_a_call_may_answer_refuse_write():
+    """`refuse_write` is what a call of a writer gets, so `agent_request_for` may answer it;
+    as a class's `agent_request` it is no value of the vocabulary and refuses like a typo."""
+    from vaf.core.agent_origin import agent_request_kind
+
+    class Exporter(vaf.BaseTool):
+        name = "exporter"
+        description = "Export."
+
+        def agent_request_for(self, args):
+            return "refuse_write" if args.get("save") else "allow"
+
+        def run(self, **kwargs):
+            return "ok"
+
+    class Declared(Exporter):
+        agent_request = "refuse_write"
+
+    assert agent_request_kind("exporter", Exporter(), "veyllo_app", {"save": True}) \
+        == "refuse_write"
+    assert agent_request_kind("exporter", Exporter(), "veyllo_app", {}) is None
+    assert agent_request_kind("exporter", Declared(), "veyllo_app") == "refuse_person"
 
 
 def test_the_path_part_is_gone():

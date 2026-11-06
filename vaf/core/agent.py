@@ -28,7 +28,7 @@ from vaf.core.backend import ServerManager
 from vaf.core import local_engine
 from vaf.core import model_health
 from vaf.core.platform import Platform
-from vaf.core.channels import ALL_SEND_TOOLS, CHANNEL_SEND_TOOLS, CHAT_SEND_TOOLS
+from vaf.core.channels import ALL_SEND_TOOLS, CHANNEL_SEND_TOOLS, OWNER_SEND_TOOLS
 from vaf.core.log_helper import append_domain_log, get_dated_log_path, log_timeline_event
 from vaf.core.system_prompt import SystemPromptManager
 from vaf.core.last_interaction import get_last_interaction
@@ -1429,7 +1429,7 @@ def release_disallowed_local_backends() -> int:
 
 
 #: The send tools that reach the OWNER from a Front Office turn (the back-channel).
-_OWNER_SEND_TOOLS = CHAT_SEND_TOOLS + ("send_to_user",)
+_OWNER_SEND_TOOLS = OWNER_SEND_TOOLS
 
 
 # The router forces the ssh tool for a message that names another machine the way people
@@ -14251,7 +14251,7 @@ class Agent:
         binding), so this answers a name the model writes anyway, with the reason and what the
         user can do instead, and a tool that writes files (``file_access = "write"``) whatever
         its arguments. With the call's repaired ``args`` it also answers for this very call: a
-        tool whose answer depends on them (``mcp_call``, ``python_sandbox``). FAIL CLOSED: an
+        tool whose answer depends on them (``mcp_call``, ``cloud_storage``). FAIL CLOSED: an
         error while deciding refuses. None outside such a turn and for a tool it may run."""
         asked_by = getattr(self, "_turn_asked_by_agent", None)
         if not asked_by or name == "multi_tool_use.parallel":

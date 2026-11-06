@@ -47,6 +47,10 @@ ALLOWED_PERMISSION_LEVELS = {"read", "write", "dangerous", "system"}
 ALLOWED_SIDE_EFFECT_CLASSES = {"none", "reversible", "irreversible"}
 # BaseTool.agent_request: how a tool answers a turn another agent asked for.
 AGENT_REQUEST_KINDS = ("allow", "refuse_work", "refuse_standing", "refuse_person", "hold")
+# BaseTool.agent_request_for: the same five for ONE call, and "refuse_write" for a call that
+# writes files - what every call of a `file_access = "write"` tool gets, for a tool whose
+# writing depends on its arguments (`cloud_storage`: save and download write, browse reads).
+AGENT_REQUEST_CALL_KINDS = AGENT_REQUEST_KINDS + ("refuse_write",)
 
 # Human-facing bundles for tool lists (the web tools window, the CLI table, the
 # TUI overlay, list_tools). The order is the display order.
@@ -196,12 +200,14 @@ def _decision_label(*, blocked: bool, requires_confirmation: bool) -> str:
 # Contract resolution
 # ─────────────────────────────────────────────────────────────────────────────
 
-def normalize_agent_request(value: Any) -> str:
-    """A ``BaseTool.agent_request`` value as the contract reads it. A value outside the
-    vocabulary refuses (as "refuse_person"): unlike the category, a typo here would otherwise
-    open a tool to another agent's request."""
+def normalize_agent_request(value: Any, *, per_call: bool = False) -> str:
+    """A ``BaseTool.agent_request`` value as the contract reads it (with ``per_call``, an
+    answer of ``BaseTool.agent_request_for``, which may also be "refuse_write"). A value
+    outside the vocabulary refuses (as "refuse_person"): unlike the category, a typo here would
+    otherwise open a tool to another agent's request."""
     raw = str(value or "allow").strip().lower()
-    return raw if raw in AGENT_REQUEST_KINDS else "refuse_person"
+    return raw if raw in (AGENT_REQUEST_CALL_KINDS if per_call else AGENT_REQUEST_KINDS) \
+        else "refuse_person"
 
 
 def resolve_tool_contract(tool_name: str, tool: Any | None) -> ToolContract:

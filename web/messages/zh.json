@@ -1042,7 +1042,8 @@
       "invalidPhone": "请输入有效的电话号码（例如 +49123456789）",
       "registerFailed": "无法登记该号码。",
       "backendUnreachable": "无法连接后端。VAF 在运行吗？",
-      "serverError": "服务器错误（{status}）"
+      "serverError": "服务器错误（{status}）",
+      "qrAlt": "用于关联 WhatsApp 的二维码"
     },
     "veylloApp": {
       "title": "Veyllo App",

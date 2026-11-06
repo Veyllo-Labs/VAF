@@ -1042,7 +1042,8 @@
       "invalidPhone": "กรอกหมายเลขโทรศัพท์ที่ถูกต้อง (เช่น +49123456789)",
       "registerFailed": "ลงทะเบียนหมายเลขไม่ได้",
       "backendUnreachable": "ติดต่อแบ็กเอนด์ไม่ได้ VAF ทำงานอยู่ไหม",
-      "serverError": "ข้อผิดพลาดของเซิร์ฟเวอร์ ({status})"
+      "serverError": "ข้อผิดพลาดของเซิร์ฟเวอร์ ({status})",
+      "qrAlt": "คิวอาร์โค้ดสำหรับเชื่อมโยง WhatsApp"
     },
     "veylloApp": {
       "title": "Veyllo App",

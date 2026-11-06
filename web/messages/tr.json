@@ -1042,7 +1042,8 @@
       "invalidPhone": "Geçerli bir telefon numarası gir (örn. +49123456789)",
       "registerFailed": "Numara kaydedilemedi.",
       "backendUnreachable": "Arka uca ulaşılamıyor. VAF çalışıyor mu?",
-      "serverError": "Sunucu hatası ({status})"
+      "serverError": "Sunucu hatası ({status})",
+      "qrAlt": "WhatsApp'ı bağlamak için QR kodu"
     },
     "veylloApp": {
       "title": "Veyllo App",

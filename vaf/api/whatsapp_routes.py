@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from vaf.core.config import Config, get_local_admin_scope_id, get_local_admin_username
@@ -25,7 +26,8 @@ logger = logging.getLogger("vaf.api.whatsapp")
 
 router = APIRouter(prefix="/api/whatsapp", tags=["whatsapp"])
 
-# QR state per username: { "qr": base64_data, "ts": time }
+# QR state per username: { "qr_png": base64 PNG of the current code, "ts": time }. The
+# code's own value is not kept: it is drawn once when the bridge emits it, see _run_qr_login.
 _qr_state: Dict[str, Dict[str, Any]] = {}
 # QR process per username (to terminate before starting a new one)
 _qr_procs: Dict[str, subprocess.Popen] = {}
@@ -876,6 +878,9 @@ async def get_whatsapp_session_history(session_id: str, request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+_QR_DRAW_FAILED = "The QR code could not be drawn. Try again with a new code."
+
+
 def _run_qr_login(username: str) -> None:
     """Spawn Node process for QR login, capture QR to _qr_state."""
     from vaf.core.log_helper import log_whatsapp_qr
@@ -949,10 +954,26 @@ def _run_qr_login(username: str) -> None:
                     continue
                 typ = obj.get("type")
                 if typ == "qr":
-                    log_whatsapp_qr(f"[VAF] Received: qr (len={len(str(obj.get('qr') or ''))})")
-                    qr_data = obj.get("qr", "")
+                    qr_data = str(obj.get("qr") or "")
+                    log_whatsapp_qr(f"[VAF] Received: qr (len={len(qr_data)})")
+                    if not qr_data:
+                        continue
+                    # Drawn here, on this machine, once per code: the value is the link's
+                    # pairing reference and keys, so it never goes to a renderer elsewhere,
+                    # and the route answers the PNG without drawing on every poll. Looked up
+                    # at call time, as the Veyllo App pairing does, so there is one renderer.
+                    from vaf.api.auth_routes import qr_png_base64
+                    try:
+                        qr_png = qr_png_base64(qr_data)
+                    except Exception as e:
+                        # Only the exception's type: its text may quote the value.
+                        log_whatsapp_qr(f"[VAF] QR code could not be drawn ({type(e).__name__})")
+                        with _qr_lock:
+                            _qr_state[username] = {"error": _QR_DRAW_FAILED, "ts": __import__("time").time()}
+                        proc.terminate()
+                        return
                     with _qr_lock:
-                        _qr_state[username] = {"qr": qr_data, "ts": __import__("time").time()}
+                        _qr_state[username] = {"qr_png": qr_png, "ts": __import__("time").time()}
                 elif typ == "connected":
                     self_jid = obj.get("selfJid") or ""
                     phone = _jid_to_phone(self_jid)
@@ -1118,9 +1139,16 @@ async def get_qr_log_path(request: Request):
     return {"path": str(get_dated_log_path("whatsapp_qr", "log"))}
 
 
+def _qr_answer(content: Dict[str, Any]) -> JSONResponse:
+    """Every answer of the QR poll is `no-store`: one of them carries the code that links a
+    device, and no cache between here and the browser may keep it."""
+    return JSONResponse(content=content, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/qr")
 async def get_qr_code(request: Request):
-    """Get current QR code for linking (or status). Poll until connected."""
+    """Get current QR code for linking (or status). Poll until connected. The code comes as
+    `qr_png`, a PNG drawn on this machine; its value is not part of the answer."""
     try:
         user_info = get_current_vaf_user(request)
         username = user_info["username"]
@@ -1130,15 +1158,15 @@ async def get_qr_code(request: Request):
 
         if state.get("connected"):
             phone = state.get("phone") or ""
-            return {"status": "connected", "message": "WhatsApp linked successfully.", "phone": phone}
+            return _qr_answer({"status": "connected", "message": "WhatsApp linked successfully.", "phone": phone})
         if state.get("error"):
-            return {"status": "error", "error": state["error"]}
-        if state.get("qr"):
-            return {"status": "qr", "qr": state["qr"]}
-        return {"status": "waiting", "message": state.get("message") or "Start QR flow from Settings -> Connections."}
+            return _qr_answer({"status": "error", "error": state["error"]})
+        if state.get("qr_png"):
+            return _qr_answer({"status": "qr", "qr_png": state["qr_png"]})
+        return _qr_answer({"status": "waiting", "message": state.get("message") or "Start QR flow from Settings -> Connections."})
     except Exception as e:
         logger.exception("WhatsApp QR endpoint error: %s", e)
-        return {"status": "error", "error": f"Internal error: {e}"}
+        return _qr_answer({"status": "error", "error": f"Internal error: {e}"})
 
 
 @router.post("/qr/reset")

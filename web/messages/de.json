@@ -1042,7 +1042,8 @@
       "invalidPhone": "Gib eine gültige Telefonnummer ein (z. B. +49123456789)",
       "registerFailed": "Die Nummer konnte nicht registriert werden.",
       "backendUnreachable": "Backend nicht erreichbar. Läuft VAF?",
-      "serverError": "Serverfehler ({status})"
+      "serverError": "Serverfehler ({status})",
+      "qrAlt": "QR-Code zum Verknüpfen von WhatsApp"
     },
     "veylloApp": {
       "title": "Veyllo App",

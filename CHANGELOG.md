@@ -57,6 +57,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **The WhatsApp setup no longer sends its link code to an outside QR service.** Since
+  0.1.0a0, and in every release up to 0.1.0a35, the setup window had its QR code drawn by a
+  public web service (api.qrserver.com), so the linking value in each code, and the address of
+  your VAF, reached that service while the code was on screen. VAF now draws the code itself,
+  as it already did for the 2FA and Veyllo App codes, and linking works without internet access
+  to anything but WhatsApp. A code is valid only for the seconds it is shown and holds no key to
+  your messages. If the agent number shown under Settings, Connections, WhatsApp is not the
+  phone you linked, use Reset and link again.
+
 - **A malformed rate-limit value can no longer stall VAF.** The parser that reads the wait an
   AI provider names after a rate limit (a header, or the "try again in" phrase of the error
   message) could take minutes on some malformed values, and while it ran the whole VAF process

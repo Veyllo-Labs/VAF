@@ -135,10 +135,10 @@ def test_every_refusal_has_a_sentence():
 # ── step two ────────────────────────────────────────────────────────────────────
 
 def test_the_qr_never_leaves_this_machine():
-    """The QR is the server's own PNG: one image, a data URL, nothing fetched elsewhere.
-    MUTATION: the third-party renderer URL as the image source - red."""
+    """The QR is the server's own PNG: one image, a data URL. That no web image anywhere is
+    fetched from a third-party renderer is the repo-wide guard in test_qr_drawn_on_this_machine.py.
+    MUTATION: another image source - red."""
     src = _src(WIZARD)
-    assert "qrserver" not in src and "src={`http" not in src and 'src="http' not in src
     images = re.findall(r"<img\b[^>]*>", src, re.S)
     assert len(images) == 1, images
     assert "src={'data:image/png;base64,' + qrPng}" in images[0]

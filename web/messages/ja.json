@@ -1042,7 +1042,8 @@
       "invalidPhone": "有効な電話番号を入力してください（例：+49123456789）",
       "registerFailed": "番号を登録できませんでした。",
       "backendUnreachable": "バックエンドに接続できません。VAFは起動していますか？",
-      "serverError": "サーバーエラー（{status}）"
+      "serverError": "サーバーエラー（{status}）",
+      "qrAlt": "WhatsAppをリンクするためのQRコード"
     },
     "veylloApp": {
       "title": "Veyllo App",

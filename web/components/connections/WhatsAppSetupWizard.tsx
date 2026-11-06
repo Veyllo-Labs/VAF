@@ -22,7 +22,8 @@ interface WhatsAppSetupWizardProps {
 export default function WhatsAppSetupWizard({ isOpen, onClose, onComplete }: WhatsAppSetupWizardProps) {
     const t = useTranslations('settings.whatsappWizard');
     const [step, setStep] = useState<'qr' | 'linked' | 'done' | 'error'>('qr');
-    const [qrData, setQrData] = useState<string | null>(null);
+    // The code as the server's own PNG (base64): the image is a data URL, nothing is fetched elsewhere.
+    const [qrPng, setQrPng] = useState<string | null>(null);
     const [linkedPhone, setLinkedPhone] = useState<string | null>(null);
     const [ownerNumber, setOwnerNumber] = useState<string | null>(null);
     const [phoneNumber, setPhoneNumber] = useState('');
@@ -44,7 +45,7 @@ export default function WhatsAppSetupWizard({ isOpen, onClose, onComplete }: Wha
             }
             const data = await res.json();
             if (data.status === 'connected') {
-                setQrData(null);
+                setQrPng(null);
                 setWaitingMsg('');
                 setLinkedPhone(data.phone || null);
                 // The link is live: start the bridge now so the agent number is reachable,
@@ -55,8 +56,8 @@ export default function WhatsAppSetupWizard({ isOpen, onClose, onComplete }: Wha
                 setStep('linked');
                 return;
             }
-            if (data.status === 'qr' && data.qr) {
-                setQrData(data.qr);
+            if (data.status === 'qr' && data.qr_png) {
+                setQrPng(String(data.qr_png || ''));
                 setError('');
                 setWaitingMsg('');
                 return;
@@ -78,7 +79,7 @@ export default function WhatsAppSetupWizard({ isOpen, onClose, onComplete }: Wha
     const startQrFlow = async (resetFirst = false) => {
         setStep('qr');
         setError('');
-        setQrData(null);
+        setQrPng(null);
         setWaitingMsg('');
         setLinkedPhone(null);
         try {
@@ -105,7 +106,7 @@ export default function WhatsAppSetupWizard({ isOpen, onClose, onComplete }: Wha
                     setLinkedPhone(status.linked_phone || null);
                     setOwnerNumber(status.owner_number || null);
                     setStep('linked');
-                    setQrData(null);
+                    setQrPng(null);
                     setError('');
                     setWaitingMsg('');
                     return;
@@ -123,9 +124,9 @@ export default function WhatsAppSetupWizard({ isOpen, onClose, onComplete }: Wha
         // poll /api/whatsapp/qr every ~1.5s for the whole time Settings is open,
         // even when the user never opened WhatsApp setup.
         if (!isOpen || step !== 'qr') return;
-        const t = setInterval(pollQr, qrData ? 2500 : 1500);
+        const t = setInterval(pollQr, qrPng ? 2500 : 1500);
         return () => clearInterval(t);
-    }, [isOpen, step, qrData, pollQr]);
+    }, [isOpen, step, qrPng, pollQr]);
 
     const handleAddOwnerNumber = async () => {
         const phone = phoneNumber.trim().replace(/\s/g, '');
@@ -178,12 +179,12 @@ export default function WhatsAppSetupWizard({ isOpen, onClose, onComplete }: Wha
                         </div>
                         <p className="text-sm text-gray-600">{t('scanInstructions')}</p>
                         <p className="text-xs text-gray-500">{t('loggingInHint')}</p>
-                        {qrData ? (
+                        {qrPng ? (
                             <div className="flex justify-center p-4 bg-white border rounded-xl">
                                 <img
-                                    src={`https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=${encodeURIComponent(qrData)}`}
-                                    alt="WhatsApp QR Code"
-                                    className="w-64 h-64"
+                                    src={'data:image/png;base64,' + qrPng}
+                                    alt={t('qrAlt')}
+                                    className="w-64 h-64 rounded-xl border border-gray-200 bg-white [image-rendering:pixelated]"
                                 />
                             </div>
                         ) : (

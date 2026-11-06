@@ -696,7 +696,7 @@ _HARDCODED_COPY_DEBT = {
     "web/components/connections/TelegramDashboard.tsx": 0,
     "web/components/connections/TelegramSetupWizard.tsx": 32,
     "web/components/connections/WhatsAppDashboard.tsx": 0,
-    "web/components/connections/WhatsAppSetupWizard.tsx": 1,
+    "web/components/connections/WhatsAppSetupWizard.tsx": 0,
     "web/components/memory/MemoryDetailPanel.tsx": 14,
     "web/components/memory/MemoryGraph.tsx": 8,
     "web/components/memory/RagQueryPanel.tsx": 9,

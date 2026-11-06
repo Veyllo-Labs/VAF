@@ -1042,7 +1042,8 @@
       "invalidPhone": "올바른 전화번호를 입력하세요 (예: +49123456789)",
       "registerFailed": "번호를 등록하지 못했어요.",
       "backendUnreachable": "백엔드에 연결할 수 없어요. VAF가 실행 중인가요?",
-      "serverError": "서버 오류 ({status})"
+      "serverError": "서버 오류 ({status})",
+      "qrAlt": "WhatsApp 연결용 QR 코드"
     },
     "veylloApp": {
       "title": "Veyllo App",

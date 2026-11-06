@@ -42,6 +42,9 @@ def _qr() -> Dict[str, Any]:
         ("local_two_direct", dict(mode="l", direct=["wss://192.168.1.20:8443/api/app-link",
                                                     "wss://[fd00::20]:8443/api/app-link"],
                                   name="Büro Müller")),
+        # "+" and "," in a name are encoded (%2B, %2C): "," also separates the d entries.
+        ("local_name_plus_comma", dict(mode="l", direct=["wss://10.0.0.2:8443/api/app-link"],
+                                       name="R+D, Lab 2")),
     ]
     vectors = []
     for name, kwargs in cases:

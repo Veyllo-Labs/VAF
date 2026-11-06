@@ -44,6 +44,20 @@
         "exp": 1794000000
       },
       "qr": "https://veyllo.app/link#v=1&m=l&k=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&ca=7fK1j-4iz3jmjFpWJ0aZMOZzH50BDl4FJab-TVes4rg&d=wss%3A%2F%2F192.168.1.20%3A8443%2Fapi%2Fapp-link,wss%3A%2F%2F%5Bfd00%3A%3A20%5D%3A8443%2Fapi%2Fapp-link&n=B%C3%BCro%20M%C3%BCller&exp=1794000000"
+    },
+    {
+      "name": "local_name_plus_comma",
+      "input": {
+        "mode": "l",
+        "direct": [
+          "wss://10.0.0.2:8443/api/app-link"
+        ],
+        "name": "R+D, Lab 2",
+        "k": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+        "ca_sha256": "7fK1j-4iz3jmjFpWJ0aZMOZzH50BDl4FJab-TVes4rg",
+        "exp": 1794000000
+      },
+      "qr": "https://veyllo.app/link#v=1&m=l&k=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8&ca=7fK1j-4iz3jmjFpWJ0aZMOZzH50BDl4FJab-TVes4rg&d=wss%3A%2F%2F10.0.0.2%3A8443%2Fapi%2Fapp-link&n=R%2BD%2C%20Lab%202&exp=1794000000"
     }
   ]
 }

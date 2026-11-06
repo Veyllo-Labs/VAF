@@ -13,3 +13,5 @@
 # checkout; tests/test_byte_pinned_files_keep_lf.py refuses a new byte-pinned file without
 # such a rule.
 vaf/auth/data/*.txt text eol=lf
+# The app link's protocol vectors, which scripts/app_link_vectors.py reproduces byte for byte.
+tests/fixtures/app_link/*.json text eol=lf

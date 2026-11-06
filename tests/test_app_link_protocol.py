@@ -42,6 +42,15 @@ def test_qr_vectors():
         assert pr.parse_qr(vector["qr"] + "&zz=1")["k"] == args["k"]
 
 
+def test_a_name_with_plus_and_comma_is_a_vector():
+    """The app side asked how "+" and "," in a name travel: %2B and %2C, never literal."""
+    names = {v["name"]: v for v in _load("qr_vectors.json")["vectors"]}
+    vector = names["local_name_plus_comma"]
+    assert vector["input"]["name"] == "R+D, Lab 2"
+    assert "&n=R%2BD%2C%20Lab%202&" in vector["qr"]
+    assert pr.parse_qr(vector["qr"])["n"] == "R+D, Lab 2"
+
+
 def test_qr_direct_entries_keep_their_commas_encoded():
     qr = pr.build_qr("l", k=bytes(32), ca_sha256=bytes(32), exp=1,
                      direct=["wss://a:1/x,y", "wss://b:2/y"])

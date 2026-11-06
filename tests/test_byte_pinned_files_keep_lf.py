@@ -12,7 +12,9 @@ macOS and red on Windows only: no local run can see it. The common-password list
 WHAT THIS DOES. It reads every test module, finds `<path>.read_bytes()` compared with `==` to
 bytes built in code (a call such as `.encode(...)` or a bytes literal), resolves `<path>` when
 it is a module-level constant under the repository, and requires `eol=lf` for each tracked one
-(`git check-attr`). A comparison of a file with itself, or with a file a test wrote, is not this
+(`git check-attr`). A path joined from a constant directory and a name only known at run time
+(`FIXTURES / name`, the name a generator yields in a loop) pins every tracked file in that
+directory: the app link's vector files were exactly that, and the scan used to skip them. A comparison of a file with itself, or with a file a test wrote, is not this
 class and is left alone.
 """
 import ast
@@ -30,6 +32,9 @@ def _path_of(node, consts, here: Path):
         left = _path_of(node.left, consts, here)
         if left is not None and isinstance(node.right, ast.Constant) and isinstance(node.right.value, str):
             return left / node.right.value
+        if left is not None and not _is_glob(left):
+            # A name known only at run time: every file of that directory may be the one.
+            return left / "*"
         return None
     # Path(__file__).resolve().parents[N] / .parent
     if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute) and node.value.attr == "parents":
@@ -45,6 +50,10 @@ def _path_of(node, consts, here: Path):
             and isinstance(node.args[0], ast.Name) and node.args[0].id == "__file__"):
         return here
     return None
+
+
+def _is_glob(path: Path) -> bool:
+    return "*" in path.name
 
 
 def _built_in_code(node) -> bool:
@@ -78,9 +87,11 @@ def byte_pinned_tracked_files():
     return found
 
 
-def _tracked(rel: str) -> bool:
-    return bool(subprocess.run(["git", "ls-files", "--", rel], cwd=ROOT, capture_output=True,
-                               text=True).stdout.strip())
+def _tracked_files(rel: str):
+    """The tracked files a pinned path names: itself, or every match of a directory glob."""
+    out = subprocess.run(["git", "ls-files", "--", rel], cwd=ROOT, capture_output=True,
+                         text=True).stdout.split()
+    return out
 
 
 def _eol(rel: str) -> str:
@@ -91,7 +102,10 @@ def _eol(rel: str) -> str:
 
 def test_byte_pinned_files_keep_lf():
     """MUTATION: drop the `vaf/auth/data/*.txt` rule from .gitattributes - red."""
-    pinned = {rel: tests for rel, tests in byte_pinned_tracked_files().items() if _tracked(rel)}
+    pinned = {}
+    for rel, tests in byte_pinned_tracked_files().items():
+        for tracked in _tracked_files(rel):
+            pinned.setdefault(tracked, set()).update(tests)
     missing = sorted(f"{rel} (pinned by {', '.join(sorted(tests))})"
                      for rel, tests in pinned.items() if _eol(rel) != "lf")
     assert not missing, ("tracked files that a test compares byte for byte, with no `eol=lf` in "
@@ -100,4 +114,8 @@ def test_byte_pinned_files_keep_lf():
 
 def test_the_scan_sees_the_known_case():
     """The guard's own floor: a scan that finds nothing passes while measuring nothing."""
-    assert "vaf/auth/data/common_passwords.txt" in byte_pinned_tracked_files()
+    found = byte_pinned_tracked_files()
+    assert "vaf/auth/data/common_passwords.txt" in found
+    # A directory joined with a name known only at run time (the vector generator's loop).
+    assert "tests/fixtures/app_link/*" in found
+    assert "tests/fixtures/app_link/qr_vectors.json" in _tracked_files("tests/fixtures/app_link/*")

@@ -378,6 +378,7 @@ def _veyllo_stt(audio: bytes, mime: str, filename: str, model: str,
                 language: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
     import httpx
     from vaf.core.config import Config
+    from vaf.core.rate_limit_gate import RateLimitHeld, rate_limit_gate, send_gated
 
     base = (Config.get("veyllo_base_url", "") or _VEYLLO_DEFAULT_BASE).rstrip("/")
     # verbose_json adds the detected language + duration; unlike OpenAI whisper
@@ -389,13 +390,25 @@ def _veyllo_stt(audio: bytes, mime: str, filename: str, model: str,
     # default to it when no specific hint so detection is robust for ANY of the
     # supported languages, then a confidently detected language pins subsequent turns.
     data = {"model": model, "response_format": "verbose_json", "language": language or "multi"}
-    resp = httpx.post(
-        f"{base}/audio/transcriptions",
-        headers={"Authorization": f"Bearer {_api_key('veyllo')}"},
-        files={"file": (filename, audio, mime)},
-        data=data,
-        timeout=_STT_TIMEOUT,
-    )
+    key = _api_key("veyllo")
+    # The key's request window is shared with the chat lane (vaf/core/rate_limit_gate.py).
+    # A voice turn never waits on it (max_wait 0): a closed window sends nothing and the
+    # caller degrades to the local engine at once, as for any 429; the gate has already
+    # logged its one line.
+    try:
+        resp = send_gated(
+            rate_limit_gate("veyllo", key),
+            lambda: httpx.post(
+                f"{base}/audio/transcriptions",
+                headers={"Authorization": f"Bearer {key}"},
+                files={"file": (filename, audio, mime)},
+                data=data,
+                timeout=_STT_TIMEOUT,
+            ),
+            max_wait=0.0,
+        )
+    except RateLimitHeld:
+        return None, None
     if resp.status_code != 200:
         _warn_api("veyllo", "STT", resp)
         return None, None

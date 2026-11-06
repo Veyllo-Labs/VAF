@@ -652,6 +652,21 @@ def coder_api_providers() -> dict:
     }
 
 
+def coder_rate_limit_wait(gate, parsed_wait: Optional[float], cap: float) -> float:
+    """How long the coder's stream waits after a 429.
+
+    With the key's request gate holding (vaf/core/rate_limit_gate.py; the 429 has just
+    been fed to it), the gate's deadline, exact: what the API named, uncapped, shared with
+    every other lane on the key. Otherwise the parsed wait (2 s when none was named) plus
+    a quarter second, capped at api_retry_after_max.
+    """
+    if gate is not None:
+        held = gate.closed_for()
+        if held > 0:
+            return held
+    return min((2.0 if parsed_wait is None else parsed_wait) + 0.25, cap)
+
+
 def _coder_deepseek_auto_model(in_workflow: bool, subagent_model: Optional[str]) -> str:
     """The concrete model behind ``deepseek-auto`` for a coder run (the API rejects
     the alias itself). A workflow run takes the tool / workflow model
@@ -3843,6 +3858,13 @@ Thumbs.db
             _llm_model = None  # fetched from /v1/models below
             _llm_chat_url = "http://127.0.0.1:8080/v1/chat/completions"
             _llm_models_url = "http://127.0.0.1:8080/v1/models"
+        # The key's request window (vaf/core/rate_limit_gate.py): every POST to
+        # _llm_chat_url goes through send_gated, which holds while the window is closed
+        # and feeds each answer back. None in local mode and for every provider without
+        # request-limit headers, and send_gated then just sends.
+        from vaf.core.rate_limit_gate import RateLimitHeld, rate_limit_gate, send_gated
+        _rate_gate = rate_limit_gate(_provider, _llm_api_key) if _is_api_mode else None
+        _rate_budget = max(0.0, float(Config.get("api_rate_limit_wait_max", 60) or 0))
 
         # Server health check (local llama-server only; API providers are always reachable)
         tui.set_action("Checking server...")
@@ -5692,7 +5714,10 @@ Task {task_idx + 1}: {current_task}
                 "temperature": 0.0,
                 "stream": False,
             }
-            _vr_resp = requests.post(_llm_chat_url, headers=_vr_headers, json=_vr_body, timeout=90)
+            _vr_resp = send_gated(
+                _rate_gate,
+                lambda: requests.post(_llm_chat_url, headers=_vr_headers, json=_vr_body, timeout=90),
+                max_wait=_rate_budget)
             _vr_resp.raise_for_status()
             _vr_data = _vr_resp.json()
             _record_coder_usage(_vr_data)
@@ -5775,8 +5800,11 @@ Task {task_idx + 1}: {current_task}
             _au_body.update(openai_request_params(_provider, _au_model, temperature=0.0,
                                                   max_tokens=max_tokens, has_tools=False,
                                                   reasoning_effort=_deepseek_effort))
-            _au_resp = requests.post(_llm_chat_url, headers=_au_headers, json=_au_body,
-                                     timeout=600)
+            _au_resp = send_gated(
+                _rate_gate,
+                lambda: requests.post(_llm_chat_url, headers=_au_headers, json=_au_body,
+                                      timeout=600),
+                max_wait=_rate_budget)
             _au_resp.raise_for_status()
             _au_data = _au_resp.json()
             _record_coder_usage(_au_data)
@@ -6765,13 +6793,30 @@ Task {task_idx + 1}: {current_task}
                     _req_body.setdefault("stream_options", {"include_usage": True})
                 except Exception:
                     pass
-                stream_response = requests.post(
-                    _llm_chat_url,
-                    headers=_req_headers,
-                    json=_req_body,
-                    timeout=300,
-                    stream=True
-                )
+                try:
+                    stream_response = send_gated(
+                        _rate_gate,
+                        lambda: requests.post(
+                            _llm_chat_url,
+                            headers=_req_headers,
+                            json=_req_body,
+                            timeout=300,
+                            stream=True
+                        ),
+                        max_wait=_rate_budget - getattr(loop, "rate_limit_waited", 0.0))
+                except RateLimitHeld as _held:
+                    # The window stays closed past what is left of the 429 budget: end the
+                    # run like a 429 that outlasted it, without sending into the window.
+                    append_with_context(f"[ERROR] {_held}")
+                    try:
+                        if lg:
+                            lg.event("rate_limit_exhausted", loop=loop.loop_count,
+                                     budget=_rate_budget, held=round(_held.seconds, 1))
+                    except Exception:
+                        pass
+                    return (f"Error: the provider's request limit stays closed for "
+                            f"{_held.seconds:.0f}s, past the {_rate_budget:.0f}s budget; "
+                            "nothing was sent.")
                 
                 # Show request status immediately
                 if stream_response.status_code == 200:
@@ -6928,15 +6973,18 @@ Task {task_idx + 1}: {current_task}
                 # then re-enter the loop; past the budget, surface the provider's own
                 # message. Without this branch a 429 fell through to the generic
                 # non-200 return below and the whole run died on a wait of milliseconds.
+                # A key with a request gate (Veyllo) waits the gate's hold instead, the
+                # wait the API named, exactly: the capped wait sent 11 s early into a
+                # 41 s window.
                 if stream_response.status_code == 429:
                     from vaf.core.api_backend import rate_limit_wait_seconds
                     _rl_budget = max(0.0, float(Config.get("api_rate_limit_wait_max", 60) or 0))
                     _rl_waited = getattr(loop, "rate_limit_waited", 0.0)
-                    _wait = rate_limit_wait_seconds(stream_response.headers,
-                                                    stream_response.text or "")
-                    if _wait is None:
-                        _wait = 2.0
-                    _wait = min(_wait + 0.25, float(Config.get("api_retry_after_max", 30) or 30))
+                    _wait = coder_rate_limit_wait(
+                        _rate_gate,
+                        rate_limit_wait_seconds(stream_response.headers,
+                                                stream_response.text or ""),
+                        float(Config.get("api_retry_after_max", 30) or 30))
                     if _rl_waited + _wait <= _rl_budget:
                         loop.rate_limit_waited = _rl_waited + _wait
                         tui.set_action(f"Rate limited - waiting {_wait:.1f}s...")

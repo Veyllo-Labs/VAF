@@ -337,69 +337,18 @@ def openai_request_params(provider_name: str, model: str, *, temperature: float,
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# RATE-LIMIT WAIT PARSING (shared by the SDK lane and the coder's raw HTTP lane)
+# RATE-LIMIT WAIT PARSING AND THE REQUEST GATE
 # ═══════════════════════════════════════════════════════════════════════════════
-# OpenAI's limits are per organization and per model, measured per minute (RPM
-# and TPM; this account: 500 requests, 200k tokens for the gpt-5.6 family). A
-# 429 names its own remedy, but in THREE different places and formats, and the
-# old header-only integer parse missed two of them on the live incident:
-#
-#   Retry-After header        "30" - and the docs allow it to be absent
-#   x-ratelimit-reset-*       duration strings: "120ms", "0s", "6m0s" (measured)
-#   the error message itself  "... Please try again in 186ms."
-#
-# The incident this exists for: a TPM 429 whose message said "try again in
-# 186ms" surfaced to the user as a lost turn, because there was no header, the
-# backoff waited 1s+2s and the attempt budget (2) ran out while the window was
-# still saturated. 186ms of patience would have saved the turn.
-
-_DURATION_RE = re.compile(r"(?:(\d+)\s*h)?\s*(?:(\d+)\s*m(?!s))?\s*(?:(\d+(?:\.\d+)?)\s*s)?\s*(?:(\d+(?:\.\d+)?)\s*ms)?\s*$")
-_TRY_AGAIN_RE = re.compile(r"try again in\s+([0-9hms\. ]+?)[\.\s]*(?:$|Visit)", re.IGNORECASE)
-
-
-def _parse_duration_seconds(raw: str) -> Optional[float]:
-    """'186ms' / '6.13s' / '6m0s' / '1h2m' / bare '30' -> seconds, else None."""
-    s = str(raw or "").strip()
-    if not s:
-        return None
-    try:  # bare number = seconds (the Retry-After header form, fractions included)
-        return float(s)
-    except ValueError:
-        pass
-    m = _DURATION_RE.fullmatch(s)
-    if not m or not any(m.groups()):
-        return None
-    h, mins, secs, ms = m.groups()
-    return (float(h or 0) * 3600 + float(mins or 0) * 60
-            + float(secs or 0) + float(ms or 0) / 1000.0)
-
-
-def rate_limit_wait_seconds(headers, message_text: str = "") -> Optional[float]:
-    """The wait a 429 asked for, from whichever source carried it, UNCAPPED.
-
-    Sources in order of authority: the Retry-After header, then the "try again
-    in <duration>" phrase in the error body. Callers apply their own cap
-    (api_retry_after_max) - the cap is policy, the parse is fact, and mixing
-    them made the old parser return None for a capped-out value instead of the
-    cap. Returns None when neither source yields a number, so the caller falls
-    back to exponential backoff.
-    """
-    try:
-        raw = None
-        if headers:
-            raw = headers.get("retry-after") or headers.get("Retry-After")
-        if raw is not None:
-            got = _parse_duration_seconds(raw)
-            if got is not None:
-                return max(0.0, got)
-        m = _TRY_AGAIN_RE.search(str(message_text or ""))
-        if m:
-            got = _parse_duration_seconds(m.group(1).strip())
-            if got is not None:
-                return max(0.0, got)
-    except Exception:
-        pass
-    return None
+# The parsers live with the gate that also reads them (vaf/core/rate_limit_gate.py)
+# and keep their names here, where the coder and the tests import them from.
+from vaf.core.rate_limit_gate import (  # noqa: E402,F401
+    _DURATION_RE,
+    _TRY_AGAIN_RE,
+    RateLimitHeld,
+    _parse_duration_seconds,
+    rate_limit_gate,
+    rate_limit_wait_seconds,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -545,7 +494,12 @@ class BaseAIProvider(ABC):
         window drains on its own schedule, and counting attempts against it is how a live turn died
         after 3s of patience against a request that asked for 186ms. Per the provider's own
         guidance the named wait is a minimum, so a small random jitter is added on top - concurrent
-        lanes (chat plus coder on one org) must not all retry in the same instant."""
+        lanes (chat plus coder on one org) must not all retry in the same instant.
+
+        A provider with a request gate (vaf/core/rate_limit_gate.py; its SDK client runs with
+        max_retries=0, so this loop is the only scheduler) waits the gate's deadline instead:
+        exactly what the API named, uncapped and without jitter, within the same budget. A hold
+        longer than what is left of the budget re-raises the 429 at once, without sending."""
         import random as _random
         import time as _time
         max_retries = max(0, int(Config.get("api_retry_attempts", 2) or 0))
@@ -559,6 +513,17 @@ class BaseAIProvider(ABC):
                 if not self._is_retryable_error(e):
                     raise
                 if self._is_rate_limit(e):
+                    gate = getattr(self, "_rate_gate", None)
+                    if gate is not None and gate.closed_for() > 0:
+                        held = False
+                        try:
+                            rate_waited += gate.wait(rate_budget - rate_waited)
+                        except RateLimitHeld:
+                            held = True
+                        if held:
+                            raise
+                        attempt += 1
+                        continue
                     wait = self._retry_after_seconds(e)
                     if wait is None:
                         wait = min(2 ** max(0, min(attempt, 4)), 8)  # 1,2,4,8,8...
@@ -581,11 +546,36 @@ class BaseAIProvider(ABC):
 # OPENAI PROVIDER (also used for DeepSeek & OpenRouter)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _gated_client_kwargs(gate, timeout) -> Dict[str, Any]:
+    """The OpenAI client arguments for a provider with a request gate; {} without one.
+
+    The httpx client is the gated one (it sees every request and answer, streams too,
+    and answers a local 429 while the window is closed) with the SDK's own defaults for
+    limits and redirects, which a caller-supplied client would otherwise lose. The SDK's
+    retries are off: they sleep outside `_with_retry`'s budget and honour retry-after only
+    up to 60 s, falling back to a short backoff above it, so a 41 s window cost six
+    requests and 194 s of waiting for one call against a 60 s budget (measured).
+    """
+    if gate is None:
+        return {}
+    import openai
+    from vaf.core.rate_limit_gate import GatedHttpxClient
+    client_kwargs: Dict[str, Any] = {"limits": openai.DEFAULT_CONNECTION_LIMITS,
+                                     "follow_redirects": True}
+    if timeout is not None:
+        client_kwargs["timeout"] = timeout
+    return {"max_retries": 0, "http_client": GatedHttpxClient(gate, **client_kwargs)}
+
+
 class OpenAIProvider(BaseAIProvider):
     """Provider for OpenAI-compatible APIs."""
     
     def __init__(self, provider_name: str, api_key: str, base_url: Optional[str] = None):
         super().__init__(provider_name, api_key)
+        # The key's request window, shared by every lane in this process that sends with
+        # it; None for every provider without request-limit headers (the client below is
+        # then the SDK's own, unchanged).
+        self._rate_gate = rate_limit_gate(provider_name, api_key)
         try:
             from openai import OpenAI
             # Explicit timeouts: bound connect/write so a large image upload can't hang,
@@ -599,9 +589,11 @@ class OpenAIProvider(BaseAIProvider):
                     read=float(Config.get("api_timeout_read", 600.0) or 600.0),
                     pool=float(Config.get("api_timeout_pool", 20.0) or 20.0),
                 )
-                self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=_timeout)
+                self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=_timeout,
+                                     **_gated_client_kwargs(self._rate_gate, _timeout))
             except Exception:
-                self.client = OpenAI(api_key=api_key, base_url=base_url)
+                self.client = OpenAI(api_key=api_key, base_url=base_url,
+                                     **_gated_client_kwargs(self._rate_gate, None))
         except ImportError:
             self.client = None
             logger.error("OpenAI SDK not installed. Please run: pip install openai")

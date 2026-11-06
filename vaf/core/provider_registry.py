@@ -104,6 +104,17 @@ class ProviderSpec:
     #               and `Agent._can_force_tool_call` decides it there (vLLM and llama-server
     #               both accept "required").
     forces_tool_calls: bool = False
+    # Whether every answer of this provider's API names the key's request window
+    # (x-ratelimit-remaining-requests / -reset-requests, retry-after on a 429), so
+    # VAF holds requests while it is closed instead of retrying into it
+    # (vaf/core/rate_limit_gate.py). Default False: the gate trusts these headers
+    # as the per-key window, which only a provider's own contract can promise.
+    #   veyllo      True: the backend sends them on every API answer, streams and
+    #               the 429 included (backend contract of 2026-11-06).
+    #   openai      False: not requested, and its token windows (TPM) are not what
+    #               a request gate models; the reactive 429 budget covers it.
+    #   others      False: no such contract.
+    request_limit_headers: bool = False
     # Vision
     vision_capable: bool = False
     vision_default_model: Optional[str] = None  # None + capable -> Config.get_default_model(name)
@@ -170,6 +181,7 @@ PROVIDER_SPECS: Dict[str, ProviderSpec] = {
             coder_base_url="https://api.veyllo.app/v1",
             coder_base_url_config_key="veyllo_base_url",
             models_base_config_key="veyllo_base_url",
+            request_limit_headers=True,
             vision_capable=True,
         ),
         ProviderSpec(

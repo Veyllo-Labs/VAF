@@ -315,3 +315,70 @@ def test_every_pairing_refusal_has_a_sentence():
     assert codes == {"window_closed", "relay_off", "no_direct_path"}, codes
     assert codes <= set(app_link_routes._REFUSALS)
     assert all(app_link_routes._REFUSALS[c].endswith(".") for c in codes)
+
+
+def test_a_pairing_answers_its_qr_as_an_image(app_link_home, monkeypatch):
+    """The window shows the QR as an image drawn on this machine, of exactly the QR string,
+    with this machine's clock for the countdown, and nothing of it is cached."""
+    import base64
+    import time
+
+    from vaf.api import auth_routes
+    drawn = []
+    real = auth_routes.qr_png_base64
+
+    def _draw(text):
+        drawn.append(text)
+        return real(text)
+    monkeypatch.setattr(auth_routes, "qr_png_base64", _draw)
+    client = _app(monkeypatch)
+    client.post("/api/app-link/pairing-window", json={"code": "123456"})
+    for mode in ("relay", "local"):
+        r = client.post("/api/app-link/pairings", json={"mode": mode})
+        body = r.json()
+        assert r.status_code == 200 and r.headers.get("cache-control") == "no-store"
+        assert drawn[-1] == body["qr"] == pairing._issued[SCOPE_A].qr
+        assert base64.b64decode(body["qr_png"]).startswith(b"\x89PNG\r\n\x1a\n")
+        assert abs(body["server_time"] - time.time()) < 5
+        assert body["expires_at"] - body["server_time"] > 500
+
+
+def test_current_carries_server_time(app_link_home, monkeypatch):
+    import time
+    client = _app(monkeypatch)
+    for _ in range(2):
+        r = client.get("/api/app-link/pairings/current")
+        assert r.headers.get("cache-control") == "no-store"
+        assert abs(r.json()["server_time"] - time.time()) < 5
+        client.post("/api/app-link/pairing-window", json={"code": "123456"})
+        client.post("/api/app-link/pairings", json={"mode": "local"})
+    assert r.json()["state"] == "issued"
+
+
+def test_relay_failures_name_their_reason(app_link_home, monkeypatch):
+    """A failed rotate or dissolve says which of the three kinds it was, so the window can
+    word it in the reader's language; the English sentence stays beside it."""
+    from vaf.core.app_link import relay
+
+    class _Failing:
+        last_error = ""
+
+        async def rotate(self, username=""):
+            return False
+
+        async def dissolve(self, username=""):
+            return False
+
+        def status(self):
+            return {"enabled": True, "state": "idle"}
+    stub = _Failing()
+    monkeypatch.setattr(relay, "connector", lambda: stub)
+    admin = _app(monkeypatch, as_scope=SCOPE_A, role="admin")
+    for error, reason in (("not_set_up", "not_set_up"), ("unreachable:ConnectError", "unreachable"),
+                          ("rotate:409", "refused")):
+        stub.last_error = error
+        for path, body in (("/api/app-link/relay/rotate", None),
+                           ("/api/app-link/relay/dissolve", {"code": "123456"})):
+            r = admin.post(path, json=body)
+            assert r.status_code == 502 and r.json()["reason"] == reason, (path, error, r.text)
+            assert r.json()["detail"] == relay.admin_failure(error)

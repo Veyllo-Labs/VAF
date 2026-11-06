@@ -633,3 +633,15 @@ def test_workers_of_gone_sessions_end(app_link_home):
 def test_a_relay_refusal_names_the_next_step():
     text = relay.admin_failure("rotate:500")
     assert "nothing was changed" in text and "`vaf relay status`" in text
+
+
+def test_failure_reasons():
+    """One classification for the terminal, the route and the web UI."""
+    cases = {"not_set_up": "not_set_up", "unreachable:ConnectError": "unreachable",
+             "unreachable:TimeoutException": "unreachable", "rotate:409": "refused",
+             "dissolve:500": "refused", "rotate:no_secret": "refused", "": "refused"}
+    for code, reason in cases.items():
+        assert relay.failure_reason(code) == reason, code
+    assert set(cases.values()) == set(relay.FAILURE_REASONS)
+    assert "could not be reached" in relay.admin_failure("unreachable:ConnectError")
+    assert relay.admin_failure("not_set_up").startswith("No relay is set up")

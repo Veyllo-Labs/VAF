@@ -839,11 +839,30 @@ class RelayConnector:
                 "devices_on_relay": sum(1 for r in rows if r.get("last_transport") == "relay")}
 
 
+# Why an admin action on the relay did not happen, in three kinds a person can act on: the
+# terminal, the route and the web UI word the same classification instead of each parsing
+# `last_error` again.
+FAILURE_REASONS = ("not_set_up", "unreachable", "refused")
+
+
+def failure_reason(code: str) -> str:
+    """The kind of an admin action's failure from the connector's `last_error`:
+    ``not_set_up`` (no instance or no secret here), ``unreachable`` (the call never reached
+    the relay) or ``refused`` (the relay answered, and not with success)."""
+    code = str(code or "")
+    if code == "not_set_up":
+        return "not_set_up"
+    if code.startswith("unreachable"):
+        return "unreachable"
+    return "refused"
+
+
 def admin_failure(code: str) -> str:
     """A sentence for why an admin action on the relay did not happen (`last_error`)."""
-    if code == "not_set_up":
+    reason = failure_reason(code)
+    if reason == "not_set_up":
         return "No relay is set up on this machine (`vaf relay status`)."
-    if code.startswith("unreachable"):
+    if reason == "unreachable":
         return "The relay could not be reached; nothing was changed."
     return (f"The relay refused it ({code}); nothing was changed. Try again later, or check "
             "`vaf relay status`.")

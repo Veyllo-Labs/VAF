@@ -512,6 +512,16 @@ def _minted_with_current_password(payload: dict, user) -> bool:
                                password_fingerprint(getattr(user, "password_hash", None)))
 
 
+def qr_png_base64(text: str) -> str:
+    """`text` as a QR code, a PNG in base64, rendered on this machine. Every QR the web UI
+    shows comes from here, because what a QR carries is a credential (a 2FA secret, a pairing
+    value): a renderer elsewhere would receive it in its request. The caller answers it
+    `no-store` and never logs it."""
+    buf = io.BytesIO()
+    qrcode.make(text).save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
 @router.post("/setup-2fa")
 async def setup_2fa(request: Request):
     """
@@ -554,13 +564,9 @@ async def setup_2fa(request: Request):
         user.requires_2fa_setup = True
         await db.commit()
 
-    img = qrcode.make(uri)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    qr_base64 = base64.b64encode(buf.getvalue()).decode()
     # `secret` (base32) is returned so the UI can show it under the QR for manual entry
     # in an authenticator app. The QR already encodes it; this endpoint is auth-required.
-    return {"qr_code_base64": qr_base64, "secret": secret}
+    return {"qr_code_base64": qr_png_base64(uri), "secret": secret}
 
 
 @router.post("/verify-2fa")

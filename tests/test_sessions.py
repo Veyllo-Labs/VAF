@@ -236,6 +236,25 @@ def test_a_temp_token_from_before_a_reset_is_refused(h):
     assert _setup_2fa(h, fresh["temp_token"]).status_code == 200
 
 
+def test_the_2fa_setup_draws_its_qr_on_this_machine(h, monkeypatch):
+    """The 2FA setup's QR comes from the one shared helper (`qr_png_base64`), which the Veyllo
+    App pairing uses too: what a QR carries is a credential, so no copy renders it elsewhere.
+    MUTATION: draw the QR inline again in setup_2fa - red."""
+    import base64
+
+    from vaf.api import auth_routes
+    drawn = []
+    real = auth_routes.qr_png_base64
+    monkeypatch.setattr(auth_routes, "qr_png_base64", lambda text: drawn.append(text) or real(text))
+    h.add_user("carol", "carol-password-1")
+    temp = h.login(h.client("192.168.13.7"), "carol", "carol-password-1").json()["temp_token"]
+    r = _setup_2fa(h, temp, ip="192.168.13.7")
+    assert r.status_code == 200, r.text
+    assert len(drawn) == 1 and drawn[0].startswith("otpauth://totp/")
+    assert r.json()["secret"] in drawn[0]
+    assert base64.b64decode(r.json()["qr_code_base64"]).startswith(b"\x89PNG\r\n\x1a\n")
+
+
 def test_the_wizard_enrolls_with_the_temp_token_and_the_cookie(h, monkeypatch):
     """The first-run wizard on another device with no full token in JSON: the bootstrap answers
     a step token for the second factor and sets the wizard's own session as the cookie; the

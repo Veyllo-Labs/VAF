@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Request, WebSocket, status
@@ -188,14 +189,18 @@ async def issue_pairing(body: PairingBody, request: Request):
         relay.wake()
     except ImportError:
         pass
-    return _no_store({"qr": issued.qr, "mode": issued.mode, "expires_at": int(issued.exp)})
+    from vaf.api.auth_routes import qr_png_base64
+    # The QR as an image from this machine, and this machine's clock: the window counts the
+    # time left from `expires_at - server_time`, so a browser with a wrong clock counts right.
+    return _no_store({"qr": issued.qr, "qr_png": qr_png_base64(issued.qr), "mode": issued.mode,
+                      "expires_at": int(issued.exp), "server_time": int(time.time())})
 
 
 @router.get("/api/app-link/pairings/current")
 async def current_pairing(request: Request):
     from vaf.core.app_link import pairing
     scope, _username = _own(request)
-    return _no_store(pairing.current(scope))
+    return _no_store({**pairing.current(scope), "server_time": int(time.time())})
 
 
 @router.post("/api/app-link/pairings/current/confirm")
@@ -276,6 +281,7 @@ async def rotate_relay(request: Request):
     connector = relay.connector()
     if not await connector.rotate(username=str(user.get("username") or "")):
         return _no_store({"detail": relay.admin_failure(connector.last_error),
+                          "reason": relay.failure_reason(connector.last_error),
                           "code": "rotate_failed"}, 502)
     return _no_store(_relay_status())
 
@@ -302,6 +308,7 @@ async def dissolve_relay(body: CodeBody, request: Request):
     connector = relay.connector()
     if not await connector.dissolve(username=str(user.get("username") or "")):
         return _no_store({"detail": relay.admin_failure(connector.last_error),
+                          "reason": relay.failure_reason(connector.last_error),
                           "code": "dissolve_failed"}, 502)
     return _no_store(_relay_status())
 

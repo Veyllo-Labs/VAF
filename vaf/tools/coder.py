@@ -656,7 +656,7 @@ def coder_rate_limit_wait(gate, parsed_wait: Optional[float], cap: float) -> flo
     """How long the coder's stream waits after a 429.
 
     With the key's request gate holding (vaf/core/rate_limit_gate.py; the 429 has just
-    been fed to it), the gate's deadline, exact: what the API named, uncapped, shared with
+    been fed to it), the gate's deadline: exact, at most MAX_HOLD_SECONDS, shared with
     every other lane on the key. Otherwise the parsed wait (2 s when none was named) plus
     a quarter second, capped at api_retry_after_max.
     """
@@ -6796,13 +6796,14 @@ Task {task_idx + 1}: {current_task}
                 def _on_gate_sleep(_secs: float) -> None:
                     # A window closed before this request (by an earlier answer or the
                     # chat lane) is waited out here: shown, and counted against the same
-                    # 429 budget, so a 429 right after it gets only what is left.
-                    loop.rate_limit_waited = getattr(loop, "rate_limit_waited", 0.0) + _secs
-                    tui.set_action(f"Request limit reached - waiting {_secs:.0f}s...")
-                    append_with_context(
-                        f"[WARN] Request limit reached - waiting {_secs:.0f}s before sending "
-                        f"({loop.rate_limit_waited:.0f}s/{_rate_budget:.0f}s used)")
+                    # 429 budget, so a 429 right after it gets only what is left. Runs
+                    # inside gate.wait: a failing display must not stop the wait or the run.
                     try:
+                        loop.rate_limit_waited = getattr(loop, "rate_limit_waited", 0.0) + _secs
+                        tui.set_action(f"Request limit reached - waiting {_secs:.0f}s...")
+                        append_with_context(
+                            f"[WARN] Request limit reached - waiting {_secs:.0f}s before sending "
+                            f"({loop.rate_limit_waited:.0f}s/{_rate_budget:.0f}s used)")
                         live.update(tui.render())
                     except Exception:
                         pass

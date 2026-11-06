@@ -471,6 +471,33 @@ def test_coder_stream_ends_cleanly_when_the_window_stays_closed():
     # The wait before sending is shown and counted against the 429 budget.
     assert [k.arg for k in call.keywords] == ["max_wait", "on_sleep"]
     assert "rate_limit_waited" in ast.unparse(call.keywords[0].value)
+    hook = call.keywords[1].value
+    assert isinstance(hook, ast.Name) and hook.id == "_on_gate_sleep"
+
+
+def _gate_sleep_hook():
+    hooks = [n for n in ast.walk(_coder_tree())
+             if isinstance(n, ast.FunctionDef) and n.name == "_on_gate_sleep"]
+    assert len(hooks) == 1
+    return hooks[0]
+
+
+def test_coder_gate_wait_counts_against_the_429_budget():
+    hook = _gate_sleep_hook()
+    targets = [ast.unparse(t) for n in ast.walk(hook) if isinstance(n, ast.Assign)
+               for t in n.targets]
+    assert "loop.rate_limit_waited" in targets
+
+
+def test_a_failing_display_cannot_stop_the_coder_wait():
+    """The hook runs inside gate.wait, before the sleep: anything it raises would
+    abort the wait and the run, so its whole body is guarded."""
+    body = [stmt for stmt in _gate_sleep_hook().body
+            if not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant))]
+    assert len(body) == 1 and isinstance(body[0], ast.Try), "the whole hook must be in one try"
+    guarded = body[0]
+    assert any(isinstance(h.type, ast.Name) and h.type.id == "Exception" for h in guarded.handlers)
+    assert any(isinstance(n, ast.Assign) for n in guarded.body)
 
 
 def test_coder_429_wait_comes_from_the_gate():

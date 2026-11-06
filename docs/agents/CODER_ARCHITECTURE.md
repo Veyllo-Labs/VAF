@@ -321,8 +321,9 @@ answer crosses instead).
     shared with the chat lane in the same process): nothing is sent while the window is
     closed, and the 429 wait is the gate's exact hold (`coder_rate_limit_wait`), not capped by
     `api_retry_after_max` (one answer holds at most 600 s). A wait for a window that was
-    already closed before the request is shown in the TUI and counted against the same budget. A hold longer than what is left of the budget ends the run at once
-    without sending (`rate_limit_exhausted` with `held`).
+    already closed before the request is shown in the TUI and counted against the same
+    budget. A hold longer than what is left of the budget ends the run at once without
+    sending (`rate_limit_exhausted` with `held`).
 *   **400 (context):** a 400 whose text mentions context/length/tokens triggers the
     compression ladder (3 levels, down to system prompt plus one sentence), capped by
     `_MAX_COMPRESSION_LEVELS`: a 400 that survives the last level was never a context error,

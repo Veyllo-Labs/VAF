@@ -51,8 +51,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **A malformed rate-limit value can no longer stall VAF.** The parser that reads the wait an
   AI provider names after a rate limit (a header, or the "try again in" phrase of the error
   message) could take minutes on some malformed values, and while it ran the whole VAF process
-  stopped answering, the web interface included. It now refuses oversized values and needs
-  well under a millisecond for any input. This affects every API provider.
+  stopped answering, the web interface included. It now refuses oversized values and reads any
+  input in time proportional to its length (a few milliseconds for a 16 KiB error body). This
+  affects every API provider.
 
 ## [0.1.0a35] - 2026-11-05
 

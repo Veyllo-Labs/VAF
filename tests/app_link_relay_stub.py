@@ -107,10 +107,12 @@ class FakeConnect:
 
     def __init__(self):
         self.upgrades: List[Tuple[str, Dict[str, str]]] = []
+        self.addresses: List[Optional[str]] = []
         self.sockets: List[FakeWS] = []
 
-    def __call__(self, url: str, headers: Dict[str, str]):
+    def __call__(self, url: str, headers: Dict[str, str], address: Optional[str] = None):
         self.upgrades.append((url, dict(headers)))
+        self.addresses.append(address)
         ws = FakeWS()
         self.sockets.append(ws)
         outer = self

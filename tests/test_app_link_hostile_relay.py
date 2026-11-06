@@ -129,3 +129,16 @@ def test_a_frame_without_the_head_is_dropped(app_link_home):
         relay.link.on_binary(frame)
     assert relay.link.sessions == {}
     assert bridge._all == set()
+
+
+def test_the_table_is_pruned_from_a_snapshot(app_link_home):
+    """A closed session is taken out while the table is walked: iterating the live dict
+    would raise "dictionary changed size during iteration"."""
+    gone = []
+    link = RelayLink(lambda frame: None, "r2", gone=gone.append)
+    for i in range(3):
+        link.on_binary(pr.wrap_relay(bytes([i + 1]) * 16, b"\x16\x03\x01\x02\x00" + b"\x01" * 3))
+    for session in link.sessions.values():
+        session.close("gone", bye=False)
+    link._prune()
+    assert link.sessions == {} and sorted(gone) == [bytes([i + 1]) * 16 for i in range(3)]

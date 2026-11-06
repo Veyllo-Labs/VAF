@@ -120,28 +120,35 @@ def set_relay_enabled(enabled: bool, *, username: str = "") -> None:
     connector().wake(reset_hold=True)
 
 
-def ws_url_allowed(url: str, api_base: str) -> bool:
-    """Whether the WebSocket URL a token answer names may be dialled: wss without userinfo,
-    to the API base's host or the contract's relay host, and resolving to public addresses
-    only. A hostile relay must not point VAF's outbound connection at this machine or the
-    LAN (the egress guard's classifier, without its LAN allowance)."""
+def ws_destination(url: str, api_base: str) -> Optional[str]:
+    """The checked address the WebSocket URL of a token answer may be dialled at, or None:
+    wss without userinfo, to the API base's host or the contract's relay host
+    (``RELAY_WS_HOSTS``), every address of that name public (the egress guard's classifier
+    without its LAN allowance). The connection goes to that one address with TLS checked
+    against the name, so a name that resolves elsewhere a moment later does not move it. A
+    hostile relay cannot point VAF's outbound connection at this machine or the LAN.
+
+    Blocking (it resolves the name): call it off the event loop."""
     parts = urlsplit(str(url or ""))
     host = (parts.hostname or "").lower().rstrip(".")
     if parts.scheme != "wss" or parts.username or parts.password or not host:
-        return False
+        return None
     allowed = {h.lower() for h in RELAY_WS_HOSTS}
     base_host = (urlsplit(str(api_base or "")).hostname or "").lower().rstrip(".")
     if base_host:
         allowed.add(base_host)
     if host not in allowed:
-        return False
+        return None
     from vaf.network.egress import EgressPolicy, EgressRefused, check_destination
     try:
-        check_destination(f"https://{parts.netloc.rsplit('@', 1)[-1]}/",
-                          EgressPolicy(allow_private=False))
+        return check_destination(f"https://{parts.netloc.rsplit('@', 1)[-1]}/",
+                                 EgressPolicy(allow_private=False))
     except (EgressRefused, ValueError, OSError):
-        return False
-    return True
+        return None
+
+
+def ws_url_allowed(url: str, api_base: str) -> bool:
+    return ws_destination(url, api_base) is not None
 
 
 def _parse_expiry(value: Any, now: float) -> float:
@@ -167,14 +174,29 @@ class RelayLink:
     """One relay connection's sessions: binary frames to and from link sessions by cid."""
 
     def __init__(self, send_frame: Callable[[bytes], None], connection_id: str, *,
-                 run: Optional[Callable[[bytes, Callable[[], None]], None]] = None):
+                 run: Optional[Callable[[bytes, Callable[[], None]], None]] = None,
+                 gone: Optional[Callable[[bytes], None]] = None):
         self._send_frame = send_frame
         self.connection_id = connection_id
         self.sessions: Dict[bytes, Any] = {}
         self.online: set = set()
         # `run(cid, fn)` runs a session's work off the connection's loop, in order per cid
-        # (the connector's executor); without one it runs here.
+        # (the connector's executor); without one it runs here. `gone(cid)` hears that a
+        # cid's session left the table, so its worker ends too.
         self._run = run
+        self._gone = gone
+
+    def _prune(self) -> None:
+        """Closed sessions leave the table. Only on the connection's own thread: the
+        executor's work never touches the table."""
+        for cid, session in list(self.sessions.items()):
+            if session.closed:
+                self._drop(cid)
+
+    def _drop(self, cid: bytes) -> None:
+        self.sessions.pop(cid, None)
+        if self._gone is not None:
+            self._gone(cid)
 
     def _session(self, cid: bytes):
         session = self.sessions.get(cid)
@@ -200,20 +222,18 @@ class RelayLink:
             return
         if cid == _ZERO_CID:
             return
-        for gone in [c for c, s in self.sessions.items() if s.closed]:
-            del self.sessions[gone]
+        self._prune()
         session = self._session(cid)
         if session is None:
             return
 
-        def _feed(session=session, cid=cid, data=data) -> None:
+        def _feed(session=session, data=data) -> None:
             # Decryption, a file check and a disk write can take a while: never on the
             # loop that carries the pings and every other device's bytes.
             session.feed(data)
-            if session.closed and self.sessions.get(cid) is session:
-                self.sessions.pop(cid, None)
         if self._run is None:
             _feed()
+            self._prune()
         else:
             self._run(cid, _feed)
 
@@ -232,9 +252,10 @@ class RelayLink:
                     bridge._came_online(row["device_id"])
             else:
                 self.online.discard(cid)
-                session = self.sessions.pop(bytes.fromhex(cid), None)
+                session = self.sessions.get(bytes.fromhex(cid))
                 if session is not None:
                     session.close("app_offline", bye=False)
+                    self._drop(bytes.fromhex(cid))
         elif t == "error":
             logger.info("app link: the relay reported %s", str(message.get("code") or "")[:64])
 
@@ -282,6 +303,8 @@ class RelayConnector:
         self._http = None
         # Since when the relay should be connected and is not (for `vaf health`).
         self.down_since: Optional[float] = None
+        # The live connection's per-cid work queues (for the health of the connection).
+        self._feeders: Dict[bytes, Any] = {}
 
     # ── the thread ──────────────────────────────────────────────────────────
 
@@ -487,10 +510,12 @@ class RelayConnector:
             raise _Refused("backoff")
         body = response.json()
         url = str(body.get("url") or "")
-        if not ws_url_allowed(url, base):
+        # The name is resolved here: off the loop that carries every relay session.
+        address = await asyncio.to_thread(ws_destination, url, base)
+        if address is None:
             raise _Refused("backoff", reason="bad_url")
         self._token_expires = _parse_expiry(body.get("expiresAt"), self._wall())
-        return {"token": str(body.get("token") or ""), "url": url}
+        return {"token": str(body.get("token") or ""), "url": url, "address": address}
 
     async def _connection(self) -> None:
         self.state = "connecting"
@@ -505,14 +530,15 @@ class RelayConnector:
                     return
                 loop.call_soon_threadsafe(outgoing.put_nowait, frame)
 
-            async with self._ws_connect(ticket["url"], {"Authorization": f"Bearer {ticket['token']}"}) as ws:
+            async with self._ws_connect(ticket["url"], {"Authorization": f"Bearer {ticket['token']}"},
+                                        ticket["address"]) as ws:
                 self._ws = ws
                 self.state = "connected"
                 self.connected_since = self._wall()
                 self.last_error = ""
                 self._attempts = 0
                 feeders: Dict[bytes, asyncio.Queue] = {}
-                workers: List[asyncio.Task] = []
+                workers: Dict[bytes, asyncio.Task] = {}
 
                 async def _feed_worker(queue: asyncio.Queue) -> None:
                     while True:
@@ -528,18 +554,26 @@ class RelayConnector:
                     queue = feeders.get(cid)
                     if queue is None:
                         queue = feeders[cid] = asyncio.Queue()
-                        workers.append(asyncio.ensure_future(_feed_worker(queue)))
+                        workers[cid] = asyncio.ensure_future(_feed_worker(queue))
                     queue.put_nowait(work)
 
-                link = RelayLink(_send_frame, uuid.uuid4().hex[:12], run=_run)
+                def _gone(cid: bytes) -> None:
+                    # The session left: its worker finishes what is queued, then ends.
+                    queue = feeders.pop(cid, None)
+                    workers.pop(cid, None)
+                    if queue is not None:
+                        queue.put_nowait(None)
+
+                link = RelayLink(_send_frame, uuid.uuid4().hex[:12], run=_run, gone=_gone)
                 self._link = link
+                self._feeders = feeders
                 pong = {"at": self._clock()}
                 try:
                     await self._pump(ws, link, outgoing, pong)
                 finally:
                     for queue in feeders.values():
                         queue.put_nowait(None)
-                    for worker in workers:
+                    for worker in workers.values():
                         worker.cancel()
                     link.close_all()
                     self._link = None
@@ -583,6 +617,9 @@ class RelayConnector:
             last_ping = self._clock()
             while True:
                 await asyncio.sleep(1)
+                # Sessions closed from elsewhere (a removal, a timeout) leave the table, and
+                # their workers end, even while that cid sends nothing more.
+                link._prune()
                 now = self._clock()
                 if now - last_ping >= PING_EVERY_SECONDS:
                     await ws.send(json.dumps({"t": "ping"}))
@@ -808,7 +845,8 @@ def admin_failure(code: str) -> str:
         return "No relay is set up on this machine (`vaf relay status`)."
     if code.startswith("unreachable"):
         return "The relay could not be reached; nothing was changed."
-    return f"The relay refused it ({code}); nothing was changed."
+    return (f"The relay refused it ({code}); nothing was changed. Try again later, or check "
+            "`vaf relay status`.")
 
 
 class _Refused(Exception):
@@ -822,10 +860,20 @@ def _default_http():
     return httpx.AsyncClient(timeout=15.0, follow_redirects=False)
 
 
-def _default_ws_connect(url: str, headers: Dict[str, str]):
+def _default_ws_connect(url: str, headers: Dict[str, str], address: Optional[str] = None):
+    """The relay's WebSocket at the checked address, TLS against the URL's name. NAMED
+    BOUNDARY: behind a site proxy (``binding.system_proxy_for``) the proxy resolves the name,
+    as for every egress, and the address is not pinned."""
     from websockets.asyncio.client import connect
+
+    from vaf.network.binding import system_proxy_for
+    parts = urlsplit(url)
+    pinned = {}
+    if address and not system_proxy_for("https", parts.hostname or ""):
+        pinned = {"host": address, "port": parts.port or 443, "server_hostname": parts.hostname,
+                  "proxy": None}
     return connect(url, additional_headers=headers, max_size=pr.MAX_FRAME_PAYLOAD + 64,
-                   ping_interval=None, open_timeout=15)
+                   ping_interval=None, open_timeout=15, **pinned)
 
 
 _connector: Optional[RelayConnector] = None

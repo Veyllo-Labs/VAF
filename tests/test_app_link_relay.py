@@ -561,3 +561,73 @@ def test_each_half_of_the_url_check_holds_on_its_own(monkeypatch):
     assert relay.ws_url_allowed("wss://evil.example/v1/connect/i", "https://relay.test") is False
     # The relay's own name resolving into the LAN (DNS rebinding): refused by the address rule.
     assert relay.ws_url_allowed("wss://relay.test/v1/connect/i", "https://relay.test") is False
+
+
+def test_the_connection_goes_to_the_checked_address(app_link_home, monkeypatch):
+    http, connect = _connected(app_link_home)
+    c = _connector(http, connect)
+
+    async def _go():
+        await c.tick()
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+        connect.last.close_from_relay(1000)
+        await asyncio.sleep(0.05)
+    asyncio.run(_go())
+    assert connect.addresses == ["93.184.216.34"]
+    # The real dialler pins it: TCP to that address, TLS checked against the name.
+    import websockets.asyncio.client as ws_client
+    seen = {}
+    monkeypatch.setattr(ws_client, "connect", lambda url, **kw: seen.update(kw) or "ctx")
+    monkeypatch.setattr("vaf.network.binding.system_proxy_for", lambda scheme, host: None)
+    relay._default_ws_connect("wss://relay.test/v1/connect/i", {"Authorization": "x"}, "93.184.216.34")
+    assert seen["host"] == "93.184.216.34" and seen["server_hostname"] == "relay.test"
+    assert seen["port"] == 443 and seen["proxy"] is None
+
+
+def test_the_name_is_resolved_off_the_loop(app_link_home, monkeypatch):
+    import threading
+    threads = []
+    real = relay.ws_destination
+    monkeypatch.setattr(relay, "ws_destination",
+                        lambda url, base: threads.append(threading.current_thread().name) or real(url, base))
+    http, connect = _connected(app_link_home)
+    c = _connector(http, connect)
+
+    async def _go():
+        await c.tick()
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+        connect.last.close_from_relay(1000)
+        await asyncio.sleep(0.05)
+    asyncio.run(_go())
+    assert threads and threading.main_thread().name not in threads
+
+
+def test_workers_of_gone_sessions_end(app_link_home):
+    http, connect = _connected(app_link_home)
+    c = _connector(http, connect)
+
+    async def _go():
+        await c.tick()
+        for _ in range(10):
+            await asyncio.sleep(0)
+        for i in range(5):
+            cid = bytes([i + 1]) * 16
+            # A garbage handshake: the session closes at once, in the executor.
+            connect.last.push(b"\x01" + cid + b"\x16\x03\x01\x00\x05hello")
+            for _ in range(5):
+                await asyncio.sleep(0.01)
+        sizes.append(len(c._feeders))       # each new frame pruned the ones before
+        await asyncio.sleep(1.2)            # one keepalive round prunes the last
+        sizes.append(len(c._feeders))
+        connect.last.close_from_relay(1000)
+        await asyncio.sleep(0.05)
+    sizes = []
+    asyncio.run(_go())
+    assert sizes == [1, 0]
+
+
+def test_a_relay_refusal_names_the_next_step():
+    text = relay.admin_failure("rotate:500")
+    assert "nothing was changed" in text and "`vaf relay status`" in text

@@ -8,7 +8,7 @@ import {
     MessageCircle, Phone, Mail, Slack, Plus, Settings,
     CheckCircle2, XCircle, Loader2, Trash2, Power,
     Calendar, Cloud, HardDrive, FolderSync, Users,
-    Video, Gamepad2, Building2, ShoppingBag, Briefcase, Code2, Search, Headphones
+    Video, Gamepad2, Building2, ShoppingBag, Briefcase, Code2, Search, Headphones, Smartphone
 } from 'lucide-react';
 import { useTranslations } from 'next-intl';
 import { cn } from '@/lib/utils';
@@ -45,6 +45,8 @@ interface ConnectionsPanelProps {
     onOpenTelegramWizard: () => void;
     onOpenWhatsAppWizard?: () => void;
     onOpenWhatsAppDashboard?: () => void;
+    /** Open the Veyllo App window (pairing, and for admins the relay). */
+    onOpenVeylloAppWizard?: () => void;
     onOpenTelegramDashboard?: () => void;
     onOpenEmailDashboard?: () => void;
     onOpenCloudDashboard?: () => void;
@@ -152,6 +154,20 @@ export const CONNECTION_APPS: ConnectionApp[] = [
         available: true,
         comingSoon: false,
         iconColor: 'bg-green-600',
+    },
+    {
+        // The account's own phones: no on/off switch and no disconnect here. Access ends per
+        // device (Settings, Account), the channel's switch is the installation's, and the
+        // relay secret goes only with the relay instance.
+        id: 'veyllo_app',
+        name: 'Veyllo App',
+        icon: Smartphone,
+        category: 'communication',
+        description: 'Chat with your agent from your phone, through the Veyllo relay or over your own network',
+        configKey: 'veyllo_app_config',
+        available: true,
+        comingSoon: false,
+        iconColor: 'bg-teal-700',
     },
     {
         id: 'email',
@@ -456,9 +472,10 @@ function sharedBotBadge(bot: { running: boolean; configured: boolean } | undefin
     return bot && bot.running && bot.configured && enabled ? 'connected' : 'disconnected';
 }
 
-export default function ConnectionsPanel({ config, onConfigChange, currentUser, refreshTrigger = 0, onOpenDiscordWizard, onOpenDiscordDashboard, onOpenTelegramWizard, onOpenWhatsAppWizard, onOpenWhatsAppDashboard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenCloudDashboard, onOpenCloudWizard, onOpenContactsDashboard, onOpenFrontOfficeDashboard, onOpenCalendarWizard, onOpenCalendarDashboard, onOpenGitHubWizard, onOpenGitHubDashboard }: ConnectionsPanelProps) {
+export default function ConnectionsPanel({ config, onConfigChange, currentUser, refreshTrigger = 0, onOpenDiscordWizard, onOpenDiscordDashboard, onOpenTelegramWizard, onOpenWhatsAppWizard, onOpenWhatsAppDashboard, onOpenVeylloAppWizard, onOpenTelegramDashboard, onOpenEmailDashboard, onOpenCloudDashboard, onOpenCloudWizard, onOpenContactsDashboard, onOpenFrontOfficeDashboard, onOpenCalendarWizard, onOpenCalendarDashboard, onOpenGitHubWizard, onOpenGitHubDashboard }: ConnectionsPanelProps) {
     const t = useTranslations('settings.connectionsPanel');
     const tf = useTranslations('settings.frontOffice');
+    const tVeylloApp = useTranslations('settings.veylloApp');
     const tCommon = useTranslations('common');
     /** The Front Office state (GET /api/front-office) for the card's status line; the switch lives in the window. */
     const [frontOffice, setFrontOffice] = useState<{ enabled: boolean; channels: Record<string, boolean>; reachable_contacts: number }>({ enabled: false, channels: {}, reachable_contacts: 0 });
@@ -467,6 +484,8 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
     const [mcpShown, setMcpShown] = useState(0);
     const [connectionStatus, setConnectionStatus] = useState<Record<string, 'connected' | 'linked' | 'disconnected' | 'checking'>>({});
     const [whatsappInfo, setWhatsappInfo] = useState<{ linked_phone: string | null; owner_number: string | null }>({ linked_phone: null, owner_number: null });
+    /** The account's Veyllo App link as GET /api/app-link/status reports it. */
+    const [veylloApp, setVeylloApp] = useState<{ devices: number; connected: boolean; relayEnabled: boolean }>({ devices: 0, connected: false, relayEnabled: true });
     /** The shared Discord and Telegram bots as their status routes last reported them, apart from
      *  this user's switch; the badge combines the two (`sharedBotBadge`). */
     const [sharedBots, setSharedBots] = useState<Record<string, { running: boolean; configured: boolean; paired: boolean }>>({});
@@ -595,6 +614,18 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
             }));
         } catch {
             setConnectionStatus(prev => ({ ...prev, whatsapp: 'disconnected' }));
+        }
+        try {
+            const res = await fetch(api('api/app-link/status'), { credentials: 'include', cache: 'no-store' });
+            if (!res.ok) throw new Error(String(res.status));
+            const link = await res.json();
+            const devices = Array.isArray(link.my_devices) ? link.my_devices : [];
+            const connected = devices.some((d: any) => d.connected);
+            setVeylloApp({ devices: devices.length, connected, relayEnabled: link.relay?.enabled !== false });
+            setConnectionStatus(prev => ({ ...prev, veyllo_app: devices.length === 0 ? 'disconnected' : connected ? 'connected' : 'linked' }));
+        } catch {
+            setVeylloApp({ devices: 0, connected: false, relayEnabled: true });
+            setConnectionStatus(prev => ({ ...prev, veyllo_app: 'disconnected' }));
         }
         await fetchEmailAccounts();
         await fetchCloudAccounts();
@@ -904,6 +935,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
             // number is optional on top (outbound-only is a complete setup).
             return connectionStatus.whatsapp === 'connected' || connectionStatus.whatsapp === 'linked';
         }
+        if (app.id === 'veyllo_app') return veylloApp.devices > 0;
         if (isCloudApp(app.id)) {
             const fromApi = cloudAccountsFromApi.some((a: any) => a.provider === app.id);
             const fromConfig = cloudAccountsFromConfig.some((a: any) => a.provider === app.id);
@@ -1011,6 +1043,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                     else if (isAdmin) onOpenTelegramWizard();   // setting the bot up is an admin's
                                 }
                                 if (app.id === 'whatsapp') (onOpenWhatsAppDashboard && configured ? onOpenWhatsAppDashboard() : onOpenWhatsAppWizard?.());
+                                if (app.id === 'veyllo_app') onOpenVeylloAppWizard?.();
                                 if (app.id === 'email') onOpenEmailDashboard?.();
                                 if (app.id === 'google_calendar' || app.id === 'outlook_calendar') {
                                     if (onOpenCalendarDashboard && configured) onOpenCalendarDashboard();
@@ -1082,7 +1115,12 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                         </span>
                                                     )}
                                                 </div>
-                                                <p className="text-sm text-gray-500 line-clamp-1">{app.description}</p>
+                                                <p className="text-sm text-gray-500 line-clamp-1">{app.id === 'veyllo_app' ? t('veylloApp.description') : app.description}</p>
+                                                {configured && app.id === 'veyllo_app' && (
+                                                    <p className="text-xs text-gray-600 mt-1">
+                                                        {t(veylloApp.relayEnabled ? 'veylloApp.cardLineOn' : 'veylloApp.cardLineOff', { count: veylloApp.devices })}
+                                                    </p>
+                                                )}
                                                 {configured && app.id === 'discord' && config[app.configKey]?.admin_username && (
                                                     <p className="text-xs text-gray-600 mt-1">
                                                         Admin: @{config[app.configKey].admin_username}
@@ -1151,6 +1189,14 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                 >
                                                     <Settings className="w-4 h-4 text-gray-500" />
                                                 </button>
+                                            ) : app.id === 'veyllo_app' && configured ? (
+                                                <button
+                                                    onClick={openApp}
+                                                    className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                                                    title={tVeylloApp('title')}
+                                                >
+                                                    <Settings className="w-4 h-4 text-gray-500" />
+                                                </button>
                                             ) : configured ? (
                                                 <>
                                                     {/* Toggle Switch (not for calendar or GitHub: no on/off toggle) */}
@@ -1203,6 +1249,7 @@ export default function ConnectionsPanel({ config, onConfigChange, currentUser, 
                                                         if (app.id === 'discord') onOpenDiscordWizard();
                                                         if (app.id === 'telegram') onOpenTelegramWizard();
                                                         if (app.id === 'whatsapp') onOpenWhatsAppWizard?.();
+                                                        if (app.id === 'veyllo_app') onOpenVeylloAppWizard?.();
                                                         if (app.id === 'email') onOpenEmailDashboard?.();
                                                         if (app.id === 'google_calendar' || app.id === 'outlook_calendar') {
                                                             onOpenCalendarWizard?.(app.id);

@@ -79,7 +79,7 @@ import { useLocaleStore } from '@/lib/localeStore';
 import { veylloDashboardUrl } from '@/lib/veyllo';
 import { useCursorStore } from '@/lib/cursorStore';
 import { useThemeStore } from '@/lib/themeStore';
-import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, MailClient, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard, ContactsDashboard, FrontOfficeDashboard, CalendarSetupWizard, CalendarDashboard, GitHubSetupWizard, GitHubDashboard } from './connections';
+import { ConnectionsPanel, DiscordSetupWizard, DiscordConfig, TelegramSetupWizard, TelegramConfig, TelegramDashboard, DiscordDashboard, MailClient, CloudDashboard, CloudSetupWizard, WhatsAppSetupWizard, WhatsAppDashboard, VeylloAppSetupWizard, ContactsDashboard, FrontOfficeDashboard, CalendarSetupWizard, CalendarDashboard, GitHubSetupWizard, GitHubDashboard } from './connections';
 import SoulWizard from './SoulWizard';
 import AutomationCalendarModal from './AutomationCalendarModal';
 import TrainingDashboard from './TrainingDashboard';
@@ -1457,6 +1457,9 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
     const [showTelegramWizard, setShowTelegramWizard] = useState(false);
     const [showWhatsAppWizard, setShowWhatsAppWizard] = useState(false);
     const [showWhatsAppDashboard, setShowWhatsAppDashboard] = useState(false);
+    const [showVeylloAppWizard, setShowVeylloAppWizard] = useState(false);
+    // Closing the Veyllo App window refreshes its card: a phone paired or removed there.
+    const [veylloAppRefresh, setVeylloAppRefresh] = useState(0);
     const [showTelegramDashboard, setShowTelegramDashboard] = useState(false);
     const [showContactsDashboard, setShowContactsDashboard] = useState(false);
     const [showFrontOfficeDashboard, setShowFrontOfficeDashboard] = useState(false);
@@ -5241,12 +5244,13 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                 config={localConfig}
                                 onConfigChange={handleChange}
                                 currentUser={currentUser}
-                                refreshTrigger={cloudDashboardRefresh + gitHubDashboardRefresh}
+                                refreshTrigger={cloudDashboardRefresh + gitHubDashboardRefresh + veylloAppRefresh}
                                 onOpenDiscordWizard={() => setShowDiscordWizard(true)}
                                 onOpenDiscordDashboard={() => setShowDiscordDashboard(true)}
                                 onOpenTelegramWizard={() => setShowTelegramWizard(true)}
                                 onOpenWhatsAppWizard={() => setShowWhatsAppWizard(true)}
                                 onOpenWhatsAppDashboard={() => setShowWhatsAppDashboard(true)}
+                                onOpenVeylloAppWizard={() => setShowVeylloAppWizard(true)}
                                 onOpenTelegramDashboard={() => setShowTelegramDashboard(true)}
                                 onOpenEmailDashboard={() => setShowMailClient(true)}
                                 onOpenCloudDashboard={() => setShowCloudDashboard(true)}
@@ -8846,6 +8850,18 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                 onComplete={() => {
                     setShowWhatsAppWizard(false);
                     onRefreshConfig?.();
+                }}
+            />
+
+            {/* Veyllo App: pairing a phone with this account, and for admins the relay */}
+            <VeylloAppSetupWizard
+                isOpen={showVeylloAppWizard}
+                onClose={() => { setShowVeylloAppWizard(false); setVeylloAppRefresh(n => n + 1); }}
+                onComplete={() => onRefreshConfig?.()}
+                isAdmin={currentUser?.role === 'admin'}
+                onOpenAccount={() => {
+                    setShowVeylloAppWizard(false);
+                    setActiveTab('account');
                 }}
             />
 

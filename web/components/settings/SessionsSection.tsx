@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
 import { Check, Copy, KeyRound, Laptop, Monitor, Smartphone } from 'lucide-react';
+import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Skeleton, { SkeletonBar } from '@/components/ui/Skeleton';
 import { copyText } from '@/lib/clipboard';
 import { retryAfterSeconds, retryWhen } from '@/lib/retryAfter';
@@ -25,6 +26,20 @@ interface SessionRow {
     current: boolean;
 }
 
+/** One paired Veyllo App of the account, as GET /api/app-link/devices answers it (times in
+ *  unix seconds). */
+interface AppDeviceRow {
+    id: string;
+    model: string;
+    platform: string;
+    app_version: string;
+    created_at: number | null;
+    last_seen_at: number | null;
+    last_transport: string | null;
+    connected: boolean;
+    fingerprint: string;
+}
+
 /** The lifetimes a token for programs may have (PROGRAM_TOKEN_DAYS in vaf/auth/sessions.py). */
 const TOKEN_DAYS = [7, 30, 90, 365];
 
@@ -36,7 +51,10 @@ const BEARER_HEADER = 'Authorization: Bearer <token>';
  * for programs. A device is signed out here (DELETE /api/auth/sessions/<id>), every other one at
  * once (POST /api/auth/sessions/end-others), and a token for a script is made with the 2FA code
  * (POST /api/auth/tokens) and shown exactly once. The browser itself holds no token a script
- * could read; this is where the account sees what can act as it.
+ * could read; this is where the account sees what can act as it. The account's paired Veyllo
+ * Apps are rows of the same device list (GET /api/app-link/devices); removing one ends its
+ * access at once (DELETE /api/app-link/devices/<id>), and signing out every other device
+ * removes them all.
  */
 export default function SessionsSection() {
     const t = useTranslations('account');
@@ -44,6 +62,8 @@ export default function SessionsSection() {
     const locale = useLocale();
     const apiBase = typeof window !== 'undefined' ? (document.location.origin || '') : '';
     const [rows, setRows] = useState<SessionRow[] | null>(null);
+    const [appRows, setAppRows] = useState<AppDeviceRow[]>([]);
+    const [asking, setAsking] = useState<'others' | AppDeviceRow | null>(null);
     const [idleDays, setIdleDays] = useState(7);
     const [loadFailed, setLoadFailed] = useState(false);
     const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
@@ -60,12 +80,20 @@ export default function SessionsSection() {
     const loadSeq = useRef(0);
     const load = useCallback(async () => {
         const seq = ++loadSeq.current;
+        // Both lists land together, so the measured placeholder stays right. A failed device
+        // answer leaves the sessions as they are and shows no app rows.
+        const apps = fetch(`${apiBase}/api/app-link/devices`, { credentials: 'include', cache: 'no-store' })
+            .then(r => (r.ok ? r.json() : { devices: [] }))
+            .then(d => (Array.isArray(d.devices) ? d.devices as AppDeviceRow[] : []))
+            .catch(() => [] as AppDeviceRow[]);
         try {
             const res = await fetch(`${apiBase}/api/auth/sessions`, { credentials: 'include', cache: 'no-store' });
             if (!res.ok) throw new Error(String(res.status));
             const data = await res.json();
+            const appDevices = await apps;
             if (seq !== loadSeq.current) return;
             setRows(Array.isArray(data.sessions) ? data.sessions : []);
+            setAppRows(appDevices);
             if (typeof data.idle_days === 'number') setIdleDays(data.idle_days);
             setLoadFailed(false);
         } catch {
@@ -89,6 +117,7 @@ export default function SessionsSection() {
     };
     const when = (iso: string | null) => format(iso, true);
     const day = (iso: string | null) => format(iso, false);
+    const fromUnix = (sec: number | null) => (sec ? new Date(sec * 1000).toISOString() : null);
 
     const deviceName = (row: SessionRow) => {
         if (!row.browser) return t('unknownDevice');
@@ -112,8 +141,28 @@ export default function SessionsSection() {
         }
     };
 
+    const removeApp = async (row: AppDeviceRow) => {
+        setAsking(null);
+        setBusy(row.id);
+        setNote(null);
+        try {
+            const res = await fetch(`${apiBase}/api/app-link/devices/${encodeURIComponent(row.id)}`, {
+                method: 'DELETE', credentials: 'include',
+            });
+            // 404: it went meanwhile (another tab, an admin); the reload shows the truth.
+            if (!res.ok && res.status !== 404) setNote({ ok: false, text: t('actionFailed') });
+        } catch {
+            setNote({ ok: false, text: t('actionFailed') });
+        } finally {
+            setBusy(null);
+            void load();
+        }
+    };
+
+    // Asked in the house dialog, like removing an app device in the same list: the browser's
+    // own confirm ignores the theme and would ask the two questions of one list two ways.
     const endOthers = async () => {
-        if (!confirm(t('confirmSignOutOthers'))) return;
+        setAsking(null);
         setBusy('others');
         setNote(null);
         try {
@@ -232,7 +281,7 @@ export default function SessionsSection() {
 
     const devices = rows.filter(r => r.kind !== 'program');
     const tokens = rows.filter(r => r.kind === 'program');
-    const others = rows.some(r => !r.current);
+    const others = rows.some(r => !r.current) || appRows.length > 0;
     const deviceIcon = (row: SessionRow) => {
         if (row.kind === 'this_machine') return <Monitor className="w-4 h-4 text-gray-500 shrink-0 mt-0.5" />;
         if (row.os === 'Android' || row.os === 'iOS') return <Smartphone className="w-4 h-4 text-gray-500 shrink-0 mt-0.5" />;
@@ -245,7 +294,7 @@ export default function SessionsSection() {
                 <div className="flex items-center justify-between gap-3 mb-2 max-md:flex-wrap">
                     <h3 className={title}>{t('devicesTitle')}</h3>
                     {others && (
-                        <button type="button" onClick={() => void endOthers()} disabled={busy !== null} className={linkButton}>
+                        <button type="button" onClick={() => setAsking('others')} disabled={busy !== null} className={linkButton}>
                             {t('signOutOthers')}
                         </button>
                     )}
@@ -277,8 +326,54 @@ export default function SessionsSection() {
                             )}
                         </li>
                     ))}
+                    {appRows.map(row => (
+                        <li key={`app-${row.id}`} className={rowClass}>
+                            <Smartphone className="w-4 h-4 text-gray-500 shrink-0 mt-0.5" />
+                            <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="text-sm font-medium text-gray-800 break-words">{row.model || t('unknownDevice')}</span>
+                                    <span className={badge}>{t('veylloAppBadge')}</span>
+                                    <span className={badge}>{row.last_transport === 'relay' ? t('wayRelay') : t('wayDirect')}</span>
+                                    {row.connected && <span className={badge}>{t('connectedNow')}</span>}
+                                </div>
+                                <p className={meta}>
+                                    {[[row.platform, row.app_version].filter(Boolean).join(' '),
+                                        t('appLastConnected', { when: when(fromUnix(row.last_seen_at)) })].filter(Boolean).join(' · ')}
+                                </p>
+                                <p className={meta}>
+                                    {t('appPaired', { when: day(fromUnix(row.created_at)) })}
+                                    {' · '}
+                                    <span className="font-mono whitespace-nowrap">{t('appFingerprint', { fingerprint: row.fingerprint })}</span>
+                                </p>
+                            </div>
+                            <button type="button" onClick={() => setAsking(row)} disabled={busy !== null} className={rowAction}>
+                                {t('removeApp')}
+                            </button>
+                        </li>
+                    ))}
                 </ul>
                 {note && <p className={`text-xs mt-3 ${note.ok ? 'text-gray-600' : 'text-red-600'}`}>{note.text}</p>}
+                <ConfirmDialog
+                    open={asking === 'others'}
+                    title={t('signOutOthersTitle')}
+                    body={t('confirmSignOutOthers')}
+                    confirmLabel={t('signOutOthersConfirm')}
+                    cancelLabel={tCommon('cancel')}
+                    destructive
+                    onConfirm={() => void endOthers()}
+                    onCancel={() => setAsking(null)}
+                />
+                <ConfirmDialog
+                    open={asking !== null && asking !== 'others'}
+                    title={t('removeAppTitle')}
+                    body={asking !== null && asking !== 'others'
+                        ? t('removeAppConfirm', { model: asking.model || t('unknownDevice') }) : ''}
+                    confirmLabel={t('removeApp')}
+                    cancelLabel={tCommon('cancel')}
+                    destructive
+                    onConfirm={() => { if (asking !== null && asking !== 'others') void removeApp(asking); }}
+                    onCancel={() => setAsking(null)}
+                />
             </div>
 
             <div className={card}>

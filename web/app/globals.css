@@ -675,6 +675,25 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
      button already says the card is waiting. */
   @keyframes vafDraftRim { 0%, 100% { opacity: .6 } }
 }
+/* The Veyllo App window's way switch (VeylloAppSetupWizard): the thumb slides with a slight
+   overshoot under the chosen half, and the QR with its explanation fades in from below out of a
+   blur on every switch. Once per switch, never in a loop, so nothing repaints at rest. The thumb
+   starts at the inline start (`start-1`), so under a `dir="rtl"` ancestor "Veyllo Relay" sits on
+   the right and the thumb travels left; no shipped locale is right-to-left yet. */
+.vaf-way-thumb { transition: transform .45s cubic-bezier(.3,1.25,.4,1); }
+.vaf-way-thumb[data-way="local"] { transform: translateX(100%); }
+[dir="rtl"] .vaf-way-thumb[data-way="local"] { transform: translateX(-100%); }
+@keyframes vafWayEnter {
+  from { opacity: 0; transform: translateY(6px); filter: blur(6px) }
+  to   { opacity: 1; transform: none; filter: none }
+}
+.vaf-way-enter { animation: vafWayEnter .5s cubic-bezier(.22,1,.36,1) both; }
+@media (prefers-reduced-motion: reduce) {
+  /* The thumb jumps and the new code fades in without travelling or blurring. */
+  .vaf-way-thumb { transition: none; }
+  @keyframes vafWayEnter { from { opacity: 0 } to { opacity: 1 } }
+  .vaf-way-enter { animation: vafWayEnter .2s linear both; }
+}
 /* The vote panel docking above the message box, and leaving the same way.
    Both directions, because a vote here ENDS by itself - the last ballot lands or
    the deadline passes - and a panel that pops out of existence while the

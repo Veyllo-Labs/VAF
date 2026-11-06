@@ -1409,7 +1409,9 @@ When you do send a message:
 Call thinking_done with a brief summary when finished."""
 
 
-_SENT_TOOLS = set(ALL_SEND_TOOLS) | {"send_mail", "reply_mail", "forward_mail", "send_to_user"}
+# user_phone too: a background thinking run hands nothing to the person's phone.
+_SENT_TOOLS = set(ALL_SEND_TOOLS) | {"send_mail", "reply_mail", "forward_mail", "send_to_user",
+                                     "user_phone"}
 
 
 def _filter_thinking_send_tools(tools: dict, main_messenger: str) -> list:

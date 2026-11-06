@@ -9564,6 +9564,17 @@ class Agent:
                     rider_order.append("send_to_user")
             except Exception:
                 pass
+            # The user's phone rides along while a Veyllo App of this account is connected:
+            # a task for the phone is asked in the words of any task ("add it to my
+            # calendar"), which the router cannot tell from the task itself.
+            if "user_phone" in self.tools:
+                try:
+                    from vaf.core.app_link import bridge as _app_bridge
+                    if _app_bridge.connected_devices(getattr(self, "_current_user_scope_id", None)):
+                        tools_set.add("user_phone")
+                        rider_order.append("user_phone")
+                except Exception:
+                    pass
             
             # Convert back to a list in cap order, never list(set): the cap below truncates
             # whatever does not fit, and hash order made which tool got cut depend on the run.

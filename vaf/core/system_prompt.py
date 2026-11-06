@@ -1310,6 +1310,15 @@ Then use the results to answer. Do NOT guess from your training data!
                         "reached on, so send_* there needs an explicit recipient such as to_phone and it "
                         "can never be the user's main_messenger).\n"
                     )
+                try:
+                    from vaf.core.app_link import bridge as _app_bridge
+                    _phones = _app_bridge.connected_devices(user_scope_id) if user_scope_id else []
+                except Exception:
+                    _phones = []
+                if _phones:
+                    _caps = sorted({c for row in _phones for c in (row.get("caps") or [])})
+                    identity_block += (
+                        f"\nphone: reachable via user_phone (offers: {', '.join(_caps) or 'none reported'})\n")
                 if avail:
                     channel_names = [CHANNEL_LABELS.get(c, c) for c in avail]
                     identity_block += f"\nmessaging_channels: {', '.join(channel_names)}\n"

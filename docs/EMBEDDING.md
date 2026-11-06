@@ -354,7 +354,10 @@ model for your hardware (`model="auto"`; override with a filename or repo).
 "openrouter"`)** - per-request HTTPS to the provider, no local model at all.
 
 - Zero VRAM, fast first start, and parallel `Agent` instances scale freely
-  (each request is independent).
+  (each request is independent), with one exception: on `veyllo`, instances in
+  one process that share a key share its per-minute request window. VAF holds a
+  request while that window is closed and waits out a 429 exactly as long as the
+  API names; nothing is needed on your side.
 - Needs a key: pass `api_key_<provider>` and optionally `api_model_<provider>`
   per instance via `config=`; your prompts are sent to that provider. Read the
   key from your own secret source - the snippets here take it from the

@@ -243,7 +243,10 @@ the local engine dispatch. Selection is explicit opt-in only; an empty provider
 key means the local Docker lane. On ANY provider problem (missing key, quota
 402, rate limit 429, timeout, non-audio response) the functions return `None`
 and the caller degrades to the local engine - a voice turn never breaks because
-a cloud API is down. On the Lean profile there is no local engine to degrade to, and the
+a cloud API is down. Veyllo's key shares one request window with the chat lane
+(`vaf/core/rate_limit_gate.py`): while it is closed, `_veyllo_stt` returns `None`
+at once without sending and without waiting, and the caller degrades exactly as
+for a 429. On the Lean profile there is no local engine to degrade to, and the
 caller reports the failure instead. All call sites go through `vaf/core/speech_client.py`, so
 the Web UI, Telegram, WhatsApp, and the CLI mic all honour the same provider
 selection.

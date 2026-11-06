@@ -315,7 +315,13 @@ answer crosses instead).
     same wall-clock budget as the SDK lane (`api_rate_limit_wait_max`). Past the budget the
     run ends with the provider's own message (`rate_limit_exhausted` in `events.jsonl`); a
     successful request resets the budget. Before this branch existed, one 429 killed the
-    whole run via the generic non-200 return.
+    whole run via the generic non-200 return. For a provider that publishes its request
+    limits (`veyllo`), all three chat requests (the stream, `_llm_verify_call`, the audit
+    calls) go through `send_gated` with the key's request gate (`vaf/core/rate_limit_gate.py`,
+    shared with the chat lane in the same process): nothing is sent while the window is
+    closed, and the 429 wait is the gate's exact hold (`coder_rate_limit_wait`), uncapped by
+    `api_retry_after_max`. A hold longer than what is left of the budget ends the run at once
+    without sending (`rate_limit_exhausted` with `held`).
 *   **400 (context):** a 400 whose text mentions context/length/tokens triggers the
     compression ladder (3 levels, down to system prompt plus one sentence), capped by
     `_MAX_COMPRESSION_LEVELS`: a 400 that survives the last level was never a context error,

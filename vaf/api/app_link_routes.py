@@ -206,6 +206,63 @@ async def remove_device(device_id: str, request: Request):
     return {"removed": bool(removed)}
 
 
+# ── the relay (admins) ───────────────────────────────────────────────────────
+
+def _admin(request: Request) -> Dict[str, Any]:
+    user = _caller(request)
+    if not _is_admin(user):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only an admin can change the relay.")
+    return user
+
+
+@router.get("/api/app-link/relay")
+async def relay_state(request: Request):
+    _admin(request)
+    return _no_store(_relay_status())
+
+
+@router.put("/api/app-link/relay")
+async def switch_relay(body: RelaySwitch, request: Request):
+    """On or off. Off closes the relay connection and stops relay QR codes, claims and push
+    notices; the instance, its secret and the devices stay, so on again needs no pairing."""
+    from vaf.core.app_link import relay
+    user = _admin(request)
+    await asyncio.to_thread(relay.set_relay_enabled, body.enabled,
+                            username=str(user.get("username") or ""))
+    return _no_store(_relay_status())
+
+
+@router.post("/api/app-link/relay/rotate")
+async def rotate_relay(request: Request):
+    from vaf.core.app_link import relay
+    user = _admin(request)
+    if not await relay.connector().rotate(username=str(user.get("username") or "")):
+        return _no_store({"detail": "The relay did not rotate the secret.", "code": "rotate_failed"}, 502)
+    return _no_store(_relay_status())
+
+
+@router.post("/api/app-link/relay/dissolve")
+async def dissolve_relay(body: CodeBody, request: Request):
+    """Removes the installation's relay instance with every member; the devices stay for the
+    direct path. An admin, with their own 2FA code."""
+    from vaf.api.auth_routes import _caller_account, _client_ip, own_second_factor_refusal
+    from vaf.auth.database import get_auth_db
+    from vaf.core.app_link import relay
+    user = _admin(request)
+    async with get_auth_db() as db:
+        account = await _caller_account(db, request)
+        if account is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No account")
+        refused = own_second_factor_refusal(account, body.code, ip=_client_ip(request),
+                                            where="Veyllo relay dissolve", what="dissolving the relay")
+        if refused is not None:
+            refused.headers.update(_NO_STORE)
+            return refused
+    if not await relay.connector().dissolve(username=str(user.get("username") or "")):
+        return _no_store({"detail": "The relay did not dissolve the instance.", "code": "dissolve_failed"}, 502)
+    return _no_store(_relay_status())
+
+
 # ── the direct WebSocket ─────────────────────────────────────────────────────
 
 @router.websocket("/api/app-link")

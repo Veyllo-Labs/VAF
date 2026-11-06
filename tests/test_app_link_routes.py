@@ -225,3 +225,37 @@ def test_loopback_no_rights(app_link_home, network_on):
     assert all(isinstance(b, (bytes, type(None))) for b in lan)
     assert not any(b and b"welcome" in b for b in lan)
     assert bridge._sessions == {}
+
+
+def test_relay_routes_are_for_admins_and_dissolve_needs_the_code(app_link_home, monkeypatch):
+    from vaf.core.app_link import relay
+    calls = []
+
+    class _Connector:
+        async def rotate(self, username=""):
+            calls.append(("rotate", username))
+            return True
+
+        async def dissolve(self, username=""):
+            calls.append(("dissolve", username))
+            return True
+
+        def status(self):
+            return {"enabled": True, "state": "idle"}
+
+        def wake(self, reset_hold=False):
+            pass
+    monkeypatch.setattr(relay, "connector", lambda: _Connector())
+    user = _app(monkeypatch, as_scope=SCOPE_B, role="user")
+    assert user.put("/api/app-link/relay", json={"enabled": False}).status_code == 403
+    assert user.post("/api/app-link/relay/rotate").status_code == 403
+    admin = _app(monkeypatch, as_scope=SCOPE_A, role="admin")
+    assert admin.put("/api/app-link/relay", json={"enabled": False}).status_code == 200
+    from vaf.core.app_link import settings
+    assert settings()["relay_enabled"] is False
+    assert "app_relay_changed" in app_link_home.kinds()
+    assert admin.post("/api/app-link/relay/dissolve", json={"code": "000000"}).status_code == 401
+    assert calls == []
+    assert admin.post("/api/app-link/relay/dissolve", json={"code": "123456"}).status_code == 200
+    assert admin.post("/api/app-link/relay/rotate").status_code == 200
+    assert calls == [("dissolve", "alice"), ("rotate", "alice")]

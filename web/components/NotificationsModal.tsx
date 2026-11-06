@@ -1452,6 +1452,7 @@ function OverviewPane({ chainOk, events, totalRaw, dates, date, today, onDateCha
       case 'channel_paired': return t('ovEvChannelPaired');
       case 'channel_unpaired': return t('ovEvChannelUnpaired');
       case 'app_pairing_refused': return t('ovEvAppPairingRefused');
+      case 'app_relay_changed': return t('ovEvAppRelayChanged');
       case 'owner_endpoint_reset': return t('ovEvOwnerEndpointReset');
       case 'contact_access_changed': return t('ovEvContactAccess');
       case 'front_office_changed': return t('ovEvFrontOffice');

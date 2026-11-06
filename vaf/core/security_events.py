@@ -119,6 +119,10 @@ SECURITY_EVENT_KINDS: dict[str, str] = {
                            "code was used through the relay elsewhere, or too many sessions at "
                            "once. `detail` the reason and the way (relay, direct). Never the "
                            "code, the relay value or the request itself",
+    "app_relay_changed": "The Veyllo relay of this installation changed: switched on or off by "
+                         "an admin, its instance created by the first claim, its secret rotated, "
+                         "or the instance dissolved. `detail` on, off, claimed, rotated or "
+                         "dissolved; `username` the admin. Never the secret",
     "owner_endpoint_reset": "The stored chat where VAF reaches an account on a messenger was "
                             "not that account's own paired chat and was reset; `channel` the "
                             "platform, `username` the account, `path` the discarded id, "

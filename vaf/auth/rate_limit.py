@@ -77,6 +77,8 @@ _RATE_LIMITED_PATHS: set[str] = {
     "/api/auth/tokens",
     # The Veyllo App pairing window opens with the account's own 2FA code, the same way.
     "/api/app-link/pairing-window",
+    # Dissolving the relay instance asks for the admin's own 2FA code as well.
+    "/api/app-link/relay/dissolve",
 }
 
 

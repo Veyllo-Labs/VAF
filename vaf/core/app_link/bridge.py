@@ -203,8 +203,11 @@ def on_hello(session, hello: Dict[str, Any]) -> None:
         _sessions[did] = session
     if previous is not None and previous is not session:
         previous.close("replaced", bye=True)
+    # The relay address is learned from the claim; a device paired before the relay sent it is
+    # given the first cid its certificate authenticated on. Identity never comes from it.
     devices.touch(did, session.transport,
-                  cid=session.relay_cid if session.transport == "relay" else None)
+                  cid=session.relay_cid if session.transport == "relay" and not row.get("relay_cid")
+                  else None)
     if hello.get("caps") is not None:
         devices.set_caps(did, hello["caps"])
     scope = row["user_scope_id"]

@@ -186,6 +186,15 @@ def live_relay_pairings() -> List[Pairing]:
             and p.state in ("issued", "claimed", "awaiting_confirm")]
 
 
+def claimed_relay_pairings() -> List[Pairing]:
+    """The live relay pairings the relay has claimed: the app may connect through it now."""
+    now = _clock()
+    with _lock:
+        rows = list(_issued.values()) + list(_awaiting.values())
+    return [p for p in rows if p.mode == "relay" and p.member and p.exp > now
+            and p.state in ("claimed", "awaiting_confirm")]
+
+
 def _by_p(p: bytes) -> Optional[Pairing]:
     with _lock:
         for pairing in list(_issued.values()) + list(_awaiting.values()):

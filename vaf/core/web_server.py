@@ -2132,7 +2132,10 @@ async def start_app_link():
     # devices. Both start once per process; this hook runs twice in TLS mode.
     try:
         from vaf.core.app_link import bridge as app_link_bridge
+        from vaf.core.app_link import relay as app_link_relay
         app_link_bridge.start()
+        # Idle (no connection at all) until a relay QR is claimed or a device uses the relay.
+        app_link_relay.start()
     except Exception as e:
         log("WebServer", f"Veyllo App link manager not started: {e}")
 

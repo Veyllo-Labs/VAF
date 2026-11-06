@@ -75,6 +75,8 @@ _RATE_LIMITED_PATHS: set[str] = {
     # A token for programs is confirmed with the 2FA code; a wrong one is a 401 counted here
     # (and in the account's second-factor window).
     "/api/auth/tokens",
+    # The Veyllo App pairing window opens with the account's own 2FA code, the same way.
+    "/api/app-link/pairing-window",
 }
 
 

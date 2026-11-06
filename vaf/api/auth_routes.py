@@ -1085,7 +1085,42 @@ async def end_other_sessions(request: Request):
         ended = await end_account_sessions(db, user.id, keep_token=_presented_token(request))
         scope = str(user.user_scope_id or "")
     close_account_sockets(scope)
+    # The account's Veyllo App devices are other devices too: they pair again.
+    try:
+        from vaf.core.app_link import devices as app_devices
+        app_devices.remove_account_devices(scope, by=str(user.username or ""),
+                                           reason="signed out every other device")
+    except Exception as e:  # noqa: BLE001 - the sign-out itself has happened
+        logger.warning("Could not remove the account's Veyllo App devices: %s", e)
     return {"ended": ended}
+
+
+def own_second_factor_refusal(user, code, *, ip: str, where: str, what: str):
+    """The answer that refuses a credential confirmed with the account's OWN 2FA code, or
+    None when the code is right. 400 when 2FA is not set up, the secret cannot be read or the
+    code was spent; 401 for a wrong code (counted by the address window when the path is in
+    `_RATE_LIMITED_PATHS`, and by the account's second-factor window); 429 while held. The
+    one copy for every route that hands out something on the strength of that code: a token
+    for programs, a Veyllo App pairing window."""
+    from vaf.auth import second_factor
+    if not (user.totp_secret and user.totp_nonce and not user.requires_2fa_setup):
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={
+            "detail": f"Set up 2FA for this account first: {what} is confirmed with its code.",
+            "code": "twofa_not_set_up"})
+    reason = second_factor.check_second_factor(user, code, ip=ip, where=where)
+    if reason == second_factor.THROTTLED:
+        from vaf.auth.rate_limit import too_many_attempts
+        return too_many_attempts(second_factor.held_for(user))
+    if reason == second_factor.UNREADABLE:
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={
+            "detail": "The 2FA secret cannot be read on this machine", "code": "twofa_unreadable"})
+    if reason == second_factor.SPENT:
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST,
+                            content={"detail": SPENT_CODE_TEXT, "code": "code_spent"})
+    if reason is not None:
+        return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED,
+                            content={"detail": "The 2FA code is not right", "code": "wrong_code"})
+    return None
 
 
 @router.post("/tokens", status_code=status.HTTP_201_CREATED)
@@ -1099,7 +1134,7 @@ async def create_program_token(body: ProgramTokenRequest, request: Request):
     in with it; closing that is the per-start IPC token docs/setup/NETWORK_FEATURES.md names. A
     wrong code is a 401, counted by the address window (`_RATE_LIMITED_PATHS`) and the
     account's second-factor window."""
-    from vaf.auth import second_factor, sessions
+    from vaf.auth import sessions
     async with get_auth_db() as db:
         user = await _caller_account(db, request)
         if user is None:
@@ -1111,24 +1146,11 @@ async def create_program_token(body: ProgramTokenRequest, request: Request):
         except sessions.ProgramTokenRefused as e:
             return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST,
                                 content={"detail": e.message, "code": e.code})
-        if not (user.totp_secret and user.totp_nonce and not user.requires_2fa_setup):
-            return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={
-                "detail": "Set up 2FA for this account first: a token is confirmed with its code.",
-                "code": "twofa_not_set_up"})
         ip = _client_ip(request)
-        reason = second_factor.check_second_factor(user, body.code, ip=ip, where="token for programs")
-        if reason == second_factor.THROTTLED:
-            from vaf.auth.rate_limit import too_many_attempts
-            return too_many_attempts(second_factor.held_for(user))
-        if reason == second_factor.UNREADABLE:
-            return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={
-                "detail": "The 2FA secret cannot be read on this machine", "code": "twofa_unreadable"})
-        if reason == second_factor.SPENT:
-            return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST,
-                                content={"detail": SPENT_CODE_TEXT, "code": "code_spent"})
-        if reason is not None:
-            return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED,
-                                content={"detail": "The 2FA code is not right", "code": "wrong_code"})
+        refused = own_second_factor_refusal(user, body.code, ip=ip, where="token for programs",
+                                            what="a token")
+        if refused is not None:
+            return refused
         try:
             token, session_id = await sessions.mint_program_token(
                 db, user, name=name, days=days, ip=ip,

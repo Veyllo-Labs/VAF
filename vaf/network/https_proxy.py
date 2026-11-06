@@ -394,6 +394,9 @@ _WS_ALLOWED = re.compile(
     # checked against the live lease by the backend route, so the shape is all this
     # pattern has to pin: token_urlsafe output, nothing that could walk a path.
     r"|^/api/browser-vnc/t/[A-Za-z0-9_-]{16,64}/websockify$"
+    # The Veyllo App's direct path: inner TLS bytes only; the device certificate inside
+    # decides, the route grants nothing by itself (vaf/api/app_link_routes.py).
+    r"|^/api/app-link$"
 )
 
 

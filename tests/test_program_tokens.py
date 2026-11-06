@@ -185,7 +185,8 @@ def test_the_account_tab_words_every_refusal():
     import vaf.api.auth_routes as auth_routes
     from vaf.auth import sessions
     root = Path(__file__).resolve().parents[1]
-    route = inspect.getsource(auth_routes.create_program_token)
+    route = (inspect.getsource(auth_routes.create_program_token)
+             + inspect.getsource(auth_routes.own_second_factor_refusal))
     codes = set(re.findall(r'"code": "(\w+)"', route))
     codes |= {node.args[0].value for node in ast.walk(ast.parse(inspect.getsource(sessions)))
               if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "ProgramTokenRefused"

@@ -95,7 +95,8 @@ def test_the_summary_counts_waits_and_unread_for_the_badge(world):
     _msg("+491700000050", "moin", ts=NOW - 3, message_id="b3")
     out = asyncio.run(ir.inbox_summary(_request()))
     assert (out["waits"], out["unread"], out["all"], out["agent"]) == (1, 2, 2, 1)
-    assert out["waits_per_channel"] == {"whatsapp": 1, "telegram": 0, "discord": 0, "mail": 0, "room": 0}
+    assert out["waits_per_channel"] == {"whatsapp": 1, "telegram": 0, "discord": 0, "veyllo_app": 0,
+                                        "mail": 0, "room": 0}
     assert out["per_channel"]["whatsapp"] == 2 and out["stored_per_channel"]["whatsapp"] == 2
     # The rail's toggles reach the summary: with done rows shown, the person's own reply counts too.
     _msg("+491700000060", "bye", direction="out", ts=NOW - 2, sender=store.OWNER_SENDER, message_id="b4")

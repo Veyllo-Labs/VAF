@@ -1620,6 +1620,17 @@ except ImportError as e:
 except Exception as e:
     log("WebServer", f"Failed to mount MCP sign-in routes: {e}")
 
+# Mount the Veyllo App routes (pairing for the caller's own account, devices, the relay
+# switch) and its direct WebSocket /api/app-link (inner TLS only; vaf/core/app_link)
+try:
+    from vaf.api.app_link_routes import router as app_link_router
+    app.include_router(app_link_router)
+    log("WebServer", "Veyllo App routes mounted at /api/app-link")
+except ImportError as e:
+    log("WebServer", f"Veyllo App routes not available: {e}")
+except Exception as e:
+    log("WebServer", f"Failed to mount Veyllo App routes: {e}")
+
 # Mount Auth routes (Local Network Authentication)
 try:
     from vaf.api.auth_routes import router as auth_router
@@ -2111,6 +2122,19 @@ async def start_sandbox_env_housekeeping():
         get_environment_manager().start_reaper()
     except Exception as e:
         log("WebServer", f"Sandbox environment housekeeping not started: {e}")
+
+
+@app.on_event("startup")
+async def start_app_link():
+    # The Veyllo App's link manager: its sweep (removed devices cut off, handshake and
+    # transfer timeouts, the pairing confirmation's 120 s, idle devices expired) and, with
+    # it imported, the revocation listener that removes a locked or deleted account's
+    # devices. Both start once per process; this hook runs twice in TLS mode.
+    try:
+        from vaf.core.app_link import bridge as app_link_bridge
+        app_link_bridge.start()
+    except Exception as e:
+        log("WebServer", f"Veyllo App link manager not started: {e}")
 
 
 @app.on_event("startup")

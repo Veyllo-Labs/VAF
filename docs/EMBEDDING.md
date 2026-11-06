@@ -395,6 +395,7 @@ keys (full reference in [CONFIG_SCHEMA.md](setup/CONFIG_SCHEMA.md)):
 | `n_ctx` | `32768` | context window (min 32768 for tool use) |
 | `context_compress_tokens` | `45000` | API providers: history token budget at which compression fires (`min(window, budget)`, floored at 8000); every round-trip resends and bills the whole history, so the window alone is the wrong ceiling. `0` = window-based. Local models ignore it. For your own settings screen, `vaf.core.context.resolve_context_effort()` returns the rung ladder, the model's real window and whether the budget applies to the configured provider |
 | `temperature` | `0.7` | sampling temperature |
+| `deepseek_reasoning_effort` | `""` | DeepSeek only: thinking effort `low`, `high` or `max` for this agent's DeepSeek calls; empty keeps DeepSeek's default (`high`), any other value is ignored with a warning. The coder sub-agent reads the machine config instead |
 
 ```python
 Agent(config={

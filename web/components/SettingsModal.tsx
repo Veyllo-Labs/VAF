@@ -50,6 +50,7 @@ import { PickerSelect } from '@/components/ui/PickerDialog';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Skeleton, { SkeletonBar, SkeletonRows } from '@/components/ui/Skeleton';
 import { groupToolsIntoBundles, bundleColor, bundleLabel, bundleIconKey } from '@/lib/toolBundles';
+import { deepseekInUse } from '@/lib/deepseekEffort';
 import type { SkillSaveData } from './settings/SkillsEditor';
 import type { CreateAutomationPayload } from './CreateAutomationPopup';
 
@@ -4139,6 +4140,26 @@ export default function SettingsModal({ isOpen, onClose, config, onSave, availab
                                         </Section>
                                     );
                                 })}
+
+                                {/* DeepSeek thinking effort. Shown whenever any job can reach DeepSeek
+                                    (a key, or any lane naming it), not only as the main provider: the
+                                    backend sends it on every DeepSeek call (web/lib/deepseekEffort.ts). */}
+                                {deepseekInUse(localConfig, providerHasKey('deepseek')) && (
+                                    <Section title={tAi('deepseekEffort')}>
+                                        <p className="text-xs text-gray-500 mb-3">{tAi('deepseekEffortDesc')}</p>
+                                        <Select
+                                            label={tAi('deepseekEffortLevel')}
+                                            value={String(localConfig.deepseek_reasoning_effort ?? '')}
+                                            onChange={(v: string) => handleChange('deepseek_reasoning_effort', v)}
+                                            options={[
+                                                { value: '', label: tAi('deepseekEffortDefault') },
+                                                { value: 'low', label: tAi('deepseekEffortLow') },
+                                                { value: 'high', label: tAi('deepseekEffortHigh') },
+                                                { value: 'max', label: tAi('deepseekEffortMax') },
+                                            ]}
+                                        />
+                                    </Section>
+                                )}
 
                                 {/* Context effort: the per-reply token budget. Deliberately OUTSIDE the
                                     local-model section - it is the setting that matters most for a paid

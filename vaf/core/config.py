@@ -1291,7 +1291,7 @@ class Config:
         "prompt_log_full_enabled",
         "secure_store_kek_backend",
         "context_archive_max_age_days",
-        # Provider request policy. These four are read with an inline default
+        # Provider request policy. These five are read with an inline default
         # instead of from DEFAULTS, so no prefix covers them and each needs an
         # explicit entry (precedent: the learn_ spend keys above).
         # `local_api_url` decides WHERE the API-backend consumers (browser agent,
@@ -1304,6 +1304,9 @@ class Config:
         "anthropic_prompt_cache",
         "anthropic_thinking",
         "google_thinking",
+        # Same reason, one step further: `max` thinks longer than DeepSeek's default and
+        # bills the extra output tokens on every DeepSeek call of the instance.
+        "deepseek_reasoning_effort",
     ])
 
     @classmethod

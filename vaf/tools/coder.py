@@ -3820,6 +3820,11 @@ Thumbs.db
                 "PROVIDER_MODELS — this is a VAF bug; the provider must be added there."
             )
         _is_api_mode = _provider in _API_PROVIDERS
+        # DeepSeek's thinking effort (`deepseek_reasoning_effort`), read once per run from
+        # the machine config like the coder's other settings. Both request sites below hand
+        # it to openai_request_params, which sends it for provider deepseek only.
+        from vaf.core.api_backend import deepseek_reasoning_effort
+        _deepseek_effort = deepseek_reasoning_effort(Config) if _provider == "deepseek" else None
         if _is_api_mode:
             _api_base, _llm_default_model = _API_PROVIDERS[_provider]
             _llm_api_key = Config.get_api_key(_provider) or ""
@@ -5768,7 +5773,8 @@ Task {task_idx + 1}: {current_task}
             _au_model = _llm_model or "user-model"
             _au_body = {"model": _au_model, "messages": messages, "stream": False}
             _au_body.update(openai_request_params(_provider, _au_model, temperature=0.0,
-                                                  max_tokens=max_tokens, has_tools=False))
+                                                  max_tokens=max_tokens, has_tools=False,
+                                                  reasoning_effort=_deepseek_effort))
             _au_resp = requests.post(_llm_chat_url, headers=_au_headers, json=_au_body,
                                      timeout=600)
             _au_resp.raise_for_status()
@@ -6729,6 +6735,7 @@ Task {task_idx + 1}: {current_task}
                 _req_body.update(openai_request_params(
                     _provider, model_name, temperature=current_temp,
                     max_tokens=32768, has_tools=True,
+                    reasoning_effort=_deepseek_effort,
                 ))
                 _req_body["tools"] = tools_schema
                 _req_body["tool_choice"] = _effective_tool_choice

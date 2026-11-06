@@ -21,6 +21,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   and the relay with `vaf relay`; `vaf health` and `vaf doctor` report on both. Your agent
   can also hand tasks to your phone (`user_phone`). The Veyllo App can be your main
   messenger in Settings.
+- **DeepSeek: choose how long the model thinks before it answers.** Settings > AI & Model has a
+  **DeepSeek thinking effort** setting (Standard, Low, High, Max), also available as the config
+  key `deepseek_reasoning_effort`. It applies to every DeepSeek call, whichever job makes it (chat,
+  sub-agents, the Thinker, the browser agent, the voice call, a failover backup, the coder), and the
+  setting is shown whenever a DeepSeek key is set or any job uses DeepSeek. Standard keeps
+  DeepSeek's default (`high`). Higher levels think longer and use more output tokens, which DeepSeek
+  bills.
 
 ### Changed
 

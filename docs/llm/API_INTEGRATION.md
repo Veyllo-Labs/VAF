@@ -184,6 +184,7 @@ All API providers support **streaming responses** for real-time output.
 - **Google** - Full support (`function_call`/`function_response` via the native google-genai SDK)
 - **OpenRouter** - Provider-dependent
 - **DeepSeek** - `tool_choice` limited to `auto`/`none` (see the DeepSeek rows in PROVIDER_MODES.md)
+- **DeepSeek** - thinking effort selectable with `deepseek_reasoning_effort` (`low`, `high`, `max`; empty keeps DeepSeek's default `high`), sent on every DeepSeek call with or without tools (see the DeepSeek rows in PROVIDER_MODES.md)
 
 ### Vision / Image Input
 

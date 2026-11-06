@@ -223,8 +223,51 @@ def _allowed_tools_retreat(tools, tool_choice):
     return narrowed, "required"
 
 
+# DeepSeek's thinking effort (`deepseek_reasoning_effort`). The three values its
+# thinking-mode guide documents for the OpenAI format; the others it accepts
+# (minimal, medium, xhigh, ultra) are mapped onto these three and add nothing.
+# Measured 2026-11-06 with one function tool on deepseek-flash and deepseek-v4-pro:
+# each of the three answers 200, and an unknown value answers 422 ("unknown variant
+# ... expected one of none, minimal, low, medium, high, xhigh, ultra, max") on EVERY
+# call, so nothing outside this set may reach the body. `none` is left out on
+# purpose: the OpenAI format turns thinking off with `thinking.type`, not with the
+# effort, and turning DeepSeek's thinking off is not offered (named boundary).
+DEEPSEEK_REASONING_EFFORTS = ("low", "high", "max")
+_deepseek_effort_warned: set = set()
+
+
+def _normalized_deepseek_effort(value: Any) -> Optional[str]:
+    """`value` as one of DEEPSEEK_REASONING_EFFORTS, or None."""
+    text = str(value or "").strip().lower()
+    return text if text in DEEPSEEK_REASONING_EFFORTS else None
+
+
+def deepseek_reasoning_effort(config: Any) -> Optional[str]:
+    """The thinking effort to send DeepSeek, or None to send nothing.
+
+    None leaves DeepSeek's own default in force (thinking on, effort `high`), which
+    is what every call did before the key existed. `config` is anything with
+    `.get`: an embedder's merged dict, the lazy product config of `_chat_single`,
+    or `Config` itself. A value outside DEEPSEEK_REASONING_EFFORTS is ignored with
+    one warning per process and value, because the API answers it with a 422.
+    """
+    try:
+        raw = config.get("deepseek_reasoning_effort", "") if config is not None else ""
+    except Exception:
+        return None
+    effort = _normalized_deepseek_effort(raw)
+    text = str(raw or "").strip()
+    if effort is None and text and text not in _deepseek_effort_warned:
+        _deepseek_effort_warned.add(text)
+        logger.warning(
+            "[deepseek] deepseek_reasoning_effort=%r is not one of %s; sending no effort "
+            "(DeepSeek's default, high)", text, ", ".join(DEEPSEEK_REASONING_EFFORTS))
+    return effort
+
+
 def openai_request_params(provider_name: str, model: str, *, temperature: float,
-                          max_tokens: int, has_tools: bool) -> Dict[str, Any]:
+                          max_tokens: int, has_tools: bool,
+                          reasoning_effort: Optional[str] = None) -> Dict[str, Any]:
     """The per-model parameters an OpenAI-compatible chat/completions body needs.
 
     Returns the token-limit key, the sampling params where they are accepted, and
@@ -234,6 +277,13 @@ def openai_request_params(provider_name: str, model: str, *, temperature: float,
     wire format, different base_url) normalizes around `max_tokens` for every model,
     so sending `max_completion_tokens` there can lose the token limit; DeepSeek,
     Veyllo and local never match the OpenAI ids anyway.
+
+    `reasoning_effort` is DeepSeek's thinking effort (`deepseek_reasoning_effort`)
+    and is sent for provider `deepseek` only, and only as one of
+    DEEPSEEK_REASONING_EFFORTS: checked again here, so a caller that skipped the
+    resolver cannot send a value the API refuses. Named boundaries: not for
+    `veyllo` (a gateway, never probed with the field) and not for OpenRouter's
+    `deepseek/...` ids (OpenRouter has its own `reasoning` object, not probed).
     """
     direct_openai = (provider_name or "").lower() == "openai"
     # A model that demands reasoning_effort IS a reasoning model, so a refusal
@@ -257,6 +307,10 @@ def openai_request_params(provider_name: str, model: str, *, temperature: float,
             # parallel_tool_calls isn't accepted by all reasoning models; the
             # server-side default already allows parallel calls, so just omit it.
             params["parallel_tool_calls"] = True
+    if (provider_name or "").lower() == "deepseek":
+        effort = _normalized_deepseek_effort(reasoning_effort)
+        if effort:
+            params["reasoning_effort"] = effort
     return params
 
 
@@ -540,7 +594,8 @@ class OpenAIProvider(BaseAIProvider):
         (before any token streams), so it can never duplicate output. Uses the shared BaseAIProvider retry."""
         return self._with_retry(lambda: self.client.chat.completions.create(**kwargs))
 
-    def chat_completion(self, messages, temperature, max_tokens, stream, model, tools, tool_choice=None):
+    def chat_completion(self, messages, temperature, max_tokens, stream, model, tools, tool_choice=None,
+                        *, reasoning_effort=None):
         if not self.client:
             yield "[Error] OpenAI SDK missing."
             return
@@ -558,6 +613,7 @@ class OpenAIProvider(BaseAIProvider):
             kwargs.update(openai_request_params(
                 self.provider_name, model, temperature=temperature,
                 max_tokens=max_tokens, has_tools=bool(tools),
+                reasoning_effort=reasoning_effort,
             ))
             if tools:
                 kwargs["tools"] = tools
@@ -1876,7 +1932,17 @@ class APIBackendManager:
 
         # Execute via provider
         try:
-            for chunk in self.provider.chat_completion(messages, temperature, max_tokens, stream, model, tools, tool_choice):
+            # DeepSeek's thinking effort, from the same config this call resolved its
+            # model from (an embedder's dict, or the fresh product config). Asked only
+            # for DeepSeek, so every other provider reads nothing new; the provider of a
+            # deepseek manager is always an OpenAIProvider, the only class with the keyword.
+            _provider_extra = {}
+            if self.provider_name == "deepseek":
+                _effort = deepseek_reasoning_effort(live_config)
+                if _effort:
+                    _provider_extra["reasoning_effort"] = _effort
+            for chunk in self.provider.chat_completion(messages, temperature, max_tokens, stream, model, tools, tool_choice,
+                                                       **_provider_extra):
                 # Sync usage stats back to manager. `update` rather than two named
                 # assignments: a field the provider learns to report must not need a
                 # second edit here to survive the trip (it did, twice).
@@ -1939,7 +2005,8 @@ class APIBackendManager:
         ("gemini-1.5-pro",2_097_152),
         ("gemini-1.5",    1_048_576),
         ("gemini",        1_048_576),
-        # DeepSeek — all V4 models: 1M input context, 64K max output
+        # DeepSeek: deepseek-flash and deepseek-v4-pro, 1M context, 384K max output
+        # (DeepSeek's models page, read 2026-11-06)
         ("deepseek-v4",   1_000_000),
         ("deepseek",      1_000_000),
         # Mistral

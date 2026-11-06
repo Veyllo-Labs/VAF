@@ -315,8 +315,12 @@ def confirm(user_scope_id: str, accept: bool) -> str:
 
     from vaf.core.app_link import devices, pki
     scope = str(user_scope_id or "").strip()
+    # Taken out under the lock: exactly one caller (a double click, the sweep) owns it.
     with _lock:
-        pairing = _awaiting.get(scope)
+        pairing = _awaiting.pop(scope, None)
+        if pairing is not None:
+            pairing.state = "confirming"
+            _last[scope] = pairing
     if pairing is None:
         return "none"
     session = pairing.session
@@ -334,13 +338,19 @@ def confirm(user_scope_id: str, accept: bool) -> str:
     device_id = str(uuid.uuid4())
     der = pki.issue_device_cert(pairing.public_key, device_id)
     serial = str(x509.load_der_x509_certificate(der).serial_number)
-    devices.add_device(user_scope_id=scope, username=pairing.username,
-                       spki_sha256=pki.spki_sha256(pairing.public_key), cert_serial=serial,
-                       model=pairing.device.get("model", ""),
-                       platform=pairing.device.get("platform", ""),
-                       app_version=pairing.device.get("app_version", ""), device_id=device_id,
-                       transport=session.transport, relay_member=pairing.member,
-                       relay_cid=pairing.cid)
+    try:
+        devices.add_device(user_scope_id=scope, username=pairing.username,
+                           spki_sha256=pki.spki_sha256(pairing.public_key), cert_serial=serial,
+                           model=pairing.device.get("model", ""),
+                           platform=pairing.device.get("platform", ""),
+                           app_version=pairing.device.get("app_version", ""), device_id=device_id,
+                           transport=session.transport, relay_member=pairing.member,
+                           relay_cid=pairing.cid)
+    except ValueError:
+        # This device key is paired already (with this account or another one).
+        _finish(pairing, "denied")
+        _pair_error(session, "denied", "key already paired", pairing.username)
+        return "denied"
     _switch_lane_on(scope)
     pairing.device_id = device_id
     _finish(pairing, "paired")
@@ -394,6 +404,9 @@ def sweep() -> None:
     now = _clock()
     with _lock:
         late = [p for p in _awaiting.values() if now - p.awaiting_since > CONFIRM_SECONDS]
+        # Taken out under the lock, so a confirmation running now cannot also own them.
+        for pairing in late:
+            del _awaiting[pairing.scope]
         for scope in [s for s, until in _windows.items() if until <= now]:
             del _windows[scope]
         for scope in [s for s, p in _issued.items() if p.exp <= now]:

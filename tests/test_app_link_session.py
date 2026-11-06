@@ -160,3 +160,85 @@ def test_session_rate_limits_per_peer_and_connection(app_link_home):
     others = [Pipe(peer=f"10.1.0.{i}", connection="conn-x").session
               for i in range(sess.SESSIONS_PER_MINUTE_PER_CONNECTION + 1)]
     assert others[-1] is None and all(s is not None for s in others[:-1])
+
+
+def test_a_pair_session_must_send_its_message_in_time(app_link_home):
+    from vaf.core.app_link import session as sess
+    pipe = Pipe()
+    AppClient(ca_der(), sni=pr.SNI_PAIR).attach(pipe).connect()
+    session = pipe.session
+    assert session.state == "pair"
+    session.check_timeouts(session.handshake_done_at + sess.FIRST_MESSAGE_SECONDS - 1)
+    assert not session.closed
+    session.check_timeouts(session.handshake_done_at + sess.FIRST_MESSAGE_SECONDS + 1)
+    assert session.closed and session.close_reason == "first_message_timeout"
+
+
+def test_a_link_session_must_say_hello_in_time(app_link_home):
+    from vaf.core.app_link import session as sess
+    _client, pipe, _row = link(SCOPE_A, hello=False)
+    session = pipe.session
+    assert session.state == "await_hello"
+    session.check_timeouts(session.handshake_done_at + sess.FIRST_MESSAGE_SECONDS + 1)
+    assert session.closed
+
+
+def test_no_big_frame_before_a_device_is_known(app_link_home):
+    from vaf.core.app_link import session as sess
+    pipe = Pipe()
+    client = AppClient(ca_der(), sni=pr.SNI_PAIR).attach(pipe).connect()
+    client.send_raw(bytes([1]) + (sess.PRE_OPEN_MAX_PAYLOAD + 1).to_bytes(4, "big") + b"x" * 1000)
+    assert pipe.session.closed and pipe.session.close_reason == "bad_frame"
+    # Once the device said hello, a frame bigger than that is a normal message.
+    client, pipe, row = link(SCOPE_A, peer="10.0.0.9", connection="c9")
+    text = "x" * (sess.PRE_OPEN_MAX_PAYLOAD + 1000)
+    client.send({"t": "msg", "id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+                 "chat": devices.chat_session_id(SCOPE_A), "text": text})
+    assert not pipe.session.closed
+    assert {"t": "ack", "id": "0f8fad5b-d9cb-469f-a165-70867728950e"} in client.frames
+
+
+def test_a_finished_file_waits_for_its_siblings_without_timing_out(app_link_home, monkeypatch):
+    import hashlib
+
+    from vaf.core.app_link import session as sess
+    monkeypatch.setattr(bridge, "on_message", lambda s, m, files: None)
+    client, pipe, row = link(SCOPE_A)
+    a, b = b"A" * 100, b"B" * 200
+    xa, xb = b"\x01" * 16, b"\x02" * 16
+    client.send({"t": "msg", "id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+                 "chat": devices.chat_session_id(SCOPE_A), "text": "two files",
+                 "attachments": [
+                     {"xfer": pr.b64url(xa), "name": "a.txt", "mime": "text/plain", "size": len(a),
+                      "sha256": hashlib.sha256(a).hexdigest()},
+                     {"xfer": pr.b64url(xb), "name": "b.txt", "mime": "text/plain", "size": len(b),
+                      "sha256": hashlib.sha256(b).hexdigest()}]})
+    client.send_raw(pr.encode_chunk(xa, 0, a))
+    client.send_raw(pr.encode_chunk(xb, 0, b[:100]))
+    session = pipe.session
+    transfers = session._transfers
+    transfers[xa].last_at -= sess.TRANSFER_SILENCE_SECONDS + 30   # A finished long ago
+    session.check_timeouts(transfers[xb].last_at + 1)              # B is still arriving
+    assert xa in transfers and xb in transfers
+    assert not [f for f in client.frames if f.get("code") == "xfer_abort"]
+
+
+def test_an_empty_message_is_refused(app_link_home):
+    client, _pipe, row = link(SCOPE_A)
+    client.send({"t": "msg", "id": "0f8fad5b-d9cb-469f-a165-70867728950e",
+                 "chat": devices.chat_session_id(SCOPE_A), "text": "  "})
+    assert {"t": "error", "code": "bad_field", "ref": "text"} in client.frames
+    from vaf.core.task_queue import TaskQueue
+    assert not TaskQueue().has_queued(devices.chat_session_id(SCOPE_A))
+
+
+def test_a_long_connected_device_keeps_counting_as_used(app_link_home, monkeypatch):
+    client, _pipe, row = link(SCOPE_A)
+    touched = []
+    monkeypatch.setattr(devices, "touch", lambda did, transport, cid=None: touched.append(did))
+    client.send({"t": "ack", "id": "0f8fad5b-d9cb-469f-a165-70867728950e"})
+    assert touched == []                                   # just touched at hello
+    monkeypatch.setitem(bridge._touched, row["device_id"], -10_000.0)
+    client.send({"t": "ack", "id": "0f8fad5b-d9cb-469f-a165-70867728950e"})
+    client.send({"t": "ack", "id": "0f8fad5b-d9cb-469f-a165-70867728950e"})
+    assert touched == [row["device_id"]]

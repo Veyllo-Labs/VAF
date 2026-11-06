@@ -197,3 +197,42 @@ def test_the_agent_name_comes_from_the_registered_resolver(app_link_home, monkey
         assert "vaf.auth" not in path.read_text(encoding="utf-8"), path.name
     routes = Path(app_link.__file__).parents[2] / "api" / "app_link_routes.py"
     assert "set_agent_name_resolver(agent_display_name)" in routes.read_text(encoding="utf-8")
+
+
+def test_a_late_confirm_on_a_closed_session_creates_nothing(app_link_home):
+    p = _issue()
+    client, pipe, _key = _scan(p)
+    pipe.session.close("gone", bye=False)          # the phone gave up waiting
+    assert pairing.confirm(SCOPE_A, True) == "expired"
+    assert devices.all_devices() == []
+
+
+def test_two_confirms_at_once_create_one_device_and_no_error(app_link_home, monkeypatch):
+    import threading
+    p = _issue()
+    client, _pipe, _key = _scan(p)
+    gate = threading.Barrier(2)
+    results = []
+
+    def _go():
+        gate.wait()
+        results.append(pairing.confirm(SCOPE_A, True))
+    threads = [threading.Thread(target=_go) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert sorted(results) == ["none", "paired"]
+    assert len(devices.all_devices()) == 1
+
+
+def test_the_sweep_and_a_confirm_never_both_own_a_pairing(app_link_home, monkeypatch):
+    p = _issue()
+    client, _pipe, _key = _scan(p)
+    now = pairing._clock()
+    monkeypatch.setattr(pairing, "_clock", lambda: now + pairing.CONFIRM_SECONDS + 1)
+    pairing.sweep()
+    assert pairing.confirm(SCOPE_A, True) == "none"
+    client.pump()
+    assert client.of("pair_error") == [{"t": "pair_error", "code": "expired"}]
+    assert devices.all_devices() == []

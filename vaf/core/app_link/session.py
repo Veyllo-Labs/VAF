@@ -36,6 +36,12 @@ logger = logging.getLogger(__name__)
 
 HANDSHAKE_SECONDS = 15
 HANDSHAKE_MAX_BYTES = 64 * 1024
+# After the handshake, the first message (`pair` on the pairing name, `hello` on the link
+# name) must come within this time; nobody is known yet, so nothing else may hold a slot.
+FIRST_MESSAGE_SECONDS = 20
+# Until a device is known (state "open"), a frame is at most this big: `pair` is about 6 KiB
+# (a 4 KiB CSR in base64 and short labels), `hello` far less. 1 MiB frames are for a device.
+PRE_OPEN_MAX_PAYLOAD = 16 * 1024
 MAX_BUFFERED = 4 * 1024 * 1024
 MSG_PER_MINUTE = 30
 MAX_TRANSFERS = 4
@@ -138,8 +144,9 @@ class LinkSession:
         self._in, self._out = ssl.MemoryBIO(), ssl.MemoryBIO()
         self._tls = pki.server_context().wrap_bio(self._in, self._out, server_side=True)
         self._lock = threading.RLock()
-        self._reader = pr.FrameReader()
+        self._reader = pr.FrameReader(PRE_OPEN_MAX_PAYLOAD)
         self.started_at = clock()
+        self.handshake_done_at: Optional[float] = None
         self.state = "handshake"
         self.purpose: Optional[str] = None
         self.device: Optional[Dict[str, Any]] = None
@@ -190,6 +197,7 @@ class LinkSession:
             self.close(f"tls:{getattr(exc, 'reason', None) or type(exc).__name__}", bye=False)
             return False
         self._flush()
+        self.handshake_done_at = self._clock()
         sni = getattr(self._tls, "vaf_sni", None)
         if self._tls.selected_alpn_protocol() != pr.ALPN or sni not in (pr.SNI_LINK, pr.SNI_PAIR):
             self.close("alpn_or_sni", bye=False)
@@ -307,7 +315,15 @@ class LinkSession:
             if self.state == "handshake" and now - self.started_at > HANDSHAKE_SECONDS:
                 self.close("handshake_timeout", bye=False)
                 return
+            if self.state in ("pair", "await_hello") and self.handshake_done_at is not None \
+                    and now - self.handshake_done_at > FIRST_MESSAGE_SECONDS:
+                self.close("first_message_timeout", bye=False)
+                return
             for transfer in list(self._transfers.values()):
+                # A finished file waits for the other files of its message: no more chunks
+                # come for it, so its silence means nothing.
+                if transfer.done():
+                    continue
                 if now - transfer.last_at > TRANSFER_SILENCE_SECONDS:
                     self._abort_transfer(transfer.xfer)
 
@@ -351,6 +367,7 @@ class LinkSession:
                 self.close("wrong_device", bye=False)
                 return
             self.state = "open"
+            self._reader.max_payload = pr.MAX_FRAME_PAYLOAD
             self.dispatched += 1
             from vaf.core.app_link import bridge
             bridge.on_hello(self, message)

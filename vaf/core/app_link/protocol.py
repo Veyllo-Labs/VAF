@@ -247,8 +247,10 @@ def decode_json_payload(payload: bytes) -> Dict[str, Any]:
 class FrameReader:
     """Reassembles frames from TLS plaintext cut anywhere."""
 
-    def __init__(self) -> None:
+    def __init__(self, max_payload: int = MAX_FRAME_PAYLOAD) -> None:
         self._buf = bytearray()
+        # The largest payload accepted right now; a session lowers it until a device is known.
+        self.max_payload = max_payload
 
     @property
     def buffered(self) -> int:
@@ -261,7 +263,7 @@ class FrameReader:
             kind, length = _HEAD.unpack_from(self._buf)
             if kind not in (FRAME_JSON, FRAME_CHUNK):
                 raise FrameError("unknown frame type")
-            if length > MAX_FRAME_PAYLOAD:
+            if length > min(self.max_payload, MAX_FRAME_PAYLOAD):
                 raise FrameError("payload too large")
             if len(self._buf) < _HEAD.size + length:
                 break
@@ -392,6 +394,9 @@ def validate_from_app(obj: Dict[str, Any], allowed: Iterable[str] = MESSAGE_TYPE
                "attachments": _attachments(obj.get("attachments"))}
         if obj.get("reply_to") is not None:
             out["reply_to"] = _uuid(obj.get("reply_to"), "reply_to")
+        if not out["text"].strip() and not out["attachments"]:
+            # Nothing to hand the agent: an empty turn is refused, not queued.
+            raise ProtocolError("bad_field", "text")
         return out
     if t in ("ack", "read", "cancel"):
         return {"t": t, "id": _uuid(obj.get("id"))}

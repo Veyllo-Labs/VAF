@@ -43,6 +43,9 @@ logger = logging.getLogger(__name__)
 SWEEP_SECONDS = 5
 DUPLICATE_WINDOW_SECONDS = 24 * 3600
 EXPIRY_EVERY_SECONDS = 3600
+# How often a device that stays connected refreshes its last use (an idle expiry counts
+# from it), at most: once per hour, not a sealed-file write per message.
+TOUCH_EVERY_SECONDS = 3600
 
 _lock = threading.RLock()
 _sessions: Dict[str, Any] = {}          # device_id -> its authenticated link session
@@ -50,6 +53,7 @@ _all: set = set()                        # every session alive, handshakes inclu
 _replies: Dict[str, "Reply"] = {}
 _seen_ids: Dict[str, Dict[str, float]] = {}
 _msg_times: Dict[str, Deque[float]] = {}
+_touched: Dict[str, float] = {}
 _offline_hooks: List[Callable[[Dict[str, Any]], None]] = []
 _online_hooks: List[Callable[[str], None]] = []
 _state = {"expired_at": 0.0}
@@ -208,6 +212,8 @@ def on_hello(session, hello: Dict[str, Any]) -> None:
     devices.touch(did, session.transport,
                   cid=session.relay_cid if session.transport == "relay" and not row.get("relay_cid")
                   else None)
+    with _lock:
+        _touched[did] = time.monotonic()
     if hello.get("caps") is not None:
         devices.set_caps(did, hello["caps"])
     scope = row["user_scope_id"]
@@ -261,6 +267,8 @@ def on_message(session, message: Dict[str, Any], files: List[Dict[str, Any]]) ->
         session.close("removed", bye=True)
         return
     t = message["t"]
+    if t in ("msg", "ack"):
+        _touch_now_and_then(did, session)
     if t == "msg":
         _on_msg(session, row, message, files)
     elif t == "ack":
@@ -284,6 +292,17 @@ def on_message(session, message: Dict[str, Any], files: List[Dict[str, Any]]) ->
             pass
     elif t == "error":
         logger.info("app link: device %s reported %s", did[:8], message.get("code"))
+
+
+def _touch_now_and_then(device_id: str, session) -> None:
+    """A device in use for weeks without reconnecting still counts as used."""
+    now = time.monotonic()
+    with _lock:
+        last = _touched.get(device_id)
+        if last is not None and now - last < TOUCH_EVERY_SECONDS:
+            return
+        _touched[device_id] = now
+    devices.touch(device_id, session.transport)
 
 
 def _rate_ok(device_id: str) -> bool:
@@ -603,6 +622,7 @@ def reset() -> None:
         _replies.clear()
         _seen_ids.clear()
         _msg_times.clear()
+        _touched.clear()
         _state["expired_at"] = 0.0
 
 

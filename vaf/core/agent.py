@@ -14249,11 +14249,10 @@ class Agent:
         admin's channel lift says, the ones that need the person, start work of their own or
         change how VAF works from now on. The same predicate hides them from the schema (the
         binding), so this answers a name the model writes anyway, with the reason and what the
-        user can do instead. With the call's ``args`` it also answers for this very call: a
-        tool whose answer depends on them (``mcp_call``), and a file write into the folders VAF
-        loads as its own behaviour (`agent_origin.standing_roots`), a relative target resolved
-        against this chat's workspace and the working folder. FAIL CLOSED: an error while
-        deciding refuses. None outside such a turn and for a tool it may run."""
+        user can do instead, and a tool that writes files (``file_access = "write"``) whatever
+        its arguments. With the call's repaired ``args`` it also answers for this very call: a
+        tool whose answer depends on them (``mcp_call``, ``python_sandbox``). FAIL CLOSED: an
+        error while deciding refuses. None outside such a turn and for a tool it may run."""
         asked_by = getattr(self, "_turn_asked_by_agent", None)
         if not asked_by or name == "multi_tool_use.parallel":
             return None
@@ -14272,24 +14271,10 @@ class Agent:
                 call_args, _errors = repair_arguments(tool, dict(call_args), tool_name=name)
             return agent_request_refusal(
                 name, tool, str(getattr(self, "_current_chat_source", "") or ""),
-                args=call_args, bases=self._write_bases())
+                args=call_args)
         except Exception:
             return (f"[APP AGENT] '{name}' does not run on a request of the Veyllo App's agent. "
                     "It did NOT run, so do not report it as done; say so in your answer.")
-
-    def _write_bases(self) -> tuple:
-        """Where a relative file target of this chat lands: its workspace (the folder
-        `_chat_session_plumbing` hands the file tools) and the process's working folder."""
-        bases = [Path.cwd()]
-        try:
-            from vaf.core.platform import Platform
-            from vaf.core.session import resolve_agent_output_dir
-            bases.insert(0, resolve_agent_output_dir(
-                Platform.documents_dir() / "VAF_Projects",
-                session_id=getattr(self, "current_session_id", None)))
-        except Exception:
-            pass
-        return tuple(bases)
 
     def _ask_user_about_gate(self, name, reason, preview=None, choices=None, gate_id=None):
         """How THIS lane reaches a human. Prefer the WebSocket gate when a web session is

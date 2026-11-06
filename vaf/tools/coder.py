@@ -2662,6 +2662,9 @@ class ContextState:
 class GitInitTool(BaseTool):
     """Initialize a Git repository in the project directory."""
     name = "git_init"
+    # It creates .git in the working folder: a file write the request does not name, and
+    # `.git/hooks` run on every later commit.
+    agent_request = "refuse_person"
     category    = "git"
     permission_level = "write"
     side_effect_class = "reversible"
@@ -2690,6 +2693,8 @@ class GitInitTool(BaseTool):
 class GitAddCommitTool(BaseTool):
     """Add files to Git staging area and commit them."""
     name = "git_add_commit"
+    # It writes .git (index, objects, the commit) in the working folder.
+    agent_request = "refuse_person"
     category    = "git"
     permission_level = "write"
     side_effect_class = "irreversible"

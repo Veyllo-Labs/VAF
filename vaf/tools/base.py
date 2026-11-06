@@ -220,8 +220,10 @@ class BaseTool(ABC):
     #                       approval where VAF has a park lane for it (vaf/core/outbound_hold),
     #                       refused like "refuse_person" for any other tool
     # Refused tools are hidden from such a turn too. A tool kept off chats
-    # (channel_restrictions) is refused there whatever this says. A value outside the five
-    # counts as "refuse_person": a typo must not open a tool.
+    # (channel_restrictions) is refused there whatever this says, and so is a tool with
+    # file_access = "write" (it writes files) unless it is a "hold" a park lane holds. A
+    # tool that writes files without that mode declares a refusal here. A value outside the
+    # five counts as "refuse_person": a typo must not open a tool.
     agent_request: Literal["allow", "refuse_work", "refuse_standing", "refuse_person",
                            "hold"] = "allow"
 

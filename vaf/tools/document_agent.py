@@ -51,6 +51,9 @@ class DocumentAgentTool(BaseTool):
     """
     
     name = "document_agent"
+    # It writes a file its own model names (from the request's text) into the chat's
+    # workspace, in a sub-agent lane the turn gate does not reach.
+    agent_request = "refuse_person"
     # A sub-agent step legitimately runs for minutes (the workflow engine raises its own
     # floor on top of this).
     def budget_seconds(self, args):

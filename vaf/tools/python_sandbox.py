@@ -638,6 +638,13 @@ class PythonSandboxTool(BaseTool):
                          f"to stop it: host_process(action=\"stop\", id=\"{handle}\").")
         return "\n".join(lines)
 
+    def agent_request_for(self, args: Dict[str, Any]) -> str:
+        """On another agent's request, a run that exports files is refused: ``export_files``
+        writes them into the chat's workspace under a name the code chose (``VAF.md``
+        passes the basename filter). A run without it touches only the container's scratch
+        volume, so it stays offered."""
+        return "refuse_person" if (args or {}).get("export_files") else self.agent_request
+
     def run(self, **kwargs) -> str:
         """Execute Python code in Docker sandbox (per-user isolated workspace)."""
         code = str(kwargs.get("code", "")).strip()

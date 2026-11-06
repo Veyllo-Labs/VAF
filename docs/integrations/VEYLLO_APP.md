@@ -146,13 +146,20 @@ is a turn of your account's app chat, with these differences
   `delete_skill`, `update_user_identity`, `create_contact`, `update_contact`, and the notes
   later automation and thinking runs act on, `add_automation_note`, `add_automation_todo`,
   `thinking_note_add`, a context checkpoint, `checkpoint_context`, whose summary later turns
-  read as yours, and any file written into the folders VAF keeps its own state and behaviour
-  in: its data folder (custom tools, MCP servers, messaging endpoints, each account's settings
-  and contacts), its config folder, your skills and workflows, however the path is spelled); the librarian
-  (`librarian_agent`), whose own file tools would run outside these limits; and what needs
-  your confirmation for another reason (`user_phone`, `store_credential`,
-  `github_create_issue`, `github_update_file`, and every MCP tool an administrator has not
-  set to read, `mcp_call` included). Confirming these from the
+  read as yours, the coder's codex and scratchpad, `update_codex` and `add_memory`, and the
+  co-author line of VAF's commits, `set_git_coauthor`); the librarian (`librarian_agent`),
+  whose own file tools would run outside these limits; every tool that writes files, for every
+  account and wherever it writes (`write_file`, `edit_file`, `download_file`,
+  `document_writer`, the document agent `document_agent`, the git tools `git_init` and
+  `git_add_commit`, and `python_sandbox` with `export_files`; a tool declaring
+  `file_access = "write"` is refused whatever its path), so no request writes a `VAF.md` or a
+  file that runs later (`.git/hooks`, `package.json` scripts, a `Makefile`, `.envrc`,
+  `.vscode/tasks.json`, `~/.bashrc`, an autostart entry); a message to your own messenger
+  (`send_to_user`, `send_telegram`, `send_discord`, `send_veyllo_app`, and `send_whatsapp`
+  without a number, which goes to your own); and what needs your
+  confirmation for another reason (`user_phone`, `store_credential`, `github_create_issue`,
+  `github_update_file`, and every MCP tool an administrator has not set to read, `mcp_call`
+  included). Confirming these from the
   app comes with a later update. A call that needs a confirmation is refused at once; no dialog
   appears in the web UI and nothing waits. Answers you gave ahead still hold: a tool you
   allowed always, a trusted folder, an "allow for this chat" in the app chat, and the admin
@@ -162,19 +169,20 @@ is a turn of your account's app chat, with these differences
   `phone_number`) is parked as a draft, as when you ask for one in the web chat
   ([`outbound_hold`](../../vaf/core/outbound_hold.py)), whatever `outward_send_hold` says; the
   card waits in the web UI's Veyllo App chat, and the app's agent is told that the message is
-  prepared and not sent. When it cannot be parked, it is not sent either. Messages to yourself
-  (your own messenger) are not held.
+  prepared and not sent. When it cannot be parked, it is not sent either.
 - **What stays possible, deliberately.** Everything else the app chat may do without a
   confirmation: reading your mail, calendar and contacts; memory entries (`memory_save`,
   `memory_update`, `learn_document`), which carry a mark of their origin and come back inside
   the same fence in every later turn and background run (the chat's own memory learning skips
-  these requests and their answers); a project's codex and the coder's scratchpad
-  (`update_codex`, `add_memory`), which only the coder reads later; the app chat's own goal and plan
+  these requests and their answers); the app chat's own goal and plan
   (`update_intent`, `update_working_memory`), which later turns of that chat read unfenced (so
   does the context VAF compresses on its own if such a request ever fills the chat's context); a
   question back (`ask_user`: the question goes out as the answer, and the app's agent puts it
-  to you); the MCP tools set to read; and the research and document agents, whose own tools
-  hold nothing a request is refused.
+  to you); the MCP tools set to read; and the research agent, whose own tools hold nothing a
+  request is refused. A few tools still write a file whose name the request does not choose:
+  the research agent's report (`research_<topic>_<time>` in the chat's workspace), VAF's own
+  caches of web searches and fetched pages, and a file `cloud_storage` downloads from your own
+  cloud into your Downloads folder, which no project's `VAF.md` search reaches.
 - **The answer goes to the phone that asked.** It streams as `delta` and ends with `done`, both
   under the request's own id, to that device only, without "read" or "typing"; it is held in
   that device's outbox only, and only that device gets a push. Your other phones see nothing

@@ -24,6 +24,8 @@ class SetGitCoauthorTool(BaseTool):
     """Turn VAF's commit co-author attribution on or off."""
 
     name = "set_git_coauthor"
+    # A global setting: every later commit VAF makes is signed by it.
+    agent_request = "refuse_standing"
     category    = "git"
     permission_level = "write"
     side_effect_class = "reversible"

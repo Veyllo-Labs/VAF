@@ -124,8 +124,8 @@ account, binding), and only the binding class is written per turn.
 A turn whose text another agent wrote carries `asked_by_agent` (today the agent of the user's
 Veyllo App, `agent_ask`; `vaf/core/agent_origin.py`). The binding forces `is_human` to False for
 it and adds the tools `agent_origin.agent_request_refusal` names to the hidden ones (the tools
-kept off chats and every tool whose `BaseTool.agent_request` refuses: work that keeps running,
-standing changes, what needs the person). While it holds, the first turn gate (gate e,
+kept off chats, every tool that writes files, and every tool whose `BaseTool.agent_request`
+refuses: work that keeps running, standing changes, what needs the person). While it holds, the first turn gate (gate e,
 `_agent_request_gate_decision`) refuses those names with an `[APP AGENT]` result, and the
 tool call runs with `interactive=False`, no dialog push and `ToolCaller(channel_lift=False)`: a
 call that needs a confirmation is refused at once, and the admin's `channel_tools_unrestricted`

@@ -28,8 +28,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Your agent's chat shows such a task as coming from the app's agent, not from you. Tools that
   need you in person or a confirmation (timers, the browser agent, the sandbox environments,
   the builders, tasks for the phone, storing a credential) do not run on it, and neither do
-  coder runs, automations, workflows, agent rooms, the librarian or changes to your skills,
-  workflows, custom tools, settings, contacts and identity. A mail or a WhatsApp message to
+  coder runs, automations, workflows, agent rooms, the librarian, file writes of any kind
+  (writing, editing or downloading files, documents, exports from the Python sandbox, git),
+  messages to your own messengers, or changes to your skills, workflows, custom tools,
+  settings, contacts and identity: a request of the app's agent writes no files on your
+  computer. A mail or a WhatsApp message to
   somebody else waits for your approval in the web UI. Memories saved on its request are
   marked and read back as the app agent's.
 - **DeepSeek: choose how long the model thinks before it answers.** Settings > AI & Model has a

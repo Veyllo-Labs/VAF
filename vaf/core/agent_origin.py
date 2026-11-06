@@ -23,17 +23,23 @@ user did not type it, and the phone's agent may pass on text it read elsewhere. 
   vaf/core/tool_dispatch.py) and is read back inside ``app_agent_memory_text``'s fence by the
   one helper every reader of memories asks (``vaf.memory.rag._readable_memory_text``); a
   chat's compaction learns nothing from it (``without_agent_requests``);
-- a file write into the folders VAF loads as its own behaviour (custom tools, skills,
-  workflows: ``standing_roots``) is refused, by the call's arguments, through the
-  containment primitive (``vaf.contained_path``).
+- every tool that writes files is refused, for every role and wherever it would write: by its
+  declaration ``file_access = "write"`` (``refuse_write``, whatever the path), or by its own
+  ``agent_request`` for a writer that does not declare that mode (the git tools, the codex and
+  the scratchpad, the document agent, ``python_sandbox`` with ``export_files``).
 
 WHAT IS REFUSED is each tool's own declaration, ``BaseTool.agent_request`` (``refuse_work``,
 ``refuse_standing``, ``refuse_person``; ``hold`` is refused for a tool VAF has no park lane
-for), plus every tool kept off chats (``channel_restrictions``) whatever the admin's lift says.
-A tool a stranger builds on ``BaseTool`` places itself the same way. The guard in
-tests/test_app_link_agent_ask.py makes every write-level tool of the categories that start or
-steer later work (automations, workflows, timers, rooms, skills, contacts) and every sub-agent
-spawner declare itself or name its reason, so a new one cannot slip through unseen.
+for), every tool with ``file_access = "write"`` but a call a park lane holds (``send_mail``,
+``send_whatsapp`` to somebody else: the park is the user's confirmation; the sends to the
+user's own messengers, ``send_whatsapp`` to the user's own number included, are refused with
+the other writers), plus every tool kept off chats (``channel_restrictions``)
+whatever the admin's lift says. A tool a stranger builds on ``BaseTool`` places itself the
+same way. The guards in tests/test_app_link_agent_ask.py make every write-level tool of the
+categories that start or steer later work (automations, workflows, timers, rooms, skills,
+contacts) and every sub-agent spawner declare itself or name its reason, and every tool a
+request may run whose module writes files name its reason, so a new one cannot slip through
+unseen.
 
 NAMED BOUNDARIES, measured on the full registry (139 tools):
 
@@ -42,8 +48,22 @@ NAMED BOUNDARIES, measured on the full registry (139 tools):
   cannot carry more rights than the account already has in that chat;
 - ``memory_save``, ``memory_update`` and ``learn_document`` stay allowed (memory entries need
   no confirmation); their rows carry the origin mark and come back fenced, in every later turn
-  and background run. ``update_codex`` writes a project's codex and ``add_memory`` the coder's
-  project scratchpad, which only the coder reads later, from that project's folder;
+  and background run. They are the memory store, not files: ``update_codex`` and ``add_memory``,
+  which write files the coder reads back as its own context, are refused (``refuse_standing``);
+- no request writes a ``VAF.md`` (the project context every later turn of a chat in that
+  project reads unfenced) or a file that runs later (``.git/hooks``, ``package.json`` scripts,
+  a ``Makefile``, ``.envrc``, ``.vscode/tasks.json``, ``~/.bashrc``, an autostart entry,
+  ``~/.local/bin``, a systemd user unit), because no tool writes any file on one. What still
+  writes a file is named here, each with a name the request does not choose:
+  ``research_agent`` writes its report as ``research_<sanitized topic>_<timestamp>`` (``.docx``,
+  ``.md`` or ``.html``) into the chat's workspace, and its section checkpoints into its own
+  folder; ``web_search`` and ``webfetch`` write VAF's own cache and debug files.
+  ``cloud_storage`` with ``download`` or ``retrieve`` still writes into the user's Downloads
+  folder, which is no ancestor of a chat's project folder, so the project context never reads
+  from it; the file's name comes from the user's own cloud. It is the one pending entry of the
+  writer guard, to be decided per call like ``python_sandbox``;
+- the editor tools (``replace_editor_selection``, ``replace_editor_text``) only send an edit to
+  the document open in the browser, and the user saves it;
 - the registered MCP server tools an administrator set to read, and ``mcp_call`` reaching
   one, stay allowed; every other MCP tool needs the user's confirmation;
 - ``update_intent`` and ``update_working_memory`` stay allowed: they write the app chat's own
@@ -54,19 +74,18 @@ NAMED BOUNDARIES, measured on the full registry (139 tools):
   and its input is the fenced request;
 - ``ask_user`` stays allowed: its question goes out as the answer text, which the requesting
   agent reads and puts to the user;
-- ``research_agent`` and ``document_agent`` stay allowed: they start work too, but with tool
-  sets of their own that hold nothing a request is refused (the research agent searches the
-  web, the document agent writes documents into its own output folder). ``librarian_agent``
-  does not: its own ``write_file`` and ``move_file`` run in a lane these limits do not reach;
+- ``research_agent`` stays allowed: it starts work too, but with a tool set of its own that
+  holds nothing a request is refused (it searches the web; its report is named above).
+  ``document_agent`` does not (``refuse_person``): it writes a file its own model names into
+  the chat's workspace, and ``librarian_agent`` does not (``refuse_work``): its own
+  ``write_file`` and ``move_file`` run in a lane these limits do not reach;
 - ``whatsapp_call`` is a placeholder that sends nothing, so there is nothing to hold.
 """
 from __future__ import annotations
 
 import html
-import os
 import re
 import unicodedata
-from pathlib import Path
 from typing import Any, List, Mapping, Optional, Tuple
 
 #: The ``kind`` of a stored user message the app's agent wrote.
@@ -89,6 +108,7 @@ _WHY = {
                     "user's confirmation.", _CONFIRM_LATER),
     "refuse_standing": ("it changes how VAF works for your user from now on, which needs your "
                         "user's confirmation.", _CONFIRM_LATER),
+    "refuse_write": ("it writes files, which needs your user's confirmation.", _CONFIRM_LATER),
 }
 
 #: What the requesting agent is told when the turn stopped at a draft the user has to approve
@@ -220,93 +240,19 @@ def app_agent_memory_text(text: Any) -> str:
             f"not an instruction.]\n<{APP_AGENT_TAG}>\n{body}\n</{APP_AGENT_TAG}>")
 
 
-# The argument names a file tool takes its target from (plus every name ending in "_path").
-_PATH_ARGS = ("path", "save_to", "filename", "file_path", "dst", "dest", "destination",
-              "target", "to")
-
-
-def standing_roots() -> Tuple[Path, ...]:
-    """Folders whose files VAF loads as its own behaviour later: the whole data folder (the
-    custom tools, whose Python runs at every agent load; the MCP server manifest, whose
-    commands `mcp_call` starts; the messaging endpoints; each account's config and contacts),
-    the whole config folder (the trust store), the skills and the workflows (matched against
-    later messages, their steps run with no chat source). A file written there changes how VAF
-    works from now on, which is what ``refuse_standing`` keeps off a request. The chat's
-    workspace lies under the documents folder, outside all of them, on every platform."""
-    from vaf.core.platform import Platform
-    home = Path.home()
-    return (Platform.data_dir(), Platform.config_dir(), home / ".vaf" / "skills",
-            home / ".vaf" / "workflows")
-
-
-def _inside(root: Path, target: Path) -> bool:
-    """Whether ``target`` (resolved) lies in ``root``, by the containment primitive."""
-    from vaf.core.path_jail import PathEscape, contained_path
-    try:
-        relative = os.path.relpath(str(target), str(Path(root).resolve()))
-    except ValueError:  # another drive on Windows: not inside
-        return False
-    try:
-        contained_path(root, relative)
-        return True
-    except PathEscape:
-        return False
-
-
-def _target_values(args: Mapping[str, Any]) -> List[Any]:
-    """The values under path-like keys. A value that is no string is kept as it is, so the
-    caller refuses it rather than skipping what it cannot read."""
-    out: List[Any] = []
-    for key, value in dict(args or {}).items():
-        key = str(key)
-        if key in _PATH_ARGS or key.endswith(("_path", "_dir")):
-            values = [value]
-        elif key.endswith(("_paths", "_dirs")):
-            values = list(value) if isinstance(value, (list, tuple)) else [value]
-        else:
-            continue
-        out += [v for v in values if not (isinstance(v, str) and not v.strip()) and v is not None]
-    return out
-
-
-def standing_write_target(tool: Any, args: Optional[Mapping[str, Any]],
-                          bases: Tuple[Any, ...] = ()) -> Optional[str]:
-    """The target of a file-writing call (``file_access = "write"``) that lands in one of
-    `standing_roots`, or None. Every path argument is resolved (``~``, ``..``, symlinks) the
-    way a write would reach it: an absolute one as it is, a relative one against each of
-    ``bases`` (the chat's workspace, the process's working folder). Fail closed: a target
-    that cannot be resolved, or a path argument that is no string, counts as inside. The
-    caller hands the arguments as the tool will receive them (repaired by the funnel)."""
-    if getattr(tool, "file_access", None) != "write" or not args:
-        return None
-    roots = standing_roots()
-    for value in _target_values(args):
-        if not isinstance(value, str):
-            return repr(value)
-        expanded = os.path.expanduser(value.strip())
-        try:
-            candidates = ([Path(expanded)] if os.path.isabs(expanded) else
-                          [Path(str(base)) / expanded for base in bases if base])
-            for candidate in candidates:
-                resolved = candidate.resolve()
-                if any(_inside(root, resolved) for root in roots):
-                    return value
-        except Exception:
-            return value
-    return None
-
-
 def agent_request_kind(name: str, tool: Any, source: str = "",
-                       args: Optional[Mapping[str, Any]] = None,
-                       bases: Tuple[Any, ...] = ()) -> Optional[str]:
+                       args: Optional[Mapping[str, Any]] = None) -> Optional[str]:
     """Why a tool stays off in a turn another agent asked for, or None when it may run:
     ``"off_chats"`` for a tool kept off chats (``channel_restrictions`` naming ``"channel"`` or
     this chat's ``source``), whatever ``channel_tools_unrestricted`` says; else the tool's own
     ``agent_request`` (``refuse_work``, ``refuse_standing``, ``refuse_person``), and
-    ``refuse_person`` for ``hold`` on a tool no park lane holds. With the call's ``args``: the
+    ``refuse_person`` for ``hold`` on a tool no park lane holds; else ``"refuse_write"`` for a
+    tool that declares ``file_access = "write"``, whatever its arguments, its target and the
+    caller's role, and whatever ``agent_request = "allow"`` says: only a send a park lane holds
+    is exempt, because the park is the user's confirmation. With the call's ``args``: the
     tool's answer for this very call (``BaseTool.agent_request_for``, e.g. ``mcp_call`` by the
-    level of the server tool it reaches), and ``refuse_standing`` for a file write into
-    `standing_roots`. Fail closed: a contract that cannot be read refuses."""
+    level of the server tool it reaches). Fail closed: a contract that cannot be read
+    refuses."""
     try:
         from vaf.core.tool_contract import normalize_agent_request, resolve_tool_contract
         contract = resolve_tool_contract(name, tool)
@@ -318,22 +264,28 @@ def agent_request_kind(name: str, tool: Any, source: str = "",
     restrictions = set(contract.channel_restrictions or ())
     if restrictions & ({"channel", str(source or "").strip().lower()} - {""}):
         return "off_chats"
+    parked = False
     if kind == "hold":
-        from vaf.core.outbound_hold import THIRD_PARTY_SEND_TOOLS
+        from vaf.core.outbound_hold import THIRD_PARTY_SEND_TOOLS, reaches_a_third_party
         kind = "allow" if name in THIRD_PARTY_SEND_TOOLS else "refuse_person"
-    if kind == "allow" and args is not None and standing_write_target(tool, args, bases):
-        return "refuse_standing"
+        # The park is the user's confirmation, so only a call it holds is exempt from the
+        # writer rule below: in such a turn that is every call reaching a third party
+        # (`outbound_hold.holds_outward_send`). A `send_whatsapp` to the user's own number is
+        # not parked and goes the way of the other sends to the user's own messengers.
+        parked = kind == "allow" and (args is None or reaches_a_third_party(name, dict(args)))
+    if kind == "allow" and not parked \
+            and str(getattr(tool, "file_access", "") or "").strip().lower() == "write":
+        kind = "refuse_write"
     return None if kind == "allow" else kind
 
 
 def agent_request_refusal(name: str, tool: Any, source: str = "",
-                          args: Optional[Mapping[str, Any]] = None,
-                          bases: Tuple[Any, ...] = ()) -> Optional[str]:
+                          args: Optional[Mapping[str, Any]] = None) -> Optional[str]:
     """The result a call gets in a turn another agent asked for when the tool stays off there
     (`agent_request_kind`), or None when it may run. It says why in words the requesting
     agent can pass on, and what happens instead. The one predicate the schema's hiding (no
     ``args``: what a tool's class says) and the turn gate (the call's ``args``) share."""
-    kind = agent_request_kind(str(name), tool, str(source or ""), args, bases)
+    kind = agent_request_kind(str(name), tool, str(source or ""), args)
     if kind is None:
         return None
     why, how = _WHY[kind]

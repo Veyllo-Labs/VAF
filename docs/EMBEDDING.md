@@ -1470,9 +1470,10 @@ Key declarative rules the runtime enforces:
   tools are hidden from such a turn and answer the model with the reason. A value outside the
   five refuses. A tool kept off chats is refused there whatever this says. A tool whose answer
   depends on its arguments overrides `agent_request_for(args)` (same five values; VAF's
-  `mcp_call` answers by the level of the server tool it reaches), and a tool with
-  `file_access = "write"` is refused when a path argument (as the funnel repairs it) lands in
-  VAF's data or config folder, skills or workflows.
+  `mcp_call` answers by the level of the server tool it reaches). A tool with
+  `file_access = "write"` is refused in such a turn whatever its arguments, unless it declares
+  `"hold"` and VAF's park lane holds the call; a tool that writes files without that mode
+  declares a refusal here.
 - `category` - which bundle the tool appears under in the human-facing tool
   lists (the web tools window, the CLI table, the TUI overlay, `list_tools`).
   The in-tree vocabulary is `TOOL_CATEGORIES` in `vaf/core/tool_contract.py`,

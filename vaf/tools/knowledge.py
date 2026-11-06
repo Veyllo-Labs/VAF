@@ -12,6 +12,8 @@ class UpdateCodexTool(BaseTool):
     Use this when you learn something important that should be remembered for future tasks.
     """
     name = "update_codex"
+    # It writes <base_dir>/.vaf/codex.md, which the coder reads back as its own context.
+    agent_request = "refuse_standing"
     category    = "memory"
     permission_level = "write"
     side_effect_class = "irreversible"
@@ -54,6 +56,8 @@ class AddMemoryTool(BaseTool):
     Use this for short-term reminders or scratchpad notes for the CURRENT workflow.
     """
     name = "add_memory"
+    # It writes <base_dir>/.vaf/memory.md, which the coder reads back as its own context.
+    agent_request = "refuse_standing"
     category    = "memory"
     permission_level = "write"
     side_effect_class = "reversible"

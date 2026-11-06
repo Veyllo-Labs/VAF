@@ -9,9 +9,9 @@ import json
 
 import pytest
 
-from tests.app_link_client import paired_device
-from tests.app_link_env import SCOPE_A, app_link_home  # noqa: F401  (fixture)
-from tests.app_link_relay_stub import FakeConnect, FakeHttp, FakeResponse
+from app_link_client import paired_device
+from app_link_env import SCOPE_A, app_link_home  # noqa: F401  (fixture)
+from app_link_relay_stub import FakeConnect, FakeHttp, FakeResponse
 from vaf.core import channel_pairing
 from vaf.core.app_link import bridge, devices, pairing, relay
 from vaf.core.channel_secrets import channel_secret, set_channel_secret

@@ -6,10 +6,10 @@ dispatched, a stream moved to another cid is still the device its certificate na
 of handshakes is cut, and a frame without the relay head is dropped."""
 import pytest
 
-from tests.app_link_client import AppClient, ca_der, paired_device
-from tests.app_link_env import SCOPE_A, app_link_home  # noqa: F401  (fixture)
-from tests.app_link_relay_stub import RelayPipe
-from tests.cert_factory import make_ca
+from app_link_client import AppClient, ca_der, paired_device
+from app_link_env import SCOPE_A, app_link_home  # noqa: F401  (fixture)
+from app_link_relay_stub import RelayPipe
+from cert_factory import make_ca
 from vaf.core.app_link import bridge, devices, pairing
 from vaf.core.app_link import protocol as pr
 from vaf.core.app_link.relay import RelayLink

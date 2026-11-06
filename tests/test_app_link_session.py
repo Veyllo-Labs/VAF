@@ -6,9 +6,9 @@ the device is known."""
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ec
 
-from tests.app_link_client import AppClient, Pipe, ca_der, link, paired_device
-from tests.app_link_env import SCOPE_A, app_link_home  # noqa: F401  (fixture)
-from tests.cert_factory import make_ca, make_leaf
+from app_link_client import AppClient, Pipe, ca_der, link, paired_device
+from app_link_env import SCOPE_A, app_link_home  # noqa: F401  (fixture)
+from cert_factory import make_ca, make_leaf
 from vaf.core.app_link import bridge, devices, pki
 from vaf.core.app_link import protocol as pr
 

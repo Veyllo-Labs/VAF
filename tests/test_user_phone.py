@@ -7,8 +7,8 @@ import time
 
 import pytest
 
-from tests.app_link_client import link, paired_device
-from tests.app_link_env import SCOPE_A, SCOPE_B, app_link_home  # noqa: F401  (fixture)
+from app_link_client import link, paired_device
+from app_link_env import SCOPE_A, SCOPE_B, app_link_home  # noqa: F401  (fixture)
 from vaf.core.app_link import bridge, devices, pairing, phone_tasks
 from vaf.tools.user_phone import UserPhoneTool
 

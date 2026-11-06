@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Tuple
 
 import pytest
 
-from tests.cert_factory import isolated_home
+from cert_factory import isolated_home
 
 SCOPE_A = "0a0b0c0d-0000-4000-8000-0000000000a1"
 SCOPE_B = "0a0b0c0d-0000-4000-8000-0000000000b2"

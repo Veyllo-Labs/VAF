@@ -13,8 +13,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from tests.app_link_client import paired_device
-from tests.app_link_env import SCOPE_A, SCOPE_B, app_link_home  # noqa: F401  (fixture)
+from app_link_client import paired_device
+from app_link_env import SCOPE_A, SCOPE_B, app_link_home  # noqa: F401  (fixture)
 from vaf.api import app_link_routes
 from vaf.core.app_link import bridge, devices, pairing
 

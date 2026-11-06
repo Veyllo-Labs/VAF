@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
-from tests.cert_factory import isolated_home
+from cert_factory import isolated_home
 from vaf.core import channel_pairing
 from vaf.core.app_link import pki
 from vaf.network import ssl_utils
@@ -142,7 +142,7 @@ def test_server_context_settings(ssl_home):
 
 
 def test_server_context_refuses_unknown_names(ssl_home):
-    from tests.cert_factory import handshake
+    from cert_factory import handshake
     ca_pem = x509.load_der_x509_certificate(ssl_utils.app_link_server_files()[2]).public_bytes(
         serialization.Encoding.PEM).decode()
     client = ssl.create_default_context(cadata=ca_pem)

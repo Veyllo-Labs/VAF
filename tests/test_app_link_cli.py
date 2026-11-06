@@ -6,8 +6,8 @@ the warning of `vaf server ca renew`."""
 import pytest
 from typer.testing import CliRunner
 
-from tests.app_link_client import paired_device
-from tests.app_link_env import SCOPE_A, SCOPE_B, app_link_home  # noqa: F401  (fixture)
+from app_link_client import paired_device
+from app_link_env import SCOPE_A, SCOPE_B, app_link_home  # noqa: F401  (fixture)
 from vaf.cli.cmd import devices as devices_cmd
 from vaf.cli.cmd import relay as relay_cmd
 from vaf.core import health

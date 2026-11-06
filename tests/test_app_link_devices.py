@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from tests.app_link_env import app_link_home  # noqa: F401  (fixture)
+from app_link_env import app_link_home  # noqa: F401  (fixture)
 from vaf.core import revocation
 from vaf.core.app_link import devices
 from vaf.core.task_queue import TaskQueue

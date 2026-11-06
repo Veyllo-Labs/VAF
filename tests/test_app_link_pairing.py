@@ -8,8 +8,8 @@ import base64
 import pytest
 from cryptography import x509
 
-from tests.app_link_client import AppClient, Pipe, ca_der, device_key, pair_message
-from tests.app_link_env import SCOPE_A, SCOPE_B, app_link_home  # noqa: F401  (fixture)
+from app_link_client import AppClient, Pipe, ca_der, device_key, pair_message
+from app_link_env import SCOPE_A, SCOPE_B, app_link_home  # noqa: F401  (fixture)
 from vaf.core import channel_pairing
 from vaf.core.app_link import bridge, devices, pairing, pki
 from vaf.core.app_link import protocol as pr

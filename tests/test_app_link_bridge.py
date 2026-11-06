@@ -11,8 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests.app_link_client import link, paired_device
-from tests.app_link_env import SCOPE_A, SCOPE_B, app_link_home  # noqa: F401  (fixture)
+from app_link_client import link, paired_device
+from app_link_env import SCOPE_A, SCOPE_B, app_link_home  # noqa: F401  (fixture)
 from vaf.core import channel_message_store as store
 from vaf.core.app_link import bridge, devices, pairing
 from vaf.core.task_queue import TaskQueue
@@ -382,7 +382,7 @@ def test_no_secret_anywhere(app_link_home, caplog):
         p = pairing.issue(SCOPE_A, "alice", "relay")
     finally:
         pm.direct_addresses = pm_direct
-    from tests.app_link_client import AppClient, Pipe, ca_der, device_key, pair_message
+    from app_link_client import AppClient, Pipe, ca_der, device_key, pair_message
     import base64
     pipe = Pipe()
     client = AppClient(ca_der(), sni="pair.vaf.internal").attach(pipe).connect()

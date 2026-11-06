@@ -89,6 +89,9 @@ class LibrarianTool(BaseTool):
     
     identity_kwargs = ("user_role", "user_scope_id")
     name = "librarian_agent"
+    # Its own write_file and move_file run unconfirmed (and, for an admin, unjailed) in a
+    # lane the limits of another agent's request do not reach, so it starts on a person's word.
+    agent_request = "refuse_work"
     # Filesystem work should return fast; if it does not, it is stuck on a huge tree or a
     # hung mount, and a long wait helps nobody.
     def budget_seconds(self, args):

@@ -687,10 +687,17 @@ class MemorySaveTool(BaseTool):
                     if prev is None or s.score > prev.score:
                         best_by_memory[s.memory_id] = s
                 lines = []
+                from types import SimpleNamespace as _Snippet
+
+                from vaf.memory.rag import _readable_memory_text
                 for s in sorted(best_by_memory.values(), key=lambda x: x.score, reverse=True)[:2]:
                     snippet = " ".join(str(s.text or "").split())
                     if len(snippet) > 300:
                         snippet = snippet[:300] + "..."
+                    # Cut first, then read it the way every memory is read: a memory stored on
+                    # another agent's request comes inside its fence, closed.
+                    snippet = _readable_memory_text(_Snippet(
+                        text=snippet, metadata=getattr(s, "metadata", None) or {}))
                     lines.append(f"- memory_id: {s.memory_id} (similarity {s.score:.0%}): {snippet}")
                 return (
                     "Not saved yet: a very similar memory already exists.\n"

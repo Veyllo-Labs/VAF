@@ -408,9 +408,11 @@ curl -X POST http://localhost:8000/api/memory/search \
 `metadata.origin` marks a memory stored in a turn another agent asked for (a request of the
 agent in the user's Veyllo App): `memory_save`, `memory_update` and `learn_document` declare the
 `request_origin` identity key and set it. Every model reads such a row inside the fence of that
-request (`rag._format_sources`, which builds a turn's memory block, `memory_search` and the
-user-profile cache, and the memory page's question lane), so it is never taken for the user's
-own words; see `vaf/core/agent_origin.py`.
+request (`rag._readable_memory_text`, asked by `_format_sources`, which builds a turn's memory
+block, `memory_search` and the user-profile cache, by the memory page's question lane and by
+`memory_save`'s near-duplicate notice), so it is never taken for the user's own words; see
+`vaf/core/agent_origin.py`. The compaction's transcript (`_format_compaction_dialogue`) leaves
+such requests and their answers out, so nothing it learns from them reaches the general lane.
 
 ### Connection
 

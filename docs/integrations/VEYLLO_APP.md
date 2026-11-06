@@ -145,8 +145,12 @@ is a turn of your account's app chat, with these differences
   `room_react`); changes to how VAF works for you from now on (`create_skill`, `update_skill`,
   `delete_skill`, `update_user_identity`, `create_contact`, `update_contact`, and the notes
   later automation and thinking runs act on, `add_automation_note`, `add_automation_todo`,
-  `thinking_note_add`); and what needs your confirmation for another reason (`user_phone`,
-  `store_credential`, `github_create_issue`, `github_update_file`). Confirming these from the
+  `thinking_note_add`, and any file written into the folders VAF loads as its own behaviour:
+  your custom tools, skills and workflows, however the path is spelled); the librarian
+  (`librarian_agent`), whose own file tools would run outside these limits; and what needs
+  your confirmation for another reason (`user_phone`, `store_credential`,
+  `github_create_issue`, `github_update_file`, and every MCP tool an administrator has not
+  set to read, `mcp_call` included). Confirming these from the
   app comes with a later update. A call that needs a confirmation is refused at once; no dialog
   appears in the web UI and nothing waits. Answers you gave ahead still hold: a tool you
   allowed always, a trusted folder, an "allow for this chat" in the app chat, and the admin
@@ -161,11 +165,13 @@ is a turn of your account's app chat, with these differences
 - **What stays possible, deliberately.** Everything else the app chat may do without a
   confirmation: reading your mail, calendar and contacts; memory entries (`memory_save`,
   `memory_update`, `learn_document`), which carry a mark of their origin and come back inside
-  the same fence in every later turn and background run; the app chat's own goal and plan
+  the same fence in every later turn and background run (the chat's own memory learning skips
+  these requests and their answers); a project's codex and the coder's scratchpad
+  (`update_codex`, `add_memory`), which only the coder reads later; the app chat's own goal and plan
   (`update_intent`, `update_working_memory`), which later turns of that chat read unfenced; a
   question back (`ask_user`: the question goes out as the answer, and the app's agent puts it
-  to you); and the research, librarian and document agents, whose own tools hold nothing a
-  request is refused.
+  to you); the MCP tools set to read; and the research and document agents, whose own tools
+  hold nothing a request is refused.
 - **The answer goes to the phone that asked.** It streams as `delta` and ends with `done`, both
   under the request's own id, to that device only, without "read" or "typing"; it is held in
   that device's outbox only, and only that device gets a push. Your other phones see nothing

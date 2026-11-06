@@ -1468,7 +1468,11 @@ Key declarative rules the runtime enforces:
   `"hold"` (a send to a third party; parked for approval where VAF has a park lane for it,
   which today are its own mail and WhatsApp tools, and refused for any other tool). Refused
   tools are hidden from such a turn and answer the model with the reason. A value outside the
-  five refuses. A tool kept off chats is refused there whatever this says.
+  five refuses. A tool kept off chats is refused there whatever this says. A tool whose answer
+  depends on its arguments overrides `agent_request_for(args)` (same five values; VAF's
+  `mcp_call` answers by the level of the server tool it reaches), and a tool with
+  `file_access = "write"` is refused when a path argument lands in VAF's custom tools, skills
+  or workflows.
 - `category` - which bundle the tool appears under in the human-facing tool
   lists (the web tools window, the CLI table, the TUI overlay, `list_tools`).
   The in-tree vocabulary is `TOOL_CATEGORIES` in `vaf/core/tool_contract.py`,

@@ -1416,8 +1416,12 @@ def _format_compaction_dialogue(dialogue: List[Tuple[Any, Any]], max_chars: int 
                                 user_label: str = "User") -> str:
     """The transcript a compaction reads: the newest user and assistant lines that fit
     `max_chars`, oldest first, one line each. `user_label` names the human side - "User"
-    for the account owner, the person's name for a messenger chat with a contact."""
+    for the account owner, the person's name for a messenger chat with a contact. A request
+    another agent wrote, and what answered it, is left out (`agent_origin`)."""
     user_label = clean_label(user_label) or "User"
+    # A turn another agent asked for, and its answer, is no fact about the user to keep.
+    from vaf.core.agent_origin import without_agent_requests
+    dialogue = without_agent_requests(list(dialogue))
     lines: List[str] = []
     total = 0
     for role, content in reversed(dialogue):

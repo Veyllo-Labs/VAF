@@ -75,6 +75,9 @@ class MCPClientTool(BaseTool):
     identity_kwargs = ("user_scope_id", "user_role")
     permission_level = "write"
     side_effect_class = "irreversible"
+    # Offered on another agent's request, and decided per call (`agent_request_for`) by the
+    # level of the server tool it reaches.
+    agent_request = "allow"
     description = ("Call a tool of an MCP (Model Context Protocol) server: one an administrator "
                    "registered (Settings > Advanced > MCP), named in `server`, or a remote server "
                    "without a login at `server_url`. An unregistered command is never started.")
@@ -153,6 +156,23 @@ class MCPClientTool(BaseTool):
             return f"Error: Unsupported transport '{transport}'"
         except Exception as e:
             return f"Error calling MCP tool: {e}"
+
+    def agent_request_for(self, args: Dict[str, Any]) -> str:
+        """On another agent's request, the same answer the server's own registered tool gives
+        (`mcp_registry.make_mcp_tool`): open for a tool the administrator set to read, refused
+        for every other one, and for a call that names no registered server (a remote URL: its
+        tools' levels are unknown). Reads the arguments the way `run` does. Fail closed."""
+        try:
+            from vaf.core import mcp_registry
+            server = str(args.get("server") or args.get("server_command") or "").strip()
+            found = mcp_registry.registered_server(server) if server else None
+            if found is None:
+                return "refuse_person"
+            _name, cfg = found
+            level = mcp_registry.tool_permission(cfg, str(args.get("tool_name") or "").strip())
+            return "allow" if level == "read" else "refuse_person"
+        except Exception:
+            return "refuse_person"
 
     def _call_registered(self, server: str, tool_name: str, arguments: Dict[str, Any],
                          scope: Optional[str] = None, role: Optional[str] = None) -> str:

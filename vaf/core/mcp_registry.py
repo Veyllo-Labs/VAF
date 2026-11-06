@@ -260,6 +260,10 @@ def make_mcp_tool(server_name: str, server_cfg: Dict[str, Any], tool_meta: Dict[
         "parameters": parameters,
         "permission_level": permission,
         "side_effect_class": "irreversible",
+        # A server tool that does more than read (it may post, write, reach a third party) needs
+        # the user's confirmation on another agent's request (vaf/core/agent_origin.py); one the
+        # administrator set to read stays open there.
+        "agent_request": "allow" if permission == "read" else "refuse_person",
         # Every MCP server becomes its own bundle in the tool lists. The
         # category vocabulary is deliberately open, so a server the framework
         # has never heard of still groups correctly without a registry entry.

@@ -225,6 +225,13 @@ class BaseTool(ABC):
     agent_request: Literal["allow", "refuse_work", "refuse_standing", "refuse_person",
                            "hold"] = "allow"
 
+    def agent_request_for(self, args: Dict[str, Any]) -> str:
+        """``agent_request`` for ONE call, for a tool whose answer depends on its arguments
+        (``mcp_call``: the level of the server tool it reaches). The default is the class's
+        value. Read only in a turn another agent asked for; same five values, an unknown one
+        refuses."""
+        return self.agent_request
+
     # identity_kwargs: which parts of the CALLER's identity the dispatcher passes
     # into run(). Declare what the tool actually consumes; execute_tool assigns
     # exactly these keys before dispatch:

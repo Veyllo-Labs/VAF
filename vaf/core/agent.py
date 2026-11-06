@@ -6549,6 +6549,11 @@ class Agent:
                         # tool_calls are what anchor the following role:"tool" result.
                         if not content and not _tool_calls:
                             continue
+                    elif role == "user":
+                        # The same rule for the user's side: a request another agent wrote
+                        # (kind "app_agent") comes back inside its fence, never as the
+                        # user's words (session.model_text, agent_origin).
+                        content = model_text(msg) or ""
 
                     entry = {"role": role, "content": content}
                     # Restore attached images (+ their persisted base_description) for user
@@ -14202,7 +14207,7 @@ class Agent:
         # (e) first: a turn another agent asked for runs no tool that needs the user in
         # person, and a refused call is no step of the turn (no plan asked for, no progress).
         if getattr(self, "_turn_asked_by_agent", None):
-            gate_msg = self._agent_request_gate_decision(name, tool_instance)
+            gate_msg = self._agent_request_gate_decision(name, tool_instance, args)
             if gate_msg is not None:
                 return gate_msg
         gate_msg = self._forced_call_gate(name, args)
@@ -14237,26 +14242,48 @@ class Agent:
             return gate_msg
         return None
 
-    def _agent_request_gate_decision(self, name, tool_instance):
+    def _agent_request_gate_decision(self, name, tool_instance, args=None):
         """Gate (e): a request another agent wrote (the turn binding's ``asked_by_agent``,
         today the agent of the user's Veyllo App) runs no tool that
         `agent_origin.agent_request_refusal` keeps off: the tools kept off chats, whatever the
         admin's channel lift says, the ones that need the person, start work of their own or
         change how VAF works from now on. The same predicate hides them from the schema (the
         binding), so this answers a name the model writes anyway, with the reason and what the
-        user can do instead. FAIL CLOSED: an error while deciding refuses. None outside such a
-        turn and for a tool it may run."""
+        user can do instead. With the call's ``args`` it also answers for this very call: a
+        tool whose answer depends on them (``mcp_call``), and a file write into the folders VAF
+        loads as its own behaviour (`agent_origin.standing_roots`), a relative target resolved
+        against this chat's workspace and the working folder. FAIL CLOSED: an error while
+        deciding refuses. None outside such a turn and for a tool it may run."""
         asked_by = getattr(self, "_turn_asked_by_agent", None)
         if not asked_by or name == "multi_tool_use.parallel":
             return None
         try:
             from vaf.core.agent_origin import agent_request_refusal
             tool = tool_instance if tool_instance is not None else (self.tools or {}).get(name)
+            call_args = args if isinstance(args, dict) else ({} if args is None else None)
+            if call_args is None:
+                import json as _json
+                call_args = _json.loads(args) if isinstance(args, str) and args.strip() else {}
             return agent_request_refusal(
-                name, tool, str(getattr(self, "_current_chat_source", "") or ""))
+                name, tool, str(getattr(self, "_current_chat_source", "") or ""),
+                args=call_args, bases=self._write_bases())
         except Exception:
             return (f"[APP AGENT] '{name}' does not run on a request of the Veyllo App's agent. "
                     "It did NOT run, so do not report it as done; say so in your answer.")
+
+    def _write_bases(self) -> tuple:
+        """Where a relative file target of this chat lands: its workspace (the folder
+        `_chat_session_plumbing` hands the file tools) and the process's working folder."""
+        bases = [Path.cwd()]
+        try:
+            from vaf.core.platform import Platform
+            from vaf.core.session import resolve_agent_output_dir
+            bases.insert(0, resolve_agent_output_dir(
+                Platform.documents_dir() / "VAF_Projects",
+                session_id=getattr(self, "current_session_id", None)))
+        except Exception:
+            pass
+        return tuple(bases)
 
     def _ask_user_about_gate(self, name, reason, preview=None, choices=None, gate_id=None):
         """How THIS lane reaches a human. Prefer the WebSocket gate when a web session is

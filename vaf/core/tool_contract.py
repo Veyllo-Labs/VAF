@@ -196,6 +196,14 @@ def _decision_label(*, blocked: bool, requires_confirmation: bool) -> str:
 # Contract resolution
 # ─────────────────────────────────────────────────────────────────────────────
 
+def normalize_agent_request(value: Any) -> str:
+    """A ``BaseTool.agent_request`` value as the contract reads it. A value outside the
+    vocabulary refuses (as "refuse_person"): unlike the category, a typo here would otherwise
+    open a tool to another agent's request."""
+    raw = str(value or "allow").strip().lower()
+    return raw if raw in AGENT_REQUEST_KINDS else "refuse_person"
+
+
 def resolve_tool_contract(tool_name: str, tool: Any | None) -> ToolContract:
     """
     Read and normalise contract metadata from a tool instance.
@@ -231,11 +239,7 @@ def resolve_tool_contract(tool_name: str, tool: Any | None) -> ToolContract:
     if not raw_category.replace("_", "").replace("-", "").isalnum():
         raw_category = "general"
 
-    # A value outside the vocabulary refuses (as "refuse_person"): unlike the category, a
-    # typo here would otherwise open a tool to another agent's request.
-    raw_agent_request = str(getattr(tool, "agent_request", "allow") or "allow").strip().lower()
-    if raw_agent_request not in AGENT_REQUEST_KINDS:
-        raw_agent_request = "refuse_person"
+    raw_agent_request = normalize_agent_request(getattr(tool, "agent_request", "allow"))
 
     return ToolContract(
         name=str(getattr(tool, "name", tool_name) or tool_name),

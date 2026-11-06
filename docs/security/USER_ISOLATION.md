@@ -975,8 +975,11 @@ Where VAF reaches an account on Telegram (`messaging_endpoints.json`, `by_scope`
   VAF works from now on, what needs the person) are hidden and refused whatever
   `channel_tools_unrestricted` says, a call that needs a confirmation is refused at once, and a
   mail or WhatsApp message to a third party is parked for the user's approval (`outbound_hold`;
-  a park that fails refuses). A memory stored in such a turn carries `metadata.origin` and is
-  read back fenced (`rag._format_sources`). The reply id is the device's, so replies are kept
+  a park that fails refuses). A file write into the folders VAF loads as its own behaviour
+  (custom tools, skills, workflows) is refused by its resolved target (`~`, `..` and links
+  followed, `vaf.contained_path`). A memory stored in such a turn carries `metadata.origin` and
+  is read back fenced (`rag._readable_memory_text`); a stored request is replayed fenced
+  (`session.model_text`), and the chat's compaction leaves requests and their answers out. The reply id is the device's, so replies are kept
   per account (`(scope, id)`) and a request's reply goes only to a device row of that account. NAMED BOUNDARY: the fence reduces confusion, it does not
   contain; what the app chat may do without a confirmation stays reachable for the request,
   and answers the person gave ahead (an "always", a trusted folder, a grant for this chat, the

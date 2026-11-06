@@ -101,7 +101,9 @@ def remove_device(device: str = typer.Argument(..., help="The device id or its f
                    "VAF is not running; its relay membership is deleted at the next start.")
         return
     if answer[0] != 200:
-        UI.error(f"VAF refused the removal ({answer[0]}).")
+        body = answer[1] if isinstance(answer[1], dict) else {}
+        detail = body.get("detail") if isinstance(body.get("detail"), str) else ""
+        UI.error(detail or f"VAF refused the removal ({answer[0]}).")
         raise typer.Exit(1)
     UI.success(f"Removed {row.get('model') or 'the device'} of {row.get('username') or 'its account'}; "
                "it is cut off now.")

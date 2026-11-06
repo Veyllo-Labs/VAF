@@ -71,6 +71,9 @@ def test_relay_off_and_on_without_a_running_vaf(app_link_home, monkeypatch):
     assert "Relay:            off" in out.output and "never reachable through the relay" in out.output
     assert runner.invoke(relay_cmd.app, ["on"]).exit_code == 0
     assert settings()["relay_enabled"] is True
+    from vaf.core.channel_secrets import set_channel_secret
+    set_channel_secret("veyllo_app", "relay_secret", "vrs_known")
+    app_link_home.set_block(relay_instance_id="inst-1")
     out = runner.invoke(relay_cmd.app, ["dissolve"], input="n\n")
     assert out.exit_code == 0 and "Nothing was changed" in out.output
 
@@ -144,3 +147,65 @@ def test_the_web_server_stops_the_link_at_shutdown():
     src = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
     block = src.split('@app.on_event("shutdown")\nasync def stop_app_link():', 1)[1].split("\n\n\n", 1)[0]
     assert "app_link_relay.stop()" in block and "app_link_bridge.stop()" in block
+
+
+def test_rotate_and_dissolve_without_a_relay_say_so(app_link_home, monkeypatch):
+    _offline(monkeypatch, relay_cmd)
+    for command in (["rotate"], ["dissolve", "--yes"]):
+        out = runner.invoke(relay_cmd.app, command)
+        assert out.exit_code == 1, command
+        assert "No relay is set up on this machine" in out.output
+        assert "Traceback" not in out.output
+
+
+def test_an_unreachable_relay_changes_nothing(app_link_home, monkeypatch):
+    import httpx
+
+    from vaf.core.app_link import relay
+    from vaf.core.channel_secrets import channel_secret, set_channel_secret
+    _offline(monkeypatch, relay_cmd)
+    set_channel_secret("veyllo_app", "relay_secret", "vrs_known")
+    app_link_home.set_block(relay_instance_id="inst-1")
+
+    class _Down:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, *a, **k):
+            raise httpx.ConnectError("no route")
+
+        async def delete(self, *a, **k):
+            raise httpx.ConnectError("no route")
+    monkeypatch.setattr(relay, "_connector", relay.RelayConnector(http_factory=_Down))
+    for command in (["rotate"], ["dissolve", "--yes"]):
+        out = runner.invoke(relay_cmd.app, command)
+        assert out.exit_code == 1 and "could not be reached; nothing was changed" in out.output
+    assert channel_secret("veyllo_app", "relay_secret") == "vrs_known"
+
+
+def test_a_refusal_shows_the_reason_vaf_gave(app_link_home, monkeypatch):
+    refused = (403, {"detail": "Only an admin can change the Veyllo relay."})
+    monkeypatch.setattr(relay_cmd, "ask_running_vaf", lambda *a, **k: refused)
+    out = runner.invoke(relay_cmd.app, ["off"])
+    assert out.exit_code == 1 and "Only an admin can change the Veyllo relay." in out.output
+    row = paired_device(SCOPE_A)[0]
+    monkeypatch.setattr(devices_cmd, "ask_running_vaf",
+                        lambda *a, **k: (404, {"detail": "No such device of this account."}))
+    out = runner.invoke(devices_cmd.app, ["remove", row["device_id"]])
+    assert out.exit_code == 1 and "No such device of this account." in out.output
+
+
+def test_status_uses_the_health_sentences(app_link_home, monkeypatch):
+    paired_device(SCOPE_A, relay_member=MEMBER)
+    answer = (200, {"enabled": True, "state": "secret_rejected", "instance": True, "secret": True,
+                    "members": 1})
+    monkeypatch.setattr(relay_cmd, "ask_running_vaf", lambda *a, **k: answer)
+    out = runner.invoke(relay_cmd.app, ["status"])
+    expected = health.app_link_check(answer[1])["reason"]
+    assert expected in out.output.replace("\n", " ") or expected[:40] in out.output
+    assert "secret_rejected" not in out.output
+    _offline(monkeypatch, relay_cmd)
+    assert "(not set up yet)" in runner.invoke(relay_cmd.app, ["status"]).output

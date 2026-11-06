@@ -323,6 +323,7 @@ def test_off_closes_and_stops_claims_and_notify_but_keeps_s(app_link_home):
 
 def test_rotate_stores_the_new_secret(app_link_home):
     set_channel_secret("veyllo_app", "relay_secret", "vrs_old")
+    app_link_home.set_block(relay_instance_id="inst-1")
     http = FakeHttp({"POST /v1/relay/instance": [FakeResponse(200, {"secret": "vrs_new"})]})
     c = _connector(http)
     assert asyncio.run(c.rotate(username="admin")) is True

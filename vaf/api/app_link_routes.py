@@ -276,8 +276,10 @@ async def switch_relay(body: RelaySwitch, request: Request):
 async def rotate_relay(request: Request):
     from vaf.core.app_link import relay
     user = _admin(request)
-    if not await relay.connector().rotate(username=str(user.get("username") or "")):
-        return _no_store({"detail": "The relay did not rotate the secret.", "code": "rotate_failed"}, 502)
+    connector = relay.connector()
+    if not await connector.rotate(username=str(user.get("username") or "")):
+        return _no_store({"detail": relay.admin_failure(connector.last_error),
+                          "code": "rotate_failed"}, 502)
     return _no_store(_relay_status())
 
 
@@ -300,8 +302,10 @@ async def dissolve_relay(body: CodeBody, request: Request):
         if refused is not None:
             refused.headers.update(_NO_STORE)
             return refused
-    if not await relay.connector().dissolve(username=str(user.get("username") or "")):
-        return _no_store({"detail": "The relay did not dissolve the instance.", "code": "dissolve_failed"}, 502)
+    connector = relay.connector()
+    if not await connector.dissolve(username=str(user.get("username") or "")):
+        return _no_store({"detail": relay.admin_failure(connector.last_error),
+                          "code": "dissolve_failed"}, 502)
     return _no_store(_relay_status())
 
 

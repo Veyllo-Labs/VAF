@@ -21,6 +21,13 @@ _NEVER = ("The web UI, the API and the sign-in are never reachable through the r
           "paired devices' end-to-end encrypted link passes it.")
 
 
+def _detail(answer, fallback: str) -> str:
+    """The reason the running VAF gave (`detail`), or the fallback with the status code."""
+    body = answer[1] if isinstance(answer[1], dict) else {}
+    detail = body.get("detail")
+    return str(detail) if isinstance(detail, str) and detail else f"{fallback} ({answer[0]})."
+
+
 def _local_status():
     from vaf.core.app_link import relay
     status = relay.connector().status()
@@ -31,15 +38,17 @@ def _local_status():
 @app.command("status")
 def relay_status():
     """On or off, connected or not, the instance, the devices on the relay."""
+    from vaf.core.health import app_link_check
     answer = ask_running_vaf("GET", "/api/app-link/relay")
-    status = answer[1] if answer is not None and answer[0] == 200 else _local_status()
-    print(f"Relay:            {'on' if status.get('enabled') else 'off'}")
-    print(f"State:            {status.get('state')}")
-    print(f"Instance:         {'set up' if status.get('instance') else 'none yet'}")
+    running = answer is not None and answer[0] == 200
+    status = answer[1] if running else _local_status()
+    on = "on" if status.get("enabled") else "off"
+    print(f"Relay:            {on}{'' if status.get('instance') else ' (not set up yet)'}")
+    # The same sentence `vaf health` shows for this state, not a second wording of it.
+    row = app_link_check(status) if running else None
+    print(f"State:            {row['reason'] if row else status.get('state')}")
     print(f"Relay secret:     {'stored' if status.get('secret') else 'none'}")
     print(f"Devices on relay: {status.get('members', 0)}")
-    if status.get("last_error"):
-        print(f"Last error:       {status['last_error']}")
     print(_NEVER)
 
 
@@ -49,7 +58,7 @@ def _switch(enabled: bool) -> None:
         from vaf.core.app_link import relay
         relay.set_relay_enabled(enabled, username="")
     elif answer[0] != 200:
-        UI.error(f"VAF refused the change ({answer[0]}).")
+        UI.error(_detail(answer, "VAF refused the change"))
         raise typer.Exit(1)
     if enabled:
         UI.success("The relay is on. VAF connects to it only while a device needs it.")
@@ -76,26 +85,30 @@ def relay_rotate():
     answer = ask_running_vaf("POST", "/api/app-link/relay/rotate")
     if answer is None:
         from vaf.core.app_link import relay
-        ok = asyncio.run(relay.connector().rotate(username=""))
-    else:
-        ok = answer[0] == 200
-    if not ok:
-        UI.error("The relay did not rotate the secret; the old one stays.")
+        connector = relay.connector()
+        if not asyncio.run(connector.rotate(username="")):
+            UI.error(relay.admin_failure(connector.last_error))
+            raise typer.Exit(1)
+    elif answer[0] != 200:
+        UI.error(_detail(answer, "The relay did not rotate the secret"))
         raise typer.Exit(1)
     UI.success("The relay secret is replaced.")
 
 
 @app.command("dissolve")
 def relay_dissolve(yes: bool = typer.Option(False, "--yes", help="Do not ask")):
-    """Delete this installation's relay instance with every device on it. Devices stay
-    paired for the direct path; using the relay again means pairing again."""
+    """Delete the relay instance; devices keep the direct path."""
+    from vaf.core.app_link import relay
+    connector = relay.connector()
+    if not connector.set_up():
+        UI.error(relay.admin_failure("not_set_up"))
+        raise typer.Exit(1)
     UI.warning("This deletes the relay instance: every device loses the relay and has to pair "
                "again to use it. The direct path keeps working.")
     if not yes and not typer.confirm("Dissolve the relay connection now?"):
         UI.info("Nothing was changed.")
         raise typer.Exit(0)
-    from vaf.core.app_link import relay
-    if not asyncio.run(relay.connector().dissolve(username="")):
-        UI.error("The relay did not dissolve the instance; nothing was changed here.")
+    if not asyncio.run(connector.dissolve(username="")):
+        UI.error(relay.admin_failure(connector.last_error))
         raise typer.Exit(1)
     UI.success("The relay connection is dissolved.")

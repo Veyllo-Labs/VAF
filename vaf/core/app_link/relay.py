@@ -734,18 +734,39 @@ class RelayConnector:
 
     # ── admin actions ───────────────────────────────────────────────────────
 
-    async def rotate(self, *, username: str = "") -> bool:
+    def set_up(self) -> bool:
+        """Whether this installation has a relay instance with its secret."""
         from vaf.core.app_link import settings
-        from vaf.core.channel_secrets import set_channel_secret
+        return bool(settings().get("relay_instance_id")) and bool(_secret())
+
+    async def _admin_call(self, method: str, path: str, **kwargs):
+        """One admin call to the relay API, or None (and `last_error`) when there is no relay
+        set up here or the relay cannot be reached."""
+        from vaf.core.app_link import settings
+        if not self.set_up():
+            self.last_error = "not_set_up"
+            return None
         base = str(settings().get("relay_api_base") or "").rstrip("/")
-        async with self._http_factory() as http:
-            response = await http.post(f"{base}/v1/relay/instance", json={"action": "rotate"},
-                                       headers={"Authorization": f"Bearer {_secret()}"})
+        try:
+            async with self._http_factory() as http:
+                call = http.post if method == "POST" else http.delete
+                return await call(f"{base}{path}", headers={"Authorization": f"Bearer {_secret()}"},
+                                  **kwargs)
+        except Exception as exc:
+            self.last_error = f"unreachable:{type(exc).__name__}"
+            return None
+
+    async def rotate(self, *, username: str = "") -> bool:
+        from vaf.core.channel_secrets import set_channel_secret
+        response = await self._admin_call("POST", "/v1/relay/instance", json={"action": "rotate"})
+        if response is None:
+            return False
         if response.status_code != 200:
             self.last_error = f"rotate:{response.status_code}"
             return False
         secret = str((response.json() or {}).get("secret") or "")
         if not secret:
+            self.last_error = "rotate:no_secret"
             return False
         set_channel_secret(CHANNEL, "relay_secret", secret)
         _event("rotated", username)
@@ -753,12 +774,11 @@ class RelayConnector:
         return True
 
     async def dissolve(self, *, username: str = "") -> bool:
-        from vaf.core.app_link import devices, settings
+        from vaf.core.app_link import devices
         from vaf.core.channel_secrets import clear_channel_secrets
-        base = str(settings().get("relay_api_base") or "").rstrip("/")
-        async with self._http_factory() as http:
-            response = await http.delete(f"{base}/v1/relay/instance",
-                                         headers={"Authorization": f"Bearer {_secret()}"})
+        response = await self._admin_call("DELETE", "/v1/relay/instance")
+        if response is None:
+            return False
         if response.status_code not in (200, 204, 404):
             self.last_error = f"dissolve:{response.status_code}"
             return False
@@ -780,6 +800,15 @@ class RelayConnector:
                 "down_since": self.down_since,
                 "members": sum(1 for r in rows if r.get("relay_member")),
                 "devices_on_relay": sum(1 for r in rows if r.get("last_transport") == "relay")}
+
+
+def admin_failure(code: str) -> str:
+    """A sentence for why an admin action on the relay did not happen (`last_error`)."""
+    if code == "not_set_up":
+        return "No relay is set up on this machine (`vaf relay status`)."
+    if code.startswith("unreachable"):
+        return "The relay could not be reached; nothing was changed."
+    return f"The relay refused it ({code}); nothing was changed."
 
 
 class _Refused(Exception):

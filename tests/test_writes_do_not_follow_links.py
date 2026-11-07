@@ -628,7 +628,9 @@ def _provider(name: str, body: bytes, monkeypatch, source: Path):
     if name == "icloud":
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_bytes(body)
-        return mod.ICloudProvider.__new__(mod.ICloudProvider), str(source)
+        prov = mod.ICloudProvider.__new__(mod.ICloudProvider)
+        prov._sync_root = source.parent  # its ids lie inside the sync folder
+        return prov, str(source)
     for verb in ("get", "post"):
         monkeypatch.setattr(mod.requests, verb, lambda *a, **k: _DriveResponse(body))
     if name == "google_drive":
@@ -706,6 +708,65 @@ def test_retrieve_copies_an_ordinary_file(lab, monkeypatch):
     out = cs._action_retrieve("bob", "acc1", "notes.txt", "tenant-scope")
     assert out.startswith("File downloaded"), out
     assert (downloads / "notes.txt").read_text() == "hello"
+
+
+def _linked_downloads(lab, monkeypatch, which):
+    """A tenant whose Downloads folder (or whole project root) was replaced with a link to
+    a folder outside their tree that is NOT VAF's state, as an autostart folder would be:
+    `open_for_write` refuses only a link at the file's own name and VAF's state, so only the
+    folder check stops this one."""
+    cs, sync, downloads = _tenant(lab, monkeypatch)
+    outside = lab.home / "outside"
+    outside.mkdir()
+    if which == "downloads":
+        downloads.rmdir()
+        _link(downloads, outside)
+    else:
+        root = downloads.parent
+        downloads.rmdir()
+        (outside / "Downloads").mkdir()
+        root.rename(lab.home / "old-root")
+        _link(root, outside)
+    return cs, sync, outside
+
+
+def _nothing_in(folder):
+    return sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*")
+                  if p.is_file())
+
+
+@pytest.mark.parametrize("which", ["downloads", "root"])
+def test_a_tenants_linked_downloads_folder_refuses_retrieve(lab, monkeypatch, which):
+    """MUTATION: drop the contained_path check in _download_dir - red (the file is written
+    into the outside folder)."""
+    cs, sync, outside = _linked_downloads(lab, monkeypatch, which)
+    (sync / "notes.txt").write_text("hello")
+    out = cs._action_retrieve("bob", "acc1", "notes.txt", "tenant-scope")
+    assert out.startswith("Refused: the Downloads folder in your files leads somewhere"), out
+    assert "Replace it with an ordinary folder named Downloads" in out
+    assert _nothing_in(outside) == []
+
+
+@pytest.mark.parametrize("which", ["downloads", "root"])
+def test_a_tenants_linked_downloads_folder_refuses_a_cloud_download(lab, monkeypatch, which):
+    """MUTATION: drop the contained_path check in _download_dir - red (the cloud file is
+    written into the outside folder)."""
+    cs, _sync, outside = _linked_downloads(lab, monkeypatch, which)
+    prov = _drive("report.txt", b"cloud body", monkeypatch)
+    monkeypatch.setattr(cs, "create_cloud_provider", lambda *a, **k: prov)
+    out = cs._action_download("bob", "acc1", "google_drive", "f1", user_scope_id="tenant-scope")
+    assert out.startswith("Refused: the Downloads folder in your files leads somewhere"), out
+    assert "read(file_id=...)" in out
+    assert _nothing_in(outside) == []
+
+
+def test_a_tenants_ordinary_downloads_folder_takes_a_cloud_download(lab, monkeypatch):
+    cs, _sync, downloads = _tenant(lab, monkeypatch)
+    prov = _drive("report.txt", b"cloud body", monkeypatch)
+    monkeypatch.setattr(cs, "create_cloud_provider", lambda *a, **k: prov)
+    out = cs._action_download("bob", "acc1", "google_drive", "f1", user_scope_id="tenant-scope")
+    assert out.startswith("Downloaded 'report.txt'"), out
+    assert (downloads / "report.txt").read_bytes() == b"cloud body"
 
 
 @pytest.mark.parametrize("remote_path,lands", [

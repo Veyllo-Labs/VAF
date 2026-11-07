@@ -292,21 +292,3 @@ def test_a_tenant_downloads_into_their_own_tree_and_the_owner_is_unaffected():
         "the owner's own scope must not move their downloads out of ~/Downloads"
     )
 
-
-def test_icloud_needs_no_credential_and_that_is_parked_with_a_trigger():
-    """LATENT, and the trigger is named instead of a date.
-
-    `ICloudProvider.authenticate()` returns True on the strength of a directory existing
-    under the machine owner's home - no credential is consulted at all. It is not reachable
-    today: the only route that creates an account posts an empty password and is rejected,
-    and it hardcodes a different provider. DUE when any route can create an `icloud` entry,
-    because at that moment a tenant with such an entry reads the owner's iCloud Drive.
-    """
-    import inspect
-
-    from vaf.cloud.icloud import ICloudProvider
-
-    src = inspect.getsource(ICloudProvider.authenticate)
-    assert "credential" not in src.lower() and "token" not in src.lower(), (
-        "iCloud now consults a credential - the parked finding above is obsolete, remove it"
-    )

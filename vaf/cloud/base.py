@@ -63,6 +63,21 @@ class SyncResult:
 # Sync-folder name used across all providers
 SYNC_FOLDER_NAME = "VAF Sync"
 
+# The config keys holding every account's list of connected clouds.
+CLOUD_ACCOUNT_KEYS = ("cloud_config", "cloud_config_by_user")
+
+
+def without_cloud_account_keys(payload: Dict) -> Dict:
+    """A Settings save without the cloud account lists. They change only through the cloud
+    routes (connect, disconnect, label, sync switch) and the sync worker's timestamps. A save
+    sends the whole page, so a page loaded before a connect would write the old list back;
+    and since neither key is admin-only, a non-admin's save could replace any account's list,
+    the owner's included, or add an entry for a provider no route connects. Both save lanes
+    pass it, for every caller: the WebSocket ``save_config`` and ``PATCH /api/config``."""
+    if isinstance(payload, dict) and any(k in CLOUD_ACCOUNT_KEYS for k in payload):
+        return {k: v for k, v in payload.items() if k not in CLOUD_ACCOUNT_KEYS}
+    return payload
+
 # File extensions / patterns that must never be synced
 EXCLUDED_EXTENSIONS = frozenset({
     ".enc", ".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite-wal", ".sqlite-shm",

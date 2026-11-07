@@ -59,6 +59,20 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Security
 
+- **iCloud Drive is now only for this computer's owner, and only for the VAF Sync folder.** On
+  a Mac, in every release from 0.1.0a0 to 0.1.0a35, another signed-in account could have its
+  agent read any file VAF can read on that computer, the owner's iCloud Drive included. Linux
+  and Windows installations are not affected. VAF now opens iCloud Drive only for the computer
+  owner's account, and only for files inside "VAF Sync"; a link that leads out of it is
+  refused. A settings save no longer changes anyone's list of connected cloud accounts (that
+  happens only in Settings, Connections), other accounts no longer see that list, and the cloud
+  sync settings are admin-only. If cloud sync was ever on with such an account's iCloud entry,
+  look in "VAF Sync" for files that account put there. If you run VAF on a Mac with more than
+  one account and cannot update yet, remove `cloud_storage` from every non-admin account's
+  tools in Settings, Users, and keep cloud sync off. On every platform, an account other than
+  the owner's can no longer make a cloud download (or `retrieve`) land in another folder of
+  the computer by turning its own Downloads folder into a link; that download is refused and
+  nothing is saved.
 - **The WhatsApp setup no longer sends its link code to an outside QR service.** Since
   0.1.0a0, and in every release up to 0.1.0a35, the setup window had its QR code drawn by a
   public web service (api.qrserver.com), so the linking value in each code, and the address of

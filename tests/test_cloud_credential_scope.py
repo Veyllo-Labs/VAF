@@ -156,10 +156,17 @@ def test_every_provider_carries_the_scope_to_the_credential_lookup():
     would leave that provider reading the owner's credentials while every unit test of the
     key builder stayed green - the "stage tested, wiring not" shape."""
     from vaf.cloud.base import create_cloud_provider
+    from vaf.core.config import get_local_admin_scope_id, get_local_admin_username
 
-    for name in ("google_drive", "onedrive", "dropbox", "nextcloud", "icloud"):
+    for name in ("google_drive", "onedrive", "dropbox", "nextcloud"):
         prov = create_cloud_provider(name, "Bob", "acct@example.com", user_scope_id=SCOPE_A)
         assert getattr(prov, "user_scope_id", None) == SCOPE_A, f"{name} dropped the scope"
+    # iCloud is built for the machine owner only (tests/test_icloud_owner_and_containment.py),
+    # so its wiring is checked with the owner's own scope.
+    owner_scope = get_local_admin_scope_id()
+    prov = create_cloud_provider("icloud", get_local_admin_username(), "icloud",
+                                 user_scope_id=owner_scope)
+    assert getattr(prov, "user_scope_id", None) == owner_scope, "icloud dropped the scope"
 
 
 def test_there_is_exactly_one_provider_factory():

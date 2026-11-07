@@ -1115,6 +1115,9 @@ class Config:
         # for everyone's agent.
         "email_agent_",
         "cloud_oauth_",
+        # Background cloud sync is one loop for every account: its switch, interval, size
+        # limit and conflict policy apply to the whole instance.
+        "cloud_sync_",
         "github_oauth_",
         "speech_stt_",
         "speech_tts_",
@@ -1521,6 +1524,23 @@ class Config:
         # Legacy email_config / email_config_by_user: non-admin should not see other users; expose only empty or own
         out["email_config"] = None
         out["email_config_by_user"] = {}
+
+        # Cloud: only the accounts this user connected, recognised by the scope the connect
+        # route records in each entry. The owner's list and other accounts' lists name
+        # their connected addresses. An entry without a recorded scope drops out of this
+        # view only; /api/cloud/accounts still lists it for its account.
+        out["cloud_config"] = None
+        own_cloud = {}
+        cloud_by_user = config.get("cloud_config_by_user") or {}
+        if isinstance(cloud_by_user, dict) and scope_str:
+            for name, ucfg in cloud_by_user.items():
+                accounts = ucfg.get("accounts") if isinstance(ucfg, dict) else None
+                mine = [a for a in (accounts if isinstance(accounts, list) else [])
+                        if isinstance(a, dict)
+                        and str(a.get("user_scope_id") or "").strip() == scope_str]
+                if mine:
+                    own_cloud[name] = {**ucfg, "accounts": mine}
+        out["cloud_config_by_user"] = own_cloud
 
         # Per-user connection toggles (new users = all off)
         by_scope = config.get("connection_enabled_by_scope") or {}

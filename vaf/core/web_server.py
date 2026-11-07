@@ -6375,6 +6375,9 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         # (/api/network/certificate, behind a second factor).
                         from vaf.network.ssl_utils import without_certificate_keys
                         new_config = without_certificate_keys(new_config)
+                        # The cloud account lists change only through the cloud routes.
+                        from vaf.cloud.base import without_cloud_account_keys
+                        new_config = without_cloud_account_keys(new_config)
                         new_config = Config.split_connection_toggles(
                             existing, new_config, str(user_scope_id) if user_scope_id else None, is_admin=is_admin)
                         # A changed sub-agent provider brings its gate along; the Settings

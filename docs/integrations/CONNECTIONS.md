@@ -37,7 +37,7 @@ VAF has a calendar of its own (the calendar window in the sidebar footer; design
 |----------|--------|-------------|
 | Google Drive | Available | Browse, read, download, and sync files; OAuth2; full Drive access |
 | Microsoft OneDrive | Available | Browse and sync files via Microsoft Graph; OAuth2 |
-| Apple iCloud | Coming Soon | Access iCloud Drive files on macOS |
+| Apple iCloud | Coming Soon | Access iCloud Drive files on macOS. Only for the computer owner's account (the local admin, by name and scope): the iCloud Drive of a Mac belongs to the OS user that runs VAF, so any other account is refused. Only files inside the `VAF Sync` folder; a file id outside it, or a link that leads out of it, is refused. |
 | Dropbox | Coming Soon | Sync and access Dropbox files |
 | Nextcloud | Available | Connect a self-hosted Nextcloud via WebDAV with an app password (Settings, Cloud setup). VAF fetches the URL itself, so it is checked when it is saved and on every request (`vaf/network/egress.py`): a server on the LAN is fine while `egress_allow_private_hosts` is on, one on this machine or at the cloud metadata service is refused. A Nextcloud on the same computer is entered with its LAN address, not `localhost`. |
 
@@ -983,7 +983,7 @@ OAuth tokens are stored in the OS keyring (or encrypted fallback file), same pat
 If the Google Drive (or other cloud) connection sometimes **disappears from the dashboard** (Settings → Connections):
 
 - **Transient API/network errors**: The UI now keeps the last known cloud list when the accounts API fails and uses config as a fallback for the "Connected" state, so a short network or server glitch should no longer hide the connection. Refresh the page or reopen Settings → Connections to retry loading accounts.
-- **Multi-user**: Ensure you are logged in as the same user who added the account. Cloud accounts are stored per user (`cloud_config` for local admin, `cloud_config_by_user[username]` for others). If you added Google Drive while not logged in (or as admin), it is tied to that user; other users will not see it.
+- **Multi-user**: Ensure you are logged in as the same user who added the account. Cloud accounts are stored per user (`cloud_config` for local admin, `cloud_config_by_user[username]` for others). If you added Google Drive while not logged in (or as admin), it is tied to that user; other users will not see it. The lists change only in Settings, Connections, Cloud (a settings save does not write them), and the config fallback shows an account only its own accounts.
 - **Token expired**: If the account appears in the list but browse/sync fails with "Token expired or invalid", remove the account in Settings → Connections → Cloud and add Google Drive again (re-authorize in the browser).
 
 ## Future Integrations

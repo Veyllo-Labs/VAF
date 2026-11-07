@@ -59,15 +59,15 @@ def _to_cell(row) -> str:
     return cell
 
 
-def _console_text(text: str) -> str:
+def _console_text(text: str, also: str = "") -> str:
     """Message text (a preview, a reason, a file name) for this console: invisible and
     direction characters marked as on the cards (`shown_text.shown_tokens`), kept as it is
     where the console's encoding can print it, and in plain ASCII marks
     (`shown_text.ascii_marks`) where it cannot. Measured: with a cp1252 console one Cyrillic
     preview made the whole listing raise ``UnicodeEncodeError``, so nothing was listed; an
-    umlaut on a UTF-8 terminal stays an umlaut."""
+    umlaut on a UTF-8 terminal stays an umlaut. The characters in ``also`` are marked too."""
     from vaf.core.shown_text import ascii_marks, shown_tokens
-    shown = "".join(shown_tokens(str(text or "")))
+    shown = "".join(shown_tokens(str(text or ""), also=also))
     try:
         shown.encode(UI.console.encoding or "utf-8")
         return shown
@@ -124,7 +124,10 @@ def list_pending(
             preview = f"[yellow]may already have been sent:[/yellow] {preview}"
         # Every address and every file, whole, because approving is approving what leaves: a
         # Bcc or a document the table did not show would go out unseen.
-        files = [_console_text(str(a)) for a in (row.get("attachments") or []) if str(a)]
+        # Each name in double quotes, a quote inside one marked: "a, b.pdf" is one file, and
+        # a bare comma list could not say so.
+        files = [f'"{_console_text(str(a), also=chr(34))}"'
+                 for a in (row.get("attachments") or []) if str(a)]
         if files:
             preview = f"{preview} [dim]files:[/dim] {escape(', '.join(files))}"
         table.add_row(_when(row["created_ts"]), escape(str(row["kind"])), str(row["id"]),

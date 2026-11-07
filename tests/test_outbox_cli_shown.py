@@ -73,7 +73,7 @@ def test_the_preview_and_the_files_print_on_a_cp1252_console(monkeypatch):
     row = _row()
     longest = "Quartalsbericht_" + "x" * 70 + ".pdf"
     row.update(preview="\u041f\u0440\u0438\u0432\u0435\u0442, Anna \u202e",
-               attachments=[longest, "plan.pdf"])
+               attachments=[longest, "plan.pdf", 'a, "b".pdf'])
     out = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict")
     console = Console(file=out, width=100, force_terminal=False, legacy_windows=False)
     monkeypatch.setattr(cmd.UI, "console", console)
@@ -93,7 +93,8 @@ def test_the_preview_and_the_files_print_on_a_cp1252_console(monkeypatch):
                   if c.header == "Preview")
     assert column.overflow == "fold"
     cell = "".join(column._cells)
-    assert longest + ", plan.pdf" in cell, cell
+    # Each name quoted, a quote inside one marked: a comma in a name is not a second file.
+    assert f'"{longest}", "plan.pdf", "a, <U+0022>b<U+0022>.pdf"' in cell, cell
     # An umlaut stays an umlaut where the console can print it.
     monkeypatch.setattr(cmd.UI, "console", Console(file=io.StringIO(), width=100))
     assert cmd._console_text("Gr\u00fc\u00dfe \u202e") == "Gr\u00fc\u00dfe \u27e8U+202E\u27e9"

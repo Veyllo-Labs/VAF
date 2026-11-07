@@ -138,7 +138,8 @@ def shown_tokens(line: str, also: str = "", *, whole: bool = False) -> List[str]
     """One line as a card shows it, one token per character (an escape is one token, so a
     cut never splits it). Every character as `shown_char` shows it, the characters in
     ``also`` escaped too, and a combining mark escaped when it has no base before it (the
-    line's start, a space of any kind, a tab or an escaped character), when more than
+    line's start, a space of any kind, a tab or an escaped character, an escaped mark
+    included), when more than
     ``_MARKS_ON_ONE_BASE`` are stacked on one base, or when it is default-ignorable
     (`_IGNORABLE_MARKS`; an emoji presentation selector right after a symbol is kept unless
     the value is shown ``whole``)."""
@@ -153,6 +154,10 @@ def shown_tokens(line: str, also: str = "", *, whole: bool = False) -> List[str]
             else:
                 kept = base and marks <= _MARKS_ON_ONE_BASE
             shown.append(char if kept else escaped(char))
+            if not kept:
+                # An escaped mark is a mark's closing bracket on screen: a mark after it would
+                # draw onto that bracket, so it has no base either.
+                base = symbol = False
             continue
         token = escaped(char) if char in also else shown_char(char)
         marks, base = 0, token == char and not _no_base(char)

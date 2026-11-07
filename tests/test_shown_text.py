@@ -203,3 +203,13 @@ def test_the_emoji_selector_after_a_symbol():
     assert st.shown_tokens("❤\ufe0f\ufe0f") == ["❤", "\ufe0f", m("FE0F")]
     assert st.shown_tokens("a\ufe0f") == ["a", m("FE0F")]
     assert st.shown_tokens("\ufe0f") == [m("FE0F")]
+
+
+def test_a_mark_after_an_escaped_mark_has_no_base():
+    """MUTATION: keep `base` after a mark is escaped.
+
+    ``a`` U+034F U+0338 ``b``: U+034F is escaped, and a raw U+0338 after it would draw onto
+    the escape's closing bracket. An escaped mark is no base, like any escaped character."""
+    assert st.shown_tokens("a\u034f\u0338b") == ["a", m("034F"), m("0338"), "b"]
+    assert st.shown_tokens("a\u0301\u0301\u0301\u0301") == ["a", "\u0301", "\u0301", m("0301"), m("0301")]
+    assert st.shown_tokens("❤\u034f\ufe0f") == ["❤", m("034F"), m("FE0F")]

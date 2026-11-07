@@ -723,11 +723,14 @@ the root itself, can be a link to any folder on this computer, and `open_for_wri
 a link only at the file's own name. A containment check is not enough here, because a link
 to another account's root, to `VAF_Projects` itself or to the owner's chat folders beside
 the roots stays inside every enclosing folder and still writes (and overwrites) someone
-else's files. `_download_dir` therefore requires the resolved folder to be exactly
-`VAF_Projects/<uid8>/Downloads` as seen from the resolved `VAF_Projects`, and `download` and
-`retrieve` refuse with nothing written otherwise. NAMED BOUNDARY: a link swapped in between
-that check and the write is followed for that one write. Guarded by
-`tests/test_writes_do_not_follow_links.py`.
+else's files. One decision for every lane that delivers into that folder,
+`session.get_user_downloads_dir`: the folder must be no link and resolve to exactly
+`VAF_Projects/<uid8>/Downloads` as seen from the resolved `VAF_Projects`, and a link loop or
+a plain file of that name is refused too. The cloud tool's `download` and `retrieve` refuse
+with nothing written otherwise, and the sandbox browser's download sweep (below) delivers
+nothing. NAMED BOUNDARY: a link swapped in between that check and the write is followed for
+that one write. Guarded by `tests/test_writes_do_not_follow_links.py` and
+`tests/test_browser_interactive.py`.
   All jailed tools enter the jail through the shared `user_jail(...)` context manager, so the
   reset-in-`finally` cannot be forgotten in one of them. Which tools receive the identity at
   all is no longer a hardcoded list of names in the dispatcher: each tool DECLARES it via
@@ -906,7 +909,9 @@ partition:
   record of its own - the pool is the answer to both.
   Downloads are not a residual: finished ones are swept to their owner's
   `VAF_Projects/<uid8>/Downloads`
-  through the threat funnel (origin `browser_download`), and a scope change purges the
+  through the threat funnel (origin `browser_download`), only while that folder is an
+  ordinary one (`get_user_downloads_dir`, see the cloud downloads above) and through
+  `open_for_write`, never through a link at the file's name; a scope change purges the
   container folder unread instead of delivering a previous holder's files onward. The
   workspace MIRROR (`/home/browser/Workspace`, the upload lane) is treated the same
   way: it is the holder's own files by construction, it is purged unread on a scope

@@ -145,3 +145,18 @@ def test_a_non_admin_save_cannot_set_the_limits_of_any_sync(stored, monkeypatch)
         src = inspect.getsource(fn)
         assert "sync_settings()" in src, fn.__name__
         assert "cloud_max_file_size" not in src and "cloud_conflict_strategy" not in src
+
+
+@pytest.mark.parametrize("stored_mb,expected_mb", [(5, 5), ("7", 7), ("lots", 100), (None, 100)])
+def test_sync_settings_hand_on_the_admins_values(monkeypatch, stored_mb, expected_mb):
+    """The admin's limit and policy reach both sync lanes; a hand-edited value that is not
+    a whole number falls back to the default instead of multiplying text. MUTATION:
+    `sync_settings` returning hard-coded defaults - red. MUTATION: no int() - red (the
+    string cases)."""
+    from vaf.cloud.sync_engine import sync_settings
+    from vaf.core.config import Config
+    values = {"cloud_sync_max_file_size_mb": stored_mb,
+              "cloud_sync_conflict_resolution": "keep_both"}
+    monkeypatch.setattr(Config, "get", staticmethod(
+        lambda key, default=None: values.get(key, default)))
+    assert sync_settings() == (expected_mb * 1024 * 1024, "keep_both")

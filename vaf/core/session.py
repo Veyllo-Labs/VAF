@@ -2320,6 +2320,40 @@ def get_user_projects_root(user_scope_id: Optional[str]) -> Optional[Path]:
     return Platform.documents_dir() / "VAF_Projects" / uid[:8]
 
 
+def get_user_downloads_dir(user_scope_id: Optional[str]) -> Optional[Path]:
+    """The account's own download folder, VAF_Projects/<uid8>/Downloads, created if missing.
+    None without a scope. The one decision for every lane that delivers a download into it
+    (the cloud tool's download and retrieve, the sandbox browser's download sweep).
+
+    Raises `PathEscape` unless it is an ordinary folder, no link, in an account root that is
+    no link either. The account can write its own root (a sandbox environment mounts it
+    read-write, the coder's shell runs in it), so `Downloads` can be a link, and a write into
+    it lands wherever the link points: `open_for_write` refuses a link at the file's name,
+    not in the folder above it. Being "inside" is not the question: a link to another
+    account's root, to VAF_Projects itself or to the owner's chat folders beside them stays
+    inside every enclosing folder and still writes into someone else's files. So the folder
+    must resolve to exactly the folder named, as seen from the resolved VAF_Projects: a link
+    at either step changes the resolved path, wherever it points. The one link that
+    resolves to its own name is a loop, and `mkdir` refuses it like a plain file of that
+    name. NAMED BOUNDARY: a link swapped in between this check and the write is followed for
+    that one write."""
+    root = get_user_projects_root(user_scope_id)
+    if root is None:
+        return None
+    dest = root / "Downloads"
+    try:
+        exact = dest.resolve() == root.parent.resolve() / root.name / "Downloads"
+    except (OSError, RuntimeError):  # a link loop, before Python 3.13
+        exact = False
+    if not exact:
+        raise PathEscape("the Downloads folder or its account folder is a link")
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+    except FileExistsError:
+        raise PathEscape("Downloads is not a folder") from None
+    return dest
+
+
 def get_session_attachments_dir(
     session_id: Optional[str],
     user_scope_id: Optional[str] = None,

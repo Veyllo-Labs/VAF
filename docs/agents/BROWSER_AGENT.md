@@ -1124,7 +1124,12 @@ rest. Each file passes the same threat funnel every ingress lane asks
 upload; a blocked file is deleted and surfaces in the security dashboard) and lands
 under the owner's own file area, `VAF_Projects/<uid8>/Downloads/`, with a sanitized,
 collision-suffixed name and a 512 MB size cap. Delivered or blocked, the container copy
-is deleted - the folder is a hand-off point, not storage.
+is deleted - the folder is a hand-off point, not storage. The account can write its own
+file area, so the sweep delivers only into a `Downloads` that is an ordinary folder, no link,
+in a root that is no link (`session.get_user_downloads_dir`); otherwise it delivers nothing
+and the files stay in the container. Each file is written through `open_for_write`
+(created new, never through a link at its name, readable by its owner only), and a link
+already at a name counts as taken.
 
 Ownership follows the jar: downloads go to whoever holds (or last held) the browser,
 and a scope CHANGE purges the folder unread - a previous holder's undelivered files

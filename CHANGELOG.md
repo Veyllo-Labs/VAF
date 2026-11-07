@@ -69,16 +69,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   iCloud Drive's "VAF Sync" folder, and that account may hold copies of what "VAF Sync"
   contained: look there for files you do not recognise. If you run VAF on a Mac with more than
   one account and cannot update yet, take `cloud_storage` away from every non-admin account
-  (Settings, Users, edit the account, Access, Custom, untick `cloud_storage`, save) and keep
-  cloud sync off.
+  and keep cloud sync off: Settings, Local Network, User management, hover the account's row
+  and click the pencil (Edit User), then Access, Custom, untick `cloud_storage`, Save Changes.
+  The user list can be edited only while Local Network is switched on.
 - **Cloud accounts, cloud sync settings and cloud downloads are each account's own.** A
   settings save no longer changes anyone's list of connected cloud accounts (that happens only
   in Settings, Connections), and other accounts no longer see that list. The cloud sync
-  settings, including the size limit and conflict policy of a manual sync, are admin-only. An
-  account other than the owner's can no longer make a cloud download (or `retrieve`) land in
-  another folder of the computer, another account's files included, by turning its own
-  Downloads folder or its project folder into a link; that download is refused and nothing is
-  saved. This applies on every platform.
+  settings, including the size limit and conflict policy of a manual sync, are admin-only; the
+  manual sync now reads the same `cloud_sync_` settings as the background sync, and the
+  hand-written `cloud_max_file_size` and `cloud_conflict_strategy` keys it used to read are
+  ignored. An account other than the owner's can no longer make a cloud download (or
+  `retrieve`) land in another folder of the computer, another account's files included, by
+  turning its own Downloads folder or its project folder into a link; that download is refused
+  and nothing is saved. The same holds for files downloaded in the sandbox browser, for every
+  account: they are delivered only into an ordinary Downloads folder and never through a link;
+  while the folder is not an ordinary one, nothing is delivered. This applies on every platform.
 - **The WhatsApp setup no longer sends its link code to an outside QR service.** Since
   0.1.0a0, and in every release up to 0.1.0a35, the setup window had its QR code drawn by a
   public web service (api.qrserver.com), so the linking value in each code, and the address of

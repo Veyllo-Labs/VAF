@@ -36,8 +36,13 @@ def sync_settings() -> Tuple[int, str]:
     that were registered nowhere, so no rule made them admin-only and any account's
     settings save set them for every account's sync."""
     from vaf.core.config import Config
-    max_size = Config.get("cloud_sync_max_file_size_mb", 100) * 1024 * 1024
-    return max_size, Config.get("cloud_sync_conflict_resolution", "last_write_wins")
+    # A hand-edited "100" multiplied as text builds a 100 MB string on every cycle; a value
+    # that is not a whole number of megabytes falls back to the default.
+    try:
+        max_mb = int(Config.get("cloud_sync_max_file_size_mb", 100))
+    except (TypeError, ValueError):
+        max_mb = 100
+    return max_mb * 1024 * 1024, Config.get("cloud_sync_conflict_resolution", "last_write_wins")
 
 
 def _md5_hash(filepath: Path) -> Optional[str]:

@@ -683,7 +683,8 @@ def _sweep_container_downloads(container_name: str, user_scope_id: str) -> List[
     delivered: List[str] = []
     try:
         from vaf.core.containers import docker as _docker
-        from vaf.core.session import get_user_projects_root
+        from vaf.core.path_jail import PathEscape, WriteRefused, open_for_write
+        from vaf.core.session import get_user_downloads_dir, get_user_projects_root
 
         root = get_user_projects_root(user_scope_id)
         if root is None:
@@ -711,7 +712,10 @@ def _sweep_container_downloads(container_name: str, user_scope_id: str) -> List[
         from vaf.core.config import resolve_caller_username
         from vaf.core.threat_db import inspect_upload_file
 
-        target_dir = root / "Downloads"
+        # Resolved at the first file that is delivered: an ordinary folder, no link, in a root
+        # that is no link (get_user_downloads_dir). The holder can write their own root, so a
+        # linked Downloads would carry the file into someone else's.
+        target_dir = None
         for size, cpath in entries:
             raw_name = os.path.basename(cpath)
             if size > _DOWNLOAD_MAX_BYTES:
@@ -738,19 +742,42 @@ def _sweep_container_downloads(container_name: str, user_scope_id: str) -> List[
                                       f"[browser_interactive] download blocked by threat "
                                       f"funnel: {name}")
                 else:
-                    target_dir.mkdir(parents=True, exist_ok=True)
+                    if target_dir is None:
+                        try:
+                            target_dir = get_user_downloads_dir(user_scope_id)
+                        except PathEscape:
+                            target_dir = None
+                        if target_dir is None:
+                            # Kept in the container, unread, until the folder is an ordinary
+                            # one again; a scope change purges them as before.
+                            append_domain_log(
+                                "webui", "[browser_interactive] downloads not delivered: "
+                                "the Downloads folder is not an ordinary folder (a link or "
+                                "a file)")
+                            break
                     dest = target_dir / name
                     stem, dot, ext = name.rpartition(".")
                     n = 1
-                    while dest.exists():
+                    # lexists: a dangling link at a name is taken too, never written through.
+                    while os.path.lexists(dest):
                         dest = target_dir / (f"{stem}-{n}.{ext}" if dot else f"{name}-{n}")
                         n += 1
-                    shutil.move(staged, dest)
-                    staged = None
+                    # A copy through open_for_write, not shutil.move: across filesystems move
+                    # falls back to copy2, which follows a link at the name, and the chmod
+                    # after it went through one as well. The staged file is removed below.
                     try:
-                        os.chmod(dest, 0o600)
-                    except Exception:
-                        pass
+                        with open(staged, "rb") as src, \
+                                open_for_write(dest, "wb", exclusive=True) as out:
+                            shutil.copyfileobj(src, out)
+                            if hasattr(os, "fchmod"):
+                                try:
+                                    os.fchmod(out.fileno(), 0o600)
+                                except OSError:
+                                    pass
+                    except (WriteRefused, FileExistsError) as e:
+                        append_domain_log("webui",
+                                          f"[browser_interactive] download not delivered: {e}")
+                        continue
                     delivered.append(dest.name)
                     append_domain_log("webui",
                                       f"[browser_interactive] download delivered to "

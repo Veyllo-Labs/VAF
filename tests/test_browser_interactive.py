@@ -1395,6 +1395,108 @@ def test_sweep_delivers_through_the_threat_funnel(monkeypatch, tmp_path):
     assert any(c[:3] == ["exec", "vaf-browser", "rm"] for c in calls)
 
 
+def _sweep_lab(monkeypatch, tmp_path, name="report.pdf", payload=b"%PDF-1.4 sweep"):
+    """The docker seam faked with one finished download called ``name``; returns the
+    account root, a folder outside it and the recorded docker calls."""
+    import vaf.core.session as session_mod
+    import vaf.core.threat_db as threat_mod
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    calls = []
+
+    def fake_docker(args, timeout=60):
+        calls.append(list(args))
+        if args[0] == "exec" and "find" in args[-1]:
+            return SimpleNamespace(returncode=0, stdout=(
+                f"{len(payload)}\t/home/browser/Downloads/{name}\n"), stderr="")
+        if args[0] == "cp":
+            with open(args[-1], "wb") as f:
+                f.write(payload)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    root = tmp_path / "Documents" / "VAF_Projects" / "ab12cd34"
+    root.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    monkeypatch.setattr("vaf.core.containers.docker", fake_docker)
+    monkeypatch.setattr(session_mod, "get_user_projects_root", lambda scope: root)
+    monkeypatch.setattr(threat_mod, "inspect_upload_file",
+                        lambda p, **kw: SimpleNamespace(blocked=False))
+    return root, outside, calls
+
+
+def _symlink_or_skip(link, target):
+    import os
+    try:
+        os.symlink(target, link)
+    except (OSError, NotImplementedError):
+        pytest.skip("this host cannot create symlinks")
+
+
+def test_sweep_refuses_a_linked_downloads_folder(monkeypatch, tmp_path):
+    """The holder can write their own root, so Downloads can be a link to any folder, another
+    account's included. Nothing is delivered and the container copy stays for the next
+    sweep. MUTATION: back to ``target_dir = root / "Downloads"`` with its mkdir - red (the
+    download lands in the outside folder)."""
+    root, outside, calls = _sweep_lab(monkeypatch, tmp_path)
+    _symlink_or_skip(root / "Downloads", outside)
+    assert bi._real_sweep_container_downloads("vaf-browser", "scope-a") == []
+    assert list(outside.iterdir()) == []
+    assert not any(c[:3] == ["exec", "vaf-browser", "rm"] for c in calls)
+
+
+def test_sweep_never_writes_through_a_link_at_the_name(monkeypatch, tmp_path):
+    """A dangling link at the download's name. Across filesystems shutil.move fell back to
+    copy2, which followed it, and the chmod after it went through it too (the rename is made
+    to fail here to take that branch). MUTATION: back to ``while dest.exists()`` and
+    ``shutil.move`` - red (the link's target is written). MUTATION: ``dest.exists()`` alone
+    - red (the link's name is chosen and the download is not delivered)."""
+    import errno
+    import os
+    root, outside, _calls = _sweep_lab(monkeypatch, tmp_path)
+    downloads = root / "Downloads"
+    downloads.mkdir()
+    _symlink_or_skip(downloads / "report.pdf", outside / "planted.pdf")
+    real_rename = os.rename
+
+    def cross_device(src, dst, *a, **k):
+        if str(dst).startswith(str(downloads)):
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        return real_rename(src, dst, *a, **k)
+
+    monkeypatch.setattr(os, "rename", cross_device)
+    delivered = bi._real_sweep_container_downloads("vaf-browser", "scope-a")
+    assert delivered == ["report-1.pdf"]
+    assert (downloads / "report-1.pdf").read_bytes() == b"%PDF-1.4 sweep"
+    assert not (outside / "planted.pdf").exists()
+    assert (downloads / "report.pdf").is_symlink()
+
+
+def test_sweep_delivers_into_an_ordinary_folder_owner_only(monkeypatch, tmp_path):
+    """The ordinary case: delivered, the staged copy gone, the file readable by its owner
+    only. MUTATION: drop the fchmod - red on POSIX."""
+    import os
+    import stat
+    root, _outside, calls = _sweep_lab(monkeypatch, tmp_path)
+    staged = []
+    import tempfile
+    real_mkstemp = tempfile.mkstemp
+
+    def recording_mkstemp(*a, **k):
+        fd, path = real_mkstemp(*a, **k)
+        staged.append(path)
+        return fd, path
+
+    monkeypatch.setattr(tempfile, "mkstemp", recording_mkstemp)
+    assert bi._real_sweep_container_downloads("vaf-browser", "scope-a") == ["report.pdf"]
+    dest = root / "Downloads" / "report.pdf"
+    assert dest.read_bytes() == b"%PDF-1.4 sweep"
+    assert staged and not any(os.path.exists(p) for p in staged)
+    assert any(c[:3] == ["exec", "vaf-browser", "rm"] for c in calls)
+    if os.name != "nt":
+        assert stat.S_IMODE(dest.stat().st_mode) == 0o600
+
+
 def test_the_run_wires_the_handover_into_its_task_and_its_jar_decision():
     """The manager half above is useless unless the tool consumes it: the run
     must take the handover, let it veto the clean-start scrub (continuing=),

@@ -712,7 +712,7 @@ def test_retrieve_copies_an_ordinary_file(lab, monkeypatch):
 
 BOBS_CODE = b"print('bob')\n"
 LINKED = ["outside", "sibling account", "every account's folder", "owner's chat folder",
-          "linked root"]
+          "linked root", "link loop", "loop through a folder", "plain file"]
 
 
 def _linked_downloads(lab, monkeypatch, which):
@@ -725,10 +725,23 @@ def _linked_downloads(lab, monkeypatch, which):
     - sibling account: another account's source folder, `VAF_Projects/cd34ef56/src`;
     - every account's folder: `..`, which is `VAF_Projects` itself;
     - owner's chat folder: an unscoped chat folder of the owner beside the account roots;
-    - linked root: the whole project root is a link to a folder with its own Downloads."""
+    - linked root: the whole project root is a link to a folder with its own Downloads;
+    - link loop, loop through a folder (`Downloads -> x/../Downloads`), plain file: these
+      resolve to the folder named, and `mkdir` used to raise a raw FileExistsError.
+      The folder watched is the tenant's root."""
     cs, sync, downloads = _tenant(lab, monkeypatch)
     projects = downloads.parent.parent
     downloads.rmdir()
+    if which == "link loop":
+        _link(downloads, Path("Downloads"))
+        return cs, sync, downloads.parent
+    if which == "loop through a folder":
+        (downloads.parent / "x").mkdir()
+        _link(downloads, Path("x") / ".." / "Downloads")
+        return cs, sync, downloads.parent
+    if which == "plain file":
+        downloads.write_bytes(b"not a folder")
+        return cs, sync, downloads.parent
     if which == "linked root":
         target = lab.home / "outside"
         (target / "Downloads").mkdir(parents=True)
@@ -777,7 +790,7 @@ def test_a_tenants_linked_downloads_folder_refuses_retrieve(lab, monkeypatch, wh
     (sync / "main.py").write_text("tenant payload")
     before = _files(target)
     out = cs._action_retrieve("bob", "acc1", "main.py", "tenant-scope")
-    assert out.startswith("Refused: the Downloads folder in your files leads somewhere"), out
+    assert out.startswith("Refused: the Downloads folder in your files is not an ordinary"), out
     assert "Replace it with an ordinary folder named Downloads" in out
     assert _files(target) == before
 
@@ -790,7 +803,7 @@ def test_a_tenants_linked_downloads_folder_refuses_a_cloud_download(lab, monkeyp
     monkeypatch.setattr(cs, "create_cloud_provider", lambda *a, **k: prov)
     before = _files(target)
     out = cs._action_download("bob", "acc1", "google_drive", "f1", user_scope_id="tenant-scope")
-    assert out.startswith("Refused: the Downloads folder in your files leads somewhere"), out
+    assert out.startswith("Refused: the Downloads folder in your files is not an ordinary"), out
     assert "read(file_id=...)" in out
     assert _files(target) == before
 

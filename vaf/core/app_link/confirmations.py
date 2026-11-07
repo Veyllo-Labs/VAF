@@ -29,6 +29,14 @@ never the requesting agent's words), ``exp`` ten minutes on. The app answers
 - An app that answers ``unknown_type`` for ``confirm`` cannot show cards: every card sent to
   that connection is settled, and its next parked item is answered at once without one.
 
+One card waits per request at a time. A round that parked more than one item (an action and a
+message, or two messages) cards the first, and the rest follow one by one (``followups``): each
+next card opens once the one before was answered Yes and its turn has answered (`open_followup`),
+and the answer that turn wrote travels with the request (``bridge.Reply.carried``) into its final
+``done``. Any other end of a card (No, no answer in time, a decision in the web UI, an app without
+cards) sends no further card: the messages still waiting stay drafts in the web UI, and the
+request's answer says so.
+
 The answer counts only from the device the card went to and the account of its row: another
 device, another account or an unknown id all get ``confirm_invalid`` (one code, no oracle),
 and the card stays open for the right one. A card answered or settled answers ``used``, one
@@ -51,7 +59,7 @@ import json
 import logging
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from vaf.core.agent_origin import CONFIRM_SECONDS, WHAT_MAX, ParkedCall
@@ -90,6 +98,8 @@ REFUSED_BY_APP = ("The Veyllo App on this phone cannot show confirmations yet (a
 REFUSED_BY_APP_SEND = ("The Veyllo App on this phone cannot show confirmations yet (an app "
                        "update brings them): the message was NOT sent, and it waits as a draft "
                        "in VAF's web UI.")
+FOLLOWUPS_WAIT = ("The other message this request prepared was NOT sent either: it waits as a "
+                  "draft in VAF's web UI.")
 CANNOT_SHOW = ("[APP AGENT] '{tool}' could not be shown to your user for confirmation, so it did "
                "NOT run. Tell your user it was not done.")
 DECIDED_ELSEWHERE = "Your user decided in VAF's web UI: {status}"
@@ -122,6 +132,8 @@ class Pending:
     decided: float = 0.0
     # The live session the card last went to (`refused_by_app` settles what went to it).
     sent_to: int = 0
+    # The drafts of the same round still to be carded, in order, once this card's Yes has run.
+    followups: List[str] = field(default_factory=list)
 
     @property
     def is_send(self) -> bool:
@@ -224,23 +236,32 @@ def _fallback(action: Optional[ParkedCall]) -> str:
 
 
 def open_card(meta: Dict[str, Any], *, action: Optional[ParkedCall] = None,
-              draft_ref: str = "") -> Optional[str]:
+              draft_ref: str = "", followups: Any = (), carried: str = "") -> Optional[str]:
     """The request's turn ended at a parked call (``action``) or a held draft (``draft_ref``):
     keep the request open and send its card to the device that asked. None when the card is
     open (the card's outcome answers the request), else the text to answer the request with
     now: a draft waits in the web UI only (``APP_AGENT_DRAFT_TEXT``), an action did not run
     (``CANNOT_SHOW``). No card for a device that no longer stands or is not the account's, for
     an app that cannot show cards, for a request at ``CONFIRMS_PER_ASK_MAX`` cards, for a
-    draft that is not waiting or whose text would be over ``WHAT_MAX``. Never raises."""
+    draft that is not waiting or whose text would be over ``WHAT_MAX``. ``followups`` are the
+    round's other drafts, carded after this card's Yes (`open_followup`); without a card they
+    wait in the web UI, and the text says so. ``carried`` is an answer the request already has
+    (a confirmed turn's), kept for its final ``done``. Never raises."""
+    rest = [str(r) for r in (followups or ()) if str(r) and str(r) != str(draft_ref)]
     try:
-        return _open_card(meta, action=action, draft_ref=draft_ref)
+        out = _open_card(meta, action=action, draft_ref=draft_ref, followups=rest,
+                         carried=carried)
     except Exception:
         logger.debug("app link: opening a confirmation failed", exc_info=True)
-        return _fallback(action)
+        out = _fallback(action)
+    if out is None:
+        return None
+    return "\n\n".join(t for t in (str(carried or "").strip(), out,
+                                    FOLLOWUPS_WAIT if rest else "") if t)
 
 
 def _open_card(meta: Dict[str, Any], *, action: Optional[ParkedCall],
-               draft_ref: str) -> Optional[str]:
+               draft_ref: str, followups: List[str] = (), carried: str = "") -> Optional[str]:
     from vaf.core.app_link import bridge
     scope = str(meta.get("user_scope_id") or "").strip()
     did = str(meta.get("app_device_id") or "")
@@ -286,6 +307,9 @@ def _open_card(meta: Dict[str, Any], *, action: Optional[ParkedCall],
                 or reply.device_id != did:
             return fallback
         reply.awaiting = entry.id
+        if str(carried or "").strip():
+            reply.carried = "\n\n".join(t for t in (reply.carried, str(carried).strip()) if t)
+        entry.followups = list(followups or ())
         _cards[entry.id] = entry
     # The request stays open: the runner's last net must not close its reply, and a later
     # text of this turn goes nowhere (`bridge.send_text`).
@@ -426,7 +450,27 @@ def _settled(entry: Pending, how: str) -> None:
     else:
         # cancelled: the request was withdrawn, or its device no longer stands.
         text = ""
+    if text and entry.followups:
+        text = f"{text}\n\n{FOLLOWUPS_WAIT}"
     _finish(entry, text)
+
+
+def followups_of(meta: Dict[str, Any]) -> List[str]:
+    """The drafts still to be carded after the card a confirmed turn ran (none for any other
+    turn)."""
+    entry = card(str(meta.get("app_confirm_id") or "")) if meta.get("app_confirm_id") else None
+    return list(entry.followups) if entry is not None else []
+
+
+def open_followup(meta: Dict[str, Any], answer: str) -> Optional[str]:
+    """The turn a Yes woke has answered: the next draft of the same round gets its card, with
+    ``answer`` kept for the request's final ``done``. None when that card is open, else the
+    text the request is answered with now (``answer``, and that the other messages wait in the
+    web UI when their card could not be shown)."""
+    rest = followups_of(meta)
+    if not rest or not meta.get("app_agent_ask"):
+        return answer
+    return open_card(meta, draft_ref=rest[0], followups=rest[1:], carried=answer)
 
 
 def refused_by_app(session) -> int:

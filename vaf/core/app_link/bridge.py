@@ -97,6 +97,9 @@ class Reply:
     device_id: str = ""
     # The card a request waits on (confirmations): its turn ended, its answer has not.
     awaiting: str = ""
+    # An answer the request already has while a further card waits (a confirmed turn's): it
+    # leads the final `done`, so the app shows every outcome of the request.
+    carried: str = ""
 
 
 @dataclass
@@ -737,7 +740,7 @@ def finish_reply(meta: Dict[str, Any], final_text: str) -> bool:
     if reply is None:
         reply = _reply_for(meta, scope)
     meta.pop("app_reply_id", None)
-    text = str(final_text or "").strip()
+    text = "\n\n".join(t for t in (reply.carried.strip(), str(final_text or "").strip()) if t)
     chat = f"{CHANNEL}_{reply.chat_key}"
     if text:
         _store_out(scope, reply.username, reply.id, text,

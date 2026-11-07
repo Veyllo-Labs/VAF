@@ -164,9 +164,12 @@ is a turn of your account's app chat, with these differences
     later tap on the phone is told it is decided. One decision wins: a draft leaves at most
     once, and the phone never sends a draft that was edited after its card went out.
   - **Cancel** of the request on the phone drops the card (and the message).
-  - One card waits per request at a time, and a request opens at most three in a row (a
-    confirmed turn may need another). A second action in the same round is refused; a second
-    message in it stays a draft in the web UI only.
+  - One card waits per request at a time, and a request opens at most three in a row. A
+    second action in the same round is refused. A message prepared in the same round as an
+    action (or a second message) gets its own card, with its own id, once the card before it
+    was answered Yes and its outcome is in; the request's answer then carries both outcomes.
+    When the card before it ends any other way (No, no answer, a decision in the web UI), no
+    further card comes: the message waits as a draft in the web UI, and the answer says so.
   - **The phone is away:** the card waits until it runs out, the relay sends a push (a
     relay-paired phone), and the card comes again after the app connects, with the same id.
     It is never in the outbox.

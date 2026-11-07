@@ -502,13 +502,26 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
                 fallback = APP_AGENT_DRAFT_TEXT
                 actions, held = parked if parked else ((), ())
                 if meta.get("app_agent_ask") and (actions or held):
+                    # One card at a time: the round's first item now, its other drafts (and
+                    # those a confirmed turn still had waiting) one by one after each Yes.
                     from vaf.core.app_link import confirmations
                     fallback = confirmations.open_card(
                         meta, action=actions[0] if actions else None,
-                        draft_ref="" if actions else str(held[0]))
+                        draft_ref="" if actions else str(held[0]),
+                        followups=[str(r) for r in (held if actions else held[1:])]
+                        + confirmations.followups_of(meta))
                     if fallback is None:
                         return
                 final_text = fallback
+            elif meta.get("app_agent_ask") and meta.get("app_confirm_id"):
+                # A turn a Yes woke has answered: the next message of the same round gets its
+                # card now, and this answer waits for the request's final `done`.
+                from vaf.core.app_link import confirmations
+                answer = confirmations.open_followup(meta, _prepare_channel_outbound(final_text))
+                if answer is None:
+                    return
+                app_bridge.finish_reply(meta, answer)
+                return
             app_bridge.finish_reply(meta, _prepare_channel_outbound(final_text))
         elif task_source == "whatsapp":
             chat_jid = meta.get("whatsapp_chat_jid")

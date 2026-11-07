@@ -39,6 +39,10 @@ MUTATIONS, each turns the named test red:
 - fence the confirm wake, store it as the app agent's, skip the rebind, or leave the
   decision line out of a send's report -> test_ok_runs_the_action_once,
   test_the_send_report_is_reported_once;
+- answer the request at once after a Yes instead of carding the round's next draft, or drop
+  the carried answer -> test_a_draft_of_the_same_round_follows_the_yes; let a No on that card
+  keep the draft -> test_no_on_the_following_draft_card_discards_it; drop the note that the
+  other message waits -> test_the_draft_waits_when_the_first_card_ends_otherwise;
 - rename the TS prefix, delete a catalogue key, give a headline two phrasings
   -> test_the_web_chat_shows_a_confirm_wake, test_the_headlines_are_one_phrasing_each.
 """
@@ -97,7 +101,7 @@ def _parked(tool="create_automation", args=None, kind="automation"):
                                    what=what)
 
 
-def _ask_parked(client, row, *, aid=A1, action=None, draft_ref=""):
+def _ask_parked(client, row, *, aid=A1, action=None, draft_ref="", held=None):
     """A request whose turn ended at a parked call (or draft), delivered as the runner does."""
     import vaf.core.headless_runner as hr
     client.send(_ask(row, aid=aid))
@@ -105,8 +109,8 @@ def _ask_parked(client, row, *, aid=A1, action=None, draft_ref=""):
     TaskQueue().drop_queued_tasks_for_session(_chat(), where=lambda t: t is task)
     hr._app_link_emit(task)
     actions = [action] if action is not None else []
-    hr._deliver_channel_reply(task, outbound_hold.TURN_ENDS_AT_DRAFT,
-                              parked=(actions, [draft_ref] if draft_ref else []))
+    held = list(held) if held is not None else ([draft_ref] if draft_ref else [])
+    hr._deliver_channel_reply(task, outbound_hold.TURN_ENDS_AT_DRAFT, parked=(actions, held))
     client.pump()
     return task
 
@@ -920,3 +924,89 @@ def test_no_doc_says_the_work_never_runs_on_a_request():
         assert old not in path.read_text(encoding="utf-8").lower(), path
     app = (ROOT / "docs" / "integrations" / "VEYLLO_APP.md").read_text(encoding="utf-8")
     assert "confirm_answer" in app and "confirm_invalid" in app
+
+
+# ── an action and a message in one round: two cards, one after the other ─────────────────
+
+def _confirmed_turn(client, card, agent, answer):
+    """The user's Yes on ``card``, the call run once, and the turn it wakes answering with
+    ``answer``, as the runner does."""
+    import vaf.core.headless_runner as hr
+    client.send({"t": "confirm_answer", "id": card["id"], "ok": True})
+    task = _confirm_task(card["id"])
+    report = confirmations.run_confirmed(agent, task)
+    assert report is not None
+    hr._app_link_emit(task)
+    hr._deliver_channel_reply(task, answer)
+    client.pump()
+
+
+def test_a_draft_of_the_same_round_follows_the_yes(app_link_home, held_store):
+    w = _two_devices()
+    client, row, other = w.client, w.row, w.other_client
+    ref = _park_whatsapp()
+    _ask_parked(client, row, action=_parked(), held=[ref])
+    first = _card(client)
+    assert first["kind"] == "automation" and _state(ref) == "held"
+    sender = _FakeSend()
+    agent = _Runner()
+    agent.tools = {"send_whatsapp": sender}
+    _confirmed_turn(client, first, agent, "Die Automation ist angelegt.")
+    cards = client.of("confirm")
+    assert len(cards) == 2 and not client.of("done"), client.frames
+    second = cards[1]
+    assert second["kind"] == "send" and second["ask"] == A1 and second["id"] != first["id"]
+    assert len(agent.calls) == 1 and sender.calls == []
+    _confirmed_turn(client, second, agent, "Die Nachricht an Anna ist raus.")
+    assert len(sender.calls) == 1 and _state(ref) == "sent"
+    assert client.of("done") == [{"t": "done", "id": A1, "final_text":
+                                  "Die Automation ist angelegt.\n\nDie Nachricht an Anna ist raus."}]
+    other.pump()
+    assert not [f for f in other.frames if f.get("t") in ("confirm", "done")]
+    assert A1 not in bridge._asks.get(row["device_id"], {})
+    client.send({"t": "confirm_answer", "id": second["id"], "ok": True})
+    assert {"t": "error", "code": "used", "ref": second["id"]} in client.frames
+    assert len(sender.calls) == 1 and _queued() == []
+
+
+def test_no_on_the_following_draft_card_discards_it(app_link_home, held_store):
+    client, _pipe, row = link(SCOPE_A)
+    ref = _park_whatsapp()
+    _ask_parked(client, row, action=_parked(), held=[ref])
+    _confirmed_turn(client, _card(client), _Runner(), "Die Automation ist angelegt.")
+    second = client.of("confirm")[1]
+    client.send({"t": "confirm_answer", "id": second["id"], "ok": False})
+    assert client.of("done") == [{"t": "done", "id": A1, "final_text":
+                                  "Die Automation ist angelegt.\n\n" + confirmations.DECLINED_SEND}]
+    assert _state(ref) == "discarded" and _queued() == []
+
+
+@pytest.mark.parametrize("end", ["expired", "declined", "decided_elsewhere"])
+def test_the_draft_waits_when_the_first_card_ends_otherwise(app_link_home, held_store, end):
+    client, _pipe, row = link(SCOPE_A)
+    ref = _park_whatsapp()
+    if end == "decided_elsewhere":
+        first_ref = _park_whatsapp("Erste Nachricht")
+        _ask_parked(client, row, draft_ref=first_ref, held=[first_ref, ref])
+    else:
+        _ask_parked(client, row, action=_parked(), held=[ref])
+    card = _card(client)
+    if end == "expired":
+        assert confirmations.settle(time.time() + 601) == 1
+        expected = confirmations.EXPIRED.format(tool="create_automation", minutes=10)
+    elif end == "declined":
+        client.send({"t": "confirm_answer", "id": card["id"], "ok": False})
+        expected = confirmations.DECLINED.format(tool="create_automation")
+    else:
+        kind, num = outbound_hold.parse_ref(first_ref)
+        outbound_hold.discard_draft(kind, num, username="alice", user_scope_id=SCOPE_A)
+        assert confirmations.settle() == 1
+        expected = confirmations.DECIDED_ELSEWHERE.format(status=outbound_hold.status_line(
+            outbound_hold.draft_rows(first_ref, username="alice", user_scope_id=SCOPE_A)[0]))
+    client.pump()
+    assert len(client.of("confirm")) == 1, "a further card after a card that was not a Yes"
+    assert client.of("done") == [{"t": "done", "id": A1, "final_text":
+                                  expected + "\n\n" + confirmations.FOLLOWUPS_WAIT}]
+    assert _state(ref) == "held"
+    assert [r["ref"] for r in outbound_hold.pending("alice", SCOPE_A)
+            if r["ref"] == ref] == [ref]

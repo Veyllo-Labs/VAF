@@ -71,7 +71,7 @@ def test_direct_addresses_need_local_network_and_tls(app_link_home, monkeypatch)
     from vaf.core.config import Config
     from vaf.network import binding
     monkeypatch.setattr(binding, "access_addresses",
-                        lambda cfg=None: [binding.LocalInterface("wg0", "10.66.66.1", "10.66.66.0/24", "vpn"),
+                        lambda cfg=None: [binding.LocalInterface("wg0", "192.0.2.10", "192.0.2.0/24", "vpn"),
                                           binding.LocalInterface("eth0", "fd00::20", "fd00::/64", "lan")])
     real = Config.get
     flags = {"local_network_enabled": True, "local_network_tls_enabled": False,
@@ -79,8 +79,8 @@ def test_direct_addresses_need_local_network_and_tls(app_link_home, monkeypatch)
     monkeypatch.setattr(Config, "get", classmethod(lambda cls, k, d=None: flags[k] if k in flags else real(k, d)))
     assert _REAL_DIRECT() == []
     flags["local_network_tls_enabled"] = True
-    assert _REAL_DIRECT() == ["wss://10.66.66.1:8443/api/app-link",
-                                          "wss://[fd00::20]:8443/api/app-link"]
+    assert _REAL_DIRECT() == ["wss://192.0.2.10:8443/api/app-link",
+                              "wss://[fd00::20]:8443/api/app-link"]
 
 
 def test_a_bad_csr_does_not_burn_the_code(app_link_home):

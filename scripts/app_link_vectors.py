@@ -37,7 +37,7 @@ def _qr() -> Dict[str, Any]:
     cases = [
         ("relay_without_direct", dict(mode="r", p=P, api="https://veyllo.app")),
         ("relay_with_direct", dict(mode="r", p=P, api="https://veyllo.app",
-                                   direct=["wss://10.66.66.1:8443/api/app-link"],
+                                   direct=["wss://192.0.2.10:8443/api/app-link"],
                                    name="Firma XY")),
         ("local_two_direct", dict(mode="l", direct=["wss://192.168.1.20:8443/api/app-link",
                                                     "wss://[fd00::20]:8443/api/app-link"],

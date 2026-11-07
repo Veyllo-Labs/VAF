@@ -59,6 +59,22 @@ def _to_cell(row) -> str:
     return cell
 
 
+def _console_text(text: str) -> str:
+    """Message text (a preview, a reason, a file name) for this console: invisible and
+    direction characters marked as on the cards (`shown_text.shown_tokens`), kept as it is
+    where the console's encoding can print it, and in plain ASCII marks
+    (`shown_text.ascii_marks`) where it cannot. Measured: with a cp1252 console one Cyrillic
+    preview made the whole listing raise ``UnicodeEncodeError``, so nothing was listed; an
+    umlaut on a UTF-8 terminal stays an umlaut."""
+    from vaf.core.shown_text import ascii_marks, shown_tokens
+    shown = "".join(shown_tokens(str(text or "")))
+    try:
+        shown.encode(UI.console.encoding or "utf-8")
+        return shown
+    except (UnicodeEncodeError, LookupError):
+        return ascii_marks(shown)
+
+
 def _when(ts: float) -> str:
     if not ts:
         return ""
@@ -88,27 +104,29 @@ def list_pending(
     from rich.table import Table
     table = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
     for col in ("When", "Kind", "Id", "Channel", "To", "Preview"):
-        # An address has no spaces to wrap at, and the default overflow would cut its tail
-        # with an ellipsis: the To column folds instead, so every address is printed whole.
-        table.add_column(col, overflow="fold" if col == "To" else "ellipsis")
+        # An address or a file name has no spaces to wrap at, and the default overflow would
+        # cut its tail with an ellipsis: the To and Preview columns fold instead, so every
+        # address and every file name is printed whole.
+        table.add_column(col, overflow="fold" if col in ("To", "Preview") else "ellipsis")
     for row in rows:
         # Everything that came from a message is DATA and is escaped before it meets Rich:
         # the body was written by the model, the reason by a bridge, the recipient by whoever
         # typed it, and any of them may contain "[bold]" or "[/red]" - the first would style
         # the table, the second raises inside it. Only the two status tags are markup.
-        preview = escape((row.get("preview") or "").replace("\n", " ")[:60])
+        preview = escape(_console_text((row.get("preview") or "").replace("\n", " ")[:60]))
         # A draft whose last attempt failed is still waiting for the person, and the reason is
         # the whole point of showing it: without the line they would press send again blind.
         state = str(row.get("state") or "")
         if state == "failed":
-            preview = f"[red]not sent:[/red] {escape((row.get('error') or '').strip()[:40])} | {preview}"
+            preview = (f"[red]not sent:[/red] "
+                       f"{escape(_console_text((row.get('error') or '').strip()[:40]))} | {preview}")
         elif state == "ambiguous":
             preview = f"[yellow]may already have been sent:[/yellow] {preview}"
-        # Every address and every file, because approving is approving what leaves: a Bcc or
-        # a document the table did not show would go out unseen.
-        files = [str(a) for a in (row.get("attachments") or []) if str(a)]
+        # Every address and every file, whole, because approving is approving what leaves: a
+        # Bcc or a document the table did not show would go out unseen.
+        files = [_console_text(str(a)) for a in (row.get("attachments") or []) if str(a)]
         if files:
-            preview = f"{preview} [dim]files:[/dim] {escape(', '.join(files)[:60])}"
+            preview = f"{preview} [dim]files:[/dim] {escape(', '.join(files))}"
         table.add_row(_when(row["created_ts"]), escape(str(row["kind"])), str(row["id"]),
                       escape(str(row["channel"])), _to_cell(row), preview)
     UI.console.print(table)

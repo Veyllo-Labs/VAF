@@ -376,7 +376,8 @@ contact book or a mail's display name, the number or address under it), every ot
 and every file that leaves with it, and the text. The recipients are the server's shown form
 (the rows' `to_shown`, `cc_shown`, `bcc_shown` and `name_shown`, `vaf/core/shown_text.py`):
 the number or address under the name is shown whole, every Cc and Bcc address comes first
-with its name after it, and the name is cut at 40 characters with an `@` in it marked. Every
+with its name after it, and the name is cut at 40 characters with an `@` (and its full-width
+and small look-alikes) in it marked. Every
 character of an address outside plain ASCII is shown as a mark (`⟨U+0430⟩` for a Cyrillic a),
 a domain with such characters gets its punycode beside it in square brackets, and the marks
 are drawn in the card's amber (`text-amber-700`, `dark:text-[#e0b866]`, in monospace); the
@@ -426,12 +427,14 @@ carry no recipient, so those reach your own endpoint and there would be nothing 
 The cards read `GET /api/outbox` on the `outbound_held` and `inbox_changed` signals, never on
 a timer, and the same verbs exist on the command line as `vaf outbox send|discard|edit` for a
 headless install (a send from there wakes no chat; the agent hears about it at that chat's
-next turn). `vaf outbox list` prints every address whole, its `To` column folding instead of
-cutting, with the marks written as plain ASCII `<U+0430>`, because a Windows console encodes
-cp1252 and cannot print the brackets. It holds only what the person ordered while they were there: a timer they
+next turn). The hold applies only to what the person ordered while they were there: a timer they
 scheduled fires and sends, and so do automations, workflows and every channel turn. The switch
 is `outward_send_hold`; the rule, the turn end and the reasons behind them are in
-[`vaf/core/outbound_hold.py`](../../vaf/core/outbound_hold.py).
+[`vaf/core/outbound_hold.py`](../../vaf/core/outbound_hold.py). `vaf outbox list` prints every
+address and every file name whole (its `To` and `Preview` columns fold instead of cutting), the
+marks in the `To` column as plain ASCII `<U+0430>`, and the preview in plain ASCII marks only
+where the console cannot print it: a Windows console encodes cp1252 and cannot print the
+brackets or a Cyrillic word.
 
 ### 2c. The Inbox Window
 

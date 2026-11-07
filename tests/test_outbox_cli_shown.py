@@ -57,3 +57,43 @@ def test_the_to_column_folds(monkeypatch):
     column = next(c for c in table.columns if c.header == "To")
     assert column.overflow == "fold"
     assert LONG in "".join(column._cells)
+
+
+def test_the_preview_and_the_files_print_on_a_cp1252_console(monkeypatch):
+    """MUTATION: drop `_console_text` on the preview, or cut the file names again.
+
+    Measured: with a cp1252 console one Cyrillic preview made `list_pending` raise
+    UnicodeEncodeError, so nothing was listed; and the file names were cut at 60."""
+    import io
+
+    from rich.console import Console
+    from typer.testing import CliRunner
+
+    import vaf.core.outbound_hold as oh
+    row = _row()
+    longest = "Quartalsbericht_" + "x" * 70 + ".pdf"
+    row.update(preview="\u041f\u0440\u0438\u0432\u0435\u0442, Anna \u202e",
+               attachments=[longest, "plan.pdf"])
+    out = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict")
+    console = Console(file=out, width=100, force_terminal=False, legacy_windows=False)
+    monkeypatch.setattr(cmd.UI, "console", console)
+    monkeypatch.setattr(cmd, "_identity", lambda: ("alice", "scope-1"))
+    monkeypatch.setattr(oh, "pending", lambda *a, **k: [row])
+    result = CliRunner().invoke(cmd.app, ["list"])
+    assert result.exit_code == 0, (result.output, result.exception)
+    out.flush()
+    printed = out.buffer.getvalue().decode("cp1252")
+    assert "<U+041F><U+0440>" in printed and "<U+202E>" in printed
+    # Every file name whole in the cell, and the column folds rather than cutting it.
+    tables = []
+    monkeypatch.setattr(console, "print", lambda *a, **k: tables.extend(a))
+    assert CliRunner().invoke(cmd.app, ["list"]).exit_code == 0
+    from rich.table import Table
+    column = next(c for c in next(t for t in tables if isinstance(t, Table)).columns
+                  if c.header == "Preview")
+    assert column.overflow == "fold"
+    cell = "".join(column._cells)
+    assert longest + ", plan.pdf" in cell, cell
+    # An umlaut stays an umlaut where the console can print it.
+    monkeypatch.setattr(cmd.UI, "console", Console(file=io.StringIO(), width=100))
+    assert cmd._console_text("Gr\u00fc\u00dfe \u202e") == "Gr\u00fc\u00dfe \u27e8U+202E\u27e9"

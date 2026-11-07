@@ -53,9 +53,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - Draft cards in the web UI and confirmation cards in the Veyllo App now show a recipient's
   address or number first and never cut it, with the name after it. Characters outside plain
   ASCII in an address are marked (for example `⟨U+0430⟩` for a Cyrillic a), with the punycode
-  of the domain beside it. `vaf outbox list` no longer cuts addresses. A mail to an address
-  with such characters is refused before it is queued (the mail lane could never deliver it),
-  and a WhatsApp number may hold only digits and separators.
+  of the domain beside it, so a look-alike address cannot pass for a real one. `vaf outbox
+  list` no longer cuts addresses or file names, and no longer fails on a Windows console when
+  a draft holds non-Latin text. A mail to an address with such characters is refused before
+  it is queued (the mail lane could never deliver it), and a WhatsApp number may hold only
+  digits and separators.
 - Signing out every other device also removes your Veyllo App devices; they pair again. "Sign
   out all other devices" now says so, and asks in the app's own dialog.
 - Answering a speaker confirmation on Discord now replies in the Discord channel the message
@@ -96,9 +98,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   The same holds for files downloaded in the sandbox browser, for every account: they are
   delivered only into an ordinary Downloads folder and never through a link; while the folder
   is not an ordinary one, nothing is delivered, and a copy that fails midway leaves no partial
-  file. This applies on every platform except for one window on Windows: a link swapped in
-  and swapped back again during one file open is not seen, and the file is written behind
-  the link. That window is real, not narrow: with the Windows path simulated, a process
+  file. This applies on every platform except for one window on Windows: a link that is in
+  place when the file is opened and removed again right after is not seen, and the file is
+  written behind the link. That window is real, not narrow: with the Windows path simulated, a process
   swapping the link in a tight loop got about one write in six through (3370 of 20000).
   For applications built on VAF,
   `vaf.open_for_write(path, expect_folder=...)` refuses a folder that was swapped for a link

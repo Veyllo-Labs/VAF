@@ -15,6 +15,9 @@ on:
 jobs:
   build-and-test:
     runs-on: ${{ matrix.os }}
+    # A hung test otherwise holds the runner for GitHub's 6 hours; the slowest job (Windows)
+    # needs about 70 minutes, so 150 leaves room and still returns a log the same afternoon.
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(inputs.matrix) }}
@@ -87,5 +90,8 @@ jobs:
 
     - name: Run Tool Logic Tests
       # Test the tool logic, templates, and scaffolding
+      # faulthandler_timeout: a test running longer than 120 s prints the stack of every
+      # thread, so a wait that only happens on one platform shows where it waits even when
+      # the job is cut off by the timeout above.
       run: |
-        pytest tests/
+        pytest tests/ -o faulthandler_timeout=120

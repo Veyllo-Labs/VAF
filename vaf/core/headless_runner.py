@@ -290,7 +290,12 @@ def _deliver_email_reply(task, meta: dict, final_text: str) -> None:
                         f"REPLY {'HELD' if hold else ('SENT' if delivered else 'QUEUED')} pk={pk} op={queued.get('op_id')} case={case_id or '-'} to={str(pre['to'])[:3]}***",
                         always=True)
     except Exception as e:
-        append_lane_log("email_inbound", f"REPLY FAILED pk={pk}: {e}", always=True)
+        # The refusal's text carries the sender's whole address; the lane log masks addresses
+        # (see the REPLY line above), so it names only the kind of refusal.
+        from vaf.mail.service import UndeliverableAddress
+        reason = ("the sender's address has characters outside plain ASCII"
+                  if isinstance(e, UndeliverableAddress) else str(e))
+        append_lane_log("email_inbound", f"REPLY FAILED pk={pk}: {reason}", always=True)
         return
     try:
         from vaf.core.web_interface import notify_inbox_changed

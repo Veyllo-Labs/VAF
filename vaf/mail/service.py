@@ -20,6 +20,12 @@ from vaf.mail.store import MailStore
 
 logger = logging.getLogger("vaf.mail.service")
 
+
+class UndeliverableAddress(ValueError):
+    """`MailService.queue_send` refused an envelope address this lane cannot deliver (a
+    character outside plain ASCII). A ``ValueError``, so every caller that already reports
+    one reports this one; its own type lets a log name the refusal without the address."""
+
 #: What a held draft is told when its last attempt handed the mail to the server and never
 #: heard back. The ledger's word for that is `ambiguous`, and it is final for the draft: SMTP
 #: has no idempotency key, so nobody may send it again on the person's behalf.
@@ -667,10 +673,11 @@ class MailService:
                      + normalize_recipients(bcc)):
             if not addr.isascii():
                 from vaf.core.shown_text import ascii_marks, mail_address
-                raise ValueError(
+                raise UndeliverableAddress(
                     f"cannot queue a mail to {ascii_marks(mail_address(addr))}: the address has "
-                    "characters outside plain ASCII, which this mail lane cannot deliver (no "
-                    "SMTPUTF8); nothing was queued")
+                    "characters outside plain ASCII, and this mail lane delivers only to plain "
+                    "ASCII addresses. Nothing was queued. Ask for the address in plain letters, "
+                    "or reach the person another way.")
         apk = self.store.account_pk(account_id)
         if apk is None:
             apk = self.store.upsert_account(account_id, "imap", account_id)

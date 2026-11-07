@@ -838,7 +838,32 @@ def test_the_tool_refuses_a_number_that_is_not_digits(monkeypatch):
         out = SendWhatsAppTool().run(to_phone=number, message="x", username="alice",
                                      user_scope_id=SCOPE)
         assert out.startswith("Invalid phone number"), (number, out)
+        assert "digits of other scripts" in out, out
     assert sent == []
     assert outbound_hold.park_refusal("send_whatsapp", {"phone_number": "+49 1761 ٣"})
     assert outbound_hold.park_refusal("send_whatsapp", {"to_phone": "+49 176 1234567"}) is None
     assert outbound_hold.park_refusal("send_whatsapp", {"message": "to myself"}) is None
+
+
+def test_the_name_belongs_to_the_first_address_the_mail_reaches(scratch, monkeypatch):
+    """MUTATION: parse the To line with `getaddresses` again in `recipient_name`.
+
+    ``Boss <boss@localhost>, x@evil.com``: the send drops boss@localhost (no dot in its
+    domain), so the mail reaches x@evil.com alone, and the card must not call it "Boss". The
+    contact book is asked for the address the mail really reaches."""
+    from vaf.core import contacts_store
+    asked = []
+    monkeypatch.setattr(contacts_store, "find_contact_by_channel",
+                        lambda ch, value, username=None, user_scope_id=None: asked.append(value))
+    raw = "Boss <boss@localhost>, x@evil.com"
+    assert outbound_hold.recipient_name("mail", raw, USER, SCOPE) == ""
+    assert asked == ["x@evil.com"]
+    fields = outbound_hold.shown_recipient_fields({"channel": "mail", "recipient": raw,
+                                                  "recipient_name": ""})
+    assert (fields["to_shown"], fields["name_shown"]) == ("x@evil.com", "")
+    # A full-width "@" in a name is marked in the row too, so the web title cannot read as an
+    # address.
+    named = outbound_hold.shown_recipient_fields({
+        "channel": "mail", "recipient": '"boss\uff20firma.de (Boss)" <x@evil.test>',
+        "recipient_name": "boss\uff20firma.de (Boss)"})
+    assert named["name_shown"] == "boss\u27e8U+FF20\u27e9firma.de (Boss)"

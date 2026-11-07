@@ -154,3 +154,52 @@ def test_ascii_marks():
     out.encode("cp1252")
     assert st.ascii_marks("Jürgen <x>") == "J<U+00FC>rgen <U+003C>x<U+003E>"
     assert st.ascii_marks(st.person_name("A" * 60)).endswith("<U+2026>")
+
+
+def test_every_at_sign_in_a_name_is_marked():
+    """MUTATION: mark only the ASCII "@" in `person_name`.
+
+    Measured: ``"boss＠firma.de (Boss)" <x@evil.test>`` put "boss＠firma.de" in the
+    web title as if it were the address. Every character whose NFKC form is "@" reads as one,
+    and the set is pinned against a scan of every code point, so a new Unicode version that
+    adds one fails here."""
+    import sys
+    import unicodedata
+    scanned = {chr(c) for c in range(sys.maxunicode + 1)
+               if not 0xD800 <= c <= 0xDFFF and unicodedata.normalize("NFKC", chr(c)) == "@"}
+    assert scanned | {"@"} == set(st.AT_SIGNS)
+    assert st.person_name("boss＠firma.de (Boss)") == f"boss{m('FF20')}firma.de (Boss)"
+    assert st.person_name("boss﹫firma.de") == f"boss{m('FE6B')}firma.de"
+    line = st.recipients_line(st.mail_recipients('"Anna), boss＠firma.de (Boss" <x@evil.test>'))
+    assert line == f"x@evil.test (Anna), boss{m('FF20')}firma.de (Boss)"
+    # Ordinary names stay as they are, brackets included.
+    assert st.person_name("Anna (Marketing)") == "Anna (Marketing)"
+    assert st.person_name("田中（営業）") == "田中（営業）"
+
+
+@pytest.mark.parametrize("space", [" ", "\u00a0", "\u2003", "\u3000", "\u202f", "\u205f", "\t"])
+def test_no_space_is_a_base(space):
+    """MUTATION: count only the ASCII space and the tab as no base."""
+    assert st.shown_tokens(f"a{space}\u0338b") == ["a", space, m("0338"), "b"]
+
+
+@pytest.mark.parametrize("mark", ["\u034f", "\u17b4", "\u17b5", "\u180b", "\u180f", "\ufe00",
+                                  "\ufe0e", "\ufe0f", "\U000e0100", "\U000e01ef"])
+def test_a_mark_that_draws_as_nothing_is_shown(mark):
+    """MUTATION: drop `_ignorable_mark` (two of them on a letter pass unseen again).
+
+    Measured: ``a`` U+17B4 U+17B4 ``b`` was shown as ``a\u17b4\u17b4b``, which reads as "ab"."""
+    assert st.shown_tokens(f"a{mark}b") == ["a", st.escaped(mark), "b"]
+
+
+def test_the_emoji_selector_after_a_symbol():
+    """MUTATION: keep U+FE0F in a whole value, or after any base.
+
+    A heart is U+2764 U+FE0F almost everywhere; marking that in every message is noise. It is
+    kept in free text right after a symbol (category So), once, and marked anywhere else and
+    in a value shown whole (a target, an address)."""
+    assert st.shown_tokens("❤\ufe0f") == ["❤", "\ufe0f"]
+    assert st.shown_tokens("❤\ufe0f", whole=True) == ["❤", m("FE0F")]
+    assert st.shown_tokens("❤\ufe0f\ufe0f") == ["❤", "\ufe0f", m("FE0F")]
+    assert st.shown_tokens("a\ufe0f") == ["a", m("FE0F")]
+    assert st.shown_tokens("\ufe0f") == [m("FE0F")]

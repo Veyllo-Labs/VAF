@@ -103,7 +103,14 @@ class SendWhatsAppTool(BaseTool):
             # Plain digits only: the bridge keeps every character whose isdigit() is true (a
             # digit of another script lands in the JID) and drops letters, so "... ext 99"
             # would reach another number than the one written.
-            chat_jid = _e164_to_jid(to_phone) if phone_digits(to_phone) is not None else None
+            if phone_digits(to_phone) is None:
+                return (
+                    "Invalid phone number for to_phone: only the digits 0-9, a leading '+' and the "
+                    "separators space - . / ( ) are allowed; letters, extensions and digits of other "
+                    "scripts are refused. Use E.164 format (e.g. +491761234567). Get the contact's "
+                    "whatsapp_phone from get_contact(name='...') when the user asks to send to a contact."
+                )
+            chat_jid = _e164_to_jid(to_phone)
             if not chat_jid:
                 return (
                     "Invalid phone number for to_phone. Use E.164 format (e.g. +491761234567). "

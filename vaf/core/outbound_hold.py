@@ -353,8 +353,9 @@ def park_refusal(tool_name: str, args: Optional[Dict[str, Any]] = None) -> Optio
     if not raw or phone_digits(raw) is not None:
         return None
     return (f"'send_whatsapp' did NOT run: the number {phone_number(raw)} has characters other "
-            "than digits, a leading '+' and the separators space - . / ( ). Nothing was sent or "
-            "parked. Call it again with the number in E.164 form, for example +491761234567.")
+            "than the digits 0-9, a leading '+' and the separators space - . / ( ) (digits of "
+            "other scripts, letters and extensions count as other characters). Nothing was sent "
+            "or parked. Call it again with the number in E.164 form, for example +491761234567.")
 
 
 def park_messenger_call(tool_name: str, args: Dict[str, Any], *,
@@ -506,8 +507,11 @@ def recipient_name(channel: str, recipient: str, username: str,
         if channel == "whatsapp":
             return (contacts_store.get_contact_name_by_phone(raw, username, user_scope_id) or "").strip()
         if channel == "mail":
-            from vaf.mail.addressing import getaddresses
-            pairs = [(n, a) for n, a in getaddresses([raw]) if a]
+            # The parse the envelope is built from (`recipient_pairs`): an entry the send
+            # drops ("Boss <boss@localhost>") must not lend its name, or its contact, to the
+            # first address the mail really reaches.
+            from vaf.mail.addressing import recipient_pairs
+            pairs = recipient_pairs(raw)
             if not pairs:
                 return ""
             display, addr = pairs[0]

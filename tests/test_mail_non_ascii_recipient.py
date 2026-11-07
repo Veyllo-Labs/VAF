@@ -62,11 +62,14 @@ def test_queue_send_refuses_a_non_ascii_address(svc, field):
     before = _ops(svc)
     args = {"to": "anna@example.org", "cc": "", "bcc": ""}
     args[field] = f"Alice <{CONFUSABLE}>" if field != "to" else CONFUSABLE
-    with pytest.raises(ValueError) as caught:
+    from vaf.mail.service import UndeliverableAddress
+    with pytest.raises(UndeliverableAddress) as caught:
         svc.queue_send("bob@example.com", args["to"], "Hallo", "Text", cc=args["cc"],
                        bcc=args["bcc"], hold=True)
     message = str(caught.value)
-    assert "alice@ex<U+0430>mple.com [xn--exmple-4nf.com]" in message and "nothing was queued" in message
+    assert "alice@ex<U+0430>mple.com [xn--exmple-4nf.com]" in message and "Nothing was queued" in message
+    # What the model relays carries a next step, not the protocol's name.
+    assert "Ask for the address in plain letters" in message and "SMTPUTF8" not in message
     message.encode("cp1252")
     assert _ops(svc) == before
 
@@ -127,9 +130,42 @@ def test_the_compose_route_answers_400(monkeypatch, tmp_path):
     res = client.post("/api/mail/send", json={"account_id": "bob@example.com", "to": CONFUSABLE,
                                               "subject": "Hallo", "body": "Text", "undo_seconds": 60})
     assert res.status_code == 400, res.text
-    assert "nothing was queued" in res.json()["detail"]
+    assert "Nothing was queued" in res.json()["detail"]
     store = MailStore(SCOPE)
     try:
         assert int(store._conn().execute("SELECT COUNT(*) FROM ops").fetchone()[0]) == 0
     finally:
         store.close()
+
+
+def test_a_front_office_refusal_logs_no_address(monkeypatch):
+    """MUTATION: log ``{e}`` again in the runner's REPLY FAILED line.
+
+    The refusal's text carries the inbound sender's whole address; the lane's own success line
+    masks it (``to=...[:3]***``), so the failure line names only the kind of refusal."""
+    import vaf.core.headless_runner as hr
+    import vaf.mail.service as svc_mod
+    from vaf.mail.service import UndeliverableAddress
+
+    class _Svc:
+        def __init__(self, scope):
+            self.store = self
+
+        def reply_prefill(self, pk):
+            return {"to": CONFUSABLE, "subject": "Re: x", "body": ""}
+
+        def account_pk(self, account_id):
+            return None
+
+        def queue_send(self, *a, **k):
+            raise UndeliverableAddress(f"cannot queue a mail to {CONFUSABLE}: ...")
+
+    lines = []
+    import vaf.core.log_helper as log_helper
+    monkeypatch.setattr(svc_mod, "MailService", _Svc)
+    monkeypatch.setattr(log_helper, "append_lane_log", lambda lane, text, **k: lines.append(text))
+    hr._deliver_email_reply(None, {"email_message_pk": 7, "email_account_id": "bob@example.com",
+                                   "user_scope_id": SCOPE, "username": "bob"}, "Antwort")
+    failed = [line for line in lines if "REPLY FAILED" in line]
+    assert failed and "exmple" not in failed[0] and "alice" not in failed[0], lines
+    assert "outside plain ASCII" in failed[0]

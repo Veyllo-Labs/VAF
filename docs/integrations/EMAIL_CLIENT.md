@@ -312,15 +312,17 @@ nobody is there to click.
 
 **A mail to an address outside plain ASCII is refused before it is queued.** `queue_send`
 checks every envelope address (`normalize_recipients` of To, Cc and Bcc) and raises
-`ValueError` ("cannot queue a mail to alice@ex<U+0430>mple.com [xn--exmple-4nf.com]: ...
-nothing was queued") before anything is built; display names may hold any characters.
+`UndeliverableAddress`, a `ValueError` ("cannot queue a mail to alice@ex<U+0430>mple.com
+[xn--exmple-4nf.com]: ... Nothing was queued. Ask for the address in plain letters, or reach
+the person another way.") before anything is built; display names may hold any characters.
 Measured: the native lane never negotiates SMTPUTF8, `compose.build_message` writes an encoded
 word inside the addr-spec, and smtplib sends `RCPT TO` in ASCII, so such a mail failed
 permanently with an `'ascii' codec` error on every provider, and only after the person had
 approved the card. The agent's tools answer `Failed to send email: ...` (no draft, no card),
 `POST /api/mail/send` answers 400 with the reason, and a Front Office answer logs
-`REPLY FAILED`. NAMED BOUNDARY: an internationalised address becomes deliverable only with an
-SMTPUTF8/IDNA lane, and this check is where that lane would start. The cards show what does
+`REPLY FAILED` with the kind of refusal and without the sender's address. NAMED BOUNDARY: an
+internationalised address becomes deliverable only with an SMTPUTF8/IDNA lane, and this check
+is where that lane would start. The cards show what does
 reach them through `vaf/core/shown_text.py`: the address first and whole, every character
 outside plain ASCII marked.
 

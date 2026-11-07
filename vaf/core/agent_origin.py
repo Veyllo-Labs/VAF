@@ -439,17 +439,18 @@ CARD_EMPTY_START = "(starts with an empty line)"
 CARD_EMPTY = "(empty)"
 
 
-def _shown_lines(value: Any) -> List[List[str]]:
+def _shown_lines(value: Any, whole: bool = False) -> List[List[str]]:
     """A value as the card shows it, split into lines of shown tokens (one per character, an
     escape one token). A Windows or old Mac line break counts as a line break (display only);
     every other invisible character is escaped, and so is a combining mark with no base
-    before it (`shown_text.shown_tokens`). Text `shown_text` already showed (`Shown`) is laid
-    out as it is: escaping it again would escape its own marks."""
+    before it (`shown_text.shown_tokens`; a value shown ``whole`` keeps no presentation
+    selector). Text `shown_text` already showed (`Shown`) is laid out as it is: escaping it
+    again would escape its own marks."""
     from vaf.core.shown_text import Shown, shown_tokens, tokens_of
     if isinstance(value, Shown):
         return [tokens_of(value)]
     text = _arg_text(value)
-    return [shown_tokens(raw)
+    return [shown_tokens(raw, whole=whole)
             for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
 
 
@@ -494,8 +495,9 @@ def card_lines(items: List[Tuple[Any, Any]], whole: Iterable[str] = ()) -> List[
     below: List[str] = []
     for key, value in items:
         name = card_key(key)
-        lines = _shown_lines(value)
-        cut = None if str(key) in whole_keys else CARD_HEAD_MAX
+        is_whole = str(key) in whole_keys
+        lines = _shown_lines(value, whole=is_whole)
+        cut = None if is_whole else CARD_HEAD_MAX
         head: List[str] = []
         size = 0
         for token in lines[0]:

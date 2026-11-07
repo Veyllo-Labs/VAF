@@ -47,6 +47,12 @@ NAMED BOUNDARIES.
 - ASCII look-alikes (``paypa1.com``, ``rn`` for ``m``, ``I`` for ``l``) are not marked: the
   tree holds no skeleton table, and every character of them is plain ASCII the person can
   read.
+- A name keeps ``(``, ``)``, ``,``, ``<`` and ``>`` and their full-width forms: every entry of
+  a recipient line starts with an address, every address carries an ``@``, and every ``@``
+  and look-alike in a name is marked, so no name can add an entry that reads as an address
+  (``x@evil.test (Anna), boss⟨U+FF20⟩firma.de (Boss)``). Marking them would mark ordinary
+  names such as ``Anna (Marketing)`` or a Japanese name with its department in full-width
+  brackets. A WhatsApp name comes from the person's own contact book, not from the call.
 - Bidi: an Arabic or Hebrew name next to an address that starts with digits can, by the
   Unicode bidi algorithm, draw those digits beside the name. The characters stay visible; the
   phone app isolates the whole card text and the web UI wraps names in ``<bdi>``. The card
@@ -68,9 +74,20 @@ ELLIPSIS = "\u2026"
 _FILLERS = frozenset((0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800))
 # Combining marks stacked on one base character beyond this are shown escaped.
 _MARKS_ON_ONE_BASE = 2
-# What may stand before a combining mark as its base: not the start of a line, not a space or
-# a tab (a space plus U+0338 draws as a slash), not a character already shown as a mark.
-_NO_BASE = (" ", "\t")
+# Combining marks that are default-ignorable: a renderer draws them as nothing at all, so
+# even on a base they hide what the value holds ("a" U+17B4 "b" reads as "ab"). Always shown
+# as a mark, except the two presentation selectors below in free text.
+_IGNORABLE_MARKS = ((0x034F, 0x034F), (0x17B4, 0x17B5), (0x180B, 0x180F), (0xFE00, 0xFE0F),
+                    (0xE0100, 0xE01EF))
+# Text and emoji presentation (U+FE0E, U+FE0F): the second follows almost every emoji heart
+# or sign ("\u2764\ufe0f"), so in free text it is kept when it directly follows a symbol
+# (category So), the base it selects the look of. Anywhere else it is marked, and a value shown
+# whole (a target, an address) never keeps it.
+_PRESENTATION_SELECTORS = ("\ufe0e", "\ufe0f")
+# Characters a name never shows as they are, because they make it read as an address: the
+# "@" and every character whose NFKC form is "@" (measured over all code points: U+FF20 and
+# U+FE6B). Pinned against a full NFKC scan in tests/test_shown_text.py.
+AT_SIGNS = "@\uff20\ufe6b"
 # The characters of an addr-spec shown as they are: the dot-atom set and the "@".
 _ADDRESS_KEEP = frozenset(
     "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
@@ -105,22 +122,41 @@ def shown_char(char: str) -> str:
     return char
 
 
-def shown_tokens(line: str, also: str = "") -> List[str]:
+def _ignorable_mark(char: str) -> bool:
+    code = ord(char)
+    return any(low <= code <= high for low, high in _IGNORABLE_MARKS)
+
+
+def _no_base(char: str) -> bool:
+    """A character that cannot carry a combining mark on a card: a tab or any space (category
+    Zs, the no-break and the wide ones included), because a space plus U+0338 draws as a
+    slash."""
+    return char == "\t" or unicodedata.category(char) == "Zs"
+
+
+def shown_tokens(line: str, also: str = "", *, whole: bool = False) -> List[str]:
     """One line as a card shows it, one token per character (an escape is one token, so a
     cut never splits it). Every character as `shown_char` shows it, the characters in
     ``also`` escaped too, and a combining mark escaped when it has no base before it (the
-    line's start, a space, a tab or an escaped character) or when more than
-    ``_MARKS_ON_ONE_BASE`` are stacked on one base."""
+    line's start, a space of any kind, a tab or an escaped character), when more than
+    ``_MARKS_ON_ONE_BASE`` are stacked on one base, or when it is default-ignorable
+    (`_IGNORABLE_MARKS`; an emoji presentation selector right after a symbol is kept unless
+    the value is shown ``whole``)."""
     shown: List[str] = []
-    marks, base = 0, False
+    marks, base, symbol = 0, False, False
     for char in line:
         if unicodedata.category(char) in ("Mn", "Me"):
             marks += 1
-            kept = base and marks <= _MARKS_ON_ONE_BASE
+            if _ignorable_mark(char):
+                kept = (not whole and char in _PRESENTATION_SELECTORS and symbol
+                        and marks == 1)
+            else:
+                kept = base and marks <= _MARKS_ON_ONE_BASE
             shown.append(char if kept else escaped(char))
             continue
         token = escaped(char) if char in also else shown_char(char)
-        marks, base = 0, token == char and char not in _NO_BASE
+        marks, base = 0, token == char and not _no_base(char)
+        symbol = base and unicodedata.category(char) == "So"
         shown.append(token)
     return shown
 
@@ -209,9 +245,10 @@ def phone_digits(raw: Any) -> Optional[str]:
 
 def person_name(name: Any, limit: int = NAME_MAX) -> Shown:
     """A name as a decision surface shows it: every character as `shown_tokens` shows it,
-    an ``@`` marked too (a name is never an address), cut so that the shown text with its
+    an ``@`` and its look-alikes (`AT_SIGNS`) marked too (a name is never an address, and
+    every address on a card carries one), cut so that the shown text with its
     ``…`` is at most ``limit`` code points, never inside a mark. An empty name is ""."""
-    tokens = shown_tokens(str(name or "").strip(), also="@")
+    tokens = shown_tokens(str(name or "").strip(), also=AT_SIGNS)
     if sum(len(t) for t in tokens) <= limit:
         return Shown("".join(tokens))
     head: List[str] = []

@@ -1216,10 +1216,27 @@ def test_targets_are_whole_on_the_action_card(agent_world):
     assert "deploy_to: ftp:x (continued below)" in what and "  more" in what
 
 
+def test_a_name_cannot_read_as_a_second_address_on_the_card():
+    """Measured: a full-width or small "@" in a display name passed unmarked, and
+    ``"Anna), boss\uff20firma.de (Boss" <x@evil.test>`` read as two recipients. Every "@"
+    look-alike in a name is marked; a target shown whole keeps no emoji selector."""
+    mail = {"kind": "mail", "id": 8, "ref": "mail:8", "channel": "mail", "tool": "send_mail",
+            "recipient": '"Anna), boss\uff20firma.de (Boss" <x@evil.test>', "recipient_name": "",
+            "cc": '"b\ufe6bx.org" <c@d.org>', "bcc": "", "subject": "Hallo", "attachments": [],
+            "preview": "Text", "state": "held"}
+    top = _top_block(confirmations.send_what(mail, {}, "en"))
+    assert top[0] == "to: x@evil.test (Anna), boss" + M("FF20") + "firma.de (Boss)", top[0]
+    assert top[1] == "cc: c@d.org (b" + M("FE6B") + "x.org)", top[1]
+    lines = agent_origin.card_lines([("deploy_to", "ftp:prod\u2764\ufe0f"),
+                                     ("task", "Danke \u2764\ufe0f")], whole=("deploy_to",))
+    assert lines == ["deploy_to: ftp:prod\u2764" + M("FE0F"), "task: Danke \u2764\ufe0f"], lines
+
+
 WHOLE = {
     "coding_agent": ("project_path", "environment", "deploy_to"),
-    "create_automation": ("output_path", "trigger_room", "trigger_from"),
-    "update_automation": ("task_id", "output_path", "trigger_room", "trigger_from"),
+    "create_automation": ("output_path", "trigger_room", "trigger_from", "trigger_on_frame"),
+    "update_automation": ("task_id", "output_path", "trigger_room", "trigger_from",
+                          "trigger_on_frame"),
     "restore_automation": ("task_id",),
     "add_automation_note": (), "add_automation_todo": (),
     "execute_workflow": ("workflow_id",),
@@ -1259,6 +1276,7 @@ def test_a_number_that_is_not_digits_is_not_parked(agent_world, held_store, monk
     agent._parked_this_round, agent._held_this_round, agent._turn_closing = [], [], None
     out = agent.execute_tool("send_whatsapp", {"to_phone": "+491761234567 ext 99", "message": "x"})
     assert out.startswith("'send_whatsapp' did NOT run"), out
+    assert "digits of other scripts" in out
     assert "+491761234567" + M("0065") + M("0078") + M("0074") + "99" in out
     assert store.held_sends(BOB.username, BOB.scope) == [] and whatsapp.calls == []
     assert agent._held_this_round == [] and agent._turn_closing is None

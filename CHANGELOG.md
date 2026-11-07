@@ -90,8 +90,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   The same holds for files downloaded in the sandbox browser, for every account: they are
   delivered only into an ordinary Downloads folder and never through a link; while the folder
   is not an ordinary one, nothing is delivered, and a copy that fails midway leaves no partial
-  file. This applies on every platform; on Windows a narrow window remains in which a link
-  swapped in and out again within one file open is not seen. For applications built on VAF,
+  file. This applies on every platform except for one window on Windows: a link swapped in
+  and swapped back again during one file open is not seen, and the file is written behind
+  the link. That window is real, not narrow: with the Windows path simulated, a process
+  swapping the link in a tight loop got about one write in six through (3370 of 20000).
+  For applications built on VAF,
   `vaf.open_for_write(path, expect_folder=...)` refuses a folder that was swapped for a link
   after you checked it.
 - **The WhatsApp setup no longer sends its link code to an outside QR service.** Since

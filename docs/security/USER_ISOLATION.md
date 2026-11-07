@@ -739,7 +739,9 @@ opened folder handle's kernel path with it and refuses anything else, so a link 
 for `Downloads` or any folder above it is refused instead of followed. NAMED BOUNDARIES: on
 Windows (no folder handles) the folder is compared before the open and the opened file's
 folder after it, and a file created elsewhere is removed again before anything is written,
-which leaves a swap and a swap back between those two looks; and the account can still
+which leaves a link swapped in and swapped back again between those two looks unseen, and
+that window is real, not narrow (with the Windows path simulated, a process swapping in a
+tight loop got 3370 of 20000 writes through); and the account can still
 rename its own real `Downloads` folder after the open into a place it may write anyway, which
 moves only its own file. Guarded by `tests/test_writes_do_not_follow_links.py` and
 `tests/test_browser_interactive.py`.

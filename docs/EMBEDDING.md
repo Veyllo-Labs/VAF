@@ -2809,8 +2809,11 @@ Stable public surface (safe to build on):
   own work between check and write took. Ask your check again right before the write and
   pass its answer. On Windows the folder is compared before the open and the opened file's
   folder after it, and a file the open created elsewhere is removed again before anything is
-  written; a swap and a swap back between the open and that second look is the remaining
-  window there.
+  written; a link swapped in and swapped back again between the open and that second look is
+  not seen, and the write lands behind it. That window is real, not narrow: with the Windows
+  path simulated, a process swapping the link in a tight loop got about one write in six
+  through (3370 of 20000), so on a Windows host do not hand an untrusted writer a folder whose
+  safety rests on `expect_folder` alone.
 - `vaf.revoke_account(scope)` / `vaf.restore_account(scope)` /
   `vaf.stop_account_work(scope)` / `vaf.stop_session(session_id, *,
   include_subagents=True)` / `vaf.add_revocation_listener(fn)` /

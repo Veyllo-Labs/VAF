@@ -259,8 +259,10 @@ def open_for_write(path, mode: str = "wb", *, exclusive: bool = False,
     in between the check and the open is followed for that one open; with ``expect_folder``
     the folder is checked before the open and the opened file's resolved folder after it, and
     a file this call created elsewhere is removed again and refused, before anything is
-    written or truncated (what remains: a swap and a swap back between the open and the
-    second check). A hard link is a second
+    written or truncated. What remains is not narrow: a link swapped in and swapped back
+    again between the open and the second check is not seen, and the write lands behind
+    it; with this branch simulated on Linux, a process swapping in a tight loop got 3370
+    of 20000 writes through. A hard link is a second
     name of the same file and is not seen on any platform; making one needs a process on the
     host with access to both folders (a sandbox environment cannot link to a file outside its
     mount)."""

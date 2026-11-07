@@ -21,6 +21,7 @@ import { MIN_PASSWORD_LEN } from '@/lib/passwordPolicy';
 import { AgentAvatar } from '@/components/AgentAvatar';
 import { useLocaleStore } from '@/lib/localeStore';
 import { veylloDashboardUrl } from '@/lib/veyllo';
+import { StepCircle, StepConnector } from '@/components/connections/SetupWizardShell';
 import { useThemeStore } from '@/lib/themeStore';
 import { languages } from '@/lib/languages';
 import EngineChoice, { type EngineId } from '@/components/settings/EngineChoice';
@@ -710,25 +711,13 @@ export default function LoginPage() {
                 <div className="w-full max-w-md mb-6 grid grid-cols-[2rem_1fr_2rem_1fr_2rem_1fr_2rem_1fr_2rem] gap-y-2 gap-x-0 items-center">
                     {onboardingSteps.map((s, idx) => (
                         <React.Fragment key={s.id}>
-                            <div
-                                className={cn(
-                                    'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium justify-self-center',
-                                    idx < onboardingCurrentStep
-                                        ? 'bg-green-500 text-white'
-                                        : idx === onboardingCurrentStep - 1
-                                            ? 'bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white'
-                                            : 'bg-gray-200 text-gray-500'
-                                )}
-                            >
-                                {idx < onboardingCurrentStep - 1 ? <Check className="w-4 h-4" /> : idx + 1}
-                            </div>
+                            {/* The setup windows' own circles (SetupStepper's parts); the row sits
+                                on the page, not on a panel, so the ring's gap takes the page's colour. */}
+                            <StepCircle
+                                state={idx < onboardingCurrentStep - 1 ? 'done' : idx === onboardingCurrentStep - 1 ? 'current' : 'future'}
+                                number={idx + 1} gap="ring-offset-[rgb(var(--sfc-gray-50))]" className="justify-self-center" />
                             {idx < onboardingSteps.length - 1 && (
-                                <div
-                                    className={cn(
-                                        'h-1 rounded-full w-full',
-                                        idx < onboardingCurrentStep - 1 ? 'bg-green-500' : 'bg-gray-200'
-                                    )}
-                                />
+                                <StepConnector done={idx < onboardingCurrentStep - 1} className="w-full" />
                             )}
                         </React.Fragment>
                     ))}

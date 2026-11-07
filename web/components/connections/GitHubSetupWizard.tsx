@@ -7,11 +7,12 @@ import React, { useState, useEffect } from 'react';
 import { useTranslations } from 'next-intl';
 import {
     X, ChevronRight, ChevronLeft, Loader2, AlertCircle,
-    ExternalLink, CheckCircle2, Shield, KeyRound, Smartphone,
+    ExternalLink, Shield, KeyRound, Smartphone,
     Copy, Check
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { copyText } from '@/lib/clipboard';
+import { SetupStepper } from '@/components/connections/SetupWizardShell';
 
 /** GitHub logo (official mark) as black SVG. */
 function GitHubLogo({ className }: { className?: string }) {
@@ -269,22 +270,8 @@ export default function GitHubSetupWizard({ isOpen, onClose, onComplete, current
                     </button>
                 </div>
 
-                <div className="px-6 pt-4">
-                    <div className="flex items-center gap-2">
-                        {[0, 1].map((idx) => (
-                            <React.Fragment key={idx}>
-                                <div className={cn(
-                                    'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all',
-                                    idx < currentStep ? 'bg-green-500 text-white' : idx === currentStep ? 'bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white' : 'bg-gray-200 text-gray-500'
-                                )}>
-                                    {idx < currentStep ? <CheckCircle2 className="w-4 h-4" /> : idx + 1}
-                                </div>
-                                {idx < 1 && (
-                                    <div className={cn('flex-1 h-1 rounded-full transition-all', idx < currentStep ? 'bg-green-500' : 'bg-gray-200')} />
-                                )}
-                            </React.Fragment>
-                        ))}
-                    </div>
+                <div className="px-6 pt-4 pb-1">
+                    <SetupStepper steps={2} current={currentStep} />
                 </div>
 
                 <div className="p-6 min-h-[320px] max-md:min-h-0 max-md:flex-1 max-md:overflow-y-auto max-md:p-4">

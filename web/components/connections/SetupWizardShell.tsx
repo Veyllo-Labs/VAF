@@ -14,21 +14,15 @@
 // height cap with a scrolling body on a desktop, since a step taller than the screen would
 // otherwise push the footer out of the panel (the cap is the screen less 1rem above and below,
 // not 90vh: on a 793 px window 90vh left 40 px unused while the QR step's body scrolled); and a
-// ring around the current step, dark in the light theme and white in the dark one, because the
-// completed steps share its black and white and the current one must read as current without a
-// colour of its own. The ring's gap takes the panel's own surface colour (--sfc-white), so it
-// shows no light halo on the dark panel. The ring reaches 4px past the circle, so the row keeps
-// 4px below it (pb-1): without them a scrolled body painted its cards over the ring's lower
-// edge. The windows that still draw their own stepper get the ring when they move onto this
-// frame.
+// ring around the current step (see SetupStepper below).
 //
 // The disabled Back is `text-gray-300`, which the dark theme does not fold (the text ramp
 // folds 400 to 900), so on the dark panel it would read as an active button; it gets a dark
 // tone of its own.
 //
-// Completed steps are drawn black and white like the current one, not green: a window that
-// says success and failure by its text only (the Veyllo App's) must not get its colour from
-// the frame.
+// The numbered steps are SetupStepper, the one stepper of every setup window with numbered
+// steps; the windows that still draw their own frame use it too, and the first-run wizard on
+// the login page builds its labelled row from the same StepCircle and StepConnector.
 
 import React from 'react';
 import { useTranslations } from 'next-intl';
@@ -82,27 +76,7 @@ export default function SetupWizardShell({ title, subtitle, icon, steps, current
                 </div>
 
                 <div className="px-6 pt-4 pb-1 shrink-0">
-                    <p className="sr-only">{tCommon('stepOf', { step: current + 1, steps })}</p>
-                    <div className="flex items-center gap-2" aria-hidden="true">
-                        {Array.from({ length: steps }, (_, idx) => (
-                            <React.Fragment key={idx}>
-                                <div className={cn(
-                                    'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all shrink-0',
-                                    idx < current ? 'bg-gray-900 text-white dark:bg-[#e6e6e6] dark:text-[#181818]' :
-                                    idx === current ? 'bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white ring-2 ring-gray-900 dark:ring-white ring-offset-2 ring-offset-[rgb(var(--sfc-white))]' :
-                                    'bg-gray-200 text-gray-500'
-                                )}>
-                                    {idx < current ? <Check className="w-4 h-4" /> : idx + 1}
-                                </div>
-                                {idx < steps - 1 && (
-                                    <div className={cn(
-                                        'flex-1 h-1 rounded-full transition-all',
-                                        idx < current ? 'bg-gray-900 dark:bg-[#e6e6e6]' : 'bg-gray-200'
-                                    )} />
-                                )}
-                            </React.Fragment>
-                        ))}
-                    </div>
+                    <SetupStepper steps={steps} current={current} />
                 </div>
 
                 <div className="p-6 min-h-[350px] max-md:min-h-0 max-md:flex-1 max-md:overflow-y-auto max-md:p-4 flex-1 overflow-y-auto">
@@ -158,5 +132,69 @@ export function WizardNextButton({ children, onClick, disabled = false, type = '
             {children}
             {chevron && <ChevronRight className="w-4 h-4" aria-hidden="true" />}
         </button>
+    );
+}
+
+/** A step's place in a numbered row. */
+export type StepState = 'done' | 'current' | 'future';
+
+/** The ring's gap on the setup panel (bg-white, which is this variable): it follows the panel
+ *  into the dark theme, so the gap shows no light halo there. */
+export const PANEL_RING_GAP = 'ring-offset-[rgb(var(--sfc-white))]';
+
+/** One numbered step. Done is a neutral circle with a check, not green: a window that says
+ *  success and failure by its text only must not get its colour from the frame. The current
+ *  step is its number in a ring with a gap, dark in the light theme and white in the dark one,
+ *  because the done steps share its black and white and it must read as current without a
+ *  colour of its own. Future steps are muted. `gap` is the background the ring sits on: the
+ *  panel by default; a row on another surface passes that surface's colour. */
+export function StepCircle({ state, number, gap = PANEL_RING_GAP, className }: {
+    state: StepState;
+    number: number;
+    gap?: string;
+    className?: string;
+}) {
+    return (
+        <div className={cn(
+            'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all shrink-0',
+            state === 'done' ? 'bg-gray-900 text-white dark:bg-[#e6e6e6] dark:text-[#181818]' :
+            state === 'current' ? cn('bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white ring-2 ring-gray-900 dark:ring-white ring-offset-2', gap) :
+            'bg-gray-200 text-gray-500',
+            className
+        )}>
+            {state === 'done' ? <Check className="w-4 h-4" /> : number}
+        </div>
+    );
+}
+
+/** The line between two steps, drawn like a done circle once the step before it is done. */
+export function StepConnector({ done, className }: { done: boolean; className?: string }) {
+    return <div className={cn('h-1 rounded-full transition-all', done ? 'bg-gray-900 dark:bg-[#e6e6e6]' : 'bg-gray-200', className)} />;
+}
+
+/** The numbered steps of a setup window: the count read out once, the circles hidden from a
+ *  screen reader. The ring reaches 4px past the circle, so the row's container keeps 4px below
+ *  it (pb-1): without them a scrolled body paints its cards over the ring's lower edge. */
+export function SetupStepper({ steps, current, gap }: {
+    /** How many numbered steps. */
+    steps: number;
+    /** The current step, counted from 0. */
+    current: number;
+    /** The ring's gap colour when the row does not sit on the setup panel. */
+    gap?: string;
+}) {
+    const tCommon = useTranslations('common');
+    return (
+        <>
+            <p className="sr-only">{tCommon('stepOf', { step: current + 1, steps })}</p>
+            <div className="flex items-center gap-2" aria-hidden="true">
+                {Array.from({ length: steps }, (_, idx) => (
+                    <React.Fragment key={idx}>
+                        <StepCircle state={idx < current ? 'done' : idx === current ? 'current' : 'future'} number={idx + 1} gap={gap} />
+                        {idx < steps - 1 && <StepConnector done={idx < current} className="flex-1" />}
+                    </React.Fragment>
+                ))}
+            </div>
+        </>
     );
 }

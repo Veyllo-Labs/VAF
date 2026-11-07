@@ -513,8 +513,6 @@ _DISCORD_FRAME = {
     "icon box": "w-10 h-10 rounded-xl bg-gray-900 dark:bg-[#2e2e2e] flex items-center justify-center",
     "title": 'className="text-xl font-bold text-gray-900"',
     "stepper": "px-6 pt-4",
-    "circle": "w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all",
-    "current": "bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white",
     "content": "p-6 min-h-[350px] max-md:min-h-0 max-md:flex-1 max-md:overflow-y-auto max-md:p-4",
     "footer": "flex items-center justify-between p-6 border-t border-gray-200 bg-gray-50 max-md:p-4 max-md:shrink-0",
     "back": "flex items-center gap-2 px-4 py-2 rounded-lg transition-colors",
@@ -552,27 +550,70 @@ def test_the_shell_is_the_discord_frame():
 
 
 def test_the_current_step_is_ringed():
-    """The current step carries a ring with a gap, dark in the light theme and white in the
-    dark one, since the completed steps share its black and white. The gap takes the panel's
-    surface colour, so the dark panel shows no light halo in it. Only the current step is
-    ringed, and the row keeps the ring's 4px below it, so a scrolled body does not cover its
-    lower edge. MUTATIONS: drop dark:ring-white; move the ring to the completed steps;
-    ring-offset-white for the gap; drop pb-1 from the row - red."""
+    """Done is a neutral circle with a check (not green), the current step its number in a
+    ring with a gap, dark in the light theme and white in the dark one, future steps muted.
+    The gap takes the panel's surface colour by default, so the dark panel shows no light halo
+    in it; a row on another surface passes its own. Only the current step is ringed, and the
+    row keeps the ring's 4px below it, so a scrolled body does not cover its lower edge.
+    MUTATIONS: drop dark:ring-white; move the ring to the done steps; ring-offset-white for the
+    gap; drop pb-1 from the row; done back to green - red."""
     shell = _src(SHELL)
-    circle = _between(shell, "idx < current ? 'bg-gray-900", ")}>")
-    done, rest = circle.split("idx === current ?", 1)
-    current, future = rest.split("' :", 1)
-    ring = ("ring-2", "ring-gray-900", "dark:ring-white", "ring-offset-2",
-            "ring-offset-[rgb(var(--sfc-white))]")
-    classes = current.split()
-    for cls in ring:
-        assert cls in classes, cls
-    assert current.strip().startswith("'" + _DISCORD_FRAME["current"] + " ")
-    assert "ring-offset-white" not in classes
+    circle = _between(shell, "export function StepCircle(", "\n}\n")
+    states = _between(circle, "state === 'done' ?", "className\n")
+    done, rest = states.split("state === 'current' ?", 1)
+    current, future = rest.split(", gap) :", 1)
+    for cls in ("ring-2", "ring-gray-900", "dark:ring-white", "ring-offset-2'"):
+        assert cls in current.split(), cls
+    assert "gap = PANEL_RING_GAP" in circle
+    assert "export const PANEL_RING_GAP = 'ring-offset-[rgb(var(--sfc-white))]';" in shell
+    assert "ring-offset-white" not in shell
     assert "ring-" not in done and "ring-" not in future
+    assert "'bg-gray-900 text-white dark:bg-[#e6e6e6] dark:text-[#181818]'" in done
+    assert "green" not in circle and "green" not in _between(shell, "export function StepConnector(", "\n}\n")
+    assert "{state === 'done' ? <Check className=\"w-4 h-4\" /> : number}" in circle
     assert '<div className="px-6 pt-4 pb-1 shrink-0">' in shell
+    assert "<SetupStepper steps={steps} current={current} />" in shell
     # The ring's gap follows the panel: the panel is bg-white, which is that same variable.
     assert 'white: v("sfc-white")' in _src(WEB / "tailwind.config.ts")
+
+
+# Every window with numbered steps, and how it draws them. The first-run wizard lays its
+# circles out in a grid with labels under them, so it uses the stepper's parts.
+_STEPPER_USERS = {
+    "components/connections/DiscordSetupWizard.tsx": "<SetupStepper steps={STEPS.length} current={currentStep} />",
+    "components/connections/TelegramSetupWizard.tsx": "<SetupStepper steps={STEPS.length} current={currentStep} />",
+    "components/connections/CloudSetupWizard.tsx": "<SetupStepper steps={STEPS.length} current={currentStep} />",
+    "components/connections/GitHubSetupWizard.tsx": "<SetupStepper steps={2} current={currentStep} />",
+    "app/login/page.tsx": "<StepCircle",
+}
+
+
+def test_one_stepper_for_every_setup_window():
+    """The numbered steps are drawn in one place, SetupWizardShell.tsx: no file under web/
+    builds a step circle by hand, each window with numbered steps uses SetupStepper (or, in
+    the labelled grid of the first-run wizard, StepCircle and StepConnector), and every row
+    keeps the 4px under it that the ring needs. MUTATION: put Discord's hand-built row back -
+    red."""
+    circle = "w-8 h-8 rounded-full flex items-center justify-center"
+    hand_built = []
+    for path in sorted(WEB.rglob("*.tsx")):
+        rel = path.relative_to(WEB).as_posix()
+        if rel.startswith(("node_modules/", ".next/")) or path == SHELL:
+            continue
+        if circle in path.read_text(encoding="utf-8"):
+            hand_built.append(rel)
+    assert not hand_built, hand_built
+    for rel, usage in _STEPPER_USERS.items():
+        src = _src(WEB / rel)
+        assert usage in src, rel
+        assert "from '@/components/connections/SetupWizardShell';" in src, rel
+        if "<SetupStepper" in usage:
+            row = src[:src.index(usage)]
+            assert row.rstrip().endswith('<div className="px-6 pt-4 pb-1">'), rel
+    login = _src(WEB / "app/login/page.tsx")
+    assert 'gap="ring-offset-[rgb(var(--sfc-gray-50))]"' in login
+    assert '<div className="min-h-screen bg-gray-50 flex flex-col' in login, "the row sits on gray-50"
+    assert "bg-green-500" not in _between(login, "{showOnboardingProgress && (", "STEP_LABEL_COLUMNS")
 
 
 def test_the_veyllo_window_uses_the_shell():

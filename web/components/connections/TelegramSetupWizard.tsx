@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { copyText } from '@/lib/clipboard';
+import { SetupStepper } from '@/components/connections/SetupWizardShell';
 
 /** Use relative /api/ so Next.js rewrites to backend (127.0.0.1:8001). */
 const api = (path: string) => path.startsWith('/') ? path : `/${path}`;
@@ -215,27 +216,8 @@ export default function TelegramSetupWizard({ isOpen, onClose, onComplete, exist
                     </button>
                 </div>
 
-                <div className="px-6 pt-4">
-                    <div className="flex items-center gap-2">
-                        {STEPS.map((step, idx) => (
-                            <React.Fragment key={step.id}>
-                                <div className={cn(
-                                    "w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all",
-                                    idx < currentStep ? "bg-green-500 text-white" :
-                                    idx === currentStep ? "bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white" :
-                                    "bg-gray-200 text-gray-500"
-                                )}>
-                                    {idx < currentStep ? <Check className="w-4 h-4" /> : idx + 1}
-                                </div>
-                                {idx < STEPS.length - 1 && (
-                                    <div className={cn(
-                                        "flex-1 h-1 rounded-full transition-all",
-                                        idx < currentStep ? "bg-green-500" : "bg-gray-200"
-                                    )} />
-                                )}
-                            </React.Fragment>
-                        ))}
-                    </div>
+                <div className="px-6 pt-4 pb-1">
+                    <SetupStepper steps={STEPS.length} current={currentStep} />
                 </div>
 
                 <div className="p-6 min-h-[350px] max-md:min-h-0 max-md:flex-1 max-md:overflow-y-auto max-md:p-4">

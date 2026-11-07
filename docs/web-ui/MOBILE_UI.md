@@ -63,7 +63,8 @@ screen's height less 2rem (`max-h-[calc(100dvh-2rem)]`) with the body scrolling 
 and the footer; below `md` the full-screen sheet of the pattern below, with the header, the steps
 and the footer fixed (`shrink-0`) and only the body scrolling (`max-md:flex-1 max-md:min-h-0`).
 The footer holds Back on the left and the step's action on the right (Next, Show QR code, New
-code, Done). The QR code is `w-64 h-64`, 256 px, which leaves room on a 390 px screen after the
+code, Done); on the code step the 2FA field stands before Show QR code, and below `md` above it,
+both as wide as the space beside Back. The QR code is `w-64 h-64`, 256 px, which leaves room on a 390 px screen after the
 sheet's padding; the Veyllo Relay / Local switch is a two-column grid over the full width, and the
 confirmation's fingerprint drops from `text-2xl` to `max-md:text-xl` so its four groups stay on
 one line. The confirmation's Yes and No stack (`max-md:flex-col`), the code field takes the full

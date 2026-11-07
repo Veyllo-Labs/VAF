@@ -63,6 +63,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- The setup windows for Discord, Telegram, Cloud and GitHub and the first-run setup show their
+  numbered steps like the Veyllo App window: a finished step is a neutral circle with a check
+  instead of a green one, and the current step has a ring, dark in the light theme and white in
+  the dark theme.
 - Draft cards in the web UI and confirmation cards in the Veyllo App now show a recipient's
   address or number first and never cut it, with the name after it. Characters outside plain
   ASCII in an address are marked (for example `⟨U+0430⟩` for a Cyrillic a), with the punycode

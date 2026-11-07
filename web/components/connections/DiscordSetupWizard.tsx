@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { copyText } from '@/lib/clipboard';
+import { SetupStepper } from '@/components/connections/SetupWizardShell';
 
 interface DiscordSetupWizardProps {
     isOpen: boolean;
@@ -184,28 +185,8 @@ export default function DiscordSetupWizard({ isOpen, onClose, onComplete, existi
                     </button>
                 </div>
 
-                {/* Progress Bar */}
-                <div className="px-6 pt-4">
-                    <div className="flex items-center gap-2">
-                        {STEPS.map((step, idx) => (
-                            <React.Fragment key={step.id}>
-                                <div className={cn(
-                                    "w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all",
-                                    idx < currentStep ? "bg-green-500 text-white" :
-                                    idx === currentStep ? "bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white" :
-                                    "bg-gray-200 text-gray-500"
-                                )}>
-                                    {idx < currentStep ? <Check className="w-4 h-4" /> : idx + 1}
-                                </div>
-                                {idx < STEPS.length - 1 && (
-                                    <div className={cn(
-                                        "flex-1 h-1 rounded-full transition-all",
-                                        idx < currentStep ? "bg-green-500" : "bg-gray-200"
-                                    )} />
-                                )}
-                            </React.Fragment>
-                        ))}
-                    </div>
+                <div className="px-6 pt-4 pb-1">
+                    <SetupStepper steps={STEPS.length} current={currentStep} />
                 </div>
 
                 {/* Content */}

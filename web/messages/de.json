@@ -1077,7 +1077,7 @@
       "wayRelay": "Veyllo Relay",
       "wayLocal": "Lokal",
       "explainRelay": "Über das Veyllo Relay erreicht die Veyllo App VAF von überall. Jede Nachricht kostet 0,01 €, auch wenn VAF von sich aus schreibt, ein Auftrag an die Veyllo App 0,005 € pro Richtung. Veyllo sieht dabei nur, wann Nachrichten laufen und wie groß sie sind, den Inhalt nie.",
-      "explainLocal": "Nur im eigenen Netz oder über dein VPN. Kostenlos, und nichts läuft über Veyllo. Push-Mitteilungen in der Veyllo App gibt es nur mit einer Kopplung über das Veyllo Relay.",
+      "explainLocal": "Die Veyllo App verbindet sich nur in deinem eigenen Netz oder über dein VPN. Das ist kostenlos, und nichts läuft über Veyllo. Push-Mitteilungen in der Veyllo App gibt es nur mit einer Kopplung über das Veyllo Relay.",
       "relayOffByAdmin": "Ein Admin hat das Veyllo Relay ausgeschaltet; koppeln geht über dein Netz oder VPN.",
       "validFor": "Gültig für {time}",
       "qrAlt": "QR-Code zum Koppeln der Veyllo App",
@@ -1098,7 +1098,7 @@
         "awaiting_confirm": "Ist das dein Gerät?",
         "confirming": "Wird bestätigt…",
         "paired": "Verbunden: {model}. In der App heißt dein VAF jetzt Main-Agent (VAF).",
-        "denied": "Kopplung abgelehnt. Das Gerät wurde nicht hinzugefügt.",
+        "denied": "Die Kopplung wurde abgelehnt, das Gerät wurde nicht hinzugefügt.",
         "expired": "Der Code ist abgelaufen, oder die Bestätigung kam zu spät.",
         "used_elsewhere": "Dieser Code wurde anderswo benutzt. Kopple neu mit einem neuen Code.",
         "failed": "Die Kopplung wurde nicht fertig. Versuch es noch einmal."
@@ -1107,8 +1107,8 @@
         "window_closed": "Das Kopplungsfenster ist zu. Bestätige noch einmal mit deinem 2FA-Code.",
         "relay_off": "Das Veyllo Relay ist auf diesem VAF ausgeschaltet. Kopple stattdessen lokal.",
         "no_direct_path": "Diese VAF-Installation hat in deinem Netz keine Adresse, unter der die Veyllo App sie erreicht. Kopple über das Veyllo Relay, oder bitte einen Admin, unter Lokales Netzwerk „Hosting aktivieren“ einzuschalten.",
-        "bad_mode": "Wähle, wie sich die Veyllo App verbindet, über das Veyllo Relay oder Lokal.",
-        "twofa_not_set_up": "Richte zuerst 2FA für dein Konto ein, denn die Veyllo App wird mit deinem 2FA-Code gekoppelt. 2FA wird bei der Anmeldung eingerichtet. Hat deine Anmeldung nicht danach gefragt, setzt ein Admin dein 2FA unter Lokales Netzwerk, Benutzerverwaltung zurück."
+        "bad_mode": "Wähle, wie sich die Veyllo App verbindet, über das Veyllo Relay oder „Lokal“.",
+        "twofa_not_set_up": "Richte zuerst 2FA für dein Konto ein, denn die Veyllo App wird mit deinem 2FA-Code gekoppelt. 2FA wird bei der Anmeldung eingerichtet. Hat deine Anmeldung nicht danach gefragt, bitte einen Admin, dein 2FA unter Lokales Netzwerk, Benutzerverwaltung zurückzusetzen."
       },
       "relayErrors": {
         "pairing_used": "Laut Relay wurde dieser Code schon benutzt.",

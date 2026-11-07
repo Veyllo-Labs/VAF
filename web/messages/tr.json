@@ -1077,7 +1077,7 @@
       "wayRelay": "Veyllo Relay",
       "wayLocal": "Yerel",
       "explainRelay": "Veyllo Relay ile Veyllo App VAF'a her yerden ulaşır. Her mesaj €0,01 tutar, VAF kendiliğinden yazdığında da, Veyllo App'e verilen bir görev ise yön başına €0,005. Veyllo yalnızca mesajların ne zaman gittiğini ve ne büyüklükte olduklarını görür, içeriği asla.",
-      "explainLocal": "Yalnızca kendi ağında veya VPN üzerinden. Ücretsiz ve hiçbir şey Veyllo üzerinden geçmez. Veyllo App'e anlık bildirimler yalnızca Veyllo Relay üzerinden bir eşleştirmeyle gelir.",
+      "explainLocal": "Veyllo App yalnızca kendi ağında veya VPN üzerinden bağlanır. Bu ücretsizdir ve hiçbir şey Veyllo üzerinden geçmez. Veyllo App'e anlık bildirimler yalnızca Veyllo Relay üzerinden bir eşleştirmeyle gelir.",
       "relayOffByAdmin": "Bir yönetici Veyllo Relay'i kapattı; ağın veya VPN üzerinden eşleştir.",
       "validFor": "Geçerlilik {time}",
       "qrAlt": "Veyllo App'i eşleştirmek için QR kodu",
@@ -1098,7 +1098,7 @@
         "awaiting_confirm": "Bu senin cihazın mı?",
         "confirming": "Onaylanıyor…",
         "paired": "Bağlandı: {model}. Uygulamada VAF'ın adı artık Main-Agent (VAF).",
-        "denied": "Eşleştirme reddedildi. Cihaz eklenmedi.",
+        "denied": "Eşleştirme reddedildi, cihaz eklenmedi.",
         "expired": "Kodun süresi doldu veya onay çok geç geldi.",
         "used_elsewhere": "Bu kod başka bir yerde kullanıldı. Yeni bir kodla yeniden eşleştir.",
         "failed": "Eşleştirme tamamlanmadı. Tekrar dene."
@@ -1107,8 +1107,8 @@
         "window_closed": "Eşleştirme penceresi kapandı. 2FA kodunla yeniden onayla.",
         "relay_off": "Veyllo Relay bu VAF'ta kapalı. Bunun yerine Yerel ile eşleştir.",
         "no_direct_path": "Bu VAF kurulumunun ağında Veyllo App'in ulaşabileceği bir adresi yok. Veyllo Relay üzerinden eşleştir veya bir yöneticiden Yerel ağ altında “Barındırmayı etkinleştir” seçeneğini açmasını iste.",
-        "bad_mode": "Veyllo App'in nasıl bağlanacağını seç, Veyllo Relay veya Yerel.",
-        "twofa_not_set_up": "Önce hesabın için 2FA kur, çünkü Veyllo App 2FA kodunla eşleştirilir. 2FA oturum açarken kurulur. Oturum açarken sorulmadıysa bir yönetici 2FA'nı Yerel Ağ, Kullanıcı Yönetimi altında sıfırlar."
+        "bad_mode": "Veyllo App'in nasıl bağlanacağını seç, Veyllo Relay veya “Yerel”.",
+        "twofa_not_set_up": "Önce hesabın için 2FA kur, çünkü Veyllo App 2FA kodunla eşleştirilir. 2FA oturum açarken kurulur. Oturum açarken sorulmadıysa bir yöneticiden 2FA'nı Yerel Ağ, Kullanıcı Yönetimi altında sıfırlamasını iste."
       },
       "relayErrors": {
         "pairing_used": "Röleye göre bu kod zaten kullanıldı.",

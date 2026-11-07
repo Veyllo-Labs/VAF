@@ -1077,7 +1077,7 @@
       "wayRelay": "Veyllo Relay",
       "wayLocal": "ローカル",
       "explainRelay": "Veyllo Relayを使うと、Veyllo AppはどこからでもVAFに接続できます。メッセージ1件ごとに€0.01で、VAFが自分から送る場合も同じです。Veyllo Appへのタスクは片道€0.005です。Veylloに見えるのはメッセージがいつ送られたかとそのサイズだけで、内容は見えません。",
-      "explainLocal": "自分のネットワーク内かVPN経由のみ。無料で、Veylloを通りません。Veyllo Appへのプッシュ通知には、Veyllo Relay経由のペアリングが必要です。",
+      "explainLocal": "Veyllo Appは自分のネットワーク内かVPN経由でのみ接続します。無料で、Veylloを通りません。Veyllo Appへのプッシュ通知には、Veyllo Relay経由のペアリングが必要です。",
       "relayOffByAdmin": "管理者がVeyllo Relayをオフにしました。ネットワークかVPN経由でペアリングしてください。",
       "validFor": "残り{time}",
       "qrAlt": "Veyllo AppのペアリングのためのQRコード",
@@ -1098,7 +1098,7 @@
         "awaiting_confirm": "このデバイスは自分のものですか？",
         "confirming": "確認しています…",
         "paired": "接続しました：{model}。アプリではこのVAFは今後Main-Agent (VAF)と表示されます。",
-        "denied": "ペアリングを拒否しました。デバイスは追加されていません。",
+        "denied": "ペアリングは拒否され、デバイスは追加されませんでした。",
         "expired": "コードの期限が切れたか、確認が遅すぎました。",
         "used_elsewhere": "このコードは別の場所で使われました。新しいコードでもう一度ペアリングしてください。",
         "failed": "ペアリングが完了しませんでした。もう一度お試しください。"
@@ -1107,8 +1107,8 @@
         "window_closed": "ペアリングの受付が終わりました。もう一度2FAコードで確認してください。",
         "relay_off": "このVAFではVeyllo Relayがオフです。代わりにローカルでペアリングしてください。",
         "no_direct_path": "このVAFインストールには、ネットワーク上でVeyllo Appが接続できるアドレスがありません。Veyllo Relay経由でペアリングするか、「ローカルネットワーク」で「ネットワーク公開を有効にする」をオンにするよう管理者に頼んでください。",
-        "bad_mode": "Veyllo Appの接続方法を、Veyllo Relayかローカルから選んでください。",
-        "twofa_not_set_up": "先にアカウントの2FAを設定してください。Veyllo Appのペアリングは2FAのコードで確認します。2FAはログイン時に設定します。ログインで求められなかった場合は、管理者が「ローカルネットワーク」の「ユーザー管理」で2FAをリセットします。"
+        "bad_mode": "Veyllo Appの接続方法を、Veyllo Relayか「ローカル」から選んでください。",
+        "twofa_not_set_up": "先にアカウントの2FAを設定してください。Veyllo Appのペアリングは2FAのコードで確認します。2FAはログイン時に設定します。ログインで求められなかった場合は、「ローカルネットワーク」の「ユーザー管理」で2FAをリセットするよう管理者に頼んでください。"
       },
       "relayErrors": {
         "pairing_used": "リレーによると、このコードはすでに使われています。",

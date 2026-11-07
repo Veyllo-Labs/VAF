@@ -82,7 +82,7 @@ The protocol's vectors (the QR code, the frames, the fingerprint) are in
   at an address VAF resolved and checked as public itself, with TLS checked against the
   name; behind a site proxy the proxy resolves the name, as for every outbound fetch.
   A session that has not said who it is gets 20 seconds and small frames only.
-- **The agent in the Veyllo app** uses your VAF as a tool and reads its answers with the app's
+- **The agent in the Veyllo App** uses your VAF as a tool and reads its answers with the app's
   own chat model; there is no switch for that. The pairing window says so in one sentence and
   links Veyllo's privacy policy (https://veyllo.app/legal/privacy), which names it.
 - **Google and Apple** see when a push notice reaches the phone (it carries no content).
@@ -123,7 +123,7 @@ them, nor the tools that start work which keeps running after it (next section).
 
 ## The app's agent can ask your agent
 
-The agent in the Veyllo app can hand your agent a task while the app is connected
+The agent in the Veyllo App can hand your agent a task while the app is connected
 (`agent_ask`, its own message type, so an older VAF answers "unknown type" and the app's tool
 stays away). There is no switch for it: every `welcome` says that VAF takes it. Such a request
 is a turn of your account's app chat, with these differences

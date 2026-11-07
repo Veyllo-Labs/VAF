@@ -1077,7 +1077,7 @@
       "wayRelay": "Veyllo Relay",
       "wayLocal": "本地",
       "explainRelay": "通过 Veyllo Relay，Veyllo App 可以随时随地连接 VAF。每条消息 €0.01，VAF 主动发送时也一样，交给 Veyllo App 的任务每个方向 €0.005。Veyllo 只能看到消息何时传输以及有多大，永远看不到内容。",
-      "explainLocal": "仅限你自己的网络或通过 VPN。免费，且不经过 Veyllo。Veyllo App 的推送通知需要通过 Veyllo Relay 配对。",
+      "explainLocal": "Veyllo App 只在你自己的网络中或通过 VPN 连接。免费，且不经过 Veyllo。Veyllo App 的推送通知需要通过 Veyllo Relay 配对。",
       "relayOffByAdmin": "管理员已关闭 Veyllo Relay，请通过你的网络或 VPN 配对。",
       "validFor": "有效期还剩 {time}",
       "qrAlt": "用于配对 Veyllo App 的二维码",
@@ -1098,7 +1098,7 @@
         "awaiting_confirm": "这是你的设备吗？",
         "confirming": "正在确认…",
         "paired": "已连接：{model}。在应用里，你的 VAF 现在叫做 Main-Agent (VAF)。",
-        "denied": "已拒绝配对，没有添加这台设备。",
+        "denied": "配对已被拒绝，没有添加这台设备。",
         "expired": "此码已过期，或确认来得太晚。",
         "used_elsewhere": "此码已在别处使用。请用新码重新配对。",
         "failed": "配对没有完成，请重试。"
@@ -1107,8 +1107,8 @@
         "window_closed": "配对窗口已关闭。请再次用你的 2FA 验证码确认。",
         "relay_off": "这个 VAF 已关闭 Veyllo Relay。请改用本地配对。",
         "no_direct_path": "此 VAF 安装在你的网络中没有可供 Veyllo App 连接的地址。请通过 Veyllo Relay 配对，或请管理员在“本地网络”中打开“启用局域网服务”。",
-        "bad_mode": "请选择 Veyllo App 的连接方式，Veyllo Relay 或本地。",
-        "twofa_not_set_up": "请先为你的账号设置 2FA，因为配对 Veyllo App 需要用 2FA 验证码确认。2FA 在登录时设置。如果登录时没有要求设置，管理员可以在“本地网络”下的“用户管理”中重置你的 2FA。"
+        "bad_mode": "请选择 Veyllo App 的连接方式，Veyllo Relay 或“本地”。",
+        "twofa_not_set_up": "请先为你的账号设置 2FA，因为配对 Veyllo App 需要用 2FA 验证码确认。2FA 在登录时设置。如果登录时没有要求设置，请让管理员在“本地网络”下的“用户管理”中重置你的 2FA。"
       },
       "relayErrors": {
         "pairing_used": "中继表示此码已被使用。",

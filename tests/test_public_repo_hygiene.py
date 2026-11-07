@@ -28,7 +28,14 @@ Design constraints of a PUBLIC guard for PRIVATE literals:
   identifier entirely, which no name-based check would ever have reported. A shape check
   catches the whole class, protects a fork of this repo as much as this one, and needs no
   secret to work.
+- ADDRESSES of this machine's own networks are derived at test time from its interfaces
+  (`vaf.network.binding.local_interfaces()`), never written down: every interface address,
+  plus the network of every VPN interface. An example address copied from a working setup
+  into a fixture names the private network it came from, and the needle list cannot be
+  published without doing the same. Examples belong in the documentation ranges of RFC 5737
+  (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24).
 """
+import ipaddress
 import re
 import subprocess
 from pathlib import Path
@@ -249,6 +256,132 @@ def test_the_denylist_itself_is_ignored():
         ".hygiene-deny.local must be gitignored; it holds the literals this guard must "
         "keep OUT of the repo"
     )
+
+
+# ── no address of a network this machine is on ───────────────────────────────────────
+#
+# A dotted quad that is not part of a longer dotted run: the lookbehind keeps
+# "1.198.51.100.7" (a package version) from matching from its second field on, and it is
+# "[\d.]" rather than "\w" so the URL-encoded form after "%2F" in a QR payload is still
+# found. The lookahead refuses a following digit or ".digit" but not a sentence's full stop.
+_IPV4_RE = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?!\.?\d)")
+
+
+def _machine_needles(interfaces):
+    """The needles for `_machine_address_hits`, from `LocalInterface` rows.
+
+    Returns `(networks, hosts)`, each a dict mapping a needle to the interface it came from.
+    Every interface's own IPv4 address is a host needle. A VPN interface adds its network as
+    well, widened to the enclosing /24 when narrower: a VPN client is handed a /32 and its
+    peers sit in the surrounding range, so without the widening the gateway address beside it
+    is not found. Two networks are deliberately NOT needles. A LAN network: consumer routers
+    share a handful of default subnets, and the repo uses those as its generic LAN examples.
+    The shared address space (100.64.0.0/10), which mesh VPNs report as their network: the
+    synthetic mesh examples in the tests live there.
+    """
+    from vaf.network.binding import CGNAT_RANGE
+    networks, hosts = {}, {}
+    for iface in interfaces:
+        try:
+            ip = ipaddress.ip_address(iface.ip)
+        except ValueError:
+            continue
+        if ip.version != 4:
+            continue
+        hosts[ip] = iface.name
+        if iface.kind != "vpn":
+            continue
+        try:
+            net = ipaddress.ip_network(iface.network, strict=False)
+        except ValueError:
+            continue
+        if net.version != 4 or net.overlaps(CGNAT_RANGE):
+            continue
+        if net.prefixlen > 24:
+            net = net.supernet(new_prefix=24)
+        networks[net] = iface.name
+    return networks, hosts
+
+
+def _machine_address_hits(text, networks, hosts):
+    """The IPv4 literals in `text` that are a host needle or lie in a network needle."""
+    found = set()
+    for literal in _IPV4_RE.findall(text):
+        try:
+            addr = ipaddress.IPv4Address(literal)
+        except ValueError:
+            continue                      # "198.51.100.256" and leading zeros are no address
+        if addr in hosts or any(addr in net for net in networks):
+            found.add(literal)
+    return sorted(found)
+
+
+def test_no_address_of_this_machines_networks_in_tracked_content():
+    """No tracked file names an address of a network this machine is on.
+
+    Runs only where the gitignored denylist exists, the established signal for the machine
+    the private literals come from. Deliberate gate, measured: a contributor whose VPN uses
+    the OpenVPN sample subnet would be red on about sixty synthetic test peers that use it as
+    their example, and a CI runner has no VPN at all, so the layer means something only where
+    such an address can originate. The detector test below pins the logic everywhere. With
+    the VPN down, or psutil unable to list interfaces, the layer has no needles and passes.
+    """
+    if not _LOCAL_DENYLIST.exists():
+        return  # CI or a fresh checkout: nothing to check at this layer
+    from vaf.network.binding import local_interfaces
+    networks, hosts = _machine_needles(local_interfaces())
+    if not networks and not hosts:
+        return
+    offenders = {}
+    for rel, p in _tracked_text_files():
+        text = p.read_bytes().decode("utf-8", errors="ignore")
+        hits = _machine_address_hits(text, networks, hosts)
+        if hits:
+            offenders[rel] = hits
+
+    def _source(literal):
+        addr = ipaddress.IPv4Address(literal)
+        if addr in hosts:
+            return f"address of {hosts[addr]}"
+        return "network of " + ", ".join(sorted({n for net, n in networks.items() if addr in net}))
+
+    assert not offenders, (
+        "An address of a network this machine is on appears in committed content (public "
+        "repo). Use a documentation address from RFC 5737 instead (192.0.2.0/24, "
+        "198.51.100.0/24, 203.0.113.0/24); a fixture produced by a script is regenerated "
+        "from it, not edited:\n"
+        + "\n".join(f"  {k}: " + ", ".join(f"{h} ({_source(h)})" for h in v)
+                    for k, v in sorted(offenders.items()))
+    )
+
+
+def test_the_machine_address_detector_actually_detects():
+    """Both directions, on synthetic interfaces from the documentation ranges, so an empty
+    result on the real machine means clean rather than blind."""
+    from vaf.network.binding import CGNAT_RANGE, LocalInterface
+
+    def hits(text, *interfaces):
+        return _machine_address_hits(text, *_machine_needles(interfaces))
+
+    vpn = LocalInterface("wg0", "198.51.100.7", "198.51.100.7/32", "vpn")
+    # A VPN client's /32 is widened to its /24, so the gateway beside it is found.
+    assert hits("wss://198.51.100.1:8443/api/app-link", vpn) == ["198.51.100.1"]
+    # The URL-encoded form inside a QR payload, and an address ending a sentence.
+    assert hits("d=wss%3A%2F%2F198.51.100.1%3A8443%2Fapi", vpn) == ["198.51.100.1"]
+    assert hits("the tunnel peer is 198.51.100.1.", vpn) == ["198.51.100.1"]
+    assert hits("a different network: 198.51.101.1", vpn) == []
+
+    lan = LocalInterface("eth0", "203.0.113.5", "203.0.113.0/24", "lan")
+    # A LAN contributes its own address, never its network.
+    assert hits("host 203.0.113.5 and neighbour 203.0.113.9", lan) == ["203.0.113.5"]
+
+    mesh = LocalInterface("tailscale0", "100.100.1.2", str(CGNAT_RANGE), "vpn")
+    # A mesh VPN contributes its own address, never the shared address space around it.
+    assert hits("node 100.100.1.2, example 100.101.102.103", mesh) == ["100.100.1.2"]
+
+    # A longer dotted run is a version, and a field above 255 is no address.
+    assert hits("nvidia-curand==1.198.51.100.7", vpn) == []
+    assert hits("198.51.100.256 and 198.51.100.7.1", vpn) == []
 
 
 # ── decisions are justified by reasons, never attributed to process ──────────────────

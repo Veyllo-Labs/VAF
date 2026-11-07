@@ -34,7 +34,10 @@ address (the A-label of a domain outside ASCII). An address with a local part ou
 needs the server's SMTPUTF8 (RFC 6531): the extension is read after the last EHLO, and a
 server without it is refused PERMANENTLY before any credential is spent and before MAIL FROM.
 Every result after the EHLO carries what the server said (`SendResult.smtputf8`), which the
-outbox records per account so the next such mail is refused at queue time.
+outbox records per account so the next such mail is refused at queue time. The login (AUTH
+PLAIN/LOGIN, XOAUTH2) uses the account's envelope form too, because smtplib writes AUTH in
+ASCII. NAMED BOUNDARY: an account whose OWN address has a local part outside ASCII cannot log
+in through smtplib at all (the AUTH string is ASCII-encoded); it fails as a permanent error.
 """
 import logging
 import smtplib
@@ -97,6 +100,9 @@ class SendResult:
     error: Optional[str] = None
     # Whether the server offered SMTPUTF8 after its last EHLO; None when no EHLO answered.
     smtputf8: Optional[bool] = None
+    # The `UndeliverableAddress` code when an address was refused, so a log can name the
+    # refusal without the address the error text carries.
+    refusal: Optional[str] = None
 
 
 def _from_addr(msg: OutgoingMessage) -> str:
@@ -169,21 +175,22 @@ def _smtp_send(msg: OutgoingMessage, provider: str) -> SendResult:
         mail_from = envelope_address(from_addr)
         rcpts = [envelope_address(a) for a in envelope]
     except UndeliverableAddress as e:
-        return SendResult(False, "permanent", error=str(e))
+        return SendResult(False, "permanent", refusal=e.code,
+                          error=refusal_text(e.code, e.address, "Nothing was sent."))
     try:
         wire = _wire_bytes(msg.raw_bytes)
     except Exception as e:
         return SendResult(False, "permanent", error=f"could not parse message bytes: {e}")
     international = [a for a in [from_addr] + envelope if needs_smtputf8(a)]
     seen: Dict[str, Optional[bool]] = {"smtputf8": None}
-    res = _smtp_conversation(msg, provider, host, port, from_addr, mail_from, rcpts,
+    res = _smtp_conversation(msg, provider, host, port, mail_from, rcpts,
                              international, wire, seen)
     res.smtputf8 = seen["smtputf8"]
     return res
 
 
 def _smtp_conversation(msg: OutgoingMessage, provider: str, host: str, port: int,
-                       from_addr: str, mail_from: str, rcpts: List[str],
+                       mail_from: str, rcpts: List[str],
                        international: List[str], wire: bytes,
                        seen: Dict[str, Optional[bool]]) -> SendResult:
     handed_off = False
@@ -201,20 +208,23 @@ def _smtp_conversation(msg: OutgoingMessage, provider: str, host: str, port: int
             conn.ehlo()
         seen["smtputf8"] = bool(conn.has_extn("smtputf8"))
         if international and not seen["smtputf8"]:
-            return SendResult(False, "permanent",
+            return SendResult(False, "permanent", refusal="smtputf8",
                               error=refusal_text("smtputf8", international[0], "Nothing was sent."))
 
         if provider == "imap":
             creds = get_email_credentials(_account_id(msg), "imap", msg.username, user_scope_id=msg.user_scope_id)
             if not creds or not creds.get("password"):
                 return SendResult(False, "permanent", error="no SMTP password stored for account")
-            conn.login(from_addr, creds["password"])
+            # The envelope form: smtplib writes AUTH in ASCII, so an account on a domain
+            # outside ASCII logs in with its A-label, the same DNS name. A plain address is
+            # unchanged.
+            conn.login(mail_from, creds["password"])
         else:  # gmail/microsoft + imap_ready -> XOAUTH2 (mirror imap_client token lanes)
             token_provider = "microsoft_imap" if provider == "microsoft" else provider
             token = get_valid_access_token(_account_id(msg), token_provider, msg.username, user_scope_id=msg.user_scope_id)
             if not token:
                 return SendResult(False, "permanent", error="no valid OAuth token (IMAP re-consent required?)")
-            ir = _xoauth2_string(from_addr, token)
+            ir = _xoauth2_string(mail_from, token)
             conn.auth("XOAUTH2", lambda challenge=None: ir if challenge is None else "", initial_response_ok=True)
 
         if international:

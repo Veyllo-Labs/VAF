@@ -20,6 +20,19 @@ MUTATIONS, each turns the named test red:
 - drop the recipient check in `queue_send` -> test_invalid_domains_are_refused_with_a_code
   (the Bcc of a UTF-8 mail);
 - drop the From check in `queue_send` -> test_the_accounts_own_address_is_checked_too;
+- drop the 253-octet cap -> test_the_whole_domain_is_capped_at_253_octets,
+  test_invalid_domains_are_refused_with_a_code;
+- the control-character check only for a local part outside ASCII
+  -> test_a_control_character_is_refused_in_any_local_part,
+  test_invalid_domains_are_refused_with_a_code;
+- drop the A-label conversion in `compose.message_id_domain`
+  -> test_the_message_id_domain_is_an_a_label,
+  test_a_case_answer_from_an_idn_account_builds_and_sends;
+- drop its `vaf.invalid` fallback -> test_the_message_id_domain_is_an_a_label;
+- log in with the address as written -> test_a_case_answer_from_an_idn_account_builds_and_sends;
+- log the refusal text in `OpExecutor.process` -> test_the_app_log_names_the_refusal_not_the_address;
+- drop a code from page.tsx `REFUSED_ADDRESS`, or a sentence from a catalogue
+  -> test_every_refusal_code_has_a_sentence_in_every_catalogue;
 - no capital-letter code, no control-character check
   -> test_invalid_domains_are_refused_with_a_code;
 - `str.lower()` on the whole label -> test_invalid_domains_are_refused_with_a_code (ПРИМЕР);
@@ -129,6 +142,9 @@ def test_envelope_address_forms():
     ("a@ПРИМЕР.рф", "domain_case"),
     ("a@\u212aü.de", "domain"),     # KELVIN SIGN: lower() would turn it into k
     ("a\u0085b@пример.рф", "local_part"),
+    ("a\x00b@bücher.de", "local_part"),  # an ASCII local part at an IDN domain
+    ("a\x00b@example.com", "local_part"),  # a plain ASCII address
+    ("a@" + ".".join(["bücher"] * 20) + ".de", "domain"),  # A-form over 253 octets
 ])
 @pytest.mark.parametrize("field", ["to", "bcc"])
 def test_invalid_domains_are_refused_with_a_code(svc, addr, code, field):
@@ -146,6 +162,33 @@ def test_invalid_domains_are_refused_with_a_code(svc, addr, code, field):
     assert "SMTPUTF8" not in message and "IDNA" not in message
     assert ascii_shown(addr) in message
     assert _ops(svc) == before
+
+
+def test_the_whole_domain_is_capped_at_253_octets():
+    """Every label is valid on its own; only the length of the whole A-form refuses it."""
+    fits = "a@" + ".".join(["bücher"] * 17) + ".de"
+    assert len(envelope_address(fits).rsplit("@", 1)[1]) <= 253
+    with pytest.raises(UndeliverableAddress) as caught:
+        envelope_address("a@" + ".".join(["bücher"] * 20) + ".de")
+    assert caught.value.code == "domain"
+
+
+def test_a_control_character_is_refused_in_any_local_part():
+    for addr in ["a\x00b@bücher.de", "a\x00b@example.com", "a\x7fb@example.com"]:
+        with pytest.raises(UndeliverableAddress) as caught:
+            envelope_address(addr)
+        assert caught.value.code == "local_part", addr
+    # A plain address is untouched.
+    assert envelope_address("first.last+tag@example.com") == "first.last+tag@example.com"
+
+
+def test_the_message_id_domain_is_an_a_label():
+    """A Message-ID carries no SMTPUTF8: a U-label there makes the mail unserialisable."""
+    assert compose.message_id_domain("a@Пример.рф") == "xn--e1afmkfd.xn--p1ai"
+    assert compose.message_id_domain("Bob <bob@bücher.de>") == "xn--bcher-kva.de"
+    # A domain no server can take falls back to the reserved one.
+    assert compose.message_id_domain("a@ｅxample.com") == "vaf.invalid"
+    assert compose.message_id_domain("bob@example.com") == "example.com"
 
 
 def test_the_accounts_own_address_is_checked_too(svc):
@@ -283,16 +326,17 @@ def stub(monkeypatch):
         s.close()
 
 
-def _account(port: int):
-    return {"provider": "imap", "account_id": OWN, "email": OWN,
+def _account(port: int, own: str = OWN):
+    return {"provider": "imap", "account_id": own, "email": own,
             "smtp_host": "127.0.0.1", "smtp_port": port}
 
 
-def _send(svc, port, to, cc="", bcc=""):
+def _send(svc, port, to, cc="", bcc="", own=OWN, case_id=""):
     """queue_send, then the outbox drain the supervisor runs: the real path, sender included."""
-    out = svc.queue_send(OWN, to, "Привет", "Text", cc=cc, bcc=bcc, undo_seconds=0)
-    apk = svc.store.account_pk(OWN)
-    OpExecutor(svc.store, apk, NullImapClient(), _account(port), SCOPE).process(
+    out = svc.queue_send(own, to, "Привет", "Text", cc=cc, bcc=bcc, undo_seconds=0,
+                         case_id=case_id)
+    apk = svc.store.account_pk(own)
+    OpExecutor(svc.store, apk, NullImapClient(), _account(port, own), SCOPE).process(
         write_enabled=False, allowed_kinds={"send"})
     return out, svc.send_outcome(out["op_id"])
 
@@ -331,6 +375,63 @@ def test_stub_without_smtputf8_refuses_before_auth(svc, stub):
     res.error.encode("cp1252")
     s.close()
     assert s.command(b"AUTH") == [] and s.command(b"MAIL") == [], s.lines
+
+
+def test_a_case_answer_from_an_idn_account_builds_and_sends(svc, stub):
+    """The Front Office answers with a case anchor as Message-ID, minted on the sending
+    address's own domain: from an IDN account that domain has to be its A-label. The login
+    is written in ASCII by smtplib, so it carries the A-label too."""
+    own = "bob@пример.рф"
+    svc.store.upsert_account(own, "imap", own)
+    s = stub(False)
+    out, outcome = _send(svc, s.port, "anna@example.org", own=own,
+                         case_id=case_token.mint_case_id())
+    assert outcome["state"] == "done", outcome
+    assert out["message_id"].endswith("@xn--e1afmkfd.xn--p1ai>"), out["message_id"]
+    assert s.command(b"MAIL") == [b"mail from:<bob@xn--e1afmkfd.xn--p1ai>\r\n"]
+    auth = s.command(b"AUTH")[0].split()[-1]
+    assert base64.b64decode(auth) == b"\0bob@xn--e1afmkfd.xn--p1ai\0pw"
+    data = b"".join(s.lines[s.lines.index(s.command(b"DATA")[0]) + 1:])
+    assert f"Message-ID: {out['message_id']}".encode() in data
+    assert b"From: bob@xn--e1afmkfd.xn--p1ai" in data
+    assert all(line.isascii() for line in s.lines)
+
+
+def test_the_app_log_names_the_refusal_not_the_address(svc, stub, caplog):
+    """The card gets the whole refusal through the op's error; the app log gets its reason
+    only, because for a Front Office answer the address is the remote sender's."""
+    s = stub(False)
+    with caplog.at_level("WARNING", logger="vaf.mail.writeback"):
+        out, outcome = _send(svc, s.port, EAI)
+    assert "Nothing was sent" in outcome["error"] and "<U+0438>" in outcome["error"]
+    logged = " ".join(r.getMessage() for r in caplog.records if r.name == "vaf.mail.writeback")
+    assert "address refused" in logged and "before the @" in logged, logged
+    assert "<U+0438>" not in logged and "xn--" not in logged and "иван" not in logged, logged
+
+
+def test_every_refusal_code_has_a_sentence_in_every_catalogue():
+    """The compose window says a refusal in the reader's language, by the route's code: the
+    server's codes, the window's list and every catalogue's sentences move together."""
+    import json
+    import re
+    from pathlib import Path
+    from vaf.mail.addressing import _REFUSAL_TEXT, REFUSAL_REASON
+    web = Path(__file__).resolve().parents[1] / "web"
+    codes = set(_REFUSAL_TEXT)
+    assert codes == set(REFUSAL_REASON)
+    page = (web / "app" / "mail" / "page.tsx").read_text(encoding="utf-8")
+    listed = re.search(r"const REFUSED_ADDRESS = \[([^\]]*)\]", page)
+    assert listed, "page.tsx lost its REFUSED_ADDRESS list"
+    assert set(re.findall(r"'([a-z0-9_]+)'", listed.group(1))) == codes
+    # The sentence is looked up by code and the address rendered isolated, as on the cards.
+    assert "t(`compose.refused.${refused.code}`, { address: SLOT })" in page
+    assert "<Recipient text={refused.address} />" in page
+    for catalogue in sorted((web / "messages").glob("*.json")):
+        refused = json.loads(catalogue.read_bytes())["mailV2"]["compose"]["refused"]
+        assert set(refused) == codes, catalogue.name
+        for code, sentence in refused.items():
+            assert sentence.count("{address}") == 1, (catalogue.name, code)
+            assert "SMTPUTF8" not in sentence and "IDNA" not in sentence, (catalogue.name, code)
 
 
 def test_the_record_refuses_at_queue_time(svc, stub):

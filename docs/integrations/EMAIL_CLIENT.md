@@ -327,7 +327,12 @@ with an encoded word and drop it), sent with `MAIL FROM:<...> SMTPUTF8 BODY=8BIT
 edited on its card with the same policy (`compose.revise_message`), so a revision keeps every
 recipient. Every other mail keeps ASCII headers, with the A-label in its addr-specs and the
 names RFC 2047-encoded; a mail whose addresses are all ASCII is built byte for byte as before.
-The op payload keeps the addresses as written, which is what the cards show and mark.
+The op payload keeps the addresses as written, which is what the cards show and mark. The
+Message-ID VAF mints on the sending address's domain (a case anchor included) carries that
+domain's A-labels, because a Message-ID is never UTF-8, and the SMTP login of an account on such
+a domain uses its A-label form as well: smtplib writes AUTH in ASCII. NAMED BOUNDARY: an account
+whose own address has a local part outside ASCII cannot log in through smtplib at all, and its
+sends fail with a permanent error.
 
 Whether a server offers SMTPUTF8 is read after its last EHLO, and a server without it is
 refused PERMANENTLY before any credential is spent and before `MAIL FROM` ("... does not
@@ -346,20 +351,25 @@ What is still refused, in `queue_send` before anything is built or queued, for e
 and the account's own From address: `UndeliverableAddress`, a `ValueError` with a `code` and the
 `address` as written. `domain`: IDNA2008 refuses the domain (`alice@ｅxample.com`, `a@ﬁle.com`,
 a Kelvin sign that `str.lower()` would turn into `k`); `domain_case`: the domain is valid only
-in small letters (`a@ПРИМЕР.рф`); `local_part`: the part before the @ holds a control
-character; `smtputf8`: the record above. Its text shows the address as the cards do, in ASCII
+in small letters (`a@ПРИМЕР.рф`) or its A-form is longer than 253 octets; `local_part`: the
+part before the @ holds a control or surrogate character, in any script (`a\x00b@example.com`
+included); `smtputf8`: the record above. Its text shows the address as the cards do, in ASCII
 marks (`alice@<U+FF45>xample.com [xn--xample-hy68a.com]`), names no protocol, says "Nothing was
 queued." and ends with the next step. The agent's tools answer `Failed to send email: ...` (no
 draft, no card), `POST /api/mail/send` answers 400 with `detail` (that text), `code` and the
-shown `address`, and the compose window shows the text inside its "Could not be sent" line
-(any other failure keeps the generic one). A Front Office answer logs `REPLY FAILED` with the
-code's phrase (`UndeliverableAddress.reason`) and without the address. A look-alike that IS a
+shown `address`, and the compose window says the refusal in the reader's language by its code
+(`mailV2.compose.refused.<code>`, the address marked and in its own `<bdi>` as on the draft
+cards); a code it has no sentence for shows the server's text inside its "Could not be sent"
+line, and any other failure keeps the generic one. A Front Office answer logs `REPLY FAILED`
+with the code's phrase (`UndeliverableAddress.reason`) and without the address, and a send
+refused for an address is written to the app log the same way (`SendResult.refusal`), while
+the draft keeps the whole text for its card. A look-alike that IS a
 valid domain (`alice@exаmple.com`, a Cyrillic а) is delivered, not refused: the cards show what
 does reach them through `vaf/core/shown_text.py`, the address first and whole, every character
 outside plain ASCII marked. A Sent APPEND of a UTF-8 mail to an IMAP server without
 `UTF8=ACCEPT` may be refused; that tail is best effort and logged (the mail was sent). Guards:
 `tests/test_mail_international_address.py` (the envelope, the headers, a socket stub with and
-without SMTPUTF8, the record) and `tests/test_mail_non_ascii_recipient.py` (the refusals on
+without SMTPUTF8, the record, the window's codes against every catalogue) and `tests/test_mail_non_ascii_recipient.py` (the refusals on
 every surface).
 
 The agent can ASK what became of a draft: the `list_drafts` TOOL (`vaf/tools/list_drafts.py`,

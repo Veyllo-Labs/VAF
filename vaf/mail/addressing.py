@@ -261,17 +261,16 @@ def _a_label(label: str, addr: str) -> str:
 def envelope_address(addr: str) -> str:
     """The form of one addr-spec that goes on the wire: the local part as written, every
     domain label outside ASCII as its strict IDNA2008 A-label (ASCII letters in such a label
-    lowered first), every ASCII label as written. An all-ASCII address comes back unchanged.
-    Raises `UndeliverableAddress` for a domain IDNA2008 refuses and for a local part outside
-    ASCII that holds a control or surrogate character; nothing else is refused, look-alikes
-    included (the cards mark them)."""
+    lowered first), every ASCII label as written. An all-ASCII address without a control
+    character comes back unchanged. Raises `UndeliverableAddress` for a domain IDNA2008 refuses
+    and for a local part, ASCII or not, that holds a control or surrogate character (a NUL
+    or a C1 control in an address is a typo or a forgery, and no server takes it); nothing
+    else is refused, look-alikes included (the cards mark them)."""
     addr = str(addr or "")
-    if addr.isascii():
-        return addr
     local, at, domain = addr.rpartition("@")
     if not at:
         local, domain = addr, ""
-    if not local.isascii() and any(unicodedata.category(c) in ("Cc", "Cs") for c in local):
+    if any(unicodedata.category(c) in ("Cc", "Cs") for c in local):
         raise UndeliverableAddress("local_part", addr)
     if domain.isascii():
         return addr

@@ -36,6 +36,16 @@ class _SendRetry(RuntimeError):
     raises a plain RuntimeError and is parked, never re-sent."""
 
 
+class _SendRefused(RuntimeError):
+    """A send refused for an address (`SendResult.refusal`). Its text names the address and
+    goes to the card through the op's error; `log_text` is the refusal without it, for the
+    app log, where a Front Office answer's address is the remote sender's."""
+
+    def __init__(self, text: str, log_text: str):
+        super().__init__(text)
+        self.log_text = log_text
+
+
 def _b(v) -> str:
     return v.decode() if isinstance(v, (bytes, bytearray)) else str(v)
 
@@ -107,7 +117,7 @@ class OpExecutor:
                 self.store.mark_op(op["id"], "done", expect_state="sending")
                 stats["done"] += 1
             except Exception as e:
-                logger.warning("op %s (%s) failed: %s", op["id"], kind, e)
+                logger.warning("op %s (%s) failed: %s", op["id"], kind, getattr(e, "log_text", e))
                 if kind == "send":
                     # A pre-hand-off transient failure (connect / 4xx before DATA)
                     # is safe to retry; the sender proved delivery had not started.
@@ -242,6 +252,9 @@ class OpExecutor:
                                               "ambiguous" if res.handed_off else "failed")
             except Exception:
                 pass
+            if res.refusal:
+                from vaf.mail.addressing import REFUSAL_REASON
+                raise _SendRefused(res.error or "", f"address refused: {REFUSAL_REASON[res.refusal]}")
             raise RuntimeError(res.error or f"send failed ({res.classification})")
         # Everything after a successful send is best-effort and MUST NOT raise
         # out of the handler - otherwise process() would treat the (already

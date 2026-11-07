@@ -125,8 +125,10 @@ def list_pending(
         # Every address and every file, whole, because approving is approving what leaves: a
         # Bcc or a document the table did not show would go out unseen.
         # Each name in double quotes, a quote inside one marked: "a, b.pdf" is one file, and
-        # a bare comma list could not say so.
-        files = [f'"{_console_text(str(a), also=chr(34))}"'
+        # a bare comma list could not say so. A literal "<" or ">" is marked too, the rule of
+        # `ascii_marks`: each name is printed on its own, so a cp1252 console shows a"b.pdf as
+        # a<U+0022>b.pdf, and a file really named that must not read the same.
+        files = [f'"{_console_text(str(a), also=chr(34) + "<>")}"'
                  for a in (row.get("attachments") or []) if str(a)]
         if files:
             preview = f"{preview} [dim]files:[/dim] {escape(', '.join(files))}"

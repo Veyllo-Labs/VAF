@@ -3378,7 +3378,13 @@
       "sending": "Gönderiliyor...",
       "sendFailed": "Gönderim başarısız.",
       "discardConfirm": "Bu mesajdan vazgeçilsin mi?",
-      "paperToggle": "Açık mod"
+      "paperToggle": "Açık mod",
+      "refused": {
+        "domain": "Gönderilmedi: {address} adresinin alan adı geçerli bir uluslararası alan adı değil. Adresi kontrol et.",
+        "domain_case": "Gönderilmedi: {address} adresinin alan adında ASCII dışında bir büyük harf var. Alan adını küçük harflerle yaz.",
+        "local_part": "Gönderilmedi: {address} adresinde @ işaretinden önceki kısım bir kontrol karakteri içeriyor.",
+        "smtputf8": "Gönderilmedi: Bu hesabın posta sunucusu {address} adresini kabul etmiyor. Başka bir hesaptan gönder."
+      }
     },
     "undoSent": "Mesaj gönderiliyor",
     "undo": "Geri al",

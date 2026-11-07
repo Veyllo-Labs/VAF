@@ -3378,7 +3378,13 @@
       "sending": "Sending...",
       "sendFailed": "Send failed.",
       "discardConfirm": "Discard this message?",
-      "paperToggle": "Light mode"
+      "paperToggle": "Light mode",
+      "refused": {
+        "domain": "Not sent: the domain of {address} is not a valid internationalised domain name. Check the address.",
+        "domain_case": "Not sent: the domain of {address} has a capital letter outside plain ASCII. Write the domain in small letters.",
+        "local_part": "Not sent: the part before the @ in {address} holds a control character.",
+        "smtputf8": "Not sent: this account's mail server does not accept {address}. Send it from another account."
+      }
     },
     "undoSent": "Message queued",
     "undo": "Undo",

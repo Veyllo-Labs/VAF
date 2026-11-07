@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { cn, getApiBase } from '@/lib/utils';
 import { MailAccounts } from '@/components/connections/MailAccounts';
+import { Recipient, SLOT, around } from '@/components/outbox/HeldSendCard';
 import {
     SFC_ACTIVE, SFC_CHROME, SFC_FILL, SFC_HOVER, SFC_RAISED, SFC_WINDOW, WaitsChip,
 } from '@/components/connections/ChannelDashboardShell';
@@ -43,13 +44,23 @@ const jfetch = async (p: string, init?: RequestInit) => {
     return r.json();
 };
 // The codes `POST /api/mail/send` answers for an address no mail server can take, or one
-// the account's server cannot (vaf/mail/addressing.py UndeliverableAddress).
-const REFUSED_ADDRESS = new Set(['domain', 'domain_case', 'local_part', 'smtputf8']);
-const refusedAddressDetail = (e: unknown): string => {
-    if (!(e instanceof HttpError) || e.status !== 400) return '';
-    const body = e.body as { code?: unknown; detail?: unknown } | null;
-    return body && typeof body.code === 'string' && REFUSED_ADDRESS.has(body.code)
-        && typeof body.detail === 'string' ? body.detail : '';
+// the account's server cannot (vaf/mail/addressing.py UndeliverableAddress), each with its
+// sentence under `mailV2.compose.refused`. tests/test_mail_international_address.py keeps
+// this list, the server's codes and every catalogue in step.
+const REFUSED_ADDRESS = ['domain', 'domain_case', 'local_part', 'smtputf8'] as const;
+type RefusedCode = typeof REFUSED_ADDRESS[number];
+interface Refusal { code: RefusedCode | ''; address: string; detail: string }
+// A 400 from the send route that refused an address: its code and the address as the cards
+// show it, or the server's own text for a code this window has no sentence for yet.
+const refusalOf = (e: unknown): Refusal | null => {
+    if (!(e instanceof HttpError) || e.status !== 400) return null;
+    const body = e.body as { code?: unknown; address?: unknown; detail?: unknown } | null;
+    if (!body || typeof body.code !== 'string') return null;
+    const known = (REFUSED_ADDRESS as readonly string[]).includes(body.code);
+    if (known && typeof body.address === 'string') {
+        return { code: body.code as RefusedCode, address: body.address, detail: '' };
+    }
+    return typeof body.detail === 'string' ? { code: '', address: '', detail: body.detail } : null;
 };
 const jpost = (p: string, body?: unknown, method = 'POST') => jfetch(p, {
     method, headers: { 'Content-Type': 'application/json' },
@@ -246,7 +257,7 @@ function ComposeModal({ prefill, accounts, threadId, anchorPk, composerEnabled, 
     const [subject, setSubject] = useState(prefill?.subject || '');
     const [body, setBody] = useState(prefill?.body || '');
     const [sending, setSending] = useState(false);
-    const [error, setError] = useState('');
+    const [error, setError] = useState<React.ReactNode>('');
     // Mail Composer: fills the textarea, never sends. `beforeAssist` backs the
     // Undo button, so one click always restores exactly what the user had.
     const [assistBusy, setAssistBusy] = useState(false);
@@ -367,10 +378,13 @@ function ComposeModal({ prefill, accounts, threadId, anchorPk, composerEnabled, 
             onQueued(out.op_id, out.undo_seconds ?? 15);
             onClose();
         } catch (e) {
-            // A refused address says why (its text is plain ASCII, the address marked as on
-            // the draft cards); any other failure keeps the generic line.
-            const refused = refusedAddressDetail(e);
-            setError(refused ? t('draft.failed', { error: refused }) : t('compose.sendFailed'));
+            // A refused address says why in the reader's language, the address marked and
+            // isolated as on the draft cards; any other failure keeps the generic line.
+            const refused = refusalOf(e);
+            setError(!refused ? t('compose.sendFailed')
+                : refused.code ? around(t(`compose.refused.${refused.code}`, { address: SLOT }),
+                    <Recipient text={refused.address} />)
+                    : t('draft.failed', { error: refused.detail }));
         }
         finally { setSending(false); }
     }, [account, to, cc, subject, body, prefill, onClose, onQueued, t]);

@@ -3378,7 +3378,13 @@
       "sending": "보내는 중…",
       "sendFailed": "보내지 못했어요.",
       "discardConfirm": "이 메일을 버릴까요?",
-      "paperToggle": "라이트 모드"
+      "paperToggle": "라이트 모드",
+      "refused": {
+        "domain": "보내지 못했어요: {address}의 도메인은 유효한 국제화 도메인 이름이 아니에요. 주소를 확인해 주세요.",
+        "domain_case": "보내지 못했어요: {address}의 도메인에 ASCII가 아닌 대문자가 있어요. 도메인을 소문자로 써 주세요.",
+        "local_part": "보내지 못했어요: {address}에서 @ 앞부분에 제어 문자가 있어요.",
+        "smtputf8": "보내지 못했어요: 이 계정의 메일 서버가 {address}을(를) 받지 않아요. 다른 계정에서 보내 주세요."
+      }
     },
     "undoSent": "메일을 보내는 중이에요",
     "undo": "취소",

@@ -3378,7 +3378,13 @@
       "sending": "正在发送…",
       "sendFailed": "发送失败。",
       "discardConfirm": "放弃这封邮件？",
-      "paperToggle": "浅色模式"
+      "paperToggle": "浅色模式",
+      "refused": {
+        "domain": "未发送：{address} 的域名不是有效的国际化域名。请检查地址。",
+        "domain_case": "未发送：{address} 的域名包含 ASCII 以外的大写字母。请用小写字母书写域名。",
+        "local_part": "未发送：{address} 中 @ 之前的部分包含控制字符。",
+        "smtputf8": "未发送：此账户的邮件服务器不接受 {address}。请从其他账户发送。"
+      }
     },
     "undoSent": "邮件正在发送",
     "undo": "撤销",

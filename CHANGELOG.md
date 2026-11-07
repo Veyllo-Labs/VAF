@@ -54,8 +54,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   address with non-Latin letters before the @ is sent with the mail server's support for
   international addresses. Only addresses no mail server can deliver are refused, for example
   a domain with a full-width letter, and so is a send from an account whose server lacks that
-  support. The mail window now says why it refused a send, and draft cards still mark every
-  character outside plain ASCII.
+  support. The mail window now says in your language why it refused a send, and draft cards
+  still mark every character outside plain ASCII.
 
 ### Changed
 

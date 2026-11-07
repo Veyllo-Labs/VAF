@@ -3378,7 +3378,13 @@
       "sending": "Wird gesendet...",
       "sendFailed": "Senden fehlgeschlagen.",
       "discardConfirm": "Nachricht verwerfen?",
-      "paperToggle": "Heller Modus"
+      "paperToggle": "Heller Modus",
+      "refused": {
+        "domain": "Nicht gesendet: Die Domain von {address} ist kein gültiger internationaler Domainname. Prüf die Adresse.",
+        "domain_case": "Nicht gesendet: Die Domain von {address} enthält einen Großbuchstaben außerhalb von ASCII. Schreib die Domain klein.",
+        "local_part": "Nicht gesendet: Der Teil vor dem @ in {address} enthält ein Steuerzeichen.",
+        "smtputf8": "Nicht gesendet: Der Mailserver dieses Kontos nimmt {address} nicht an. Schick sie von einem anderen Konto."
+      }
     },
     "undoSent": "Nachricht wird gesendet",
     "undo": "Rückgängig",

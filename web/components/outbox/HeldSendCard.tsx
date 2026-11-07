@@ -103,9 +103,9 @@ function Marked({ text }: { text: string }) {
 // Where a catalogue sentence takes a value rendered as elements (marked, isolated): the value
 // is passed as this private-use character and the sentence split around it. The server
 // escapes every private-use character in a shown field, so it cannot occur in the value.
-const SLOT = '\uE000';
+export const SLOT = '\uE000';
 
-function around(sentence: string, value: React.ReactNode): React.ReactNode {
+export function around(sentence: string, value: React.ReactNode): React.ReactNode {
     const at = sentence.indexOf(SLOT);
     if (at < 0) return sentence;
     return <>{sentence.slice(0, at)}{value}{sentence.slice(at + SLOT.length)}</>;
@@ -113,7 +113,7 @@ function around(sentence: string, value: React.ReactNode): React.ReactNode {
 
 /** A recipient value, marked and in its own bidi isolation, so a right-to-left name cannot
  *  reorder the words around it. */
-function Recipient({ text }: { text: string }) {
+export function Recipient({ text }: { text: string }) {
     return <bdi><Marked text={text} /></bdi>;
 }
 

@@ -227,6 +227,100 @@ def test_the_branch_without_directory_handles(lab, monkeypatch):
     assert (lab.ws / "plain.txt").read_text(encoding="utf-8") == "ok"
 
 
+def _expect_lab(lab):
+    """A folder somebody else can write, `a/b/Downloads`, its real path, and a look-alike
+    tree elsewhere that a swapped link would lead to, with a file of the same name in it."""
+    base = lab.home / "Documents" / "VAF_Projects"
+    real = base / "a" / "b" / "Downloads"
+    real.mkdir(parents=True)
+    other = lab.home / "other" / "b" / "Downloads"
+    other.mkdir(parents=True)
+    (other / "main.py").write_bytes(b"theirs")
+    return real.resolve(), other
+
+
+def _swap_for_link(folder: Path, target: Path) -> None:
+    folder.rename(folder.with_name(folder.name + ".old"))
+    _link(folder, target)
+
+
+@pytest.mark.parametrize("dir_fd", [True, False], ids=["handles", "no handles"])
+def test_expect_folder_writes_into_the_expected_folder(lab, monkeypatch, dir_fd):
+    monkeypatch.setattr(path_jail, "_DIR_FD", dir_fd and path_jail._DIR_FD)
+    real, _other = _expect_lab(lab)
+    with open_for_write(real / "main.py", "wb", expect_folder=real) as fh:
+        fh.write(b"mine")
+    assert (real / "main.py").read_bytes() == b"mine"
+
+
+@pytest.mark.parametrize("which", ["the folder", "a folder above it"])
+@pytest.mark.parametrize("dir_fd", [True, False], ids=["handles", "no handles"])
+def test_expect_folder_refuses_a_folder_swapped_after_the_check(lab, monkeypatch, which,
+                                                               dir_fd):
+    """The caller checked the folder, then it was swapped for a link before the open. The
+    open follows the folder path, so only the comparison of the opened folder's real path
+    with the expected one refuses it, for the last folder and for one above it alike.
+
+    MUTATION: drop the comparison in `_open_in_folder` - the handles cases red. MUTATION:
+    drop the check before the open in `_open_without_dir_fd` - the no-handles cases red
+    (the file is created in the other folder)."""
+    monkeypatch.setattr(path_jail, "_DIR_FD", dir_fd and path_jail._DIR_FD)
+    real, other = _expect_lab(lab)
+    if which == "the folder":
+        _swap_for_link(real, other)
+    else:
+        _swap_for_link(real.parent, other.parent)
+    with pytest.raises(WriteRefused, match="a link on the way"):
+        open_for_write(real / "main.py", "wb", expect_folder=real)
+    with pytest.raises(WriteRefused, match="a link on the way"):
+        open_for_write(real / "new.txt", "wb", exclusive=True, expect_folder=real)
+    assert (other / "main.py").read_bytes() == b"theirs"
+    assert sorted(p.name for p in other.iterdir()) == ["main.py"]
+
+
+def test_expect_folder_without_handles_removes_what_a_late_swap_created(lab, monkeypatch):
+    """The branch without folder handles checks before the open and the opened file's real
+    folder after it. A swap between the two lands the new file in the other folder, which
+    the second check removes again before anything is written.
+
+    MUTATION: drop ``moved`` from the check after the open - red (the file stays there)."""
+    monkeypatch.setattr(path_jail, "_DIR_FD", False)
+    real, other = _expect_lab(lab)
+    real_open = os.open
+
+    def swapping_open(path, flags, *a, **k):
+        if os.fspath(path) == os.fspath(real / "new.txt") and flags & os.O_CREAT:
+            _swap_for_link(real, other)
+        return real_open(path, flags, *a, **k)
+
+    monkeypatch.setattr(path_jail.os, "open", swapping_open)
+    with pytest.raises(WriteRefused):
+        open_for_write(real / "new.txt", "wb", exclusive=True, expect_folder=real)
+    monkeypatch.setattr(path_jail.os, "open", real_open)
+    assert sorted(p.name for p in other.iterdir()) == ["main.py"]
+
+
+@pytest.mark.parametrize("dir_fd", [True, False], ids=["handles", "no handles"])
+def test_discard_written_removes_only_its_own_file(lab, monkeypatch, dir_fd):
+    """A failed copy leaves no partial file; a folder swapped meanwhile never costs another
+    folder its same-named file. MUTATION: drop the samestat check - red in both branches
+    (theirs is removed)."""
+    from vaf.core.path_jail import discard_written
+    monkeypatch.setattr(path_jail, "_DIR_FD", dir_fd and path_jail._DIR_FD)
+    real, other = _expect_lab(lab)
+    out = open_for_write(real / "partial.bin", "wb", expect_folder=real)
+    out.write(b"half")
+    assert discard_written(real / "partial.bin", out) is True
+    out.close()
+    assert not (real / "partial.bin").exists()
+
+    out = open_for_write(real / "main.py", "wb", expect_folder=real)
+    _swap_for_link(real, other)
+    assert discard_written(real / "main.py", out) is False
+    out.close()
+    assert (other / "main.py").read_bytes() == b"theirs"
+
+
 # -- download_file ----------------------------------------------------------------------
 
 class _Res:
@@ -806,6 +900,84 @@ def test_a_tenants_linked_downloads_folder_refuses_a_cloud_download(lab, monkeyp
     assert out.startswith("Refused: the Downloads folder in your files is not an ordinary"), out
     assert "read(file_id=...)" in out
     assert _files(target) == before
+
+
+def _swapping_drive(name, body, monkeypatch, swap):
+    """The real Drive provider whose fetch runs ``swap`` first: the fetch takes as long as
+    the file's owner wants, and the tenant's own sandbox can swap the folder meanwhile."""
+    prov = _drive(name, body, monkeypatch)
+    real_fetch = prov.download_file
+
+    def fetch(file_id, local_path):
+        swap()
+        return real_fetch(file_id, local_path)
+
+    prov.download_file = fetch
+    return prov
+
+
+def test_a_cloud_download_refuses_a_folder_swapped_during_the_fetch(lab, monkeypatch):
+    """Measured before this was fixed: Downloads checked, the fetch swaps it for a link to
+    another account's source folder, and the download overwrote that account's main.py.
+    MUTATION: the lanes as they were (no folder answer after the fetch, no expect_folder) -
+    red."""
+    cs, _sync, downloads = _tenant(lab, monkeypatch)
+    bob = downloads.parent.parent / "cd34ef56" / "src"
+    bob.mkdir(parents=True)
+    (bob / "main.py").write_bytes(BOBS_CODE)
+    prov = _swapping_drive("main.py", b"tenant payload", monkeypatch,
+                           lambda: _swap_for_link(downloads, bob))
+    monkeypatch.setattr(cs, "create_cloud_provider", lambda *a, **k: prov)
+    out = cs._action_download("bob", "acc1", "google_drive", "f1", user_scope_id="tenant-scope")
+    assert out.startswith("Refused: the Downloads folder in your files is not an ordinary"), out
+    assert (bob / "main.py").read_bytes() == BOBS_CODE
+    assert sorted(p.name for p in bob.iterdir()) == ["main.py"]
+
+
+@pytest.mark.parametrize("action", ["download", "retrieve"])
+def test_a_folder_swapped_after_the_last_answer_is_refused_by_the_open(lab, monkeypatch,
+                                                                       action):
+    """The swap lands right after the lane's last folder answer, before its open: only the
+    open's expect_folder refuses it. MUTATION: pass no expect_folder in `_action_download`
+    / `_action_retrieve` - that case red (the other account's main.py is overwritten)."""
+    import vaf.core.session as session_mod
+    cs, sync, downloads = _tenant(lab, monkeypatch)
+    bob = downloads.parent.parent / "cd34ef56" / "src"
+    bob.mkdir(parents=True)
+    (bob / "main.py").write_bytes(BOBS_CODE)
+    real_answer = session_mod.get_user_downloads_dir
+    answers = []
+
+    def answer_then_swap(scope):
+        folder = real_answer(scope)
+        answers.append(folder)
+        if action == "retrieve" or len(answers) == 2:
+            _swap_for_link(downloads, bob)
+        return folder
+
+    monkeypatch.setattr(session_mod, "get_user_downloads_dir", answer_then_swap)
+    if action == "download":
+        prov = _drive("main.py", b"tenant payload", monkeypatch)
+        monkeypatch.setattr(cs, "create_cloud_provider", lambda *a, **k: prov)
+        out = cs._action_download("bob", "acc1", "google_drive", "f1",
+                                  user_scope_id="tenant-scope")
+    else:
+        (sync / "main.py").write_text("tenant payload")
+        out = cs._action_retrieve("bob", "acc1", "main.py", "tenant-scope")
+    assert out.startswith("Refused: the Downloads folder in your files is not an ordinary"), out
+    assert (bob / "main.py").read_bytes() == BOBS_CODE
+
+
+def test_a_cloud_download_asks_for_the_folder_again_after_the_fetch(lab, monkeypatch):
+    """The answer before the fetch is old once the fetch is done: a Downloads folder removed
+    meanwhile is made again and the download lands, instead of failing on a folder that is
+    gone. MUTATION: drop the second `_download_dir` in `_action_download` - red."""
+    cs, _sync, downloads = _tenant(lab, monkeypatch)
+    prov = _swapping_drive("report.txt", b"cloud body", monkeypatch, downloads.rmdir)
+    monkeypatch.setattr(cs, "create_cloud_provider", lambda *a, **k: prov)
+    out = cs._action_download("bob", "acc1", "google_drive", "f1", user_scope_id="tenant-scope")
+    assert out.startswith("Downloaded 'report.txt'"), out
+    assert (downloads / "report.txt").read_bytes() == b"cloud body"
 
 
 def test_a_tenants_ordinary_downloads_folder_takes_a_cloud_download(lab, monkeypatch):

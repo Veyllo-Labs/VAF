@@ -80,10 +80,15 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   hand-written `cloud_max_file_size` and `cloud_conflict_strategy` keys it used to read are
   ignored. An account other than the owner's can no longer make a cloud download (or
   `retrieve`) land in another folder of the computer, another account's files included, by
-  turning its own Downloads folder or its project folder into a link; that download is refused
-  and nothing is saved. The same holds for files downloaded in the sandbox browser, for every
-  account: they are delivered only into an ordinary Downloads folder and never through a link;
-  while the folder is not an ordinary one, nothing is delivered. This applies on every platform.
+  turning its own Downloads folder or its project folder into a link, also not by swapping
+  the link in while a download is under way; that download is refused and nothing is saved.
+  The same holds for files downloaded in the sandbox browser, for every account: they are
+  delivered only into an ordinary Downloads folder and never through a link; while the folder
+  is not an ordinary one, nothing is delivered, and a copy that fails midway leaves no partial
+  file. This applies on every platform; on Windows a narrow window remains in which a link
+  swapped in and out again within one file open is not seen. For applications built on VAF,
+  `vaf.open_for_write(path, expect_folder=...)` refuses a folder that was swapped for a link
+  after you checked it.
 - **The WhatsApp setup no longer sends its link code to an outside QR service.** Since
   0.1.0a0, and in every release up to 0.1.0a35, the setup window had its QR code drawn by a
   public web service (api.qrserver.com), so the linking value in each code, and the address of

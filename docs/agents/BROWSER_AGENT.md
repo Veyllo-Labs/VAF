@@ -1126,10 +1126,14 @@ under the owner's own file area, `VAF_Projects/<uid8>/Downloads/`, with a saniti
 collision-suffixed name and a 512 MB size cap. Delivered or blocked, the container copy
 is deleted - the folder is a hand-off point, not storage. The account can write its own
 file area, so the sweep delivers only into a `Downloads` that is an ordinary folder, no link,
-in a root that is no link (`session.get_user_downloads_dir`); otherwise it delivers nothing
-and the files stay in the container. Each file is written through `open_for_write`
-(created new, never through a link at its name, readable by its owner only), and a link
-already at a name counts as taken.
+in a root that is no link (`session.get_user_downloads_dir`), asked again before every
+file because the container copy in between can take minutes; otherwise it delivers nothing
+and the files stay in the container. Each file is written through `open_for_write` with that
+answer as `expect_folder`, so a folder swapped for a link after the answer is refused, not
+followed; the file is created new, never through a link at its name, and made readable by
+its owner only before the first byte. A link already at a name counts as taken. A copy that
+fails midway (a full disk) leaves no partial file behind (`path_jail.discard_written`), keeps
+that container copy for the next sweep and goes on with the next file.
 
 Ownership follows the jar: downloads go to whoever holds (or last held) the browser,
 and a scope CHANGE purges the folder unread - a previous holder's undelivered files

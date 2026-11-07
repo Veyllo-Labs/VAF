@@ -125,15 +125,32 @@ def _download_dir(user_scope_id: Optional[str]) -> Path:
     owner's `~/Downloads` is not checked: it is their own home, where a linked Downloads
     folder is an ordinary setup.
     """
-    from vaf.core.config import get_local_admin_scope_id
     from vaf.core.session import get_user_downloads_dir
 
-    scope = str(user_scope_id or "").strip()
-    if scope and scope != get_local_admin_scope_id():
+    scope = _tenant_scope(user_scope_id)
+    if scope:
         dest = get_user_downloads_dir(scope)
         if dest is not None:
             return dest
     return Platform.downloads_dir()
+
+
+def _downloads_still_own(user_scope_id: Optional[str]) -> bool:
+    """After a refused write: False when the Downloads folder is no longer an ordinary one
+    (swapped for a link meanwhile), so the answer can say that instead of naming paths."""
+    try:
+        _download_dir(user_scope_id)
+        return True
+    except PathEscape:
+        return False
+
+
+def _tenant_scope(user_scope_id: Optional[str]) -> str:
+    """The caller's scope when it is not the owner's, else "": whose Downloads lies in a
+    project root the account itself can write."""
+    from vaf.core.config import get_local_admin_scope_id
+    scope = str(user_scope_id or "").strip()
+    return scope if scope and scope != get_local_admin_scope_id() else ""
 
 
 _DOWNLOADS_NOT_OWN = (
@@ -479,12 +496,23 @@ def _action_download(username: str, account_id: str, provider: str, file_id: Opt
         try:
             fetched = staging / "download"
             prov.download_file(file_id, fetched)
+            # Asked again after the fetch, whose length the file's owner decides: a folder
+            # swapped for a link meanwhile is refused here, and one swapped after this answer
+            # by the open itself (expect_folder).
             try:
-                _copy_into(fetched, dest)
+                downloads = _download_dir(user_scope_id)
+            except PathEscape:
+                return _DOWNLOADS_NOT_OWN + " Use read(file_id=...) to see the content meanwhile."
+            dest = downloads / name
+            try:
+                _copy_into(fetched, dest,
+                           expect_folder=downloads if _tenant_scope(user_scope_id) else None)
             except WriteRefused as e:
                 # The destination is fixed to Downloads, so the write refusal's own hint
                 # ("choose another folder") names nothing the model can do here.
                 logger.warning("[CloudStorage] Download refused: %s", e)
+                if not _downloads_still_own(user_scope_id):
+                    return _DOWNLOADS_NOT_OWN + " Use read(file_id=...) to see the content meanwhile."
                 return (f"Download failed: {dest} is not a plain file VAF may write (a link, "
                         "for example), so nothing was saved. Remove or rename that entry in "
                         "Downloads, or use read(file_id=...) to see the content.")
@@ -539,14 +567,17 @@ def _action_read(username: str, account_id: str, provider: str, file_id: Optiona
         return f"Read failed: {e}"
 
 
-def _copy_into(source: Path, dest: Path) -> None:
+def _copy_into(source: Path, dest: Path, *, expect_folder: Optional[Path] = None) -> None:
     """Copy ``source`` to ``dest`` through `open_for_write`: never through a link at the
     name and never into VAF's own data. A tenant's Downloads folder lies in their project
     root, which a sandbox environment of theirs can mount and plant a link in; shutil.copy2
-    followed it."""
+    followed it. ``expect_folder`` (the folder's real path from `get_user_downloads_dir`)
+    makes the open refuse a folder swapped for a link after that answer."""
     from vaf.core.path_jail import open_for_write
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    with open(source, "rb") as src, open_for_write(dest, "wb") as out:
+    if expect_folder is None:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(source, "rb") as src, \
+            open_for_write(dest, "wb", expect_folder=expect_folder) as out:
         shutil.copyfileobj(src, out)
 
 
@@ -576,8 +607,13 @@ def _action_retrieve(username: str, account_id: str, file_path: Optional[str], u
         return _DOWNLOADS_NOT_OWN
     dest = downloads / source.name
     try:
-        _copy_into(source, dest)
+        _copy_into(source, dest,
+                   expect_folder=downloads if _tenant_scope(user_scope_id) else None)
         return f"File downloaded to: {dest}"
+    except WriteRefused as e:
+        if not _downloads_still_own(user_scope_id):
+            return _DOWNLOADS_NOT_OWN
+        return f"Failed to retrieve file: {e}"
     except Exception as e:
         return f"Failed to retrieve file: {e}"
 

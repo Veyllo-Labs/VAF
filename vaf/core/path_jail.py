@@ -34,8 +34,8 @@ import unicodedata
 from pathlib import Path
 from typing import Optional
 
-__all__ = ["PathEscape", "WriteRefused", "contained_path", "is_rooted", "open_for_write",
-           "safe_entry_name"]
+__all__ = ["PathEscape", "WriteRefused", "contained_path", "discard_written", "is_rooted",
+           "open_for_write", "safe_entry_name"]
 
 
 class PathEscape(ValueError):
@@ -220,7 +220,8 @@ def _fd_path(fd: int, fallback: str) -> str:
 
 
 def open_for_write(path, mode: str = "wb", *, exclusive: bool = False,
-                   encoding: Optional[str] = None, newline: Optional[str] = None):
+                   encoding: Optional[str] = None, newline: Optional[str] = None,
+                   expect_folder=None):
     """Open ``path`` to write it, as a file object, or raise `WriteRefused`.
 
     For a path a model, a request or a peer chose, and for a temporary ``.part`` beside one.
@@ -242,10 +243,24 @@ def open_for_write(path, mode: str = "wb", *, exclusive: bool = False,
     ``mode`` is "wb" or "w" (then ``encoding``/``newline`` as for ``open``). ``exclusive``
     refuses an existing file (``O_EXCL``).
 
+    ``expect_folder`` is for a folder somebody else can write: the REAL path (no links on
+    the way) the file's folder must have. The opened folder handle's kernel path is compared
+    with it, as given and never resolved (resolving it would follow the very link it is
+    there to catch), and anything else is refused before the file is opened. That closes
+    the window between a caller's check and this open, for every folder on the way: a link
+    swapped in for the folder or for any folder above it changes the handle's real path. The
+    file is then opened relative to that handle, so later renames cannot redirect it. Without
+    a kernel answer (no /proc, no F_GETPATH) the resolved path is accepted only when it is
+    the same directory as the handle.
+
     NAMED BOUNDARY, Windows (no ``O_NOFOLLOW``, no directory handles): a link at the path is
     refused (``islink``), the resolved path is checked before and after the open, and a file
     created in VAF's state by a swap in between is removed again. A link or junction swapped
-    in between the check and the open is followed for that one open. A hard link is a second
+    in between the check and the open is followed for that one open; with ``expect_folder``
+    the folder is checked before the open and the opened file's resolved folder after it, and
+    a file this call created elsewhere is removed again and refused, before anything is
+    written or truncated (what remains: a swap and a swap back between the open and the
+    second check). A hard link is a second
     name of the same file and is not seen on any platform; making one needs a process on the
     host with access to both folders (a sandbox environment cannot link to a file outside its
     mount)."""
@@ -261,10 +276,12 @@ def open_for_write(path, mode: str = "wb", *, exclusive: bool = False,
     flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0)
     if exclusive:
         flags |= os.O_EXCL
+    expected = (os.path.normcase(os.path.abspath(os.fspath(expect_folder)))
+                if expect_folder is not None else None)
     if _DIR_FD:
-        fd = _open_in_folder(parent, name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, raw)
+        fd = _open_in_folder(parent, name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, raw, expected)
     else:
-        fd = _open_without_dir_fd(raw, flags)
+        fd = _open_without_dir_fd(raw, flags, expected)
     try:
         info = os.fstat(fd)
         import stat as _stat
@@ -282,7 +299,13 @@ def open_for_write(path, mode: str = "wb", *, exclusive: bool = False,
         raise
 
 
-def _open_in_folder(parent: str, name: str, flags: int, raw: str) -> int:
+def _folder_moved(raw: str, real: str, expected: str) -> "WriteRefused":
+    return WriteRefused(f"refusing to write {raw}: its folder is {real}, not {expected} "
+                        "(a link on the way)")
+
+
+def _open_in_folder(parent: str, name: str, flags: int, raw: str,
+                    expected: Optional[str] = None) -> int:
     from vaf.core.data_stores import is_vaf_state
     import errno
     try:
@@ -290,7 +313,10 @@ def _open_in_folder(parent: str, name: str, flags: int, raw: str) -> int:
     except NotADirectoryError:
         raise WriteRefused(f"refusing to write {raw}: {parent} is not a folder") from None
     try:
-        real = os.path.join(_fd_path(dfd, parent), name)
+        real_dir = _fd_path(dfd, parent)
+        if expected is not None and os.path.normcase(real_dir) != expected:
+            raise _folder_moved(raw, real_dir, expected)
+        real = os.path.join(real_dir, name)
         if is_vaf_state(real):
             raise WriteRefused(f"refusing to write {raw}: it lands in VAF's own data ({real}); "
                                "choose another folder")
@@ -306,11 +332,46 @@ def _open_in_folder(parent: str, name: str, flags: int, raw: str) -> int:
         os.close(dfd)
 
 
-def _open_without_dir_fd(raw: str, flags: int) -> int:
+def discard_written(path, fileobj) -> bool:
+    """Remove the file ``fileobj`` (from `open_for_write`) holds at ``path`` after a write
+    into it failed, so no partial file stays behind. Call it before closing ``fileobj``.
+
+    Only ever the open file itself: the entry at ``path`` is removed when it is the same
+    file (device and inode) as ``fileobj``, so a folder swapped for a link meanwhile can
+    never cost another folder its file of the same name. The look and the removal are made
+    relative to one folder handle, so nothing is swapped in between them. True if it was
+    removed. NAMED BOUNDARY, Windows (no folder handles): the look and the removal are two
+    calls by path. Never raises."""
+    try:
+        raw = os.path.abspath(os.fspath(path))
+        parent, name = os.path.split(raw)
+        mine = os.fstat(fileobj.fileno())
+        if not _DIR_FD:
+            if os.path.samestat(os.lstat(raw), mine):
+                os.unlink(raw)
+                return True
+            return False
+        dfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0))
+        try:
+            if not os.path.samestat(os.stat(name, dir_fd=dfd, follow_symlinks=False), mine):
+                return False
+            os.unlink(name, dir_fd=dfd)
+            return True
+        finally:
+            os.close(dfd)
+    except (OSError, ValueError):
+        return False
+
+
+def _open_without_dir_fd(raw: str, flags: int, expected: Optional[str] = None) -> int:
     """The Windows branch (see the named boundary in `open_for_write`)."""
     from vaf.core.data_stores import is_vaf_state
     if os.path.islink(raw):
         raise WriteRefused(f"refusing to write {raw}: it is a link")
+    if expected is not None:
+        before = os.path.normcase(os.path.realpath(os.path.dirname(raw)))
+        if before != expected:
+            raise _folder_moved(raw, before, expected)
     # Created by THIS call or not: only a file this call created may be removed again below.
     try:
         fd, created = os.open(raw, flags | os.O_EXCL, 0o666), True
@@ -319,7 +380,9 @@ def _open_without_dir_fd(raw: str, flags: int) -> int:
             raise
         fd, created = os.open(raw, flags & ~os.O_CREAT, 0o666), False
     real = os.path.realpath(raw)
-    if os.path.islink(raw) or is_vaf_state(real):
+    moved = (expected is not None
+             and os.path.normcase(os.path.dirname(real)) != expected)
+    if os.path.islink(raw) or is_vaf_state(real) or moved:
         try:
             if created and os.path.samestat(os.fstat(fd), os.stat(real)):
                 os.close(fd)

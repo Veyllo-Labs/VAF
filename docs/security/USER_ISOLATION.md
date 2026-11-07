@@ -728,8 +728,20 @@ else's files. One decision for every lane that delivers into that folder,
 `VAF_Projects/<uid8>/Downloads` as seen from the resolved `VAF_Projects`, and a link loop or
 a plain file of that name is refused too. The cloud tool's `download` and `retrieve` refuse
 with nothing written otherwise, and the sandbox browser's download sweep (below) delivers
-nothing. NAMED BOUNDARY: a link swapped in between that check and the write is followed for
-that one write. Guarded by `tests/test_writes_do_not_follow_links.py` and
+nothing. A check alone is old by the time the bytes arrive: the cloud fetch and the
+browser's container copy take as long as the file's owner wants, and the account's sandbox
+can swap the folder for a link meanwhile (measured: another account's `main.py` and a
+synthetic `~/.ssh/authorized_keys` were overwritten, files were created in another account's
+chat folder and a synthetic `~/.config/autostart`). So each lane asks again right before
+every write (the cloud download after its fetch, the sweep per file) and passes the answer,
+the folder's real path, to `open_for_write(..., expect_folder=)`: the open compares the
+opened folder handle's kernel path with it and refuses anything else, so a link swapped in
+for `Downloads` or any folder above it is refused instead of followed. NAMED BOUNDARIES: on
+Windows (no folder handles) the folder is compared before the open and the opened file's
+folder after it, and a file created elsewhere is removed again before anything is written,
+which leaves a swap and a swap back between those two looks; and the account can still
+rename its own real `Downloads` folder after the open into a place it may write anyway, which
+moves only its own file. Guarded by `tests/test_writes_do_not_follow_links.py` and
 `tests/test_browser_interactive.py`.
   All jailed tools enter the jail through the shared `user_jail(...)` context manager, so the
   reset-in-`finally` cannot be forgotten in one of them. Which tools receive the identity at
@@ -910,8 +922,9 @@ partition:
   Downloads are not a residual: finished ones are swept to their owner's
   `VAF_Projects/<uid8>/Downloads`
   through the threat funnel (origin `browser_download`), only while that folder is an
-  ordinary one (`get_user_downloads_dir`, see the cloud downloads above) and through
-  `open_for_write`, never through a link at the file's name; a scope change purges the
+  ordinary one (`get_user_downloads_dir`, asked again before every file and held to by the
+  open's `expect_folder`, see the cloud downloads above) and through `open_for_write`, never
+  through a link at the file's name; a scope change purges the
   container folder unread instead of delivering a previous holder's files onward. The
   workspace MIRROR (`/home/browser/Workspace`, the upload lane) is treated the same
   way: it is the holder's own files by construction, it is purged unread on a scope

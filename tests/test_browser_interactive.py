@@ -1395,21 +1395,28 @@ def test_sweep_delivers_through_the_threat_funnel(monkeypatch, tmp_path):
     assert any(c[:3] == ["exec", "vaf-browser", "rm"] for c in calls)
 
 
-def _sweep_lab(monkeypatch, tmp_path, name="report.pdf", payload=b"%PDF-1.4 sweep"):
-    """The docker seam faked with one finished download called ``name``; returns the
-    account root, a folder outside it and the recorded docker calls."""
+def _sweep_lab(monkeypatch, tmp_path, name="report.pdf", payload=b"%PDF-1.4 sweep",
+               names=None, on_cp=None):
+    """The docker seam faked with finished downloads (``names``, or the one ``name``), each
+    holding ``payload``; ``on_cp(i)`` runs inside the i-th container copy, the slow step a
+    holder can watch. Returns the account root, a folder outside it and the docker calls."""
     import vaf.core.session as session_mod
     import vaf.core.threat_db as threat_mod
 
     monkeypatch.setenv("HOME", str(tmp_path))
     calls = []
+    names = names or [name]
+    copies = []
 
     def fake_docker(args, timeout=60):
         calls.append(list(args))
         if args[0] == "exec" and "find" in args[-1]:
-            return SimpleNamespace(returncode=0, stdout=(
-                f"{len(payload)}\t/home/browser/Downloads/{name}\n"), stderr="")
+            return SimpleNamespace(returncode=0, stdout="".join(
+                f"{len(payload)}\t/home/browser/Downloads/{n}\n" for n in names), stderr="")
         if args[0] == "cp":
+            copies.append(args[-1])
+            if on_cp:
+                on_cp(len(copies) - 1)
             with open(args[-1], "wb") as f:
                 f.write(payload)
         return SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -1495,6 +1502,114 @@ def test_sweep_delivers_into_an_ordinary_folder_owner_only(monkeypatch, tmp_path
     assert any(c[:3] == ["exec", "vaf-browser", "rm"] for c in calls)
     if os.name != "nt":
         assert stat.S_IMODE(dest.stat().st_mode) == 0o600
+
+
+def _removed(calls, name):
+    return any(c[:3] == ["exec", "vaf-browser", "rm"] and c[-1].endswith("/" + name)
+               for c in calls)
+
+
+def test_sweep_refuses_a_folder_swapped_between_two_downloads(monkeypatch, tmp_path):
+    """Measured before this was fixed: the folder was checked once, at the first delivered
+    file, and the holder swapped it for a link while the next container copy ran, so the
+    second file landed in another account's chat folder. MUTATION: the sweep as it was
+    (one folder answer for all files, no expect_folder) - red."""
+    bob = tmp_path / "Documents" / "VAF_Projects" / "cd34ef56" / "web_chat"
+
+    def swap(i):
+        if i == 1:
+            downloads = tmp_path / "Documents" / "VAF_Projects" / "ab12cd34" / "Downloads"
+            downloads.rename(downloads.with_name("Downloads.old"))
+            _symlink_or_skip(downloads, bob)
+
+    root, _outside, calls = _sweep_lab(monkeypatch, tmp_path, names=["big.pdf", "notes.md"],
+                                       on_cp=swap)
+    bob.mkdir(parents=True)
+    assert bi._real_sweep_container_downloads("vaf-browser", "scope-a") == ["big.pdf"]
+    assert list(bob.iterdir()) == []
+    assert (root / "Downloads.old" / "big.pdf").exists()
+    assert _removed(calls, "big.pdf") and not _removed(calls, "notes.md")
+
+
+def test_sweep_refuses_a_folder_swapped_after_its_answer(monkeypatch, tmp_path):
+    """The swap lands right after the per-file folder answer, before the open: only the
+    open's expect_folder refuses it. MUTATION: no expect_folder in the sweep - red (the file
+    is created in the other folder)."""
+    import vaf.core.session as session_mod
+    root, outside, calls = _sweep_lab(monkeypatch, tmp_path)
+    real_answer = session_mod.get_user_downloads_dir
+
+    def answer_then_swap(scope):
+        folder = real_answer(scope)
+        folder.rename(folder.with_name("Downloads.old"))
+        _symlink_or_skip(folder, outside)
+        return folder
+
+    monkeypatch.setattr(session_mod, "get_user_downloads_dir", answer_then_swap)
+    assert bi._real_sweep_container_downloads("vaf-browser", "scope-a") == []
+    assert list(outside.iterdir()) == []
+    assert not _removed(calls, "report.pdf")
+
+
+def test_sweep_asks_for_the_folder_before_every_file(monkeypatch, tmp_path):
+    """An answer from the first file is old after the next container copy: a Downloads
+    folder removed meanwhile is made again and the second file lands, instead of failing
+    the rest of the sweep. MUTATION: one folder answer for all files - red."""
+    import shutil as _shutil
+
+    def remove(i):
+        if i == 1:
+            _shutil.rmtree(tmp_path / "Documents" / "VAF_Projects" / "ab12cd34" / "Downloads")
+
+    root, _outside, _calls = _sweep_lab(monkeypatch, tmp_path, names=["a.pdf", "b.pdf"],
+                                        on_cp=remove)
+    assert bi._real_sweep_container_downloads("vaf-browser", "scope-a") == ["a.pdf", "b.pdf"]
+    assert (root / "Downloads" / "b.pdf").exists()
+
+
+def test_sweep_makes_the_file_owner_only_before_the_first_byte(monkeypatch, tmp_path):
+    """MUTATION: the fchmod after the copy - red (the bytes are written at 0o666 & ~umask)."""
+    import os
+    import shutil as _shutil
+    import stat
+    if not hasattr(os, "fchmod"):
+        pytest.skip("no fchmod on this host")
+    _sweep_lab(monkeypatch, tmp_path)
+    modes = []
+    real_copy = _shutil.copyfileobj
+
+    def spying_copy(src, dst, *a, **k):
+        modes.append(stat.S_IMODE(os.fstat(dst.fileno()).st_mode))
+        return real_copy(src, dst, *a, **k)
+
+    monkeypatch.setattr(_shutil, "copyfileobj", spying_copy)
+    assert bi._real_sweep_container_downloads("vaf-browser", "scope-a") == ["report.pdf"]
+    assert modes == [0o600]
+
+
+def test_a_failed_copy_leaves_no_partial_file_and_the_sweep_goes_on(monkeypatch, tmp_path):
+    """A full disk in the middle of one file: that file is removed again (in the folder it
+    was opened in), its container copy stays for the next sweep, and the next file is still
+    delivered. MUTATION: drop the discard_written call - red (a partial a.pdf stays).
+    MUTATION: re-raise instead of going on - red (b.pdf is not delivered)."""
+    import errno
+    import shutil as _shutil
+    root, _outside, calls = _sweep_lab(monkeypatch, tmp_path, names=["a.pdf", "b.pdf"])
+    real_copy = _shutil.copyfileobj
+    seen = []
+
+    def full_disk_once(src, dst, *a, **k):
+        seen.append(dst)
+        if len(seen) == 1:
+            dst.write(b"half")
+            dst.flush()
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real_copy(src, dst, *a, **k)
+
+    monkeypatch.setattr(_shutil, "copyfileobj", full_disk_once)
+    assert bi._real_sweep_container_downloads("vaf-browser", "scope-a") == ["b.pdf"]
+    assert sorted(p.name for p in (root / "Downloads").iterdir()) == ["b.pdf"]
+    assert not _removed(calls, "a.pdf") and _removed(calls, "b.pdf")
 
 
 def test_the_run_wires_the_handover_into_its_task_and_its_jar_decision():

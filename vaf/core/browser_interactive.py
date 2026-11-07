@@ -683,7 +683,8 @@ def _sweep_container_downloads(container_name: str, user_scope_id: str) -> List[
     delivered: List[str] = []
     try:
         from vaf.core.containers import docker as _docker
-        from vaf.core.path_jail import PathEscape, WriteRefused, open_for_write
+        from vaf.core.path_jail import (PathEscape, WriteRefused, discard_written,
+                                        open_for_write)
         from vaf.core.session import get_user_downloads_dir, get_user_projects_root
 
         root = get_user_projects_root(user_scope_id)
@@ -712,10 +713,6 @@ def _sweep_container_downloads(container_name: str, user_scope_id: str) -> List[
         from vaf.core.config import resolve_caller_username
         from vaf.core.threat_db import inspect_upload_file
 
-        # Resolved at the first file that is delivered: an ordinary folder, no link, in a root
-        # that is no link (get_user_downloads_dir). The holder can write their own root, so a
-        # linked Downloads would carry the file into someone else's.
-        target_dir = None
         for size, cpath in entries:
             raw_name = os.path.basename(cpath)
             if size > _DOWNLOAD_MAX_BYTES:
@@ -742,19 +739,23 @@ def _sweep_container_downloads(container_name: str, user_scope_id: str) -> List[
                                       f"[browser_interactive] download blocked by threat "
                                       f"funnel: {name}")
                 else:
+                    # Asked for EVERY file, right before its write: the holder can write
+                    # their own root and watch a file arrive, so an answer from an earlier
+                    # file is old after the next container copy (up to 120 s). An ordinary
+                    # folder, no link, in a root that is no link (get_user_downloads_dir), and
+                    # the open below holds the folder to that answer (expect_folder).
+                    try:
+                        target_dir = get_user_downloads_dir(user_scope_id)
+                    except PathEscape:
+                        target_dir = None
                     if target_dir is None:
-                        try:
-                            target_dir = get_user_downloads_dir(user_scope_id)
-                        except PathEscape:
-                            target_dir = None
-                        if target_dir is None:
-                            # Kept in the container, unread, until the folder is an ordinary
-                            # one again; a scope change purges them as before.
-                            append_domain_log(
-                                "webui", "[browser_interactive] downloads not delivered: "
-                                "the Downloads folder is not an ordinary folder (a link or "
-                                "a file)")
-                            break
+                        # Kept in the container, unread, until the folder is an ordinary
+                        # one again; a scope change purges them as before.
+                        append_domain_log(
+                            "webui", "[browser_interactive] downloads not delivered: "
+                            "the Downloads folder is not an ordinary folder (a link or "
+                            "a file)")
+                        break
                     dest = target_dir / name
                     stem, dot, ext = name.rpartition(".")
                     n = 1
@@ -766,17 +767,37 @@ def _sweep_container_downloads(container_name: str, user_scope_id: str) -> List[
                     # falls back to copy2, which follows a link at the name, and the chmod
                     # after it went through one as well. The staged file is removed below.
                     try:
-                        with open(staged, "rb") as src, \
-                                open_for_write(dest, "wb", exclusive=True) as out:
-                            shutil.copyfileobj(src, out)
-                            if hasattr(os, "fchmod"):
-                                try:
-                                    os.fchmod(out.fileno(), 0o600)
-                                except OSError:
-                                    pass
+                        out = open_for_write(dest, "wb", exclusive=True,
+                                             expect_folder=target_dir)
                     except (WriteRefused, FileExistsError) as e:
                         append_domain_log("webui",
                                           f"[browser_interactive] download not delivered: {e}")
+                        continue
+                    copied = False
+                    try:
+                        # Owner-only before the first byte, on the handle (never by path).
+                        if hasattr(os, "fchmod"):
+                            try:
+                                os.fchmod(out.fileno(), 0o600)
+                            except OSError:
+                                pass
+                        with open(staged, "rb") as src:
+                            shutil.copyfileobj(src, out)
+                        out.flush()
+                        copied = True
+                    except OSError as e:
+                        # A full disk, say: no partial file stays behind, removed in the
+                        # folder it was opened in, and the container copy stays for the next
+                        # sweep.
+                        discard_written(dest, out)
+                        append_domain_log("webui",
+                                          f"[browser_interactive] download not delivered: {e}")
+                    finally:
+                        try:
+                            out.close()
+                        except OSError:
+                            pass
+                    if not copied:
                         continue
                     delivered.append(dest.name)
                     append_domain_log("webui",

@@ -2335,23 +2335,30 @@ def get_user_downloads_dir(user_scope_id: Optional[str]) -> Optional[Path]:
     must resolve to exactly the folder named, as seen from the resolved VAF_Projects: a link
     at either step changes the resolved path, wherever it points. The one link that
     resolves to its own name is a loop, and `mkdir` refuses it like a plain file of that
-    name. NAMED BOUNDARY: a link swapped in between this check and the write is followed for
-    that one write."""
+    name.
+
+    Returns that REAL path (VAF_Projects resolved, the two names as they are), which is what a
+    writer passes to `open_for_write(..., expect_folder=)`: a check made here is old by the
+    time the bytes arrive (a cloud fetch, a container copy), and the folder can be swapped
+    for a link in between. Ask this right before each write, and let the open compare the
+    folder handle's kernel path with the answer, so a swap in between is refused, not
+    followed."""
     root = get_user_projects_root(user_scope_id)
     if root is None:
         return None
     dest = root / "Downloads"
+    real = root.parent.resolve() / root.name / "Downloads"
     try:
-        exact = dest.resolve() == root.parent.resolve() / root.name / "Downloads"
+        exact = dest.resolve() == real
     except (OSError, RuntimeError):  # a link loop, before Python 3.13
         exact = False
     if not exact:
         raise PathEscape("the Downloads folder or its account folder is a link")
     try:
-        dest.mkdir(parents=True, exist_ok=True)
+        real.mkdir(parents=True, exist_ok=True)
     except FileExistsError:
         raise PathEscape("Downloads is not a folder") from None
-    return dest
+    return real
 
 
 def get_session_attachments_dir(

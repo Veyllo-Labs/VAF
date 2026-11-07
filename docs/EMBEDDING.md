@@ -2777,7 +2777,7 @@ Stable public surface (safe to build on):
   (as given and resolved, case-folded, Windows' trailing dots and stream suffixes cut),
   fail-closed: an error answers True. It answers nothing about reading. The path need not
   exist.
-- `vaf.open_for_write(path, mode="wb", *, exclusive=False, encoding=None, newline=None)` /
+- `vaf.open_for_write(path, mode="wb", *, exclusive=False, encoding=None, newline=None, expect_folder=None)` /
   `vaf.WriteRefused` - the open that goes with that answer, for a file under a name a
   model, a request or a peer chose (and the `.part` beside one). It opens the folder first
   and the file relative to it, refuses a link as the last component instead of following
@@ -2791,7 +2791,17 @@ Stable public surface (safe to build on):
   as ordinary entries, which is why VAF's own writers use this and not `open()`. On Windows
   (no `O_NOFOLLOW`, no open relative to a folder handle) a link swapped in between the
   check and the open is followed for that one open; a file it creates in VAF's state is
-  removed again.
+  removed again. `expect_folder` is for a folder somebody else can write (an account's own
+  folder that its sandbox environment mounts): pass the folder's REAL path as you checked it
+  (resolved from a folder only you can write, the last names as you expect them). The open
+  compares the opened folder handle's kernel path with it, never resolving it, and refuses
+  anything else (`WriteRefused`, "a link on the way"), so a link swapped in for that folder
+  or any folder above it after your check is refused instead of followed, however long your
+  own work between check and write took. Ask your check again right before the write and
+  pass its answer. On Windows the folder is compared before the open and the opened file's
+  folder after it, and a file the open created elsewhere is removed again before anything is
+  written; a swap and a swap back between the open and that second look is the remaining
+  window there.
 - `vaf.revoke_account(scope)` / `vaf.restore_account(scope)` /
   `vaf.stop_account_work(scope)` / `vaf.stop_session(session_id, *,
   include_subagents=True)` / `vaf.add_revocation_listener(fn)` /

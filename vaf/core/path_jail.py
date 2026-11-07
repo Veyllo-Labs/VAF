@@ -256,11 +256,12 @@ def open_for_write(path, mode: str = "wb", *, exclusive: bool = False,
     NAMED BOUNDARY, Windows (no ``O_NOFOLLOW``, no directory handles): a link at the path is
     refused (``islink``), the resolved path is checked before and after the open, and a file
     created in VAF's state through a link that is still in place at the second check is
-    removed again. A link or junction swapped
+    removed again, best effort only: an error of that removal is ignored and the write is
+    still refused, so an empty file can stay in VAF's state. A link or junction swapped
     in between the check and the open is followed for that one open; with ``expect_folder``
     the folder is checked before the open and the path's resolved folder after it, and a
-    file this call created elsewhere is removed again and refused, before anything is
-    written or truncated. What remains is not narrow: the second check resolves the PATH
+    file this call created elsewhere is refused and removed again (best effort, as above),
+    before anything is written or truncated. What remains is not narrow: the second check resolves the PATH
     again (``realpath``), not the opened handle, so a link that is in place when ``os.open``
     runs and is removed again before that second check is not seen, and the write lands
     behind it; with this branch simulated on Linux, a process swapping in a tight loop got

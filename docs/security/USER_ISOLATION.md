@@ -738,7 +738,8 @@ the folder's real path, to `open_for_write(..., expect_folder=)`: the open compa
 opened folder handle's kernel path with it and refuses anything else, so a link swapped in
 for `Downloads` or any folder above it is refused instead of followed. NAMED BOUNDARIES: on
 Windows (no folder handles) the folder is compared before the open and the path's resolved
-folder after it, and a file created elsewhere is removed again before anything is written.
+folder after it, and a file created elsewhere is removed again before anything is written
+(best effort: a failed removal leaves an empty file there, and the write is still refused).
 The second look resolves the path again, not the opened file, which leaves a link that is in
 place when the file is opened and removed again before the second look unseen, and that
 window is real, not narrow (with the Windows path simulated, a process swapping in a

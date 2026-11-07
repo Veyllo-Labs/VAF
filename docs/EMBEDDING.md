@@ -2807,16 +2807,18 @@ Stable public surface (safe to build on):
   check and the open is followed for that one open; a file it creates in VAF's state is
   removed again only while the link is still there at the second look, which resolves the
   path, not the opened file (a link into VAF's state removed again before it lets the write
-  land there, with or without `expect_folder`). `expect_folder` is for a folder somebody else can write (an account's own
-  folder that its sandbox environment mounts): pass the folder's REAL path as you checked it
+  land there, with or without `expect_folder`). That removal is best effort: an error of it
+  is ignored and the write is still refused, so an empty file can stay in VAF's state.
+  `expect_folder` is for a folder somebody else can write (an account's own folder that its
+  sandbox environment mounts): pass the folder's REAL path as you checked it
   (resolved from a folder only you can write, the last names as you expect them). The open
   compares the opened folder handle's kernel path with it, never resolving it, and refuses
   anything else (`WriteRefused`, "a link on the way"), so a link swapped in for that folder
   or any folder above it after your check is refused instead of followed, however long your
   own work between check and write took. Ask your check again right before the write and
   pass its answer. On Windows the folder is compared before the open and the path's resolved
-  folder after it, and a file the open created elsewhere is removed again before anything is
-  written. That second look resolves the path again, not the opened file, so a link that is
+  folder after it, and a file the open created elsewhere is removed again (best effort, an
+  empty file can stay) before anything is written. That second look resolves the path again, not the opened file, so a link that is
   in place when the file is opened and removed again before the second look is not seen, and
   the write lands behind it. That window is real, not narrow: with the Windows
   path simulated, a process swapping the link in a tight loop got about one write in six

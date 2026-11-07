@@ -174,8 +174,9 @@ is a turn of your account's app chat, with these differences
   character outside plain ASCII marked, and a domain with such characters its punycode in
   square brackets: `alice@ex⟨U+0430⟩mple.com [xn--exmple-4nf.com]`. A number shows only its
   digits and a leading `+`, anything else marked. Two sends never reach a card at all: a mail
-  to an address with a character outside plain ASCII is refused when it is queued (the mail
-  lane delivers only to plain ASCII addresses), and a WhatsApp number with anything but
+  to an address no mail server can take (a domain that is no valid internationalised domain
+  name, such as one with a full-width letter, or an address the account's server has said it
+  cannot take) is refused when it is queued, and a WhatsApp number with anything but
   digits, a leading `+` and the separators space, `-`, `.`, `/`, `(` and `)` is refused
   before it is parked; the app's agent gets the reason. What runs is still exactly the
   stored call. Nothing is cut: a call whose text as shown would be longer than

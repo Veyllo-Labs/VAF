@@ -15,16 +15,16 @@ import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from vaf.mail.addressing import UndeliverableAddress  # noqa: F401  (the funnel's refusal, imported from here)
 from vaf.mail.parser import parse_message
 from vaf.mail.store import MailStore
 
 logger = logging.getLogger("vaf.mail.service")
 
-
-class UndeliverableAddress(ValueError):
-    """`MailService.queue_send` refused an envelope address this lane cannot deliver (a
-    character outside plain ASCII). A ``ValueError``, so every caller that already reports
-    one reports this one; its own type lets a log name the refusal without the address."""
+#: How long a server's "no SMTPUTF8" answer refuses a mail at queue time. Every SMTP session
+#: of the account records the answer again (`writeback._op_send`), so a server that gains the
+#: extension is seen on the next ordinary send; an older "no" lets the send itself ask again.
+SMTPUTF8_RECORD_MAX_AGE_SEC = 7 * 24 * 3600
 
 #: What a held draft is told when its last attempt handed the mail to the server and never
 #: heard back. The ledger's word for that is `ambiguous`, and it is final for the draft: SMTP
@@ -659,45 +659,59 @@ class MailService:
         `sent_by` records whose word it is (owner, agent, front_office); `reply_to_pk`
         is the inbound message this answers, marked answered when the mail leaves.
 
-        An envelope address with a character outside plain ASCII raises ``ValueError`` before
-        anything is built or queued (display names may be anything). Measured: this lane
-        never negotiates SMTPUTF8 and smtplib sends ``RCPT TO`` in ASCII, so such a mail fails
-        permanently on every provider, and only after the person approved it. NAMED BOUNDARY:
-        an internationalised address becomes deliverable only with an SMTPUTF8/IDNA lane, and
-        this check is where that lane would start.
+        Internationalised addresses (EMAIL_CLIENT.md, "Addresses in other scripts") are
+        checked before anything is built or queued, and an address no server can take raises
+        `UndeliverableAddress` (a ``ValueError``): every recipient and the account's own From
+        address go through `envelope_address`. A local part outside ASCII needs the server's
+        SMTPUTF8; when this account's server answered "no" within
+        `SMTPUTF8_RECORD_MAX_AGE_SEC`, the mail is refused here, before any card. NAMED
+        BOUNDARY: no SMTP connection is opened here, so the first such send from an account
+        with no record is decided by the server at send time, before any credential is spent.
+        Such a mail is built with UTF-8 headers as written (RFC 6532); every other mail keeps
+        ASCII headers, with the A-label of a domain outside ASCII in its addr-specs. The op
+        payload keeps the addresses as written, which is what the cards show and mark.
         """
         from datetime import datetime, timezone
         from vaf.mail import compose
-        from vaf.mail.addressing import normalize_recipients
-        for addr in (normalize_recipients(to) + normalize_recipients(cc)
-                     + normalize_recipients(bcc)):
-            if not addr.isascii():
-                from vaf.core.shown_text import ascii_marks, mail_address
-                raise UndeliverableAddress(
-                    f"cannot queue a mail to {ascii_marks(mail_address(addr))}: the address has "
-                    "characters outside plain ASCII, and this mail lane delivers only to plain "
-                    "ASCII addresses. Nothing was queued. Ask for the address in plain letters, "
-                    "or reach the person another way.")
-        apk = self.store.account_pk(account_id)
-        if apk is None:
-            apk = self.store.upsert_account(account_id, "imap", account_id)
+        from vaf.mail.addressing import envelope_address, envelope_header, needs_smtputf8, normalize_recipients
+        recipients = (normalize_recipients(to) + normalize_recipients(cc)
+                      + normalize_recipients(bcc))
+        for addr in recipients:
+            envelope_address(addr)
         # From = the account's real address (not the account_id identifier); the
         # Bcc goes into the stored Sent copy so the sender keeps the record.
         acc = next((a for a in self.store.list_accounts()
                     if a.get("account_id") == account_id), None)
         from_addr = (acc or {}).get("email") or account_id
+        envelope_address(from_addr)
+        international = [a for a in [from_addr] + recipients if needs_smtputf8(a)]
+        apk = self.store.account_pk(account_id)
+        if international and apk is not None:
+            rec = self.store.account_state(apk).get("smtp_utf8")
+            if isinstance(rec, dict) and rec.get("offered") is False:
+                age = datetime.now(timezone.utc).timestamp() - float(rec.get("checked_ts") or 0)
+                if 0 <= age < SMTPUTF8_RECORD_MAX_AGE_SEC:
+                    raise UndeliverableAddress("smtputf8", international[0])
+        if apk is None:
+            apk = self.store.upsert_account(account_id, "imap", account_id)
         message_id = None
         if case_id:
             from vaf.mail.case_token import mint_message_id
             message_id = mint_message_id(self.user_scope_id, account_id, case_id,
                                          compose.message_id_domain(from_addr))
-        msg = compose.build_message(from_addr, to, subject, body, cc=cc or None,
-                                    bcc=bcc or None,
+        if international:
+            headers = (from_addr, to, cc or None, bcc or None)
+        else:
+            headers = (envelope_header(from_addr), envelope_header(to),
+                       envelope_header(cc) or None, envelope_header(bcc) or None)
+        msg = compose.build_message(headers[0], headers[1], subject, body, cc=headers[2],
+                                    bcc=headers[3],
                                     in_reply_to=in_reply_to or None,
                                     references=references or None,
                                     attachments=attachments or None,
                                     message_id=message_id, agent_written=agent_written,
-                                    root_anchor=root_anchor or None)
+                                    root_anchor=root_anchor or None,
+                                    utf8=bool(international))
         # Carry the compose Message-ID so the DELIVERED mail is sent with this
         # exact id (transport message_id=), making the delivered mail and the
         # Sent copy one RFC822 entity - replies then thread correctly.

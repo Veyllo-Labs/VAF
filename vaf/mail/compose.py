@@ -10,11 +10,17 @@ threading alive on the recipient side (JWZ input). Subject prefixes are
 normalized so "Re:" never stacks (German AW:/WG: variants recognized)."""
 import re
 from datetime import datetime, timezone
+from email import policy as _policy
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
 from typing import Dict, Iterable, List, Optional
 
-from vaf.mail.addressing import parseaddr
+from vaf.mail.addressing import UndeliverableAddress, envelope_address, parseaddr
+
+#: The header policy of a mail whose addresses need SMTPUTF8: every header, the addresses and
+#: the display names, written as raw UTF-8 (RFC 6532). The default policy would write an
+#: encoded word in place of such an address, which drops the address from the header.
+UTF8_POLICY = _policy.default.clone(utf8=True)
 
 _RE_PREFIX = re.compile(r"^\s*((re|aw|antw|sv)(\[\d+\])?:\s*)+", re.IGNORECASE)
 _FWD_PREFIX = re.compile(r"^\s*((fw|fwd|wg)(\[\d+\])?:\s*)+", re.IGNORECASE)
@@ -127,9 +133,15 @@ def _flow_encode(text: str) -> str:
 def message_id_domain(from_addr: str) -> str:
     """The domain half of a Message-ID VAF mints: the sending address's own domain, so
     the id looks ordinary to the correspondent and never carries the machine's hostname
-    (which `make_msgid()` would use)."""
+    (which `make_msgid()` would use). A domain outside ASCII is written as its A-labels, the
+    form the envelope carries; one no server could take falls back to ``vaf.invalid``."""
     _name, addr = parseaddr(from_addr or "")
     domain = addr.rsplit("@", 1)[-1].strip().lower() if "@" in addr else ""
+    if domain and not domain.isascii():
+        try:
+            domain = envelope_address(f"x@{domain}").rsplit("@", 1)[-1]
+        except UndeliverableAddress:
+            domain = ""
     return domain or "vaf.invalid"
 
 
@@ -138,7 +150,7 @@ def build_message(from_addr: str, to: str, subject: str, body_text: str,
                   in_reply_to: Optional[str] = None, references: Optional[str] = None,
                   attachments: Optional[List[Dict[str, bytes]]] = None,
                   message_id: Optional[str] = None, agent_written: bool = False,
-                  root_anchor: Optional[str] = None) -> EmailMessage:
+                  root_anchor: Optional[str] = None, utf8: bool = False) -> EmailMessage:
     """RFC 822 message with format=flowed plain text. attachments: list of
     {filename, content_type, payload}. Bcc handling is the TRANSPORT's job
     (envelope vs header semantics differ per provider - v1 rules apply).
@@ -149,9 +161,10 @@ def build_message(from_addr: str, to: str, subject: str, body_text: str,
     adds `Auto-Submitted: auto-replied` (RFC 3834, the loop guard every autoresponder
     honours) and `X-Auto-Response-Suppress: OOF, AutoReply` (Exchange's). `root_anchor`
     is the case's first Message-ID, appended to References on every mail of the case so
-    a client that threads on a consistent id keeps the conversation together.
+    a client that threads on a consistent id keeps the conversation together. `utf8` writes
+    every header as raw UTF-8 (`UTF8_POLICY`), for a mail that goes out with SMTPUTF8.
     """
-    msg = EmailMessage()
+    msg = EmailMessage(policy=UTF8_POLICY) if utf8 else EmailMessage()
     msg["From"] = from_addr
     msg["To"] = to
     if cc:
@@ -194,10 +207,14 @@ def revise_message(raw: bytes, *, subject: Optional[str] = None,
     the same format=flowed encoding `build_message` writes, and the Subject header is
     swapped in its own position. From, every recipient (the Bcc included), the Message-ID,
     the threading headers and every attachment leave byte for byte as they were built.
+    A message with raw UTF-8 in its header block (built with `utf8`) is read and written back
+    with `UTF8_POLICY`: the default policy would turn its To line into an encoded word of
+    unknown bytes and lose the address.
     """
-    from email import policy
     from email.parser import BytesParser
-    msg = BytesParser(policy=policy.default).parsebytes(raw)
+    head = raw.split(b"\r\n\r\n", 1)[0].split(b"\n\n", 1)[0]
+    utf8 = any(byte >= 0x80 for byte in head)
+    msg = BytesParser(policy=UTF8_POLICY if utf8 else _policy.default).parsebytes(raw)
     if subject is not None:
         if msg["Subject"] is None:
             msg["Subject"] = subject or "(No subject)"

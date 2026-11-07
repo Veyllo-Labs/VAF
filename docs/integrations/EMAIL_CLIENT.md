@@ -310,21 +310,57 @@ surfaces, see [VEYLLO_APP.md](VEYLLO_APP.md#the-apps-agent-can-ask-your-agent)).
 turns, the Front Office answer and a timer the person scheduled all send as before, because
 nobody is there to click.
 
-**A mail to an address outside plain ASCII is refused before it is queued.** `queue_send`
-checks every envelope address (`normalize_recipients` of To, Cc and Bcc) and raises
-`UndeliverableAddress`, a `ValueError` ("cannot queue a mail to alice@ex<U+0430>mple.com
-[xn--exmple-4nf.com]: ... Nothing was queued. Ask for the address in plain letters, or reach
-the person another way.") before anything is built; display names may hold any characters.
-Measured: the native lane never negotiates SMTPUTF8, `compose.build_message` writes an encoded
-word inside the addr-spec, and smtplib sends `RCPT TO` in ASCII, so such a mail failed
-permanently with an `'ascii' codec` error on every provider, and only after the person had
-approved the card. The agent's tools answer `Failed to send email: ...` (no draft, no card),
-`POST /api/mail/send` answers 400 with the reason, and a Front Office answer logs
-`REPLY FAILED` with the kind of refusal and without the sender's address. NAMED BOUNDARY: an
-internationalised address becomes deliverable only with an SMTPUTF8/IDNA lane, and this check
-is where that lane would start. The cards show what does
-reach them through `vaf/core/shown_text.py`: the address first and whole, every character
-outside plain ASCII marked.
+**Addresses in other scripts are delivered.** `иван@пример.рф` and `alice@bücher.de` go out
+like any address; `vaf/mail/addressing.py` gives every address its envelope form
+(`envelope_address`). A domain outside ASCII becomes its A-labels under strict IDNA2008 (RFC
+5891-5893, the `idna` package's `alabel`; ASCII letters in such a label are lowered first,
+which DNS treats as the same name). Measured on the alternatives: the standard library's
+`idna` codec (IDNA 2003 with nameprep) turns `faß.de` into `fass.de` and a full-width
+`ｅxample.com` into `example.com`, and UTS46 mapping still folds the full-width letter, the
+`ﬁ` ligature and the Roman numeral `ⅷ`; each of those is another, separately registrable
+domain, so a mapping codec hands the mail to a stranger. For every label IDNA2008 accepts,
+the A-label is `xn--` plus the label's raw punycode, which is the bracket the cards show
+beside the address, so the card names the domain the mail goes to. A local part outside ASCII
+stays as written and needs the server's SMTPUTF8 (RFC 6531): such a mail is built with raw
+UTF-8 headers (RFC 6532, `compose.UTF8_POLICY`; the default policy would replace the address
+with an encoded word and drop it), sent with `MAIL FROM:<...> SMTPUTF8 BODY=8BITMIME`, and
+edited on its card with the same policy (`compose.revise_message`), so a revision keeps every
+recipient. Every other mail keeps ASCII headers, with the A-label in its addr-specs and the
+names RFC 2047-encoded; a mail whose addresses are all ASCII is built byte for byte as before.
+The op payload keeps the addresses as written, which is what the cards show and mark.
+
+Whether a server offers SMTPUTF8 is read after its last EHLO, and a server without it is
+refused PERMANENTLY before any credential is spent and before `MAIL FROM` ("... does not
+accept addresses with characters outside plain ASCII before the @ ... Nothing was sent."), so
+a held draft goes back to `held` with that reason. Every SMTP session records the answer in
+the account's own state (`smtp_utf8`: `offered`, `checked_ts`, written by `writeback._op_send`
+through `MailStore.set_account_state`, whose read and write share one write lock because the
+answering lane writes its cursor into the same JSON from another thread). A "no" younger than
+seven days (`SMTPUTF8_RECORD_MAX_AGE_SEC`) refuses the next such mail in `queue_send`, before
+any card; an older one lets the send ask again, and an ordinary send to a server that gained
+the extension clears it. NAMED BOUNDARY: `queue_send` opens no SMTP connection (it holds a
+scope, not the account's SMTP settings), so the first such mail from an account with no record
+is decided by the server at send time.
+
+What is still refused, in `queue_send` before anything is built or queued, for every recipient
+and the account's own From address: `UndeliverableAddress`, a `ValueError` with a `code` and the
+`address` as written. `domain`: IDNA2008 refuses the domain (`alice@ｅxample.com`, `a@ﬁle.com`,
+a Kelvin sign that `str.lower()` would turn into `k`); `domain_case`: the domain is valid only
+in small letters (`a@ПРИМЕР.рф`); `local_part`: the part before the @ holds a control
+character; `smtputf8`: the record above. Its text shows the address as the cards do, in ASCII
+marks (`alice@<U+FF45>xample.com [xn--xample-hy68a.com]`), names no protocol, says "Nothing was
+queued." and ends with the next step. The agent's tools answer `Failed to send email: ...` (no
+draft, no card), `POST /api/mail/send` answers 400 with `detail` (that text), `code` and the
+shown `address`, and the compose window shows the text inside its "Could not be sent" line
+(any other failure keeps the generic one). A Front Office answer logs `REPLY FAILED` with the
+code's phrase (`UndeliverableAddress.reason`) and without the address. A look-alike that IS a
+valid domain (`alice@exаmple.com`, a Cyrillic а) is delivered, not refused: the cards show what
+does reach them through `vaf/core/shown_text.py`, the address first and whole, every character
+outside plain ASCII marked. A Sent APPEND of a UTF-8 mail to an IMAP server without
+`UTF8=ACCEPT` may be refused; that tail is best effort and logged (the mail was sent). Guards:
+`tests/test_mail_international_address.py` (the envelope, the headers, a socket stub with and
+without SMTPUTF8, the record) and `tests/test_mail_non_ascii_recipient.py` (the refusals on
+every surface).
 
 The agent can ASK what became of a draft: the `list_drafts` TOOL (`vaf/tools/list_drafts.py`,
 not the `MailService.list_drafts` method below) reads the same ledger as the card, this chat's
@@ -1034,7 +1070,8 @@ The strict address checks in `vaf/mail/addressing.py` follow the behaviour of
 CPython's fix for CVE-2023-27043 (PSF-2.0), written anew for the older runtimes.
 Protocol algorithms come from IETF RFCs (freely implementable): 2177 (IDLE),
 3676 (format=flowed), 4315 (UIDPLUS), 4549 (offline sync), 5256 (threading),
-6154 (SPECIAL-USE), 6851 (MOVE), 7162 (CONDSTORE/QRESYNC), 8621 (JMAP data
-model). Runtime dependencies: IMAPClient BSD-3-Clause,
+5890-5893 (IDNA2008), 6154 (SPECIAL-USE), 6531 (SMTPUTF8), 6532 (UTF-8 headers),
+6851 (MOVE), 7162 (CONDSTORE/QRESYNC), 8621 (JMAP data
+model). Runtime dependencies: IMAPClient BSD-3-Clause, idna BSD-3-Clause,
 nh3 MIT (ammonia MIT/Apache-2.0), zstandard BSD, optional DOMPurify
 Apache-2.0/MPL dual. GPL/AGPL projects are pattern references only.

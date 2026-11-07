@@ -17,6 +17,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Response
+from fastapi.responses import JSONResponse
 
 from vaf.api.config_routes import get_current_user_or_local_admin as _get_current_user
 from vaf.core import composer_lane
@@ -396,10 +397,18 @@ async def send_message(body: Dict[str, Any] = Body(...),
             references=(body.get("references") or "").strip(),
             undo_seconds=undo)
 
+    from vaf.mail.addressing import UndeliverableAddress
     try:
         out = await asyncio.to_thread(_run)
+    except UndeliverableAddress as e:
+        # An address no server can take, or this account's server cannot: nothing was
+        # queued. `code` and the address as the cards show it let the window say why in the
+        # reader's language; `detail` is the same text every other caller gets.
+        from vaf.core.shown_text import mail_address
+        return JSONResponse(status_code=400, content={
+            "detail": str(e), "code": e.code, "address": str(mail_address(e.address))})
     except ValueError as e:
-        # A send the funnel refuses (an address this lane cannot deliver): nothing was queued.
+        # Any other send the funnel refuses: nothing was queued.
         raise HTTPException(status_code=400, detail=str(e))
 
     async def _deliver_later():

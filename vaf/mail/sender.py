@@ -28,6 +28,13 @@ parks it and never re-sends.
 
 TLS is always verified (ssl.create_default_context, never disableable) and the
 SMTP host passes the shared SSRF guard, exactly like the IMAP client.
+
+Internationalised addresses: the envelope carries `addressing.envelope_address` of every
+address (the A-label of a domain outside ASCII). An address with a local part outside ASCII
+needs the server's SMTPUTF8 (RFC 6531): the extension is read after the last EHLO, and a
+server without it is refused PERMANENTLY before any credential is spent and before MAIL FROM.
+Every result after the EHLO carries what the server said (`SendResult.smtputf8`), which the
+outbox records per account so the next such mail is refused at queue time.
 """
 import logging
 import smtplib
@@ -39,7 +46,8 @@ from typing import Any, Dict, List, Optional
 from vaf.core.config import Config
 from vaf.core.credential_store import get_email_credentials
 from vaf.core.oauth_pkce import get_valid_access_token
-from vaf.mail.addressing import normalize_recipients
+from vaf.mail.addressing import (UndeliverableAddress, envelope_address, needs_smtputf8,
+                                  normalize_recipients, refusal_text)
 from vaf.network.binding import assert_safe_remote_host
 
 logger = logging.getLogger("vaf.mail.sender")
@@ -87,6 +95,8 @@ class SendResult:
     classification: str  # 'ok' | 'transient' | 'permanent' | 'ambiguous'
     handed_off: bool = False
     error: Optional[str] = None
+    # Whether the server offered SMTPUTF8 after its last EHLO; None when no EHLO answered.
+    smtputf8: Optional[bool] = None
 
 
 def _from_addr(msg: OutgoingMessage) -> str:
@@ -155,10 +165,27 @@ def _smtp_send(msg: OutgoingMessage, provider: str) -> SendResult:
     if not envelope:
         return SendResult(False, "permanent", error="no valid recipients")
     try:
+        # Only an op written by hand reaches this with an address the funnel would refuse.
+        mail_from = envelope_address(from_addr)
+        rcpts = [envelope_address(a) for a in envelope]
+    except UndeliverableAddress as e:
+        return SendResult(False, "permanent", error=str(e))
+    try:
         wire = _wire_bytes(msg.raw_bytes)
     except Exception as e:
         return SendResult(False, "permanent", error=f"could not parse message bytes: {e}")
+    international = [a for a in [from_addr] + envelope if needs_smtputf8(a)]
+    seen: Dict[str, Optional[bool]] = {"smtputf8": None}
+    res = _smtp_conversation(msg, provider, host, port, from_addr, mail_from, rcpts,
+                             international, wire, seen)
+    res.smtputf8 = seen["smtputf8"]
+    return res
 
+
+def _smtp_conversation(msg: OutgoingMessage, provider: str, host: str, port: int,
+                       from_addr: str, mail_from: str, rcpts: List[str],
+                       international: List[str], wire: bytes,
+                       seen: Dict[str, Optional[bool]]) -> SendResult:
     handed_off = False
     conn: Optional[smtplib.SMTP] = None
     try:
@@ -172,6 +199,10 @@ def _smtp_send(msg: OutgoingMessage, provider: str) -> SendResult:
             conn.ehlo()
             conn.starttls(context=ctx)
             conn.ehlo()
+        seen["smtputf8"] = bool(conn.has_extn("smtputf8"))
+        if international and not seen["smtputf8"]:
+            return SendResult(False, "permanent",
+                              error=refusal_text("smtputf8", international[0], "Nothing was sent."))
 
         if provider == "imap":
             creds = get_email_credentials(_account_id(msg), "imap", msg.username, user_scope_id=msg.user_scope_id)
@@ -186,8 +217,13 @@ def _smtp_send(msg: OutgoingMessage, provider: str) -> SendResult:
             ir = _xoauth2_string(from_addr, token)
             conn.auth("XOAUTH2", lambda challenge=None: ir if challenge is None else "", initial_response_ok=True)
 
-        conn.mail(from_addr)
-        for rcpt in envelope:
+        if international:
+            # The pair the standard library's own send_message passes for such a mail; with
+            # SMTPUTF8 smtplib writes the commands in UTF-8 instead of ASCII.
+            conn.mail(mail_from, ["SMTPUTF8", "BODY=8BITMIME"])
+        else:
+            conn.mail(mail_from)
+        for rcpt in rcpts:
             conn.rcpt(rcpt)
         handed_off = True
         conn.data(wire)

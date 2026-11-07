@@ -293,8 +293,7 @@ def _deliver_email_reply(task, meta: dict, final_text: str) -> None:
         # The refusal's text carries the sender's whole address; the lane log masks addresses
         # (see the REPLY line above), so it names only the kind of refusal.
         from vaf.mail.service import UndeliverableAddress
-        reason = ("the sender's address has characters outside plain ASCII"
-                  if isinstance(e, UndeliverableAddress) else str(e))
+        reason = e.reason if isinstance(e, UndeliverableAddress) else str(e)
         append_lane_log("email_inbound", f"REPLY FAILED pk={pk}: {reason}", always=True)
         return
     try:

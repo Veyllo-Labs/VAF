@@ -14,7 +14,8 @@ THE SURFACES (measured, N = 3, plus two refusals): the confirmation card on the 
 (vaf/core/agent_origin.py `card_lines`, vaf/core/app_link/confirmations.py `send_what`), the
 web UI's draft card through the rows of vaf/core/outbound_hold.py (`to_shown`, `cc_shown`,
 `bcc_shown`, `name_shown`), and `vaf outbox list`; the mail funnel
-(`MailService.queue_send`) and the WhatsApp park and tool refuse what these functions mark.
+(`MailService.queue_send`) refuses an address no mail server can take, and the WhatsApp park
+and tool refuse what `phone_number` marks.
 
 HOW A RECIPIENT IS SHOWN. The address or number first and whole, then the name, cut at
 ``NAME_MAX``: a name is written by whoever wrote the mail's To line (the model, for a draft),
@@ -28,7 +29,9 @@ the address ``x@evil.test``).
   [xn--exmple-4nf.com]``). The raw ``punycode`` codec per label, never the ``idna`` codec:
   measured, ``"ｅxample".encode("idna") == b"example"``, because nameprep folds a
   full-width letter to ASCII, which is exactly the silent normalisation a look-alike needs.
-  The third-party ``idna`` package is no direct dependency.
+  For every domain strict IDNA2008 accepts, this bracket equals the A-labels the mail is
+  delivered to (`vaf.mail.addressing.envelope_address`), so the card names the domain the mail
+  goes to; a domain IDNA2008 refuses still gets its bracket here, and the funnel refuses it.
 - `phone_number`: what the WhatsApp lane dials, marked. Measured on
   `whatsapp_bridge._normalize_phone`: it keeps every character whose ``isdigit()`` is true,
   so an Arabic-Indic seven, full-width digits or a superscript two land in the JID, and

@@ -19,6 +19,7 @@ Safety rules:
 """
 import base64
 import logging
+import time
 from typing import Any, Dict, Optional
 
 from vaf.mail.store import MailStore
@@ -224,6 +225,15 @@ class OpExecutor:
             attachments=payload.get("attachments") or None,
         )
         res = sender.send(msg)
+        if res.smtputf8 is not None:
+            # What the server said about SMTPUTF8, from every session that reached EHLO, so a
+            # later mail to an address it cannot take is refused before its card
+            # (`MailService.queue_send`) and a server that gains the extension is seen again.
+            try:
+                self.store.set_account_state(self.account_pk, smtp_utf8={
+                    "offered": bool(res.smtputf8), "checked_ts": int(time.time())})
+            except Exception as e:
+                logger.warning("could not record the SMTPUTF8 answer: %s", e)
         if not res.ok:
             if res.classification == "transient" and not res.handed_off:
                 raise _SendRetry(res.error or "transient send failure")

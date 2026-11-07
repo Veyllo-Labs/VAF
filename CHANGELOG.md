@@ -49,6 +49,13 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   Standard keeps DeepSeek's default (`high`). `vaf models config deepseek_reasoning_effort`
   refuses any other value instead of storing one DeepSeek would reject. Higher levels think
   longer and use more output tokens, which DeepSeek bills.
+- **Mail to addresses in other scripts.** Addresses such as `иван@пример.рф` or
+  `alice@bücher.de` can now be sent to: the domain goes out in its punycode form, and an
+  address with non-Latin letters before the @ is sent with the mail server's support for
+  international addresses. Only addresses no mail server can deliver are refused, for example
+  a domain with a full-width letter, and so is a send from an account whose server lacks that
+  support. The mail window now says why it refused a send, and draft cards still mark every
+  character outside plain ASCII.
 
 ### Changed
 
@@ -57,9 +64,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   ASCII in an address are marked (for example `⟨U+0430⟩` for a Cyrillic a), with the punycode
   of the domain beside it, so a look-alike address cannot pass for a real one. `vaf outbox
   list` no longer cuts addresses or file names, and no longer fails on a Windows console when
-  a draft holds non-Latin text. A mail to an address with such characters is refused before
-  it is queued (the mail lane could never deliver it), and a WhatsApp number may hold only
-  digits and separators.
+  a draft holds non-Latin text. A WhatsApp number may hold only digits and separators.
 - Signing out every other device also removes your Veyllo App devices; they pair again. "Sign
   out all other devices" now says so, and asks in the app's own dialog.
 - Answering a speaker confirmation on Discord now replies in the Discord channel the message

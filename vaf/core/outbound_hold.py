@@ -70,9 +70,10 @@ x@evil.test). Every character of an address outside plain ASCII is marked as
 ``\u27e8U+XXXX\u27e9``, with the per-label punycode of a domain outside ASCII beside it in
 square brackets, never through the ``idna`` codec (its nameprep folds a full-width letter to
 ASCII, which is the silent normalisation a look-alike needs). Two such sends never become a
-draft at all. A mail to an address outside ASCII is refused in `MailService.queue_send`:
-measured, the mail lane never negotiates SMTPUTF8 and `smtplib` fails at ``RCPT TO`` with an
-ascii codec error on every provider, so it could only ever fail after the click. A WhatsApp
+draft at all. A mail to an address no mail server can take is refused in
+`MailService.queue_send` (a domain strict IDNA2008 refuses, or a local part outside ASCII
+while the account's server has said it lacks SMTPUTF8), so it never waits for a click that
+could only fail; every other address outside ASCII is delivered and marked. A WhatsApp
 number holding anything but digits, a leading ``+`` and the separators is refused before it
 is parked (`park_refusal`) and in the tool: measured, the bridge keeps every character whose
 ``isdigit()`` is true, so an Arabic-Indic digit lands in the JID, and ``... ext 99`` dials

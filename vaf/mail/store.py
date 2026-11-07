@@ -1200,11 +1200,24 @@ class MailStore:
             return {}
 
     def set_account_state(self, account_pk: int, **patch: Any) -> Dict[str, Any]:
-        state = self.account_state(account_pk)
-        state.update(patch)
+        """Each key of `patch` replaces that key of the account's JSON state; the other keys
+        stay. Read and write run under one write lock (BEGIN IMMEDIATE): the answering lane's
+        cursor and the outbox's SMTPUTF8 answer are written from different threads and
+        connections, and a read outside the lock would write the other lane's key back as it
+        was before (a cursor moved backwards answers mail twice)."""
         conn = self._conn()
-        conn.execute("UPDATE accounts SET sync_state=? WHERE id=?", (json.dumps(state), int(account_pk)))
-        conn.commit()
+        own = not conn.in_transaction
+        if own:
+            conn.execute("BEGIN IMMEDIATE")
+        try:
+            state = self.account_state(account_pk)
+            state.update(patch)
+            conn.execute("UPDATE accounts SET sync_state=? WHERE id=?", (json.dumps(state), int(account_pk)))
+            conn.commit()
+        except BaseException:
+            if own:
+                conn.rollback()
+            raise
         return state
 
     def new_inbox_messages(self, account_pk: int, *, after_pk: int, min_date_ts: int = 0,

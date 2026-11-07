@@ -37,7 +37,8 @@ class FakeSMTP:
         self.calls.append(("auth", mech, authobject()))
         if self.fail_at == "auth" and self.exc:
             raise self.exc
-    def mail(self, sender): self._maybe(("mail", sender))
+    def has_extn(self, name): return False
+    def mail(self, sender, options=()): self._maybe(("mail", sender))
     def rcpt(self, r): self.rcpts.append(r); self._maybe("rcpt")
     def data(self, msg): self.data_sent = msg; self._maybe("data")
     def quit(self): self.calls.append("quit")

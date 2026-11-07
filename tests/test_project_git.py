@@ -231,3 +231,68 @@ def test_history_and_rollback_run_the_git_vaf_resolved(monkeypatch, project):
     ProjectRollbackTool().run(commit="abc1234", project_path=str(project))
     assert ran and all(argv[0] == "/opt/vaf/git/bin/git" for argv in ran)
     assert any("log" in argv for argv in ran) and any("rev-parse" in argv for argv in ran)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The caller decides which project folders are reachable
+# ─────────────────────────────────────────────────────────────────────────────
+
+ALICE = "ab12cd34-0000-4000-8000-00000000000a"
+BOB = "cd34ef56-0000-4000-8000-00000000000b"
+FOREIGN = "is outside the folders this account may write."
+
+
+@pytest.fixture
+def two_accounts(tmp_path, monkeypatch):
+    """Bob's project, with two commits, under a scratch home that Alice shares."""
+    if _git("--version", cwd=tmp_path).returncode != 0:
+        pytest.skip("git not available")
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    import vaf.tools.filesystem as fs
+    fs._shared_room_roots_cache.clear()
+    monkeypatch.setattr(fs, "_shared_room_roots", lambda scope: [])
+    from vaf.core.session import get_user_projects_root
+    bob = get_user_projects_root(BOB)
+    proj = bob / "proj"
+    proj.mkdir(parents=True)
+    _git("init", "-q", cwd=proj)
+    _git("config", "user.name", "Bob", cwd=proj)
+    _git("config", "user.email", "bob@example.invalid", cwd=proj)
+    for text in ("one", "two"):
+        (proj / "notes.txt").write_text(text)
+        _git("add", "-A", cwd=proj)
+        _git("commit", "-qm", f"Bob {text}", cwd=proj)
+    yield bob, proj
+    fs._shared_room_roots_cache.clear()
+
+
+def test_another_accounts_project_is_refused_for_history_and_rollback(two_accounts):
+    _bob, proj = two_accounts
+    alice = {"user_scope_id": ALICE, "user_role": "user"}
+    out = ProjectHistoryTool().run(project_path=str(proj), **alice)
+    assert FOREIGN in out and "Bob one" not in out
+    out = ProjectRollbackTool().run(commit=_sha(proj, "HEAD~1"), project_path=str(proj), **alice)
+    assert FOREIGN in out
+    assert _git("rev-list", "--count", "HEAD", cwd=proj).stdout.strip() == "2"
+    assert (proj / "notes.txt").read_text() == "two"
+    # Bob himself, an admin and a caller without identity still reach it.
+    for who in ({"user_scope_id": BOB, "user_role": "user"},
+                {"user_scope_id": ALICE, "user_role": "admin"}, {}):
+        assert "Bob one" in ProjectHistoryTool().run(project_path=str(proj), **who)
+
+
+@pytest.mark.parametrize("shape", ["missing", "not_a_repo"])
+def test_a_foreign_folder_answers_the_same_whatever_is_there(two_accounts, shape):
+    """Existence and repository state of another account's folders are not answered.
+    MUTATION: ask the account half after the existence check - the missing row red."""
+    bob, _proj = two_accounts
+    target = bob / shape
+    if shape == "not_a_repo":
+        target.mkdir()
+    alice = {"user_scope_id": ALICE, "user_role": "user"}
+    for out in (ProjectHistoryTool().run(project_path=str(target), **alice),
+                ProjectRollbackTool().run(commit="abc1234", project_path=str(target), **alice)):
+        assert out == f"Error: Refused: {target} {FOREIGN}"

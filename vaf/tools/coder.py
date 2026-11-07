@@ -22,7 +22,7 @@ import platform
 import threading
 import subprocess
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, NamedTuple
 from dataclasses import asdict
 
 from rich.console import Console, Group
@@ -47,7 +47,9 @@ from vaf.core.persistence import PersistenceManager, ProjectState, Task, coerce_
 
 # Project directory safety lives in core (vaf/core/workspace_guard.py): the session store,
 # the web server and the headless runner ask the same question.
-from vaf.core.workspace_guard import is_unsafe_project_dir  # noqa: E402
+from vaf.core.workspace_guard import (  # noqa: E402
+    OUTSIDE_ACCOUNT, is_unsafe_project_dir, project_dir_refusal,
+)
 from vaf.core.local_engine import reasoning_text  # noqa: E402
 
 
@@ -2823,6 +2825,164 @@ def _caller_identity(kwargs: dict) -> tuple:
     return (str(scope) if scope else None), (str(role) if role else None)
 
 
+def _project_path_refusal(project_path, scope, role):
+    """The refusal for an explicit ``project_path`` this caller may not write, or None.
+
+    Asked at the top of run(), before the history shortcut and before a child process
+    exists, so a foreign folder is neither read nor started on. Only the account half: an
+    unsafe folder (the home directory, VAF's own data) keeps being ignored further down, the
+    way it always was, so the machine owner and an admin see no change. A file name is
+    split to its folder first, because the folder is what the run works in. The message
+    echoes the path as given, so the answer is the same whether or not the entry exists.
+    """
+    if not project_path:
+        return None
+    given = os.path.abspath(os.path.expanduser(str(project_path)))
+    folder, _hint = _split_explicit_path(given)
+    from vaf.tools.filesystem import jail_allows
+    if jail_allows(folder, user_scope_id=scope, user_role=role, mode="write"):
+        return None
+    return (
+        f"Error: project_path '{given}' is outside the folders this account may write "
+        "(its own project folder and the shared folders of its rooms). Leave project_path "
+        "out to start a new project in this account's own folder."
+    )
+
+
+class _BaseDirChoice(NamedTuple):
+    """What `_choose_base_dir` decided. ``refusal`` non-empty means the run must stop."""
+    base_dir: str           # "" for a content-only run: run() makes its temporary folder
+    target_file_hint: str   # the deliverable's file name when a path named a file
+    notes: list             # stream lines, in order, for run() to show
+    refusal: str
+    source: str             # "project_path", "content_only" or "chosen"
+
+
+def _choose_base_dir(tool, task, project_path, *, scope, role, content_only):
+    """The project folder a run works in, decided without creating it.
+
+    Order: the ``project_path`` argument, a path in the task text, the chat's last project
+    (for an edit request), then `_determine_base_dir` (the cwd when it is a project, else a
+    generated folder). Every candidate is asked `project_dir_refusal` for THIS caller, the
+    file jail's own rule, so an account works only in folders it may write:
+    - ``project_path`` outside the account's folders is refused (an edit request on a named
+      project must not quietly turn into an empty new one); an unsafe one is ignored.
+    - a path from the task that is refused falls through with the file-name hint kept: the
+      extraction reads free text, and a mentioned path is not always the requested target.
+    - the chat's last project and the cwd are skipped when refused.
+    The folder settled on is asked once more before it is returned; a content-only run gets
+    a fresh private temporary folder from run() and is not asked.
+    For an empty scope or an admin identity the account half allows everything, so the
+    choice is the one the unsafe check alone made before.
+    """
+    notes = []
+    hint = ""
+    if project_path:
+        # Main agents sometimes pass the deliverable FILE as project_path.
+        # Split it so the DIRNAME becomes the project and the checks below judge the
+        # directory, not the file.
+        _pp_abs = os.path.abspath(os.path.expanduser(str(project_path)))
+        if _looks_like_file_path(_pp_abs):
+            _pp_abs, hint = _split_explicit_path(_pp_abs)
+            notes.append(
+                f"project_path names a file - using its directory as project "
+                f"(target file: {hint})"
+            )
+        project_path = _pp_abs
+    if project_path:
+        reason = project_dir_refusal(project_path, user_scope_id=scope, user_role=role)
+        if reason == OUTSIDE_ACCOUNT:
+            return _BaseDirChoice("", hint, notes,
+                                  f"Error: cannot work in '{project_path}': {reason}.",
+                                  "project_path")
+        if reason:
+            # Sessions poisoned before the safety guard may still tell the main
+            # agent the "project" lives in /home/<user>. Ignore and fall back to
+            # the normal VAF_Projects flow instead of writing into unsafe dirs.
+            notes.append(f"Ignoring unsafe project path: {project_path}")
+            project_path = ''
+    if project_path:
+        # Continue existing project OR create new one at specific path
+        return _BaseDirChoice(project_path, hint, notes, "", "project_path")
+    if content_only:
+        return _BaseDirChoice("", hint, notes, "", "content_only")
+
+    # Normal mode: first try to extract an explicit absolute path from the task text,
+    # then fall back to keyword-based directory generation.
+    _explicit_path = None
+    try:
+        _raw_path = _extract_explicit_task_path(task)
+        if _raw_path:
+            # A path in the task often names the deliverable FILE
+            # (".../marktmodell.html"): split so the DIRNAME becomes the
+            # project dir and the basename survives as the target-file hint.
+            _dir_part, _hint = _split_explicit_path(_raw_path)
+            if _hint:
+                hint = _hint
+            _candidate = os.path.abspath(os.path.expanduser(_dir_part))
+            reason = project_dir_refusal(_candidate, user_scope_id=scope, user_role=role)
+            if reason == OUTSIDE_ACCOUNT:
+                notes.append(
+                    "Path from task is outside the folders this account may write - "
+                    + (f"creating '{hint}' in its own project folder instead" if hint
+                       else "working in its own project folder instead")
+                )
+            elif reason:
+                # Unsafe dirname (file directly in $HOME, Documents root, ...):
+                # fall through to the generated VAF_Projects dir but KEEP the
+                # filename hint so the deliverable is still the named file.
+                if hint:
+                    notes.append(
+                        f"Path from task points into an unsafe directory - creating "
+                        f"'{hint}' in a VAF_Projects folder instead"
+                    )
+            else:
+                _explicit_path = _candidate
+    except Exception:
+        _explicit_path = None
+
+    if _explicit_path:
+        base_dir = _explicit_path
+        if hint:
+            notes.append(f"Using path from task: {base_dir} (target file: {hint})")
+        else:
+            notes.append(f"Using path from task: {base_dir}")
+    else:
+        # Check session's last project path before generating a new directory
+        _session_proj = tool._get_session_project_path(task, scope=scope, role=role)
+        if _session_proj:
+            base_dir = _session_proj
+            notes.append(f"Continuing existing project: {os.path.basename(_session_proj)}")
+        else:
+            base_dir = tool._determine_base_dir(task, owner_scope=scope, owner_role=role)
+
+    reason = project_dir_refusal(base_dir, user_scope_id=scope, user_role=role)
+    if reason:
+        return _BaseDirChoice(base_dir, hint, notes,
+                              f"Error: cannot work in '{base_dir}': {reason}.", "chosen")
+    return _BaseDirChoice(base_dir, hint, notes, "", "chosen")
+
+
+def _base_dir_tool(tool_class, base_dir):
+    """A coder inner tool bound to the run's project folder: every call gets ``base_dir``.
+
+    The wrapper shows the wrapped tool's ``identity_kwargs``, so the coder's funnel assigns
+    the caller to it like to any other inner tool. Without that, `project_history` and
+    `project_rollback` would judge a model-written ``project_path`` as the machine owner.
+    """
+    class GitToolWrapper:
+        def __init__(self, tool, base_dir):
+            self.tool = tool
+            self.base_dir = base_dir
+            self.identity_kwargs = tuple(getattr(tool, "identity_kwargs", ()) or ())
+
+        def run(self, **kwargs):
+            kwargs['base_dir'] = self.base_dir
+            return self.tool.run(**kwargs)
+
+    return GitToolWrapper(tool_class(), base_dir)
+
+
 # Inner tools that exist ONLY inside the coder's child process - never in the main
 # registry, so the admin's user-management picker cannot offer them from the registry list.
 # Exposed via GET /api/users/tool-universe so "the admin can disable bash for a user" is
@@ -3194,7 +3354,8 @@ class CodingAgentTool(BaseTool):
         "required": ["task"]
     }
 
-    def _determine_base_dir(self, task: str, provided_path: str = None) -> str:
+    def _determine_base_dir(self, task: str, provided_path: str = None, *,
+                            owner_scope=None, owner_role=None) -> str:
         """
         Intelligently determine the base directory for the coding task.
         
@@ -3202,11 +3363,16 @@ class CodingAgentTool(BaseTool):
         1. If path provided -> Use it.
         2. If CWD is a project root (.git, .vaf, etc.) AND task is NOT "create new project" -> Use CWD.
         3. Else -> Generate new project folder in VAF_Projects.
+
+        ``owner_scope``/``owner_role`` are the caller's: a path or a cwd this account may
+        not write is never used (`project_dir_refusal`), and a generated folder lands in
+        the account's own tree.
         """
-        # 1. Explicit path (unless it points to an unsafe location like /home/<user>)
+        # 1. Explicit path (unless it points to an unsafe location like /home/<user>,
+        # or outside the caller's own folders)
         if provided_path:
             _abs = os.path.abspath(os.path.expanduser(provided_path))
-            if not is_unsafe_project_dir(_abs):
+            if project_dir_refusal(_abs, user_scope_id=owner_scope, user_role=owner_role) is None:
                 return _abs
 
         cwd = os.getcwd()
@@ -3217,7 +3383,7 @@ class CodingAgentTool(BaseTool):
         # and the agent would dump files directly into /home/<user>.
         project_markers = [".git", ".vaf", "package.json", "pyproject.toml", "requirements.txt"]
         is_project_root = (
-            not is_unsafe_project_dir(cwd)
+            project_dir_refusal(cwd, user_scope_id=owner_scope, user_role=owner_role) is None
             and any(os.path.exists(os.path.join(cwd, m)) for m in project_markers)
         )
 
@@ -3232,13 +3398,15 @@ class CodingAgentTool(BaseTool):
             return cwd
             
         # Fallback: Create new project folder
-        return self._generate_project_directory(task)
+        return self._generate_project_directory(task, owner_scope=owner_scope,
+                                                owner_role=owner_role)
 
-    def _get_session_project_path(self, task: str) -> str:
+    def _get_session_project_path(self, task: str, *, scope=None, role=None) -> str:
         """Return last_project_path from session runtime_state if task looks like editing existing code.
 
         Avoids creating a new directory when the user says 'fix the UI', 'update the website', etc.
-        Returns empty string if task is clearly a new-project request or if no session path exists.
+        Returns empty string if task is clearly a new-project request or if no session path exists,
+        or when the stored folder is one this caller (``scope``/``role``) may not write.
         """
         task_l = task.lower()
         # Explicit new-project keywords → always create fresh
@@ -3267,14 +3435,18 @@ class CodingAgentTool(BaseTool):
             _sm = _SM()
             _sess = _sm.load(_sid)
             _last = (getattr(_sess, "runtime_state", None) or {}).get("last_project_path", "")
-            if _last and os.path.isdir(_last) and not is_unsafe_project_dir(_last):
+            if (_last and os.path.isdir(_last)
+                    and project_dir_refusal(_last, user_scope_id=scope, user_role=role) is None):
                 return _last
         except Exception:
             pass
         return ""
 
-    def _generate_project_directory(self, task: str) -> str:
-        """Generate a user-friendly project directory name based on task. OS-independent."""
+    def _generate_project_directory(self, task: str, *, owner_scope=None, owner_role=None) -> str:
+        """Generate a user-friendly project directory name based on task. OS-independent.
+
+        For a caller with an account that is not an admin (``owner_scope``/``owner_role``),
+        the folder is always in that account's own ``VAF_Projects/<uid8>/``."""
         # Strip embedded file paths before keyword extraction so path components
         # (e.g. project-type or verb words inside a path string) don't
         # pollute the project name.
@@ -3359,6 +3531,17 @@ class CodingAgentTool(BaseTool):
                 _uid = (_s.metadata or {}).get("user_scope_id", "")
                 if _uid:
                     _user_prefix = _uid[:8]
+        except Exception:
+            pass
+        # An account's folder comes from the CALLER, not from the saved session: on a
+        # chat's first turn the scope is not saved yet, and the flat root that would leave
+        # is outside the account's tree (refused for it). Admins and the scope-less owner
+        # keep the session's prefix.
+        try:
+            from vaf.core.config import is_admin_identity
+            if owner_scope and not is_admin_identity(owner_role, owner_scope):
+                from vaf.core.session import get_user_projects_root
+                _user_prefix = get_user_projects_root(owner_scope).name
         except Exception:
             pass
 
@@ -3560,6 +3743,12 @@ Thumbs.db
         # the dispatcher) and the spawned child (kwargs empty, env set by the parent), and
         # the dispatch loop thousands of lines below needs the answer as locals.
         caller_scope, caller_role = _caller_identity(kwargs)
+        # A project_path this account may not write ends the call here: before the history
+        # shortcut reads or rolls it back, and before a child is started on it. The same
+        # run() is the child, so the gate holds there too (identity from the environment).
+        _pp_refusal = _project_path_refusal(kwargs.get("project_path"), caller_scope, caller_role)
+        if _pp_refusal:
+            return _pp_refusal
         caller_allowed = _caller_allowed_tools(caller_scope, caller_role)
         # The one server this run may deploy to, decided by the caller and checked before
         # anything is built (parent and child alike). A local of the run, never instance state.
@@ -3597,16 +3786,20 @@ Thumbs.db
             _hr_kind, _hr_commit = _detect_history_rollback_intent(task)
             if _hr_kind:
                 _hr_path = kwargs.get('project_path', '')
+                # The caller's identity, so the chat's stored folder (no project_path) is
+                # judged for this account as well.
+                _hr_who = {"user_scope_id": caller_scope, "user_role": caller_role}
                 if _hr_kind == "history":
-                    return ProjectHistoryTool().run(project_path=_hr_path)
+                    return ProjectHistoryTool().run(project_path=_hr_path, **_hr_who)
                 if not _hr_commit:
-                    history = ProjectHistoryTool().run(project_path=_hr_path)
+                    history = ProjectHistoryTool().run(project_path=_hr_path, **_hr_who)
                     return (
                         f"{history}\n\n"
                         "Rollback needs a version id. Ask the user which version to restore, "
                         'then call coding_agent again with task="rollback auf <id>".'
                     )
-                return ProjectRollbackTool().run(commit=_hr_commit, project_path=_hr_path)
+                return ProjectRollbackTool().run(commit=_hr_commit, project_path=_hr_path,
+                                                 **_hr_who)
         except Exception as _hr_e:
             return f"Error: history/rollback handling failed: {_hr_e}"
 
@@ -3945,32 +4138,25 @@ Thumbs.db
         # This is ONLY for automations that need temp content without project structure
         skip_template = _content_only_task(task)
         
-        # Check if continuing existing project
-        project_path = kwargs.get('project_path', '')
+        # Which folder this run works in, for THIS caller (_choose_base_dir): nothing is
+        # created until the choice stands.
+        _choice = _choose_base_dir(self, task, kwargs.get('project_path', ''),
+                                   scope=caller_scope, role=caller_role,
+                                   content_only=skip_template)
+        for _note in _choice.notes:
+            tui.append_stream(_note)
         # The deliverable filename when a passed/extracted path names a FILE, not a
         # directory. Flows into the system prompts so the model writes exactly this file.
-        _target_file_hint = ""
-        if project_path:
-            # Main agents sometimes pass the deliverable FILE as project_path.
-            # Split it so the DIRNAME becomes the project and the unsafe check
-            # below judges the directory, not the file.
-            _pp_abs = os.path.abspath(os.path.expanduser(str(project_path)))
-            if _looks_like_file_path(_pp_abs):
-                _pp_abs, _target_file_hint = _split_explicit_path(_pp_abs)
-                tui.append_stream(
-                    f"project_path names a file - using its directory as project "
-                    f"(target file: {_target_file_hint})"
-                )
-            project_path = _pp_abs
-        if project_path and is_unsafe_project_dir(project_path):
-            # Sessions poisoned before the safety guard may still tell the main
-            # agent the "project" lives in /home/<user>. Ignore and fall back to
-            # the normal VAF_Projects flow instead of writing into unsafe dirs.
-            tui.append_stream(f"Ignoring unsafe project path: {project_path}")
-            project_path = ''
-        if project_path:
+        _target_file_hint = _choice.target_file_hint
+        if _choice.refusal:
+            # The display and its animation thread are running by now: end them, or an
+            # in-process run leaves them drawing over the chat.
+            animation_running.clear()
+            stop_live()
+            return _choice.refusal
+        base_dir = _choice.base_dir
+        if _choice.source == "project_path":
             # Continue existing project OR create new one at specific path
-            base_dir = project_path  # already expanded + absolute above
             if not os.path.exists(base_dir):
                 try:
                     os.makedirs(base_dir, exist_ok=True)
@@ -3979,57 +4165,12 @@ Thumbs.db
                     return f"❌ Error: Could not create project directory: {base_dir}\n{e}"
             else:
                 tui.append_stream(f"Using existing directory: {os.path.basename(base_dir)}")
-        elif skip_template:
+        elif _choice.source == "content_only":
             # CONTENT_ONLY mode: Use a temporary directory instead of creating a project
             import tempfile
             base_dir = tempfile.mkdtemp(prefix="vaf_content_")
             tui.append_stream("Content-only mode: Using temporary directory")
         else:
-            # Normal mode: first try to extract an explicit absolute path from the task text,
-            # then fall back to keyword-based directory generation.
-            _explicit_path = None
-            try:
-                _raw_path = _extract_explicit_task_path(task)
-                if _raw_path:
-                    # A path in the task often names the deliverable FILE
-                    # (".../marktmodell.html"): split so the DIRNAME becomes the
-                    # project dir and the basename survives as the target-file hint.
-                    _dir_part, _hint = _split_explicit_path(_raw_path)
-                    if _hint:
-                        _target_file_hint = _hint
-                    _candidate = os.path.abspath(os.path.expanduser(_dir_part))
-                    if is_unsafe_project_dir(_candidate):
-                        # Unsafe dirname (file directly in $HOME, Documents root, ...):
-                        # fall through to the generated VAF_Projects dir but KEEP the
-                        # filename hint so the deliverable is still the named file.
-                        if _target_file_hint:
-                            tui.append_stream(
-                                f"Path from task points into an unsafe directory - creating "
-                                f"'{_target_file_hint}' in a VAF_Projects folder instead"
-                            )
-                        _explicit_path = None
-                    else:
-                        _explicit_path = _candidate
-            except Exception:
-                _explicit_path = None
-
-            if _explicit_path:
-                base_dir = _explicit_path
-                if _target_file_hint:
-                    tui.append_stream(
-                        f"Using path from task: {base_dir} (target file: {_target_file_hint})"
-                    )
-                else:
-                    tui.append_stream(f"Using path from task: {base_dir}")
-            else:
-                # Check session's last project path before generating a new directory
-                _session_proj = self._get_session_project_path(task)
-                if _session_proj:
-                    base_dir = _session_proj
-                    tui.append_stream(f"Continuing existing project: {os.path.basename(_session_proj)}")
-                else:
-                    base_dir = self._determine_base_dir(task)
-
             try:
                 os.makedirs(base_dir, exist_ok=True)
             except OSError as e:
@@ -4095,37 +4236,24 @@ Thumbs.db
         except Exception:
             _initial_file_names = set()
         
-        # Add Git tools with base_dir context (create wrappers that pass base_dir)
-        def make_git_tool_wrapper(tool_class, base_dir):
-            """Create a wrapper that automatically passes base_dir to the tool."""
-            class GitToolWrapper:
-                def __init__(self, tool, base_dir):
-                    self.tool = tool
-                    self.base_dir = base_dir
-                
-                def run(self, **kwargs):
-                    kwargs['base_dir'] = self.base_dir
-                    return self.tool.run(**kwargs)
-            
-            return GitToolWrapper(tool_class(), base_dir)
-        
-        # Add Git tools with base_dir context (only if not CONTENT_ONLY)
+        # Add Git tools with base_dir context (only if not CONTENT_ONLY). _base_dir_tool
+        # passes base_dir and shows the wrapped tool's identity declaration to the funnel.
         if not skip_template:
-            self.local_tools["git_init"] = make_git_tool_wrapper(GitInitTool, base_dir)
-            self.local_tools["git_add_commit"] = make_git_tool_wrapper(GitAddCommitTool, base_dir)
-            self.local_tools["git_status"] = make_git_tool_wrapper(GitStatusTool, base_dir)
-            self.local_tools["git_log"] = make_git_tool_wrapper(GitLogTool, base_dir)
+            self.local_tools["git_init"] = _base_dir_tool(GitInitTool, base_dir)
+            self.local_tools["git_add_commit"] = _base_dir_tool(GitAddCommitTool, base_dir)
+            self.local_tools["git_status"] = _base_dir_tool(GitStatusTool, base_dir)
+            self.local_tools["git_log"] = _base_dir_tool(GitLogTool, base_dir)
 
             # Version history + safe rollback (coder-owned; also reachable for the
             # model so it can restore a known-good state at its own discretion)
             from vaf.tools.project_git import ProjectHistoryTool, ProjectRollbackTool
-            self.local_tools["project_history"] = make_git_tool_wrapper(ProjectHistoryTool, base_dir)
-            self.local_tools["project_rollback"] = make_git_tool_wrapper(ProjectRollbackTool, base_dir)
+            self.local_tools["project_history"] = _base_dir_tool(ProjectHistoryTool, base_dir)
+            self.local_tools["project_rollback"] = _base_dir_tool(ProjectRollbackTool, base_dir)
             
             # Add Knowledge Tools (wrapped to inject base_dir)
             from vaf.tools.knowledge import UpdateCodexTool, AddMemoryTool
-            self.local_tools["update_codex"] = make_git_tool_wrapper(UpdateCodexTool, base_dir)
-            self.local_tools["add_memory"] = make_git_tool_wrapper(AddMemoryTool, base_dir)
+            self.local_tools["update_codex"] = _base_dir_tool(UpdateCodexTool, base_dir)
+            self.local_tools["add_memory"] = _base_dir_tool(AddMemoryTool, base_dir)
 
         # The sandbox environment this run works in, decided AFTER base_dir: the caller's
         # project environment mounted at exactly this folder (an explicit `environment`
@@ -4197,6 +4325,10 @@ Thumbs.db
         # Re-bind bash to the project workspace: it now runs inside a kernel-confined
         # jail (bwrap) rooted at base_dir - full workspace access (incl. host docker),
         # but VAF's core, secrets and the agent itself are structurally out of reach.
+        # The jail mounts no other part of the home directory, so this folder is all of the
+        # host bash can write, and _choose_base_dir has made it one the caller may write.
+        # This is the only bash bound to a folder: the workflow lane's has none and the
+        # engine pins its workspace.
         if HAS_CODING_TOOLS:
             self.local_tools["bash"] = BashTool(base_dir, environment=_env_binding,
                                                 owner_scope=_env_owner)

@@ -531,6 +531,15 @@ command is confined by the **kernel**:
   whose output shows a missing network (an unresolved host, a failed artifact transfer) says so
   in its result.
 
+**Whose folder the workspace is.** In a coder run the workspace is the run's project folder.
+For an account that folder is one the account may write: the coder chooses it through
+`project_dir_refusal` (`vaf/core/workspace_guard.py`, the file jail's own write rule on top of
+the unsafe check), and refuses a `project_path` outside the account's own `VAF_Projects/<uid8>/`
+and its rooms' shared folders. Since the jail mounts nothing else of the home directory, that
+also bounds what the shell can read and write on the host. What `bash` may run is not screened
+by the file jail (see "The coder acts as its caller" in
+[USER_ISOLATION.md](USER_ISOLATION.md)).
+
 **In a workflow step** the same jailed shell runs in the run's project folder, which the
 engine assigns as the workspace (`_inject_workflow_paths` in `vaf/workflows/engine.py`); a
 step's own `base_dir` is dropped. The folder is the run's own: a `workflow_project_path` that

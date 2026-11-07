@@ -97,6 +97,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   cloud-to-local direction of Cloud sync currently does not run at all, so files that appear
   in the cloud are not copied to your computer; use the `search`, `read` and `download` actions
   of `cloud_storage` to reach them instead.
+- **The coding agent works only in folders the account may write.** On a machine with several
+  accounts, a regular account's coding agent could be pointed at another account's project
+  folder, by its path or by a path in the task, and read, change or roll back that project,
+  including through its shell. It now refuses folders outside the account's own project folder
+  and the shared folders of its rooms, and creates new projects there. Administrators and
+  single-user machines are unaffected.
 
 ## [0.1.0a35] - 2026-11-05
 

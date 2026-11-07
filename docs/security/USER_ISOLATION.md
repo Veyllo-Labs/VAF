@@ -420,8 +420,41 @@ machinery was attached and permanently resolving as the owner.
 The caller's scope and role now travel as DATA in the spawn environment
 (`VAF_USER_SCOPE_ID` / `VAF_USER_ROLE`, the librarian's pattern) and are ASSIGNED to every
 inner tool that declares them - never `setdefault`, so a prompt-injected admin role is
-overwritten. For the machine owner nothing changes; a tenant's coder run is confined to
-their own tree for the first time.
+overwritten. For the machine owner nothing changes; a tenant's inner file tools are
+confined to their own tree.
+
+**The folder the run works in is the caller's too.** Jailing the inner tools did not decide
+WHERE the run works: the folder was screened by `is_unsafe_project_dir` alone, which knows the
+home directory and VAF's own data but no account. Measured as one account against another's
+project: the history shortcut printed the other account's commits, a rollback wrote two commits
+into its repository, and in a run rooted there `bash` read and created files, `update_codex`
+wrote its `.vaf/codex.md` and `git_status` listed it. Every folder the coder may work in now
+asks `project_dir_refusal` (`vaf/core/workspace_guard.py`), which is `is_unsafe_project_dir`
+plus the file jail's own `jail_allows(..., mode="write")` for the caller, so a project folder
+and a file write cannot disagree about whose tree a path is in:
+
+- an explicit `project_path` outside the account's folders (its own `VAF_Projects/<uid8>/` and
+  the shared folders of the rooms it was admitted to) is refused at the top of
+  `CodingAgentTool.run`, before the history and rollback shortcut and before a child process
+  is started. The child runs the same `run()` with the identity from its environment, so the
+  gate holds there as well;
+- a path from the task text that is refused falls through to the account's own folder (the
+  file-name hint is kept); the chat's last project and the cwd are skipped when refused; the
+  folder settled on is asked once more before anything is created;
+- a generated folder is always under the caller's own `VAF_Projects/<uid8>/`: the prefix used
+  to come from the saved session only, which on a chat's very first turn has no scope yet and
+  left the flat shared root;
+- `project_history` and `project_rollback` declare `user_scope_id`/`user_role` and refuse a
+  folder the caller may not write before they look whether it exists or is a repository, so
+  those answers say nothing about another account's tree. Inside a run the base-folder
+  wrapper shows the wrapped tool's declaration to the coder's funnel, so a model-written
+  `project_path` is judged for the caller too.
+
+Admins and the scope-less machine owner reach everything the unsafe check allows, so nothing
+changes for them or on a single-user machine. A tenant's project from before the per-user
+prefix (a flat `VAF_Projects/<name>`) cannot be attributed to an account and is refused for a
+non-admin; nothing is moved or deleted, and an admin can move it into the account's folder.
+Guarded by `tests/test_coder_project_dir_jail.py` and `tests/test_project_git.py`.
 
 **`bash` is a named exception, in both directions.** It declares no identity and no
 `file_access`, deliberately: the coder must be able to build, test and install at full
@@ -429,7 +462,10 @@ strength, and the containment for a user who should not have that power is the p
 tool permission - which IS enforced now (see "The per-user tool permission is enforced"
 below). An admin can withhold the coder entirely, or allow the coder and withhold `bash`
 by name. What remains true by design: a tenant who is allowed `bash` has an unjailed
-shell, so granting it is the decision.
+shell, so granting it is the decision. What that shell can reach on the host is measured:
+the jail mounts its workspace read-write and system folders read-only, and no other part of
+the home directory, so its only writable host folder is the run's project folder, which is
+now one the caller may write.
 
 ### The per-user tool permission is enforced
 

@@ -105,7 +105,7 @@ def test_the_coder_stays_in_a_project_cwd(monkeypatch, tmp_path):
     monkeypatch.chdir(project)
 
     dummy = SimpleNamespace(
-        _generate_project_directory=lambda task: "GENERATED-NEW")
+        _generate_project_directory=lambda task, **_: "GENERATED-NEW")
     base = CodingAgentTool._determine_base_dir(dummy, "fix the failing tests")
     assert base == str(project)
 

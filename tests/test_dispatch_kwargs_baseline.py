@@ -178,7 +178,10 @@ KWARGS_BASELINE = {
     # answer is keyed on the caller's account.
     "memory_search":             ("chat", ["user_scope_id", "username"]),
     "move_file":                 ("chat", []),
-    "project_history":           ("chat", []),
+    # DELIBERATE change: both project_git tools declare the caller, because the folder they
+    # open must be one that account may write (a tenant read and rolled back another
+    # account's repository through them). Re-measured, not typed.
+    "project_history":           ("chat", ["user_role", "user_scope_id"]),
     # Room tools carry both halves: the scope decides which rooms this caller is a
     # member of, and the role travels with it the way every identity pair does.
     # DELIBERATE change on join/open: username was added so the agent introduces
@@ -191,7 +194,7 @@ KWARGS_BASELINE = {
     "room_read":                 ("chat", ["user_role", "user_scope_id"]),
     "room_send":                 ("chat", ["user_role", "user_scope_id"]),
     "room_verify":               ("chat", ["user_role", "user_scope_id"]),
-    "project_rollback":          ("chat", []),
+    "project_rollback":          ("chat", ["user_role", "user_scope_id"]),
     # DELIBERATE change: the trust store is per user now, and this tool reads
     # the policy itself (vaf/tools/python_exec.py) - without the declared
     # identity it would read the local-admin bucket for every tenant.

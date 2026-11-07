@@ -141,18 +141,26 @@ def _session_project_path() -> str:
     return ""
 
 
-def _resolve_project(provided: str) -> "tuple[str, str]":
-    """Resolve and validate the project directory. Returns (path, error)."""
+def _resolve_project(provided: str, *, user_scope_id=None, user_role=None) -> "tuple[str, str]":
+    """Resolve and validate the project directory. Returns (path, error).
+
+    The caller's identity decides whose folders are reachable: a folder this account may
+    not write is refused BEFORE the existence and repository checks, so "does not exist"
+    and "not a git repository" never tell a caller anything about another account's tree.
+    No identity (a direct consumer, the machine owner) keeps the unsafe check alone."""
     path = os.path.abspath(os.path.expanduser(provided)) if provided else _session_project_path()
     if not path:
         return "", (
             "No project found. This chat has no session workspace yet — "
             "pass project_path explicitly."
         )
+    from vaf.core.workspace_guard import OUTSIDE_ACCOUNT, project_dir_refusal
+    refusal = project_dir_refusal(path, user_scope_id=user_scope_id, user_role=user_role)
+    if refusal == OUTSIDE_ACCOUNT:
+        return "", f"Refused: {path} is outside the folders this account may write."
     if not os.path.isdir(path):
         return "", f"Project directory does not exist: {path}"
-    from vaf.core.workspace_guard import is_unsafe_project_dir
-    if is_unsafe_project_dir(path):
+    if refusal:
         return "", f"Refused: {path} is not a valid project directory."
     if not os.path.lexists(os.path.join(path, ".git")):
         return "", (
@@ -173,6 +181,9 @@ class ProjectHistoryTool(BaseTool):
     name = "project_history"
     category    = "git"
     coder_only = True  # Main Agent delegates via coding_agent task instead
+    # The caller decides which project folders are reachable (_resolve_project). No
+    # file_access: the work is git subprocesses, which the in-process jail cannot see.
+    identity_kwargs = ("user_scope_id", "user_role")
     description = (
         "Show the version history of the project (one entry per saved state, "
         "newest first, with commit id, date, description and changed files). "
@@ -200,7 +211,9 @@ class ProjectHistoryTool(BaseTool):
     }
 
     def run(self, **kwargs) -> str:
-        path, err = _resolve_project(kwargs.get("project_path") or kwargs.get("base_dir", ""))
+        path, err = _resolve_project(kwargs.get("project_path") or kwargs.get("base_dir", ""),
+                                     user_scope_id=kwargs.get("user_scope_id"),
+                                     user_role=kwargs.get("user_role"))
         if err:
             return f"Error: {err}"
         limit = max(1, min(int(kwargs.get("limit") or 15), 50))
@@ -238,6 +251,8 @@ class ProjectRollbackTool(BaseTool):
     name = "project_rollback"
     category    = "git"
     coder_only = True  # Main Agent delegates via coding_agent task instead
+    # Same identity as project_history, for the same reason.
+    identity_kwargs = ("user_scope_id", "user_role")
     description = (
         "Restore the project to an earlier version from project_history. "
         "Safe by design: uncommitted work is saved as a backup first and the "
@@ -270,7 +285,9 @@ class ProjectRollbackTool(BaseTool):
         commit = (kwargs.get("commit") or "").strip()
         if not commit:
             return "Error: commit is required (get it from project_history)."
-        path, err = _resolve_project(kwargs.get("project_path") or kwargs.get("base_dir", ""))
+        path, err = _resolve_project(kwargs.get("project_path") or kwargs.get("base_dir", ""),
+                                     user_scope_id=kwargs.get("user_scope_id"),
+                                     user_role=kwargs.get("user_role"))
         if err:
             return f"Error: {err}"
 

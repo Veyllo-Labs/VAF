@@ -1087,6 +1087,14 @@ What to expect:
   `sub_agents_in_separate_terminals` at its default. Workflows
   (`execute_workflow`, `run_temp`) follow the same rule: a process of their own
   where that infrastructure exists, inline where it does not.
+- **For a scoped caller, the coder works only in that caller's folders.** With
+  `Agent(user_scope=...)` for any scope but the machine's local-admin scope,
+  `coding_agent` works only in folders
+  `vaf.jail_allows(path, user_scope_id=..., user_role=..., mode="write")` grants that
+  caller: it refuses a `project_path` outside them with an error the model can act on,
+  ignores a path in the task text that points elsewhere, and creates new projects under
+  the caller's own `Documents/VAF_Projects/<uid8>/`. A scope-less caller is the machine
+  owner, as everywhere, and is not confined.
 - **The coder needs a sandbox.** The coding agent's shell needs bubblewrap or
   Docker; its test runner and `python_sandbox` need Docker specifically (see
   [Security posture](#security-posture)). Without them, those steps return an

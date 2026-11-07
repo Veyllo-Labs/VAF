@@ -48,20 +48,41 @@ Implements a "Mini-IDE" using `rich.live`.
 
 ### Explicit-path resolution in `run()` (before `_determine_base_dir`)
 
-`run()` resolves the project directory in this order (normal mode):
+The decision lives in the module-level `_choose_base_dir(tool, task, project_path, *, scope,
+role, content_only)`, which creates nothing; `run()` shows its notes and makes the folder.
+Every candidate is asked `project_dir_refusal` (`vaf/core/workspace_guard.py`) for the caller:
+the unsafe check below plus the file jail's own `jail_allows(..., mode="write")`. For a
+scope-less caller and an admin identity the account half allows everything, so only the
+unsafe check decides, as before. For anyone else only their own `VAF_Projects/<uid8>/` and the
+shared folders of the rooms they were admitted to are usable. `run()` resolves the project
+directory in this order (normal mode):
 
 1.  **`project_path` kwarg** - expanded/absolutized first. If it names a FILE (see the
     file-vs-directory rule below), it is split into directory + target-file hint and the
     directory becomes the candidate. Unsafe candidates are ignored (fall through to 2-4).
+    A candidate outside the caller's folders is REFUSED, and earlier than here: at the very
+    top of `run()`, right after the caller's identity is resolved and before the
+    history/rollback shortcut and the spawn, `_project_path_refusal` returns "project_path
+    '<path>' is outside the folders this account may write ... Leave project_path out to
+    start a new project in this account's own folder." (the path as given, so the answer does
+    not depend on whether it exists). The spawned child runs the same check with the
+    identity from its environment; the check in `_choose_base_dir` is the backstop.
 2.  **Explicit path in the task text** - `_extract_explicit_task_path()` matches phrase forms
     ("im Verzeichnis /x", "in directory /x", "path: /x") and bare absolute paths
     (`/home|/tmp|/mnt|/root/...` or Windows drive paths). Dots are part of the match (filenames
     keep their extension) and quotes end it. The match is split file-vs-directory the same way;
     the unsafe guard judges the DIRECTORY part, so a file directly in `$HOME` falls back to
-    `VAF_Projects` while the filename hint survives.
+    `VAF_Projects` while the filename hint survives. A directory outside the caller's folders
+    falls through the same way, with the note "Path from task is outside the folders this
+    account may write": the extraction reads free text, and a mentioned path is not always
+    the requested target.
 3.  **Session's `last_project_path`** (`_get_session_project_path`) when the task looks like an
-    edit request.
+    edit request. Skipped when the caller may not use it.
 4.  **`_determine_base_dir`** (below) as the fallback.
+
+The folder settled on is asked once more before it is returned, so a regression in any
+source cannot hand the run another account's folder. A content-only run is exempt: its folder
+is a fresh private `tempfile.mkdtemp(prefix="vaf_content_")` that the run removes again.
 
 **File-vs-directory rule (`_looks_like_file_path` / `_split_explicit_path`):** an existing
 filesystem entry decides directly (a directory named like a file stays a directory - the
@@ -75,6 +96,7 @@ deliverable nested inside. `os.makedirs` failures (`FileExistsError` / `NotADire
 return an actionable error string instead of a traceback.
 
 ### `_determine_base_dir(task, provided_path)` (The Smart Switch)
+*   **Account guard:** with `owner_scope`/`owner_role` (the caller's), the explicit path and the cwd are asked `project_dir_refusal`, so a folder outside the caller's own is never used, and `_generate_project_directory` gets the same pair.
 *   **Safety guard:** `is_unsafe_project_dir(path)` (`vaf/core/workspace_guard.py`) rejects the user's home directory itself, the standard user dirs (Documents, Desktop, ... - their subdirectories are fine), VAF's own state (`vaf.is_vaf_state`: `~/.vaf`, the data and the config directory) together with every folder that contains part of it, and the VAF program tree as work directories. Applied to every path source below; unsafe paths fall through to `_generate_project_directory`. Sub-agent terminals historically spawned with CWD=$HOME on Linux/macOS (terminal emulators do not inherit the spawner's cwd), where `~/.vaf` (and a stray `~/.git`) would otherwise make home look like a project root - the guard stays for exactly that shape. Since the VAF_PARENT_CWD handoff (`Platform.open_new_terminal` stamps the caller's cwd, the sub-agent entry adopts it via `Platform.adopt_parent_cwd()`), a coder spawned from a project checkout actually STARTS in that checkout, so the Edit-Mode branch below fires for the directory the user launched `vaf run` in.
 *   **Logic:** Decides whether to work in the current directory or create a new one.
     1.  **Explicit:** If `provided_path` is set (and safe) -> Use it.
@@ -91,7 +113,7 @@ return an actionable error string instead of a traceback.
         -   **"App"**, **"Tool"**, **"API"** etc. for other common types.
     2.  Extracts semantic keywords (removing stop words like "the", "create").
     3.  Sanitizes the name using Regex to be OS-safe (removes `/ \ : * ?`).
-    4.  **User isolation:** Reads `user_scope_id` from the current session (via `get_current_session_id()` + `SessionManager.load()`). If a scope ID is found, the project root becomes `~/Documents/VAF_Projects/{uid[:8]}/`. Without a scope ID (local/admin mode) the root is `~/Documents/VAF_Projects/` as before.
+    4.  **User isolation:** Reads `user_scope_id` from the current session (via `get_current_session_id()` + `SessionManager.load()`). If a scope ID is found, the project root becomes `~/Documents/VAF_Projects/{uid[:8]}/`. Without a scope ID (local/admin mode) the root is `~/Documents/VAF_Projects/` as before. For a caller with an account that is not an admin identity (`owner_scope`/`owner_role`), the prefix is always that caller's own (`get_user_projects_root(owner_scope)`), whatever the session says: on a chat's first turn the scope is not saved yet, and the flat root would be outside the account's tree.
     5.  **Per-chat isolation:** with a session id, each chat gets its own folder below the user root (`VAF_Projects/[uid]/[session_id]/<ProjectName>`), so projects from different chats never mix. The workflow engine builds its project paths the same way.
     6.  Constructs path: `{projects_root}/{Prefix} {Name}`.
     7.  **Duplicate Check:** If folder exists, appends timestamp `_{HHMMSS}`.
@@ -134,7 +156,9 @@ The coder owns each project's version history (built up by the final commit on e
 
 Rollback safety (`ProjectRollbackTool`): uncommitted work is committed as a backup first, then the target state is restored via `git revert` as a NEW commit - history is never rewritten and every rollback can itself be rolled back. Unsafe directories and non-git folders are refused.
 
-Inside the agentic loop the same two tools are registered as base_dir-wrapped local tools (`project_history`, `project_rollback`), so the coder can also restore a known-good state at its own discretion after breaking something.
+Whose folder: both tools declare `identity_kwargs = ("user_scope_id", "user_role")`, and the shortcut passes the caller's pair (which also covers a call without `project_path`, where the tools fall back to the chat's stored folder). `_resolve_project` asks `project_dir_refusal` and refuses a folder the caller may not write with "Refused: <path> is outside the folders this account may write.", BEFORE the existence and git checks, so "does not exist" and "not a git repository" reveal nothing about another account's tree. No identity (a direct consumer) keeps the unsafe check alone.
+
+Inside the agentic loop the same two tools are registered as base_dir-wrapped local tools (`project_history`, `project_rollback`, wrapped by `_base_dir_tool`), so the coder can also restore a known-good state at its own discretion after breaking something. The wrapper shows the wrapped tool's `identity_kwargs` to the coder's funnel, so a `project_path` the model writes is judged for the caller as well.
 
 ### A. Process Isolation & IPC (Lines ~1600-1700)
 *   **Check:** Is `VAF_IN_SUBAGENT_TERMINAL` env var set?
@@ -142,8 +166,8 @@ Inside the agentic loop the same two tools are registered as base_dir-wrapped lo
     declares `identity_kwargs = ("user_scope_id", "user_role")`, the dispatcher assigns
     them, and the spawn env carries them as `VAF_USER_SCOPE_ID` / `VAF_USER_ROLE` - the
     librarian's proven pattern. In the child, `_caller_identity()` resolves kwargs-or-env
-    once at the top of `run()`, and `_assign_caller_identity()` hands the pair to every
-    inner tool that declares it (seven of eight do) at the dispatch site - by ASSIGNMENT,
+    once at the top of `run()`, and the coder's funnel (`_coder_funnel`, the framework's
+    `ToolCaller`) hands the pair to every inner tool that declares it at the dispatch site - by ASSIGNMENT,
     never `setdefault`, so a model-written `user_role: "admin"` is overwritten rather than
     honoured. Before this, the child ran every inner tool as
     `compute_user_jail(None, None)` = the machine owner, for every caller.

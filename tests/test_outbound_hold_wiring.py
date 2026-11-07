@@ -182,7 +182,8 @@ def test_the_card_has_no_hardcoded_copy():
     # colon), and a title is one sentence per channel, never "{channel} an {recipient}" for
     # the channels that exist: the words around a channel name are grammar in ko and th.
     assert "tCommon('labelSeparator')" in CARD
-    assert "t('titleMail', { recipient })" in CARD and "t('titleWhatsapp', { recipient })" in CARD
+    assert "t('titleMail', { recipient: SLOT })" in CARD \
+        and "t('titleWhatsapp', { recipient: SLOT })" in CARD
     assert "tMain('wakeDraft')" in PAGE
 
 # ---- the CLI ------------------------------------------------------------------
@@ -455,7 +456,8 @@ def test_the_send_button_is_the_house_white_and_locked_until_it_is_read():
     assert "{row.state !== 'ambiguous' && (" in CARD and "t('ambiguous')" in CARD
     assert "const editable = row.state !== 'ambiguous';" in CARD
     # Every address and every file: approving is approving what leaves.
-    assert "t('cc', { recipients: row.cc })" in CARD and "t('bcc', { recipients: row.bcc })" in CARD
+    assert "around(t('cc', { recipients: SLOT }), <Recipient text={row.cc_shown} />)" in CARD
+    assert "around(t('bcc', { recipients: SLOT }), <Recipient text={row.bcc_shown} />)" in CARD
     assert "t('attachments', { names: row.attachments.join(', ') })" in CARD
     # The failure is said ONCE: the row's own line yields to the note set by the failed click.
     assert "{row.state === 'failed' && !note && (" in CARD

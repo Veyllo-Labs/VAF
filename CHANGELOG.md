@@ -50,6 +50,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Changed
 
+- Draft cards in the web UI and confirmation cards in the Veyllo App now show a recipient's
+  address or number first and never cut it, with the name after it. Characters outside plain
+  ASCII in an address are marked (for example `⟨U+0430⟩` for a Cyrillic a), with the punycode
+  of the domain beside it. `vaf outbox list` no longer cuts addresses. A mail to an address
+  with such characters is refused before it is queued (the mail lane could never deliver it),
+  and a WhatsApp number may hold only digits and separators.
 - Signing out every other device also removes your Veyllo App devices; they pair again. "Sign
   out all other devices" now says so, and asks in the app's own dialog.
 - Answering a speaker confirmation on Discord now replies in the Discord channel the message

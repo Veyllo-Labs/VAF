@@ -49,10 +49,20 @@ export type HeldSendRow = {
     recipient: string;
     /** The name the person knows the recipient by (contact book, or a mail's display name). */
     recipient_name?: string;
-    /** The other addresses a mail goes to. Shown because approving is approving what leaves:
-     *  a card with the To line alone let a Bcc go out unseen. */
+    /** The other addresses a mail goes to, raw. What the card shows is the `_shown` fields. */
     cc?: string;
     bcc?: string;
+    /** The recipients as the server shows them (vaf/core/shown_text.py): every address or
+     *  number whole, every character outside plain ASCII as a visible mark (`⟨U+0430⟩`), a
+     *  domain outside ASCII with its punycode beside it. `to_shown` holds the addresses or
+     *  the number; `cc_shown`/`bcc_shown` every address first with its name; `name_shown`
+     *  the name, cut at 40 with its `@` marked, "" when there is none. Shown because
+     *  approving is approving what leaves: a card with the To line alone let a Bcc go out
+     *  unseen, and a name can be written to look like an address. */
+    to_shown?: string;
+    cc_shown?: string;
+    bcc_shown?: string;
+    name_shown?: string;
     /** The names of the files that leave with it. */
     attachments?: string[];
     subject: string;
@@ -74,18 +84,49 @@ export const isWaitingDraft = (row: HeldSendRow) => WAITING.has(row.state || 'he
 
 type T = ReturnType<typeof useTranslations>;
 
-function addressee(row: HeldSendRow, t: T): string {
-    return (row.recipient_name || '').trim() || row.recipient || t('noRecipient');
+// The server's marks, `⟨U+XXXX⟩`. Every U+27E8/U+27E9 in a value is itself escaped there, so
+// whatever matches this is VAF's own mark and no recipient can fake one.
+const MARK = /(\u27e8U\+[0-9A-F]{4,6}\u27e9)/;
+
+/** Shown text with every mark in the card's amber, the tone it already uses for "look again".
+ *  The mark's own letters carry the meaning; the colour only adds to it. */
+function Marked({ text }: { text: string }) {
+    return (
+        <>
+            {text.split(MARK).map((part, i) => (i % 2 === 1
+                ? <span key={i} className="font-mono text-amber-700 dark:text-[#e0b866]">{part}</span>
+                : part ? <React.Fragment key={i}>{part}</React.Fragment> : null))}
+        </>
+    );
+}
+
+// Where a catalogue sentence takes a value rendered as elements (marked, isolated): the value
+// is passed as this private-use character and the sentence split around it. The server
+// escapes every private-use character in a shown field, so it cannot occur in the value.
+const SLOT = '\uE000';
+
+function around(sentence: string, value: React.ReactNode): React.ReactNode {
+    const at = sentence.indexOf(SLOT);
+    if (at < 0) return sentence;
+    return <>{sentence.slice(0, at)}{value}{sentence.slice(at + SLOT.length)}</>;
+}
+
+/** A recipient value, marked and in its own bidi isolation, so a right-to-left name cannot
+ *  reorder the words around it. */
+function Recipient({ text }: { text: string }) {
+    return <bdi><Marked text={text} /></bdi>;
 }
 
 // One title per channel rather than a `{channel}` placeholder: the words around a channel name
 // are grammar (a Korean particle follows the name's last sound, Thai spaces a Latin name but
 // not a Thai one), and only a whole sentence per channel gets that right in every language.
-function titleOf(row: HeldSendRow, t: T): string {
-    const recipient = addressee(row, t);
-    if (row.channel === 'mail') return t('titleMail', { recipient });
-    if (row.channel === 'whatsapp') return t('titleWhatsapp', { recipient });
-    return t('titleOther', { channel: row.channel, recipient });
+// The raw `recipient` is only the fallback for a row from a server without the shown fields.
+function Title({ row, t }: { row: HeldSendRow; t: T }) {
+    const recipient = row.name_shown || row.to_shown || row.recipient || t('noRecipient');
+    const sentence = row.channel === 'mail' ? t('titleMail', { recipient: SLOT })
+        : row.channel === 'whatsapp' ? t('titleWhatsapp', { recipient: SLOT })
+            : t('titleOther', { channel: row.channel, recipient: SLOT });
+    return <>{around(sentence, <Recipient text={recipient} />)}</>;
 }
 
 type CardProps = {
@@ -249,7 +290,6 @@ function WaitingDraft({ row, apiBase, onChanged }: CardProps) {
         }
     };
 
-    const named = !!(row.recipient_name || '').trim() && row.recipient_name !== row.recipient;
     // The person's own words until the store holds them: after leaving the field the save is
     // still on the wire (or failed), and showing the agent's old text meanwhile would say the
     // edit was lost while Send would still send it.
@@ -271,16 +311,20 @@ function WaitingDraft({ row, apiBase, onChanged }: CardProps) {
             <div className="flex items-start gap-2 text-gray-800 dark:text-gray-200">
                 <Icon className="w-4 h-4 shrink-0 mt-0.5" />
                 <div className="min-w-0">
-                    <p className="text-sm font-medium break-words">{titleOf(row, t)}</p>
+                    <p className="text-sm font-medium break-words"><Title row={row} t={t} /></p>
+                    {/* Under a name, the address or number it stands for, whole and marked:
+                        the name is free text, the address is where it goes. */}
                     <p className="text-xs text-gray-500 dark:text-[#9a9a9a] break-words">
-                        {named ? `${row.recipient} · ` : ''}{t('notSent')}{row.edited ? ` · ${t('edited')}` : ''}
+                        {row.name_shown ? <><Recipient text={row.to_shown || row.recipient} />{' · '}</> : null}
+                        {t('notSent')}{row.edited ? ` · ${t('edited')}` : ''}
                     </p>
                 </div>
             </div>
             {/* Every address and every file, because what the person approves is what
-                leaves; a line is shown only when there is something on it. */}
-            {row.cc ? <p className="text-xs text-gray-500 dark:text-[#9a9a9a] break-words">{t('cc', { recipients: row.cc })}</p> : null}
-            {row.bcc ? <p className="text-xs text-gray-500 dark:text-[#9a9a9a] break-words">{t('bcc', { recipients: row.bcc })}</p> : null}
+                leaves; a line is shown only when there is something on it. Each address
+                comes first, with its name after it. */}
+            {row.cc_shown ? <p className="text-xs text-gray-500 dark:text-[#9a9a9a] break-words">{around(t('cc', { recipients: SLOT }), <Recipient text={row.cc_shown} />)}</p> : null}
+            {row.bcc_shown ? <p className="text-xs text-gray-500 dark:text-[#9a9a9a] break-words">{around(t('bcc', { recipients: SLOT }), <Recipient text={row.bcc_shown} />)}</p> : null}
             {row.attachments && row.attachments.length > 0 ? (
                 <p className="text-xs text-gray-500 dark:text-[#9a9a9a] break-words">{t('attachments', { names: row.attachments.join(', ') })}</p>
             ) : null}
@@ -377,17 +421,17 @@ function DecidedDraft({ row, formatTime }: CardProps) {
     // "Gesendet: WhatsApp an Anna Berg · 14:32". The separator is the catalogue's, because
     // Chinese writes a full-width colon where German and English write ": ".
     const when = row.state === 'sent' && row.decided_ts ? ` · ${formatTime(row.decided_ts)}` : '';
-    const label = `${state}${tCommon('labelSeparator')}${titleOf(row, t)}${when}`;
     const Icon = row.state === 'sent' ? Check : row.state === 'sending' ? Send : row.state === 'replaced' ? RefreshCw : Trash2;
     return (
         <div className="max-w-2xl min-w-0 rounded-xl border border-gray-200 dark:border-[#2e2e2e] bg-gray-50 dark:bg-[#1f1f1f]">
             {/* One line, the record of what became of the draft; the words it held open under
                 it, read-only, because this is what the agent wrote (and, for a sent draft,
-                what left). */}
+                what left). NAMED BOUNDARY: this line is truncated, unlike the waiting card.
+                Nothing on it can be acted on any more, and it opens to the text. */}
             <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
                 className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-gray-500 hover:text-gray-700 dark:text-[#9a9a9a] dark:hover:text-gray-300">
                 <Icon className="w-3.5 h-3.5 shrink-0" />
-                <span className="min-w-0 truncate">{label}{row.edited ? ` · ${t('edited')}` : ''}</span>
+                <span className="min-w-0 truncate">{state}{tCommon('labelSeparator')}<Title row={row} t={t} />{when}{row.edited ? ` · ${t('edited')}` : ''}</span>
                 <ChevronRight className={cn('w-3.5 h-3.5 ml-auto shrink-0 transition-transform', open && 'rotate-90')} />
             </button>
             {open && (

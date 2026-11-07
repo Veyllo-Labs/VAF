@@ -971,7 +971,7 @@ For **Google Drive**, create an OAuth 2.0 Client (Web application) in [Google Cl
 
 - A "VAF Sync" folder is created in the cloud root (Google Drive, OneDrive, etc.).
 - Optional sync keeps this folder in sync with a local directory.
-- Known limitation: the cloud-to-local direction does not work at the moment. The local sync folder lies inside VAF's own data, and VAF's writers refuse to save a download there, so each such download fails and is logged while the rest of the sync goes on. A remote path that would leave the sync folder is refused the same way. Reach files in the cloud with the `search`, `read` and `download` actions instead.
+- Known limitation: the cloud-to-local direction does not work at the moment, for two reasons. The providers name remote files with a leading `/`, and the sync engine refuses such a rooted path instead of stripping it; and the local sync folder lies inside VAF's own data, where VAF's safe open (`open_for_write`) refuses the write. Each such download fails and is logged while the rest of the sync goes on. A remote path that would leave the sync folder is refused the same way. Reach files in the cloud with the `search`, `read` and `download` actions instead.
 - The agent can browse the **entire** drive; sync is optional for specific use cases.
 
 ### Credential storage

@@ -93,7 +93,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   with the `read` action of `cloud_storage`.
 - **Cloud sync no longer saves a file outside its sync folder.** A remote file whose path would
   leave the local sync folder (a `..` in its name, or a path naming another folder) is now
-  refused: that one file fails and is logged, and the rest of the sync goes on.
+  refused: that one file fails and is logged, and the rest of the sync goes on. The
+  cloud-to-local direction of Cloud sync currently does not run at all, so files that appear
+  in the cloud are not copied to your computer; use the `search`, `read` and `download` actions
+  of `cloud_storage` to reach them instead.
 
 ## [0.1.0a35] - 2026-11-05
 

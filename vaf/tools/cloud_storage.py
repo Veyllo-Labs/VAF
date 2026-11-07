@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from vaf.core.config import Config
-from vaf.core.path_jail import PathEscape, contained_path, safe_entry_name
+from vaf.core.path_jail import PathEscape, WriteRefused, contained_path, safe_entry_name
 from vaf.core.platform import Platform
 from vaf.tools.base import BaseTool
 from vaf.tools.filesystem import is_safe_path, user_jail
@@ -452,8 +452,7 @@ def _action_download(username: str, account_id: str, provider: str, file_id: Opt
             name = safe_entry_name(meta.name)
         except PathEscape:
             return (f"Refused: the cloud file's name {meta.name!r} is not a plain file name, so "
-                    "it cannot be saved under it; nothing was saved. Use read(file_id=...) for "
-                    "its content.")
+                    "it was not saved. Use read(file_id=...) to see its content.")
         try:
             contained_path(downloads, name)
         except PathEscape:
@@ -467,7 +466,15 @@ def _action_download(username: str, account_id: str, provider: str, file_id: Opt
         try:
             fetched = staging / "download"
             prov.download_file(file_id, fetched)
-            _copy_into(fetched, dest)
+            try:
+                _copy_into(fetched, dest)
+            except WriteRefused as e:
+                # The destination is fixed to Downloads, so the write refusal's own hint
+                # ("choose another folder") names nothing the model can do here.
+                logger.warning("[CloudStorage] Download refused: %s", e)
+                return (f"Download failed: {dest} is not a plain file VAF may write (a link, "
+                        "for example), so nothing was saved. Remove or rename that entry in "
+                        "Downloads, or use read(file_id=...) to see the content.")
         finally:
             shutil.rmtree(staging, ignore_errors=True)
         return f"Downloaded '{meta.name}' to {dest}"

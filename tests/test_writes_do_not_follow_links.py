@@ -562,7 +562,10 @@ def test_a_cloud_download_with_a_plain_name_lands_in_downloads(lab, monkeypatch)
 def test_a_cloud_download_does_not_write_through_a_link_in_downloads(lab, monkeypatch):
     """A link inside Downloads to another file inside Downloads is contained, so only the
     write itself can refuse it. MUTATION: copy into Downloads with open() in _copy_into -
-    red (the link's target is overwritten)."""
+    red (the link's target is overwritten). MUTATION: drop the WriteRefused answer in
+    _action_download - red (the generic failure passes the write's refusal through, with no
+    next step; for a state refusal its "choose another folder", which the fixed Downloads
+    destination does not allow)."""
     from vaf.core.platform import Platform
     import vaf.tools.cloud_storage as cs
     downloads = Platform.downloads_dir()
@@ -574,7 +577,32 @@ def test_a_cloud_download_does_not_write_through_a_link_in_downloads(lab, monkey
     monkeypatch.setattr(cs, "create_cloud_provider", lambda *a, **k: prov)
     out = cs._action_download("alice", "acc1", "google_drive", "f1")
     assert out.startswith("Download failed"), out
+    assert "choose another folder" not in out, out
+    assert "Remove or rename that entry in Downloads" in out and "read(file_id=" in out, out
     assert kept.read_bytes() == b"old"
+
+
+@pytest.mark.parametrize("name", ["sub/x.py", "sub\\x.py", ".env"])
+def test_a_cloud_download_is_saved_only_under_a_plain_visible_name(lab, monkeypatch, name):
+    """A nested name or a dotfile stays inside Downloads, so containment alone lets it
+    through; only the plain-name check refuses it (a nested name builds folders nobody
+    asked for, a dotfile is hidden from the listings).
+
+    MUTATION: ``name = meta.name`` instead of ``safe_entry_name(meta.name)`` - red ("sub"
+    and ".env" are written into Downloads)."""
+    from vaf.core.platform import Platform
+    import vaf.tools.cloud_storage as cs
+    downloads = Platform.downloads_dir()
+    downloads.mkdir(parents=True, exist_ok=True)
+    before = sorted(p.name for p in downloads.iterdir())
+    prov = _drive(name, b"SECRET=1\n", monkeypatch)
+    monkeypatch.setattr(cs, "create_cloud_provider", lambda *a, **k: prov)
+    out = cs._action_download("alice", "acc1", "google_drive", "f1")
+    assert out.startswith("Refused") and "is not a plain file name, so it was not saved" in out
+    assert "read(file_id=...) to see its content" in out, out
+    assert sorted(p.name for p in downloads.iterdir()) == before
+    assert not (downloads / "sub").exists() and not (downloads / ".env").exists()
+    _untouched(lab)
 
 
 def test_a_cloud_download_refuses_a_link_in_downloads_that_points_out(lab, monkeypatch):
@@ -624,9 +652,11 @@ def _provider(name: str, body: bytes, monkeypatch, source: Path):
 @pytest.mark.parametrize("provider", ["google_drive", "onedrive", "dropbox_provider",
                                       "nextcloud", "icloud"])
 def test_a_provider_download_does_not_write_through_a_link(lab, monkeypatch, provider):
-    """Each provider's own download, into a name that is a link to the MCP list. The sync
-    engine hands them paths in the sync folder, which a mounted environment can plant a
-    link in; the refusal must be the write's own (WriteRefused), not an earlier failure.
+    """Each provider's own download, into a name that is a link to the MCP list. The
+    providers are a public surface: the sync engine hands them paths in its sync folder
+    (inside VAF's own state, which no environment may mount), and any other caller may hand
+    them a folder someone else can plant a link in. The refusal must be the write's own
+    (WriteRefused), not an earlier failure.
 
     MUTATION: one provider's write back to open() (iCloud: shutil.copy2) - its case red."""
     body = b'{"servers": {"x": {"command": "sh"}}}'
@@ -679,38 +709,54 @@ def test_retrieve_copies_an_ordinary_file(lab, monkeypatch):
 
 
 @pytest.mark.parametrize("remote_path,lands", [
-    ("/notes.txt", "notes.txt"), ("/sub/notes.txt", "sub/notes.txt"),
-    ("/../../escape.txt", None), ("/sub/../../escape.txt", None), ("/C:/escape.txt", None),
+    ("notes.txt", "notes.txt"), ("sub/notes.txt", "sub/notes.txt"),
+    ("/notes.txt", None), ("/sub/notes.txt", None),
+    ("../escape.txt", None), ("/../../escape.txt", None), ("sub/../../escape.txt", None),
+    ("/C:/escape.txt", None), ("C:/escape.txt", None), ("ELSEWHERE", None),
 ])
 def test_the_sync_engine_holds_a_remote_path_inside_the_sync_folder(lab, monkeypatch,
                                                                     remote_path, lands):
     """Remote paths are "/" plus remote names, and a name may carry "/" and "..". Joined as
-    they were, the leading "/" swallowed the sync folder.
+    they were, the leading "/" swallowed the sync folder. A rooted path is refused, not
+    stripped: the local scan keys files without the "/", so a download recorded under
+    "/name" would read as deleted locally on the next cycle and delete the remote file.
 
-    MUTATION: back to ``self.local_sync_dir / rel_path`` - red (the plain cases land outside
-    the sync folder, the escapes are written)."""
+    MUTATION: back to ``self.local_sync_dir / rel_path`` - red (the escapes are written
+    outside the sync folder). MUTATION: ``contained_path(..., rel_path.lstrip("/"))`` - red
+    (the rooted cases are downloaded)."""
     import vaf.core.threat_db as threat_db
     from vaf.cloud.base import CloudFileMetadata
     from vaf.cloud.sync_engine import SyncEngine, SyncResult
+    from vaf.core.path_jail import PathEscape
     monkeypatch.setattr(threat_db, "inspect_upload_file",
                         lambda *a, **k: SimpleNamespace(blocked=False))
-    sync = lab.home / "sync"
-    sync.mkdir()
+    sync = lab.home / "sync" / "google_drive"
+    sync.mkdir(parents=True)
+    elsewhere = lab.home / "elsewhere"
+    elsewhere.mkdir()
+    if remote_path == "ELSEWHERE":
+        remote_path = str(elsewhere / "escape.txt")
     written = []
 
     class _Provider:
         def download_file(self, file_id, local_path):
             written.append(Path(local_path))
-            Path(local_path).write_bytes(b"x")
+            # A broken engine may name a path outside the scratch home: recorded, not written.
+            if lab.home.resolve() in Path(local_path).resolve().parents:
+                Path(local_path).parent.mkdir(parents=True, exist_ok=True)
+                Path(local_path).write_bytes(b"x")
             return local_path
 
     engine = SyncEngine(_Provider(), SimpleNamespace(upsert_file=lambda **k: None), sync, 10**6)
     meta = CloudFileMetadata(file_id="f1", name="n", path=remote_path, size=1, modified_time=0.0)
     payload = {"remote_file": meta, "remote_path": remote_path, "manifest": None}
     if lands is None:
-        with pytest.raises(ValueError):
+        with pytest.raises(PathEscape):
             engine._execute_download(payload, SyncResult())
         assert written == []
+        assert not (lab.home / "sync" / "escape.txt").exists()
+        assert not (lab.home / "escape.txt").exists()
+        assert list(elsewhere.iterdir()) == []
     else:
         engine._execute_download(payload, SyncResult())
         assert written == [(sync / lands).resolve()]

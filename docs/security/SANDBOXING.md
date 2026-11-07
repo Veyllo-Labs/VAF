@@ -459,7 +459,9 @@ tenant's Downloads folder lies in their own project root, which an environment o
 mount), and every provider writes its downloads through it. A cloud file's name is the remote
 owner's choice and may carry `/` and `..`: `download` saves only under a plain file name
 (`vaf.safe_entry_name`, held inside Downloads by `vaf.contained_path`), and the sync engine
-holds each remote path inside the local sync folder. A guard test
+holds each remote path inside the local sync folder (a rooted path is refused, not stripped).
+That folder lies in VAF's own state, so the same open refuses a sync download into it today;
+the sync's download direction does not work until it gets a write lane of its own. A guard test
 (`tests/test_writes_do_not_follow_links.py`) refuses a new raw write in `vaf/tools` and
 `vaf/cloud` that is not on its reviewed list.
 

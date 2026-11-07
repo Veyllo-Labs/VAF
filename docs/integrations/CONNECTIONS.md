@@ -927,7 +927,7 @@ Single-user (no login or local admin) continues to use the legacy `email_config`
 - **Read without local copy**: Extract document content (PDF, Word, Google Docs, etc.) via API; no permanent download required.
 - **Download**: Save files from cloud to the user's Downloads folder by `file_id`.
 - **Upload (VAF Sync)**: Copy local files into the VAF Sync folder; they are uploaded on the next sync.
-- **Sync**: Optional bi-directional sync of the "VAF Sync" folder between local storage and cloud.
+- **Sync**: Optional sync of the "VAF Sync" folder between local storage and cloud; the download direction does not work at the moment (see [VAF Sync folder](#vaf-sync-folder)).
 - **Agent tools**: The `cloud_storage` tool is available to the main agent and to the Librarian sub-agent. Use for browse, download, read, save, list, and status.
 
 ### Setup
@@ -970,7 +970,8 @@ For **Google Drive**, create an OAuth 2.0 Client (Web application) in [Google Cl
 ### VAF Sync folder
 
 - A "VAF Sync" folder is created in the cloud root (Google Drive, OneDrive, etc.).
-- Optional bi-directional sync keeps this folder in sync with a local directory.
+- Optional sync keeps this folder in sync with a local directory.
+- Known limitation: the cloud-to-local direction does not work at the moment. The local sync folder lies inside VAF's own data, and VAF's writers refuse to save a download there, so each such download fails and is logged while the rest of the sync goes on. A remote path that would leave the sync folder is refused the same way. Reach files in the cloud with the `search`, `read` and `download` actions instead.
 - The agent can browse the **entire** drive; sync is optional for specific use cases.
 
 ### Credential storage

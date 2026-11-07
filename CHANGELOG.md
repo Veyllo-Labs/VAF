@@ -79,14 +79,21 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   account could write into the folders where VAF keeps its custom tools (Python it runs at
   every start), skills, workflows, MCP server list and tool permissions, from any chat,
   messenger, workflow or automation. That is now refused for every account, also when a file
-  in the chat's folder is a link that points there or a cloud file's name contains a path
-  (a cloud download is saved only under a plain file name); custom tools, skills and workflows are
+  in the chat's folder is a link that points there; custom tools, skills and workflows are
   still made with their own tools, and reading is unchanged. Update, and if you are unsure,
   look through the `custom_tools` folder in VAF's data directory (on Linux
   `~/.local/share/vaf/custom_tools`) for tools you did not create.
   `~/.VAF` is now treated as `~/.vaf` on macOS and Windows. For applications built on VAF,
   `vaf.is_vaf_state(path)` and `vaf.open_for_write(path)` give the same answer and the same
   safe open.
+- **A cloud download is saved only under a plain file name.** Whoever owns or shares a cloud
+  file chooses its name, and Google Drive allows a `/` in it, so a name such as `../x` could
+  save the download outside your Downloads folder. A name with a path in it, or one starting
+  with a dot, is now refused and nothing is saved; the agent can still read the file's content
+  with the `read` action of `cloud_storage`.
+- **Cloud sync no longer saves a file outside its sync folder.** A remote file whose path would
+  leave the local sync folder (a `..` in its name, or a path naming another folder) is now
+  refused: that one file fails and is logged, and the rest of the sync goes on.
 
 ## [0.1.0a35] - 2026-11-05
 

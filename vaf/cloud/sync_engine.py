@@ -344,8 +344,11 @@ class SyncEngine:
         # The remote path is built from remote names ("/" + name), and a name may carry "/"
         # and "..": joined as it was, a leading "/" swallowed the sync folder and the rest
         # named any folder on this machine. Held inside the sync folder; PathEscape fails
-        # this one action (logged by the caller), never the sync.
-        local_path = contained_path(self.local_sync_dir, rel_path.lstrip("/"))
+        # this one action (logged by the caller), never the sync. A rooted path is refused,
+        # not stripped: the local scan keys files without the "/", so a download recorded
+        # under "/name" would read as deleted locally on the next cycle and delete the
+        # remote file.
+        local_path = contained_path(self.local_sync_dir, rel_path)
 
         local_path.parent.mkdir(parents=True, exist_ok=True)
 

@@ -41,6 +41,7 @@ import { Switch, switchWord } from '@/components/ui/Switch';
 import SetupWizardShell, { WizardNextButton } from '@/components/connections/SetupWizardShell';
 import { retryAfterSeconds, retryWhen } from '@/lib/retryAfter';
 import { cn } from '@/lib/utils';
+import { veylloRelayPricesUrl } from '@/lib/veyllo';
 
 const api = (path: string) => `/api/app-link${path}`;
 
@@ -243,6 +244,11 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
     const [issueRefusal, setIssueRefusal] = useState<string | null>(null);
     const [code, setCode] = useState('');
     const [codeNote, setCodeNote] = useState<string | null>(null);
+    // A code the press could not use: aria-invalid until the field is edited, and a red border
+    // for 1.5 s, so the press answers even when the button is not disabled.
+    const [codeInvalid, setCodeInvalid] = useState(false);
+    const [codeFlash, setCodeFlash] = useState(false);
+    const codeFlashTimer = useRef<number | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
 
     const pairingRef = useRef<Pairing>({ state: 'none' });
@@ -355,8 +361,24 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
         }
     }, [refusalText, t]);
 
+    const markCodeInvalid = () => {
+        setCodeInvalid(true);
+        setCodeFlash(true);
+        if (codeFlashTimer.current !== null) window.clearTimeout(codeFlashTimer.current);
+        codeFlashTimer.current = window.setTimeout(() => setCodeFlash(false), 1500);
+    };
+    useEffect(() => () => {
+        if (codeFlashTimer.current !== null) window.clearTimeout(codeFlashTimer.current);
+    }, []);
+
     const openWindow = async () => {
         setCodeNote(null);
+        // The server reads a 2FA code as six digits, spaces dropped (vaf/auth/second_factor.py):
+        // anything else is answered here, without spending an attempt of the address window.
+        if (!/^\d{6}$/.test(code.replace(/\s/g, ''))) {
+            markCodeInvalid();
+            return;
+        }
         setBusy('code');
         try {
             const res = await fetch(api('/pairing-window'), {
@@ -367,9 +389,11 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
             const data = await res.json().catch(() => ({}));
             if (!res.ok) {
                 setCodeNote(refusalText(data, res));
+                if (data.code === 'wrong_code' || data.code === 'code_spent') markCodeInvalid();
                 return;
             }
             setCode('');
+            setCodeInvalid(false);
             setBusy(null);
             await issue(relayAllowed ? 'relay' : 'local');
         } catch {
@@ -423,6 +447,7 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
         setIssueRefusal(null);
         setCode('');
         setCodeNote(null);
+        setCodeInvalid(false);
     }, []);
 
     const close = () => {
@@ -502,6 +527,7 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
 
     const stepId: StepId = view === 'explain' ? STEPS[introPage] : VIEW_STEP[view];
     const stepIndex = STEPS.indexOf(stepId);
+    const codeReady = !!status && !impossible;
 
     const intro = (
         <div className="space-y-6">
@@ -558,12 +584,17 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
             <section className={card}>
                 <h3 className="font-semibold text-gray-900">{t('costTitle')}</h3>
                 <p className="text-sm text-gray-700 mt-2">{t('costSentence')}</p>
+                <a href={veylloRelayPricesUrl(locale)} target="_blank" rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 mt-1 text-sm font-medium text-gray-900 underline underline-offset-2 hover:no-underline">
+                    {t('pricesLink')} <ExternalLink className="w-3.5 h-3.5 text-gray-500" aria-hidden="true" />
+                </a>
             </section>
         </div>
     );
 
-    // The form's submit button is the footer's action (form="veyllo-app-code-form"), so Enter
-    // in the field and a click on it both open the window.
+    // The code field and its button sit in the footer, between Back and Show QR code, so the
+    // step's one answer is typed where it is sent; the body keeps the hint and the refusal.
+    // The button stays enabled while the field is empty: pressing it is what marks the field.
     const codeStep = (
         <div className="space-y-4">
             {statusFailed && !status ? (
@@ -582,15 +613,10 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
                     {isAdmin && <p className="text-sm text-gray-600">{t('impossibleAdmin')}</p>}
                 </div>
             ) : (
-                <form id="veyllo-app-code-form" className="space-y-2" onSubmit={e => { e.preventDefault(); void openWindow(); }}>
+                <div className="space-y-2">
                     <p className="text-xs text-gray-600">{t('codeHint')}</p>
-                    <div className="max-w-[14rem] max-md:max-w-none">
-                        <label className={label} htmlFor="veyllo-app-code">{tAccount('code')}</label>
-                        <input id="veyllo-app-code" value={code} onChange={e => setCode(e.target.value)} inputMode="numeric"
-                            autoComplete="one-time-code" placeholder="123456" className={`${field} font-mono w-32 max-md:w-full`} />
-                    </div>
-                    {codeNote && <p className="text-xs text-red-600">{codeNote}</p>}
-                </form>
+                    {codeNote && <p id="veyllo-app-code-note" className="text-xs text-red-600">{codeNote}</p>}
+                </div>
             )}
         </div>
     );
@@ -703,10 +729,19 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
     ) : stepId === 'sees' ? (
         <WizardNextButton onClick={() => setIntroPage(2)}>{tCommon('next')}</WizardNextButton>
     ) : stepId === 'code' ? (
-        <WizardNextButton type="submit" form="veyllo-app-code-form" busy={busy !== null} chevron={false}
-            disabled={busy !== null || !code.trim() || !status || impossible}>
-            {busy !== null ? t('opening') : t('showQr')}
-        </WizardNextButton>
+        // Below md the field stands above the button, both as wide as the space beside Back.
+        <form id="veyllo-app-code-form" noValidate onSubmit={e => { e.preventDefault(); void openWindow(); }}
+            className="flex items-center gap-3 min-w-0 max-md:flex-1 max-md:flex-col max-md:items-stretch max-md:gap-2 max-md:[&>button]:justify-center">
+            {codeReady && (
+                <input id="veyllo-app-code" value={code} onChange={e => { setCode(e.target.value); setCodeInvalid(false); }}
+                    inputMode="numeric" autoComplete="one-time-code" aria-label={tAccount('code')} placeholder={tAccount('code')}
+                    aria-invalid={codeInvalid} aria-describedby={codeNote ? 'veyllo-app-code-note' : undefined}
+                    className={cn(field, 'font-mono w-36 max-md:w-full transition-colors', codeFlash && 'border-red-500 focus:ring-red-400')} />
+            )}
+            <WizardNextButton type="submit" busy={busy !== null} chevron={false} disabled={busy !== null || !codeReady}>
+                {busy !== null ? t('opening') : t('showQr')}
+            </WizardNextButton>
+        </form>
     ) : view === 'ended' || (view === 'qr' && issueRefusal) ? (
         <WizardNextButton onClick={() => void issue(relayAllowed ? way : 'local')} disabled={busy !== null} chevron={false}>
             {t('newCode')}

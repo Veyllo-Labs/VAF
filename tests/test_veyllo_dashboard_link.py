@@ -21,9 +21,13 @@ def test_the_wizard_and_settings_link_the_dashboard():
 
 
 def test_the_address_is_the_localized_dashboard():
+    """Every veyllo.app address goes through the one page helper, so the dashboard and the
+    relay's prices share the locale rule."""
     helper = (WEB / "lib" / "veyllo.ts").read_text(encoding="utf-8")
-    assert "`https://veyllo.app/${locale}/dashboard`" in helper
-    assert "'https://veyllo.app/dashboard'" in helper, "English has no prefix there"
+    assert "`https://veyllo.app/${locale}/${page}`" in helper
+    assert "`https://veyllo.app/${page}`" in helper, "English has no prefix there"
+    assert "return veylloPageUrl(locale, 'dashboard');" in helper
+    assert "return veylloPageUrl(locale, 'relay#prices');" in helper
 
 
 def test_only_a_ui_locale_gets_a_prefix():
@@ -37,7 +41,7 @@ def test_only_a_ui_locale_gets_a_prefix():
 _TS = WEB / "node_modules" / "typescript"
 
 
-def _dashboard_urls(locales):
+def _dashboard_urls(locales, fn="veylloDashboardUrl"):
     """The REAL veylloDashboardUrl and isSupportedLocale, transpiled with the app's own
     TypeScript and run in node (the pattern of tests/test_ask_user_chat.py)."""
     import json
@@ -58,9 +62,9 @@ def _dashboard_urls(locales):
         "const veyllo = load(path.join(lib, 'veyllo.ts'), (id) => {"
         " if (id === './languages') return languages; throw new Error('unexpected import ' + id); });"
         "const locales = JSON.parse(process.argv[3]);"
-        "process.stdout.write(JSON.stringify(locales.map((l) => veyllo.veylloDashboardUrl(l))));"
+        "process.stdout.write(JSON.stringify(locales.map((l) => veyllo[process.argv[4]](l))));"
     )
-    out = subprocess.run(["node", "-e", script, str(_TS), str(WEB / "lib"), json.dumps(locales)],
+    out = subprocess.run(["node", "-e", script, str(_TS), str(WEB / "lib"), json.dumps(locales), fn],
                          capture_output=True, text=True, check=True).stdout
     return dict(zip(locales, json.loads(out)))
 
@@ -78,3 +82,16 @@ def test_the_url_for_every_locale():
         assert urls[code] == want, code
     for locale in odd:
         assert urls[locale] == "https://veyllo.app/dashboard", locale
+
+
+def test_the_relay_prices_url_for_every_locale():
+    """The Veyllo App window links the relay's prices in the UI's language: English without a
+    prefix, every other UI locale under its own, anything else in English. MUTATION: the page
+    'relay' without '#prices' - red."""
+    codes = re.findall(r"code: '([a-z]+)'", (WEB / "lib" / "languages.ts").read_text(encoding="utf-8"))
+    urls = _dashboard_urls(codes + ["en-US", ""], "veylloRelayPricesUrl")
+    for code in codes:
+        want = ("https://veyllo.app/relay#prices" if code == "en"
+                else f"https://veyllo.app/{code}/relay#prices")
+        assert urls[code] == want, code
+    assert urls["en-US"] == urls[""] == "https://veyllo.app/relay#prices"

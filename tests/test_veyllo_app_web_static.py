@@ -125,7 +125,7 @@ def test_step_one_says_what_the_frd_asks():
                   ("canChat", "canReceive", "canTasks", "appName", "agentUsesVaf", "privacyLink",
                    "introTitle", "featureMessages", "featureTasks")),
         "sees": (_between(src, "const sees = (", "const codeStep = ("),
-                 ("seesTitle", "seesRelay", "seesDirect", "costTitle", "costSentence")),
+                 ("seesTitle", "seesRelay", "seesDirect", "costTitle", "costSentence", "pricesLink")),
         "code": (_between(src, "const codeStep = (", "const qr = ("), ("codeHint",)),
     }
     for page, (block, keys) in pages.items():
@@ -143,6 +143,12 @@ def test_step_one_says_what_the_frd_asks():
         assert heading in card, title
         for text in texts:
             assert card.index(heading) < card.index(f"t('{text}')"), (title, text)
+    # The cost card names no amount; it links veyllo.app's prices in the UI's language, opened
+    # in a new tab like the privacy policy.
+    price = _between(cards[1], "<a href={veylloRelayPricesUrl(locale)}", "</a>")
+    assert 'target="_blank"' in price and 'rel="noopener noreferrer"' in price and "{t('pricesLink')}" in price
+    assert cards[1].index("t('costSentence')") < cards[1].index("<a href={veylloRelayPricesUrl(locale)}")
+    assert "import { veylloRelayPricesUrl } from '@/lib/veyllo';" in src
     # The two card titles are the steps' header lines now.
     subtitles = dict(re.findall(r"(\w+): '([\w.]+)'", _const_block(src, "STEP_SUBTITLE")))
     assert subtitles["intro"] == "canDoTitle" and subtitles["sees"] == "seesTitle"
@@ -217,7 +223,11 @@ def test_relay_off_means_local_only():
     code_step = _between(src, "const codeStep = (", "const qr = (")
     gate = code_step.index(") : impossible ? (")
     assert code_step.index("t('impossible')") > gate
-    assert code_step.index("<form") > code_step.index(") : (", gate), "the code field shows when pairing is impossible"
+    # The field lives in the footer and shows only when a code can open anything.
+    assert "const codeReady = !!status && !impossible;" in src
+    code_action = _between(src, "stepId === 'code' ? (", "</form>")
+    assert code_action.index("{codeReady && (") < code_action.index("<input"), \
+        "the code field shows when pairing is impossible"
     # The first QR is relay only when the relay is allowed.
     assert "await issue(relayAllowed ? 'relay' : 'local');" in src
 
@@ -437,19 +447,6 @@ def test_admin_section_is_admins_only():
     assert "<Switch on={relay.enabled}" in section and "{row.username}" in section
 
 
-# The relay's two prices as Intl.NumberFormat(locale, {style: 'currency', currency: 'EUR'})
-# writes them; German keeps a no-break space so an amount never breaks across two lines.
-_AMOUNTS = {
-    "en": ("€0.01", "€0.005"),
-    "de": ("0,01\u00a0€", "0,005\u00a0€"),
-    "ja": ("€0.01", "€0.005"),
-    "ko": ("€0.01", "€0.005"),
-    "th": ("€0.01", "€0.005"),
-    "tr": ("€0,01", "€0,005"),
-    "zh": ("€0.01", "€0.005"),
-}
-
-
 def test_the_relay_admin_block_is_always_open():
     """The admin block is shown open and cannot be folded away: a folded heading read as the
     state of the pairing in progress. It names itself, says what it decides, and loads when it
@@ -471,20 +468,19 @@ def test_the_relay_admin_block_is_always_open():
 
 
 def test_the_window_promises_what_each_way_delivers():
-    """Push reaches a phone only when it paired through the Veyllo relay (no relay member, no
-    notify), a message costs 0.01 euro and a task for the phone 0.005 euro per direction, written
-    in each locale's own number format, 2FA is set up at sign-in or after an admin's reset, and
-    the switch that gives the phone a direct address is named as the Local Network tab names it.
-    MUTATIONS: the old Local text without the push sentence in one locale; the Turkish cost
-    sentence with its old "1 sent" - red."""
+    """Push reaches the Veyllo App only when it paired through the Veyllo relay (no relay
+    member, no notify), the relay's texts say it is charged but name no amount (the prices
+    live on veyllo.app, where they can change without a VAF release), 2FA is set up at sign-in
+    or after an admin's reset, and the switch that gives a direct address is named as the
+    Local Network tab names it. MUTATIONS: the old Local text without the push sentence in one
+    locale; the Turkish cost sentence with an amount, "€0,01" - red."""
     for locale in LOCALES:
         cat = _catalog(locale)
         keys = cat["settings"]["veylloApp"]
         assert "veyllo relay" in keys["canReceive"].lower(), locale
         assert "Veyllo Relay" in keys["explainLocal"], locale
-        for key in ("costSentence", "explainRelay"):
-            for amount in _AMOUNTS[locale]:
-                assert amount in keys[key], (locale, key, amount)
+        for key in ("costSentence", "explainRelay", "pricesLink"):
+            assert not re.search(r"\u20ac|\d[.,]\d", keys[key]), (locale, key)
         hosting = cat["settings"]["localNetwork"]["enableHosting"]
         for text in (keys["impossibleAdmin"], keys["refusalNoDirectAdmin"], keys["refusals"]["no_direct_path"]):
             assert hosting in text, (locale, text)
@@ -654,10 +650,9 @@ def test_the_approved_texts_are_word_for_word():
             "seesDirect": "If you connect directly through your own network, Veyllo sees "
                 "nothing.",
             "costTitle": "What it costs",
-            "costSentence": "Through the Veyllo Relay, each message costs \u20ac0.01, in both "
-                "directions and also when VAF writes on its own. A task from VAF to the Veyllo "
-                "App costs \u20ac0.005 per direction. Your subscription pays first, then your "
-                "credit. The direct way is free.",
+            "costSentence": "Messages through the Veyllo Relay are charged. Your subscription "
+                "pays first, then your credit. The direct way is free.",
+            "pricesLink": "View prices",
             "adminTitle": "Veyllo Relay for this VAF installation",
             "adminIntro": "As an admin, you decide here for all accounts of this installation "
                 "whether the Veyllo App may connect through the Veyllo Relay. Whether your "
@@ -673,10 +668,9 @@ def test_the_approved_texts_are_word_for_word():
                 "accounts. All devices with the Veyllo App stay paired and can still reach VAF "
                 "directly through your network, for example at home or over a VPN. They can "
                 "only reach VAF through the relay again after pairing anew.",
-            "explainRelay": "With the Veyllo Relay the Veyllo App reaches VAF from anywhere. "
-                "Each message costs \u20ac0.01, also when VAF writes on its own, a task to the "
-                "Veyllo App \u20ac0.005 per direction. Veyllo only sees when messages travel "
-                "and how large they are, never the content.",
+            "explainRelay": "With the Veyllo Relay, the Veyllo App reaches VAF from anywhere. "
+                "Messages through the relay are charged, the prices are on veyllo.app. Veyllo "
+                "only sees when messages travel and how large they are, never the content.",
             "relayStates.off": "The relay is switched off. The Veyllo App pairs and connects "
                 "only directly.",
             "relayStates.replaced": "Another VAF with the same relay key took the connection.",
@@ -758,11 +752,10 @@ def test_the_approved_texts_are_word_for_word():
             "seesDirect": "Verbindest du dich direkt \u00fcber dein eigenes Netz, sieht Veyllo "
                 "nichts.",
             "costTitle": "Was es kostet",
-            "costSentence": "\u00dcber das Veyllo Relay kostet jede Nachricht "
-                "0,01\u00a0\u20ac, in beide Richtungen und auch dann, wenn VAF von sich aus "
-                "schreibt. Ein Auftrag von VAF an die Veyllo App kostet 0,005\u00a0\u20ac pro "
-                "Richtung. Bezahlt wird zuerst mit deinem Abo, dann mit deinem Guthaben. Der "
-                "direkte Weg ist kostenlos.",
+            "costSentence": "Nachrichten \u00fcber das Veyllo Relay sind kostenpflichtig. "
+                "Bezahlt wird zuerst mit deinem Abo, dann mit deinem Guthaben. Der direkte Weg "
+                "ist kostenlos.",
+            "pricesLink": "Preise ansehen",
             "adminTitle": "Veyllo Relay f\u00fcr diese VAF-Installation",
             "adminIntro": "Hier legst du als Admin f\u00fcr alle Konten dieser Installation "
                 "fest, ob sich die Veyllo App \u00fcber das Veyllo Relay verbinden darf. Ob "
@@ -780,10 +773,9 @@ def test_the_approved_texts_are_word_for_word():
                 "erreichen VAF weiter direkt \u00fcber dein Netz, etwa zu Hause oder per VPN. "
                 "\u00dcber das Relay erreichen sie VAF erst wieder, wenn sie neu koppeln.",
             "explainRelay": "\u00dcber das Veyllo Relay erreicht die Veyllo App VAF von "
-                "\u00fcberall. Jede Nachricht kostet 0,01\u00a0\u20ac, auch wenn VAF von sich "
-                "aus schreibt, ein Auftrag an die Veyllo App 0,005\u00a0\u20ac pro Richtung. "
-                "Veyllo sieht dabei nur, wann Nachrichten laufen und wie gro\u00df sie sind, "
-                "den Inhalt nie.",
+                "\u00fcberall. Nachrichten \u00fcber das Relay sind kostenpflichtig, die "
+                "Preise stehen auf veyllo.app. Veyllo sieht dabei nur, wann Nachrichten laufen "
+                "und wie gro\u00df sie sind, den Inhalt nie.",
             "relayStates.off": "Das Relay ist ausgeschaltet. Die Veyllo App koppelt und "
                 "verbindet sich nur direkt.",
             "relayStates.replaced": "Ein anderes VAF mit demselben Relay-Schl\u00fcssel hat "
@@ -939,19 +931,26 @@ def test_english_writes_the_veyllo_app_as_its_name():
 
 
 def test_the_footer_actions():
-    """The code step submits its form from the footer (Enter in the field too), the run-out
-    pairing and a code VAF refused to issue get a new code there (with the relay off nothing
-    else on that step can ask again), the connected one closes. MUTATIONS: drop the `form=`
-    attribute; offer New code for the ended view only - red."""
+    """The code step's field and its button are one form in the footer, between Back and
+    Show QR code (Enter in the field submits it); the button stays enabled while the field is
+    empty, so pressing it can mark the field. The run-out pairing and a code VAF refused to
+    issue get a new code there (with the relay off nothing else on that step can ask again),
+    the connected one closes. MUTATIONS: put the code field back into the body; disable the
+    button while the field is empty again; offer New code for the ended view only - red."""
     src = _src(WIZARD)
     action = _between(src, "const action = ", "const back = ")
-    code = _between(action, "stepId === 'code' ? (", "</WizardNextButton>")
-    assert 'type="submit"' in code and 'form="veyllo-app-code-form"' in code
-    assert "disabled={busy !== null || !code.trim() || !status || impossible}" in code
+    code = _between(action, "stepId === 'code' ? (", "</form>")
+    assert '<form id="veyllo-app-code-form"' in code
+    assert "onSubmit={e => { e.preventDefault(); void openWindow(); }}" in code
+    assert code.index('<input id="veyllo-app-code"') < code.index('<WizardNextButton type="submit"')
+    assert "disabled={busy !== null || !codeReady}" in code and "code.trim()" not in code
+    # No visible label: the 2FA label's own words name the field for a screen reader and as
+    # its placeholder, and the body keeps the hint and the refusal.
+    assert "aria-label={tAccount('code')} placeholder={tAccount('code')}" in code
+    assert "max-md:flex-col" in code, "below md the field stands above the button"
     code_step = _between(src, "const codeStep = (", "const qr = (")
-    assert '<form id="veyllo-app-code-form"' in code_step
-    assert "onSubmit={e => { e.preventDefault(); void openWindow(); }}" in code_step
-    assert 'type="submit"' not in code_step, "one submit button: the footer's"
+    assert "<input" not in code_step and "<form" not in code_step and "t('codeHint')" in code_step
+    assert 'id="veyllo-app-code-note"' in code_step
     ended = _between(action, "view === 'ended' || (view === 'qr' && issueRefusal) ? (", "</WizardNextButton>")
     assert "issue(relayAllowed ? way : 'local')" in ended and "t('newCode')" in ended
     # The refusal is the only QR-step state without a QR; it is what issue() sets on a refusal.
@@ -964,6 +963,26 @@ def test_the_footer_actions():
     # The shell's next button forwards both attributes to the element.
     button = _between(_src(SHELL), "export function WizardNextButton(", "\n}\n")
     assert "type={type}" in button and "form={form}" in button
+
+
+def test_a_code_the_press_cannot_use_marks_the_field():
+    """An empty code, one that is not six digits (the server's own reading: spaces dropped,
+    digits only), and one the server calls wrong or spent mark the field: aria-invalid until
+    it is edited, a red border for 1.5 s. The format check answers before any request.
+    MUTATIONS: drop the format check; drop the red border; let the border stay - red."""
+    src = _src(WIZARD)
+    open_window = _between(src, "const openWindow = async () => {", "\n    };\n")
+    check = "if (!/^\\d{6}$/.test(code.replace(/\\s/g, ''))) {\n            markCodeInvalid();\n            return;\n        }"
+    assert check in open_window
+    assert open_window.index(check) < open_window.index("fetch(")
+    assert "if (data.code === 'wrong_code' || data.code === 'code_spent') markCodeInvalid();" in open_window
+    mark = _between(src, "const markCodeInvalid = () => {", "\n    };\n")
+    assert "setCodeInvalid(true);" in mark and "setCodeFlash(true);" in mark
+    assert "window.setTimeout(() => setCodeFlash(false), 1500)" in mark
+    code = _between(_between(src, "const action = ", "const back = "), "stepId === 'code' ? (", "</form>")
+    assert "aria-invalid={codeInvalid}" in code
+    assert "codeFlash && 'border-red-500" in code
+    assert "onChange={e => { setCode(e.target.value); setCodeInvalid(false); }}" in code
 
 
 def test_the_new_words_are_in_every_catalogue():

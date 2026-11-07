@@ -33,14 +33,17 @@ Pairing happens in the web UI, in **Settings, Connections, Veyllo App**
 (`web/components/connections/VeylloAppSetupWizard.tsx`):
 
 1. The window walks through numbered steps, the current one ringed: first what the app can
-   do, then what Veyllo sees on each way and what each way costs, each under its own heading,
-   then it asks for **your own** 2FA code. That opens a
+   do, then what Veyllo sees on each way and what each way costs, each under its own heading
+   (the cost names no amount and links the prices on veyllo.app in the UI's language), then
+   it asks for **your own** 2FA code, typed into the footer between Back and "Show QR code".
+   A code that is empty or not six digits, or one VAF calls wrong or spent, marks the field
+   red for a moment. That opens a
    pairing window for your account for ten minutes; nobody can create a QR code for another
    account, an admin neither. With the relay switched off and no direct address either, the
    window says pairing is not possible and asks for no code.
 2. VAF shows a QR code, drawn on this machine (the routes answer it as a PNG; no renderer
    elsewhere ever sees it), with the time it is still valid. Below it a switch chooses the way:
-   **Veyllo Relay** (from anywhere, €0.01 per message, Veyllo sees only metadata) or
+   **Veyllo Relay** (from anywhere, charged per message, Veyllo sees only metadata) or
    **Local** (only on your own network or over your VPN, free, nothing through Veyllo).
    Switching issues a new QR code without a second 2FA code and withdraws the earlier one.
    While an admin has the relay switched off there is no switch, only the Local code. The QR
@@ -285,10 +288,12 @@ is a turn of your account's app chat, with these differences
 
 ## Cost
 
-The relay is billed to the app user's Veyllo account, not by VAF: €0.01 per message in
-each direction, also for the messages VAF sends by itself (reminders, automations, sub-agent
-results), and €0.005 per direction for a task for the Veyllo App. The user's subscription pays
-first, then their credit. The direct way is free.
+The relay is billed to the app user's Veyllo account, not by VAF: per message in each
+direction, also for the messages VAF sends by itself (reminders, automations, sub-agent
+results), and per direction for a task for the Veyllo App. The user's subscription pays
+first, then their credit. The direct way is free. The prices are on veyllo.app
+(`https://veyllo.app/relay#prices`, under `/<locale>/` for the other languages). The window
+links that page instead of quoting amounts, which an installed VAF could not keep current.
 
 ## Managing devices and the relay
 

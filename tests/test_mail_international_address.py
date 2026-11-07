@@ -342,10 +342,19 @@ def _send(svc, port, to, cc="", bcc="", own=OWN, case_id=""):
 
 
 
+def _verb_lines(stub, verb):
+    """The ``verb`` commands (MAIL, RCPT) with the part up to the first colon lowercased:
+    smtplib writes "mail FROM:" and "rcpt TO:" on older Pythons (3.12 on CI) and "mail from:"
+    and "rcpt to:" on 3.13; the arguments after the colon stay exactly as sent."""
+    out = []
+    for line in stub.command(verb):
+        head, sep, rest = line.partition(b":")
+        out.append(head.lower() + sep + rest)
+    return out
+
+
 def _mail_lines(stub):
-    """The MAIL commands with the verb lowercased: smtplib writes "mail FROM:" on older Pythons
-    (3.12 on CI) and "mail from:" on 3.13; the arguments stay exactly as sent."""
-    return [line[:10].lower() + line[10:] for line in stub.command(b"MAIL")]
+    return _verb_lines(stub, b"MAIL")
 
 
 def test_stub_with_smtputf8_delivers(svc, stub):
@@ -356,7 +365,7 @@ def test_stub_with_smtputf8_delivers(svc, stub):
         account=_account(s.port), raw_bytes=raw, to=f"Иван <{EAI}>", bcc="b@example.org"))
     assert res.ok and res.classification == "ok" and res.smtputf8 is True, res
     assert _mail_lines(s) == [b"mail from:<bob@example.com> SMTPUTF8 BODY=8BITMIME\r\n"]
-    assert s.command(b"RCPT") == [f"rcpt to:<{EAI_ENVELOPE}>\r\n".encode(),
+    assert _verb_lines(s, b"RCPT") == [f"rcpt to:<{EAI_ENVELOPE}>\r\n".encode(),
                                   b"rcpt to:<b@example.org>\r\n"]
     data = b"".join(s.lines[s.lines.index(s.command(b"DATA")[0]) + 1:])
     assert f"To: Иван <{EAI}>".encode() in data
@@ -368,7 +377,7 @@ def test_an_ascii_local_part_needs_no_smtputf8(svc, stub):
     out, outcome = _send(svc, s.port, "Jürgen <jm@bücher.de>")
     assert outcome["state"] == "done", outcome
     assert _mail_lines(s) == [b"mail from:<bob@example.com>\r\n"]
-    assert s.command(b"RCPT") == [b"rcpt to:<jm@xn--bcher-kva.de>\r\n"]
+    assert _verb_lines(s, b"RCPT") == [b"rcpt to:<jm@xn--bcher-kva.de>\r\n"]
     assert all(line.isascii() for line in s.lines)
 
 

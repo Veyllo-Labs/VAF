@@ -243,7 +243,7 @@ def test_the_runner_delivers_through_the_one_function():
     assert ('_deliver_channel_reply(\n                            task, final_text, '
             'session_mgr=session_mgr,\n                            '
             'contact=getattr(agent, "_front_office_contact", None),\n                            '
-            'turn=_turn_status)') in loop
+            'turn=_turn_status,') in loop
     assert "_deliver_email_reply(" not in loop
 
 

@@ -69,7 +69,7 @@ Also present in `requirements.txt`.
 | markdownify | >=1.0.0 | MIT |
 | huggingface_hub[hf_xet] | >=1.1.0 | Apache-2.0 |
 | tqdm | >=4.65.0 | MPL-2.0 AND MIT |
-| openai | >=1.12.0 | Apache-2.0 |
+| openai | >=1.12.0,<3 | Apache-2.0 |
 | anthropic | >=0.18.0 | MIT |
 | google-genai | >=1.0.0 | Apache-2.0 |
 | inquirer | >=3.1.0 | MIT |

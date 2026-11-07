@@ -341,6 +341,13 @@ def _send(svc, port, to, cc="", bcc="", own=OWN, case_id=""):
     return out, svc.send_outcome(out["op_id"])
 
 
+
+def _mail_lines(stub):
+    """The MAIL commands with the verb lowercased: smtplib writes "mail FROM:" on older Pythons
+    (3.12 on CI) and "mail from:" on 3.13; the arguments stay exactly as sent."""
+    return [line[:10].lower() + line[10:] for line in stub.command(b"MAIL")]
+
+
 def test_stub_with_smtputf8_delivers(svc, stub):
     s = stub(True)
     raw = bytes(compose.build_message(OWN, f"Иван <{EAI}>", "Привет", "Text", bcc="b@example.org",
@@ -348,7 +355,7 @@ def test_stub_with_smtputf8_delivers(svc, stub):
     res = sender_mod.send(sender_mod.OutgoingMessage(
         account=_account(s.port), raw_bytes=raw, to=f"Иван <{EAI}>", bcc="b@example.org"))
     assert res.ok and res.classification == "ok" and res.smtputf8 is True, res
-    assert s.command(b"MAIL") == [b"mail from:<bob@example.com> SMTPUTF8 BODY=8BITMIME\r\n"]
+    assert _mail_lines(s) == [b"mail from:<bob@example.com> SMTPUTF8 BODY=8BITMIME\r\n"]
     assert s.command(b"RCPT") == [f"rcpt to:<{EAI_ENVELOPE}>\r\n".encode(),
                                   b"rcpt to:<b@example.org>\r\n"]
     data = b"".join(s.lines[s.lines.index(s.command(b"DATA")[0]) + 1:])
@@ -360,7 +367,7 @@ def test_an_ascii_local_part_needs_no_smtputf8(svc, stub):
     s = stub(False)
     out, outcome = _send(svc, s.port, "Jürgen <jm@bücher.de>")
     assert outcome["state"] == "done", outcome
-    assert s.command(b"MAIL") == [b"mail from:<bob@example.com>\r\n"]
+    assert _mail_lines(s) == [b"mail from:<bob@example.com>\r\n"]
     assert s.command(b"RCPT") == [b"rcpt to:<jm@xn--bcher-kva.de>\r\n"]
     assert all(line.isascii() for line in s.lines)
 
@@ -388,7 +395,7 @@ def test_a_case_answer_from_an_idn_account_builds_and_sends(svc, stub):
                          case_id=case_token.mint_case_id())
     assert outcome["state"] == "done", outcome
     assert out["message_id"].endswith("@xn--e1afmkfd.xn--p1ai>"), out["message_id"]
-    assert s.command(b"MAIL") == [b"mail from:<bob@xn--e1afmkfd.xn--p1ai>\r\n"]
+    assert _mail_lines(s) == [b"mail from:<bob@xn--e1afmkfd.xn--p1ai>\r\n"]
     auth = s.command(b"AUTH")[0].split()[-1]
     assert base64.b64decode(auth) == b"\0bob@xn--e1afmkfd.xn--p1ai\0pw"
     data = b"".join(s.lines[s.lines.index(s.command(b"DATA")[0]) + 1:])

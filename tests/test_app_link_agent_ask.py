@@ -86,7 +86,6 @@ MUTATIONS, each turns the named test red:
   `server_command` -> test_mcp_tools_beyond_read_need_the_person; drop the gate's argument
   repair -> test_mcp_call_is_decided_on_the_repaired_arguments.
 """
-import contextvars
 import json
 import re
 import uuid
@@ -98,6 +97,9 @@ import pytest
 import vaf
 from app_link_client import link, paired_device
 from app_link_env import SCOPE_A, SCOPE_B, app_link_home  # noqa: F401  (fixture)
+from app_link_env import (A1, A2, A3, A4, A5, ASK_TEXT, BOB, RUNNER_CHAT,  # noqa: F401
+                          RUNNER_SCOPE, _ask, _ask_turn, _chat, _queued, _run_app_turn,
+                          _task_of, _Tool, _two_devices, agent_world, runner_world)
 from vaf.core import channel_message_store as store
 from vaf.core.app_link import bridge, devices, pairing
 from vaf.core.app_link import protocol as pr
@@ -107,12 +109,6 @@ from vaf.core.task_queue import TaskQueue
 from vaf.core.turn_binding import TurnBinding, bind_turn
 
 ROOT = Path(__file__).resolve().parents[1]
-A1 = "0f8fad5b-d9cb-469f-a165-70867728950e"
-A2 = "1f8fad5b-d9cb-469f-a165-70867728950e"
-A3 = "2f8fad5b-d9cb-469f-a165-70867728950e"
-A4 = "3f8fad5b-d9cb-469f-a165-70867728950e"
-A5 = "4f8fad5b-d9cb-469f-a165-70867728950e"
-ASK_TEXT = "Welche Termine habe ich morgen?"
 
 
 @pytest.fixture(autouse=True)
@@ -125,25 +121,6 @@ def _fresh(monkeypatch):
         emit_message_complete=lambda **k: None))
     yield
     bridge.reset()
-
-
-def _chat(scope=SCOPE_A):
-    return devices.chat_session_id(scope)
-
-
-def _queued(scope=SCOPE_A):
-    return list(TaskQueue()._queued_by_session.get(_chat(scope), ()))
-
-
-def _ask(row, text=ASK_TEXT, aid=A1, with_chat=True, **extra):
-    message = {"t": "agent_ask", "id": aid, "text": text, **extra}
-    if with_chat and "chat" not in extra:
-        message["chat"] = _chat(row["user_scope_id"])
-    return message
-
-
-def _task_of(aid, scope=SCOPE_A):
-    return [t for t in _queued(scope) if t.metadata.get("app_ask_id") == aid][0]
 
 
 def _turn_frames(client):
@@ -272,16 +249,6 @@ def test_agent_ask_duplicate_and_limits(app_link_home, monkeypatch):
 
 
 # ── AC 6: the answer goes to the device that asked ────────────────────────────────────────
-
-def _two_devices():
-    asker = paired_device(SCOPE_A, model="Phone")
-    other = paired_device(SCOPE_A, model="Tablet")
-    away = paired_device(SCOPE_A, model="Old phone")
-    client, _p1, row = link(SCOPE_A, device=asker)
-    other_client, _p2, other_row = link(SCOPE_A, device=other, peer="10.0.0.6", connection="c2")
-    return SimpleNamespace(client=client, row=row, other_client=other_client, other_row=other_row,
-                           away=away[0], asker=asker)
-
 
 def test_ask_reply_goes_to_the_asker_with_its_id(app_link_home):
     import vaf.core.headless_runner as hr
@@ -458,137 +425,6 @@ def test_ask_is_stored_with_kind_and_read_fenced():
     assert [m["content"] for m in scanned] == ["Gern.", "Mein eigener Satz"]
 
 
-class _LoopStop(BaseException):
-    pass
-
-
-class _Queue:
-    def __init__(self, tasks):
-        self.tasks = list(tasks)
-
-    def get(self, *a, **k):
-        return self.tasks.pop(0) if self.tasks else None
-
-    def should_stop(self, session_id):
-        return False
-
-    def try_claim_session(self, session_id):
-        return True
-
-    def get_queue_stats(self):
-        return {}
-
-    def get_queue_size(self):
-        return 0
-
-    def __getattr__(self, name):
-        return lambda *args, **kwargs: None
-
-
-class _Web:
-    def __getattr__(self, name):
-        return lambda *args, **kwargs: None
-
-
-RUNNER_CHAT = "veyllo_app_k3y"
-RUNNER_SCOPE = "0b1c2d3e-4f50-4a6b-8c7d-9e0f1a2b3c4d"
-
-
-@pytest.fixture
-def runner_world(monkeypatch, tmp_path):
-    import vaf.core.config as config_module
-    import vaf.core.session as session_module
-    import vaf.core.subagent_ipc as ipc
-    from vaf.core.context import ContextManager
-    monkeypatch.delenv("VAF_SESSION_ID", raising=False)
-    tokens = [(var, var.set(ipc._UNSET)) for var in
-              (ipc._session_ctx, ipc._turn_ctx, ipc._room_ctx, ipc._conversation_ctx)]
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path / "data"))
-    monkeypatch.setattr(Platform, "vaf_dir", staticmethod(lambda: tmp_path / "vaf"))
-    monkeypatch.setattr(Platform, "documents_dir", staticmethod(lambda: tmp_path / "docs"))
-    monkeypatch.setattr(config_module.Config, "APP_DIR", tmp_path / "app", raising=False)
-    sessions = tmp_path / "sessions"
-    sessions.mkdir()
-    monkeypatch.setattr(session_module, "default_sessions_dir", lambda: sessions)
-    monkeypatch.setattr(session_module, "_manager", None)
-    monkeypatch.setattr(ContextManager, "ARCHIVE_DIR", tmp_path / "context_archive")
-    monkeypatch.setattr(config_module, "get_local_admin_scope_id",
-                        lambda: "6f9619ff-8b86-d011-b42d-00c04fc964ff")
-    session = session_module.Session(id=RUNNER_CHAT, name="Veyllo App")
-    session.metadata.update({"user_scope_id": RUNNER_SCOPE, "username": "bobq7",
-                             "source": "veyllo_app"})
-    session_module.SessionManager().save(session, sync_state=False)
-    yield SimpleNamespace(tmp=tmp_path, sessions=sessions)
-    for var, token in reversed(tokens):
-        var.reset(token)
-
-
-def _run_app_turn(monkeypatch, world, text, **meta):
-    import time as _time
-
-    import vaf.core.headless_runner as hr
-    import vaf.core.last_interaction as last_interaction
-    import vaf.core.subagent_ipc as ipc_mod
-    from vaf.core.agent import Agent
-    from vaf.core.app_link import bridge as app_bridge
-    from vaf.core.task_queue import AgentTask
-    agent = Agent(register_signals=False, run_kind="chat",
-                  config_overrides={"provider": "openai", "api_key_openai": "sk-test"})
-    monkeypatch.setattr(agent, "_try_workflow", lambda *a, **k: None)
-    monkeypatch.setattr(agent, "_detect_ungrounded_result_claim", lambda text, res: (False, None))
-    monkeypatch.setattr(agent, "collect_room_wake", lambda **k: None)
-    agent.init_chat()
-    seen = []
-
-    def provider(messages=None, **kw):
-        seen.append([dict(m) for m in (messages or [])])
-        yield "Morgen ist frei."
-
-    agent.api_backend.chat_completion = provider
-    sent = {"finished": []}
-    monkeypatch.setattr(app_bridge, "turn_started", lambda m: "rid")
-    monkeypatch.setattr(app_bridge, "stream_round", lambda *a, **k: None)
-    monkeypatch.setattr(app_bridge, "finish_reply",
-                        lambda m, text: sent["finished"].append((dict(m), text)) or True)
-    recorded = []
-    monkeypatch.setattr(last_interaction, "update_last_interaction",
-                        lambda **k: recorded.append(k))
-    task = AgentTask(session_id=RUNNER_CHAT, input_text=text, source="veyllo_app", metadata={
-        "user_scope_id": RUNNER_SCOPE, "username": "bobq7", "origin_channel": "veyllo_app",
-        "task_class": "interactive", "app_device_id": "dev-1", **meta})
-    queue = _Queue([task])
-    state = {"idle": 0, "error": False}
-    logs = []
-    monkeypatch.setattr(hr, "Agent", lambda *a, **k: agent)
-    monkeypatch.setattr(hr, "TaskQueue", lambda: queue)
-    monkeypatch.setattr(hr, "get_web_interface", lambda: _Web())
-    monkeypatch.setattr(hr, "_WORKER_THREADS", {})
-    monkeypatch.setattr(hr, "append_domain_log_always", lambda domain, msg: logs.append(msg))
-    monkeypatch.setattr(Platform, "stop_webui_subagent_processes", staticmethod(lambda **k: 0))
-    monkeypatch.setattr("vaf.core.memory_profiler.start_profiler", lambda *a, **k: None)
-    monkeypatch.setattr("vaf.core.at_rest_migration.repair_context_copies_once", lambda: None)
-    monkeypatch.setattr("vaf.memory.rag.turn_memory_context", lambda *a, **k: "")
-    monkeypatch.setattr(ipc_mod, "_ipc_instance", None)
-
-    def _sleep(seconds):
-        if seconds >= 1:
-            state["error"] = True
-            raise _LoopStop()
-        if not queue.tasks:
-            state["idle"] += 1
-            if state["idle"] >= 2:
-                raise _LoopStop()
-
-    monkeypatch.setattr(hr, "time", SimpleNamespace(time=_time.time, sleep=_sleep))
-    with pytest.raises(_LoopStop):
-        contextvars.copy_context().run(hr.run_headless_agent, worker_id=1, total_workers=1)
-    assert not state["error"], f"the loop raised: {logs[-5:]}"
-    from vaf.core.session import SessionManager
-    stored = SessionManager()._read_session_file(world.sessions / f"{RUNNER_CHAT}.json")
-    return SimpleNamespace(stored=stored, seen=seen, sent=sent, recorded=recorded)
-
-
 def test_the_runner_turn_of_an_ask(runner_world, monkeypatch):
     from vaf.core.agent_origin import APP_AGENT_KIND, app_agent_request_text
     run = _run_app_turn(monkeypatch, runner_world, ASK_TEXT, app_agent_ask=True, app_ask_id=A1)
@@ -613,48 +449,6 @@ def test_the_runner_turn_of_a_message(runner_world, monkeypatch):
     users = [m for m in run.stored["messages"] if m["role"] == "user"]
     assert users[-1].get("kind") is None and users[-1]["content"] == "Hallo"
     assert [r["source"] for r in run.recorded] == ["veyllo_app"]
-
-
-BOB = Identity(scope=RUNNER_SCOPE, username="bobq7", role="user")
-
-
-class _Tool(vaf.BaseTool):
-    __module__ = "vaf.tools.notes"
-    description = "A stand-in."
-    permission_level = "write"
-    side_effect_class = "reversible"
-    parameters = {"type": "object", "properties": {}}
-
-    def __init__(self, name, *, restrictions=(), level="write", agent_request="allow"):
-        self.name = name
-        self.channel_restrictions = list(restrictions)
-        self.permission_level = level
-        self.agent_request = agent_request
-        self.calls = []
-
-    def run(self, **kwargs):
-        self.calls.append(kwargs)
-        return "ok"
-
-
-@pytest.fixture
-def agent_world(runner_world, monkeypatch):
-    from vaf.core.agent import Agent
-
-    def _make():
-        agent = Agent(register_signals=False, run_kind="chat",
-                      config_overrides={"provider": "openai", "api_key_openai": "sk-test"})
-        agent._current_chat_source = "veyllo_app"
-        # The plan gate asks for a plan before any write; not what these tests are about.
-        agent._plan_gate_decision = lambda *a, **k: None
-        agent.init_chat()
-        return agent
-    return SimpleNamespace(make=_make)
-
-
-def _ask_turn(agent, asked=True):
-    bind_turn(agent, TurnBinding(identity=BOB, source="veyllo_app", session_id=RUNNER_CHAT,
-                                 asked_by_agent="veyllo_app" if asked else None))
 
 
 def test_agent_ask_gate_refuses_person_tools(agent_world):

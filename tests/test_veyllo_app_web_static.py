@@ -621,9 +621,11 @@ def test_the_steps_run_in_order():
 def test_the_approved_texts_are_word_for_word():
     """The approved sentences keep their words. The relay texts replace the earlier ones that
     priced in cents and named a relay secret and a relay instance: the window now says euro, a
-    relay key and signing the installation out of the relay, and no new text of the window
+    relay key and signing the installation out of the relay. The paired device is named the
+    Veyllo App, or a device where any device is meant, never a phone. No new text of the window
     carries a colon. MUTATIONS: change one word of the DE dissolveBody; put the colon back into
-    the DE relayStates.off; a colon in the EN relayStates.unavailable - red."""
+    the DE relayStates.off; a colon in the EN relayStates.unavailable; the DE counts back to
+    "Mitglied" - red."""
     kept = {
         "en": {
             "agentUsesVaf": "The agent in the Veyllo app uses this VAF as a tool, reads its "
@@ -653,30 +655,30 @@ def test_the_approved_texts_are_word_for_word():
                 "nothing.",
             "costTitle": "What it costs",
             "costSentence": "Through the Veyllo Relay, each message costs \u20ac0.01, in both "
-                "directions and also when VAF writes on its own. A task from VAF to your phone "
-                "costs \u20ac0.005 per direction. Your subscription pays first, then your "
+                "directions and also when VAF writes on its own. A task from VAF to the Veyllo "
+                "app costs \u20ac0.005 per direction. Your subscription pays first, then your "
                 "credit. The direct way is free.",
             "adminTitle": "Veyllo Relay for this VAF installation",
             "adminIntro": "As an admin, you decide here for all accounts of this installation "
-                "whether phones may connect through the Veyllo Relay. Whether your own phone "
-                "connects through the relay or directly through your network is chosen in the "
-                "next step, below the QR code.",
+                "whether the Veyllo app may connect through the Veyllo Relay. Whether your "
+                "Veyllo app connects through the relay or directly through your network is "
+                "chosen in the next step, below the QR code.",
             "relayStates.idle": "The relay is allowed. VAF only connects to the relay while a "
-                "phone needs it.",
+                "Veyllo app needs it.",
             "noInstance": "This installation is not registered with the relay yet. This "
-                "happens automatically as soon as the first phone pairs through the relay.",
+                "happens automatically as soon as the first Veyllo app pairs through the relay.",
             "rotate": "Renew relay key",
             "dissolve": "Sign out of the relay",
             "dissolveBody": "This installation will be signed out of the Veyllo Relay, for all "
-                "accounts. Phones stay paired and can still reach VAF directly through your "
-                "network, for example at home or over a VPN. They can only reach VAF through "
-                "the relay again after pairing anew.",
-            "explainRelay": "With the Veyllo Relay you reach VAF from anywhere. Each message "
-                "costs \u20ac0.01, also when VAF writes on its own, a task to the phone "
-                "\u20ac0.005 per direction. Veyllo only sees when messages travel and how "
-                "large they are, never the content.",
-            "relayStates.off": "The relay is switched off. Phones pair and connect only "
-                "directly.",
+                "accounts. All devices with the Veyllo app stay paired and can still reach VAF "
+                "directly through your network, for example at home or over a VPN. They can "
+                "only reach VAF through the relay again after pairing anew.",
+            "explainRelay": "With the Veyllo Relay the Veyllo app reaches VAF from anywhere. "
+                "Each message costs \u20ac0.01, also when VAF writes on its own, a task to the "
+                "Veyllo app \u20ac0.005 per direction. Veyllo only sees when messages travel "
+                "and how large they are, never the content.",
+            "relayStates.off": "The relay is switched off. The Veyllo app pairs and connects "
+                "only directly.",
             "relayStates.replaced": "Another VAF with the same relay key took the connection.",
             "relayStates.revoked": "The relay ended this installation's access.",
             "relayStates.secret_rejected": "The relay does not accept this installation's "
@@ -684,24 +686,69 @@ def test_the_approved_texts_are_word_for_word():
             "relayStates.secret_not_stored": "The relay key could not be stored on this "
                 "machine.",
             "relayStateHelp.secret_rejected": "Renew the relay key, or sign this installation "
-                "out of the relay and pair the phones again.",
+                "out of the relay and pair the devices again.",
             "relayStateHelp.replaced": "A backup restored on a second machine uses the same "
                 "relay key. Renew it on one of the two machines. VAF tries again after five "
                 "minutes.",
             "relayStateHelp.revoked": "Sign this installation out of the relay and pair the "
-                "phones again for the relay.",
+                "devices again for the relay.",
             "relayErrors.secret_rejected": "The relay does not accept this installation's "
                 "relay key. An admin can renew it.",
             "relayErrors.secret_not_stored": "The relay key could not be stored on this "
                 "machine. An admin should check the machine's key ring, then you pair the "
-                "phone again.",
+                "Veyllo app again.",
             "rotateTitle": "Renew the relay key?",
             "rotateBody": "The relay key is renewed, and VAF then reconnects to the relay. "
-                "Phones stay paired.",
+                "Devices stay paired.",
             "rotateConfirm": "Renew",
             "rotated": "The relay key was renewed.",
             "dissolveConfirm": "Sign out",
             "dissolved": "This installation is signed out of the relay.",
+            "counts": "{members, plural, one {# device is paired for the relay} other {# "
+                "devices are paired for the relay}}, {onRelay, plural, one {# is using it "
+                "right now} other {# are using it right now}}.",
+            "failureReasons.not_set_up": "This installation is not registered with the relay "
+                "yet. This happens automatically as soon as the first Veyllo app pairs through "
+                "the relay.",
+            "impossible": "Pairing is not possible right now, because the relay is off and "
+                "this VAF installation has no address at which the Veyllo app can reach it "
+                "directly.",
+            "canReceive": "Your agent's messages reach your Veyllo app, and when it is paired "
+                "through the Veyllo Relay, also with a push notice.",
+            "canTasks": "Your agent can hand tasks to your Veyllo app, such as a calendar "
+                "entry or a reminder.",
+            "errNoAccount": "There is no active account to pair a Veyllo app for. Sign in with "
+                "your account.",
+            "explainLocal": "Only in your own network or over your VPN. Free, and nothing goes "
+                "through Veyllo. Push notices in the Veyllo app need a pairing through the "
+                "Veyllo Relay.",
+            "featureTasks": "Tasks for your Veyllo app",
+            "introTitle": "Your agent in the Veyllo app",
+            "manageInAccount": "Your paired devices are listed under Account, where you can "
+                "remove one.",
+            "pairingStates.claimed": "Your Veyllo app found the code. Waiting for it to "
+                "connect.",
+            "pairingStates.denied": "Pairing refused. The device was not added.",
+            "phoneFallback": "Unnamed device",
+            "refusalNoDirectAdmin": "This VAF installation has no address on your network at "
+                "which the Veyllo app can reach it. Switch on Enable Hosting under Local "
+                "Network, or pair through the Veyllo Relay.",
+            "refusals.no_direct_path": "This VAF installation has no address on your network "
+                "at which the Veyllo app can reach it. Pair through the Veyllo Relay, or ask "
+                "an admin to switch on Enable Hosting under Local Network.",
+            "refusals.bad_mode": "Choose how the Veyllo app connects, through the Veyllo Relay "
+                "or Local.",
+            "refusals.twofa_not_set_up": "Set up 2FA for your account first, because the "
+                "Veyllo app is paired with your 2FA code. The sign-in sets 2FA up. If yours "
+                "did not ask for it, an admin resets your 2FA under Local Network, User "
+                "Management.",
+            "relayStateHelp.secret_not_stored": "Check the key ring of this machine, then pair "
+                "a Veyllo app through the relay again.",
+            "relayStateHelp.unavailable": "VAF tries again by itself. Devices on the direct "
+                "way keep working.",
+            "steps.confirm": "Confirm your device",
+            "steps.done": "Your Veyllo app is connected",
+            "wayLabel": "How the Veyllo app connects",
         },
         "de": {
             "seesRelay": "\u00dcber das Veyllo Relay sieht Veyllo nur, wann Nachrichten "
@@ -713,30 +760,32 @@ def test_the_approved_texts_are_word_for_word():
             "costTitle": "Was es kostet",
             "costSentence": "\u00dcber das Veyllo Relay kostet jede Nachricht "
                 "0,01\u00a0\u20ac, in beide Richtungen und auch dann, wenn VAF von sich aus "
-                "schreibt. Ein Auftrag von VAF an dein Handy kostet 0,005\u00a0\u20ac pro "
+                "schreibt. Ein Auftrag von VAF an die Veyllo App kostet 0,005\u00a0\u20ac pro "
                 "Richtung. Bezahlt wird zuerst mit deinem Abo, dann mit deinem Guthaben. Der "
                 "direkte Weg ist kostenlos.",
             "adminTitle": "Veyllo Relay f\u00fcr diese VAF-Installation",
             "adminIntro": "Hier legst du als Admin f\u00fcr alle Konten dieser Installation "
-                "fest, ob sich Handys \u00fcber das Veyllo Relay verbinden d\u00fcrfen. Ob "
-                "dein eigenes Handy \u00fcber das Relay oder direkt \u00fcber dein Netz "
+                "fest, ob sich die Veyllo App \u00fcber das Veyllo Relay verbinden darf. Ob "
+                "deine Veyllo App \u00fcber das Relay oder direkt \u00fcber dein Netz "
                 "verbunden wird, w\u00e4hlst du im n\u00e4chsten Schritt unter dem QR-Code.",
             "relayStates.idle": "Das Relay ist erlaubt. VAF verbindet sich nur dann mit dem "
-                "Relay, wenn ein Handy es gerade braucht.",
+                "Relay, wenn eine Veyllo App es gerade braucht.",
             "noInstance": "Diese Installation ist beim Relay noch nicht angemeldet. Das "
-                "geschieht automatisch, sobald das erste Handy \u00fcber das Relay koppelt.",
+                "geschieht automatisch, sobald sich die erste Veyllo App \u00fcber das Relay "
+                "koppelt.",
             "rotate": "Relay-Schl\u00fcssel erneuern",
             "dissolve": "Beim Relay abmelden",
             "dissolveBody": "Diese Installation wird beim Veyllo Relay abgemeldet, f\u00fcr "
-                "alle Konten. Die Handys bleiben gekoppelt und erreichen VAF weiter direkt "
-                "\u00fcber dein Netz, etwa zu Hause oder per VPN. \u00dcber das Relay "
-                "erreichen sie VAF erst wieder, wenn sie neu koppeln.",
-            "explainRelay": "\u00dcber das Veyllo Relay erreichst du VAF von \u00fcberall. "
-                "Jede Nachricht kostet 0,01\u00a0\u20ac, auch wenn VAF von sich aus schreibt, "
-                "ein Auftrag ans Handy 0,005\u00a0\u20ac pro Richtung. Veyllo sieht dabei nur, "
-                "wann Nachrichten laufen und wie gro\u00df sie sind, den Inhalt nie.",
-            "relayStates.off": "Das Relay ist ausgeschaltet. Handys koppeln und verbinden sich "
-                "nur direkt.",
+                "alle Konten. Alle Ger\u00e4te mit der Veyllo App bleiben gekoppelt und "
+                "erreichen VAF weiter direkt \u00fcber dein Netz, etwa zu Hause oder per VPN. "
+                "\u00dcber das Relay erreichen sie VAF erst wieder, wenn sie neu koppeln.",
+            "explainRelay": "\u00dcber das Veyllo Relay erreicht die Veyllo App VAF von "
+                "\u00fcberall. Jede Nachricht kostet 0,01\u00a0\u20ac, auch wenn VAF von sich "
+                "aus schreibt, ein Auftrag an die Veyllo App 0,005\u00a0\u20ac pro Richtung. "
+                "Veyllo sieht dabei nur, wann Nachrichten laufen und wie gro\u00df sie sind, "
+                "den Inhalt nie.",
+            "relayStates.off": "Das Relay ist ausgeschaltet. Die Veyllo App koppelt und "
+                "verbindet sich nur direkt.",
             "relayStates.replaced": "Ein anderes VAF mit demselben Relay-Schl\u00fcssel hat "
                 "die Verbindung \u00fcbernommen.",
             "relayStates.revoked": "Das Relay hat dieser Installation den Zugang entzogen.",
@@ -745,24 +794,71 @@ def test_the_approved_texts_are_word_for_word():
             "relayStates.secret_not_stored": "Der Relay-Schl\u00fcssel konnte auf diesem "
                 "Rechner nicht gespeichert werden.",
             "relayStateHelp.secret_rejected": "Erneuere den Relay-Schl\u00fcssel, oder melde "
-                "diese Installation beim Relay ab und kopple die Handys neu.",
+                "diese Installation beim Relay ab und kopple die Ger\u00e4te neu.",
             "relayStateHelp.replaced": "Eine Sicherung, die auf einem zweiten Rechner "
                 "wiederhergestellt wurde, nutzt denselben Relay-Schl\u00fcssel. Erneuere ihn "
                 "auf einem der beiden Rechner. VAF versucht es nach f\u00fcnf Minuten erneut.",
             "relayStateHelp.revoked": "Melde diese Installation beim Relay ab und kopple die "
-                "Handys f\u00fcr das Relay neu.",
+                "Ger\u00e4te f\u00fcr das Relay neu.",
             "relayErrors.secret_rejected": "Das Relay nimmt den Relay-Schl\u00fcssel dieser "
                 "Installation nicht an. Ein Admin kann ihn erneuern.",
             "relayErrors.secret_not_stored": "Der Relay-Schl\u00fcssel konnte auf diesem "
                 "Rechner nicht gespeichert werden. Ein Admin sollte den Schl\u00fcsselbund des "
-                "Rechners pr\u00fcfen, danach koppelst du das Handy neu.",
+                "Rechners pr\u00fcfen, danach koppelst du die Veyllo App neu.",
             "rotateTitle": "Relay-Schl\u00fcssel erneuern?",
             "rotateBody": "Der Relay-Schl\u00fcssel wird erneuert, und VAF verbindet sich "
-                "danach neu mit dem Relay. Die Handys bleiben gekoppelt.",
+                "danach neu mit dem Relay. Die Ger\u00e4te bleiben gekoppelt.",
             "rotateConfirm": "Erneuern",
             "rotated": "Der Relay-Schl\u00fcssel wurde erneuert.",
             "dissolveConfirm": "Abmelden",
             "dissolved": "Diese Installation ist beim Relay abgemeldet.",
+            "counts": "{members, plural, one {# Ger\u00e4t ist f\u00fcrs Relay gekoppelt} "
+                "other {# Ger\u00e4te sind f\u00fcrs Relay gekoppelt}}, {onRelay, plural, one "
+                "{# nutzt es gerade} other {# nutzen es gerade}}.",
+            "failureReasons.not_set_up": "Diese Installation ist beim Relay noch nicht "
+                "angemeldet. Das geschieht automatisch, sobald sich die erste Veyllo App "
+                "\u00fcber das Relay koppelt.",
+            "impossible": "Koppeln geht gerade nicht, weil das Relay aus ist und diese "
+                "VAF-Installation keine Adresse hat, unter der die Veyllo App sie direkt "
+                "erreicht.",
+            "canReceive": "Die Nachrichten deines Agenten kommen in deiner Veyllo App an, bei "
+                "einer Kopplung \u00fcber das Veyllo Relay auch mit einer Push-Mitteilung.",
+            "canTasks": "Dein Agent kann deiner Veyllo App Aufgaben geben, etwa einen "
+                "Kalendereintrag oder eine Erinnerung.",
+            "errNoAccount": "Es gibt kein aktives Konto, f\u00fcr das eine Veyllo App "
+                "gekoppelt werden kann. Melde dich mit deinem Konto an.",
+            "explainLocal": "Nur im eigenen Netz oder \u00fcber dein VPN. Kostenlos, und "
+                "nichts l\u00e4uft \u00fcber Veyllo. Push-Mitteilungen in der Veyllo App gibt "
+                "es nur mit einer Kopplung \u00fcber das Veyllo Relay.",
+            "featureTasks": "Aufgaben f\u00fcr deine Veyllo App",
+            "introTitle": "Dein Agent in der Veyllo App",
+            "manageInAccount": "Deine gekoppelten Ger\u00e4te stehen unter Konto, dort kannst "
+                "du eines entfernen.",
+            "pairingStates.claimed": "Deine Veyllo App hat den Code gefunden. Sie verbindet "
+                "sich gleich.",
+            "pairingStates.denied": "Kopplung abgelehnt. Das Ger\u00e4t wurde nicht "
+                "hinzugef\u00fcgt.",
+            "phoneFallback": "Ger\u00e4t ohne Namen",
+            "refusalNoDirectAdmin": "Diese VAF-Installation hat in deinem Netz keine Adresse, "
+                "unter der die Veyllo App sie erreicht. Schalte unter Lokales Netzwerk "
+                "\u201eHosting aktivieren\u201c ein, oder kopple \u00fcber das Veyllo Relay.",
+            "refusals.no_direct_path": "Diese VAF-Installation hat in deinem Netz keine "
+                "Adresse, unter der die Veyllo App sie erreicht. Kopple \u00fcber das Veyllo "
+                "Relay, oder bitte einen Admin, unter Lokales Netzwerk \u201eHosting "
+                "aktivieren\u201c einzuschalten.",
+            "refusals.bad_mode": "W\u00e4hle, wie sich die Veyllo App verbindet, \u00fcber das "
+                "Veyllo Relay oder Lokal.",
+            "refusals.twofa_not_set_up": "Richte zuerst 2FA f\u00fcr dein Konto ein, denn die "
+                "Veyllo App wird mit deinem 2FA-Code gekoppelt. 2FA wird bei der Anmeldung "
+                "eingerichtet. Hat deine Anmeldung nicht danach gefragt, setzt ein Admin dein "
+                "2FA unter Lokales Netzwerk, Benutzerverwaltung zur\u00fcck.",
+            "relayStateHelp.secret_not_stored": "Pr\u00fcfe den Schl\u00fcsselbund dieses "
+                "Rechners und kopple dann eine Veyllo App noch einmal \u00fcber das Relay.",
+            "relayStateHelp.unavailable": "VAF versucht es von selbst wieder. Ger\u00e4te auf "
+                "dem direkten Weg laufen weiter.",
+            "steps.confirm": "Dein Ger\u00e4t best\u00e4tigen",
+            "steps.done": "Deine Veyllo App ist verbunden",
+            "wayLabel": "Wie sich die Veyllo App verbindet",
         },
     }
     for table in (kept, relay):
@@ -796,6 +892,39 @@ def test_no_old_relay_terms_in_the_window():
 
     for locale, pattern in old.items():
         hits = [key for key, text in texts(_window_keys(locale)) if pattern.search(text)]
+        assert not hits, (locale, hits)
+
+
+# The words for a phone in each language. The window names the paired device the Veyllo App,
+# or a device where any device is meant: a phone is only one place the app runs.
+_PHONE_WORDS = {
+    "en": r"(?i)phone",
+    "de": r"(?i)handy|smartphone|telefon",
+    "ja": r"\u30b9\u30de\u30fc\u30c8\u30d5\u30a9\u30f3|\u30b9\u30de\u30db|\u96fb\u8a71|\u643a\u5e2f",
+    "ko": r"\ud734\ub300\ud3f0|\ud578\ub4dc\ud3f0|\uc804\ud654",
+    "th": r"\u0e42\u0e17\u0e23\u0e28\u0e31\u0e1e\u0e17\u0e4c|\u0e21\u0e37\u0e2d\u0e16\u0e37\u0e2d",
+    "tr": r"(?i)telefon",
+    "zh": r"\u624b\u673a|\u7535\u8bdd",
+}
+
+
+def test_the_window_never_calls_the_app_a_phone():
+    """No text of the Veyllo App window or of its card in Connections names a phone, in any of
+    the seven languages: the paired device is the Veyllo App, or a device. MUTATIONS: the DE
+    introTitle back to "Dein Agent auf deinem Handy"; the ja steps.done back to its phone
+    wording; the DE card description back to "Chatte vom Handy" - red."""
+    def texts(node, path=""):
+        for key, value in node.items():
+            if isinstance(value, dict):
+                yield from texts(value, f"{path}{key}.")
+            else:
+                yield f"{path}{key}", value
+
+    for locale in LOCALES:
+        pattern = re.compile(_PHONE_WORDS[locale])
+        card = _catalog(locale)["settings"]["connectionsPanel"]["veylloApp"]
+        hits = [key for key, text in [*texts(_window_keys(locale)), *texts(card, "card.")]
+                if pattern.search(text)]
         assert not hits, (locale, hits)
 
 

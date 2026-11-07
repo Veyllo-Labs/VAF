@@ -53,11 +53,11 @@ Pairing happens in the web UI, in **Settings, Connections, Veyllo App**
    one-time value. VAF checks the request first (a bad one does not use up the code), then
    the code: a code used once is "used", an unknown or expired one "expired", a second
    pairing while one waits for confirmation "busy".
-4. The window asks "Is this your device?" and shows the phone's model, platform and app version
+4. The window asks "Is this your device?" and shows the device's model, platform and app version
    and its key fingerprint (four groups of hex, exactly as the app shows them). Only after you
    confirm, within two minutes, is the device created, its certificate issued by VAF's separate
    device authority, and the Veyllo App switched on for your account. The window then says
-   "Connected" with the phone's model; in the app, your VAF is called "Main-Agent (VAF)".
+   "Connected" with the device's model; in the app, your VAF is called "Main-Agent (VAF)".
 
 The window asks the server every two seconds while it is open, visible and the pairing is still
 running. Closing it (the X, Escape, a click beside it) withdraws a QR code that is still live
@@ -287,28 +287,28 @@ is a turn of your account's app chat, with these differences
 
 The relay is billed to the app user's Veyllo account, not by VAF: €0.01 per message in
 each direction, also for the messages VAF sends by itself (reminders, automations, sub-agent
-results), and €0.005 per direction for a task for the phone. The user's subscription pays
+results), and €0.005 per direction for a task for the Veyllo App. The user's subscription pays
 first, then their credit. The direct way is free.
 
 ## Managing devices and the relay
 
-- Your paired phones are rows of **Settings, Account, Signed-in devices**, with the way they
+- Your paired devices are rows of **Settings, Account, Signed-in devices**, with the way they
   last used (relay or direct), whether one is connected now, when it last connected, when it
   was paired and its fingerprint. **Remove** asks first; its access then ends at once, also
   when its certificate is still valid (a lost phone too). In the terminal: `vaf devices list`,
   `vaf devices remove <id>`.
 - An admin sees every account's devices, with the account, in the admin section on the code
   step of the Veyllo App window ("Veyllo Relay for this VAF installation", always open, with a
-  sentence saying it decides for every account and that a phone's own way is chosen under the
-  QR code) and removes one there.
+  sentence saying it decides for every account and that the way of the account's own Veyllo App
+  is chosen under the QR code on the next step) and removes one there.
 - Devices also go when their account is deactivated or deleted, after 90 days without use
   (`device_idle_days`), and when the account signs out every other device. A password change
   does not remove them: the device key, not the password, is their credential.
 - An admin switches the relay off and on (`vaf relay off`, `vaf relay on`, or the switch in
   the admin section of the Veyllo App window, which also shows the relay's state and how many
-  devices are members and use it now): off keeps the instance, its secret and the devices, so
+  devices are paired for the relay and use it now): off keeps the instance, its secret and the devices, so
   on again needs no new pairing. `vaf relay rotate` (or "Renew relay key" in the window, after
-  a question) replaces the relay secret; the phones stay paired. `vaf relay dissolve` (or "Sign
+  a question) replaces the relay secret; the devices stay paired. `vaf relay dissolve` (or "Sign
   out of the relay" in the window, with the admin's own 2FA code) signs the installation out
   of the relay for every account and deletes the instance; the devices stay paired for the
   direct way and need a new pairing for the relay. A failed action says whether

@@ -13,18 +13,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Added
 
-- **Veyllo App: chat with your agent from your phone, from anywhere through the Veyllo relay or
-  directly over your own network or VPN.** Pair the app with your own account by QR code in
+- **Veyllo App: chat with your agent in the Veyllo App, from anywhere through the Veyllo relay
+  or directly over your own network or VPN.** Pair the app with your own account by QR code in
   Settings, Connections, Veyllo App, in a step-by-step setup window like the other connections,
   after your 2FA code, and choose the relay or the local way there. The relay only carries
   end-to-end encrypted traffic of paired devices; the web UI and the API stay private. Messages
-  your agent sends while the phone is away arrive when it connects again, with a push notice
+  your agent sends while the device is away arrive when it connects again, with a push notice
   through the relay. Manage devices with `vaf devices` and the relay with `vaf relay`;
-  `vaf health` and `vaf doctor` report on both. Your agent can also hand tasks to your phone
-  (`user_phone`). The Veyllo App can be your main messenger in Settings. Your paired phones are
-  listed under Settings, Account, where you can remove one; admins switch the relay, renew its
-  key or sign the installation out of it in Settings, Connections, Veyllo App, in the relay
-  section of the 2FA code step. Its card stands first under Communication.
+  `vaf health` and `vaf doctor` report on both. Your agent can also hand tasks to your Veyllo
+  App (`user_phone`). The Veyllo App can be your main messenger in Settings. Your paired
+  devices are listed under Settings, Account, where you can remove one; admins switch the relay,
+  renew its key or sign the installation out of it in Settings, Connections, Veyllo App, in the
+  relay section of the 2FA code step. Its card stands first under Communication.
 - **Veyllo App: the app's own agent can ask your agent.** When the app is connected, its agent
   can hand your agent a task and read the answer; only the phone that asked gets that answer.
   Your agent's chat shows such a task as coming from the app's agent, not from you. What only

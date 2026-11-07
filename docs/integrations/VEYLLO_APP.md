@@ -32,14 +32,15 @@ direct way later without pairing again.
 Pairing happens in the web UI, in **Settings, Connections, Veyllo App**
 (`web/components/connections/VeylloAppSetupWizard.tsx`):
 
-1. The window walks through numbered steps: first what the app can do, then what Veyllo sees on
-   each way and what each way costs, then it asks for **your own** 2FA code. That opens a
+1. The window walks through numbered steps, the current one ringed: first what the app can
+   do, then what Veyllo sees on each way and what each way costs, each under its own heading,
+   then it asks for **your own** 2FA code. That opens a
    pairing window for your account for ten minutes; nobody can create a QR code for another
    account, an admin neither. With the relay switched off and no direct address either, the
    window says pairing is not possible and asks for no code.
 2. VAF shows a QR code, drawn on this machine (the routes answer it as a PNG; no renderer
    elsewhere ever sees it), with the time it is still valid. Below it a switch chooses the way:
-   **Veyllo Relay** (from anywhere, one cent per message, Veyllo sees only metadata) or
+   **Veyllo Relay** (from anywhere, €0.01 per message, Veyllo sees only metadata) or
    **Local** (only on your own network or over your VPN, free, nothing through Veyllo).
    Switching issues a new QR code without a second 2FA code and withdraws the earlier one.
    While an admin has the relay switched off there is no switch, only the Local code. The QR
@@ -284,9 +285,10 @@ is a turn of your account's app chat, with these differences
 
 ## Cost
 
-The relay is billed to the app user's Veyllo account, not by VAF: one cent per message in
+The relay is billed to the app user's Veyllo account, not by VAF: €0.01 per message in
 each direction, also for the messages VAF sends by itself (reminders, automations, sub-agent
-results), and half a cent per direction for a task for the phone. The direct way is free.
+results), and €0.005 per direction for a task for the phone. The user's subscription pays
+first, then their credit. The direct way is free.
 
 ## Managing devices and the relay
 
@@ -296,17 +298,20 @@ results), and half a cent per direction for a task for the phone. The direct way
   when its certificate is still valid (a lost phone too). In the terminal: `vaf devices list`,
   `vaf devices remove <id>`.
 - An admin sees every account's devices, with the account, in the admin section on the code
-  step of the Veyllo App window ("Veyllo relay (for every account)") and removes one there.
+  step of the Veyllo App window ("Veyllo Relay for this VAF installation", always open, with a
+  sentence saying it decides for every account and that a phone's own way is chosen under the
+  QR code) and removes one there.
 - Devices also go when their account is deactivated or deleted, after 90 days without use
   (`device_idle_days`), and when the account signs out every other device. A password change
   does not remove them: the device key, not the password, is their credential.
 - An admin switches the relay off and on (`vaf relay off`, `vaf relay on`, or the switch in
   the admin section of the Veyllo App window, which also shows the relay's state and how many
   devices are members and use it now): off keeps the instance, its secret and the devices, so
-  on again needs no new pairing. `vaf relay rotate` (or "Replace relay secret" in the window,
-  after a question) replaces the relay secret. `vaf relay dissolve` (or "Dissolve relay
-  instance" in the window, with the admin's own 2FA code) deletes the instance; the devices
-  stay for the direct way and need a new pairing for the relay. A failed action says whether
+  on again needs no new pairing. `vaf relay rotate` (or "Renew relay key" in the window, after
+  a question) replaces the relay secret; the phones stay paired. `vaf relay dissolve` (or "Sign
+  out of the relay" in the window, with the admin's own 2FA code) signs the installation out
+  of the relay for every account and deletes the instance; the devices stay paired for the
+  direct way and need a new pairing for the relay. A failed action says whether
   no relay is set up, the relay could not be reached or it refused (`reason` in the route's
   answer).
 - `vaf health` has an `app_link` row, `vaf doctor` reports a relay that carries devices and an
@@ -326,7 +331,8 @@ results), and half a cent per direction for a task for the phone. The direct way
   public; see [NETWORK_FEATURES.md](../setup/NETWORK_FEATURES.md#scope-private-networks-only).
 - **A backup restored onto a second running machine** holds the same relay secret: the two
   take the relay connection from each other (VAF waits five minutes each time and says so in
-  `vaf relay status`). Rotate the secret on one, or dissolve on one.
+  `vaf relay status`). Rotate the secret on one ("Renew relay key" in the window), or
+  dissolve on one.
 - **Post-quantum key exchange** is used only where both TLS stacks offer it; there is no extra
   key from the QR code in every session.
 - **Pairing from the terminal** is not offered: the one-time value lives in the web server's

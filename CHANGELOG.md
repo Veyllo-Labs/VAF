@@ -22,9 +22,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   through the relay. Manage devices with `vaf devices` and the relay with `vaf relay`;
   `vaf health` and `vaf doctor` report on both. Your agent can also hand tasks to your phone
   (`user_phone`). The Veyllo App can be your main messenger in Settings. Your paired phones are
-  listed under Settings, Account, where you can remove one; admins switch the relay, replace its
-  secret or dissolve it in Settings, Connections, Veyllo App, in the collapsed relay section of
-  the 2FA code step. Its card stands first under Communication.
+  listed under Settings, Account, where you can remove one; admins switch the relay, renew its
+  key or sign the installation out of it in Settings, Connections, Veyllo App, in the relay
+  section of the 2FA code step. Its card stands first under Communication.
 - **Veyllo App: the app's own agent can ask your agent.** When the app is connected, its agent
   can hand your agent a task and read the answer; only the phone that asked gets that answer.
   Your agent's chat shows such a task as coming from the app's agent, not from you. What only

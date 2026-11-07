@@ -1,0 +1,269 @@
+# SPDX-FileCopyrightText: 2026 Veyllo GmbH
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Additional permissions and terms under AGPL Section 7: see LICENSING.md
+"""How a decision surface shows text that somebody else wrote: an argument, an address, a
+number, a name. The one place that decides what is drawn as it is and what is marked.
+
+A card a person confirms is a security control: what they read is what they agree to. So
+nothing here normalises. A character that could draw as nothing, as another letter or as
+another argument is shown as a visible mark, ``⟨U+XXXX⟩`` (U+27E8/U+27E9 around the
+code point), and those two brackets are themselves escaped wherever they occur in a value, so
+every mark on a card is VAF's own and no value can fake one or hide a real one.
+
+THE SURFACES (measured, N = 3, plus two refusals): the confirmation card on the phone
+(vaf/core/agent_origin.py `card_lines`, vaf/core/app_link/confirmations.py `send_what`), the
+web UI's draft card through the rows of vaf/core/outbound_hold.py (`to_shown`, `cc_shown`,
+`bcc_shown`, `name_shown`), and `vaf outbox list`; the mail funnel
+(`MailService.queue_send`) and the WhatsApp park and tool refuse what these functions mark.
+
+HOW A RECIPIENT IS SHOWN. The address or number first and whole, then the name, cut at
+``NAME_MAX``: a name is written by whoever wrote the mail's To line (the model, for a draft),
+so a long one must never push the address out of sight, and an ``@`` in it is marked, because
+a name is never an address (``"boss@firma.de (Boss)" <x@evil.test>`` parses to that name and
+the address ``x@evil.test``).
+
+- `mail_address`: the dot-atom characters and ``@`` as they are, every other character
+  marked, a space and a quote included; a domain with a character outside ASCII gets its
+  per-label punycode in square brackets beside it (``alice@ex⟨U+0430⟩mple.com
+  [xn--exmple-4nf.com]``). The raw ``punycode`` codec per label, never the ``idna`` codec:
+  measured, ``"ｅxample".encode("idna") == b"example"``, because nameprep folds a
+  full-width letter to ASCII, which is exactly the silent normalisation a look-alike needs.
+  The third-party ``idna`` package is no direct dependency.
+- `phone_number`: what the WhatsApp lane dials, marked. Measured on
+  `whatsapp_bridge._normalize_phone`: it keeps every character whose ``isdigit()`` is true,
+  so an Arabic-Indic seven, full-width digits or a superscript two land in the JID, and
+  ``+491761234567 ext 99`` dials a different number than the one read. Only a leading ``+``
+  and the ASCII digits are kept, the separators the lane drops are dropped, and everything
+  else is marked where it stands. `phone_digits` is the matching refusal test.
+
+ON A TERMINAL the marks are written as ``<U+XXXX>`` (`ascii_marks`): measured, with
+``PYTHONIOENCODING=cp1252`` both ``print("⟨")`` and Rich raise ``UnicodeEncodeError``, so a
+Windows console must never be handed the brackets.
+
+NAMED BOUNDARIES.
+- Not on the facade: the facade exports neither the outbound hold nor the cards
+  (docs/EMBEDDING.md names `confirmations.py` a first-party boundary), and all three
+  surfaces are VAF's own, fed from VAF's own rows. It is exported with the outbound hold.
+- ASCII look-alikes (``paypa1.com``, ``rn`` for ``m``, ``I`` for ``l``) are not marked: the
+  tree holds no skeleton table, and every character of them is plain ASCII the person can
+  read.
+- Bidi: an Arabic or Hebrew name next to an address that starts with digits can, by the
+  Unicode bidi algorithm, draw those digits beside the name. The characters stay visible; the
+  phone app isolates the whole card text and the web UI wraps names in ``<bdi>``. The card
+  text cannot carry isolation controls itself, because they are exactly what gets marked.
+"""
+from __future__ import annotations
+
+import re
+import unicodedata
+from typing import Any, List, Optional, Sequence, Tuple
+
+OPEN, CLOSE = "\u27e8", "\u27e9"
+#: The longest a name is shown on a decision surface, in code points with the ellipsis
+#: (escapes count as the text they are shown as).
+NAME_MAX = 40
+ELLIPSIS = "\u2026"
+# Characters a renderer draws as nothing although their category is a letter or a symbol:
+# the Hangul fillers and the Braille blank.
+_FILLERS = frozenset((0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800))
+# Combining marks stacked on one base character beyond this are shown escaped.
+_MARKS_ON_ONE_BASE = 2
+# What may stand before a combining mark as its base: not the start of a line, not a space or
+# a tab (a space plus U+0338 draws as a slash), not a character already shown as a mark.
+_NO_BASE = (" ", "\t")
+# The characters of an addr-spec shown as they are: the dot-atom set and the "@".
+_ADDRESS_KEEP = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    "!#$%&'*+-/=?^_`{|}~.@")
+# What the WhatsApp lane drops from a number without changing what it dials.
+_PHONE_SEPARATORS = frozenset(" -./()")
+_ASCII_DIGITS = frozenset("0123456789")
+_MARK_RE = re.compile("(" + OPEN + r"U\+[0-9A-F]{4,6}" + CLOSE + ")")
+
+
+class Shown(str):
+    """Text already shown safely by this module. A card lays it out as it is instead of
+    escaping it again: a second pass would escape the marks' own brackets."""
+
+
+def escaped(char: str) -> str:
+    """One character as its visible mark: ``⟨U+0430⟩``, five or six hex digits above
+    U+FFFF."""
+    return f"{OPEN}U+{ord(char):04X}{CLOSE}"
+
+
+def shown_char(char: str) -> str:
+    """One character as a card shows it: a control, format, separator, private-use or
+    unassigned character (a direction override, a zero-width space, a carriage return), a
+    filler and the two mark brackets themselves as a visible ``⟨U+XXXX⟩``; a tab
+    kept."""
+    if char == "\t":
+        return char
+    if unicodedata.category(char) in ("Cc", "Cf", "Zl", "Zp", "Co", "Cn", "Cs") \
+            or ord(char) in _FILLERS or char in (OPEN, CLOSE):
+        return escaped(char)
+    return char
+
+
+def shown_tokens(line: str, also: str = "") -> List[str]:
+    """One line as a card shows it, one token per character (an escape is one token, so a
+    cut never splits it). Every character as `shown_char` shows it, the characters in
+    ``also`` escaped too, and a combining mark escaped when it has no base before it (the
+    line's start, a space, a tab or an escaped character) or when more than
+    ``_MARKS_ON_ONE_BASE`` are stacked on one base."""
+    shown: List[str] = []
+    marks, base = 0, False
+    for char in line:
+        if unicodedata.category(char) in ("Mn", "Me"):
+            marks += 1
+            kept = base and marks <= _MARKS_ON_ONE_BASE
+            shown.append(char if kept else escaped(char))
+            continue
+        token = escaped(char) if char in also else shown_char(char)
+        marks, base = 0, token == char and char not in _NO_BASE
+        shown.append(token)
+    return shown
+
+
+def tokens_of(text: str) -> List[str]:
+    """`Shown` text back as its tokens: every mark one token, every other character one."""
+    out: List[str] = []
+    for part in _MARK_RE.split(text):
+        if _MARK_RE.fullmatch(part):
+            out.append(part)
+        else:
+            out.extend(part)
+    return out
+
+
+def _punycode_domain(domain: str) -> Optional[str]:
+    """The domain with every label outside ASCII as ``xn--`` plus its raw punycode, the ASCII
+    labels as they are; None when the codec refuses a label."""
+    labels = []
+    for label in domain.split("."):
+        if label.isascii():
+            labels.append(label)
+            continue
+        try:
+            labels.append("xn--" + label.encode("punycode").decode("ascii"))
+        except Exception:
+            return None
+    return ".".join(labels)
+
+
+def mail_address(addr: Any) -> Shown:
+    """One addr-spec as a decision surface shows it: the dot-atom characters and ``@`` as
+    they are, every other character marked; when the part after the last ``@`` holds a
+    character outside ASCII, its punycode follows in square brackets. A plain ASCII address
+    is unchanged."""
+    text = str(addr or "")
+    shown = "".join(c if c in _ADDRESS_KEEP else escaped(c) for c in text)
+    domain = text.rsplit("@", 1)[-1] if "@" in text else ""
+    if domain and not domain.isascii():
+        ascii_domain = _punycode_domain(domain)
+        if ascii_domain is not None:
+            shown += f" [{ascii_domain}]"
+    return Shown(shown)
+
+
+def _phone_body(raw: Any) -> str:
+    return str(raw or "").strip(" \t\r\n\f\v")
+
+
+def phone_number(raw: Any) -> Shown:
+    """What the WhatsApp lane dials, marked: one leading ``+`` and the ASCII digits kept, the
+    separators ``space - . / ( )`` dropped as the lane drops them, every other character
+    marked where it stands."""
+    text = _phone_body(raw)
+    out: List[str] = []
+    if text.startswith("+"):
+        out.append("+")
+        text = text[1:]
+    for char in text:
+        if char in _ASCII_DIGITS:
+            out.append(char)
+        elif char not in _PHONE_SEPARATORS:
+            out.append(escaped(char))
+    return Shown("".join(out))
+
+
+def phone_digits(raw: Any) -> Optional[str]:
+    """The number as ``+`` (when given) and its ASCII digits, or None when it holds anything
+    but an optional leading ``+``, ASCII digits and the separators ``space - . / ( )``, or no
+    digit at all: a letter, a digit of another script, a no-break space, a zero-width or
+    direction character and a ``+`` inside the number are all refused. The length rule stays
+    with the lane (`whatsapp_bridge._e164_to_jid`)."""
+    text = _phone_body(raw)
+    plus = text.startswith("+")
+    body = text[1:] if plus else text
+    digits = []
+    for char in body:
+        if char in _ASCII_DIGITS:
+            digits.append(char)
+        elif char not in _PHONE_SEPARATORS:
+            return None
+    if not digits:
+        return None
+    return ("+" if plus else "") + "".join(digits)
+
+
+def person_name(name: Any, limit: int = NAME_MAX) -> Shown:
+    """A name as a decision surface shows it: every character as `shown_tokens` shows it,
+    an ``@`` marked too (a name is never an address), cut so that the shown text with its
+    ``…`` is at most ``limit`` code points, never inside a mark. An empty name is ""."""
+    tokens = shown_tokens(str(name or "").strip(), also="@")
+    if sum(len(t) for t in tokens) <= limit:
+        return Shown("".join(tokens))
+    head: List[str] = []
+    size = 0
+    for token in tokens:
+        if size + len(token) > limit - len(ELLIPSIS):
+            break
+        head.append(token)
+        size += len(token)
+    return Shown("".join(head) + ELLIPSIS)
+
+
+def mail_recipients(raw: Any, first_name: Any = "") -> List[Tuple[Shown, Shown]]:
+    """``(address, name)`` per recipient of a mail header, both as shown, in the order of
+    `vaf.mail.addressing.recipient_pairs`, the same parse the envelope is built from. The
+    first entry's name is ``first_name`` when given (the contact book's), else its own
+    display name; a name equal to its address is dropped. A header the parse finds nothing
+    in comes back whole and marked as one address, so a value the lane would drop is still
+    shown rather than hidden."""
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    from vaf.mail.addressing import recipient_pairs
+    pairs = recipient_pairs(text)
+    if not pairs:
+        return [(mail_address(text), Shown(""))]
+    out: List[Tuple[Shown, Shown]] = []
+    for index, (name, addr) in enumerate(pairs):
+        if index == 0 and str(first_name or "").strip():
+            name = str(first_name)
+        name = str(name or "").strip()
+        out.append((mail_address(addr), person_name(name if name != addr else "")))
+    return out
+
+
+def recipients_line(pairs: Sequence[Tuple[str, str]]) -> Shown:
+    """``addr (name), addr2, addr3 (name3)``: every address first, each name after its own."""
+    return Shown(", ".join(f"{addr} ({name})" if name else str(addr) for addr, name in pairs))
+
+
+def ascii_marks(text: Any) -> str:
+    """Shown text for a terminal that may not encode the marks (cp1252): the brackets become
+    ``<`` and ``>``, every other character outside ASCII ``<U+XXXX>``, and a literal ``<`` or
+    ``>`` ``<U+003C>`` / ``<U+003E>``, so a mark stays told apart from text. Always ASCII."""
+    out: List[str] = []
+    for part in _MARK_RE.split(str(text or "")):
+        if _MARK_RE.fullmatch(part):
+            out.append("<" + part[1:-1] + ">")
+            continue
+        for char in part:
+            if char in "<>" or not char.isascii():
+                out.append(f"<U+{ord(char):04X}>")
+            else:
+                out.append(char)
+    return "".join(out)

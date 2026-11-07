@@ -89,6 +89,7 @@ class AutomationTool(BaseTool):
     name = "create_automation"
     agent_request = "refuse_work"
     agent_request_confirm_kind = "automation"
+    agent_request_confirm_whole_args = ("output_path", "trigger_room", "trigger_from")
     category    = "automations"
     permission_level = "write"
     side_effect_class = "reversible"
@@ -1112,6 +1113,7 @@ class UpdateAutomationTool(BaseTool):
     name = "update_automation"
     agent_request = "refuse_work"
     agent_request_confirm_kind = "automation"
+    agent_request_confirm_whole_args = ("task_id", "output_path", "trigger_room", "trigger_from")
     category    = "automations"
     permission_level = "write"
     side_effect_class = "reversible"
@@ -1375,6 +1377,7 @@ class RestoreAutomationTool(BaseTool):
     name = "restore_automation"
     agent_request = "refuse_work"
     agent_request_confirm_kind = "automation"
+    agent_request_confirm_whole_args = ("task_id",)
     category    = "automations"
     permission_level = "write"
     side_effect_class = "reversible"

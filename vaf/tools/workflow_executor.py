@@ -55,6 +55,7 @@ class ExecuteWorkflowTool(BaseTool):
     name = "execute_workflow"
     agent_request = "refuse_work"
     agent_request_confirm_kind = "workflow"
+    agent_request_confirm_whole_args = ("workflow_id",)
     # An orchestrator: the engine inside already bounds every step, so bounding the whole
     # run again would double-bound it.
     self_supervised = True

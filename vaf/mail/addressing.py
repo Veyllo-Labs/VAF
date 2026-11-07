@@ -134,17 +134,28 @@ def header_addresses(value: Any) -> Set[str]:
     return out
 
 
-def normalize_recipients(value: Any) -> List[str]:
-    """Parse a recipient string ("a@x.com, b@y.com") or list into validated address
-    strings. Invalid/empty entries are dropped; order is preserved and duplicates
-    removed."""
+def recipient_pairs(value: Any) -> List[Tuple[str, str]]:
+    """Parse a recipient string ("Anna <a@x.com>, b@y.com") or list into ``(display name,
+    address)`` pairs, the addresses validated. Invalid/empty entries are dropped; order is
+    preserved and a repeated address is dropped (the first name wins). The one parse behind
+    the envelope (`normalize_recipients`) and what a confirmation card shows
+    (`vaf.core.shown_text.mail_recipients`), so the card names exactly who the mail reaches."""
     if not value:
         return []
     items = value if isinstance(value, list) else [value]
     raw = ", ".join(str(x) for x in items if x)
-    out: List[str] = []
-    for _name, addr in getaddresses([raw]):
+    out: List[Tuple[str, str]] = []
+    seen: Set[str] = set()
+    for name, addr in getaddresses([raw]):
         addr = (addr or "").strip()
-        if "@" in addr and "." in addr.rsplit("@", 1)[-1] and addr not in out:
-            out.append(addr)
+        if "@" in addr and "." in addr.rsplit("@", 1)[-1] and addr not in seen:
+            seen.add(addr)
+            out.append((name or "", addr))
     return out
+
+
+def normalize_recipients(value: Any) -> List[str]:
+    """Parse a recipient string ("a@x.com, b@y.com") or list into validated address
+    strings (`recipient_pairs` without the names). Invalid/empty entries are dropped; order
+    is preserved and duplicates removed."""
+    return [addr for _name, addr in recipient_pairs(value)]

@@ -96,10 +96,14 @@ class SendWhatsAppTool(BaseTool):
             return f"WhatsApp send unavailable: {e}"
 
         from vaf.core.outbound_hold import whatsapp_recipient
+        from vaf.core.shown_text import phone_digits
         to_phone = whatsapp_recipient(kwargs)
         allow_contact_send = False
         if to_phone:
-            chat_jid = _e164_to_jid(to_phone)
+            # Plain digits only: the bridge keeps every character whose isdigit() is true (a
+            # digit of another script lands in the JID) and drops letters, so "... ext 99"
+            # would reach another number than the one written.
+            chat_jid = _e164_to_jid(to_phone) if phone_digits(to_phone) is not None else None
             if not chat_jid:
                 return (
                     "Invalid phone number for to_phone. Use E.164 format (e.g. +491761234567). "

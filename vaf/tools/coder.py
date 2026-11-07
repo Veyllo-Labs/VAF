@@ -3278,6 +3278,7 @@ class CodingAgentTool(BaseTool):
     name = "coding_agent"
     agent_request = "refuse_work"
     agent_request_confirm_kind = "coder"
+    agent_request_confirm_whole_args = ("project_path", "environment", "deploy_to")
     # A large edit legitimately takes many minutes; the agentic loop governs itself (idle-based
     # safety timeout, stuck detection, a final commit on every exit path) and polls
     # should_stop each iteration, so a flat wall-clock bound would ABANDON it mid-edit and

@@ -150,15 +150,31 @@ is a turn of your account's app chat, with these differences
   shown safely rather than byte for byte, so no value can pass itself off as another argument
   or push one out of sight. The card opens with one line per argument, in the tool's own
   order: its name and the first line of its value (at most 80 characters, then "(continued
-  below)"; "(starts with an empty line)" when the value begins with one). Below that block,
-  each value continues under its own name, every line indented, with runs of empty lines
-  counted. Invisible characters (direction overrides, zero-width and control characters,
-  blank fillers, combining marks stacked beyond two) appear as `<U+XXXX>`; a Windows line
+  below)"; "(starts with an empty line)" when the value begins with one). The arguments a
+  tool names as its targets (`BaseTool.agent_request_confirm_whole_args`: the coder's project,
+  environment and deploy target, an automation's output path and triggers, an id) show their
+  whole first line there, because their tail is their meaning. Below that block, each value
+  continues under its own name, every line indented, with runs of empty lines counted.
+  Invisible characters (direction overrides, zero-width and control characters, blank
+  fillers, combining marks with no letter before them or stacked beyond two) appear as
+  `⟨U+XXXX⟩`; a mark after a space, a tab or another such escape counts as having no letter,
+  because a space with a combining slash draws as a slash. The two brackets `⟨` and `⟩`
+  themselves are escaped too, so every `⟨U+XXXX⟩` on a card is VAF's own. A Windows line
   break is just a line break. An argument name shows every character outside plain ASCII,
-  and any space or colon, as `<U+XXXX>`. A call with an argument the tool does not declare is
+  and any space or colon, as `⟨U+XXXX⟩`. A call with an argument the tool does not declare is
   not parked at all: the app's agent is told to call again without it. A message card is
-  laid out the same way, the recipient first and the text last. What runs is still exactly
-  the stored call. Nothing is cut: a call whose text as shown would be longer than
+  laid out the same way, the recipient first and the text last. Every recipient, Cc and Bcc
+  reads address or number first and whole, then the name (at most 40 characters, ending in
+  `…` when cut, an `@` in it marked, because a name written as `"boss@firma.de (Boss)"` is
+  not an address): `to: x@evil.test (boss⟨U+0040⟩firma.de (Boss))`. An address shows every
+  character outside plain ASCII marked, and a domain with such characters its punycode in
+  square brackets: `alice@ex⟨U+0430⟩mple.com [xn--exmple-4nf.com]`. A number shows only its
+  digits and a leading `+`, anything else marked. Two sends never reach a card at all: a mail
+  to an address with a character outside plain ASCII is refused when it is queued (the mail
+  lane has no SMTPUTF8 and could never deliver it), and a WhatsApp number with anything but
+  digits, a leading `+` and the separators space, `-`, `.`, `/`, `(` and `)` is refused
+  before it is parked; the app's agent gets the reason. What runs is still exactly the
+  stored call. Nothing is cut: a call whose text as shown would be longer than
   4000 characters is refused, and the app's agent is told to make the request smaller. Your answer counts only from a tap on that card on that
   phone:
   - **Yes** runs exactly that call once (a message leaves as when you press Send in the web

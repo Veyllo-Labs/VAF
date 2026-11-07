@@ -1499,6 +1499,11 @@ Key declarative rules the runtime enforces:
   refusal, so a typo never opens a tool. The card itself is the Veyllo App link's
   (`vaf/core/app_link/confirmations.py`, a named first-party boundary below); a stranger's
   tool takes part by declaring this one attribute.
+- `agent_request_confirm_whole_args` - the arguments that card shows WHOLE in its top block,
+  as a tuple of names (default `()`): its targets, whose tail is their meaning (a path, a
+  host, an address, an id). Every other argument's first line is cut at 80 code points there
+  and continued below it, so a long free text cannot push the next argument out of sight;
+  nothing is ever left out.
 - `category` - which bundle the tool appears under in the human-facing tool
   lists (the web tools window, the CLI table, the TUI overlay, `list_tools`).
   The in-tree vocabulary is `TOOL_CATEGORIES` in `vaf/core/tool_contract.py`,

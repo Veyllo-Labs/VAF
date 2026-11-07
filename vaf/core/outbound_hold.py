@@ -61,6 +61,23 @@ sends a draft that changed after its card went out (`draft_digest`): an edit in 
 settles the card instead. No answer on the phone in ten minutes leaves the draft waiting in
 the web UI; a No discards it.
 
+HOW A RECIPIENT IS SHOWN on every surface that decides a draft (the web UI's card through
+the rows' ``to_shown``, ``cc_shown``, ``bcc_shown`` and ``name_shown``, the phone's card,
+`vaf outbox list`; vaf/core/shown_text.py): the address or number first and whole, the name
+after it and cut at 40 characters with its ``@`` marked, because the name is free text that
+whoever wrote the To line chose (``"boss@firma.de (Boss)" <x@evil.test>`` is a mail to
+x@evil.test). Every character of an address outside plain ASCII is marked as
+``\u27e8U+XXXX\u27e9``, with the per-label punycode of a domain outside ASCII beside it in
+square brackets, never through the ``idna`` codec (its nameprep folds a full-width letter to
+ASCII, which is the silent normalisation a look-alike needs). Two such sends never become a
+draft at all. A mail to an address outside ASCII is refused in `MailService.queue_send`:
+measured, the mail lane never negotiates SMTPUTF8 and `smtplib` fails at ``RCPT TO`` with an
+ascii codec error on every provider, so it could only ever fail after the click. A WhatsApp
+number holding anything but digits, a leading ``+`` and the separators is refused before it
+is parked (`park_refusal`) and in the tool: measured, the bridge keeps every character whose
+``isdigit()`` is true, so an Arabic-Indic digit lands in the JID, and ``... ext 99`` dials
+another number than the one read.
+
 Front Office answers need no exclusion here: a Front Office turn is restricted to its own
 allow-list, its mail answer goes through `queue_send` in the runner rather than a tool, and
 `send_whatsapp` refuses any recipient but the owner in that mode.
@@ -324,6 +341,22 @@ def storable_args(args: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     return out
 
 
+def park_refusal(tool_name: str, args: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """Why a messenger call must not even be parked, or None. A `send_whatsapp` number that
+    is not plain digits (`shown_text.phone_digits`) would be carded as one number and dialled
+    as another, so the call is answered at once with the number as shown and nothing is
+    parked; the tool refuses it the same way in every other lane."""
+    if str(tool_name or "").strip() != "send_whatsapp":
+        return None
+    raw = whatsapp_recipient(args)
+    from vaf.core.shown_text import phone_digits, phone_number
+    if not raw or phone_digits(raw) is not None:
+        return None
+    return (f"'send_whatsapp' did NOT run: the number {phone_number(raw)} has characters other "
+            "than digits, a leading '+' and the separators space - . / ( ). Nothing was sent or "
+            "parked. Call it again with the number in E.164 form, for example +491761234567.")
+
+
 def park_messenger_call(tool_name: str, args: Dict[str, Any], *,
                         username: str, user_scope_id: Optional[str],
                         session_id: str = "") -> int:
@@ -486,6 +519,36 @@ def recipient_name(channel: str, recipient: str, username: str,
     return ""
 
 
+def shown_recipient_fields(row: Dict[str, Any]) -> Dict[str, str]:
+    """How a decision surface shows a row's recipients (vaf/core/shown_text.py, "HOW A
+    RECIPIENT IS SHOWN"): ``to_shown`` the addresses or the number, marked and whole;
+    ``cc_shown``/``bcc_shown`` every address first with its name; ``name_shown`` the name the
+    person knows the recipient by, cut and with its ``@`` marked, "" when there is none or it
+    only repeats the address. The raw fields stay as they are, and `draft_digest` reads only
+    those."""
+    from vaf.core import shown_text
+    channel = str(row.get("channel") or "")
+    recipient = str(row.get("recipient") or "").strip()
+    name = str(row.get("recipient_name") or "").strip()
+    out = {"to_shown": "", "cc_shown": "", "bcc_shown": "", "name_shown": ""}
+    if channel == "mail":
+        pairs = shown_text.mail_recipients(recipient)
+        out["to_shown"] = ", ".join(addr for addr, _ in pairs)
+        for key in ("cc", "bcc"):
+            out[f"{key}_shown"] = shown_text.recipients_line(
+                shown_text.mail_recipients(row.get(key)))
+        from vaf.mail.addressing import recipient_pairs
+        first = recipient_pairs(recipient)
+        repeats = name == recipient or bool(first and name == first[0][1])
+    else:
+        out["to_shown"] = (shown_text.phone_number(recipient) if channel == "whatsapp"
+                           else "".join(shown_text.shown_tokens(recipient)))
+        repeats = name == recipient
+    if name and not repeats:
+        out["name_shown"] = shown_text.person_name(name)
+    return {key: str(value) for key, value in out.items()}
+
+
 def _with_names(rows: List[Dict[str, Any]], username: str,
                 user_scope_id: Optional[str]) -> List[Dict[str, Any]]:
     seen: Dict[Tuple[str, str], str] = {}
@@ -494,6 +557,7 @@ def _with_names(rows: List[Dict[str, Any]], username: str,
         if key not in seen:
             seen[key] = recipient_name(key[0], key[1], username, user_scope_id)
         r["recipient_name"] = seen[key]
+        r.update(shown_recipient_fields(r))
     return rows
 
 

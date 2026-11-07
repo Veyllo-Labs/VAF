@@ -396,7 +396,11 @@ async def send_message(body: Dict[str, Any] = Body(...),
             references=(body.get("references") or "").strip(),
             undo_seconds=undo)
 
-    out = await asyncio.to_thread(_run)
+    try:
+        out = await asyncio.to_thread(_run)
+    except ValueError as e:
+        # A send the funnel refuses (an address this lane cannot deliver): nothing was queued.
+        raise HTTPException(status_code=400, detail=str(e))
 
     async def _deliver_later():
         # fast path: deliver right after the undo window; the supervisor sweep

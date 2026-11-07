@@ -33,6 +33,7 @@ class AddAutomationNoteTool(BaseTool):
     name = "add_automation_note"
     agent_request = "refuse_standing"
     agent_request_confirm_kind = "automation"
+    agent_request_confirm_whole_args = ()
     category    = "automations"
     permission_level = "write"
     side_effect_class = "reversible"
@@ -69,6 +70,7 @@ class AddAutomationTodoTool(BaseTool):
     name = "add_automation_todo"
     agent_request = "refuse_standing"
     agent_request_confirm_kind = "automation"
+    agent_request_confirm_whole_args = ()
     category    = "automations"
     permission_level = "write"
     side_effect_class = "reversible"

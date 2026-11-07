@@ -235,6 +235,12 @@ class BaseTool(ABC):
     # other value keep the refusal.
     agent_request_confirm_kind: str = ""
 
+    # agent_request_confirm_whole_args: the arguments that card shows WHOLE in its top block,
+    # because their tail is their meaning (a target path, a host, an address, an id): a
+    # ``deploy_to`` cut at 80 characters can end in ``../../home/user/.ssh`` out of sight.
+    # Every other argument's first line is cut at 80 there and continued below it.
+    agent_request_confirm_whole_args: tuple[str, ...] = ()
+
     def agent_request_for(self, args: Dict[str, Any]) -> str:
         """``agent_request`` for ONE call, for a tool whose answer depends on its arguments
         (``mcp_call``: the level of the server tool it reaches; ``cloud_storage``: its

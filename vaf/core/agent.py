@@ -14608,6 +14608,11 @@ class Agent:
                     tool_args["hold"] = True
                     tool_args["hold_session"] = str(getattr(self, "current_session_id", "") or "")
                 else:
+                    # A call that would be carded as one number and dialled as another is
+                    # answered here, before a draft or a card exists.
+                    refusal = outbound_hold.park_refusal(name, tool_args)
+                    if refusal:
+                        return refusal
                     entry_id = outbound_hold.park_messenger_call(
                         name, dict(tool_args),
                         username=getattr(self, "_current_username", None) or "",

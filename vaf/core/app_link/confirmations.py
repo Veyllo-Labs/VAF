@@ -60,7 +60,7 @@ import logging
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from vaf.core.agent_origin import CONFIRM_SECONDS, WHAT_MAX, ParkedCall
 from vaf.core.app_link import CHANNEL, devices
@@ -202,29 +202,44 @@ def _call_args(row: Dict[str, Any], username: str, scope: str) -> Dict[str, Any]
 
 
 def send_what(row: Dict[str, Any], args: Dict[str, Any], lang: Optional[str]) -> str:
-    """The card's text for a draft: the headline, then whom it goes to (the name when known
-    and the address), every Cc and Bcc, the subject and the attachment names of a mail, or
-    every further argument of a WhatsApp call (a voice message's language, the file), and the
-    whole text last. Laid out as the action cards are (`agent_origin.card_lines`: a top block
-    with every field's first line in that order, then what each one continues with, all shown
-    safely), so no subject or text can write a line that reads as a recipient or push one out
-    of sight. Nothing is cut."""
-    from vaf.core import outbound_hold
+    """The card's text for a draft: the headline, then whom it goes to, every Cc and Bcc, the
+    subject and the attachment names of a mail, or every further argument of a WhatsApp call
+    (a voice message's language, the file), and the whole text last. Laid out as the action
+    cards are (`agent_origin.card_lines`: a top block with every field's first line in that
+    order, then what each one continues with, all shown safely), so no subject or text can
+    write a line that reads as a recipient or push one out of sight. Nothing is cut.
+
+    Every recipient reads address (or number) first and whole, then its name, cut at
+    `shown_text.NAME_MAX` (`shown_text.recipients_line`): a name is free text whoever wrote
+    the To line chose, and a long one must not move the address into the continuation. The
+    recipient fields and the file names are never cut in the top block (``whole``)."""
+    from vaf.core import shown_text
     from vaf.core.agent_origin import card_lines, confirm_headline
     mail = str(row.get("channel") or "") == "mail"
     head = confirm_headline("send_mail" if mail else "send_whatsapp", lang) or (
         "Send a mail" if mail else "Send a WhatsApp message")
+    name = str(row.get("recipient_name") or "").strip()
     if mail:
-        middle = [(key, row.get(key)) for key in ("cc", "bcc", "subject")
-                  if str(row.get(key) or "").strip()]
+        to = shown_text.recipients_line(
+            shown_text.mail_recipients(row.get("recipient"), first_name=name))
+        middle: List[Tuple[str, Any]] = [
+            (key, shown_text.recipients_line(shown_text.mail_recipients(row.get(key))))
+            for key in ("cc", "bcc") if str(row.get(key) or "").strip()]
+        if str(row.get("subject") or "").strip():
+            middle.append(("subject", row.get("subject")))
         if row.get("attachments"):
             middle.append(("attachments", ", ".join(str(a) for a in row["attachments"])))
         text = ("body", row.get("preview") or "")
     else:
+        number = shown_text.phone_number(row.get("recipient"))
+        shown_name = shown_text.person_name(name) if name and name != str(
+            row.get("recipient") or "").strip() else ""
+        to = shown_text.Shown(f"{number} ({shown_name})" if shown_name else number)
         skip = {"to_phone", "phone_number", "message"}
         middle = [(key, args[key]) for key in sorted(args) if key not in skip]
         text = ("message", row.get("preview") or "")
-    lines = card_lines([("to", outbound_hold._addressee(row))] + middle + [text])
+    lines = card_lines([("to", to)] + middle + [text],
+                       whole=("to", "cc", "bcc", "attachments", "file_path"))
     return "\n".join([head, ""] + lines)
 
 

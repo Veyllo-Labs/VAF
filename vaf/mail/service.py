@@ -652,9 +652,25 @@ class MailService:
         `agent_written` marks a mail the agent wrote on its own (RFC 3834 headers);
         `sent_by` records whose word it is (owner, agent, front_office); `reply_to_pk`
         is the inbound message this answers, marked answered when the mail leaves.
+
+        An envelope address with a character outside plain ASCII raises ``ValueError`` before
+        anything is built or queued (display names may be anything). Measured: this lane
+        never negotiates SMTPUTF8 and smtplib sends ``RCPT TO`` in ASCII, so such a mail fails
+        permanently on every provider, and only after the person approved it. NAMED BOUNDARY:
+        an internationalised address becomes deliverable only with an SMTPUTF8/IDNA lane, and
+        this check is where that lane would start.
         """
         from datetime import datetime, timezone
         from vaf.mail import compose
+        from vaf.mail.addressing import normalize_recipients
+        for addr in (normalize_recipients(to) + normalize_recipients(cc)
+                     + normalize_recipients(bcc)):
+            if not addr.isascii():
+                from vaf.core.shown_text import ascii_marks, mail_address
+                raise ValueError(
+                    f"cannot queue a mail to {ascii_marks(mail_address(addr))}: the address has "
+                    "characters outside plain ASCII, which this mail lane cannot deliver (no "
+                    "SMTPUTF8); nothing was queued")
         apk = self.store.account_pk(account_id)
         if apk is None:
             apk = self.store.upsert_account(account_id, "imap", account_id)

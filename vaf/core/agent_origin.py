@@ -119,7 +119,7 @@ import html
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Any, List, Mapping, Optional, Tuple
+from typing import Any, Iterable, List, Mapping, Optional, Tuple
 
 #: The ``kind`` of a stored user message the app's agent wrote.
 APP_AGENT_KIND = "app_agent"
@@ -437,55 +437,30 @@ CARD_HEAD_MAX = 80
 CARD_CONTINUED = "(continued below)"
 CARD_EMPTY_START = "(starts with an empty line)"
 CARD_EMPTY = "(empty)"
-# Characters a renderer draws as nothing although their category is a letter or a symbol:
-# the Hangul fillers and the Braille blank.
-_FILLERS = frozenset((0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800))
-# Combining marks stacked on one base character beyond this are shown escaped.
-_MARKS_ON_ONE_BASE = 2
 
 
-def _escaped(char: str) -> str:
-    return f"<U+{ord(char):04X}>"
-
-
-def _shown_char(char: str) -> str:
-    """One character as the card shows it: a control, format, separator, private-use or
-    unassigned character (a direction override, a zero-width space, a carriage return) and a
-    filler as a visible ``<U+XXXX>``; a tab kept."""
-    if char == "\t":
-        return char
-    if unicodedata.category(char) in ("Cc", "Cf", "Zl", "Zp", "Co", "Cn", "Cs") \
-            or ord(char) in _FILLERS:
-        return _escaped(char)
-    return char
-
-
-def _shown_lines(text: str) -> List[List[str]]:
-    """A value's text as the card shows it, split into lines of shown characters. A Windows or
-    old Mac line break counts as a line break (display only); every other invisible character
-    is escaped (`_shown_char`), and so is a combining mark with no base before it on its line
-    or more than ``_MARKS_ON_ONE_BASE`` stacked on one base."""
-    lines: List[List[str]] = []
-    for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-        shown: List[str] = []
-        marks, base = 0, False
-        for char in raw:
-            if unicodedata.category(char) in ("Mn", "Me"):
-                marks += 1
-                shown.append(char if base and marks <= _MARKS_ON_ONE_BASE else _escaped(char))
-                continue
-            marks, base = 0, True
-            shown.append(_shown_char(char))
-        lines.append(shown)
-    return lines
+def _shown_lines(value: Any) -> List[List[str]]:
+    """A value as the card shows it, split into lines of shown tokens (one per character, an
+    escape one token). A Windows or old Mac line break counts as a line break (display only);
+    every other invisible character is escaped, and so is a combining mark with no base
+    before it (`shown_text.shown_tokens`). Text `shown_text` already showed (`Shown`) is laid
+    out as it is: escaping it again would escape its own marks."""
+    from vaf.core.shown_text import Shown, shown_tokens, tokens_of
+    if isinstance(value, Shown):
+        return [tokens_of(value)]
+    text = _arg_text(value)
+    return [shown_tokens(raw)
+            for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
 
 
 def card_key(key: Any) -> str:
     """An argument's name as the card shows it: ASCII letters, digits and punctuation as they
     are; every other character (a look-alike letter of another script, a space, a colon, a
-    line break) as ``<U+XXXX>``, so no name can pass for another one or carry a value."""
+    line break) as ``\u27e8U+XXXX\u27e9``, so no name can pass for another one or carry a
+    value."""
+    from vaf.core.shown_text import escaped
     return "".join(c if c.isascii() and c.isprintable() and not c.isspace() and c != ":"
-                   else _escaped(c) for c in str(key))
+                   else escaped(c) for c in str(key))
 
 
 def _continuation(lines: List[str]) -> List[str]:
@@ -504,24 +479,27 @@ def _continuation(lines: List[str]) -> List[str]:
     return out
 
 
-def card_lines(items: List[Tuple[Any, Any]]) -> List[str]:
+def card_lines(items: List[Tuple[Any, Any]], whole: Iterable[str] = ()) -> List[str]:
     """The lines of a card for ``(name, value)`` pairs, in their given order, laid out by
     STRUCTURE so that no value can move another argument out of sight. First a top block with
     exactly one line per argument: ``name: <the first line of the value>``, at most
     ``CARD_HEAD_MAX`` code points of it, then ``(continued below)`` when there is more; a
-    value whose first line is empty says so (``(starts with an empty line)``). Then, in the
-    same order, what each value continues with, under ``name, continued:``, every line
-    indented and runs of empty lines counted. Names as `card_key` shows them, values as
-    `_shown_lines` shows them. Nothing is left out."""
+    value whose first line is empty says so (``(starts with an empty line)``). A name in
+    ``whole`` (a target, an address: its tail is its meaning) shows its WHOLE first line
+    there. Then, in the same order, what each value continues with, under ``name,
+    continued:``, every line indented and runs of empty lines counted. Names as `card_key`
+    shows them, values as `_shown_lines` shows them. Nothing is left out."""
+    whole_keys = {str(k) for k in whole}
     top: List[str] = []
     below: List[str] = []
     for key, value in items:
         name = card_key(key)
-        lines = _shown_lines(_arg_text(value))
+        lines = _shown_lines(value)
+        cut = None if str(key) in whole_keys else CARD_HEAD_MAX
         head: List[str] = []
         size = 0
         for token in lines[0]:
-            if size + len(token) > CARD_HEAD_MAX:
+            if cut is not None and size + len(token) > cut:
                 break
             head.append(token)
             size += len(token)
@@ -569,6 +547,19 @@ def _argument_order(tool: Any, args: Mapping[str, Any]) -> List[str]:
     return ordered + sorted(k for k in args if k not in ordered)
 
 
+def _whole_args(tool: Any) -> Tuple[str, ...]:
+    """The arguments ``tool`` declares to be shown whole on its card
+    (`BaseTool.agent_request_confirm_whole_args`), read on the instance; anything but a tuple
+    or list of names counts as none."""
+    try:
+        declared = getattr(tool, "agent_request_confirm_whole_args", ())
+    except Exception:
+        return ()
+    if not isinstance(declared, (tuple, list)):
+        return ()
+    return tuple(item for item in declared if isinstance(item, str))
+
+
 def confirm_what(name: str, tool: Any, args: Optional[Mapping[str, Any]],
                  lang: Optional[str] = None) -> str:
     """VAF's own plain text of exactly the call a card confirms: the headline
@@ -578,7 +569,8 @@ def confirm_what(name: str, tool: Any, args: Optional[Mapping[str, Any]],
     nothing is cut (``WHAT_MAX`` is checked by the caller, on the text as shown); never the
     requesting agent's own words about the call."""
     stored = _storable(args)
-    lines = card_lines([(key, stored[key]) for key in _argument_order(tool, stored)])
+    lines = card_lines([(key, stored[key]) for key in _argument_order(tool, stored)],
+                       whole=_whole_args(tool))
     headline = confirm_headline(str(name), lang) or str(name)
     return "\n".join([headline, ""] + lines) if lines else headline
 

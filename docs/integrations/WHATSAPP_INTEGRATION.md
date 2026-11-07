@@ -159,6 +159,13 @@ turn ends there: the card in the conversation sends, edits or discards it (an ed
 call's `message` argument and the preview together, `channel_message_store.revise_held_send`),
 `vaf outbox` does the same from a terminal, and the switch is
 `outward_send_hold` (see [`vaf/core/outbound_hold.py`](../../vaf/core/outbound_hold.py)). A
+number the agent writes to may hold only ASCII digits, one leading `+` and the separators
+space, `-`, `.`, `/`, `(` and `)` (`shown_text.phone_digits`): measured, the bridge keeps every
+character whose `isdigit()` is true, so an Arabic-Indic or full-width digit landed in the JID,
+and `+491761234567 ext 99` dialled `49176123456799`. `send_whatsapp` refuses anything else with
+its E.164 hint in every lane, and the hold refuses it before it is parked
+(`outbound_hold.park_refusal`), so no card shows one number for a send to another. The cards
+show the number as the lane dials it, anything else marked (`⟨U+0667⟩`). A
 request of the Veyllo App's own agent is held the same way, whatever the switch says, and the
 phone that asked also shows it as a confirmation card (Yes sends it, No discards it, no answer in
 ten minutes leaves it waiting in the web UI; one decision wins on both surfaces,

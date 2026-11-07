@@ -395,7 +395,7 @@ def test_an_ask_send_gets_a_card(app_link_home, held_store, monkeypatch):
             "bcc": "hidden@example.org", "subject": "Später", "attachments": ["plan.pdf"],
             "preview": "Hallo Anna,\nich komme später.", "state": "held"}
     assert confirmations.send_what(mail, {}, "en") == (
-        "Send a mail\n\nto: Anna (anna@example.org)\ncc: cc@example.org\n"
+        "Send a mail\n\nto: anna@example.org (Anna)\ncc: cc@example.org\n"
         "bcc: hidden@example.org\nsubject: Später\nattachments: plan.pdf\n"
         "body: Hallo Anna, (continued below)\n\nbody, continued:\n  ich komme später.")
     # A draft whose card would be over the limit: no card, the request learns where it waits.
@@ -1074,7 +1074,7 @@ def test_a_value_cannot_forge_an_argument_line():
             or line.endswith(", continued:"), line
     assert "  deploy_to: none" in below and "deploy_to, continued:" in below
     # The fillers are shown, not drawn as nothing.
-    assert "  <U+2800>" in below and "  <U+0301><U+0301>" in below
+    assert "  \u27e8U+2800\u27e9" in below and "  \u27e8U+0301\u27e9\u27e8U+0301\u27e9" in below
     # A long first line cannot wrap the next argument out of sight: the top line is cut there
     # and the rest follows below, nothing lost.
     long = agent_origin.confirm_what("coding_agent", _Coder(), {
@@ -1089,17 +1089,17 @@ def test_invisible_characters_are_shown_and_counted(agent_world):
     what = agent_origin.confirm_what("coding_agent", _Coder(), {
         "environment": "Water\u202egnp.exe", "task": "ok\u200b\r\nnext\u2028line\tend\rlast",
         "deploy_to": "\n\nftp:production", "project_path": "a\u0301\u0301\u0301b"}, "en")
-    assert "environment: Water<U+202E>gnp.exe" in what
+    assert "environment: Water\u27e8U+202E\u27e9gnp.exe" in what
     # CRLF and a lone CR are line breaks on the card (display only); nothing else is hidden.
-    assert "task: ok<U+200B> (continued below)" in what
-    assert "  next<U+2028>line\tend\n  last" in what
+    assert "task: ok\u27e8U+200B\u27e9 (continued below)" in what
+    assert "  next\u27e8U+2028\u27e9line\tend\n  last" in what
     for char in ("\u202e", "\u200b", "\r", "\u2028"):
         assert char not in what
     # An empty first line cannot hide a value: the top block says so.
     assert "deploy_to: (starts with an empty line) (continued below)" in what
     assert "  [1 empty line]\n  ftp:production" in what
     # Two marks on one base pass; a third and more are shown.
-    assert "project_path: a\u0301\u0301<U+0301>b" in what
+    assert "project_path: a\u0301\u0301\u27e8U+0301\u27e9b" in what
     # The limit counts the text as shown: 600 zero-width spaces are 4800 code points there.
     agent = agent_world.make()
     agent.tools["coding_agent"] = _Coder()
@@ -1119,7 +1119,7 @@ def test_the_send_card_cannot_be_forged():
                                 "subject: (starts with an empty line) (continued below)",
                                 "body: x (continued below)"]
     lines = what.split("\n")
-    assert "  bcc: nobody<U+202E>" in lines and "  to: someone-else@example.org" in lines
+    assert "  bcc: nobody\u27e8U+202E\u27e9" in lines and "  to: someone-else@example.org" in lines
     assert lines[-1] == "  to: someone-else@example.org"
     assert [line for line in lines if line.startswith(("to:", "bcc:"))] == ["to: anna@example.org"]
     call = {"kind": "call", "id": 4, "ref": "call:4", "channel": "whatsapp",
@@ -1146,15 +1146,125 @@ def test_a_key_outside_the_schema_is_refused_at_park(agent_world):
         out = agent.execute_tool("coding_agent", {"task": "Fix", "deploy_to": "ftp:x", **extra})
         assert out.startswith("[APP AGENT]") and "does not take" in out, out
         assert agent._parked_this_round == [] and agent._turn_closing is None and calls == []
-    assert "'d<U+0435>ploy_to'" in agent_origin.confirm_unknown_arguments(
+    assert "'d\u27e8U+0435\u27e9ploy_to'" in agent_origin.confirm_unknown_arguments(
         "coding_agent", coder, {"d\u0435ploy_to": "none"})
     # The schema's own arguments park as before.
     agent._parked_this_round = []
     assert agent.execute_tool("coding_agent", {"task": "Fix", "deploy_to": "ftp:x"}).startswith(
         agent_origin.PARKED_PREFIX)
     # A name with a colon, a space or another script cannot read as a name and a value.
-    assert agent_origin.card_key("deploy_to: none") == "deploy_to<U+003A><U+0020>none"
-    assert agent_origin.card_key("d\u0435ploy_to") == "d<U+0435>ploy_to"
+    assert agent_origin.card_key("deploy_to: none") == "deploy_to\u27e8U+003A\u27e9\u27e8U+0020\u27e9none"
+    assert agent_origin.card_key("d\u0435ploy_to") == "d\u27e8U+0435\u27e9ploy_to"
+
+
+# ── recipients and targets whole ──────────────────────────────────────────────────────────
+
+M = "⟨U+{}⟩".format
+
+
+def test_a_mark_cannot_be_forged_on_a_card():
+    """A value that writes a mark's own shape shows its brackets escaped, so every mark on a
+    card is VAF's own."""
+    what = agent_origin.confirm_what("coding_agent", _Coder(), {"task": "x" + M("0041")}, "en")
+    assert "task: x" + M("27E8") + "U+0041" + M("27E9") in what
+    # An already escaped character is no base: a mark after it is escaped too.
+    what = agent_origin.confirm_what("coding_agent", _Coder(), {
+        "task": "a \u0338b\t\u0301", "environment": "\u200b\u0301"}, "en")
+    assert "task: a " + M("0338") + "b\t" + M("0301") in what
+    assert "environment: " + M("200B") + M("0301") in what
+
+
+def test_the_send_card_puts_the_address_first_and_whole():
+    """Measured: a 90-code-point name pushed the address into the continuation, and a long Bcc
+    hid its tail. Every recipient now reads address first, never cut, the name after it cut
+    at 40 with its "@" marked."""
+    bcc = ", ".join(f"a{i}@example.org" for i in range(11)) + ", evil@attacker.test"
+    mail = {"kind": "mail", "id": 5, "ref": "mail:5", "channel": "mail", "tool": "send_mail",
+            "recipient": "alice@exаmple.com", "recipient_name": "Alice " + "B" * 90,
+            "cc": "", "bcc": bcc, "subject": "Hallo", "attachments": [], "preview": "Text",
+            "state": "held"}
+    top = _top_block(confirmations.send_what(mail, {}, "en"))
+    assert top[0] == ("to: alice@ex" + M("0430") + "mple.com [xn--exmple-4nf.com] (Alice "
+                      + "B" * 33 + "…)"), top[0]
+    assert top[1] == "bcc: " + bcc, top[1]
+    assert agent_origin.CARD_CONTINUED not in top[0] + top[1]
+    # A display name written to look like an address is shown as a name, after the address.
+    mail.update(recipient='"boss@firma.de (Boss)" <x@evil.test>', recipient_name="", bcc="")
+    top = _top_block(confirmations.send_what(mail, {}, "en"))
+    assert top[0] == "to: x@evil.test (boss" + M("0040") + "firma.de (Boss))", top[0]
+    # A WhatsApp number reads number first, with its name.
+    call = {"kind": "call", "id": 6, "ref": "call:6", "channel": "whatsapp",
+            "tool": "send_whatsapp", "recipient": "+491700000001",
+            "recipient_name": "Uwe " + "@" * 50, "preview": "Hallo", "state": "held"}
+    top = _top_block(confirmations.send_what(call, {}, "en"))
+    assert top[0].startswith("to: +491700000001 (Uwe " + M("0040")) and top[0].endswith("…)")
+
+
+def test_targets_are_whole_on_the_action_card(agent_world):
+    """The measured probe: a deploy target whose tail is ``../../home/user/.ssh`` lost that
+    tail past 80 characters in the top block. A declared target is shown whole there."""
+    tool = agent_world.make().tools["coding_agent"]
+    deploy = "deploy@myserver:/var/www/blog/" + "v2/" * 30 + "../../../../home/user/.ssh"
+    path = "/home/user/projects/" + "deep/" * 20 + "site"
+    what = agent_origin.confirm_what("coding_agent", tool, {
+        "task": "t" * 200, "project_path": path, "deploy_to": deploy}, "en")
+    top = _top_block(what)
+    assert "deploy_to: " + deploy in top and "project_path: " + path in top, top
+    assert top[0] == "task: " + "t" * agent_origin.CARD_HEAD_MAX + " " + agent_origin.CARD_CONTINUED
+    # A further line of a whole value still continues below, under its name.
+    what = agent_origin.confirm_what("coding_agent", tool, {"deploy_to": "ftp:x\nmore"}, "en")
+    assert "deploy_to: ftp:x (continued below)" in what and "  more" in what
+
+
+WHOLE = {
+    "coding_agent": ("project_path", "environment", "deploy_to"),
+    "create_automation": ("output_path", "trigger_room", "trigger_from"),
+    "update_automation": ("task_id", "output_path", "trigger_room", "trigger_from"),
+    "restore_automation": ("task_id",),
+    "add_automation_note": (), "add_automation_todo": (),
+    "execute_workflow": ("workflow_id",),
+    "create_skill": ("skill_id",), "update_skill": ("skill_id",), "delete_skill": ("skill_id",),
+    "update_user_identity": ("main_messenger",),
+}
+
+
+def test_every_carded_tool_declares_its_whole_args(agent_world):
+    """Every carded tool decides which of its arguments are shown whole, in its own class, so
+    a new carded tool cannot inherit the empty default without saying so."""
+    assert set(WHOLE) == set(CARDED)
+    agent = agent_world.make()
+    for name, whole in WHOLE.items():
+        tool = agent.tools[name]
+        assert "agent_request_confirm_whole_args" in type(tool).__dict__, name
+        assert tuple(tool.agent_request_confirm_whole_args) == whole, name
+        props = set((tool.parameters or {}).get("properties") or {})
+        assert set(whole) <= props, (name, set(whole) - props)
+
+
+@pytest.mark.parametrize("asked", [False, True])
+def test_a_number_that_is_not_digits_is_not_parked(agent_world, held_store, monkeypatch, asked):
+    """Measured: the bridge keeps every character whose isdigit() is true and drops letters, so
+    ``+491761234567 ext 99`` would be carded as one number and dialled as another. The seam
+    answers it before a draft or a card exists, in a web turn and in a request."""
+    from app_link_env import BOB, RUNNER_CHAT
+    from vaf.core import channel_message_store as store
+    from vaf.core.turn_binding import TurnBinding, bind_turn
+    agent = agent_world.make()
+    whatsapp = _Tool("send_whatsapp", agent_request="hold")
+    agent.tools["send_whatsapp"] = whatsapp
+    if asked:
+        _ask_turn(agent)
+    else:
+        bind_turn(agent, TurnBinding(identity=BOB, source="web", session_id=RUNNER_CHAT))
+    agent._parked_this_round, agent._held_this_round, agent._turn_closing = [], [], None
+    out = agent.execute_tool("send_whatsapp", {"to_phone": "+491761234567 ext 99", "message": "x"})
+    assert out.startswith("'send_whatsapp' did NOT run"), out
+    assert "+491761234567" + M("0065") + M("0078") + M("0074") + "99" in out
+    assert store.held_sends(BOB.username, BOB.scope) == [] and whatsapp.calls == []
+    assert agent._held_this_round == [] and agent._turn_closing is None
+    # A plain number is parked as before.
+    out = agent.execute_tool("send_whatsapp", {"to_phone": "+49 176 1234567", "message": "x"})
+    assert out.startswith(outbound_hold.HELD_PREFIX), out
 
 
 # ── a removed device, the result's fence, the cap ─────────────────────────────────────────

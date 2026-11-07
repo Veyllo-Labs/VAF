@@ -310,6 +310,20 @@ surfaces, see [VEYLLO_APP.md](VEYLLO_APP.md#the-apps-agent-can-ask-your-agent)).
 turns, the Front Office answer and a timer the person scheduled all send as before, because
 nobody is there to click.
 
+**A mail to an address outside plain ASCII is refused before it is queued.** `queue_send`
+checks every envelope address (`normalize_recipients` of To, Cc and Bcc) and raises
+`ValueError` ("cannot queue a mail to alice@ex<U+0430>mple.com [xn--exmple-4nf.com]: ...
+nothing was queued") before anything is built; display names may hold any characters.
+Measured: the native lane never negotiates SMTPUTF8, `compose.build_message` writes an encoded
+word inside the addr-spec, and smtplib sends `RCPT TO` in ASCII, so such a mail failed
+permanently with an `'ascii' codec` error on every provider, and only after the person had
+approved the card. The agent's tools answer `Failed to send email: ...` (no draft, no card),
+`POST /api/mail/send` answers 400 with the reason, and a Front Office answer logs
+`REPLY FAILED`. NAMED BOUNDARY: an internationalised address becomes deliverable only with an
+SMTPUTF8/IDNA lane, and this check is where that lane would start. The cards show what does
+reach them through `vaf/core/shown_text.py`: the address first and whole, every character
+outside plain ASCII marked.
+
 The agent can ASK what became of a draft: the `list_drafts` TOOL (`vaf/tools/list_drafts.py`,
 not the `MailService.list_drafts` method below) reads the same ledger as the card, this chat's
 drafts or one by its ref (`mail:12`), sent, discarded, replaced or still waiting. It is the

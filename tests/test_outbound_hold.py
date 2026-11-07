@@ -774,3 +774,71 @@ def test_a_click_that_races_a_finished_send_wakes_nothing(scratch, monkeypatch):
                                    user_role="user", tools=tools)
     assert out["ok"] is True and out.get("repeat") is True
     assert len(woken) == 1 and len(tools["send_whatsapp"].calls) == 1
+
+
+# ---- how a recipient is shown -------------------------------------------------
+
+def test_rows_carry_the_shown_recipient(scratch, monkeypatch):
+    """MUTATION: drop a field in `_with_names`, or hash `to_shown` in `draft_digest`.
+
+    Every row of the listings carries the recipients as a decision surface shows them
+    (vaf/core/shown_text.py): the web card and `vaf outbox list` read only these. The digest
+    keeps hashing the raw fields, so the shown form never changes what a card confirms."""
+    from vaf.core import contacts_store
+    monkeypatch.setattr(contacts_store, "get_contact_name_by_phone",
+                        lambda phone, username=None, user_scope_id=None: "Uwe Berg")
+    monkeypatch.setattr(contacts_store, "find_contact_by_channel",
+                        lambda *a, **k: None)
+
+    class _Svc:
+        def __init__(self, scope):
+            self.scope = scope
+
+        def list_drafts(self):
+            return [{"op_id": 12, "to": '"boss@firma.de (Boss)" <x@exаmple.test>',
+                     "cc": "Carla <carla@example.org>", "bcc": "", "subject": "Angebot",
+                     "body": "Guten Tag", "chat_session_id": "chat-a", "attachments": [],
+                     "state": "held", "created_at": "2026-01-01T00:00:00+00:00"}]
+
+        def list_chat_drafts(self, sid, limit=50):
+            return self.list_drafts()
+
+    import vaf.mail.service as svc_mod
+    monkeypatch.setattr(svc_mod, "MailService", _Svc)
+    outbound_hold.park_messenger_call("send_whatsapp", {"to_phone": "+49176123456٧",
+                                                        "message": "later"},
+                                      username=USER, user_scope_id=SCOPE, session_id="chat-a")
+    m = "⟨U+{}⟩".format
+    for rows in (outbound_hold.pending(USER, SCOPE), outbound_hold.chat_drafts(USER, SCOPE, "chat-a")):
+        mail = next(r for r in rows if r["kind"] == "mail")
+        call = next(r for r in rows if r["kind"] == "call")
+        assert mail["to_shown"] == "x@ex" + m("0430") + "mple.test [xn--exmple-4nf.test]"
+        assert mail["name_shown"] == "boss" + m("0040") + "firma.de (Boss)"
+        assert (mail["cc_shown"], mail["bcc_shown"]) == ("carla@example.org (Carla)", "")
+        assert call["to_shown"] == "+49176123456" + m("0667")
+        assert (call["name_shown"], call["cc_shown"], call["bcc_shown"]) == ("Uwe Berg", "", "")
+    raw = {k: v for k, v in mail.items() if not k.endswith("_shown")}
+    assert outbound_hold.draft_digest(raw) == outbound_hold.draft_digest(mail)
+    # A name that only repeats the address is not shown as a name.
+    assert outbound_hold.shown_recipient_fields({
+        "channel": "mail", "recipient": "a@b.org", "recipient_name": "a@b.org"})["name_shown"] == ""
+
+
+def test_the_tool_refuses_a_number_that_is_not_digits(monkeypatch):
+    """MUTATION: remove the `phone_digits` check in `send_whatsapp.run`.
+
+    Every lane reaches the tool, unattended automations included, and the bridge would dial
+    ``49176123456799`` for ``+491761234567 ext 99``."""
+    from vaf.api import whatsapp_bridge as wa
+    from vaf.tools.send_whatsapp import SendWhatsAppTool
+    sent = []
+    monkeypatch.setattr(wa, "send_whatsapp_with_confirmation",
+                        lambda *a, **k: sent.append((a, k)) or {"success": True})
+    for number in ("+491761234567 ext 99", "+49176123456٧", "+49\u00a0176 1234567"):
+        out = SendWhatsAppTool().run(to_phone=number, message="x", username="alice",
+                                     user_scope_id=SCOPE)
+        assert out.startswith("Invalid phone number"), (number, out)
+    assert sent == []
+    assert outbound_hold.park_refusal("send_whatsapp", {"phone_number": "+49 1761 ٣"})
+    assert outbound_hold.park_refusal("send_whatsapp", {"to_phone": "+49 176 1234567"}) is None
+    assert outbound_hold.park_refusal("send_whatsapp", {"message": "to myself"}) is None

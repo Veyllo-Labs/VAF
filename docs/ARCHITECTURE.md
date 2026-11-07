@@ -118,7 +118,8 @@ This is the contract. Treat it as a stable API.
 - `vaf.CoreAgent`
 - `BaseTool` and its declared attributes (`name`, `description`, `parameters`,
   `permission_level`, `side_effect_class`, `admin_only`, `channel_restrictions`,
-  `agent_request`, `agent_request_confirm_kind`, `coder_only`, `identity_kwargs`, `run`)
+  `agent_request`, `agent_request_confirm_kind`, `agent_request_confirm_whole_args`,
+  `coder_only`, `identity_kwargs`, `run`)
 - `vaf.markers` - the special-return-value constants
 - `last_turn` on both `Agent` and `CoreAgent` (a frozen `vaf.TurnStatus`), with
   `vaf.stored_turn_copy` and `vaf.model_text` - whether the last turn failed and which

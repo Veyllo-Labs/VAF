@@ -23,6 +23,7 @@ class UpdateUserIdentityTool(BaseTool):
     name = "update_user_identity"
     agent_request = "refuse_standing"
     agent_request_confirm_kind = "identity"
+    agent_request_confirm_whole_args = ("main_messenger",)
     category    = "contacts"
     identity_kwargs = ("username",)
     permission_level = "write"

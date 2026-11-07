@@ -16,6 +16,7 @@ class DeleteSkillTool(BaseTool):
     name = "delete_skill"
     agent_request = "refuse_standing"
     agent_request_confirm_kind = "skill"
+    agent_request_confirm_whole_args = ("skill_id",)
     category    = "skills"
     identity_kwargs = ("user_scope_id", "username")
     description = (

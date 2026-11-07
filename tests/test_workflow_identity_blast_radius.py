@@ -142,6 +142,13 @@ NEWLY_IDENTIFIED = {
     # it spawned a child that ran every inner tool as the machine owner. The identity now
     # crosses the process boundary as data (VAF_USER_SCOPE_ID/VAF_USER_ROLE).
     "coding_agent": ('user_role', 'user_scope_id'),
+    # Added with the coder's folder gate: both refuse a project folder the caller may not
+    # write, before they look whether it exists or is a repository. coder_only, so no
+    # workflow step calls them directly (the registry skips them); in a workflow they run
+    # through a coding_agent step, and the identity they are judged by is the workflow
+    # owner's, as in the chat lane.
+    "project_history": ('user_role', 'user_scope_id'),
+    "project_rollback": ('user_role', 'user_scope_id'),
     "linter": ('user_role', 'user_scope_id'),
     # Added 2026-07-31 as the first consumer of the `file_access` declaration: it is a
     # WRITE tool whose gap was closed by declaring the mode, and the declaration cannot

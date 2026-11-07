@@ -470,7 +470,9 @@ a write lane of its own. A guard test
 **Named boundaries.** On Windows there is no open relative to a folder handle and no
 `O_NOFOLLOW`: a link at the name is refused and the real path is checked before and after the
 open, but a link or junction swapped in between is followed for that one open (a file it
-creates in VAF's state is removed again). `write_file` and `edit_file` write a temporary file
+creates in VAF's state is removed again only while the link is still in place at the second
+check; that check resolves the path, so a link into VAF's state removed before it lets the
+write land there, unrefused). `write_file` and `edit_file` write a temporary file
 beside the target and rename it into place; the rename resolves the folder again, so a folder
 swapped for a link between the check and the rename carries the file with it. That takes a
 process racing the write from inside a mounted folder. A Word export is no longer replaced

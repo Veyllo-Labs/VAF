@@ -100,8 +100,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   is not an ordinary one, nothing is delivered, and a copy that fails midway leaves no partial
   file. This applies on every platform except for one window on Windows: a link that is in
   place when the file is opened and removed again right after is not seen, and the file is
-  written behind the link. That window is real, not narrow: with the Windows path simulated, a process
-  swapping the link in a tight loop got about one write in six through (3370 of 20000).
+  written behind the link, VAF's own data included. That window is real, not narrow: with the
+  Windows path simulated, a process swapping the link in a tight loop got about one write in
+  six through (3370 of 20000).
   For applications built on VAF,
   `vaf.open_for_write(path, expect_folder=...)` refuses a folder that was swapped for a link
   after you checked it.

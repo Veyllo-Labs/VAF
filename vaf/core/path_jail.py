@@ -255,7 +255,8 @@ def open_for_write(path, mode: str = "wb", *, exclusive: bool = False,
 
     NAMED BOUNDARY, Windows (no ``O_NOFOLLOW``, no directory handles): a link at the path is
     refused (``islink``), the resolved path is checked before and after the open, and a file
-    created in VAF's state by a swap in between is removed again. A link or junction swapped
+    created in VAF's state through a link that is still in place at the second check is
+    removed again. A link or junction swapped
     in between the check and the open is followed for that one open; with ``expect_folder``
     the folder is checked before the open and the path's resolved folder after it, and a
     file this call created elsewhere is removed again and refused, before anything is
@@ -263,7 +264,10 @@ def open_for_write(path, mode: str = "wb", *, exclusive: bool = False,
     again (``realpath``), not the opened handle, so a link that is in place when ``os.open``
     runs and is removed again before that second check is not seen, and the write lands
     behind it; with this branch simulated on Linux, a process swapping in a tight loop got
-    3370 of 20000 writes through. A hard link is a second
+    3370 of 20000 writes through. The same window opens VAF's own state, with or without
+    ``expect_folder``: ``is_vaf_state`` asks the restored path, so a folder link into VAF's
+    state that is gone again by the second check lets the write land there, unrefused and
+    not removed. A hard link is a second
     name of the same file and is not seen on any platform; making one needs a process on the
     host with access to both folders (a sandbox environment cannot link to a file outside its
     mount)."""

@@ -2805,7 +2805,9 @@ Stable public surface (safe to build on):
   as ordinary entries, which is why VAF's own writers use this and not `open()`. On Windows
   (no `O_NOFOLLOW`, no open relative to a folder handle) a link swapped in between the
   check and the open is followed for that one open; a file it creates in VAF's state is
-  removed again. `expect_folder` is for a folder somebody else can write (an account's own
+  removed again only while the link is still there at the second look, which resolves the
+  path, not the opened file (a link into VAF's state removed again before it lets the write
+  land there, with or without `expect_folder`). `expect_folder` is for a folder somebody else can write (an account's own
   folder that its sandbox environment mounts): pass the folder's REAL path as you checked it
   (resolved from a folder only you can write, the last names as you expect them). The open
   compares the opened folder handle's kernel path with it, never resolving it, and refuses

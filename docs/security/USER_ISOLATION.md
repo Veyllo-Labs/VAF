@@ -742,7 +742,9 @@ folder after it, and a file created elsewhere is removed again before anything i
 The second look resolves the path again, not the opened file, which leaves a link that is in
 place when the file is opened and removed again before the second look unseen, and that
 window is real, not narrow (with the Windows path simulated, a process swapping in a
-tight loop got 3370 of 20000 writes through); and the account can still
+tight loop got 3370 of 20000 writes through). The same window reaches VAF's own state for
+every `open_for_write` on Windows, with or without `expect_folder`: the check for VAF's state
+also asks the restored path; and the account can still
 rename its own real `Downloads` folder after the open into a place it may write anyway, which
 moves only its own file. Guarded by `tests/test_writes_do_not_follow_links.py` and
 `tests/test_browser_interactive.py`.

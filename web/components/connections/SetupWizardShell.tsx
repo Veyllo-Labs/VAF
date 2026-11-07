@@ -17,8 +17,10 @@
 // ring around the current step, dark in the light theme and white in the dark one, because the
 // completed steps share its black and white and the current one must read as current without a
 // colour of its own. The ring's gap takes the panel's own surface colour (--sfc-white), so it
-// shows no light halo on the dark panel; the windows that still draw their own stepper get the
-// ring when they move onto this frame.
+// shows no light halo on the dark panel. The ring reaches 4px past the circle, so the row keeps
+// 4px below it (pb-1): without them a scrolled body painted its cards over the ring's lower
+// edge. The windows that still draw their own stepper get the ring when they move onto this
+// frame.
 //
 // The disabled Back is `text-gray-300`, which the dark theme does not fold (the text ramp
 // folds 400 to 900), so on the dark panel it would read as an active button; it gets a dark
@@ -79,7 +81,7 @@ export default function SetupWizardShell({ title, subtitle, icon, steps, current
                     </button>
                 </div>
 
-                <div className="px-6 pt-4 shrink-0">
+                <div className="px-6 pt-4 pb-1 shrink-0">
                     <p className="sr-only">{tCommon('stepOf', { step: current + 1, steps })}</p>
                     <div className="flex items-center gap-2" aria-hidden="true">
                         {Array.from({ length: steps }, (_, idx) => (

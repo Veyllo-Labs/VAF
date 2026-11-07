@@ -559,8 +559,9 @@ def test_the_current_step_is_ringed():
     """The current step carries a ring with a gap, dark in the light theme and white in the
     dark one, since the completed steps share its black and white. The gap takes the panel's
     surface colour, so the dark panel shows no light halo in it. Only the current step is
-    ringed. MUTATIONS: drop dark:ring-white; move the ring to the completed steps;
-    ring-offset-white for the gap - red."""
+    ringed, and the row keeps the ring's 4px below it, so a scrolled body does not cover its
+    lower edge. MUTATIONS: drop dark:ring-white; move the ring to the completed steps;
+    ring-offset-white for the gap; drop pb-1 from the row - red."""
     shell = _src(SHELL)
     circle = _between(shell, "idx < current ? 'bg-gray-900", ")}>")
     done, rest = circle.split("idx === current ?", 1)
@@ -573,6 +574,7 @@ def test_the_current_step_is_ringed():
     assert current.strip().startswith("'" + _DISCORD_FRAME["current"] + " ")
     assert "ring-offset-white" not in classes
     assert "ring-" not in done and "ring-" not in future
+    assert '<div className="px-6 pt-4 pb-1 shrink-0">' in shell
     # The ring's gap follows the panel: the panel is bg-white, which is that same variable.
     assert 'white: v("sfc-white")' in _src(WEB / "tailwind.config.ts")
 

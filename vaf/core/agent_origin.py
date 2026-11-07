@@ -131,19 +131,20 @@ APP_AGENT_ORIGIN = "veyllo_app"
 
 _REFUSED = ("[APP AGENT] '{name}' does not run on a request of the Veyllo App's agent: {why} "
             "It did NOT run, so do not report it as done. Say so in your answer: {how}")
-_CONFIRM_LATER = ("it needs your user's confirmation in the app, which comes with a later "
-                  "update. Tell your user it was not done.")
+_CONFIRM_NOT_CARRIED = ("it needs your user's own confirmation, which a request from you "
+                        "cannot carry. Tell your user that VAF did not do it.")
 _WHY = {
     "off_chats": ("it can only be done by your user in VAF's web UI.",
                   "tell your user it was not done and that it can be done there."),
-    "refuse_person": ("it needs your user's confirmation.", _CONFIRM_LATER),
+    "refuse_person": ("it needs your user's confirmation.", _CONFIRM_NOT_CARRIED),
     "refuse_work": ("it starts work that keeps running after this request, which needs your "
-                    "user's confirmation.", _CONFIRM_LATER),
+                    "user's confirmation.", _CONFIRM_NOT_CARRIED),
     "refuse_standing": ("it changes how VAF works for your user from now on, which needs your "
-                        "user's confirmation.", _CONFIRM_LATER),
-    "refuse_write": ("it writes files, which needs your user's confirmation.", _CONFIRM_LATER),
+                        "user's confirmation.", _CONFIRM_NOT_CARRIED),
+    "refuse_write": ("it writes files, which needs your user's confirmation.",
+                     _CONFIRM_NOT_CARRIED),
     "refuse_own_messenger": ("it sends a message to your user's own messenger, which needs your "
-                             "user's confirmation.", _CONFIRM_LATER),
+                             "user's confirmation.", _CONFIRM_NOT_CARRIED),
 }
 
 #: What the requesting agent is told when the turn stopped at a draft the user has to approve

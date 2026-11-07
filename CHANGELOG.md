@@ -31,10 +31,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   need you in person or a confirmation (timers, the browser agent, the sandbox environments,
   the builders, tasks for the phone, storing a credential) do not run on it. Neither do agent
   rooms, the librarian, the Python sandbox, messages to your own messengers, or changes to your
-  workflows, custom tools, settings and contacts. A request of the app's agent does not write
-  or change your files: writing, editing, downloading and saving files, documents, cloud files
-  and git are refused. Memories saved on its request are marked and read back as the app
-  agent's.
+  workflows, custom tools, settings and contacts. The app's agent is then told that VAF did
+  not do it, because it needs your own confirmation, which its request cannot carry. A request
+  of the app's agent does not write or change your files: writing, editing, downloading and
+  saving files, documents, cloud files and git are refused. Memories saved on its request are
+  marked and read back as the app agent's.
 - **Veyllo App: confirm on your phone what the app's agent asked for.** When the app's agent
   asks your agent for a coder run, an automation, a workflow, a skill or identity change, or a
   mail or WhatsApp message to somebody else, nothing happens until you confirm it on a card in

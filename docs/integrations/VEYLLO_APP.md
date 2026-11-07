@@ -220,11 +220,14 @@ is a turn of your account's app chat, with these differences
   carries `"confirm": true` (`vaf/core/app_link/confirmations.py`).
 - **Tools that need you in person stay off.** Each tool declares how it answers such a request
   (`BaseTool.agent_request`); refused ones are not offered either, and the app's agent is told
-  why. Refused: every tool kept off chats, whatever `channel_tools_unrestricted` says (the
-  sandbox, the browser agent, timers, background processes); work whose own limits a request
-  cannot reach (`set_timer`, the room tools that make other agents act, `room_send`,
-  `room_open`, `room_invite`, `room_join`, `room_react`, and the librarian, `librarian_agent`,
-  whose own file tools would run outside these limits); changes to how VAF works for you that
+  why and that VAF did not do it: a tool kept off chats can be done by you in VAF's web UI,
+  and every other refused tool needs your own confirmation, which a request from the app's
+  agent cannot carry. Refused: every tool kept off chats, whatever
+  `channel_tools_unrestricted` says (the sandbox, the browser agent, timers, background
+  processes); work whose own limits a request cannot reach (`set_timer`, the room tools that
+  make other agents act, `room_send`, `room_open`, `room_invite`, `room_join`, `room_react`,
+  and the librarian, `librarian_agent`, whose own file tools would run outside these
+  limits); changes to how VAF works for you that
   no card covers yet (`create_contact`, `update_contact`, `thinking_note_add`, a context
   checkpoint, `checkpoint_context`, whose summary later turns read as yours, the coder's codex
   and scratchpad, `update_codex` and `add_memory`, and the co-author line of VAF's commits,

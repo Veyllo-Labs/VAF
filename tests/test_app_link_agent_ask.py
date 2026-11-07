@@ -451,6 +451,12 @@ def test_the_runner_turn_of_a_message(runner_world, monkeypatch):
     assert [r["source"] for r in run.recorded] == ["veyllo_app"]
 
 
+# Written out, never read from the module: a test that imports the constant follows a change
+# of the text and stays green.
+_NOT_CARRIED = ("Say so in your answer: it needs your user's own confirmation, which a request "
+                "from you cannot carry. Tell your user that VAF did not do it.")
+
+
 def test_agent_ask_gate_refuses_person_tools(agent_world):
     agent = agent_world.make()
     tools = {name: _Tool(name, restrictions=r, agent_request=k) for name, r, k in (
@@ -466,8 +472,10 @@ def test_agent_ask_gate_refuses_person_tools(agent_world):
         # One kind of answer for every refusal, the policy's included: why, and what the user
         # can do, with no internal channel name.
         assert out.startswith("[APP AGENT]") and "veyllo_app" not in out, (name, out)
-        assert "Say so in your answer:" in out and "Tell your user it was not done" in out \
-            or "tell your user it was not done" in out, (name, out)
+        tail = (_NOT_CARRIED if name in ("user_phone", "store_credential") else
+                "Say so in your answer: tell your user it was not done and that it can be "
+                "done there.")
+        assert out.endswith(tail), (name, out)
         assert not tools[name].calls, f"{name} ran on an agent's request"
         assert name not in agent.visible_tools(), f"{name} was offered"
     assert agent.execute_tool("note_it", {}) == "ok" and "note_it" in agent.visible_tools()
@@ -585,10 +593,38 @@ def test_each_refused_tool_declares_itself(agent_world, kind, name):
     _ask_turn(agent)
     out = agent.execute_tool(name, {})
     assert out.startswith("[APP AGENT]") and _WORDS[kind] in out, out
-    assert "later update" in out and "Tell your user it was not done" in out
+    assert out.endswith(_NOT_CARRIED) and "later update" not in out, out
     assert tool.calls == [] and name not in agent.visible_tools()
     _ask_turn(agent, asked=False)
     assert agent.execute_tool(name, {}) == "ok" and name in agent.visible_tools()
+
+
+@pytest.mark.parametrize("kind,name,declared,writes", [
+    ("refuse_person", "user_phone", "refuse_person", False),
+    ("refuse_work", "room_send", "refuse_work", False),
+    ("refuse_standing", "create_contact", "refuse_standing", False),
+    ("refuse_write", "write_file", "allow", True),
+    ("refuse_own_messenger", "send_to_user", "allow", True),
+])
+def test_refusal_tail_says_vaf_did_not_do_it(kind, name, declared, writes):
+    """Every refusal without a card tells the app's agent the truth: VAF did not do it, and a
+    request cannot carry the user's own confirmation. No promise of a later update."""
+    from vaf.core.agent_origin import agent_request_decision, agent_request_kind
+    tool = _Tool(name, agent_request=declared)
+    if writes:
+        tool.file_access = "write"
+    assert agent_request_kind(name, tool, "veyllo_app") == kind
+    decision = agent_request_decision(name, tool, "veyllo_app")
+    assert decision is not None and decision[0] == "refuse", decision
+    text = decision[1]
+    assert text.endswith(_NOT_CARRIED), text
+    assert "later update" not in text and "comes with" not in text, text
+    if name == "user_phone":
+        assert text == (
+            "[APP AGENT] 'user_phone' does not run on a request of the Veyllo App's agent: it "
+            "needs your user's confirmation. It did NOT run, so do not report it as done. Say "
+            "so in your answer: it needs your user's own confirmation, which a request from "
+            "you cannot carry. Tell your user that VAF did not do it.")
 
 
 @pytest.mark.parametrize("name", ["memory_save", "memory_update", "learn_document",
@@ -1215,14 +1251,14 @@ def ask_home(agent_world, monkeypatch, runner_world):
 
 def _refused_for_writing(out) -> bool:
     return (str(out).startswith("[APP AGENT]") and "it writes files" in str(out)
-            and "later update" in str(out))
+            and str(out).endswith(_NOT_CARRIED))
 
 
 def _refused_as_own_messenger(out) -> bool:
     return (str(out).startswith("[APP AGENT]")
             and "it sends a message to your user's own messenger, which needs your user's "
                 "confirmation." in str(out)
-            and "it writes files" not in str(out) and "later update" in str(out))
+            and "it writes files" not in str(out) and str(out).endswith(_NOT_CARRIED))
 
 
 _FILE_TOOLS = ("write_file", "edit_file", "download_file", "document_writer")

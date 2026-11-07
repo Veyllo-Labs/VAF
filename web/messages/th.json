@@ -809,7 +809,10 @@
     "undoWithShortcut": "เลิกทำ ({shortcut})",
     "redoWithShortcut": "ทำซ้ำ ({shortcut})",
     "ctrlKey": "Ctrl",
-    "openSignInPage": "เปิดหน้าลงชื่อเข้าใช้"
+    "openSignInPage": "เปิดหน้าลงชื่อเข้าใช้",
+    "back": "ย้อนกลับ",
+    "next": "ถัดไป",
+    "stepOf": "ขั้นที่ {step} จาก {steps}"
   },
   "settings": {
     "title": "การตั้งค่า",
@@ -1156,7 +1159,16 @@
       "dissolveConfirm": "ยุบ",
       "dissolved": "ยุบอินสแตนซ์รีเลย์แล้ว",
       "allDevicesTitle": "อุปกรณ์ของทุกบัญชี",
-      "allDevicesNone": "ยังไม่มีบัญชีใดจับคู่ Veyllo App"
+      "allDevicesNone": "ยังไม่มีบัญชีใดจับคู่ Veyllo App",
+      "introTitle": "เอเจนต์ของคุณบนโทรศัพท์",
+      "featureMessages": "ข้อความและการแจ้งเตือนแบบพุช",
+      "featureTasks": "งานสำหรับโทรศัพท์ของคุณ",
+      "steps": {
+        "code": "ยืนยันด้วยรหัส 2FA ของคุณ",
+        "scan": "สแกนคิวอาร์โค้ดด้วยแอป",
+        "confirm": "ยืนยันโทรศัพท์ของคุณ",
+        "done": "เชื่อมต่อโทรศัพท์ของคุณแล้ว"
+      }
     },
     "channelDashboard": {
       "searchChats": "ค้นหาแชตและรายชื่อติดต่อ",

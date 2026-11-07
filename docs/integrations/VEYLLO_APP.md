@@ -32,11 +32,11 @@ direct way later without pairing again.
 Pairing happens in the web UI, in **Settings, Connections, Veyllo App**
 (`web/components/connections/VeylloAppSetupWizard.tsx`):
 
-1. The window first says what the app can do, what Veyllo sees on each way and what each way
-   costs, and then asks for **your own** 2FA code. That opens a pairing window for your account
-   for ten minutes; nobody can create a QR code for another account, an admin neither.
-   With the relay switched off and no direct address either, the window says pairing is not
-   possible and asks for no code.
+1. The window walks through numbered steps: first what the app can do, then what Veyllo sees on
+   each way and what each way costs, then it asks for **your own** 2FA code. That opens a
+   pairing window for your account for ten minutes; nobody can create a QR code for another
+   account, an admin neither. With the relay switched off and no direct address either, the
+   window says pairing is not possible and asks for no code.
 2. VAF shows a QR code, drawn on this machine (the routes answer it as a PNG; no renderer
    elsewhere ever sees it), with the time it is still valid. Below it a switch chooses the way:
    **Veyllo Relay** (from anywhere, one cent per message, Veyllo sees only metadata) or
@@ -291,8 +291,8 @@ results), and half a cent per direction for a task for the phone. The direct way
   was paired and its fingerprint. **Remove** asks first; its access then ends at once, also
   when its certificate is still valid (a lost phone too). In the terminal: `vaf devices list`,
   `vaf devices remove <id>`.
-- An admin sees every account's devices, with the account, in the admin section of the Veyllo
-  App window ("Veyllo relay (for every account)") and removes one there.
+- An admin sees every account's devices, with the account, in the admin section on the code
+  step of the Veyllo App window ("Veyllo relay (for every account)") and removes one there.
 - Devices also go when their account is deactivated or deleted, after 90 days without use
   (`device_idle_days`), and when the account signs out every other device. A password change
   does not remove them: the device key, not the password, is their credential.

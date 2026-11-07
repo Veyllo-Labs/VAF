@@ -809,7 +809,10 @@
     "undoWithShortcut": "Undo ({shortcut})",
     "redoWithShortcut": "Redo ({shortcut})",
     "ctrlKey": "Ctrl",
-    "openSignInPage": "Open the sign-in page"
+    "openSignInPage": "Open the sign-in page",
+    "back": "Back",
+    "next": "Next",
+    "stepOf": "Step {step} of {steps}"
   },
   "settings": {
     "title": "Settings",
@@ -1156,7 +1159,16 @@
       "dissolveConfirm": "Dissolve",
       "dissolved": "The relay instance was dissolved.",
       "allDevicesTitle": "Devices of every account",
-      "allDevicesNone": "No account has a paired Veyllo App."
+      "allDevicesNone": "No account has a paired Veyllo App.",
+      "introTitle": "Your agent on your phone",
+      "featureMessages": "Messages and push notices",
+      "featureTasks": "Tasks for your phone",
+      "steps": {
+        "code": "Confirm with your 2FA code",
+        "scan": "Scan the QR code with the app",
+        "confirm": "Confirm your phone",
+        "done": "Your phone is connected"
+      }
     },
     "channelDashboard": {
       "searchChats": "Search chats and contacts",

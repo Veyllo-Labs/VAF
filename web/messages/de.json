@@ -809,7 +809,10 @@
     "undoWithShortcut": "Rückgängig ({shortcut})",
     "redoWithShortcut": "Wiederholen ({shortcut})",
     "ctrlKey": "Strg",
-    "openSignInPage": "Anmeldeseite öffnen"
+    "openSignInPage": "Anmeldeseite öffnen",
+    "back": "Zurück",
+    "next": "Weiter",
+    "stepOf": "Schritt {step} von {steps}"
   },
   "settings": {
     "title": "Einstellungen",
@@ -1156,7 +1159,16 @@
       "dissolveConfirm": "Auflösen",
       "dissolved": "Die Relay-Instanz wurde aufgelöst.",
       "allDevicesTitle": "Geräte aller Konten",
-      "allDevicesNone": "Kein Konto hat eine gekoppelte Veyllo App."
+      "allDevicesNone": "Kein Konto hat eine gekoppelte Veyllo App.",
+      "introTitle": "Dein Agent auf deinem Handy",
+      "featureMessages": "Nachrichten und Push-Mitteilungen",
+      "featureTasks": "Aufgaben fürs Handy",
+      "steps": {
+        "code": "Mit deinem 2FA-Code bestätigen",
+        "scan": "QR-Code mit der App scannen",
+        "confirm": "Dein Handy bestätigen",
+        "done": "Dein Handy ist verbunden"
+      }
     },
     "channelDashboard": {
       "searchChats": "Chats und Kontakte durchsuchen",

@@ -809,7 +809,10 @@
     "undoWithShortcut": "Geri al ({shortcut})",
     "redoWithShortcut": "Yinele ({shortcut})",
     "ctrlKey": "Ctrl",
-    "openSignInPage": "Giriş sayfasını aç"
+    "openSignInPage": "Giriş sayfasını aç",
+    "back": "Geri",
+    "next": "Devam",
+    "stepOf": "Adım {step} / {steps}"
   },
   "settings": {
     "title": "Ayarlar",
@@ -1156,7 +1159,16 @@
       "dissolveConfirm": "Dağıt",
       "dissolved": "Röle örneği dağıtıldı.",
       "allDevicesTitle": "Tüm hesapların cihazları",
-      "allDevicesNone": "Hiçbir hesabın eşleştirilmiş bir Veyllo App'i yok."
+      "allDevicesNone": "Hiçbir hesabın eşleştirilmiş bir Veyllo App'i yok.",
+      "introTitle": "Ajanın telefonunda",
+      "featureMessages": "Mesajlar ve anlık bildirimler",
+      "featureTasks": "Telefonun için görevler",
+      "steps": {
+        "code": "2FA kodunla onayla",
+        "scan": "QR kodunu uygulamayla tara",
+        "confirm": "Telefonunu onayla",
+        "done": "Telefonun bağlandı"
+      }
     },
     "channelDashboard": {
       "searchChats": "Sohbetlerde ve kişilerde ara",

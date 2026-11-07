@@ -809,7 +809,10 @@
     "undoWithShortcut": "실행 취소 ({shortcut})",
     "redoWithShortcut": "다시 실행 ({shortcut})",
     "ctrlKey": "Ctrl",
-    "openSignInPage": "로그인 페이지 열기"
+    "openSignInPage": "로그인 페이지 열기",
+    "back": "뒤로",
+    "next": "다음",
+    "stepOf": "{steps}단계 중 {step}단계"
   },
   "settings": {
     "title": "설정",
@@ -1156,7 +1159,16 @@
       "dissolveConfirm": "해체",
       "dissolved": "릴레이 인스턴스를 해체했어요.",
       "allDevicesTitle": "모든 계정의 기기",
-      "allDevicesNone": "Veyllo App을 페어링한 계정이 없어요."
+      "allDevicesNone": "Veyllo App을 페어링한 계정이 없어요.",
+      "introTitle": "휴대폰에서 만나는 내 에이전트",
+      "featureMessages": "메시지와 푸시 알림",
+      "featureTasks": "휴대폰에 맡기는 작업",
+      "steps": {
+        "code": "2FA 코드로 확인",
+        "scan": "앱으로 QR 코드 스캔",
+        "confirm": "휴대폰 확인",
+        "done": "휴대폰이 연결됐어요"
+      }
     },
     "channelDashboard": {
       "searchChats": "채팅 및 연락처 검색",

@@ -56,13 +56,19 @@ max-md:max-w-none`; the desktop toast is unchanged.
 
 ## The Veyllo App window
 
-The pairing window (`web/components/connections/VeylloAppSetupWizard.tsx`) is a full-screen sheet
-below `md` (the pattern below: the header row stays, the body scrolls with `min-h-0`). The QR code
-is `w-64 h-64`, 256 px, which leaves room on a 390 px screen after the sheet's padding; the
-Veyllo Relay / Local switch is a two-column grid over the full width, and the confirmation's
-fingerprint drops from `text-2xl` to `max-md:text-xl` so its four groups stay on one line. Button
-pairs stack (`max-md:flex-col`), and the code field takes the full width like the token field
-under Account. On a desktop it is the centred `max-w-md` card of the other setup windows.
+The pairing window (`web/components/connections/VeylloAppSetupWizard.tsx`) sits in the shared
+setup-window frame, `web/components/connections/SetupWizardShell.tsx`: on a desktop the Discord
+window's `max-w-2xl` panel (672 px) with the numbered steps under its header, capped at the
+screen's height less 2rem (`max-h-[calc(100dvh-2rem)]`) with the body scrolling between the header
+and the footer; below `md` the full-screen sheet of the pattern below, with the header, the steps
+and the footer fixed (`shrink-0`) and only the body scrolling (`max-md:flex-1 max-md:min-h-0`).
+The footer holds Back on the left and the step's action on the right (Next, Show QR code, New
+code, Done). The QR code is `w-64 h-64`, 256 px, which leaves room on a 390 px screen after the
+sheet's padding; the Veyllo Relay / Local switch is a two-column grid over the full width, and the
+confirmation's fingerprint drops from `text-2xl` to `max-md:text-xl` so its four groups stay on
+one line. The confirmation's Yes and No stack (`max-md:flex-col`), the code field takes the full
+width like the token field under Account, and the two cards of the first step stack
+(`grid-cols-2 max-md:grid-cols-1`).
 
 ## Reusable patterns (copy the class strings)
 

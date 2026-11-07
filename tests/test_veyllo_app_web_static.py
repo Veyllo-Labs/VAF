@@ -18,6 +18,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "web"
 WIZARD = WEB / "components" / "connections" / "VeylloAppSetupWizard.tsx"
+SHELL = WEB / "components" / "connections" / "SetupWizardShell.tsx"
+DISCORD = WEB / "components" / "connections" / "DiscordSetupWizard.tsx"
 PANEL = WEB / "components" / "connections" / "ConnectionsPanel.tsx"
 SESSIONS = WEB / "components" / "settings" / "SessionsSection.tsx"
 MODAL = WEB / "components" / "SettingsModal.tsx"
@@ -104,18 +106,32 @@ def test_the_veyllo_app_card_comes_first_under_communication():
 
 def test_step_one_says_what_the_frd_asks():
     """What the app can do, what Veyllo sees, the cost of each way, the app's name for VAF and
-    that the app's agent uses VAF as a tool with the privacy policy beside it. MUTATION:
-    delete the agentUsesVaf line from the JSX - red."""
+    that the app's agent uses VAF as a tool with the privacy policy beside it, each on its
+    step: the first two before the code, the code hint on the code step. MUTATION: delete the
+    agentUsesVaf line from the JSX - red."""
     src = _src(WIZARD)
-    explain = _between(src, "const explain = (", "const qr = (")
-    for key in ("canChat", "canReceive", "canTasks", "appName", "agentUsesVaf", "privacyLink",
-                "seesRelay", "seesDirect", "costSentence", "showQr"):
-        assert f"t('{key}')" in explain, key
-        for locale in LOCALES:
-            assert _window_keys(locale).get(key), (locale, key)
+    pages = {
+        "intro": (_between(src, "const intro = (", "const sees = ("),
+                  ("canChat", "canReceive", "canTasks", "appName", "agentUsesVaf", "privacyLink",
+                   "introTitle", "featureMessages", "featureTasks")),
+        "sees": (_between(src, "const sees = (", "const codeStep = ("),
+                 ("seesRelay", "seesDirect", "costSentence")),
+        "code": (_between(src, "const codeStep = (", "const qr = ("), ("codeHint",)),
+    }
+    for page, (block, keys) in pages.items():
+        for key in keys:
+            assert f"t('{key}')" in block, (page, key)
+            for locale in LOCALES:
+                assert _window_keys(locale).get(key), (locale, key)
+    # The two card titles are the steps' header lines now.
+    subtitles = dict(re.findall(r"(\w+): '([\w.]+)'", _const_block(src, "STEP_SUBTITLE")))
+    assert subtitles["intro"] == "canDoTitle" and subtitles["sees"] == "seesTitle"
+    assert "subtitle={t(STEP_SUBTITLE[stepId])}" in src
+    # The code step's action shows the QR.
+    assert "t('showQr')" in _between(src, "const action = ", "const back = ")
     # A plain link to the policy, opened in a new tab; VAF never fetches it.
     assert "const PRIVACY_URL = 'https://veyllo.app/legal/privacy';" in src
-    link = _between(explain, "<a href={PRIVACY_URL}", "</a>")
+    link = _between(pages["intro"][0], "<a href={PRIVACY_URL}", "</a>")
     assert 'target="_blank"' in link and 'rel="noopener noreferrer"' in link
     assert src.count("PRIVACY_URL") == 2, "the policy URL is only linked, never fetched"
     # The names stay literal in every language.
@@ -178,10 +194,10 @@ def test_relay_off_means_local_only():
     allowed = _between(qr, "{relayAllowed ? (", "{t('relayOffByAdmin')}")
     assert "<WaySwitch" in allowed
     assert qr.count("<WaySwitch") == 1
-    explain = _between(src, "const explain = (", "const qr = (")
-    gate = explain.index(") : impossible ? (")
-    assert explain.index("t('impossible')") > gate
-    assert explain.index("<form") > explain.index(") : (", gate), "the code field shows when pairing is impossible"
+    code_step = _between(src, "const codeStep = (", "const qr = (")
+    gate = code_step.index(") : impossible ? (")
+    assert code_step.index("t('impossible')") > gate
+    assert code_step.index("<form") > code_step.index(") : (", gate), "the code field shows when pairing is impossible"
     # The first QR is relay only when the relay is allowed.
     assert "await issue(relayAllowed ? 'relay' : 'local');" in src
 
@@ -291,9 +307,9 @@ def test_the_poll_and_the_close():
     assert "setQrPng(null);" in leave and "setPairing({ state: 'none' });" in leave
     close = _between(src, "const close = () => {", "};")
     assert "leave();" in close and "onClose();" in close
-    # X, Escape and the backdrop all go through close; so does a close from outside.
-    assert "useEscapeLayer({ active: isOpen, level: 60, onEscape: close });" in src
-    assert "onClick={close}>" in src and "return () => leave();" in src
+    # X, Escape and the backdrop all go through close (the shell's onClose, pinned in
+    # test_the_shell_is_the_discord_frame); so does a close from outside.
+    assert "onClose={close}" in src and "return () => leave();" in src
 
 
 def test_a_code_nobody_shows_is_withdrawn():
@@ -338,11 +354,13 @@ def test_the_switch_is_the_d14_switch():
 
 
 def test_no_coloured_icons_in_the_pairing_view():
-    """Black and white only: success and failure are said by the text. MUTATION:
-    `text-green-600` on the paired icon - red."""
-    src = _src(WIZARD)
-    assert not re.search(r"\btext-(?:green|teal|blue|emerald|sky|indigo|amber)-\d+", src)
-    assert not re.search(r"\bbg-(?:green|teal|blue|emerald|sky|indigo|amber)-\d+", src)
+    """Black and white only: success and failure are said by the text, also by the frame's
+    completed steps. MUTATIONS: `text-green-600` on the paired icon; `bg-green-500` on a done
+    circle in the shell - red."""
+    for path in (WIZARD, SHELL):
+        src = _src(path)
+        assert not re.search(r"\btext-(?:green|teal|blue|emerald|sky|indigo|amber)-\d+", src), path.name
+        assert not re.search(r"\bbg-(?:green|teal|blue|emerald|sky|indigo|amber)-\d+", src), path.name
 
 
 # ── Account and the admin section ───────────────────────────────────────────────
@@ -384,7 +402,8 @@ def test_admin_section_is_admins_only():
     """The relay switch, rotate, dissolve and every account's devices render for an admin
     only. MUTATION: render the section for everyone - red."""
     src = _src(WIZARD)
-    assert "{isAdmin && view === 'explain' && <RelayAdminSection" in src
+    # On the code step, where impossibleAdmin points at it ("switch the relay on below").
+    assert "{isAdmin && stepId === 'code' && <RelayAdminSection" in src
     assert src.count("<RelayAdminSection") == 1
     assert "isAdmin={currentUser?.role === 'admin'}" in _src(MODAL)
     section = src[src.index("function RelayAdminSection("):]
@@ -428,3 +447,169 @@ def test_no_dot_ends_a_device_line_on_a_phone():
         src = _src(path)
         assert "<span className=\"max-md:hidden\">{' · '}</span>" in src, path.name
         assert "font-mono whitespace-nowrap max-md:block\">" in src, path.name
+
+
+# ── the frame and the steps ─────────────────────────────────────────────────────
+
+# The Discord window's frame, by part. Each string occurs in DiscordSetupWizard.tsx and in the
+# shell, so the shell cannot drift from the setup windows it was taken from.
+_DISCORD_FRAME = {
+    "overlay": "fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm max-md:p-0",
+    "panel": ("bg-white rounded-2xl shadow-2xl w-full max-w-2xl mx-4 overflow-hidden border border-gray-200 "
+              "max-md:max-w-none max-md:mx-0 max-md:h-[100dvh] max-md:rounded-none max-md:border-0 "
+              "max-md:flex max-md:flex-col"),
+    "header": "flex items-center justify-between p-6 border-b border-gray-200 bg-gray-50 max-md:p-4 max-md:shrink-0",
+    "icon box": "w-10 h-10 rounded-xl bg-gray-900 dark:bg-[#2e2e2e] flex items-center justify-center",
+    "title": 'className="text-xl font-bold text-gray-900"',
+    "stepper": "px-6 pt-4",
+    "circle": "w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all",
+    "current": "bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white",
+    "content": "p-6 min-h-[350px] max-md:min-h-0 max-md:flex-1 max-md:overflow-y-auto max-md:p-4",
+    "footer": "flex items-center justify-between p-6 border-t border-gray-200 bg-gray-50 max-md:p-4 max-md:shrink-0",
+    "back": "flex items-center gap-2 px-4 py-2 rounded-lg transition-colors",
+    "next": "flex items-center gap-2 px-6 py-2 rounded-lg font-medium transition-colors",
+    "next on": ("bg-gray-900 hover:bg-gray-800 text-white dark:bg-[#e6e6e6] dark:text-[#181818] "
+                "dark:hover:bg-[#f5f5f5] dark:shadow-none"),
+    "next off": "bg-gray-200 text-gray-400 cursor-not-allowed",
+}
+
+
+def test_the_shell_is_the_discord_frame():
+    """The shared setup frame carries the Discord window's classes verbatim, plus the dialog
+    semantics: role, aria-modal, its title as the name, a named X, and Escape and a click
+    beside the panel closing like the X. MUTATIONS: the shell header to `p-5`; drop
+    aria-modal - red."""
+    shell, discord = _src(SHELL), _src(DISCORD)
+    for part, classes in _DISCORD_FRAME.items():
+        assert classes in discord, f"{part}: the Discord window changed; move the shell with it"
+        assert classes in shell, part
+    assert shell.startswith("'use client';\n// SPDX-FileCopyrightText: ")
+    for needle in ('role="dialog"', 'aria-modal="true"', "aria-label={title}",
+                   "aria-label={tCommon('close')}", "onClick={e => e.stopPropagation()}"):
+        assert needle in shell, needle
+    overlay = _between(shell, f'<div className="{_DISCORD_FRAME["overlay"]}"', ">")
+    assert "onClick={onClose}" in overlay
+    assert "useEscapeLayer({ active: true, level: 60, onEscape: onClose });" in shell
+    # A step taller than the screen scrolls inside the panel on a desktop too.
+    panel = _between(shell, _DISCORD_FRAME["panel"], '">')
+    assert "max-h-[calc(100dvh-2rem)]" in panel and "flex flex-col" in panel and "max-md:max-h-none" in panel
+    content = _between(shell, _DISCORD_FRAME["content"], '">')
+    assert "flex-1 overflow-y-auto" in content
+    # Every word is the catalogue's; the step count is read out, the circles are not.
+    assert "tCommon('back')" in shell and "tCommon('stepOf', { step: current + 1, steps })" in shell
+    assert 'className="flex items-center gap-2" aria-hidden="true"' in shell
+
+
+def test_the_veyllo_window_uses_the_shell():
+    """The window is the shared frame, not a frame of its own. MUTATION: put back the old
+    `max-w-md` card - red."""
+    src = _src(WIZARD)
+    assert "import SetupWizardShell, { WizardNextButton } from '@/components/connections/SetupWizardShell';" in src
+    assert src.count("<SetupWizardShell") == 1 and "onClose={close}" in src
+    assert "fixed inset-0" not in src and "max-w-md w-full" not in src
+    assert "useEscapeLayer(" not in src
+    assert "steps={STEPS.length}" in src and "current={stepIndex}" in src
+
+
+def test_the_steps_run_in_order():
+    """Six steps: the three pages before the QR, then one step per pairing view. A running
+    pairing never lands on a page before the code, and a note about it lands on the code step.
+    MUTATIONS: swap 'sees' and 'code'; drop setIntroPage(2) from the window_closed branch - red."""
+    src = _src(WIZARD)
+    steps = re.findall(r"'(\w+)'", _const_block(src, "STEPS"))
+    assert steps == ["intro", "sees", "code", "scan", "confirm", "done"]
+    view_step = dict(re.findall(r"(\w+): '(\w+)'", _const_block(src, "VIEW_STEP")))
+    assert view_step == {"qr": "scan", "ended": "scan", "confirm": "confirm", "paired": "done"}
+    views = set(re.findall(r"^\s*\w+: '(\w+)',$", _const_block(src, "PAIRING_VIEWS"), re.M))
+    assert views - {"explain"} == set(view_step)
+    assert "const stepId: StepId = view === 'explain' ? STEPS[introPage] : VIEW_STEP[view];" in src
+    assert set(re.findall(r"(\w+): '", _const_block(src, "STEP_SUBTITLE"))) == set(steps)
+    leave = _between(src, "const leave = useCallback(() => {", "}, []);")
+    assert "setIntroPage(0);" in leave
+    issue = _between(src, "const issue = useCallback(async (mode: Way) => {", "}, [refusalText, t]);")
+    closed = _between(issue, "if (data.code === 'window_closed') {", "return;")
+    assert "setIntroPage(2);" in closed
+    apply = _between(src, "const applyPairing = useCallback(", "}, [loadStatus, onComplete, t]);")
+    none = _between(apply, "if (next.state === 'none' && prev !== 'explain') {", "}")
+    assert "setCodeNote(t('pairingStates.none'));" in none and "setIntroPage(2);" in none
+    # Back walks the pages before the QR only.
+    back = _between(src, "const back = ", ";\n")
+    assert "stepId === 'sees' ? () => setIntroPage(0)" in back
+    assert "stepId === 'code' ? () => setIntroPage(1)" in back
+    assert back.rstrip().endswith(": undefined")
+
+
+def test_the_approved_texts_are_word_for_word():
+    """The sentences the FRD and the owner approved keep their words in the new steps.
+    MUTATION: change one word of the DE costSentence - red."""
+    approved = {
+        "en": {
+            "agentUsesVaf": "The agent in the Veyllo app uses this VAF as a tool, reads its answers "
+                            "and processes them with the app's chat model.",
+            "privacyLink": "Veyllo privacy policy",
+            "seesTitle": "What Veyllo sees",
+            "canDoTitle": "What the app can do",
+            "costSentence": "Through the Veyllo relay each message costs 1 cent on your Veyllo account, "
+                            "in both directions and also when VAF writes by itself, and a task for the "
+                            "phone half a cent per direction; the direct way is free.",
+            "codeHint": "Pairing is for your own account and starts with your 2FA code.",
+        },
+        "de": {
+            "agentUsesVaf": "Der Agent in der Veyllo App nutzt dieses VAF als Werkzeug, liest seine "
+                            "Antworten und verarbeitet sie mit dem Chat-Modell der App.",
+            "privacyLink": "Datenschutzerkl\u00e4rung von Veyllo",
+            "seesTitle": "Was Veyllo sieht",
+            "canDoTitle": "Was die App kann",
+            "costSentence": "\u00dcber das Veyllo Relay kostet jede Nachricht 1 Cent auf deinem "
+                            "Veyllo-Konto, in beide Richtungen und auch, wenn VAF von sich aus "
+                            "schreibt, ein Auftrag ans Handy einen halben Cent pro Richtung; der "
+                            "direkte Weg ist kostenlos.",
+            "codeHint": "Gekoppelt wird nur mit deinem eigenen Konto, und es beginnt mit deinem 2FA-Code.",
+        },
+    }
+    for locale, texts in approved.items():
+        keys = _window_keys(locale)
+        for key, text in texts.items():
+            assert keys[key] == text, (locale, key)
+
+
+def test_the_footer_actions():
+    """The code step submits its form from the footer (Enter in the field too), the run-out
+    pairing gets a new code there, the connected one closes. MUTATION: drop the `form=`
+    attribute - red."""
+    src = _src(WIZARD)
+    action = _between(src, "const action = ", "const back = ")
+    code = _between(action, "stepId === 'code' ? (", "</WizardNextButton>")
+    assert 'type="submit"' in code and 'form="veyllo-app-code-form"' in code
+    assert "disabled={busy !== null || !code.trim() || !status || impossible}" in code
+    code_step = _between(src, "const codeStep = (", "const qr = (")
+    assert '<form id="veyllo-app-code-form"' in code_step
+    assert "onSubmit={e => { e.preventDefault(); void openWindow(); }}" in code_step
+    assert 'type="submit"' not in code_step, "one submit button: the footer's"
+    ended = _between(action, "view === 'ended' ? (", "</WizardNextButton>")
+    assert "issue(relayAllowed ? way : 'local')" in ended
+    paired_action = _between(action, "view === 'paired' ? (", "</WizardNextButton>")
+    assert "onClick={close}" in paired_action and "t('done')" in paired_action
+    paired = _between(src, "const paired = (", "const action = ")
+    assert "onClick={() => { close(); onOpenAccount(); }}" in paired
+    # The shell's next button forwards both attributes to the element.
+    button = _between(_src(SHELL), "export function WizardNextButton(", "\n}\n")
+    assert "type={type}" in button and "form={form}" in button
+
+
+def test_the_new_words_are_in_every_catalogue():
+    """The step names and the two card titles, and the frame's Back, Next and step count, in
+    all seven catalogues. Back, Next and the step count reuse words the catalogues already
+    had. MUTATION: drop steps.scan from tr.json - red."""
+    for locale in LOCALES:
+        cat = _catalog(locale)
+        keys = cat["settings"]["veylloApp"]
+        for key in ("introTitle", "featureMessages", "featureTasks"):
+            assert isinstance(keys.get(key), str) and keys[key].strip(), (locale, key)
+        assert set(keys["steps"]) == {"code", "scan", "confirm", "done"}, locale
+        assert all(isinstance(v, str) and v.strip() for v in keys["steps"].values()), locale
+        common = cat["common"]
+        assert common["back"] == cat["settings"]["githubWizard"]["back"], locale
+        assert common["next"] == cat["settings"]["githubWizard"]["next"], locale
+        assert common["stepOf"] == cat["localEngine"]["stepOf"], locale
+        assert "{step}" in common["stepOf"] and "{steps}" in common["stepOf"], locale

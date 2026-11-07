@@ -809,7 +809,10 @@
     "undoWithShortcut": "元に戻す（{shortcut}）",
     "redoWithShortcut": "やり直し（{shortcut}）",
     "ctrlKey": "Ctrl",
-    "openSignInPage": "サインインページを開く"
+    "openSignInPage": "サインインページを開く",
+    "back": "戻る",
+    "next": "次へ",
+    "stepOf": "ステップ{step}/{steps}"
   },
   "settings": {
     "title": "設定",
@@ -1156,7 +1159,16 @@
       "dissolveConfirm": "解散する",
       "dissolved": "リレーのインスタンスを解散しました。",
       "allDevicesTitle": "すべてのアカウントのデバイス",
-      "allDevicesNone": "Veyllo Appをペアリングしているアカウントはありません。"
+      "allDevicesNone": "Veyllo Appをペアリングしているアカウントはありません。",
+      "introTitle": "エージェントをスマートフォンで",
+      "featureMessages": "メッセージとプッシュ通知",
+      "featureTasks": "スマートフォンへのタスク",
+      "steps": {
+        "code": "2FAコードで確認",
+        "scan": "アプリでQRコードをスキャン",
+        "confirm": "スマートフォンを確認",
+        "done": "スマートフォンが接続されました"
+      }
     },
     "channelDashboard": {
       "searchChats": "チャットと連絡先を検索",

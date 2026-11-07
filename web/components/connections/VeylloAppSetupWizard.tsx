@@ -26,15 +26,19 @@
 // what the three code fields in the app have in common is two attributes, and a component
 // for those would be an adapter, not a primitive.
 //
+// The window is the shared setup frame (SetupWizardShell): numbered steps, Back, and the step's
+// action in the footer. The three steps before the QR are pages of the `explain` view; from the
+// QR on, the step follows the pairing's view, so the server's state alone decides those.
+//
 // Icons here are black and white only: success and failure are said by the text.
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
-import { ChevronRight, ExternalLink, Loader2, Smartphone, X } from 'lucide-react';
+import { Bell, CalendarCheck, Check, ChevronRight, ExternalLink, Loader2, Smartphone } from 'lucide-react';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Skeleton from '@/components/ui/Skeleton';
 import { Switch, switchWord } from '@/components/ui/Switch';
-import { useEscapeLayer } from '@/hooks/useEscapeLayer';
+import SetupWizardShell, { WizardNextButton } from '@/components/connections/SetupWizardShell';
 import { retryAfterSeconds, retryWhen } from '@/lib/retryAfter';
 import { cn } from '@/lib/utils';
 
@@ -65,6 +69,17 @@ const PAIRING_VIEWS = {
 } as const;
 type PairingState = keyof typeof PAIRING_VIEWS;
 type View = typeof PAIRING_VIEWS[PairingState];
+
+/** The window's numbered steps. intro, sees and code are the pages of the `explain` view. */
+const STEPS = ['intro', 'sees', 'code', 'scan', 'confirm', 'done'] as const;
+type StepId = typeof STEPS[number];
+
+/** The views after the code: each sits on one step. A refused or run-out pairing stays on the
+ *  scan step, since its way out is a new code. */
+const VIEW_STEP: Record<Exclude<View, 'explain'>, StepId> = { qr: 'scan', ended: 'scan', confirm: 'confirm', paired: 'done' };
+
+/** The header's line under the title, per step. */
+const STEP_SUBTITLE: Record<StepId, string> = { intro: 'canDoTitle', sees: 'seesTitle', code: 'steps.code', scan: 'steps.scan', confirm: 'steps.confirm', done: 'steps.done' };
 
 /** The states in which the server can still move the pairing on; only these are polled. */
 const RUNNING: ReadonlySet<string> = new Set(['issued', 'claimed', 'awaiting_confirm', 'confirming']);
@@ -219,6 +234,8 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
     // The view is the pairing's, except that a QR state found on opening has no QR to show
     // (the server never sends it twice): that starts at the explanation.
     const [view, setView] = useState<View>('explain');
+    // The page within `explain`: what the app can do, what Veyllo sees, the 2FA code.
+    const [introPage, setIntroPage] = useState<0 | 1 | 2>(0);
     const [way, setWay] = useState<Way>('relay');
     const [qrPng, setQrPng] = useState<string | null>(null);
     const [deadline, setDeadline] = useState<number | null>(null);
@@ -269,8 +286,12 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
         setView(prev => {
             if (target === 'qr' && prev !== 'qr') return prev;
             if (next.state === 'none' && prev === 'ended') return prev;
-            // Answered elsewhere (another tab) or withdrawn: say so at the explanation.
-            if (next.state === 'none' && prev !== 'explain') setCodeNote(t('pairingStates.none'));
+            // Answered elsewhere (another tab) or withdrawn: say so on the code step, where a
+            // new code can be typed.
+            if (next.state === 'none' && prev !== 'explain') {
+                setCodeNote(t('pairingStates.none'));
+                setIntroPage(2);
+            }
             return target;
         });
         if (next.state === 'paired') {
@@ -310,6 +331,7 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
                 if (data.code === 'window_closed') {
                     setPairing({ state: 'none' });
                     setView('explain');
+                    setIntroPage(2);
                     setCodeNote(t('refusals.window_closed'));
                     return;
                 }
@@ -395,6 +417,7 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
         }
         setPairing({ state: 'none' });
         setView('explain');
+        setIntroPage(0);
         setQrPng(null);
         setDeadline(null);
         setIssueRefusal(null);
@@ -467,8 +490,6 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
         return () => clearInterval(timer);
     }, [isOpen, deadline, view]);
 
-    useEscapeLayer({ active: isOpen, level: 60, onEscape: close });
-
     if (!isOpen) return null;
 
     const left = deadline === null ? 0 : Math.max(0, Math.ceil((deadline - now) / 1000));
@@ -479,29 +500,37 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
     const relayError = pairing.relay_error && (RELAY_ERRORS as readonly string[]).includes(pairing.relay_error)
         ? t(`relayErrors.${pairing.relay_error}`) : null;
 
-    const explain = (
-        <div className="space-y-4">
+    const stepId: StepId = view === 'explain' ? STEPS[introPage] : VIEW_STEP[view];
+    const stepIndex = STEPS.indexOf(stepId);
+
+    const intro = (
+        <div className="space-y-6">
+            <div className="text-center">
+                <div className="w-20 h-20 mx-auto rounded-2xl bg-gray-900 dark:bg-[#2e2e2e] flex items-center justify-center mb-4">
+                    <Smartphone className="w-10 h-10 text-white" aria-hidden="true" />
+                </div>
+                <h3 className="text-2xl font-bold text-gray-900 mb-2">{t('introTitle')}</h3>
+                <p className="text-gray-500 max-w-md mx-auto">{t('canChat')}</p>
+            </div>
+            <div className="grid grid-cols-2 gap-4 max-md:grid-cols-1">
+                <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                    <Bell className="w-8 h-8 text-gray-700 mb-2" aria-hidden="true" />
+                    <h4 className="font-semibold text-gray-900">{t('featureMessages')}</h4>
+                    <p className="text-sm text-gray-500">{t('canReceive')}</p>
+                </div>
+                <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                    <CalendarCheck className="w-8 h-8 text-gray-700 mb-2" aria-hidden="true" />
+                    <h4 className="font-semibold text-gray-900">{t('featureTasks')}</h4>
+                    <p className="text-sm text-gray-500">{t('canTasks')}</p>
+                </div>
+            </div>
             <div className={card}>
-                <h4 className="text-sm font-semibold text-gray-900 mb-2">{t('canDoTitle')}</h4>
-                <ul className="list-disc ps-5 space-y-1 text-sm text-gray-700">
-                    <li>{t('canChat')}</li>
-                    <li>{t('canReceive')}</li>
-                    <li>{t('canTasks')}</li>
-                </ul>
-                <p className="text-sm text-gray-700 mt-2">{t('appName')}</p>
+                <p className="text-sm text-gray-700">{t('appName')}</p>
                 <p className="text-sm text-gray-700 mt-2">{t('agentUsesVaf')}</p>
                 <a href={PRIVACY_URL} target="_blank" rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 mt-1 text-sm font-medium text-gray-900 underline underline-offset-2 hover:no-underline">
                     {t('privacyLink')} <ExternalLink className="w-3.5 h-3.5 text-gray-500" aria-hidden="true" />
                 </a>
-            </div>
-            <div className={card}>
-                <h4 className="text-sm font-semibold text-gray-900 mb-2">{t('seesTitle')}</h4>
-                <ul className="list-disc ps-5 space-y-1 text-sm text-gray-700">
-                    <li>{t('seesRelay')}</li>
-                    <li>{t('seesDirect')}</li>
-                </ul>
-                <p className="text-sm text-gray-700 mt-2">{t('costSentence')}</p>
             </div>
             {devices.length > 0 && (
                 <div className="flex items-center justify-between gap-3 text-sm text-gray-700 max-md:flex-col max-md:items-start">
@@ -511,6 +540,24 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
                     </button>
                 </div>
             )}
+        </div>
+    );
+
+    // The step's title in the header says "What Veyllo sees"; the card carries the rest.
+    const sees = (
+        <div className={card}>
+            <ul className="list-disc ps-5 space-y-1 text-sm text-gray-700">
+                <li>{t('seesRelay')}</li>
+                <li>{t('seesDirect')}</li>
+            </ul>
+            <p className="text-sm text-gray-700 mt-2">{t('costSentence')}</p>
+        </div>
+    );
+
+    // The form's submit button is the footer's action (form="veyllo-app-code-form"), so Enter
+    // in the field and a click on it both open the window.
+    const codeStep = (
+        <div className="space-y-4">
             {statusFailed && !status ? (
                 <div className="flex items-center gap-3">
                     <p className="text-sm text-red-600 flex-1">{t('statusFailed')}</p>
@@ -527,18 +574,12 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
                     {isAdmin && <p className="text-sm text-gray-600">{t('impossibleAdmin')}</p>}
                 </div>
             ) : (
-                <form className="space-y-2" onSubmit={e => { e.preventDefault(); void openWindow(); }}>
+                <form id="veyllo-app-code-form" className="space-y-2" onSubmit={e => { e.preventDefault(); void openWindow(); }}>
                     <p className="text-xs text-gray-600">{t('codeHint')}</p>
-                    <div className="flex items-end gap-3 max-md:flex-col max-md:items-stretch">
-                        <div>
-                            <label className={label} htmlFor="veyllo-app-code">{tAccount('code')}</label>
-                            <input id="veyllo-app-code" value={code} onChange={e => setCode(e.target.value)} inputMode="numeric"
-                                autoComplete="one-time-code" placeholder="123456" className={`${field} font-mono w-32 max-md:w-full`} />
-                        </div>
-                        <button type="submit" disabled={busy !== null || !code.trim()} className={cn(primary, 'inline-flex items-center justify-center gap-2')}>
-                            {busy !== null && <Loader2 className="w-4 h-4 animate-spin" />}
-                            {busy !== null ? t('opening') : t('showQr')}
-                        </button>
+                    <div className="max-w-[14rem] max-md:max-w-none">
+                        <label className={label} htmlFor="veyllo-app-code">{tAccount('code')}</label>
+                        <input id="veyllo-app-code" value={code} onChange={e => setCode(e.target.value)} inputMode="numeric"
+                            autoComplete="one-time-code" placeholder="123456" className={`${field} font-mono w-32 max-md:w-full`} />
                     </div>
                     {codeNote && <p className="text-xs text-red-600">{codeNote}</p>}
                 </form>
@@ -624,64 +665,74 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
         ? t(`pairingStates.${pairing.state}`) : t('pairingStates.failed');
 
     const ended = (
-        <div className="space-y-4">
-            <div className={card}>
-                <p className="text-sm font-medium text-gray-900">{endText}</p>
-                {relayError && pairing.relay_error !== 'pairing_used' && pairing.relay_error !== 'expired' && (
-                    <p className="text-sm text-gray-600 mt-1">{relayError}</p>
-                )}
-            </div>
-            <div className="flex gap-3 max-md:flex-col">
-                <button type="button" disabled={busy !== null} onClick={() => void issue(relayAllowed ? way : 'local')}
-                    className={cn(primary, 'flex-1')}>
-                    {t('newCode')}
-                </button>
-                <button type="button" onClick={close} className={cn(secondary, 'flex-1')}>{tCommon('close')}</button>
-            </div>
+        <div className={card}>
+            <p className="text-sm font-medium text-gray-900">{endText}</p>
+            {relayError && pairing.relay_error !== 'pairing_used' && pairing.relay_error !== 'expired' && (
+                <p className="text-sm text-gray-600 mt-1">{relayError}</p>
+            )}
         </div>
     );
 
     const paired = (
-        <div className="space-y-4">
-            <div className={card}>
-                <div className="flex items-start gap-3">
-                    <Smartphone className="w-5 h-5 text-gray-900 shrink-0 mt-0.5" aria-hidden="true" />
-                    <p className="text-sm font-medium text-gray-900">{t('pairingStates.paired', { model: pairedModel })}</p>
-                </div>
-                <p className="text-sm text-gray-600 mt-3">{t('manageInAccount')}</p>
+        <div className="text-center">
+            <div className="w-20 h-20 mx-auto rounded-2xl bg-gray-900 dark:bg-[#2e2e2e] flex items-center justify-center mb-4">
+                <Check className="w-10 h-10 text-white" aria-hidden="true" />
             </div>
-            <div className="flex gap-3 max-md:flex-col">
-                <button type="button" onClick={close} className={cn(primary, 'flex-1')}>{t('done')}</button>
-                <button type="button" onClick={() => { close(); onOpenAccount(); }} className={cn(secondary, 'flex-1')}>
-                    {t('openAccount')}
-                </button>
-            </div>
+            <p className="text-lg font-semibold text-gray-900 break-words">{t('pairingStates.paired', { model: pairedModel })}</p>
+            <p className="text-sm text-gray-500 mt-2 max-w-md mx-auto">{t('manageInAccount')}</p>
+            <button type="button" onClick={() => { close(); onOpenAccount(); }} className={cn(secondary, 'mt-6')}>
+                {t('openAccount')}
+            </button>
         </div>
     );
 
+    // The footer's right side. Nothing on the QR and the confirmation moves the pairing on but
+    // the phone and Yes/No, so Next stays drawn there, disabled.
+    const action = stepId === 'intro' ? (
+        <WizardNextButton onClick={() => setIntroPage(1)}>{tCommon('next')}</WizardNextButton>
+    ) : stepId === 'sees' ? (
+        <WizardNextButton onClick={() => setIntroPage(2)}>{tCommon('next')}</WizardNextButton>
+    ) : stepId === 'code' ? (
+        <WizardNextButton type="submit" form="veyllo-app-code-form" busy={busy !== null} chevron={false}
+            disabled={busy !== null || !code.trim() || !status || impossible}>
+            {busy !== null ? t('opening') : t('showQr')}
+        </WizardNextButton>
+    ) : view === 'ended' ? (
+        <WizardNextButton onClick={() => void issue(relayAllowed ? way : 'local')} disabled={busy !== null} chevron={false}>
+            {t('newCode')}
+        </WizardNextButton>
+    ) : view === 'paired' ? (
+        <WizardNextButton onClick={close} chevron={false}>{t('done')}</WizardNextButton>
+    ) : (
+        <WizardNextButton disabled>{tCommon('next')}</WizardNextButton>
+    );
+
+    // Back walks the three pages before the QR. From the QR on it is disabled: leaving a live
+    // code or a waiting phone has to withdraw or refuse it, which only closing the window does.
+    const back = stepId === 'sees' ? () => setIntroPage(0)
+        : stepId === 'code' ? () => setIntroPage(1)
+        : undefined;
+
     return (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4 max-md:p-0" onClick={close}>
-            <div role="dialog" aria-modal="true" aria-label={t('title')} onClick={e => e.stopPropagation()}
-                className="bg-white rounded-2xl shadow-xl max-w-md w-full max-h-[90vh] flex flex-col overflow-hidden max-md:max-w-none max-md:mx-0 max-md:h-[100dvh] max-md:max-h-none max-md:rounded-none max-md:border-0">
-                <div className="flex items-center justify-between px-6 pt-6 pb-4 max-md:p-4 max-md:shrink-0">
-                    <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
-                        <Smartphone className="w-5 h-5 text-gray-900" aria-hidden="true" />
-                        {t('title')}
-                    </h3>
-                    <button type="button" onClick={close} aria-label={tCommon('close')} className="p-1 hover:bg-gray-100 rounded-lg">
-                        <X className="w-5 h-5 text-gray-500" />
-                    </button>
-                </div>
-                <div className="px-6 pb-6 overflow-y-auto min-h-0 max-md:flex-1 max-md:p-4 max-md:pt-0">
-                    {view === 'explain' && explain}
-                    {view === 'qr' && qr}
-                    {view === 'confirm' && confirmView}
-                    {view === 'ended' && ended}
-                    {view === 'paired' && paired}
-                    {isAdmin && view === 'explain' && <RelayAdminSection onChanged={() => void loadStatus()} />}
-                </div>
-            </div>
-        </div>
+        <SetupWizardShell
+            title={t('title')}
+            subtitle={t(STEP_SUBTITLE[stepId])}
+            icon={<Smartphone className="w-5 h-5 text-white" aria-hidden="true" />}
+            steps={STEPS.length}
+            current={stepIndex}
+            onClose={close}
+            onBack={back}
+            action={action}
+        >
+            {stepId === 'intro' && intro}
+            {stepId === 'sees' && sees}
+            {stepId === 'code' && codeStep}
+            {view === 'qr' && qr}
+            {view === 'ended' && ended}
+            {view === 'confirm' && confirmView}
+            {view === 'paired' && paired}
+            {isAdmin && stepId === 'code' && <RelayAdminSection onChanged={() => void loadStatus()} />}
+        </SetupWizardShell>
     );
 }
 

@@ -809,7 +809,10 @@
     "undoWithShortcut": "撤销（{shortcut}）",
     "redoWithShortcut": "重做（{shortcut}）",
     "ctrlKey": "Ctrl",
-    "openSignInPage": "打开登录页面"
+    "openSignInPage": "打开登录页面",
+    "back": "上一步",
+    "next": "下一步",
+    "stepOf": "第 {step} 步，共 {steps} 步"
   },
   "settings": {
     "title": "设置",
@@ -1156,7 +1159,16 @@
       "dissolveConfirm": "解散",
       "dissolved": "中继实例已解散。",
       "allDevicesTitle": "所有账号的设备",
-      "allDevicesNone": "还没有账号配对 Veyllo App。"
+      "allDevicesNone": "还没有账号配对 Veyllo App。",
+      "introTitle": "你手机上的智能体",
+      "featureMessages": "消息和推送通知",
+      "featureTasks": "交给手机的任务",
+      "steps": {
+        "code": "用你的 2FA 验证码确认",
+        "scan": "用应用扫描二维码",
+        "confirm": "确认你的手机",
+        "done": "你的手机已连接"
+      }
     },
     "channelDashboard": {
       "searchChats": "搜索聊天和联系人",

@@ -540,7 +540,7 @@ def test_the_steps_run_in_order():
 
 
 def test_the_approved_texts_are_word_for_word():
-    """The sentences the FRD and the owner approved keep their words in the new steps.
+    """The approved sentences keep their words in the new steps.
     MUTATION: change one word of the DE costSentence - red."""
     approved = {
         "en": {
@@ -575,8 +575,9 @@ def test_the_approved_texts_are_word_for_word():
 
 def test_the_footer_actions():
     """The code step submits its form from the footer (Enter in the field too), the run-out
-    pairing gets a new code there, the connected one closes. MUTATION: drop the `form=`
-    attribute - red."""
+    pairing and a code VAF refused to issue get a new code there (with the relay off nothing
+    else on that step can ask again), the connected one closes. MUTATIONS: drop the `form=`
+    attribute; offer New code for the ended view only - red."""
     src = _src(WIZARD)
     action = _between(src, "const action = ", "const back = ")
     code = _between(action, "stepId === 'code' ? (", "</WizardNextButton>")
@@ -586,8 +587,11 @@ def test_the_footer_actions():
     assert '<form id="veyllo-app-code-form"' in code_step
     assert "onSubmit={e => { e.preventDefault(); void openWindow(); }}" in code_step
     assert 'type="submit"' not in code_step, "one submit button: the footer's"
-    ended = _between(action, "view === 'ended' ? (", "</WizardNextButton>")
-    assert "issue(relayAllowed ? way : 'local')" in ended
+    ended = _between(action, "view === 'ended' || (view === 'qr' && issueRefusal) ? (", "</WizardNextButton>")
+    assert "issue(relayAllowed ? way : 'local')" in ended and "t('newCode')" in ended
+    # The refusal is the only QR-step state without a QR; it is what issue() sets on a refusal.
+    issue = _between(src, "const issue = useCallback(async (mode: Way) => {", "}, [refusalText, t]);")
+    assert "setView('qr');\n                setIssueRefusal(refusalText(data, res));" in issue
     paired_action = _between(action, "view === 'paired' ? (", "</WizardNextButton>")
     assert "onClick={close}" in paired_action and "t('done')" in paired_action
     paired = _between(src, "const paired = (", "const action = ")

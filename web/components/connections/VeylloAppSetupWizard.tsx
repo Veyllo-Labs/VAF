@@ -687,7 +687,9 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
     );
 
     // The footer's right side. Nothing on the QR and the confirmation moves the pairing on but
-    // the phone and Yes/No, so Next stays drawn there, disabled.
+    // the phone and Yes/No, so Next stays drawn there, disabled. A code that ran out or ended,
+    // and one VAF refused to issue, get "New code": with the relay off there is no switch under
+    // the refusal, and the switch never re-issues the way already chosen.
     const action = stepId === 'intro' ? (
         <WizardNextButton onClick={() => setIntroPage(1)}>{tCommon('next')}</WizardNextButton>
     ) : stepId === 'sees' ? (
@@ -697,7 +699,7 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
             disabled={busy !== null || !code.trim() || !status || impossible}>
             {busy !== null ? t('opening') : t('showQr')}
         </WizardNextButton>
-    ) : view === 'ended' ? (
+    ) : view === 'ended' || (view === 'qr' && issueRefusal) ? (
         <WizardNextButton onClick={() => void issue(relayAllowed ? way : 'local')} disabled={busy !== null} chevron={false}>
             {t('newCode')}
         </WizardNextButton>

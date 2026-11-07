@@ -720,8 +720,8 @@ def test_the_approved_texts_are_word_for_word():
             "errNoAccount": "There is no active account to pair a Veyllo App for. Sign in with "
                 "your account.",
             "explainLocal": "The Veyllo App connects only in your own network or over your "
-                "VPN. It is free, and nothing goes through Veyllo. Push notices in the Veyllo "
-                "App need a pairing through the Veyllo Relay.",
+                "VPN. It is free, and nothing goes through Veyllo. Push notifications in the "
+                "Veyllo App need a pairing through the Veyllo Relay.",
             "featureTasks": "Tasks for your Veyllo App",
             "introTitle": "Your agent in the Veyllo App",
             "manageInAccount": "Your paired devices are listed under Account, where you can "

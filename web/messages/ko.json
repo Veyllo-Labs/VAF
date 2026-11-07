@@ -1149,7 +1149,7 @@
       "off": "끔",
       "on": "켬",
       "relaySwitchLabel": "모든 계정의 Veyllo Relay",
-      "counts": "릴레이용으로 페어링된 기기 {members}대, 지금 쓰는 기기 {onRelay}대.",
+      "counts": "릴레이용으로 페어링된 기기 {members}대, 지금 릴레이를 쓰는 기기 {onRelay}대.",
       "noInstance": "이 설치는 아직 릴레이에 등록되지 않았어요. 첫 Veyllo App이 릴레이로 페어링하면 자동으로 등록돼요.",
       "rotate": "릴레이 키 갱신",
       "rotateTitle": "릴레이 키를 갱신할까요?",

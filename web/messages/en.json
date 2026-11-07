@@ -1077,7 +1077,7 @@
       "wayRelay": "Veyllo Relay",
       "wayLocal": "Local",
       "explainRelay": "With the Veyllo Relay the Veyllo App reaches VAF from anywhere. Each message costs €0.01, also when VAF writes on its own, a task to the Veyllo App €0.005 per direction. Veyllo only sees when messages travel and how large they are, never the content.",
-      "explainLocal": "The Veyllo App connects only in your own network or over your VPN. It is free, and nothing goes through Veyllo. Push notices in the Veyllo App need a pairing through the Veyllo Relay.",
+      "explainLocal": "The Veyllo App connects only in your own network or over your VPN. It is free, and nothing goes through Veyllo. Push notifications in the Veyllo App need a pairing through the Veyllo Relay.",
       "relayOffByAdmin": "An admin has switched the Veyllo relay off; pair over your network or VPN.",
       "validFor": "Valid for {time}",
       "qrAlt": "QR code for pairing the Veyllo App",

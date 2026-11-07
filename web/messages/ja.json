@@ -1149,7 +1149,7 @@
       "off": "オフ",
       "on": "オン",
       "relaySwitchLabel": "すべてのアカウントのVeyllo Relay",
-      "counts": "リレー用にペアリングされたデバイス{members}台、今使っているデバイス{onRelay}台。",
+      "counts": "リレー用にペアリングされたデバイス{members}台、今リレーを使っているデバイス{onRelay}台。",
       "noInstance": "このインストールはまだリレーに登録されていません。最初のVeyllo Appがリレー経由でペアリングすると自動的に登録されます。",
       "rotate": "リレーキーを更新",
       "rotateTitle": "リレーキーを更新しますか？",

@@ -26,12 +26,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   renew its key or sign the installation out of it in Settings, Connections, Veyllo App, in the
   relay section of the 2FA code step. Its card stands first under Communication.
 - **Veyllo App: the app's own agent can ask your agent.** When the app is connected, its agent
-  can hand your agent a task and read the answer; only the phone that asked gets that answer.
+  can hand your agent a task and read the answer; only the device that asked gets that answer.
   Your agent's chat shows such a task as coming from the app's agent, not from you. What only
   you can do in VAF's web UI does not run on it (timers, the browser agent, the sandbox
   environments, shell commands, SSH and FTP, building custom tools and workflows); the app's
   agent is told it can be done there. Actions without a confirmation card need your own
-  confirmation, which its request cannot carry: tasks for the phone, storing a credential,
+  confirmation, which its request cannot carry: tasks for the Veyllo App, storing a credential,
   agent rooms, the librarian, the Python sandbox, messages to your own messengers, and changes
   to your contacts, notes and settings. They do not run either, and the app's agent is told
   that VAF did not do it. Nor does a request write or change your files directly: writing,
@@ -39,7 +39,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   refused; only a few tools still write their own fixed output file, such as the research
   report and the code audit's result. Memories saved on its request are marked and read back
   as the app agent's.
-- **Veyllo App: confirm on your phone what the app's agent asked for.** When the app's agent
+- **Veyllo App: confirm in the Veyllo App what the app's agent asked for.** When the app's agent
   asks your agent for a coder run, an automation, a workflow, a skill or identity change, or a
   mail or WhatsApp message to somebody else, nothing happens until you confirm it on a card in
   the app; the card shows exactly what will run. No, or no answer within 10 minutes, and it

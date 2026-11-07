@@ -54,6 +54,10 @@ dependencies = [
     # API & networking (core)
     "requests>=2.31.0",
     "httpx>=0.27.0",
+    # Strict IDNA2008 for the mail envelope of a domain outside ASCII (vaf/mail/addressing.py);
+    # was only transitive (requests, httpx). 3.7 fixes CVE-2024-3651. Capped below 4 like
+    # requirements-headless.txt: a major release changes the codec's refusals.
+    "idna>=3.7,<4",
     "PyGithub>=2.1.1",
     "beautifulsoup4>=4.12.0",
     "markdownify>=1.0.0",

@@ -63,6 +63,7 @@ Also present in `requirements.txt`.
 | psutil | >=5.9.0 | BSD-3-Clause |
 | requests | >=2.31.0 | Apache-2.0 |
 | httpx | >=0.27.0 | BSD-3-Clause |
+| idna | >=3.7,<4 | BSD-3-Clause |
 | PyGithub | >=2.1.1 | LGPL-3.0 |
 | beautifulsoup4 | >=4.12.0 | MIT |
 | markdownify | >=1.0.0 | MIT |

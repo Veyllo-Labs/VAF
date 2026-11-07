@@ -1090,6 +1090,7 @@ idna==3.16 \
     --hash=sha256:cc246e3a3f89580c3a951b5ad298ca4638078b2cdd4f115654332b5c26daded5 \
     --hash=sha256:d7a6da03db833450fca25d2358ac9ff06cd624577a4aea3a596d5c0f77b8e03d
     # via
+    #   -r requirements-headless.txt
     #   anyio
     #   httpx
     #   requests

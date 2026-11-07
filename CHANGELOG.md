@@ -101,7 +101,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   accounts, a regular account's coding agent could be pointed at another account's project
   folder, by its path or by a path in the task, and read, change or roll back that project,
   including through its shell. It now refuses folders outside the account's own project folder
-  and the shared folders of its rooms, and creates new projects there. Administrators and
+  and the shared folders of its rooms, and creates new projects there. A path named in the task
+  that lies outside them falls back to the account's own folder. Administrators and
   single-user machines are unaffected.
 
 ## [0.1.0a35] - 2026-11-05

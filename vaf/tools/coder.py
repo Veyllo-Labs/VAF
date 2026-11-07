@@ -2838,9 +2838,13 @@ def _project_path_refusal(project_path, scope, role):
     if not project_path:
         return None
     given = os.path.abspath(os.path.expanduser(str(project_path)))
-    folder, _hint = _split_explicit_path(given)
-    from vaf.tools.filesystem import jail_allows
-    if jail_allows(folder, user_scope_id=scope, user_role=role, mode="write"):
+    try:
+        folder, _hint = _split_explicit_path(given)
+        from vaf.tools.filesystem import jail_allows
+        allowed = jail_allows(folder, user_scope_id=scope, user_role=role, mode="write")
+    except Exception:
+        allowed = False     # fail-closed, like project_dir_refusal
+    if allowed:
         return None
     return (
         f"Error: project_path '{given}' is outside the folders this account may write "
@@ -2924,8 +2928,8 @@ def _choose_base_dir(tool, task, project_path, *, scope, role, content_only):
             if reason == OUTSIDE_ACCOUNT:
                 notes.append(
                     "Path from task is outside the folders this account may write - "
-                    + (f"creating '{hint}' in its own project folder instead" if hint
-                       else "working in its own project folder instead")
+                    + (f"creating '{hint}' in this account's own project folder instead" if hint
+                       else "working in this account's own project folder instead")
                 )
             elif reason:
                 # Unsafe dirname (file directly in $HOME, Documents root, ...):

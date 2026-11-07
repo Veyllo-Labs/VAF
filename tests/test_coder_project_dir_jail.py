@@ -251,6 +251,22 @@ def test_the_gate_stands_before_the_shortcut_and_the_spawn():
     assert gate < src.index("live.start()")
 
 
+def test_a_gate_that_cannot_ask_the_jail_refuses(world, spawn_recorder, monkeypatch):
+    """Fail-closed like project_dir_refusal: an error in the jail question ends the call.
+    MUTATION: drop the try around the jail question in _project_path_refusal - red."""
+    from vaf.tools.coder import CodingAgentTool
+
+    def _broken(*a, **k):
+        raise RuntimeError("jail store unreadable")
+
+    monkeypatch.setattr(fs, "jail_allows", _broken)
+    out = CodingAgentTool().run(task="build a small page",
+                                project_path=str(world.a_root / "chat" / "site"),
+                                user_scope_id=A, user_role="user")
+    assert GATE in out
+    assert spawn_recorder == []
+
+
 # ── AC4: the gate holds in the spawned child ───────────────────────────────────────────
 
 def test_the_child_refuses_with_the_identity_from_its_environment(world, monkeypatch):
@@ -299,7 +315,8 @@ def test_a_foreign_path_in_the_task_falls_through_to_the_accounts_folder(world):
     assert choice.refusal == ""
     assert _inside(choice.base_dir, world.a_root), choice.base_dir
     assert choice.target_file_hint == "landing.html"
-    assert any("outside the folders this account may write - creating 'landing.html'" in n
+    assert any("outside the folders this account may write - creating 'landing.html' in "
+               "this account's own project folder instead" in n
                for n in choice.notes), choice.notes
 
 

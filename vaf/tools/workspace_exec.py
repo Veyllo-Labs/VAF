@@ -4,24 +4,23 @@
 """Run a coder shell command with full access to its project workspace, but with
 VAF's own source, config and secrets structurally out of reach.
 
-The coding agent needs real host access (run scripts, npm/pip install, and docker
-against the host daemon for a Dockerized project), but must never be able to touch
-VAF's core files or itself and break the running system. String-filtering a shell is
-not real security, so we confine with the KERNEL instead:
+The coding agent needs real host access (run scripts, npm/pip install), but must never be
+able to touch VAF's core files or itself and break the running system. String-filtering a
+shell is not real security, so we confine with the KERNEL instead:
 
 - Linux + bubblewrap: the command runs on the real host inside a bwrap jail. The
   workspace is bind-mounted read-write (edits persist); the system is read-only; the
-  VAF repo, ~/.vaf and secrets are NOT mounted, so they simply do not exist for the
-  command. FS writes are kernel-confined to the workspace. Host tools, network and
-  (opt-in) the docker socket are available.
+  VAF repo, the home directory, ~/.vaf, secrets and the docker socket are NOT mounted,
+  so they simply do not exist for the command. FS writes are kernel-confined to the
+  workspace. Host tools are available; the network is not (see below).
 - Otherwise (no bwrap / macOS-todo / Windows): fall back to a container with ONLY the
-  workspace mounted. Same confinement, minus host-docker-from-bash.
+  workspace mounted and no network. Same confinement.
 - No sandbox available at all: refuse. We never run a raw, unconfined host shell,
   which had no path guard and could overwrite VAF's core.
 
-The one residual privilege is the docker socket (docker can bind-mount host paths):
-_docker_mount_escapes rejects a docker command that -v/--mount/--volume-s a host path
-outside the workspace.
+Docker is refused up front (`_invokes_docker`), in both lanes: the host docker socket is
+host-root-equivalent and cannot be policed by reading the command, so the jail does not
+expose it at all.
 
 NAMED BOUNDARY - no network, not even for a build's dependency repository. A Maven, Gradle or
 npm build that must download dependencies fails in here, and that is deliberate: the jail's

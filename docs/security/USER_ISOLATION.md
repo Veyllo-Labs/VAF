@@ -463,9 +463,12 @@ tool permission - which IS enforced now (see "The per-user tool permission is en
 below). An admin can withhold the coder entirely, or allow the coder and withhold `bash`
 by name. What remains true by design: a tenant who is allowed `bash` has an unjailed
 shell, so granting it is the decision. What that shell can reach on the host is measured:
-the jail mounts its workspace read-write and system folders read-only, and no other part of
-the home directory, so its only writable host folder is the run's project folder, which is
-now one the caller may write.
+the jail mounts its workspace read-write and system folders read-only, no other part of
+the home directory and no docker socket (a `docker` command is refused before the jail
+starts, `_invokes_docker` in `vaf/tools/workspace_exec.py`), so its only writable host folder
+is the run's project folder, which is now one the caller may write. In a sandbox environment
+the shell runs in that environment's container instead, whose `/workspace` is the same
+project folder.
 
 ### The per-user tool permission is enforced
 

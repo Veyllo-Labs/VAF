@@ -535,8 +535,9 @@ command is confined by the **kernel**:
 For an account that folder is one the account may write: the coder chooses it through
 `project_dir_refusal` (`vaf/core/workspace_guard.py`, the file jail's own write rule on top of
 the unsafe check), and refuses a `project_path` outside the account's own `VAF_Projects/<uid8>/`
-and its rooms' shared folders. Since the jail mounts nothing else of the home directory, that
-also bounds what the shell can read and write on the host. What `bash` may run is not screened
+and its rooms' shared folders. Since the jail mounts nothing else of the home directory and no
+docker socket (a `docker` command is refused, see "Docker is refused in the coder shell"
+below), that also bounds what the shell can read and write on the host. What `bash` may run is not screened
 by the file jail (see "The coder acts as its caller" in
 [USER_ISOLATION.md](USER_ISOLATION.md)).
 

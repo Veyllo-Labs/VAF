@@ -103,6 +103,20 @@ export const CONNECTION_APPS: ConnectionApp[] = [
 
     // ============ Communication ============
     {
+        // The account's own phones: no on/off switch and no disconnect here. Access ends per
+        // device (Settings, Account), the channel's switch is the installation's, and the
+        // relay secret goes only with the relay instance.
+        id: 'veyllo_app',
+        name: 'Veyllo App',
+        icon: Smartphone,
+        category: 'communication',
+        description: 'Chat with your agent from your phone, through the Veyllo relay or over your own network',
+        configKey: 'veyllo_app_config',
+        available: true,
+        comingSoon: false,
+        iconColor: 'bg-teal-700',
+    },
+    {
         id: 'discord',
         name: 'Discord',
         icon: MessageCircle,
@@ -154,20 +168,6 @@ export const CONNECTION_APPS: ConnectionApp[] = [
         available: true,
         comingSoon: false,
         iconColor: 'bg-green-600',
-    },
-    {
-        // The account's own phones: no on/off switch and no disconnect here. Access ends per
-        // device (Settings, Account), the channel's switch is the installation's, and the
-        // relay secret goes only with the relay instance.
-        id: 'veyllo_app',
-        name: 'Veyllo App',
-        icon: Smartphone,
-        category: 'communication',
-        description: 'Chat with your agent from your phone, through the Veyllo relay or over your own network',
-        configKey: 'veyllo_app_config',
-        available: true,
-        comingSoon: false,
-        iconColor: 'bg-teal-700',
     },
     {
         id: 'email',

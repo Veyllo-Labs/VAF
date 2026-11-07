@@ -80,6 +80,26 @@ def test_the_card_opens_the_window_and_has_no_toggle():
     assert "onOpenVeylloAppWizard={() => setShowVeylloAppWizard(true)}" in _src(MODAL)
 
 
+def test_the_veyllo_app_card_comes_first_under_communication():
+    """Nothing sorts the cards at render time, so CONNECTION_APPS order is screen order. The
+    Veyllo App stands first, the other messengers keep theirs; the full order is pinned because
+    Discord is hidden from non-admins, so "before Discord" alone would not say what they see.
+    MUTATIONS: move veyllo_app back below whatsapp; swap discord and telegram; sort by name in
+    getAppsByCategory - each red."""
+    src = _src(PANEL)
+    apps = _between(src, "export const CONNECTION_APPS: ConnectionApp[] = [", "\n];")
+    # Lazy across the fields between id and category: an entry may carry a comment there.
+    pairs = re.findall(r"id: '([a-z_]+)'[\s\S]*?category: '([a-z_]+)'", apps)
+    communication = [app_id for app_id, category in pairs if category == "communication"]
+    assert communication == [
+        "veyllo_app", "discord", "telegram", "slack", "signal", "whatsapp",
+        "email", "microsoft_teams", "matrix", "irc",
+    ]
+    for helper in ("const getAppsByCategory = ", "const getFilteredAppsByCategory = "):
+        body = _between(src, helper, "\n    };\n")
+        assert ".sort(" not in body, helper
+
+
 # ── step one ────────────────────────────────────────────────────────────────────
 
 def test_step_one_says_what_the_frd_asks():

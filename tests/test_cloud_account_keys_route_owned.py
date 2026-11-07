@@ -120,3 +120,28 @@ def test_cloud_sync_keys_are_admin_only(stored):
            {"role": "user", "user_scope_id": TENANT_SCOPE, "username": "alice"})
     assert stored["cloud_sync_enabled"] is False
     assert stored["tts_auto_speak"] is True
+
+
+def test_a_non_admin_save_cannot_set_the_limits_of_any_sync(stored, monkeypatch):
+    """The manual sync route read `cloud_max_file_size` and `cloud_conflict_strategy`, keys
+    registered nowhere, so a non-admin save set them for every account. Both sync lanes now
+    read the admin-only `cloud_sync_` pair through one reader.
+
+    MUTATION: the route back to `Config.get("cloud_max_file_size", ...)` - red (source).
+    MUTATION: `sync_settings` reading the old keys - red (the non-admin's values win)."""
+    from vaf.api import cloud_routes
+    from vaf.cloud import sync_worker
+    from vaf.cloud.sync_engine import sync_settings
+    from vaf.core.config import Config
+
+    monkeypatch.setattr(Config, "get", staticmethod(
+        lambda key, default=None: stored.get(key, default)))
+    _patch({"cloud_max_file_size": 1, "cloud_conflict_strategy": "keep_both",
+            "cloud_sync_max_file_size_mb": 1, "cloud_sync_conflict_resolution": "keep_both"},
+           {"role": "user", "user_scope_id": TENANT_SCOPE, "username": "alice"})
+    assert sync_settings() == (100 * 1024 * 1024, "last_write_wins")
+
+    for fn in (cloud_routes.trigger_sync, sync_worker._run_sync_for_account):
+        src = inspect.getsource(fn)
+        assert "sync_settings()" in src, fn.__name__
+        assert "cloud_max_file_size" not in src and "cloud_conflict_strategy" not in src

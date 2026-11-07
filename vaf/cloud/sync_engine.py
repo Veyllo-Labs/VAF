@@ -28,6 +28,18 @@ from vaf.core.path_jail import contained_path
 logger = logging.getLogger("vaf.cloud.sync_engine")
 
 
+def sync_settings() -> Tuple[int, str]:
+    """The size limit (bytes) and the conflict policy every sync cycle runs with, the
+    background worker's and the manual sync route's alike: the admin-only
+    ``cloud_sync_max_file_size_mb`` and ``cloud_sync_conflict_resolution``. The manual route
+    used to read two keys of its own (``cloud_max_file_size``, ``cloud_conflict_strategy``)
+    that were registered nowhere, so no rule made them admin-only and any account's
+    settings save set them for every account's sync."""
+    from vaf.core.config import Config
+    max_size = Config.get("cloud_sync_max_file_size_mb", 100) * 1024 * 1024
+    return max_size, Config.get("cloud_sync_conflict_resolution", "last_write_wins")
+
+
 def _md5_hash(filepath: Path) -> Optional[str]:
     """Compute MD5 hex digest for a local file. Returns None on error."""
     try:

@@ -42,6 +42,9 @@ Named boundaries:
   target must still lie under the resolved root.
 - The owner's own links that lead out of "VAF Sync" disappear from listings and are
   refused on read.
+- A name whose path begins or ends with whitespace ("notes.txt ") is refused and left out
+  of listings: the containment check trims what it checks, so the name checked and the
+  name opened would differ.
 """
 
 import hashlib
@@ -142,9 +145,15 @@ class ICloudProvider(CloudProvider):
         """The in-root spelling of a file id or path, or `PathEscape`. `contained_path`
         refuses `..`, a rooted fragment, a null byte and anything that resolves outside the
         root (a link included); its resolved answer is the check, the returned path keeps
-        the spelling a listing gives."""
+        the spelling a listing gives.
+
+        `contained_path` trims whitespace around the fragment before it checks it, so
+        "in.txt " would be checked as "in.txt" and opened as "in.txt " (a link out, say).
+        Such a fragment is refused: the name checked and the name returned are the same."""
         root = self.sync_root
         fragment = self._relative(ref)
+        if fragment != fragment.strip():
+            raise PathEscape("an iCloud path must not begin or end with whitespace")
         contained_path(root, fragment)
         parts = [p for p in fragment.replace("\\", "/").split("/") if p and p != "."]
         return root.joinpath(*parts)

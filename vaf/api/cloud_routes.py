@@ -41,7 +41,7 @@ from vaf.cloud.credential_cloud import (
     set_cloud_webdav_credentials,
 )
 from vaf.cloud.sync_manifest import SyncManifest
-from vaf.cloud.sync_engine import SyncEngine
+from vaf.cloud.sync_engine import SyncEngine, sync_settings
 from vaf.cloud.base import SYNC_FOLDER_NAME
 from vaf.api.oauth_session_binding import (
     enforce_callback_actor_binding,
@@ -57,9 +57,6 @@ router = APIRouter(prefix="/api/cloud", tags=["cloud"])
 OAUTH_PROVIDERS = ("google_drive", "onedrive", "dropbox", "icloud")
 WEBDAV_PROVIDERS = ("nextcloud",)
 ALL_PROVIDERS = OAUTH_PROVIDERS + WEBDAV_PROVIDERS
-
-# Max file size for sync (100 MB)
-DEFAULT_MAX_FILE_SIZE = 100 * 1024 * 1024
 
 
 # ── Auth helper ───────────────────────────────────────────────────────────
@@ -473,8 +470,7 @@ async def trigger_sync(
 
     manifest = SyncManifest(username=_username, provider=provider_name)
     sync_dir = _local_sync_dir(_username, account_id)
-    max_size = Config.get("cloud_max_file_size", DEFAULT_MAX_FILE_SIZE)
-    conflict_strategy = Config.get("cloud_conflict_strategy", "last_write_wins")
+    max_size, conflict_strategy = sync_settings()
 
     engine = SyncEngine(
         provider=provider,

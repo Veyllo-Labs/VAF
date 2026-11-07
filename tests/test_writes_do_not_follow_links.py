@@ -710,54 +710,89 @@ def test_retrieve_copies_an_ordinary_file(lab, monkeypatch):
     assert (downloads / "notes.txt").read_text() == "hello"
 
 
+BOBS_CODE = b"print('bob')\n"
+LINKED = ["outside", "sibling account", "every account's folder", "owner's chat folder",
+          "linked root"]
+
+
 def _linked_downloads(lab, monkeypatch, which):
-    """A tenant whose Downloads folder (or whole project root) was replaced with a link to
-    a folder outside their tree that is NOT VAF's state, as an autostart folder would be:
+    """A tenant whose Downloads folder (or whole project root) was replaced with a link.
     `open_for_write` refuses only a link at the file's own name and VAF's state, so only the
-    folder check stops this one."""
+    folder check stops these. Returns the folder the link leads to; each holds a `main.py`
+    where one exists, so an overwrite would show.
+
+    - outside: a folder elsewhere on the computer (an autostart folder, say);
+    - sibling account: another account's source folder, `VAF_Projects/cd34ef56/src`;
+    - every account's folder: `..`, which is `VAF_Projects` itself;
+    - owner's chat folder: an unscoped chat folder of the owner beside the account roots;
+    - linked root: the whole project root is a link to a folder with its own Downloads."""
     cs, sync, downloads = _tenant(lab, monkeypatch)
-    outside = lab.home / "outside"
-    outside.mkdir()
-    if which == "downloads":
-        downloads.rmdir()
-        _link(downloads, outside)
-    else:
+    projects = downloads.parent.parent
+    downloads.rmdir()
+    if which == "linked root":
+        target = lab.home / "outside"
+        (target / "Downloads").mkdir(parents=True)
         root = downloads.parent
-        downloads.rmdir()
-        (outside / "Downloads").mkdir()
         root.rename(lab.home / "old-root")
-        _link(root, outside)
-    return cs, sync, outside
+        _link(root, target)
+        return cs, sync, target
+    if which == "outside":
+        target = lab.home / "outside"
+        target.mkdir()
+    elif which == "sibling account":
+        target = projects / "cd34ef56" / "src"
+        target.mkdir(parents=True)
+        (target / "main.py").write_bytes(BOBS_CODE)
+    elif which == "every account's folder":
+        target = projects
+        _link(downloads, Path(".."))
+        return cs, sync, target
+    else:
+        target = projects / "web_session1"
+        target.mkdir()
+        (target / "main.py").write_bytes(BOBS_CODE)
+    _link(downloads, target)
+    return cs, sync, target
 
 
-def _nothing_in(folder):
-    return sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*")
-                  if p.is_file())
+def _files(folder):
+    """Every regular file below ``folder`` with its bytes, links neither listed nor entered."""
+    out = {}
+    for here, _dirs, names in os.walk(folder, followlinks=False):
+        for name in names:
+            full = Path(here) / name
+            if full.is_file() and not full.is_symlink():
+                out[full.relative_to(folder).as_posix()] = full.read_bytes()
+    return out
 
 
-@pytest.mark.parametrize("which", ["downloads", "root"])
+@pytest.mark.parametrize("which", LINKED)
 def test_a_tenants_linked_downloads_folder_refuses_retrieve(lab, monkeypatch, which):
-    """MUTATION: drop the contained_path check in _download_dir - red (the file is written
-    into the outside folder)."""
-    cs, sync, outside = _linked_downloads(lab, monkeypatch, which)
-    (sync / "notes.txt").write_text("hello")
-    out = cs._action_retrieve("bob", "acc1", "notes.txt", "tenant-scope")
+    """MUTATION: drop the check in _download_dir - every case red (the file is written where
+    the link leads; the sibling's and the owner's main.py are overwritten). MUTATION: the
+    check as ``contained_path(root.parent, "<uid8>/Downloads")`` - the sibling, the
+    every-account and the owner's-chat cases red. MUTATION: ``contained_path(root,
+    "Downloads")`` alone - the linked-root case red."""
+    cs, sync, target = _linked_downloads(lab, monkeypatch, which)
+    (sync / "main.py").write_text("tenant payload")
+    before = _files(target)
+    out = cs._action_retrieve("bob", "acc1", "main.py", "tenant-scope")
     assert out.startswith("Refused: the Downloads folder in your files leads somewhere"), out
     assert "Replace it with an ordinary folder named Downloads" in out
-    assert _nothing_in(outside) == []
+    assert _files(target) == before
 
 
-@pytest.mark.parametrize("which", ["downloads", "root"])
+@pytest.mark.parametrize("which", LINKED)
 def test_a_tenants_linked_downloads_folder_refuses_a_cloud_download(lab, monkeypatch, which):
-    """MUTATION: drop the contained_path check in _download_dir - red (the cloud file is
-    written into the outside folder)."""
-    cs, _sync, outside = _linked_downloads(lab, monkeypatch, which)
-    prov = _drive("report.txt", b"cloud body", monkeypatch)
+    """MUTATIONS as for retrieve, same cases red."""
+    cs, _sync, target = _linked_downloads(lab, monkeypatch, which)
+    prov = _drive("main.py", b"cloud body", monkeypatch)
     monkeypatch.setattr(cs, "create_cloud_provider", lambda *a, **k: prov)
+    before = _files(target)
     out = cs._action_download("bob", "acc1", "google_drive", "f1", user_scope_id="tenant-scope")
     assert out.startswith("Refused: the Downloads folder in your files leads somewhere"), out
     assert "read(file_id=...)" in out
-    assert _nothing_in(outside) == []
+    assert _files(target) == before
 
 
 def test_a_tenants_ordinary_downloads_folder_takes_a_cloud_download(lab, monkeypatch):

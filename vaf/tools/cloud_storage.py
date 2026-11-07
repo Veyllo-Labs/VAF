@@ -119,14 +119,18 @@ def _download_dir(user_scope_id: Optional[str]) -> Path:
     shape CLAUDE.md Rule 0b warns about, and it is exactly how `_action_save` came to be
     guarded while `_action_retrieve` was not.
 
-    The tenant's folder must REALLY lie in their tree, or `PathEscape`. The tenant can write
-    their own project root (a sandbox environment mounts it read-write, the coder's shell
-    runs in it), so `Downloads` can be a link, and a write into it lands wherever the link
-    points: `open_for_write` refuses a link at the file's name, not in the folder above it.
-    Checked from the folder holding every account's root, so a root that is itself a link is
-    refused as well. NAMED BOUNDARY: a link swapped in between this check and the write is
-    followed for that one write. The owner's `~/Downloads` is not checked: it is their own
-    home, where a linked Downloads folder is an ordinary setup.
+    The tenant's folder must be no link, and neither may their root be, or `PathEscape`. The
+    tenant can write their own project root (a sandbox environment mounts it read-write, the
+    coder's shell runs in it), so `Downloads` can be a link, and a write into it lands
+    wherever the link points: `open_for_write` refuses a link at the file's name, not in the
+    folder above it. Being "inside" is not the question: a link to another account's root,
+    to the folder holding every root, or to the owner's chat folders beside them stays
+    inside every enclosing folder and still writes into someone else's files (an existing
+    file there is overwritten). So the resolved folder must be exactly the folder named, as
+    seen from the resolved parent of every account's root. NAMED BOUNDARY: a link swapped in
+    between this check and the write is followed for that one write. The owner's
+    `~/Downloads` is not checked: it is their own home, where a linked Downloads folder is
+    an ordinary setup.
     """
     from vaf.core.config import get_local_admin_scope_id
     from vaf.core.session import get_user_projects_root
@@ -135,7 +139,9 @@ def _download_dir(user_scope_id: Optional[str]) -> Path:
     if scope and scope != get_local_admin_scope_id():
         root = get_user_projects_root(scope)
         if root:
-            contained_path(root.parent, f"{root.name}/Downloads")
+            named = root.parent.resolve() / root.name / "Downloads"
+            if (root / "Downloads").resolve() != named:
+                raise PathEscape("the Downloads folder or its account folder is a link")
             dest = root / "Downloads"
             dest.mkdir(parents=True, exist_ok=True)
             return dest

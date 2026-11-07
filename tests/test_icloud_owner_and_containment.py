@@ -218,6 +218,27 @@ def test_listing_hides_links_out_and_refuses_walking_up(lab):
     assert all(m.content_hash != secret_hash for m in listed)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows drops a trailing space from a name")
+def test_a_name_with_trailing_whitespace_is_checked_as_it_is_opened(lab):
+    """`contained_path` trims what it checks: "in.txt " (a link out) was checked as the
+    in-root "in.txt" and then opened as itself. MUTATION: drop the whitespace refusal in
+    `_in_root` - red (the outside content is read and its hash listed)."""
+    prov = _owner(lab)
+    _link(lab.root / "in.txt ", lab.outside / "secret.txt")
+    spaced = str(lab.root / "in.txt ")
+    assert prov.get_file_metadata(spaced) is None
+    dest = lab.tmp / "dest.bin"
+    with pytest.raises(PathEscape):
+        prov.download_file(spaced, dest)
+    assert not dest.exists()
+    listed = prov.list_files("/")
+    assert {m.name for m in listed} == {"in.txt"}
+    secret_hash = hashlib.sha256(SECRET).hexdigest()
+    assert all(m.content_hash != secret_hash for m in listed)
+    assert prov.delete_file(spaced) is False
+    assert (lab.root / "in.txt ").is_symlink()
+
+
 # -- AC6: who gets a provider ------------------------------------------------------------
 
 @pytest.mark.parametrize("username,scope", [

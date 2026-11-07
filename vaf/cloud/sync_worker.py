@@ -68,7 +68,7 @@ def _run_sync_for_account(username: str, provider_name: str, account_id: str,
                           user_scope_id: Optional[str] = None) -> dict:
     """Run a single sync cycle for one account. Blocking — call via asyncio.to_thread."""
     from vaf.cloud.base import create_cloud_provider
-    from vaf.cloud.sync_engine import SyncEngine
+    from vaf.cloud.sync_engine import SyncEngine, sync_settings
     from vaf.cloud.sync_manifest import SyncManifest
 
     provider = create_cloud_provider(provider_name, username, account_id,
@@ -79,8 +79,7 @@ def _run_sync_for_account(username: str, provider_name: str, account_id: str,
 
     local_dir = _get_user_sync_dir(username, provider_name)
     manifest = SyncManifest(username, provider_name)
-    max_size = Config.get("cloud_sync_max_file_size_mb", 100) * 1024 * 1024
-    conflict = Config.get("cloud_sync_conflict_resolution", "last_write_wins")
+    max_size, conflict = sync_settings()
 
     engine = SyncEngine(
         provider=provider,

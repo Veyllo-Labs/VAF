@@ -43,6 +43,22 @@ def _identity():
     return ident.username, ident.scope
 
 
+def _to_cell(row) -> str:
+    """The `To` cell of one row: every address whole, as the cards show it (`to_shown`, the
+    ``cc_shown``/``bcc_shown`` lines), with the marks written in plain ASCII
+    (`shown_text.ascii_marks`): a Windows console encodes cp1252, and a ``\u27e8`` there
+    raises instead of printing. Rich markup in it is escaped, because a recipient is data."""
+    from rich.markup import escape
+
+    from vaf.core.shown_text import ascii_marks
+    cell = escape(ascii_marks(row.get("to_shown") or ""))
+    for label in ("cc", "bcc"):
+        shown = str(row.get(f"{label}_shown") or "")
+        if shown:
+            cell = f"{cell} [dim]{label}:[/dim] {escape(ascii_marks(shown))}"
+    return cell
+
+
 def _when(ts: float) -> str:
     if not ts:
         return ""
@@ -72,7 +88,9 @@ def list_pending(
     from rich.table import Table
     table = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
     for col in ("When", "Kind", "Id", "Channel", "To", "Preview"):
-        table.add_column(col)
+        # An address has no spaces to wrap at, and the default overflow would cut its tail
+        # with an ellipsis: the To column folds instead, so every address is printed whole.
+        table.add_column(col, overflow="fold" if col == "To" else "ellipsis")
     for row in rows:
         # Everything that came from a message is DATA and is escaped before it meets Rich:
         # the body was written by the model, the reason by a bridge, the recipient by whoever
@@ -91,12 +109,8 @@ def list_pending(
         files = [str(a) for a in (row.get("attachments") or []) if str(a)]
         if files:
             preview = f"{preview} [dim]files:[/dim] {escape(', '.join(files)[:60])}"
-        to = escape((row.get("recipient") or "")[:40])
-        for label in ("cc", "bcc"):
-            if str(row.get(label) or "").strip():
-                to = f"{to} [dim]{label}:[/dim] {escape(str(row.get(label)).strip()[:40])}"
         table.add_row(_when(row["created_ts"]), escape(str(row["kind"])), str(row["id"]),
-                      escape(str(row["channel"])), to, preview)
+                      escape(str(row["channel"])), _to_cell(row), preview)
     UI.console.print(table)
     UI.console.print("[dim]vaf outbox send <kind> <id>   vaf outbox discard <kind> <id>   "
                      "vaf outbox edit <kind> <id> --text ...[/dim]")

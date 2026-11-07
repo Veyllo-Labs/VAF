@@ -29,14 +29,21 @@ Design constraints of a PUBLIC guard for PRIVATE literals:
   catches the whole class, protects a fork of this repo as much as this one, and needs no
   secret to work.
 - ADDRESSES of this machine's own networks are derived at test time from its interfaces
-  (`vaf.network.binding.local_interfaces()`), never written down: every interface address,
-  plus the network of every VPN interface. An example address copied from a working setup
-  into a fixture names the private network it came from, and the needle list cannot be
-  published without doing the same. Examples belong in the documentation ranges of RFC 5737
-  (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24).
+  (`vaf.network.binding.local_interfaces()`), never written down: every private or
+  shared-space IPv4 address that function reports, plus the network of every VPN interface.
+  An example address copied from a working setup into a fixture names the private network
+  it came from, and the needle list cannot be published without doing the same. Examples
+  belong in the documentation ranges of RFC 5737 (192.0.2.0/24, 198.51.100.0/24,
+  203.0.113.0/24). Named gaps: IPv6 is not checked, because the product never prints an
+  IPv6 interface address (`local_interfaces` and `access_addresses` are IPv4 only, and
+  `public_addresses` leaves IPv6 out on purpose), so no access URL or pairing code a
+  fixture could be copied from carries one; an address split across lines or across
+  implicitly joined string literals is not found; an octet written with a leading zero is
+  not an address to `ipaddress` and is not found either.
 """
 import ipaddress
 import re
+import urllib.parse
 import subprocess
 from pathlib import Path
 
@@ -270,8 +277,10 @@ _IPV4_RE = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?!\.?\d)")
 def _machine_needles(interfaces):
     """The needles for `_machine_address_hits`, from `LocalInterface` rows.
 
-    Returns `(networks, hosts)`, each a dict mapping a needle to the interface it came from.
-    Every interface's own IPv4 address is a host needle. A VPN interface adds its network as
+    Returns `(networks, hosts)`, each a dict mapping a needle to the kind of the interface it
+    came from ("vpn" or "lan"). The kind, not the interface name, because a name can carry a
+    login (a WireGuard interface is named after its tunnel file) and the failure message
+    prints these values. Every interface's own IPv4 address is a host needle. A VPN interface adds its network as
     well, widened to the enclosing /24 when narrower: a VPN client is handed a /32 and its
     peers sit in the surrounding range, so without the widening the gateway address beside it
     is not found. Two networks are deliberately NOT needles. A LAN network: consumer routers
@@ -288,7 +297,7 @@ def _machine_needles(interfaces):
             continue
         if ip.version != 4:
             continue
-        hosts[ip] = iface.name
+        hosts[ip] = iface.kind
         if iface.kind != "vpn":
             continue
         try:
@@ -299,21 +308,40 @@ def _machine_needles(interfaces):
             continue
         if net.prefixlen > 24:
             net = net.supernet(new_prefix=24)
-        networks[net] = iface.name
+        networks[net] = iface.kind
     return networks, hosts
 
 
 def _machine_address_hits(text, networks, hosts):
-    """The IPv4 literals in `text` that are a host needle or lie in a network needle."""
+    """The IPv4 literals in `text` that are a host needle or lie in a network needle.
+
+    The text is scanned as written and once more percent-decoded: an escape that ends in a
+    digit ("%20" before an address) hides the address from the lookbehind, and "%2E" hides
+    its dots. A literal found in both views is reported once.
+    """
     found = set()
-    for literal in _IPV4_RE.findall(text):
-        try:
-            addr = ipaddress.IPv4Address(literal)
-        except ValueError:
-            continue                      # "198.51.100.256" and leading zeros are no address
-        if addr in hosts or any(addr in net for net in networks):
-            found.add(literal)
+    for view in (text, urllib.parse.unquote(text)):
+        for literal in _IPV4_RE.findall(view):
+            try:
+                addr = ipaddress.IPv4Address(literal)
+            except ValueError:
+                continue                  # "198.51.100.256" and leading zeros are no address
+            if addr in hosts or any(addr in net for net in networks):
+                found.add(literal)
     return sorted(found)
+
+
+def _machine_address_report(offenders, networks, hosts):
+    """The failure text: each hit with the KIND of needle it matched, never the interface
+    name, which can carry a login."""
+    def source(literal):
+        addr = ipaddress.IPv4Address(literal)
+        if addr in hosts:
+            return f"{hosts[addr].upper()} host address"
+        return "VPN network"
+
+    return "\n".join(f"  {rel}: " + ", ".join(f"{h} ({source(h)})" for h in hits)
+                     for rel, hits in sorted(offenders.items()))
 
 
 def test_no_address_of_this_machines_networks_in_tracked_content():
@@ -338,20 +366,12 @@ def test_no_address_of_this_machines_networks_in_tracked_content():
         hits = _machine_address_hits(text, networks, hosts)
         if hits:
             offenders[rel] = hits
-
-    def _source(literal):
-        addr = ipaddress.IPv4Address(literal)
-        if addr in hosts:
-            return f"address of {hosts[addr]}"
-        return "network of " + ", ".join(sorted({n for net, n in networks.items() if addr in net}))
-
     assert not offenders, (
         "An address of a network this machine is on appears in committed content (public "
         "repo). Use a documentation address from RFC 5737 instead (192.0.2.0/24, "
         "198.51.100.0/24, 203.0.113.0/24); a fixture produced by a script is regenerated "
         "from it, not edited:\n"
-        + "\n".join(f"  {k}: " + ", ".join(f"{h} ({_source(h)})" for h in v)
-                    for k, v in sorted(offenders.items()))
+        + _machine_address_report(offenders, networks, hosts)
     )
 
 
@@ -370,6 +390,9 @@ def test_the_machine_address_detector_actually_detects():
     assert hits("d=wss%3A%2F%2F198.51.100.1%3A8443%2Fapi", vpn) == ["198.51.100.1"]
     assert hits("the tunnel peer is 198.51.100.1.", vpn) == ["198.51.100.1"]
     assert hits("a different network: 198.51.101.1", vpn) == []
+    # An escape ending in a digit right before the address, and escaped dots.
+    assert hits("n=Firma%20198.51.100.1", vpn) == ["198.51.100.1"]
+    assert hits("d=wss%3A%2F%2F198%2E51%2E100%2E1%3A8443", vpn) == ["198.51.100.1"]
 
     lan = LocalInterface("eth0", "203.0.113.5", "203.0.113.0/24", "lan")
     # A LAN contributes its own address, never its network.
@@ -382,6 +405,24 @@ def test_the_machine_address_detector_actually_detects():
     # A longer dotted run is a version, and a field above 255 is no address.
     assert hits("nvidia-curand==1.198.51.100.7", vpn) == []
     assert hits("198.51.100.256 and 198.51.100.7.1", vpn) == []
+
+
+def test_the_machine_address_report_names_no_interface():
+    """The failure text says which kind of needle matched, never which interface: a
+    WireGuard interface is named after its tunnel file, and that name can be a login."""
+    from vaf.network.binding import LocalInterface
+
+    interfaces = (LocalInterface("wg-alice9x", "198.51.100.7", "198.51.100.7/32", "vpn"),
+                  LocalInterface("lan-bob7y", "203.0.113.5", "203.0.113.0/24", "lan"))
+    networks, hosts = _machine_needles(interfaces)
+    offenders = {"docs/x.md": _machine_address_hits(
+        "wss://198.51.100.1, 198.51.100.7 and 203.0.113.5", networks, hosts)}
+    report = _machine_address_report(offenders, networks, hosts)
+    for iface in interfaces:
+        assert iface.name not in report, report
+    assert "198.51.100.1 (VPN network)" in report, report
+    assert "198.51.100.7 (VPN host address)" in report, report
+    assert "203.0.113.5 (LAN host address)" in report, report
 
 
 # ── decisions are justified by reasons, never attributed to process ──────────────────

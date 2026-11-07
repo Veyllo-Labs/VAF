@@ -315,8 +315,8 @@ function WaitingDraft({ row, apiBase, onChanged }: CardProps) {
                     {/* Under a name, the address or number it stands for, whole and marked:
                         the name is free text, the address is where it goes. */}
                     <p className="text-xs text-gray-500 dark:text-[#9a9a9a] break-words">
-                        {row.name_shown ? <><Recipient text={row.to_shown || row.recipient} />{' · '}</> : null}
-                        {t('notSent')}{row.edited ? ` · ${t('edited')}` : ''}
+                        {row.name_shown ? <><Recipient text={row.to_shown || row.recipient} />{' · '}</> : null}{t('notSent')}
+                        {row.edited ? ` · ${t('edited')}` : ''}
                     </p>
                 </div>
             </div>

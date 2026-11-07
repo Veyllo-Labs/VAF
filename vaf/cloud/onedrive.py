@@ -16,6 +16,8 @@ from typing import List, Optional
 
 import requests
 
+from vaf.core.path_jail import open_for_write
+
 from vaf.cloud.base import (
     AuthMethod,
     CloudFileMetadata,
@@ -346,7 +348,7 @@ class OneDriveProvider(CloudProvider):
             )
             resp.raise_for_status()
 
-            with open(local_path, "wb") as fh:
+            with open_for_write(local_path, "wb") as fh:
                 for chunk in resp.iter_content(chunk_size=8192):
                     fh.write(chunk)
 

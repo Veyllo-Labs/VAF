@@ -959,7 +959,7 @@ For **Google Drive**, create an OAuth 2.0 Client (Web application) in [Google Cl
 | `search` | `query` (required), `mime_type` (optional) | Search entire cloud by filename in one call; returns matches with `file_id` (preferred for finding files) |
 | `browse` | `folder_id` (default `root`) | List folders and files in cloud; returns `file_id` for navigation |
 | `read` | `file_id` | Download to temp, extract text with Librarian, return content, delete temp |
-| `download` | `file_id` | Download file to user's Downloads folder |
+| `download` | `file_id` | Download file to user's Downloads folder (only under a plain file name; a cloud name with a path in it is refused) |
 | `save` | `file_path`, `remote_path` | Copy local file into VAF Sync folder for next sync |
 | `list` | - | List files in local VAF Sync folder |
 | `retrieve` | `file_path` | Copy file from local sync folder to Downloads |

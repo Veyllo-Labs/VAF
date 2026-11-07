@@ -18,6 +18,8 @@ from urllib.parse import quote
 
 import requests
 
+from vaf.core.path_jail import open_for_write
+
 from vaf.cloud.base import (
     AuthMethod,
     CloudFileMetadata,
@@ -466,7 +468,7 @@ class GoogleDriveProvider(CloudProvider):
                 )
                 resp.raise_for_status()
                 local_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(local_path, "wb") as fh:
+                with open_for_write(local_path, "wb") as fh:
                     for chunk in resp.iter_content(chunk_size=8192):
                         fh.write(chunk)
                 logger.info("Exported %s to %s (mime=%s)", file_id, local_path, export_mime)
@@ -487,7 +489,7 @@ class GoogleDriveProvider(CloudProvider):
             )
             resp.raise_for_status()
 
-            with open(local_path, "wb") as fh:
+            with open_for_write(local_path, "wb") as fh:
                 for chunk in resp.iter_content(chunk_size=8192):
                     fh.write(chunk)
 

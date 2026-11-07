@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from vaf.core.config import Config
-from vaf.core.path_jail import PathEscape, contained_path
+from vaf.core.path_jail import PathEscape, contained_path, safe_entry_name
 from vaf.core.platform import Platform
 from vaf.tools.base import BaseTool
 from vaf.tools.filesystem import is_safe_path, user_jail
@@ -443,8 +443,33 @@ def _action_download(username: str, account_id: str, provider: str, file_id: Opt
             return "Cannot download a folder. Use browse to list folder contents."
 
         downloads = _download_dir(user_scope_id)
-        dest = downloads / meta.name
-        prov.download_file(file_id, dest)
+        # The name is the remote file's, chosen by whoever owns or shared it: Drive allows a
+        # "/" in a name, so `downloads / meta.name` walked out of Downloads ("../" or a
+        # leading "/") into any folder, VAF's own data included.
+        # contained_path answers with the RESOLVED path, so it is the check only: the write
+        # goes to the name itself, where open_for_write refuses a link instead of following it.
+        try:
+            name = safe_entry_name(meta.name)
+        except PathEscape:
+            return (f"Refused: the cloud file's name {meta.name!r} is not a plain file name, so "
+                    "it cannot be saved under it; nothing was saved. Use read(file_id=...) for "
+                    "its content.")
+        try:
+            contained_path(downloads, name)
+        except PathEscape:
+            return (f"Refused: {downloads / name} points outside the Downloads folder; nothing "
+                    "was saved. Remove that entry or use read(file_id=...) for the content.")
+        dest = downloads / name
+        # The provider fetches into a private folder; the one write into Downloads is the
+        # copy below.
+        import tempfile
+        staging = Path(tempfile.mkdtemp(prefix="vaf_cloud_"))
+        try:
+            fetched = staging / "download"
+            prov.download_file(file_id, fetched)
+            _copy_into(fetched, dest)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
         return f"Downloaded '{meta.name}' to {dest}"
     except NotImplementedError:
         return f"{provider} does not support download by file_id."
@@ -494,6 +519,17 @@ def _action_read(username: str, account_id: str, provider: str, file_id: Optiona
         return f"Read failed: {e}"
 
 
+def _copy_into(source: Path, dest: Path) -> None:
+    """Copy ``source`` to ``dest`` through `open_for_write`: never through a link at the
+    name and never into VAF's own data. A tenant's Downloads folder lies in their project
+    root, which a sandbox environment of theirs can mount and plant a link in; shutil.copy2
+    followed it."""
+    from vaf.core.path_jail import open_for_write
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(source, "rb") as src, open_for_write(dest, "wb") as out:
+        shutil.copyfileobj(src, out)
+
+
 def _action_retrieve(username: str, account_id: str, file_path: Optional[str], user_scope_id: Optional[str] = None) -> str:
     """Download a file from cloud to the user's Downloads folder."""
     if not file_path:
@@ -517,7 +553,7 @@ def _action_retrieve(username: str, account_id: str, file_path: Optional[str], u
     downloads = _download_dir(user_scope_id)
     dest = downloads / source.name
     try:
-        shutil.copy2(str(source), str(dest))
+        _copy_into(source, dest)
         return f"File downloaded to: {dest}"
     except Exception as e:
         return f"Failed to retrieve file: {e}"

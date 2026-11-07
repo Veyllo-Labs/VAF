@@ -495,6 +495,235 @@ def test_move_file_still_moves_a_folder_elsewhere(lab):
     assert (lab.home / "Documents" / "b" / "x.txt").read_text() == "x"
 
 
+# -- the cloud: names a remote owner chose, and the copy into Downloads -------------------
+
+class _DriveResponse:
+    def __init__(self, body: bytes):
+        self.body = body
+
+    def raise_for_status(self):
+        return None
+
+    def iter_content(self, chunk_size=1):
+        yield self.body
+
+
+def _drive(name: str, body: bytes, monkeypatch):
+    """The real Google Drive provider with only its HTTP call and its login stubbed: the
+    remote file is called ``name`` and holds ``body``."""
+    import vaf.cloud.google_drive as gd
+    from vaf.cloud.base import CloudFileMetadata
+    monkeypatch.setattr(gd.requests, "get", lambda *a, **k: _DriveResponse(body))
+    prov = gd.GoogleDriveProvider.__new__(gd.GoogleDriveProvider)
+    prov._access_token = "token"
+    prov.authenticate = lambda: True
+    prov.get_file_metadata = lambda file_id: CloudFileMetadata(
+        file_id=file_id, name=name, path="/" + name, size=len(body), modified_time=0.0,
+        mime_type="text/x-python")
+    return prov
+
+
+@pytest.mark.parametrize("spelling", ["walks up", "rooted", "walks up elsewhere"])
+def test_a_cloud_download_named_like_a_path_stays_out_of_the_state(lab, monkeypatch, spelling):
+    """Drive allows "/" in a file name, and whoever shares a file names it. Into the state
+    the write would refuse on its own; a walk to any other folder only the name check stops.
+
+    MUTATION: back to ``dest = downloads / meta.name`` with both name checks gone - red (the
+    "elsewhere" file is written outside Downloads, the state cases answer "Download failed")."""
+    from vaf.core.platform import Platform
+    import vaf.tools.cloud_storage as cs
+    downloads = Platform.downloads_dir()
+    elsewhere = lab.home / "escaped.py"
+    if spelling == "walks up":
+        name = os.path.relpath(lab.new_tool, downloads)
+        assert name.startswith("..")
+    elif spelling == "walks up elsewhere":
+        name = os.path.relpath(elsewhere, downloads)
+    else:
+        name = str(lab.new_tool)
+    prov = _drive(name, b"print('planted')\n", monkeypatch)
+    monkeypatch.setattr(cs, "create_cloud_provider", lambda *a, **k: prov)
+    out = cs._action_download("alice", "acc1", "google_drive", "f1")
+    assert out.startswith("Refused"), out
+    _untouched(lab)
+    assert not lab.new_tool.exists() and not elsewhere.exists()
+
+
+def test_a_cloud_download_with_a_plain_name_lands_in_downloads(lab, monkeypatch):
+    from vaf.core.platform import Platform
+    import vaf.tools.cloud_storage as cs
+    prov = _drive("report.pdf", b"%PDF", monkeypatch)
+    monkeypatch.setattr(cs, "create_cloud_provider", lambda *a, **k: prov)
+    out = cs._action_download("alice", "acc1", "google_drive", "f1")
+    assert out.startswith("Downloaded"), out
+    assert (Platform.downloads_dir() / "report.pdf").read_bytes() == b"%PDF"
+
+
+def test_a_cloud_download_does_not_write_through_a_link_in_downloads(lab, monkeypatch):
+    """A link inside Downloads to another file inside Downloads is contained, so only the
+    write itself can refuse it. MUTATION: copy into Downloads with open() in _copy_into -
+    red (the link's target is overwritten)."""
+    from vaf.core.platform import Platform
+    import vaf.tools.cloud_storage as cs
+    downloads = Platform.downloads_dir()
+    (downloads / "keep").mkdir()
+    kept = downloads / "keep" / "old.pdf"
+    kept.write_bytes(b"old")
+    _link(downloads / "report.pdf", kept)
+    prov = _drive("report.pdf", b"new", monkeypatch)
+    monkeypatch.setattr(cs, "create_cloud_provider", lambda *a, **k: prov)
+    out = cs._action_download("alice", "acc1", "google_drive", "f1")
+    assert out.startswith("Download failed"), out
+    assert kept.read_bytes() == b"old"
+
+
+def test_a_cloud_download_refuses_a_link_in_downloads_that_points_out(lab, monkeypatch):
+    """MUTATION: drop the contained_path check in _action_download - red (the write then
+    refuses on its own, with a "Download failed" that does not say why)."""
+    from vaf.core.platform import Platform
+    import vaf.tools.cloud_storage as cs
+    target = lab.data / "mcp_servers.json"
+    _link(Platform.downloads_dir() / "mcp_servers.json", target)
+    prov = _drive("mcp_servers.json", b'{"servers": {}}', monkeypatch)
+    monkeypatch.setattr(cs, "create_cloud_provider", lambda *a, **k: prov)
+    out = cs._action_download("alice", "acc1", "google_drive", "f1")
+    assert out.startswith("Refused") and "outside the Downloads folder" in out, out
+    assert not target.exists()
+
+
+def _provider(name: str, body: bytes, monkeypatch, source: Path):
+    """One provider with its HTTP call (iCloud: its local folder) stubbed, ready to download
+    file "f1" holding ``body``."""
+    import importlib
+    from vaf.cloud.base import CloudFileMetadata
+    mod = importlib.import_module(f"vaf.cloud.{name}")
+    if name == "icloud":
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_bytes(body)
+        return mod.ICloudProvider.__new__(mod.ICloudProvider), str(source)
+    for verb in ("get", "post"):
+        monkeypatch.setattr(mod.requests, verb, lambda *a, **k: _DriveResponse(body))
+    if name == "google_drive":
+        prov = _drive("x.pdf", body, monkeypatch)
+        prov.get_file_metadata = lambda fid: CloudFileMetadata(
+            file_id=fid, name="x.pdf", path="/x.pdf", size=len(body), modified_time=0.0,
+            mime_type="application/pdf")
+        return prov, "f1"
+    cls = {"onedrive": "OneDriveProvider", "dropbox_provider": "DropboxProvider",
+           "nextcloud": "NextcloudProvider"}[name]
+    prov = getattr(mod, cls).__new__(getattr(mod, cls))
+    prov._access_token = "t"
+    prov._headers = lambda *a, **k: {}
+    if name == "nextcloud":
+        prov._session = SimpleNamespace(get=lambda *a, **k: _DriveResponse(body))
+        prov._url_for = lambda fid: "https://cloud.example.org/dav/f1"
+        prov._auth = lambda: None
+    return prov, "f1"
+
+
+@pytest.mark.parametrize("provider", ["google_drive", "onedrive", "dropbox_provider",
+                                      "nextcloud", "icloud"])
+def test_a_provider_download_does_not_write_through_a_link(lab, monkeypatch, provider):
+    """Each provider's own download, into a name that is a link to the MCP list. The sync
+    engine hands them paths in the sync folder, which a mounted environment can plant a
+    link in; the refusal must be the write's own (WriteRefused), not an earlier failure.
+
+    MUTATION: one provider's write back to open() (iCloud: shutil.copy2) - its case red."""
+    body = b'{"servers": {"x": {"command": "sh"}}}'
+    target = lab.data / "mcp_servers.json"
+    link = _link(lab.ws / "mcp_servers.json", target)
+    prov, file_id = _provider(provider, body, monkeypatch, lab.home / "icloud" / "m.json")
+    with pytest.raises(WriteRefused):
+        prov.download_file(file_id, link)
+    assert not target.exists() and link.is_symlink()
+    plain = lab.ws / "plain.json"
+    assert prov.download_file(file_id, plain) == plain and plain.read_bytes() == body
+
+
+def _tenant(lab, monkeypatch):
+    """A tenant's Downloads folder: inside their own project root, which a sandbox
+    environment of theirs can mount."""
+    import vaf.core.config as config_mod
+    import vaf.core.session as session_mod
+    import vaf.tools.cloud_storage as cs
+    root = lab.home / "Documents" / "VAF_Projects" / "ab12cd34"
+    monkeypatch.setattr(session_mod, "get_user_projects_root", lambda scope: root)
+    monkeypatch.setattr(config_mod, "get_local_admin_scope_id", lambda: "admin-scope")
+    sync = lab.home / "sync"
+    sync.mkdir()
+    monkeypatch.setattr(cs, "_get_sync_dir", lambda username, account_id: sync)
+    downloads = root / "Downloads"
+    downloads.mkdir(parents=True)
+    return cs, sync, downloads
+
+
+def test_retrieve_does_not_copy_through_a_link_in_a_tenants_downloads(lab, monkeypatch):
+    """MUTATION: back to shutil.copy2 in _action_retrieve - red (the MCP list appears with
+    the tenant's content)."""
+    cs, sync, downloads = _tenant(lab, monkeypatch)
+    (sync / "mcp_servers.json").write_text('{"servers": {"x": {"command": "sh"}}}')
+    target = lab.data / "mcp_servers.json"
+    _link(downloads / "mcp_servers.json", target)
+    out = cs._action_retrieve("bob", "acc1", "mcp_servers.json", "tenant-scope")
+    assert out.startswith("Failed to retrieve"), out
+    assert not target.exists()
+    _untouched(lab)
+
+
+def test_retrieve_copies_an_ordinary_file(lab, monkeypatch):
+    cs, sync, downloads = _tenant(lab, monkeypatch)
+    (sync / "notes.txt").write_text("hello")
+    out = cs._action_retrieve("bob", "acc1", "notes.txt", "tenant-scope")
+    assert out.startswith("File downloaded"), out
+    assert (downloads / "notes.txt").read_text() == "hello"
+
+
+@pytest.mark.parametrize("remote_path,lands", [
+    ("/notes.txt", "notes.txt"), ("/sub/notes.txt", "sub/notes.txt"),
+    ("/../../escape.txt", None), ("/sub/../../escape.txt", None), ("/C:/escape.txt", None),
+])
+def test_the_sync_engine_holds_a_remote_path_inside_the_sync_folder(lab, monkeypatch,
+                                                                    remote_path, lands):
+    """Remote paths are "/" plus remote names, and a name may carry "/" and "..". Joined as
+    they were, the leading "/" swallowed the sync folder.
+
+    MUTATION: back to ``self.local_sync_dir / rel_path`` - red (the plain cases land outside
+    the sync folder, the escapes are written)."""
+    import vaf.core.threat_db as threat_db
+    from vaf.cloud.base import CloudFileMetadata
+    from vaf.cloud.sync_engine import SyncEngine, SyncResult
+    monkeypatch.setattr(threat_db, "inspect_upload_file",
+                        lambda *a, **k: SimpleNamespace(blocked=False))
+    sync = lab.home / "sync"
+    sync.mkdir()
+    written = []
+
+    class _Provider:
+        def download_file(self, file_id, local_path):
+            written.append(Path(local_path))
+            Path(local_path).write_bytes(b"x")
+            return local_path
+
+    engine = SyncEngine(_Provider(), SimpleNamespace(upsert_file=lambda **k: None), sync, 10**6)
+    meta = CloudFileMetadata(file_id="f1", name="n", path=remote_path, size=1, modified_time=0.0)
+    payload = {"remote_file": meta, "remote_path": remote_path, "manifest": None}
+    if lands is None:
+        with pytest.raises(ValueError):
+            engine._execute_download(payload, SyncResult())
+        assert written == []
+    else:
+        engine._execute_download(payload, SyncResult())
+        assert written == [(sync / lands).resolve()]
+        assert (sync / lands).read_bytes() == b"x"
+
+
+def test_the_refusal_says_what_to_do(lab):
+    """MUTATION: drop "; choose another folder" from the state refusal - red."""
+    with pytest.raises(WriteRefused) as caught:
+        open_for_write(lab.new_tool, "wb")
+    assert str(caught.value).endswith("; choose another folder")
+
+
 # -- the guard: no new raw write in vaf/tools ------------------------------------------------
 
 # (module, enclosing function) -> (number of raw writes, why it is not a write under a name a
@@ -506,8 +735,6 @@ RAW_WRITES = {
     ("vaf/core/ssh.py", "ensure_identity"): (1, "the account's public key in its own ssh folder"),
     ("vaf/tools/browser_agent.py", "_decrypt_session_to_tmp"):
         (1, "O_EXCL in a fresh private temp folder"),
-    ("vaf/tools/cloud_storage.py", "_action_retrieve"):
-        (1, "into the Downloads folder itself, a standard folder no environment can mount"),
     ("vaf/tools/cloud_storage.py", "_action_save"):
         (1, "contained_path resolves the target inside the sync folder"),
     ("vaf/tools/research_agent.py", "ResearchAgentTool.run._run_research_loop"):
@@ -520,8 +747,10 @@ RAW_WRITES = {
     ("vaf/tools/workflow_executor.py", "_wf_log"): (1, "VAF's own log file"),
 }
 
-# The modules a write tool hands a model-chosen path to, besides vaf/tools itself.
+# The modules a write tool hands a model-chosen path to, besides vaf/tools itself. The cloud
+# providers write what a remote owner named, so all of vaf/cloud is scanned too.
 _SINKS = ("vaf/core/ftp.py", "vaf/core/ssh.py", "vaf/core/document_formatting.py")
+_SINK_FOLDERS = ("vaf/tools", "vaf/cloud")
 
 
 def _mode(call, pos):
@@ -563,7 +792,8 @@ def _raw_write(call: ast.Call) -> bool:
 
 
 def _raw_writes():
-    files = sorted((_REPO / "vaf" / "tools").rglob("*.py")) + [_REPO / s for s in _SINKS]
+    files = [f for folder in _SINK_FOLDERS for f in sorted((_REPO / folder).rglob("*.py"))]
+    files += [_REPO / s for s in _SINKS]
     found = Counter()
     for path in files:
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -584,7 +814,7 @@ def _raw_writes():
 
 def test_no_new_raw_write_in_the_tools():
     """MUTATION: put one write back on open() (download_file's .part, the coder's PARTIAL_
-    backup) - red, a new key."""
+    backup, a cloud provider's download, cloud_storage's retrieve) - red, a new key."""
     assert dict(_raw_writes()) == {k: n for k, (n, _why) in RAW_WRITES.items()}
 
 
@@ -611,6 +841,8 @@ def test_the_writers_named_in_the_docs_use_the_safe_open():
         "vaf/tools/research_agent.py", "vaf/tools/render_check.py",
         "vaf/core/document_formatting.py", "vaf/tools/coder.py",
         "vaf/tools/coder_templates/__init__.py",
+        "vaf/tools/cloud_storage.py", "vaf/cloud/google_drive.py", "vaf/cloud/onedrive.py",
+        "vaf/cloud/dropbox_provider.py", "vaf/cloud/nextcloud.py", "vaf/cloud/icloud.py",
     }
     users = set()
     for rel in expected:

@@ -22,6 +22,8 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
+from vaf.core.path_jail import open_for_write
+
 from vaf.cloud.base import (
     AuthMethod,
     CloudFileMetadata,
@@ -32,6 +34,14 @@ from vaf.cloud.base import (
 logger = logging.getLogger("vaf.cloud.icloud")
 
 ICLOUD_BASE = Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs"
+
+
+
+def _copy_file(source: Path, dest: Path) -> None:
+    """A copy that never writes through a link at ``dest`` nor into VAF's own data
+    (`open_for_write`); shutil.copy2 followed one."""
+    with open(source, "rb") as src, open_for_write(dest, "wb") as out:
+        shutil.copyfileobj(src, out)
 
 
 class ICloudProvider(CloudProvider):
@@ -155,7 +165,7 @@ class ICloudProvider(CloudProvider):
         dest.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            shutil.copy2(str(local_path), str(dest))
+            _copy_file(local_path, dest)
             logger.info("Copied %s to %s (%d bytes)", local_path.name, dest, dest.stat().st_size)
             return self._to_metadata(dest)
         except OSError as exc:
@@ -174,7 +184,7 @@ class ICloudProvider(CloudProvider):
         local_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            shutil.copy2(str(source), str(local_path))
+            _copy_file(source, local_path)
             logger.info("Copied %s to %s", source.name, local_path)
             return local_path
         except OSError as exc:

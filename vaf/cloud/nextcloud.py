@@ -24,6 +24,8 @@ from xml.etree import ElementTree as ET
 
 import requests
 
+from vaf.core.path_jail import open_for_write
+
 from vaf.cloud.base import (
     AuthMethod,
     CloudFileMetadata,
@@ -356,7 +358,7 @@ class NextcloudProvider(CloudProvider):
             resp = self._http.get(url, auth=self._auth(), stream=True, timeout=120)
             resp.raise_for_status()
 
-            with open(local_path, "wb") as fh:
+            with open_for_write(local_path, "wb") as fh:
                 for chunk in resp.iter_content(chunk_size=8192):
                     fh.write(chunk)
 

@@ -79,7 +79,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   account could write into the folders where VAF keeps its custom tools (Python it runs at
   every start), skills, workflows, MCP server list and tool permissions, from any chat,
   messenger, workflow or automation. That is now refused for every account, also when a file
-  in the chat's folder is a link that points there; custom tools, skills and workflows are
+  in the chat's folder is a link that points there or a cloud file's name contains a path
+  (a cloud download is saved only under a plain file name); custom tools, skills and workflows are
   still made with their own tools, and reading is unchanged. Update, and if you are unsure,
   look through the `custom_tools` folder in VAF's data directory (on Linux
   `~/.local/share/vaf/custom_tools`) for tools you did not create.

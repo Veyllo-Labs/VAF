@@ -23,6 +23,7 @@ from vaf.cloud.base import (
     is_syncable,
 )
 from vaf.cloud.sync_manifest import SyncManifest
+from vaf.core.path_jail import contained_path
 
 logger = logging.getLogger("vaf.cloud.sync_engine")
 
@@ -340,7 +341,11 @@ class SyncEngine:
         """Download a file from cloud to local."""
         remote_file: CloudFileMetadata = payload["remote_file"]
         rel_path = payload["remote_path"]
-        local_path = self.local_sync_dir / rel_path
+        # The remote path is built from remote names ("/" + name), and a name may carry "/"
+        # and "..": joined as it was, a leading "/" swallowed the sync folder and the rest
+        # named any folder on this machine. Held inside the sync folder; PathEscape fails
+        # this one action (logged by the caller), never the sync.
+        local_path = contained_path(self.local_sync_dir, rel_path.lstrip("/"))
 
         local_path.parent.mkdir(parents=True, exist_ok=True)
 

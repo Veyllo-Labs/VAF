@@ -257,7 +257,7 @@ def open_for_write(path, mode: str = "wb", *, exclusive: bool = False,
     if not name:
         raise WriteRefused(f"refusing to write {raw}: it names a folder, not a file")
     if is_vaf_state(raw):
-        raise WriteRefused(f"refusing to write {raw}: it is VAF's own data")
+        raise WriteRefused(f"refusing to write {raw}: it is VAF's own data; choose another folder")
     flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0)
     if exclusive:
         flags |= os.O_EXCL
@@ -292,7 +292,8 @@ def _open_in_folder(parent: str, name: str, flags: int, raw: str) -> int:
     try:
         real = os.path.join(_fd_path(dfd, parent), name)
         if is_vaf_state(real):
-            raise WriteRefused(f"refusing to write {raw}: it lands in VAF's own data ({real})")
+            raise WriteRefused(f"refusing to write {raw}: it lands in VAF's own data ({real}); "
+                               "choose another folder")
         try:
             return os.open(name, flags, 0o666, dir_fd=dfd)
         except OSError as e:
@@ -329,5 +330,6 @@ def _open_without_dir_fd(raw: str, flags: int) -> int:
         finally:
             if fd >= 0:
                 os.close(fd)
-        raise WriteRefused(f"refusing to write {raw}: it lands in VAF's own data or is a link")
+        raise WriteRefused(f"refusing to write {raw}: it lands in VAF's own data or is a link; "
+                           "choose another folder")
     return fd

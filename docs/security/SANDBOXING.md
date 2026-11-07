@@ -453,9 +453,15 @@ handle) is asked `is_vaf_state` again, and only a regular file is written (a pip
 without blocking). That covers `download_file` and the `.part` files of the `ssh` and `ftp`
 downloads, `document_writer`, `document_agent` and `research_agent` (text, Markdown and Word),
 `render_check`'s screenshot, and the coder's own writes into its project (the `PARTIAL_` backup,
-the default `.gitignore`, the README of the document phase, the template files). A guard test
-(`tests/test_writes_do_not_follow_links.py`) refuses a new raw write in `vaf/tools` that is not
-on its reviewed list.
+the default `.gitignore`, the README of the document phase, the template files), and the
+cloud: `cloud_storage` `download` and `retrieve` copy into the Downloads folder through it (a
+tenant's Downloads folder lies in their own project root, which an environment of theirs can
+mount), and every provider writes its downloads through it. A cloud file's name is the remote
+owner's choice and may carry `/` and `..`: `download` saves only under a plain file name
+(`vaf.safe_entry_name`, held inside Downloads by `vaf.contained_path`), and the sync engine
+holds each remote path inside the local sync folder. A guard test
+(`tests/test_writes_do_not_follow_links.py`) refuses a new raw write in `vaf/tools` and
+`vaf/cloud` that is not on its reviewed list.
 
 **Named boundaries.** On Windows there is no open relative to a folder handle and no
 `O_NOFOLLOW`: a link at the name is refused and the real path is checked before and after the
@@ -463,7 +469,9 @@ open, but a link or junction swapped in between is followed for that one open (a
 creates in VAF's state is removed again). `write_file` and `edit_file` write a temporary file
 beside the target and rename it into place; the rename resolves the folder again, so a folder
 swapped for a link between the check and the rename carries the file with it. That takes a
-process racing the write from inside a mounted folder. A hard link is not seen, but a sandbox
+process racing the write from inside a mounted folder. A Word export is no longer replaced
+atomically: it is built and checked in memory, so every failure before the first byte leaves
+the old file alone, but a failed write on a full disk can leave a partial file. A hard link is not seen, but a sandbox
 environment cannot make one to a file outside its mount, and a mount that holds VAF's state is
 refused. When neither `Documents/VAF` nor `Downloads/VAF` can be created,
 `Platform.get_vaf_output_dir()` falls back to `~/.vaf/output`, inside VAF's own state. Its one

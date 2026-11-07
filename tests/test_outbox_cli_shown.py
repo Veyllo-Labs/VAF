@@ -22,7 +22,7 @@ LONG = "a.very.long.mailbox.name.for.the.test@" + "sub." * 6 + "example.org"
 
 def _row():
     row = {"kind": "mail", "id": 3, "ref": "mail:3", "channel": "mail", "tool": "send_mail",
-           "recipient": LONG, "recipient_name": "", "cc": "Ivan <ivan@exаmple.com>",
+           "recipient": LONG, "recipient_name": "", "cc": "Ivan " + "X" * 50 + " <ivan@exаmple.com>",
            "bcc": ", ".join(f"b{i}@example.org" for i in range(8)) + ", evil@attacker.test",
            "attachments": [], "subject": "x", "preview": "Hallo", "created_ts": 1.0,
            "state": "held", "error": ""}
@@ -35,7 +35,9 @@ def test_the_to_cell_is_whole_and_ascii():
     from rich.text import Text
     cell = Text.from_markup(cmd._to_cell(_row())).plain
     assert LONG in cell
-    assert "ivan@ex<U+0430>mple.com [xn--exmple-4nf.com] (Ivan)" in cell
+    # The name is cut with an ellipsis, which a cp1252 console cannot print either.
+    assert "ivan@ex<U+0430>mple.com [xn--exmple-4nf.com] (Ivan XXX" in cell
+    assert "X<U+2026>)" in cell
     assert cell.endswith("evil@attacker.test")
     cell.encode("cp1252")
     assert cell.isascii()

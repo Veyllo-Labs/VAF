@@ -524,7 +524,7 @@ def test_the_wire_literals_match_on_both_sides():
     assert re.match(r"^NOT SENT YET\. Draft (mail|call):(\d+)", result)
     # The page hides exactly the closing sentence and draws the wake row by the prefix.
     assert "const cleanAnswer = isBot ? (isDraftTurnEnd(answer) ? '' : withoutOptions(stripToolCallsJSON(answer), turnAsks)) : answer;" in PAGE
-    assert "msg.kind === 'draft' || _wakeContent.startsWith(DRAFT_WAKE_PREFIX)" in PAGE
+    assert "msg.kind === 'draft' || (!msg.kind && _wakeContent.startsWith(DRAFT_WAKE_PREFIX))" in PAGE
     assert "return String(content ?? '').trim() === DRAFT_TURN_END;" in REFS
 
 

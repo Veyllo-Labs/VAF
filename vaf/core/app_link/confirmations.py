@@ -203,26 +203,29 @@ def _call_args(row: Dict[str, Any], username: str, scope: str) -> Dict[str, Any]
 
 def send_what(row: Dict[str, Any], args: Dict[str, Any], lang: Optional[str]) -> str:
     """The card's text for a draft: the headline, then whom it goes to (the name when known
-    and the address), every Cc and Bcc, the subject, the attachment names and the whole text
-    of a mail; for a WhatsApp message the number, every further argument of the call (a voice
-    message's language, the file) and the text. Nothing is cut."""
+    and the address), every Cc and Bcc, the subject and the attachment names of a mail, or
+    every further argument of a WhatsApp call (a voice message's language, the file), and the
+    whole text last. Shown as the action cards show their arguments
+    (`agent_origin.card_lines`: invisible characters made visible, continuation lines
+    indented, the short ones first), so no subject or text can write a line that reads as a
+    recipient. Nothing is cut."""
     from vaf.core import outbound_hold
-    from vaf.core.agent_origin import _arg_text, confirm_headline
+    from vaf.core.agent_origin import card_lines, confirm_headline
     mail = str(row.get("channel") or "") == "mail"
     head = confirm_headline("send_mail" if mail else "send_whatsapp", lang) or (
         "Send a mail" if mail else "Send a WhatsApp message")
-    lines = [f"to: {outbound_hold._addressee(row)}"]
     if mail:
-        for key in ("cc", "bcc", "subject"):
-            if str(row.get(key) or "").strip():
-                lines.append(f"{key}: {row.get(key)}")
+        middle = [(key, row.get(key)) for key in ("cc", "bcc", "subject")
+                  if str(row.get(key) or "").strip()]
         if row.get("attachments"):
-            lines.append("attachments: " + ", ".join(str(a) for a in row["attachments"]))
-        lines.append(f"body: {row.get('preview') or ''}")
+            middle.append(("attachments", ", ".join(str(a) for a in row["attachments"])))
+        text = ("body", row.get("preview") or "")
     else:
         skip = {"to_phone", "phone_number", "message"}
-        lines += [f"{key}: {_arg_text(args[key])}" for key in sorted(args) if key not in skip]
-        lines.append(f"message: {row.get('preview') or ''}")
+        middle = [(key, args[key]) for key in sorted(args) if key not in skip]
+        text = ("message", row.get("preview") or "")
+    lines = (card_lines([("to", outbound_hold._addressee(row))]) + card_lines(middle)
+             + card_lines([text]))
     return "\n".join([head, ""] + lines)
 
 
@@ -588,7 +591,8 @@ def run_confirmed(agent: Any, task: Any) -> Optional[str]:
     task names no card that is approved for it (claimed already, cancelled, or forgotten by a
     restart): then no turn runs, and nothing either.
 
-    The card is claimed first (``approved`` -> ``running``). An action runs through
+    The card is claimed first (``approved`` -> ``running``), and only while the device that
+    tapped Yes still stands (else it is settled as cancelled). An action runs through
     ``agent.execute_tool`` with the stored arguments, on the agent the runner bound to this
     turn (the device row's identity, ``asked_by_agent`` standing), inside
     ``agent_origin.confirmed_call_scope``. A send is read again: sent only while it waits and
@@ -597,6 +601,9 @@ def run_confirmed(agent: Any, task: Any) -> Optional[str]:
     decision note does not tell it twice."""
     meta = task.metadata if isinstance(getattr(task, "metadata", None), dict) else {}
     cid = str(meta.get("app_confirm_id") or "")
+    # The device that tapped Yes must still stand when the call runs: one removed while its
+    # confirmed turn waited in the queue (a lost phone) runs nothing.
+    stands = devices.stands(str(meta.get("app_device_id") or ""))
     with _lock():
         entry = _cards.get(cid)
         if entry is None or entry.state != "approved" \
@@ -604,7 +611,13 @@ def run_confirmed(agent: Any, task: Any) -> Optional[str]:
                 or entry.scope != str(meta.get("user_scope_id") or "") \
                 or entry.ask_id != str(meta.get("app_ask_id") or ""):
             return None
-        entry.state = "running"
+        if not stands:
+            entry.state, entry.decided = "cancelled", time.time()
+        else:
+            entry.state = "running"
+    if not stands:
+        _settled(entry, "cancelled")
+        return None
     try:
         body = _run_send(agent, entry) if entry.is_send else _run_action(agent, entry)
     finally:
@@ -614,7 +627,7 @@ def run_confirmed(agent: Any, task: Any) -> Optional[str]:
 
 
 def _run_action(agent: Any, entry: Pending) -> str:
-    from vaf.core.agent_origin import call_digest, confirmed_call_scope
+    from vaf.core.agent_origin import call_digest, confirmed_call_scope, confirmed_result_text
     try:
         args = json.loads(entry.args_json or "{}")
     except Exception:
@@ -624,7 +637,7 @@ def _run_action(agent: Any, entry: Pending) -> str:
     with confirmed_call_scope(entry.tool, entry.digest):
         result = agent.execute_tool(entry.tool, dict(args))
     return (f"Your user CONFIRMED '{entry.tool}' in the Veyllo App, and it ran once just now. "
-            f"Its result:\n{result}")
+            f"Its result:\n{confirmed_result_text(entry.tool, result)}")
 
 
 def _run_send(agent: Any, entry: Pending) -> str:

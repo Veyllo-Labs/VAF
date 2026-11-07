@@ -10001,17 +10001,19 @@ function VAFDashboardContent() {
                                                     // user/bot bubble. Sent as role="user" so it still creates a bubble boundary;
                                                     // matched here by kind, or by the lane's own prefix when reloaded: a fired
                                                     // timer ("⏰ Timer fired") or a finished background command ("⚙ Background
-                                                    // command finished", vaf/core/processes.py).
+                                                    // command finished", vaf/core/processes.py). The prefix counts only for a
+                                                    // message with no kind: a stored wake has none, while a message another
+                                                    // agent wrote (kind "app_agent") is never drawn as a wake, whatever it says.
                                                     const _wakeContent = String(msg.content ?? '');
-                                                    const _isProcessWake = msg.kind === 'process' || _wakeContent.startsWith('⚙ Background command finished');
+                                                    const _isProcessWake = msg.kind === 'process' || (!msg.kind && _wakeContent.startsWith('⚙ Background command finished'));
                                                     // A draft the person sent wakes the chat that stopped at it
                                                     // (vaf/core/outbound_hold.py); its first line names the addressee.
-                                                    const _isDraftWake = msg.kind === 'draft' || _wakeContent.startsWith(DRAFT_WAKE_PREFIX);
+                                                    const _isDraftWake = msg.kind === 'draft' || (!msg.kind && _wakeContent.startsWith(DRAFT_WAKE_PREFIX));
                                                     // The user confirmed on the phone what a request of the Veyllo App's
                                                     // agent had parked (vaf/core/app_link/confirmations.py); its first line
                                                     // names what ran.
-                                                    const _isConfirmWake = msg.kind === 'confirm' || _wakeContent.startsWith(CONFIRM_WAKE_PREFIX);
-                                                    const _isWake = _isConfirmWake || _isProcessWake || _isDraftWake || msg.kind === 'timer' || _wakeContent.startsWith('⏰ Timer fired');
+                                                    const _isConfirmWake = msg.kind === 'confirm' || (!msg.kind && _wakeContent.startsWith(CONFIRM_WAKE_PREFIX));
+                                                    const _isWake = _isConfirmWake || _isProcessWake || _isDraftWake || msg.kind === 'timer' || (!msg.kind && _wakeContent.startsWith('⏰ Timer fired'));
                                                     if (_isWake) {
                                                         // Show only the user's note (timer) or the one-line outcome (process),
                                                         // not the internal "Act on it…" / "Continue with…" framing.

@@ -146,9 +146,14 @@ is a turn of your account's app chat, with these differences
   (`send_mail`, `reply_mail`, `forward_mail`) or a WhatsApp message to a number
   (`send_whatsapp` with `to_phone` or `phone_number`). The card is VAF's own text of exactly
   that call: what it does, then every argument the call carries (for a message every
-  recipient, Cc and Bcc, the subject, the attachment names and the whole text). Nothing is cut:
-  a call whose text would be longer than 4000 characters is refused, and the app's agent is
-  told to make the request smaller. Your answer counts only from a tap on that card on that
+  recipient, Cc and Bcc, the subject, the attachment names and the whole text). The values are
+  shown safely rather than byte for byte, so a value cannot pass itself off as another
+  argument: the short single-line arguments (paths, environment, deploy target, schedule,
+  recipient) come first and free texts last, every further line of a value is indented,
+  invisible characters (direction overrides, zero-width and control characters) appear as
+  `<U+XXXX>`, and a long run of empty lines is one line saying how many. What runs is still
+  exactly the stored call. Nothing is cut: a call whose text as shown would be longer than
+  4000 characters is refused, and the app's agent is told to make the request smaller. Your answer counts only from a tap on that card on that
   phone:
   - **Yes** runs exactly that call once (a message leaves as when you press Send in the web
     UI), and the app's agent gets its outcome as the answer to its request. The confirmed work

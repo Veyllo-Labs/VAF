@@ -70,7 +70,7 @@ import pytest
 
 import vaf
 from app_link_client import link, paired_device
-from app_link_env import (A1, A2, ASK_TEXT, SCOPE_A, SCOPE_B, _ask, _ask_turn,  # noqa: F401
+from app_link_env import (A1, A2, ASK_TEXT, SCOPE_A, SCOPE_B, _ask, _ask_chat, _ask_turn,  # noqa: F401
                           _chat, _queued, _task_of, _Tool, _two_devices, agent_world,
                           app_link_home, run_runner, runner_world)
 from vaf.core import agent_origin, outbound_hold
@@ -118,7 +118,7 @@ def _ask_parked(client, row, *, aid=A1, action=None, draft_ref="", held=None):
     import vaf.core.headless_runner as hr
     client.send(_ask(row, aid=aid))
     task = _task_of(aid)
-    TaskQueue().drop_queued_tasks_for_session(_chat(), where=lambda t: t is task)
+    TaskQueue().drop_queued_tasks_for_session(_ask_chat(), where=lambda t: t is task)
     hr._app_link_emit(task)
     actions = [action] if action is not None else []
     held = list(held) if held is not None else ([draft_ref] if draft_ref else [])
@@ -137,7 +137,7 @@ def _confirm_task(card_id):
     found = [t for t in _queued() if t.metadata.get("app_confirm_id") == card_id]
     assert len(found) == 1, _queued()
     task = found[0]
-    TaskQueue().drop_queued_tasks_for_session(_chat(), where=lambda t: t is task)
+    TaskQueue().drop_queued_tasks_for_session(_ask_chat(), where=lambda t: t is task)
     return task
 
 
@@ -448,7 +448,7 @@ def e2e(app_link_home, monkeypatch, tmp_path):
     monkeypatch.setattr(ContextManager, "ARCHIVE_DIR", tmp_path / "context_archive")
     monkeypatch.setattr(config_module, "get_local_admin_scope_id",
                         lambda: "6f9619ff-8b86-d011-b42d-00c04fc964ff")
-    session = session_module.Session(id=_chat(), name="Veyllo App")
+    session = session_module.Session(id=_ask_chat(), name="Veyllo App")
     session.metadata.update({"user_scope_id": SCOPE_A, "username": "alice",
                              "source": "veyllo_app"})
     session_module.SessionManager().save(session, sync_state=False)
@@ -516,7 +516,7 @@ def test_ok_runs_the_action_once(e2e, monkeypatch):
 
     client.send(_ask(row, text="Leg eine Automation an, die mich um 8 an Wasser erinnert."))
     ask_task = _task_of(A1)
-    TaskQueue().drop_queued_tasks_for_session(_chat(), where=lambda t: t is ask_task)
+    TaskQueue().drop_queued_tasks_for_session(_ask_chat(), where=lambda t: t is ask_task)
     run_runner(monkeypatch, agent, [ask_task])
     client.pump()
     other.pump()
@@ -552,7 +552,7 @@ def test_ok_runs_the_action_once(e2e, monkeypatch):
                      and str(m.get("content")).find(confirmations.CONFIRM_WAKE_PREFIX) >= 0]
     assert report_inputs and agent_origin.APP_AGENT_TAG not in report_inputs[-1]["content"]
     assert "Automation 'Wasser' created (id 7)." in report_inputs[-1]["content"]
-    stored = SessionManager()._read_session_file(e2e.sessions / f"{_chat()}.json")
+    stored = SessionManager()._read_session_file(e2e.sessions / f"{_ask_chat()}.json")
     users = [m for m in stored["messages"] if m["role"] == "user"]
     assert users[-1]["content"].startswith(confirmations.CONFIRM_WAKE_PREFIX)
     assert users[-1].get("kind") is None
@@ -821,7 +821,7 @@ def test_offline_card_notifies_and_returns_after_welcome(app_link_home, monkeypa
     client, pipe, row = link(SCOPE_A, device=device)
     client.send(_ask(row))
     task = _task_of(A1)
-    TaskQueue().drop_queued_tasks_for_session(_chat(), where=lambda t: t is task)
+    TaskQueue().drop_queued_tasks_for_session(_ask_chat(), where=lambda t: t is task)
     import vaf.core.headless_runner as hr
     hr._app_link_emit(task)
     bridge.close_device(row["device_id"])        # the phone went away before the card

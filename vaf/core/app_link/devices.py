@@ -161,6 +161,16 @@ def chat_session_id(user_scope_id: Any) -> str:
     return f"{CHANNEL}_{chat_key(user_scope_id)}"
 
 
+ASK_SESSION_SUFFIX = "_agent"
+
+
+def ask_session_id(user_scope_id: Any) -> str:
+    """The session the app agent's requests (``agent_ask``) run in, beside the account's chat
+    and never inside it: a request left in the person's chat read as an open question of the
+    person, and a later turn of the person answered it instead of them."""
+    return chat_session_id(user_scope_id) + ASK_SESSION_SUFFIX
+
+
 def scope_for_chat(chat: str) -> Optional[str]:
     """The account whose chat this is (a session id or a bare key), or None."""
     key = str(chat or "")
@@ -375,8 +385,9 @@ def _after_removal(rows: List[Dict[str, Any]], by: str, reason: str) -> None:
             sid = f"{CHANNEL}_{row.get('chat_key')}" if row.get("chat_key") else None
             if sid:
                 did = row["device_id"]
-                TaskQueue().drop_queued_tasks_for_session(
-                    sid, where=lambda t, did=did: (t.metadata or {}).get("app_device_id") == did)
+                for one in (sid, sid + ASK_SESSION_SUFFIX):
+                    TaskQueue().drop_queued_tasks_for_session(
+                        one, where=lambda t, did=did: (t.metadata or {}).get("app_device_id") == did)
         except Exception:
             pass
         with _lock:

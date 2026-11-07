@@ -129,8 +129,10 @@ them, nor the tools that start work which keeps running after it (next section).
 The agent in the Veyllo App can hand your agent a task while the app is connected
 (`agent_ask`, its own message type, so an older VAF answers "unknown type" and the app's tool
 stays away). There is no switch for it: every `welcome` says that VAF takes it. Such a request
-is a turn of your account's app chat, with these differences
-(`vaf/core/app_link/bridge.py`, `vaf/core/agent_origin.py`):
+runs in a chat of its own beside your account's app chat (`veyllo_app_<key>_agent`,
+`devices.ask_session_id`), never inside it: left in your app chat, an earlier request read as
+your own open question and a later message of yours got an answer to it instead. Further
+differences (`vaf/core/app_link/bridge.py`, `vaf/core/agent_origin.py`):
 
 - **It is the agent's text, not yours.** VAF's chat shows it with the tag "From your app's
   Veyllo agent" and a sky-blue ring, the terminal with a label line. Your agent reads it inside

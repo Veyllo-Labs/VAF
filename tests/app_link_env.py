@@ -285,9 +285,16 @@ def _chat(scope=SCOPE_A):
     return _devices().chat_session_id(scope)
 
 
+def _ask_chat(scope=SCOPE_A):
+    """The session the app agent's requests run in, beside the account's chat."""
+    return _devices().ask_session_id(scope)
+
+
 def _queued(scope=SCOPE_A):
+    """The queued turns of the account's chat and of its app-agent session."""
     from vaf.core.task_queue import TaskQueue
-    return list(TaskQueue()._queued_by_session.get(_chat(scope), ()))
+    queued = TaskQueue()._queued_by_session
+    return list(queued.get(_chat(scope), ())) + list(queued.get(_ask_chat(scope), ()))
 
 
 def _ask(row, text=ASK_TEXT, aid=A1, with_chat=True, **extra):

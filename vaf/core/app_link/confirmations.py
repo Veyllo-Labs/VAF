@@ -297,7 +297,7 @@ def _open_card(meta: Dict[str, Any], *, action: Optional[ParkedCall],
     lang = vocab.resolve_user_language(scope, username)
     now = time.time()
     entry = Pending(id=str(uuid.uuid4()), ask_id=aid, device_id=did, scope=scope,
-                    username=username, chat_sid=devices.chat_session_id(scope), kind="",
+                    username=username, chat_sid=devices.ask_session_id(scope), kind="",
                     what="", headline="", exp=now + CONFIRM_SECONDS, created=now)
     if action is not None:
         if action.kind not in KINDS or action.kind == "send":

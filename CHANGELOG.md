@@ -80,6 +80,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Veyllo App: your agent answers you, not an old question of the app's agent.** A request
+  of the agent in the Veyllo App now runs in a chat of its own beside your app chat. Before, it
+  stayed in your app chat and read as your own open question, so a later message of yours could
+  get an answer to that old request instead.
+
 - **Veyllo API: VAF now respects your key's request limit.** When the Veyllo API reports the
   per-minute limit as used up, VAF sends nothing until the window resets, and after a 429 it
   waits exactly the time the API names (at most 10 minutes) instead of retrying early. The log

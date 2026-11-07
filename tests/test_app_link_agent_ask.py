@@ -98,7 +98,7 @@ import vaf
 from app_link_client import link, paired_device
 from app_link_env import SCOPE_A, SCOPE_B, app_link_home  # noqa: F401  (fixture)
 from app_link_env import (A1, A2, A3, A4, A5, ASK_TEXT, BOB, RUNNER_CHAT,  # noqa: F401
-                          RUNNER_SCOPE, _ask, _ask_turn, _chat, _queued, _run_app_turn,
+                          RUNNER_SCOPE, _ask, _ask_chat, _ask_turn, _chat, _queued, _run_app_turn,
                           _task_of, _Tool, _two_devices, agent_world, runner_world)
 from vaf.core import channel_message_store as store
 from vaf.core.app_link import bridge, devices, pairing
@@ -137,6 +137,9 @@ def test_agent_ask_queues_one_turn_for_the_device_account(app_link_home):
     assert not client.of("error")
     [task] = _queued()
     assert task.source == "veyllo_app" and task.input_text == ASK_TEXT
+    # Its own session beside the person's chat: left in the chat, an earlier request read as
+    # the person's open question and a later turn of the person answered it.
+    assert task.session_id == _ask_chat() != _chat()
     meta = task.metadata
     assert meta["app_agent_ask"] is True and meta["app_ask_id"] == A1
     assert meta["app_device_id"] == row["device_id"]
@@ -378,7 +381,7 @@ def test_cancel_running_and_queued_ask(app_link_home, monkeypatch):
     other_client.send({"t": "cancel", "id": A1})
     assert stopped == []
     client.send({"t": "cancel", "id": A1})
-    assert stopped == [_chat()]
+    assert stopped == [_ask_chat()]
 
 
 def test_an_ask_that_ends_without_a_reply_is_answered(app_link_home):
@@ -393,7 +396,7 @@ def test_an_ask_that_ends_without_a_reply_is_answered(app_link_home):
     bridge.turn_started(_task_of(A2).metadata)
     assert bridge.settle_asks() == 0, "a queued, taken or replying request was ended"
     # The web UI's stop drops the chat's queue: that request gets its `done`.
-    TaskQueue().drop_queued_tasks_for_session(_chat())
+    TaskQueue().drop_queued_tasks_for_session(_ask_chat())
     assert bridge.settle_asks() == 1
     client.pump()
     assert {"t": "done", "id": A3} in client.frames
@@ -863,8 +866,8 @@ def test_the_same_id_from_two_devices_of_one_account(app_link_home):
 def test_a_request_arriving_twice_at_once_holds_one_place(app_link_home):
     _client, _pipe, row = link(SCOPE_A)
     did = row["device_id"]
-    assert bridge._take_ask_slot(did, A1, _chat(), SCOPE_A) is True
-    assert bridge._take_ask_slot(did, A1, _chat(), SCOPE_A) is False
+    assert bridge._take_ask_slot(did, A1, _ask_chat(), SCOPE_A) is True
+    assert bridge._take_ask_slot(did, A1, _ask_chat(), SCOPE_A) is False
     assert list(bridge._asks[did]) == [A1]
 
 

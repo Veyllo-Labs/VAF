@@ -19,8 +19,10 @@ entries in order, as ``msg`` with the stored text (streamed deltas are never rep
 Every send asks whether the device still stands, so a device removed mid-turn receives
 nothing more of it.
 
-A request of the app's own agent (``agent_ask``, protocol section 10) is a turn of the same
-chat with two differences. Its text is another agent's (vaf/core/agent_origin.py: marked,
+A request of the app's own agent (``agent_ask``, protocol section 10) runs in a session of its
+own beside the account's chat (``devices.ask_session_id``), never inside it: left in the
+person's chat, an earlier request read as the person's open question and a later turn of the
+person answered it instead of them. Two more differences. Its text is another agent's (vaf/core/agent_origin.py: marked,
 fenced, the tools that need the person off), so it is not stored as the person's message.
 And it is answered on the DEVICE that asked, never the account: ``delta`` and ``done`` carry
 the request's own id and go to that device only, with no ``read`` and no ``typing``, the
@@ -551,7 +553,8 @@ def _on_agent_ask(session, row, message) -> None:
     if _seen_before(did, aid) or _id_taken(row, aid):
         session.send_json({"t": "ack", "id": aid})
         return
-    if not _take_ask_slot(did, aid, chat_sid, scope):
+    ask_sid = devices.ask_session_id(scope)
+    if not _take_ask_slot(did, aid, ask_sid, scope):
         with _lock:
             again = aid in _asks.get(did, {})
         # The same request arriving twice at once: the copy that holds the place is the one.
@@ -571,10 +574,10 @@ def _on_agent_ask(session, row, message) -> None:
         session.send_json({"t": "error", "code": "refused", "ref": aid})
         return
     # Not stored as a message of the person (no inbox entry, no unread count, no hit of the
-    # read tools): the chat's history holds it, marked as the app agent's.
+    # read tools), and run in the requests' own session, never in the person's chat.
     try:
         from vaf.core.task_queue import TaskQueue
-        TaskQueue().add(session_id=chat_sid, input_text=message["text"], source=CHANNEL,
+        TaskQueue().add(session_id=ask_sid, input_text=message["text"], source=CHANNEL,
                         metadata={"user_scope_id": scope, "username": username,
                                   "origin_channel": CHANNEL, "task_class": "interactive",
                                   "app_device_id": did, "app_agent_ask": True,
@@ -629,10 +632,11 @@ def _on_cancel(row: Dict[str, Any], ref: str) -> None:
         queued_mine = ref in _asks.get(did, {})
     if running:
         from vaf.core import revocation
-        revocation.stop_session(chat_sid, include_subagents=False)
+        revocation.stop_session(devices.ask_session_id(scope) if running[0].ask else chat_sid,
+                                include_subagents=False)
         return
     if queued_mine:
-        _drop_queued_asks(chat_sid, lambda meta: meta.get("app_ask_id") == ref
+        _drop_queued_asks(devices.ask_session_id(scope), lambda meta: meta.get("app_ask_id") == ref
                           and meta.get("app_device_id") == did)
 
 

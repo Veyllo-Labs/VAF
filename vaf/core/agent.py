@@ -14330,7 +14330,8 @@ class Agent:
         end the turn there: the call does not run, the model gets
         `agent_origin.parked_result`, and the runner opens the card once the turn is over
         (vaf/core/app_link/confirmations.py). Refused instead when the card would have to cut
-        it (`agent_origin.WHAT_MAX`), when this round already parked a call or a draft (one
+        it (`agent_origin.WHAT_MAX`), when it carries an argument outside the tool's schema
+        (`agent_origin.confirm_unknown_arguments`), when this round already parked a call or a draft (one
         card answers one request at a time), and inside a confirmed call (it cannot open a
         card of its own). The parked call is a value of this round (``_parked_this_round``),
         never of the agent's life: the runner reads it at the end of the same turn."""
@@ -14338,6 +14339,9 @@ class Agent:
         if agent_origin.in_confirmed_call() or getattr(self, "_parked_this_round", None) \
                 or getattr(self, "_held_this_round", None):
             return agent_origin.CONFIRM_ONE_AT_A_TIME.format(name=name)
+        unknown = agent_origin.confirm_unknown_arguments(name, tool, call_args)
+        if unknown:
+            return unknown
         from vaf.core import vocab
         lang = vocab.resolve_user_language(getattr(self, "_current_user_scope_id", None),
                                            getattr(self, "_current_username", None))

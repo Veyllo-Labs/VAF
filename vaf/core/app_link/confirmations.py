@@ -205,10 +205,10 @@ def send_what(row: Dict[str, Any], args: Dict[str, Any], lang: Optional[str]) ->
     """The card's text for a draft: the headline, then whom it goes to (the name when known
     and the address), every Cc and Bcc, the subject and the attachment names of a mail, or
     every further argument of a WhatsApp call (a voice message's language, the file), and the
-    whole text last. Shown as the action cards show their arguments
-    (`agent_origin.card_lines`: invisible characters made visible, continuation lines
-    indented, the short ones first), so no subject or text can write a line that reads as a
-    recipient. Nothing is cut."""
+    whole text last. Laid out as the action cards are (`agent_origin.card_lines`: a top block
+    with every field's first line in that order, then what each one continues with, all shown
+    safely), so no subject or text can write a line that reads as a recipient or push one out
+    of sight. Nothing is cut."""
     from vaf.core import outbound_hold
     from vaf.core.agent_origin import card_lines, confirm_headline
     mail = str(row.get("channel") or "") == "mail"
@@ -224,8 +224,7 @@ def send_what(row: Dict[str, Any], args: Dict[str, Any], lang: Optional[str]) ->
         skip = {"to_phone", "phone_number", "message"}
         middle = [(key, args[key]) for key in sorted(args) if key not in skip]
         text = ("message", row.get("preview") or "")
-    lines = (card_lines([("to", outbound_hold._addressee(row))]) + card_lines(middle)
-             + card_lines([text]))
+    lines = card_lines([("to", outbound_hold._addressee(row))] + middle + [text])
     return "\n".join([head, ""] + lines)
 
 

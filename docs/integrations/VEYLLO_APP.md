@@ -147,12 +147,18 @@ is a turn of your account's app chat, with these differences
   (`send_whatsapp` with `to_phone` or `phone_number`). The card is VAF's own text of exactly
   that call: what it does, then every argument the call carries (for a message every
   recipient, Cc and Bcc, the subject, the attachment names and the whole text). The values are
-  shown safely rather than byte for byte, so a value cannot pass itself off as another
-  argument: the short single-line arguments (paths, environment, deploy target, schedule,
-  recipient) come first and free texts last, every further line of a value is indented,
-  invisible characters (direction overrides, zero-width and control characters) appear as
-  `<U+XXXX>`, and a long run of empty lines is one line saying how many. What runs is still
-  exactly the stored call. Nothing is cut: a call whose text as shown would be longer than
+  shown safely rather than byte for byte, so no value can pass itself off as another argument
+  or push one out of sight. The card opens with one line per argument, in the tool's own
+  order: its name and the first line of its value (at most 80 characters, then "(continued
+  below)"; "(starts with an empty line)" when the value begins with one). Below that block,
+  each value continues under its own name, every line indented, with runs of empty lines
+  counted. Invisible characters (direction overrides, zero-width and control characters,
+  blank fillers, combining marks stacked beyond two) appear as `<U+XXXX>`; a Windows line
+  break is just a line break. An argument name shows every character outside plain ASCII,
+  and any space or colon, as `<U+XXXX>`. A call with an argument the tool does not declare is
+  not parked at all: the app's agent is told to call again without it. A message card is
+  laid out the same way, the recipient first and the text last. What runs is still exactly
+  the stored call. Nothing is cut: a call whose text as shown would be longer than
   4000 characters is refused, and the app's agent is told to make the request smaller. Your answer counts only from a tap on that card on that
   phone:
   - **Yes** runs exactly that call once (a message leaves as when you press Send in the web

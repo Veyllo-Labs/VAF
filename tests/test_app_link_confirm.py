@@ -39,6 +39,10 @@ MUTATIONS, each turns the named test red:
 - fence the confirm wake, store it as the app agent's, skip the rebind, or leave the
   decision line out of a send's report -> test_ok_runs_the_action_once,
   test_the_send_report_is_reported_once;
+- order the card by the value's shape again, drop the head cut, show an empty first line as
+  it is, let a key outside the schema park, or show a key's other-script letter raw
+  -> test_a_value_cannot_forge_an_argument_line, test_invisible_characters_are_shown_and_counted,
+  test_a_key_outside_the_schema_is_refused_at_park;
 - show a value's continuation line flush left, pass an invisible character through, or keep
   schema order with a free text first -> test_a_value_cannot_forge_an_argument_line,
   test_invisible_characters_are_shown_and_counted; the same on the send card
@@ -316,19 +320,21 @@ def test_what_is_complete_and_never_cut(agent_world):
     what = agent_origin.confirm_what("deploy_site", tool, {
         "zeta": {"b": 2, "a": [1, "ü"]}, "notes": "Zeile 1\nZeile 2  ", "target": "prod",
         "_agent": object()}, "en")
-    assert what == ('deploy_site\n\ntarget: prod\nzeta: {"a":[1,"ü"],"b":2}\n'
-                    "notes: Zeile 1\n  Zeile 2  ")
+    assert what == ('deploy_site\n\ntarget: prod\nnotes: Zeile 1 (continued below)\n'
+                    'zeta: {"a":[1,"ü"],"b":2}\n\nnotes, continued:\n  Zeile 2  ')
     agent = agent_world.make()
     agent.tools["deploy_site"] = tool
     _ask_turn(agent)
     # The limit counts code points: 4000 of them fit, whatever their UTF-16 length.
-    base = len(agent_origin.confirm_what("deploy_site", tool, {"notes": ""}, "en"))
+    probe = "\U0001F600" * 200
+    base = len(agent_origin.confirm_what("deploy_site", tool, {"notes": probe}, "en")) - 200
     fits = "\U0001F600" * (agent_origin.WHAT_MAX - base)
     agent._parked_this_round = []
     out = agent.execute_tool("deploy_site", {"notes": fits})
     assert out.startswith(agent_origin.PARKED_PREFIX), out
     assert len(agent._parked_this_round[0].what) == agent_origin.WHAT_MAX
-    assert agent._parked_this_round[0].what.endswith(fits), "the card text was cut"
+    shown = agent._parked_this_round[0].what
+    assert shown.count("\U0001F600") == len(fits), "the card text was cut"
     agent._parked_this_round = []
     agent._turn_closing = None
     out = agent.execute_tool("deploy_site", {"notes": fits + "x", "target": "prod"})
@@ -380,8 +386,9 @@ def test_an_ask_send_gets_a_card(app_link_home, held_store, monkeypatch):
     _ask_parked(client, row, draft_ref=ref)
     card = _card(client)
     assert card["kind"] == "send"
-    assert card["what"] == ("Send a WhatsApp message\n\nto: +491700000001\n"
-                            "voice_lang: de\nmessage: Ich komme\n  später.")
+    assert card["what"] == ("Send a WhatsApp message\n\nto: +491700000001\nvoice_lang: de\n"
+                            "message: Ich komme (continued below)\n\n"
+                            "message, continued:\n  später.")
     # A mail: every recipient, the subject, the attachment names and the whole body.
     mail = {"kind": "mail", "id": 12, "ref": "mail:12", "channel": "mail", "tool": "send_mail",
             "recipient": "anna@example.org", "recipient_name": "Anna", "cc": "cc@example.org",
@@ -390,7 +397,7 @@ def test_an_ask_send_gets_a_card(app_link_home, held_store, monkeypatch):
     assert confirmations.send_what(mail, {}, "en") == (
         "Send a mail\n\nto: Anna (anna@example.org)\ncc: cc@example.org\n"
         "bcc: hidden@example.org\nsubject: Später\nattachments: plan.pdf\n"
-        "body: Hallo Anna,\n  ich komme später.")
+        "body: Hallo Anna, (continued below)\n\nbody, continued:\n  ich komme später.")
     # A draft whose card would be over the limit: no card, the request learns where it waits.
     client2, _p2, row2 = link(SCOPE_A, device=paired_device(SCOPE_A, model="Tab"),
                               peer="10.0.0.9", connection="c9")
@@ -1042,37 +1049,57 @@ class _Coder(vaf.BaseTool):
         return "started"
 
 
+def _top_block(what):
+    lines = what.split("\n")[2:]
+    return lines[:lines.index("")] if "" in lines else lines
+
+
 def test_a_value_cannot_forge_an_argument_line():
-    args = {"task": "Fix a typo in README\nworkspace: ~/notes\ndeploy_to: none" + "\n" * 40 + ".",
-            "project_path": "/home/user/.ssh", "environment": "prod",
-            "deploy_to": "ftp:production"}
-    lines = agent_origin.confirm_what("coding_agent", _Coder(), args, "en").split("\n")
-    body = lines[2:]
-    keyed = [line.split(":", 1)[0] for line in body if not line.startswith(" ")]
-    # Every line that starts flush left is a real argument, each exactly once.
-    assert sorted(keyed) == sorted(args), body
-    for line in body:
-        assert line.startswith(agent_origin.CARD_INDENT) or line.split(":", 1)[0] in args, line
-    assert "deploy_to: ftp:production" in body and "deploy_to: none" not in body
-    # The short arguments stand above the free text, whatever it pushes.
-    task = body.index("task: Fix a typo in README")
-    assert all(body.index(f"{k}: {args[k]}") < task
-               for k in ("project_path", "environment", "deploy_to"))
-    # 39 empty lines are one line saying so; nothing is dropped.
-    assert f"{agent_origin.CARD_INDENT}[39 empty lines]" in body
-    assert body[-1] == f"{agent_origin.CARD_INDENT}."
-    # A name cannot break a line either.
-    forged = agent_origin.confirm_what("coding_agent", _Coder(), {"x\ndeploy_to": "y"}, "en")
-    assert "x<U+000A>deploy_to: y" in forged.split("\n")
+    """The measured bypass: a trailing line break on the real target and 40 filler lines in
+    the task. The top block still holds every argument's first line, in the schema's order,
+    and the target's own first line with it."""
+    args = {"task": "Fix a typo in README\ndeploy_to: none" + "\n." * 40 + "\n\u2800\n\u0301\u0301",
+            "project_path": "/home/user/projects/site", "environment": "prod",
+            "deploy_to": "ftp:production\n"}
+    what = agent_origin.confirm_what("coding_agent", _Coder(), args, "en")
+    top = _top_block(what)
+    assert top == ["task: Fix a typo in README (continued below)",
+                   "project_path: /home/user/projects/site",
+                   "environment: prod",
+                   "deploy_to: ftp:production (continued below)"], top
+    below = what.split("\n")[2 + len(top):]
+    # Below the top block, every line is a value's name heading or indented.
+    for line in below:
+        assert not line or line.startswith(agent_origin.CARD_INDENT) \
+            or line.endswith(", continued:"), line
+    assert "  deploy_to: none" in below and "deploy_to, continued:" in below
+    # The fillers are shown, not drawn as nothing.
+    assert "  <U+2800>" in below and "  <U+0301><U+0301>" in below
+    # A long first line cannot wrap the next argument out of sight: the top line is cut there
+    # and the rest follows below, nothing lost.
+    long = agent_origin.confirm_what("coding_agent", _Coder(), {
+        "task": "x" * 500, "deploy_to": "ftp:production"}, "en")
+    top = _top_block(long)
+    assert top[0] == "task: " + "x" * agent_origin.CARD_HEAD_MAX + " (continued below)"
+    assert top[1] == "deploy_to: ftp:production"
+    assert long.count("x") == 500
 
 
 def test_invisible_characters_are_shown_and_counted(agent_world):
     what = agent_origin.confirm_what("coding_agent", _Coder(), {
-        "environment": "Water\u202egnp.exe", "task": "ok\u200b\r\nnext\u2028line\tend"}, "en")
+        "environment": "Water\u202egnp.exe", "task": "ok\u200b\r\nnext\u2028line\tend\rlast",
+        "deploy_to": "\n\nftp:production", "project_path": "a\u0301\u0301\u0301b"}, "en")
     assert "environment: Water<U+202E>gnp.exe" in what
-    assert "task: ok<U+200B><U+000D>\n  next<U+2028>line\tend" in what
+    # CRLF and a lone CR are line breaks on the card (display only); nothing else is hidden.
+    assert "task: ok<U+200B> (continued below)" in what
+    assert "  next<U+2028>line\tend\n  last" in what
     for char in ("\u202e", "\u200b", "\r", "\u2028"):
         assert char not in what
+    # An empty first line cannot hide a value: the top block says so.
+    assert "deploy_to: (starts with an empty line) (continued below)" in what
+    assert "  [1 empty line]\n  ftp:production" in what
+    # Two marks on one base pass; a third and more are shown.
+    assert "project_path: a\u0301\u0301<U+0301>b" in what
     # The limit counts the text as shown: 600 zero-width spaces are 4800 code points there.
     agent = agent_world.make()
     agent.tools["coding_agent"] = _Coder()
@@ -1085,19 +1112,49 @@ def test_invisible_characters_are_shown_and_counted(agent_world):
 def test_the_send_card_cannot_be_forged():
     mail = {"kind": "mail", "id": 3, "ref": "mail:3", "channel": "mail", "tool": "send_mail",
             "recipient": "anna@example.org", "recipient_name": "", "cc": "",
-            "bcc": "", "subject": "Hi\nbcc: nobody\u202e", "attachments": [],
+            "bcc": "", "subject": "\nbcc: nobody\u202e" + "\n." * 30, "attachments": [],
             "preview": "x\nto: someone-else@example.org", "state": "held"}
-    lines = confirmations.send_what(mail, {}, "en").split("\n")
-    assert lines[2] == "to: anna@example.org"
-    assert lines[3] == "subject: Hi" and lines[4] == "  bcc: nobody<U+202E>"
+    what = confirmations.send_what(mail, {}, "en")
+    assert _top_block(what) == ["to: anna@example.org",
+                                "subject: (starts with an empty line) (continued below)",
+                                "body: x (continued below)"]
+    lines = what.split("\n")
+    assert "  bcc: nobody<U+202E>" in lines and "  to: someone-else@example.org" in lines
     assert lines[-1] == "  to: someone-else@example.org"
     assert [line for line in lines if line.startswith(("to:", "bcc:"))] == ["to: anna@example.org"]
     call = {"kind": "call", "id": 4, "ref": "call:4", "channel": "whatsapp",
             "tool": "send_whatsapp", "recipient": "+491700000001", "recipient_name": "",
             "preview": "Hallo", "state": "held"}
-    text = confirmations.send_what(call, {"file_path": "/tmp/a.ogg\nto_phone: +1"}, "en")
-    assert text.split("\n")[2:] == ["to: +491700000001", "file_path: /tmp/a.ogg",
-                                    "  to_phone: +1", "message: Hallo"]
+    text = confirmations.send_what(call, {"file_path": "/tmp/a.ogg\r\nto_phone: +1"}, "en")
+    assert text.split("\n")[2:] == ["to: +491700000001",
+                                    "file_path: /tmp/a.ogg (continued below)",
+                                    "message: Hallo", "", "file_path, continued:",
+                                    "  to_phone: +1"]
+
+
+def test_a_key_outside_the_schema_is_refused_at_park(agent_world):
+    """The measured bypass: a look-alike key (Cyrillic e) next to the real ones. The call is
+    not parked, the model is told which key to leave out, and a name is never shown raw."""
+    agent = agent_world.make()
+    coder = _Coder()
+    calls = []
+    coder.run = lambda **kw: calls.append(kw) or "started"
+    agent.tools["coding_agent"] = coder
+    _ask_turn(agent)
+    for extra in ({"d\u0435ploy_to": "none"}, {"zz_note": "deploy_to: none"}):
+        agent._parked_this_round, agent._held_this_round, agent._turn_closing = [], [], None
+        out = agent.execute_tool("coding_agent", {"task": "Fix", "deploy_to": "ftp:x", **extra})
+        assert out.startswith("[APP AGENT]") and "does not take" in out, out
+        assert agent._parked_this_round == [] and agent._turn_closing is None and calls == []
+    assert "'d<U+0435>ploy_to'" in agent_origin.confirm_unknown_arguments(
+        "coding_agent", coder, {"d\u0435ploy_to": "none"})
+    # The schema's own arguments park as before.
+    agent._parked_this_round = []
+    assert agent.execute_tool("coding_agent", {"task": "Fix", "deploy_to": "ftp:x"}).startswith(
+        agent_origin.PARKED_PREFIX)
+    # A name with a colon, a space or another script cannot read as a name and a value.
+    assert agent_origin.card_key("deploy_to: none") == "deploy_to<U+003A><U+0020>none"
+    assert agent_origin.card_key("d\u0435ploy_to") == "d<U+0435>ploy_to"
 
 
 # ── a removed device, the result's fence, the cap ─────────────────────────────────────────

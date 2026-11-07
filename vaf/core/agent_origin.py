@@ -23,7 +23,11 @@ user did not type it, and the phone's agent may pass on text it read elsewhere. 
 - a tool among the refused ones that declares a card kind (``BaseTool.agent_request_confirm_kind``)
   is parked instead (``agent_request_decision`` answers ``("confirm", kind)``): the call does
   not run, the turn ends, and the phone that asked shows ``confirm_what``, VAF's own text of
-  exactly that call, never cut (``WHAT_MAX``). Only the user's Yes on that card runs it, once,
+  exactly that call, never cut (``WHAT_MAX``) and laid out by structure (``card_lines``: one
+  top line per argument in the schema's order, then each value's continuation under its
+  name, invisible characters and foreign letters in names escaped); a call carrying an
+  argument outside the tool's schema is refused instead of parked
+  (``confirm_unknown_arguments``). Only the user's Yes on that card runs it, once,
   inside ``confirmed_call_scope``: one pass through the request gate for exactly that tool and
   ``call_digest``, with every other limit of the request standing
   (vaf/core/app_link/confirmations.py);
@@ -404,6 +408,10 @@ CONFIRM_ONE_AT_A_TIME = (
     "[APP AGENT] '{name}' did NOT run: one action can wait for your user's confirmation at a "
     "time, and one already waits for this request. Tell your user it was not done; it can be "
     "asked for again once the first one is decided.")
+CONFIRM_UNKNOWN_ARGS = (
+    "[APP AGENT] '{name}' did NOT run: it was called with {keys}, which the tool does not "
+    "take, and a call for your user to confirm carries only the tool's own arguments. Call it "
+    "again without {them}.")
 CONFIRM_TOO_LONG = (
     "[APP AGENT] '{name}' is too long to confirm in the Veyllo App ({length} characters, at "
     "most {limit}). It did NOT run. Shorten {longest} and call it again, or your user can ask "
@@ -422,61 +430,117 @@ def _arg_text(value: Any) -> str:
 #: Every continuation line of a value on a card starts with this, so no value can begin a
 #: line that reads as another argument (``deploy_to: none`` written inside a task).
 CARD_INDENT = "  "
-#: A single-line value up to this many code points is shown above every longer or multi-line
-#: one, so the short arguments (paths, environment, target, schedule, recipient) are never
-#: pushed below a free text.
-_SHORT_VALUE = 120
-# Fillers a renderer draws as nothing although their category is a letter.
-_FILLERS = frozenset((0x115F, 0x1160, 0x3164, 0xFFA0))
+#: The most of a value's first line the card's top block shows, in code points (escapes
+#: count). The rest of it follows below, under its name: a long first line cannot wrap the
+#: next argument's first line out of sight.
+CARD_HEAD_MAX = 80
+CARD_CONTINUED = "(continued below)"
+CARD_EMPTY_START = "(starts with an empty line)"
+CARD_EMPTY = "(empty)"
+# Characters a renderer draws as nothing although their category is a letter or a symbol:
+# the Hangul fillers and the Braille blank.
+_FILLERS = frozenset((0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800))
+# Combining marks stacked on one base character beyond this are shown escaped.
+_MARKS_ON_ONE_BASE = 2
 
 
-def _shown_char(char: str, *, keep_breaks: bool = True) -> str:
+def _escaped(char: str) -> str:
+    return f"<U+{ord(char):04X}>"
+
+
+def _shown_char(char: str) -> str:
     """One character as the card shows it: a control, format, separator, private-use or
     unassigned character (a direction override, a zero-width space, a carriage return) and a
-    filler as a visible ``<U+XXXX>``; a line break and a tab kept where ``keep_breaks``."""
-    if keep_breaks and char in "\n\t":
+    filler as a visible ``<U+XXXX>``; a tab kept."""
+    if char == "\t":
         return char
     if unicodedata.category(char) in ("Cc", "Cf", "Zl", "Zp", "Co", "Cn", "Cs") \
             or ord(char) in _FILLERS:
-        return f"<U+{ord(char):04X}>"
+        return _escaped(char)
     return char
 
 
-def card_value(value: Any) -> str:
-    """One argument's value as a confirmation card shows it. Nothing is left out, but it is
-    shown SAFELY rather than byte for byte: invisible characters as ``<U+XXXX>``
-    (`_shown_char`), every continuation line indented by ``CARD_INDENT``, and a run of more
-    than two empty lines as one line that says how many. What runs is the stored call, bound
-    by ``call_digest``; only its display differs."""
-    lines = "".join(_shown_char(c) for c in _arg_text(value)).split("\n")
-    out, empty = [lines[0]], 0
+def _shown_lines(text: str) -> List[List[str]]:
+    """A value's text as the card shows it, split into lines of shown characters. A Windows or
+    old Mac line break counts as a line break (display only); every other invisible character
+    is escaped (`_shown_char`), and so is a combining mark with no base before it on its line
+    or more than ``_MARKS_ON_ONE_BASE`` stacked on one base."""
+    lines: List[List[str]] = []
+    for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        shown: List[str] = []
+        marks, base = 0, False
+        for char in raw:
+            if unicodedata.category(char) in ("Mn", "Me"):
+                marks += 1
+                shown.append(char if base and marks <= _MARKS_ON_ONE_BASE else _escaped(char))
+                continue
+            marks, base = 0, True
+            shown.append(_shown_char(char))
+        lines.append(shown)
+    return lines
 
-    def _flush() -> None:
-        if empty > 2:
-            out.append(f"{CARD_INDENT}[{empty} empty lines]")
-        else:
-            out.extend([CARD_INDENT] * empty)
 
-    for line in lines[1:]:
-        if not line.strip():
+def card_key(key: Any) -> str:
+    """An argument's name as the card shows it: ASCII letters, digits and punctuation as they
+    are; every other character (a look-alike letter of another script, a space, a colon, a
+    line break) as ``<U+XXXX>``, so no name can pass for another one or carry a value."""
+    return "".join(c if c.isascii() and c.isprintable() and not c.isspace() and c != ":"
+                   else _escaped(c) for c in str(key))
+
+
+def _continuation(lines: List[str]) -> List[str]:
+    """Continuation lines, indented; a run of empty lines as one line that says how many."""
+    out: List[str] = []
+    empty = 0
+    for line in lines + [None]:
+        if line is not None and not line.strip():
             empty += 1
             continue
-        _flush()
-        empty = 0
-        out.append(CARD_INDENT + line)
-    _flush()
-    return "\n".join(out)
+        if empty:
+            out.append(f"{CARD_INDENT}[{empty} empty line{'s' if empty > 1 else ''}]")
+            empty = 0
+        if line is not None:
+            out.append(CARD_INDENT + line)
+    return out
 
 
 def card_lines(items: List[Tuple[Any, Any]]) -> List[str]:
-    """``name: value`` lines of a card for ``(name, value)`` pairs in their given order, the
-    short single-line ones first (`_SHORT_VALUE`), the free texts after them; the names
-    shown as `_shown_char` shows them, a line break included."""
-    shown = [("".join(_shown_char(c, keep_breaks=False) for c in str(key)), card_value(value))
-             for key, value in items]
-    short = [kv for kv in shown if "\n" not in kv[1] and len(kv[1]) <= _SHORT_VALUE]
-    rest = [kv for kv in shown if kv not in short]
-    return [f"{key}: {value}" for key, value in short + rest]
+    """The lines of a card for ``(name, value)`` pairs, in their given order, laid out by
+    STRUCTURE so that no value can move another argument out of sight. First a top block with
+    exactly one line per argument: ``name: <the first line of the value>``, at most
+    ``CARD_HEAD_MAX`` code points of it, then ``(continued below)`` when there is more; a
+    value whose first line is empty says so (``(starts with an empty line)``). Then, in the
+    same order, what each value continues with, under ``name, continued:``, every line
+    indented and runs of empty lines counted. Names as `card_key` shows them, values as
+    `_shown_lines` shows them. Nothing is left out."""
+    top: List[str] = []
+    below: List[str] = []
+    for key, value in items:
+        name = card_key(key)
+        lines = _shown_lines(_arg_text(value))
+        head: List[str] = []
+        size = 0
+        for token in lines[0]:
+            if size + len(token) > CARD_HEAD_MAX:
+                break
+            head.append(token)
+            size += len(token)
+        rest_of_first = "".join(lines[0][len(head):])
+        rest = ([rest_of_first] if rest_of_first else []) + ["".join(line) for line in lines[1:]]
+        shown = "".join(head)
+        if not shown.strip():
+            shown = CARD_EMPTY_START if rest else CARD_EMPTY
+        top.append(f"{name}: {shown}" + (f" {CARD_CONTINUED}" if rest else ""))
+        if rest:
+            below.append(f"{name}, continued:")
+            below += _continuation(rest)
+    return top + ([""] + below if below else [])
+
+
+def card_value(value: Any) -> str:
+    """One value as the card shows it on its own (`card_lines` of a single argument, without
+    its name); what ``WHAT_MAX`` and the longest-argument hint measure."""
+    return "\n".join(card_lines([("", value)]))
 
 
 def _storable(args: Optional[Mapping[str, Any]]) -> dict:
@@ -509,14 +573,35 @@ def confirm_what(name: str, tool: Any, args: Optional[Mapping[str, Any]],
                  lang: Optional[str] = None) -> str:
     """VAF's own plain text of exactly the call a card confirms: the headline
     (`confirm_headline`, the tool name when there is none), an empty line, then every argument
-    the call carries as ``name: value`` (`card_lines`: shown safely, the short ones first,
-    each group in the order of the tool's schema and the rest sorted). Nothing is left out and
+    the call carries (`card_lines`: a top block with every argument's first line in the order
+    of the tool's schema, then what each one continues with, all shown safely). Nothing is left out and
     nothing is cut (``WHAT_MAX`` is checked by the caller, on the text as shown); never the
     requesting agent's own words about the call."""
     stored = _storable(args)
     lines = card_lines([(key, stored[key]) for key in _argument_order(tool, stored)])
     headline = confirm_headline(str(name), lang) or str(name)
     return "\n".join([headline, ""] + lines) if lines else headline
+
+
+def confirm_unknown_arguments(name: str, tool: Any,
+                              args: Optional[Mapping[str, Any]]) -> Optional[str]:
+    """The refusal of a call that carries an argument outside the tool's schema
+    (``parameters.properties``), or None. A card shows the call it runs, and a tool that takes
+    ``**kwargs`` would receive such a key unseen next to the ones the user read (a look-alike
+    ``deploy_to`` in another script, say), so the call is not parked at all. Fail closed: a
+    schema that cannot be read leaves no argument known."""
+    try:
+        props = (getattr(tool, "parameters", None) or {}).get("properties") or {}
+        known = set(props) if isinstance(props, Mapping) else set()
+    except Exception:
+        known = set()
+    extra = [key for key in _storable(args) if key not in known]
+    if not extra:
+        return None
+    shown = ", ".join(f"'{card_key(key)}'" for key in extra)
+    return CONFIRM_UNKNOWN_ARGS.format(
+        name=name, keys=("the argument " if len(extra) == 1 else "the arguments ") + shown,
+        them="it" if len(extra) == 1 else "them")
 
 
 def confirm_too_long(name: str, tool: Any, args: Optional[Mapping[str, Any]],

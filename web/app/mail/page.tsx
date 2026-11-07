@@ -31,10 +31,25 @@ import {
 const HOVER_CHROME = 'hover:bg-white dark:hover:bg-[#1f1f1f]';
 
 const api = (p: string) => `${getApiBase()}${p.startsWith('/') ? p : `/${p}`}`;
+// A failed request still says only its status as the message, so every caller that reads
+// it sees what it always did; the status and the parsed JSON body ride along for the one
+// that wants the server's reason.
+class HttpError extends Error {
+    constructor(readonly status: number, readonly body: unknown) { super(`${status}`); }
+}
 const jfetch = async (p: string, init?: RequestInit) => {
     const r = await fetch(api(p), { credentials: 'include', ...init });
-    if (!r.ok) throw new Error(`${r.status}`);
+    if (!r.ok) throw new HttpError(r.status, await r.json().catch(() => null));
     return r.json();
+};
+// The codes `POST /api/mail/send` answers for an address no mail server can take, or one
+// the account's server cannot (vaf/mail/addressing.py UndeliverableAddress).
+const REFUSED_ADDRESS = new Set(['domain', 'domain_case', 'local_part', 'smtputf8']);
+const refusedAddressDetail = (e: unknown): string => {
+    if (!(e instanceof HttpError) || e.status !== 400) return '';
+    const body = e.body as { code?: unknown; detail?: unknown } | null;
+    return body && typeof body.code === 'string' && REFUSED_ADDRESS.has(body.code)
+        && typeof body.detail === 'string' ? body.detail : '';
 };
 const jpost = (p: string, body?: unknown, method = 'POST') => jfetch(p, {
     method, headers: { 'Content-Type': 'application/json' },
@@ -351,7 +366,12 @@ function ComposeModal({ prefill, accounts, threadId, anchorPk, composerEnabled, 
             });
             onQueued(out.op_id, out.undo_seconds ?? 15);
             onClose();
-        } catch { setError(t('compose.sendFailed')); }
+        } catch (e) {
+            // A refused address says why (its text is plain ASCII, the address marked as on
+            // the draft cards); any other failure keeps the generic line.
+            const refused = refusedAddressDetail(e);
+            setError(refused ? t('draft.failed', { error: refused }) : t('compose.sendFailed'));
+        }
         finally { setSending(false); }
     }, [account, to, cc, subject, body, prefill, onClose, onQueued, t]);
     // Guard an accidental close of a half-written draft (X / Cancel only; a

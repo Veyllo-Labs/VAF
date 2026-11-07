@@ -1,0 +1,32 @@
+{
+  "ar": [
+    "بدء تشغيل المبرمج"
+  ],
+  "de": [
+    "VAF soll einen Coder-Lauf starten"
+  ],
+  "en": [
+    "Start a coder run"
+  ],
+  "es": [
+    "Iniciar una ejecución del coder"
+  ],
+  "fr": [
+    "Lancer une exécution du codeur"
+  ],
+  "ja": [
+    "コーダーの実行を開始"
+  ],
+  "ko": [
+    "코더 실행 시작"
+  ],
+  "th": [
+    "เริ่มการทำงานของ Coder"
+  ],
+  "tr": [
+    "Bir kodlayıcı çalıştırması başlat"
+  ],
+  "zh": [
+    "启动一次编码运行"
+  ]
+}

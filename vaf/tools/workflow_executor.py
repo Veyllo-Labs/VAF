@@ -54,6 +54,7 @@ _HEARTBEAT_INTERVAL_S = 5.0
 class ExecuteWorkflowTool(BaseTool):
     name = "execute_workflow"
     agent_request = "refuse_work"
+    agent_request_confirm_kind = "workflow"
     # An orchestrator: the engine inside already bounds every step, so bounding the whole
     # run again would double-bound it.
     self_supervised = True

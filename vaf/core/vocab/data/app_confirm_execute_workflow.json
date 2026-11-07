@@ -1,0 +1,32 @@
+{
+  "ar": [
+    "تشغيل سير عمل"
+  ],
+  "de": [
+    "VAF soll einen Workflow ausführen"
+  ],
+  "en": [
+    "Run a workflow"
+  ],
+  "es": [
+    "Ejecutar un flujo de trabajo"
+  ],
+  "fr": [
+    "Lancer un workflow"
+  ],
+  "ja": [
+    "ワークフローを実行"
+  ],
+  "ko": [
+    "워크플로 실행"
+  ],
+  "th": [
+    "เรียกใช้เวิร์กโฟลว์"
+  ],
+  "tr": [
+    "Bir iş akışı çalıştır"
+  ],
+  "zh": [
+    "运行一个工作流"
+  ]
+}

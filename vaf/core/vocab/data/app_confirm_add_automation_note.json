@@ -1,0 +1,32 @@
+{
+  "ar": [
+    "إضافة ملاحظة إلى أتمتة"
+  ],
+  "de": [
+    "VAF soll einer Automation eine Notiz hinzufügen"
+  ],
+  "en": [
+    "Add a note to an automation"
+  ],
+  "es": [
+    "Añadir una nota a una automatización"
+  ],
+  "fr": [
+    "Ajouter une note à une automatisation"
+  ],
+  "ja": [
+    "オートメーションにメモを追加"
+  ],
+  "ko": [
+    "자동화에 메모 추가"
+  ],
+  "th": [
+    "เพิ่มบันทึกให้ระบบอัตโนมัติ"
+  ],
+  "tr": [
+    "Bir otomasyona not ekle"
+  ],
+  "zh": [
+    "为自动化添加一条备注"
+  ]
+}

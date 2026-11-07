@@ -746,7 +746,11 @@ class RelayConnector:
             if not state["due"] or now < state["due"] or now < state["unreachable"]:
                 continue
             row = devices.get(did)
-            if row is None or not row.get("relay_member") or not row.get("outbox") \
+            # Due while something waits for the device: an outbox entry, or a confirmation
+            # card, which is never in the outbox (confirmations).
+            from vaf.core.app_link import confirmations
+            if row is None or not row.get("relay_member") \
+                    or not (row.get("outbox") or confirmations.has_pending(did)) \
                     or bridge.is_connected(did):
                 self._notify.pop(did, None)
                 continue

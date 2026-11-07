@@ -1060,10 +1060,11 @@ Where VAF reaches an account on Telegram (`messaging_endpoints.json`, `by_scope`
   `kind="app_agent"` and read by every model inside a fence (`session.model_text`,
   `vaf/core/agent_origin.py`). The tools kept off chats and every tool whose
   `BaseTool.agent_request` refuses (work that keeps running after the request, changes to how
-  VAF works from now on, what needs the person) are hidden and refused whatever
+  VAF works from now on, what needs the person; a tool among them that declares a card kind is
+  parked for the user's confirmation on the phone instead, below) are hidden and refused whatever
   `channel_tools_unrestricted` says, a call that needs a confirmation is refused at once, and a
-  mail or WhatsApp message to a third party is parked for the user's approval (`outbound_hold`;
-  a park that fails refuses). Every tool that writes files is refused, for every role and
+  mail or WhatsApp message to a third party is parked for the user's approval (`outbound_hold`,
+  in the web UI or on the phone's card; a park that fails refuses). Every tool that writes files is refused, for every role and
   wherever it would write: by its `file_access = "write"` declaration (only a send the park
   lane holds stays open) or by its own `agent_request` (per call: `agent_request_for`,
   `cloud_storage`'s save and downloads). A memory stored in such a turn carries `metadata.origin` and
@@ -1073,6 +1074,24 @@ Where VAF reaches an account on Telegram (`messaging_endpoints.json`, `by_scope`
   contain; what the app chat may do without a confirmation stays reachable for the request,
   and answers the person gave ahead (an "always", a trusted folder, a grant for this chat, the
   admin bypass) still hold.
+- **A request's confirmation card counts only from the phone that asked**
+  (`vaf/core/app_link/confirmations.py`). A tool that declares a card kind
+  (`BaseTool.agent_request_confirm_kind`) and a mail or WhatsApp message to a third party are
+  parked instead of refused, and the card goes to the asking device only, by its id. An
+  answer counts only from that device and the account of its row (the certificate's row, never
+  a message field): another device of the account, another account's device and an unknown id
+  all get `confirm_invalid`, and the card stays open for the right one. A card is single use
+  (a second answer gets `used`), lasts ten minutes (`expired`), and is bound to the exact call:
+  the tool and the digest of its stored arguments (`agent_origin.call_digest`), or for a
+  message the draft's digest (`outbound_hold.draft_digest`), so an edit in the web UI settles
+  the card instead of letting the phone send another text. The confirmed call runs in a turn
+  that keeps every limit of the request (`asked_by_agent`, no channel lift, the policy and its
+  hard blocks); only gate (e) lets that one call pass, once (`confirmed_call_scope`), and a
+  policy confirmation of it is answered once, never as a standing grant. What that call
+  starts then runs within its own lane's limits. NAMED BOUNDARY: the cards live in the
+  service process's memory, like the request they answer; a restart drops them, and nothing
+  runs after it. The trust boundary for "a tap, not the app's agent" is the app (protocol
+  section 12, its commitments): VAF cannot tell a tap from the app's own code.
 
 ### Discord
 

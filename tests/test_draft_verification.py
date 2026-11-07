@@ -146,7 +146,7 @@ def test_the_runner_says_which_wake_a_turn_is_and_forgets_it_after(agent):
     end_turn(agent)
     assert agent._turn_wake is None
     from vaf.core.task_queue import WAKE_KINDS, WAKE_REPORT_KINDS
-    assert set(WAKE_REPORT_KINDS) == {"draft", "process"} and set(WAKE_REPORT_KINDS) < set(WAKE_KINDS)
+    assert set(WAKE_REPORT_KINDS) == {"draft", "process", "confirm"} and set(WAKE_REPORT_KINDS) < set(WAKE_KINDS)
 
 
 def test_the_agent_can_ask_what_became_of_its_drafts(agent):

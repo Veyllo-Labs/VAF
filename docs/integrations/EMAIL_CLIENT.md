@@ -303,7 +303,10 @@ the draft came from, `outbound_hold.wake_after_send`); the decision itself is
 [`vaf/core/outbound_hold.py`](../../vaf/core/outbound_hold.py) and the switch is
 `outward_send_hold`. A request of the Veyllo App's own agent is held the same way, whatever the
 switch says (its text may carry what that agent read elsewhere; the card waits in the web UI's
-Veyllo App chat). Every other lane is untouched: automations, workflow steps, other channel
+Veyllo App chat, and the phone that asked shows the same draft as a confirmation card with every
+recipient, the subject, the attachment names and the whole text: Yes sends it, No discards it,
+and no answer in ten minutes leaves it waiting in the web UI; one decision wins on both
+surfaces, see [VEYLLO_APP.md](VEYLLO_APP.md#the-apps-agent-can-ask-your-agent)). Every other lane is untouched: automations, workflow steps, other channel
 turns, the Front Office answer and a timer the person scheduled all send as before, because
 nobody is there to click.
 

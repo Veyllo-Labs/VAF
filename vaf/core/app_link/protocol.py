@@ -46,7 +46,7 @@ MAX_JSON_DEPTH = 4
 # The message types the app may send in a link session, and in a pairing session. The ONE
 # list: the validator, the dispatcher and the tests read it.
 MESSAGE_TYPES_FROM_APP = ("hello", "msg", "ack", "read", "typing", "cancel", "caps",
-                          "task_result", "error", "bye", "agent_ask")
+                          "task_result", "error", "bye", "agent_ask", "confirm_answer")
 PAIR_TYPES_FROM_APP = ("pair",)
 TASK_ERRORS = ("declined", "unavailable", "timeout", "failed")
 PAIR_ERRORS = ("expired", "used", "denied", "bad_csr", "busy")
@@ -421,6 +421,14 @@ def validate_from_app(obj: Dict[str, Any], allowed: Iterable[str] = MESSAGE_TYPE
             raise ProtocolError("bad_field", "text")
         if obj.get("attachments"):
             raise ProtocolError("bad_field", "attachments")
+        return out
+    if t == "confirm_answer":
+        # The user's tap on a confirmation card (section 12): the card's id and a real bool,
+        # nothing else read.
+        out = {"t": t, "id": _uuid(obj.get("id"))}
+        if not isinstance(obj.get("ok"), bool):
+            raise ProtocolError("bad_field", "ok")
+        out["ok"] = obj["ok"]
         return out
     if t in ("ack", "read", "cancel"):
         return {"t": t, "id": _uuid(obj.get("id"))}

@@ -408,7 +408,7 @@ def drain_failure_notice(session_id, error) -> None:
 
 
 def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=None,
-                           turn: TurnStatus = TurnStatus()) -> None:
+                           turn: TurnStatus = TurnStatus(), parked=None) -> None:
     """Send a finished turn's answer back where the task came from: Telegram, Discord,
     WhatsApp, or the mail outbox (`_deliver_email_reply`); a web turn sends nothing here.
 
@@ -424,7 +424,10 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
     an "[Error] ..." tool result does not decide the turn. The owner's own chats get the text
     as it is, and so does the web UI, which the runner fed before this. `contact` is the
     record pinned for THIS turn. `session_mgr` serves the WhatsApp fallback that reads the
-    chat's JID off the session. Never raises."""
+    chat's JID off the session. `parked` is what the turn's last round parked, as
+    (`Agent._parked_this_round`, `Agent._held_this_round`): a request of the Veyllo App's agent
+    that stopped there is answered by the confirmation card's outcome on the phone instead
+    (vaf/core/app_link/confirmations.py). Never raises."""
     try:
         task_source = getattr(task, "source", None)
         meta = (task.metadata or {}) if getattr(task, "metadata", None) else {}
@@ -490,11 +493,22 @@ def _deliver_channel_reply(task, final_text: str, *, session_mgr=None, contact=N
             from vaf.core.app_link import bridge as app_bridge
             from vaf.core.outbound_hold import TURN_ENDS_AT_DRAFT
             if str(final_text or "").strip() == TURN_ENDS_AT_DRAFT:
-                # The turn stopped at a draft (only a request of the app's agent holds a send
-                # on this channel): the web UI's sentence means nothing to the phone, so its
-                # agent is told where the message waits.
+                # The turn stopped at a parked call or a draft (only a request of the app's
+                # agent parks on this channel): the phone that asked gets the confirmation
+                # card, and its outcome answers the request. Without a card the web UI's
+                # sentence still means nothing to the phone: its agent is told where the
+                # message waits, or that the call did not run.
                 from vaf.core.agent_origin import APP_AGENT_DRAFT_TEXT
-                final_text = APP_AGENT_DRAFT_TEXT
+                fallback = APP_AGENT_DRAFT_TEXT
+                actions, held = parked if parked else ((), ())
+                if meta.get("app_agent_ask") and (actions or held):
+                    from vaf.core.app_link import confirmations
+                    fallback = confirmations.open_card(
+                        meta, action=actions[0] if actions else None,
+                        draft_ref="" if actions else str(held[0]))
+                    if fallback is None:
+                        return
+                final_text = fallback
             app_bridge.finish_reply(meta, _prepare_channel_outbound(final_text))
         elif task_source == "whatsapp":
             chat_jid = meta.get("whatsapp_chat_jid")
@@ -2048,6 +2062,32 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                 input_text = task.input_text
                 is_cmd = is_system_command(task)
 
+                # A confirmation the user gave on the phone (vaf/core/app_link/confirmations.py):
+                # the confirmed call runs first, exactly once, on the agent bound to this turn,
+                # and the turn reads VAF's report of it. Bound again with the report as the
+                # wake's text (the single writer), so the result-grounding judge counts it as
+                # evidence. A card that is no longer approved for this task (cancelled, claimed,
+                # forgotten by a restart) runs nothing and no turn.
+                if _bound and _binding is not None and _binding.wake \
+                        and _binding.wake[0] == "confirm":
+                    from vaf.core.app_link import confirmations as _confirmations
+                    _report = _confirmations.run_confirmed(agent, task)
+                    if _report is None:
+                        append_domain_log("headless", "[APP_CONFIRM] confirm turn dropped: its "
+                                                      "card is not approved for it")
+                        try:
+                            tq.task_done(task=task)
+                        except Exception:
+                            tq.task_done()
+                        continue
+                    from dataclasses import replace as _dc_replace
+                    _binding = _dc_replace(_binding, wake=("confirm", _report))
+                    try:
+                        bind_turn(agent, _binding)
+                    except Exception as _rebind_exc:
+                        append_domain_log("headless", f"[APP_CONFIRM] rebind failed: {_rebind_exc}")
+                    input_text = _report
+
                 # Check for System Commands (similar to run.py) - do NOT load model for commands
                 if is_cmd:
                     _handle_command(input_text, agent, session_mgr)
@@ -2485,9 +2525,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                             "[WhatsApp message.] Respond helpfully; do not repeat or echo the user's message back.\n\n"
                             + effective_input
                         )
-                    elif _binding.asked_by_agent:
+                    elif _binding.asked_by_agent and not _binding.wake:
                         # Another agent's request, read inside its fence (agent_origin); the
                         # stored copy is the raw text, which session.model_text fences again.
+                        # A wake of such a request (a confirmation) is VAF's own report.
                         from vaf.core.agent_origin import app_agent_request_text
                         effective_input = app_agent_request_text(effective_input)
                     try:
@@ -3183,7 +3224,9 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         _deliver_channel_reply(
                             task, final_text, session_mgr=session_mgr,
                             contact=getattr(agent, "_front_office_contact", None),
-                            turn=_turn_status)
+                            turn=_turn_status,
+                            parked=(list(getattr(agent, "_parked_this_round", None) or ()),
+                                    list(getattr(agent, "_held_this_round", None) or ())))
 
                     # Send token/context stats to WebUI
                     try:
@@ -3298,7 +3341,8 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 _msg_kind = ("voice_delegation"
                                              if (task.metadata or {}).get("origin_channel") == "voice_call"
                                              else None)
-                                if getattr(_binding, "asked_by_agent", None):
+                                if getattr(_binding, "asked_by_agent", None) \
+                                        and not getattr(_binding, "wake", None):
                                     from vaf.core.agent_origin import APP_AGENT_KIND
                                     _msg_kind = APP_AGENT_KIND
                                 session.add_message(role="user", content=_user_input.strip(),

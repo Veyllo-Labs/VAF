@@ -1,0 +1,32 @@
+{
+  "ar": [
+    "استعادة أتمتة"
+  ],
+  "de": [
+    "VAF soll eine Automation wiederherstellen"
+  ],
+  "en": [
+    "Restore an automation"
+  ],
+  "es": [
+    "Restaurar una automatización"
+  ],
+  "fr": [
+    "Restaurer une automatisation"
+  ],
+  "ja": [
+    "オートメーションを復元"
+  ],
+  "ko": [
+    "자동화 복원"
+  ],
+  "th": [
+    "กู้คืนระบบอัตโนมัติ"
+  ],
+  "tr": [
+    "Bir otomasyonu geri yükle"
+  ],
+  "zh": [
+    "恢复一个自动化"
+  ]
+}

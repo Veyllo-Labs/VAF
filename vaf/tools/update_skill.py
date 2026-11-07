@@ -17,6 +17,7 @@ from vaf.tools.create_skill import _build_skill_md
 class UpdateSkillTool(BaseTool):
     name = "update_skill"
     agent_request = "refuse_standing"
+    agent_request_confirm_kind = "skill"
     category    = "skills"
     identity_kwargs = ("user_scope_id", "username")
     description = (

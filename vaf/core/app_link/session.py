@@ -157,6 +157,9 @@ class LinkSession:
         self.state = "handshake"
         self.purpose: Optional[str] = None
         self.device: Optional[Dict[str, Any]] = None
+        # The app on this connection answered `unknown_type` for a confirmation card: it gets
+        # no card any more (vaf/core/app_link/confirmations.py).
+        self.confirm_unsupported = False
         self.closed = False
         self.close_reason = ""
         self.dispatched = 0

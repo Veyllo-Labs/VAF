@@ -1,0 +1,32 @@
+{
+  "ar": [
+    "إرسال رسالة واتساب"
+  ],
+  "de": [
+    "VAF soll eine WhatsApp-Nachricht senden"
+  ],
+  "en": [
+    "Send a WhatsApp message"
+  ],
+  "es": [
+    "Enviar un mensaje de WhatsApp"
+  ],
+  "fr": [
+    "Envoyer un message WhatsApp"
+  ],
+  "ja": [
+    "WhatsAppメッセージを送信"
+  ],
+  "ko": [
+    "WhatsApp 메시지 보내기"
+  ],
+  "th": [
+    "ส่งข้อความ WhatsApp"
+  ],
+  "tr": [
+    "Bir WhatsApp mesajı gönder"
+  ],
+  "zh": [
+    "发送一条 WhatsApp 消息"
+  ]
+}

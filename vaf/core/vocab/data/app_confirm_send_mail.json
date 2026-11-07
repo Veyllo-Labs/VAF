@@ -1,0 +1,32 @@
+{
+  "ar": [
+    "إرسال بريد إلكتروني"
+  ],
+  "de": [
+    "VAF soll eine E-Mail senden"
+  ],
+  "en": [
+    "Send a mail"
+  ],
+  "es": [
+    "Enviar un correo"
+  ],
+  "fr": [
+    "Envoyer un e-mail"
+  ],
+  "ja": [
+    "メールを送信"
+  ],
+  "ko": [
+    "메일 보내기"
+  ],
+  "th": [
+    "ส่งอีเมล"
+  ],
+  "tr": [
+    "Bir e-posta gönder"
+  ],
+  "zh": [
+    "发送一封邮件"
+  ]
+}

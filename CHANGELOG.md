@@ -27,13 +27,18 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   can hand your agent a task and read the answer; only the phone that asked gets that answer.
   Your agent's chat shows such a task as coming from the app's agent, not from you. Tools that
   need you in person or a confirmation (timers, the browser agent, the sandbox environments,
-  the builders, tasks for the phone, storing a credential) do not run on it. Neither do coder
-  runs, automations, workflows, agent rooms, the librarian, the Python sandbox, messages to
-  your own messengers, or changes to your skills, workflows, custom tools, settings, contacts
-  and identity. A request of the app's agent does not write or change your files: writing,
-  editing, downloading and saving files, documents, cloud files and git are refused. A mail or
-  a WhatsApp message to somebody else waits for your approval in the web UI. Memories saved
-  on its request are marked and read back as the app agent's.
+  the builders, tasks for the phone, storing a credential) do not run on it. Neither do agent
+  rooms, the librarian, the Python sandbox, messages to your own messengers, or changes to your
+  workflows, custom tools, settings and contacts. A request of the app's agent does not write
+  or change your files: writing, editing, downloading and saving files, documents, cloud files
+  and git are refused. Memories saved on its request are marked and read back as the app
+  agent's.
+- **Veyllo App: confirm on your phone what the app's agent asked for.** When the app's agent
+  asks your agent for a coder run, an automation, a workflow, a skill or identity change, or a
+  mail or WhatsApp message to somebody else, nothing happens until you confirm it on a card in
+  the app; the card shows exactly what will run. No, or no answer within 10 minutes, and it
+  does not run (a message then still waits as a draft in the web UI). The pairing window now
+  also says that the app's agent processes your agent's answers with the app's chat model.
 - **DeepSeek: choose how long the model thinks before it answers.** Settings > AI & Model has a
   **DeepSeek thinking effort** setting (Standard, Low, High, Max), also available as the config
   key `deepseek_reasoning_effort`. It applies to every DeepSeek call, whichever job makes it

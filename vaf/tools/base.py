@@ -227,6 +227,14 @@ class BaseTool(ABC):
     agent_request: Literal["allow", "refuse_work", "refuse_standing", "refuse_person",
                            "hold"] = "allow"
 
+    # agent_request_confirm_kind: for a "refuse_work" or "refuse_standing" tool, the kind of
+    # the confirmation card the user can answer on the phone instead ("coder", "automation",
+    # "workflow", "skill", "identity"; vaf/core/agent_origin.py). Such a call in a request of
+    # the Veyllo App's agent does not run and is not refused: it is parked, the asking phone
+    # shows exactly the call, and only the user's Yes runs it, once. "" (the default) and any
+    # other value keep the refusal.
+    agent_request_confirm_kind: str = ""
+
     def agent_request_for(self, args: Dict[str, Any]) -> str:
         """``agent_request`` for ONE call, for a tool whose answer depends on its arguments
         (``mcp_call``: the level of the server tool it reaches; ``cloud_storage``: its

@@ -15,6 +15,10 @@ export const DRAFT_TURN_END = "Draft waiting for the user's decision; the turn e
 /** The first line of the wake turn a sent draft queues; the rest is for the agent. */
 export const DRAFT_WAKE_PREFIX = '✉ Draft sent:';
 
+/** The first line of the wake turn a confirmation on the phone queues
+ * (vaf/core/app_link/confirmations.py, pinned by tests/test_app_link_confirm.py). */
+export const CONFIRM_WAKE_PREFIX = '✔ Confirmed in the app:';
+
 const CREATED = /^NOT SENT YET\. Draft (mail|call):(\d+)/;
 
 /** The draft a tool result parked (`mail:12`, `call:7`), or null for any other result. */

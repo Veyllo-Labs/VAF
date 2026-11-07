@@ -29,6 +29,7 @@ def _build_skill_md(kwargs: dict) -> str:
 class CreateSkillTool(BaseTool):
     name = "create_skill"
     agent_request = "refuse_standing"
+    agent_request_confirm_kind = "skill"
     category    = "skills"
     identity_kwargs = ("user_scope_id", "username")
     description = (

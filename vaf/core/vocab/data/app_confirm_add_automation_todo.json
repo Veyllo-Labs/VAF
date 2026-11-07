@@ -1,0 +1,32 @@
+{
+  "ar": [
+    "إضافة مهمة إلى أتمتة"
+  ],
+  "de": [
+    "VAF soll einer Automation eine Aufgabe hinzufügen"
+  ],
+  "en": [
+    "Add a to-do to an automation"
+  ],
+  "es": [
+    "Añadir una tarea a una automatización"
+  ],
+  "fr": [
+    "Ajouter une tâche à une automatisation"
+  ],
+  "ja": [
+    "オートメーションにToDoを追加"
+  ],
+  "ko": [
+    "자동화에 할 일 추가"
+  ],
+  "th": [
+    "เพิ่มสิ่งที่ต้องทำให้ระบบอัตโนมัติ"
+  ],
+  "tr": [
+    "Bir otomasyona yapılacak iş ekle"
+  ],
+  "zh": [
+    "为自动化添加一项待办"
+  ]
+}

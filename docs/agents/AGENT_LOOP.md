@@ -136,6 +136,29 @@ in the turn is marked and read back fenced. The runner wraps the turn's input in
 (`app_agent_request_text`), stores the raw text with `kind="app_agent"` and skips the last
 interaction record.
 
+A tool among the refused ones that declares a card kind (`BaseTool.agent_request_confirm_kind`:
+the coder, the automations and their notes, workflows, skills, the user's identity) is not
+refused but PARKED in such a turn: `agent_origin.agent_request_decision` answers
+`("confirm", kind)`, so the binding keeps it offered, and gate (e) (`_park_for_confirmation`)
+records the call in the step attribute `_parked_this_round` (tool, stored arguments, their
+`call_digest`, the card's text `confirm_what`), ends the turn with the invisible
+`TURN_ENDS_AT_DRAFT` sentence exactly as a held draft does (`_close_turn`), and answers the
+call with `agent_origin.parked_result` (`NOT RUN YET.`, no id). Refused instead: a second
+parked call or a call after a draft in the same round (one card per request at a time), a call
+whose card text would be over `WHAT_MAX` (never cut; the refusal names the longest argument),
+and any call inside a confirmed one. The runner hands the round's parked call or first held
+draft to the app link, which sends the asking phone the card
+(`vaf/core/app_link/confirmations.py`). The user's Yes queues a wake turn of kind `confirm`:
+the runner first runs exactly the parked call once through `execute_tool`, inside
+`agent_origin.confirmed_call_scope(tool, digest)`. That scope is a one-shot pass: gate (e)
+lets the first call with that tool and digest through (`confirmed_call_allows`) together with
+the other turn gates (they judge a model's step in a round, and this call is the person's
+confirmed one), the confirmation gate answers `allow_once` for it (never a standing grant),
+and every other call, a second identical one included, is answered as in any request. The
+report of the run (`CONFIRM_WAKE_PREFIX`, then the result) is bound as the wake's text, so
+`_turn_reports` counts it, and it is the turn's input, neither fenced nor stored as the app
+agent's words.
+
 NAMED BOUNDARY: `vaf run --web` serves the owner's browser chats without the runner and without
 this binding. That mode hosts the web server in the terminal's process, and its loop takes a
 queued chat with `load_session_context` alone, on an agent bound to the machine owner: it cannot
@@ -263,7 +286,7 @@ incident the woken agent answered that the mail was out, the judge called that u
 and the correction told the person the send could not be confirmed. `_turn_reports` now puts
 what VAF itself told the agent this turn in front of the judge, labelled `VAF report`: the
 decision note, and the input of a wake turn whose kind is a report
-(`task_queue.WAKE_REPORT_KINDS`: `draft`, `process`; a timer's text is the agent's own). The
+(`task_queue.WAKE_REPORT_KINDS`: `draft`, `process`, `confirm`; a timer's text is the agent's own). The
 runner says which wake a turn is and hands over the wake's own text (`agent._turn_wake`, from
 the queue and cleared after the turn), never the typed text, which anybody can write; the text
 as VAF wrote it, because the turn's input opens with the chat's workspace note and would push

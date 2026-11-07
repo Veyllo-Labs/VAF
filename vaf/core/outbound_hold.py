@@ -52,7 +52,14 @@ AND WHEN ANOTHER AGENT ASKED. A turn the agent of the user's Veyllo App wrote (t
 binding's `asked_by_agent`, vaf/core/agent_origin.py) holds every call that can reach a third
 party too, whatever its chat source, and whatever `outward_send_hold` says: that switch is the
 person's trust in their own word, and such a request may carry text its agent read elsewhere.
-The card waits in the web UI's chat of that request.
+The card waits in the web UI's chat of that request, and the same draft goes to the phone
+that asked as a confirmation card (vaf/core/app_link/confirmations.py, kind ``send``) showing
+every recipient, the subject, the attachment names and the whole text. Two places decide one
+draft, and one decision wins through the store's own claim: a Send or Discard in the web UI
+settles the card, a Yes on the phone goes through `send_draft` like a click. The phone never
+sends a draft that changed after its card went out (`draft_digest`): an edit in the web UI
+settles the card instead. No answer on the phone in ten minutes leaves the draft waiting in
+the web UI; a No discards it.
 
 Front Office answers need no exclusion here: a Front Office turn is restricted to its own
 allow-list, its mail answer goes through `queue_send` in the runner rather than a tool, and
@@ -974,6 +981,18 @@ def status_line(row: Dict[str, Any]) -> str:
         return (f"Draft {ref} MAY already have been sent: its send was interrupted, and only the "
                 f"user can tell whether it arrived ({what}).")
     return f"Draft {ref} WAITS for the user to send, edit or discard it ({what})."
+
+
+def draft_digest(row: Dict[str, Any]) -> str:
+    """The fingerprint of what a draft would send: channel, tool, every recipient, subject,
+    attachment names and the full text. A second place to decide the same draft (the Veyllo
+    App's confirmation card) sends it only while this is what the person read there; an edit
+    in the web UI makes it another message."""
+    import hashlib
+    canon = json.dumps({key: row.get(key) for key in (
+        "channel", "tool", "recipient", "cc", "bcc", "subject", "attachments", "preview")},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
 
 
 def draft_rows(ref: str, *, username: Optional[str],

@@ -128,6 +128,7 @@ AGENT_STATE: dict = {
     "_cross_chat_hints": _STEP, "_current_turn_thinking_mode": _STEP,
     "_force_tool_choice": _STEP, "_forced_tool_names": _STEP,
     "_force_tool_choice_used": _STEP, "_forced_round": _STEP, "_held_this_round": _STEP,
+    "_parked_this_round": _STEP,
     "_injected_context_chars": _STEP, "_model_health_noted": _STEP,
     "_model_health_retried": _STEP, "_model_health_signals": _STEP,
     "_model_health_turn": _STEP, "_model_health_verdict": _STEP,
@@ -278,10 +279,11 @@ def _write_markers(agent: Any, binding: Optional[TurnBinding]) -> None:
     hidden = b.excluded_tools if b else None
     if asked_by:
         # What the turn gate refuses on another agent's request is not offered either, from
-        # the same predicate (`agent_origin.refused_on_agent_request`).
+        # the same predicate (`agent_origin.refused_on_agent_request`). A tool the user
+        # confirms on the phone stays offered: its call parks for the card.
         from vaf.core.agent_origin import refused_tool_names
         hidden = frozenset(hidden or ()) | refused_tool_names(getattr(agent, "tools", None) or {},
-                                                              str(b.source))
+                                                              str(b.source), asked_by)
     if hidden is None:
         try:
             del agent._excluded_tools

@@ -28,7 +28,9 @@ stored answer is put into that device's outbox only, and only that device is not
 device is addressed by its id at every send, so after a drop the answer reaches the session
 it connected again with (the app sends the same id again and gets ``ack``). A device holds
 at most ``AGENT_ASK_OPEN_MAX`` requests queued or running; one that ends without a reply (a
-stop, a cancel, a removal) is answered with ``done`` and its place freed by the sweep.
+stop, a cancel, a removal) is answered with ``done`` and its place freed by the sweep. A
+request whose turn parked a call for the user's confirmation stays open, with its place,
+until the card's outcome answers it (vaf/core/app_link/confirmations.py).
 
 NAMED BOUNDARY: a file sent while a device is away reaches it as its text line only; the
 file itself goes to the devices connected at the time (the outbox keeps ids, not bytes).
@@ -93,6 +95,8 @@ class Reply:
     # A request of the app's agent: answered on the device that asked, with its id.
     ask: bool = False
     device_id: str = ""
+    # The card a request waits on (confirmations): its turn ended, its answer has not.
+    awaiting: str = ""
 
 
 @dataclass
@@ -271,13 +275,16 @@ def on_hello(session, hello: Dict[str, Any]) -> None:
     from vaf.core.app_link import agent_name
     agent = agent_name(row.get("username") or "")
     # `agent_ask` is always taken (protocol section 10: no switch); the protocol's reserved
-    # switch message and refusal code for it are never sent.
+    # switch message and refusal code for it are never sent. `confirm`: this VAF sends
+    # confirmation cards (section 12) and takes `confirm_answer`.
     session.send_json({"t": "welcome", "v": pr.PROTOCOL_VERSION,
                        "chat": devices.chat_session_id(scope), "account": row.get("username", ""),
                        "agent": agent or "VAF", "server_time": int(time.time()),
-                       "agent_ask": True})
+                       "agent_ask": True, "confirm": True})
     _came_online(did)
     replay(session)
+    from vaf.core.app_link import confirmations
+    confirmations.resend(session)
 
 
 def _dropped_notice(row: Dict[str, Any], count: int) -> str:
@@ -321,12 +328,15 @@ def on_message(session, message: Dict[str, Any], files: List[Dict[str, Any]]) ->
         session.close("removed", bye=True)
         return
     t = message["t"]
-    if t in ("msg", "ack", "agent_ask"):
+    if t in ("msg", "ack", "agent_ask", "confirm_answer"):
         _touch_now_and_then(did, session)
     if t == "msg":
         _on_msg(session, row, message, files)
     elif t == "agent_ask":
         _on_agent_ask(session, row, message)
+    elif t == "confirm_answer":
+        from vaf.core.app_link import confirmations
+        confirmations.on_answer(session, row, message)
     elif t == "ack":
         devices.outbox_ack(did, message["id"])
     elif t == "read":
@@ -348,6 +358,11 @@ def on_message(session, message: Dict[str, Any], files: List[Dict[str, Any]]) ->
             pass
     elif t == "error":
         logger.info("app link: device %s reported %s", did[:8], message.get("code"))
+        if message.get("code") == "unknown_type" and message.get("ref") == "confirm":
+            # An app without cards: the type, not a card id, comes back, so every card of
+            # this connection is answered as refused (confirmations.refused_by_app).
+            from vaf.core.app_link import confirmations
+            confirmations.refused_by_app(session)
 
 
 def _touch_now_and_then(device_id: str, session) -> None:
@@ -599,6 +614,11 @@ def _on_cancel(row: Dict[str, Any], ref: str) -> None:
     scope = row["user_scope_id"]
     did = row["device_id"]
     chat_sid = devices.chat_session_id(scope)
+    # A request whose card waits: no turn runs, so nothing is stopped (a stop would hit
+    # whatever else the chat runs); the card is settled instead.
+    from vaf.core.app_link import confirmations
+    if confirmations.cancel(row, ref):
+        return
     with _lock:
         running = [r for r in _replies.values() if r.scope == scope
                    and ref in (r.id, r.app_message_id)
@@ -636,6 +656,19 @@ def turn_started(meta: Dict[str, Any]) -> Optional[str]:
     scope = str(meta.get("user_scope_id") or "").strip()
     if not scope:
         return None
+    if meta.get("app_agent_ask") and meta.get("app_confirm_id"):
+        # The turn a confirmation woke answers the request that waited on it: under the same
+        # reply, which streams nothing more (its `done` carries the answer the app shows in
+        # place of what it streamed before the card).
+        with _lock:
+            waiting = _replies.get(_rkey(scope, meta.get("app_ask_id")))
+            if waiting is not None and waiting.ask and waiting.awaiting \
+                    and waiting.awaiting == meta.get("app_confirm_id") \
+                    and waiting.device_id == str(meta.get("app_device_id") or ""):
+                waiting.awaiting = ""
+                waiting.streaming = False
+                meta["app_reply_id"] = waiting.id
+                return waiting.id
     reply = _reply_for(meta, scope)
     with _lock:
         _replies[_rkey(scope, reply.id)] = reply
@@ -819,6 +852,11 @@ def sweep(now: Optional[float] = None) -> None:
     with _lock:
         for key in [k for k, r in _replies.items() if wall_now - r.started > REPLY_MAX_SECONDS]:
             del _replies[key]
+    try:
+        from vaf.core.app_link import confirmations
+        confirmations.settle(wall_now)
+    except Exception:
+        logger.debug("app link: settling confirmations failed", exc_info=True)
     settle_asks(wall_now)
     try:
         from vaf.core.app_link import pairing
@@ -899,6 +937,8 @@ def reset() -> None:
         _msg_times.clear()
         _touched.clear()
         _state["expired_at"] = 0.0
+    from vaf.core.app_link import confirmations
+    confirmations.reset()
 
 
 devices.add_removed_listener(close_device)

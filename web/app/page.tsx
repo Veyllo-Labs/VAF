@@ -10,7 +10,7 @@ import { useTranslations } from 'next-intl';
 import { toWav16k } from '@/lib/wav';
 import {
     Send, Menu, Plus, MessageSquare, Brain, Bot, ChevronLeft, User, Trash2, Edit2, Paperclip,
-    Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, Loader2,
+    Activity, GitBranch, Workflow, CheckCircle2, ShieldAlert, ShieldCheck, Loader2,
     Settings, Mic, MicOff, Check, ChevronRight, Zap, Volume2, Square, Wrench, FileText, Calendar, ScrollText, AlarmClock, Terminal, Inbox,
     Folder, FolderOpen, FolderPlus, Download, Upload, RefreshCw, ArrowLeft, Info, Search, X, Users, UserMinus,
     Lock, Unlock, Globe, Code2, MousePointer2, Microscope, PenLine, BookOpen,
@@ -36,7 +36,7 @@ import AutomationCalendarModal from '@/components/AutomationCalendarModal';
 import InboxWindow from '@/components/inbox/InboxWindow';
 import { TurnDrafts, UnplacedDrafts, isWaitingDraft, type HeldSendRow } from '@/components/outbox/HeldSendCard';
 import { useChatDrafts } from '@/components/outbox/useChatDrafts';
-import { draftRefOf, isDraftTurnEnd, DRAFT_WAKE_PREFIX } from '@/components/outbox/draftRefs';
+import { draftRefOf, isDraftTurnEnd, DRAFT_WAKE_PREFIX, CONFIRM_WAKE_PREFIX } from '@/components/outbox/draftRefs';
 import AskChoices from '@/components/chat/AskChoices';
 import { asksOf, withoutOptions } from '@/components/chat/askContract';
 import { bodyAndSay, placeRoundUpdate, removeRoundBubble } from '@/components/chat/turnRounds';
@@ -10007,18 +10007,24 @@ function VAFDashboardContent() {
                                                     // A draft the person sent wakes the chat that stopped at it
                                                     // (vaf/core/outbound_hold.py); its first line names the addressee.
                                                     const _isDraftWake = msg.kind === 'draft' || _wakeContent.startsWith(DRAFT_WAKE_PREFIX);
-                                                    const _isWake = _isProcessWake || _isDraftWake || msg.kind === 'timer' || _wakeContent.startsWith('⏰ Timer fired');
+                                                    // The user confirmed on the phone what a request of the Veyllo App's
+                                                    // agent had parked (vaf/core/app_link/confirmations.py); its first line
+                                                    // names what ran.
+                                                    const _isConfirmWake = msg.kind === 'confirm' || _wakeContent.startsWith(CONFIRM_WAKE_PREFIX);
+                                                    const _isWake = _isConfirmWake || _isProcessWake || _isDraftWake || msg.kind === 'timer' || _wakeContent.startsWith('⏰ Timer fired');
                                                     if (_isWake) {
                                                         // Show only the user's note (timer) or the one-line outcome (process),
                                                         // not the internal "Act on it…" / "Continue with…" framing.
-                                                        const _noteMatch = (_isProcessWake || _isDraftWake) ? null : _wakeContent.match(/your note:\s*"([\s\S]*?)"/);
+                                                        const _noteMatch = (_isProcessWake || _isDraftWake || _isConfirmWake) ? null : _wakeContent.match(/your note:\s*"([\s\S]*?)"/);
                                                         const _draftLine = _wakeContent.split('\n')[0];
-                                                        const _wakeText = _isDraftWake
+                                                        const _wakeText = _isConfirmWake
+                                                            ? (_draftLine.startsWith(CONFIRM_WAKE_PREFIX) ? _draftLine.slice(CONFIRM_WAKE_PREFIX.length) : _draftLine).trim()
+                                                            : _isDraftWake
                                                             ? (_draftLine.startsWith(DRAFT_WAKE_PREFIX) ? _draftLine.slice(DRAFT_WAKE_PREFIX.length) : _draftLine).trim()
                                                             : _isProcessWake
                                                             ? _wakeContent.split('\n')[0].replace(/^⚙\s*/, '').trim()
                                                             : (_noteMatch ? _noteMatch[1] : _wakeContent.replace(/^⏰\s*/, '')).trim();
-                                                        const WakeIcon = _isDraftWake ? Send : _isProcessWake ? Terminal : AlarmClock;
+                                                        const WakeIcon = _isConfirmWake ? ShieldCheck : _isDraftWake ? Send : _isProcessWake ? Terminal : AlarmClock;
                                                         // Two states: ACTIVE (E) while the agent is still handling the timer — real (dark) agent
                                                         // avatar + amber clock BADGE + amber bubble ("look here"); DONE (J) once it has replied —
                                                         // neutral dim avatar, neutral bubble, amber only in the "TIMER" label (quietly marked,
@@ -10046,7 +10052,7 @@ function VAFDashboardContent() {
                                                                         )}>
                                                                             <div className="mb-1 flex items-center gap-1.5 text-amber-500">
                                                                                 <WakeIcon className="h-3.5 w-3.5" />
-                                                                                <span className="text-[11px] font-semibold uppercase tracking-wide">{_isDraftWake ? tMain('wakeDraft') : _isProcessWake ? tMain('wakeProcess') : tMain('wakeTimer')}</span>
+                                                                                <span className="text-[11px] font-semibold uppercase tracking-wide">{_isConfirmWake ? tMain('wakeConfirm') : _isDraftWake ? tMain('wakeDraft') : _isProcessWake ? tMain('wakeProcess') : tMain('wakeTimer')}</span>
                                                                             </div>
                                                                             <div className="chat-markdown"><ChatMarkdown>{_wakeText}</ChatMarkdown></div>
                                                                         </div>

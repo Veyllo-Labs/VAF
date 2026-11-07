@@ -51,6 +51,10 @@ AGENT_REQUEST_KINDS = ("allow", "refuse_work", "refuse_standing", "refuse_person
 # writes files - what every call of a `file_access = "write"` tool gets, for a tool whose
 # writing depends on its arguments (`cloud_storage`: save and download write, browse reads).
 AGENT_REQUEST_CALL_KINDS = AGENT_REQUEST_KINDS + ("refuse_write",)
+# BaseTool.agent_request_confirm_kind: what a "refuse_work"/"refuse_standing" tool becomes in a
+# request of the Veyllo App's agent when the user can confirm the very call on the phone
+# (vaf/core/agent_origin.py). The kinds of the app's confirmation card; "" is no card.
+AGENT_REQUEST_CONFIRM_KINDS = ("coder", "automation", "workflow", "skill", "identity")
 
 # Human-facing bundles for tool lists (the web tools window, the CLI table, the
 # TUI overlay, list_tools). The order is the display order.
@@ -175,6 +179,9 @@ class ToolContract:
     # How the tool answers a turn another agent asked for (BaseTool.agent_request);
     # read by vaf.core.agent_origin.
     agent_request: str = "allow"
+    # The card the user confirms such a refused call on (BaseTool.agent_request_confirm_kind);
+    # "" for none.
+    agent_request_confirm_kind: str = ""
 
 
 @dataclass(frozen=True)
@@ -246,6 +253,10 @@ def resolve_tool_contract(tool_name: str, tool: Any | None) -> ToolContract:
         raw_category = "general"
 
     raw_agent_request = normalize_agent_request(getattr(tool, "agent_request", "allow"))
+    # A kind outside the card's list is no card: the call stays refused (fails closed).
+    raw_confirm_kind = str(getattr(tool, "agent_request_confirm_kind", "") or "").strip().lower()
+    if raw_confirm_kind not in AGENT_REQUEST_CONFIRM_KINDS:
+        raw_confirm_kind = ""
 
     return ToolContract(
         name=str(getattr(tool, "name", tool_name) or tool_name),
@@ -255,6 +266,7 @@ def resolve_tool_contract(tool_name: str, tool: Any | None) -> ToolContract:
         admin_only=admin_only,
         category=raw_category,
         agent_request=raw_agent_request,
+        agent_request_confirm_kind=raw_confirm_kind,
     )
 
 

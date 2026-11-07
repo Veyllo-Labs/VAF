@@ -12511,6 +12511,9 @@ class Agent:
                 _post_tc_messages: list = []
                 # Filled by `_announce_held_send` when a call of THIS round parks a draft.
                 self._held_this_round = []
+                # Filled by gate (e) when a call of THIS round waits for the user's
+                # confirmation on the phone (`_park_for_confirmation`).
+                self._parked_this_round = []
                 # Set by `_close_turn` when a call of THIS round ends the turn.
                 self._turn_closing = None
                 # The round's fan-out (`_fanout_for`): sub-agents of one kind started in it
@@ -13157,6 +13160,10 @@ class Agent:
                         append_domain_log(
                             "backend",
                             f"[OUTBOUND_HOLD] turn ends at draft {','.join(self._held_this_round)}")
+                    if getattr(self, "_parked_this_round", None):
+                        append_domain_log(
+                            "backend",
+                            f"[APP_CONFIRM] turn ends at a parked {self._parked_this_round[0].tool}")
                     UI.event("System", "Waiting for the user: the turn ends here", style="info")
                     if _closing_visible and stream_callback:
                         stream_callback("\n\n" + _closing_text)
@@ -14051,6 +14058,17 @@ class Agent:
         # with no dialog pushed and nothing waiting, and the admin's channel lift does not
         # apply. Standing answers the person gave ahead still do (resolve_confirmation_gate).
         _asked_by_agent = bool(getattr(self, "_turn_asked_by_agent", None))
+        # The call the user confirmed on the phone (agent_origin.confirmed_call_scope): the
+        # card was the person's word for exactly this call, so a confirmation the policy asks
+        # for is answered "allow_once" for it, and nothing standing is granted. Every other
+        # call of such a turn is refused at once, as above.
+        _card_confirmed = False
+        if _asked_by_agent:
+            try:
+                from vaf.core.agent_origin import confirmed_call_pending
+                _card_confirmed = confirmed_call_pending(name, args if isinstance(args, dict) else {})
+            except Exception:
+                _card_confirmed = False
         caller = _ToolCaller(
             self.tools,
             user_scope_id=getattr(self, "_current_user_scope_id", None),
@@ -14058,10 +14076,11 @@ class Agent:
             user_role=getattr(self, "_current_user_role", None),
             source=current_source,
             session_id=sid,
-            interactive=not self._noninteractive and not _asked_by_agent,
+            interactive=_card_confirmed or (not self._noninteractive and not _asked_by_agent),
             gate_enabled=not _ww,
             trust_dir=Path.cwd(),
-            decide=self._ask_user_about_gate,
+            decide=((lambda *_a, **_k: "allow_once") if _card_confirmed
+                    else self._ask_user_about_gate),
             on_gate_required=None if _asked_by_agent else self._push_gate_to_websocket,
             channel_lift=not _asked_by_agent,
             request_origin=getattr(self, "_turn_asked_by_agent", None) or None,
@@ -14098,7 +14117,7 @@ class Agent:
             # The policy refused a tool kept off chats before gate (e) could: the requesting
             # agent gets gate (e)'s words (why, and what the user can do) instead of the
             # policy's internal ones. The refusal itself stays the policy's.
-            refusal = self._agent_request_gate_decision(name, None)
+            refusal = self._agent_request_gate_decision(name, None, park=False)
             if refusal:
                 from dataclasses import replace as _replace
                 outcome = _replace(outcome, result=refusal)
@@ -14206,8 +14225,13 @@ class Agent:
         raising (Rule 4.1), and all of them run after the hard policy block, never before."""
         # (e) first: a turn another agent asked for runs no tool that needs the user in
         # person, and a refused call is no step of the turn (no plan asked for, no progress).
+        # The call the user confirmed on the phone passes once, and passes the other turn
+        # gates with it: they judge a model's step in a chat round, and this call is no step of
+        # one (the runner runs it before the turn), the user's card is its confirmation.
         if getattr(self, "_turn_asked_by_agent", None):
-            gate_msg = self._agent_request_gate_decision(name, tool_instance, args)
+            confirmed, gate_msg = self._agent_request_gate(name, tool_instance, args)
+            if confirmed:
+                return None
             if gate_msg is not None:
                 return gate_msg
         gate_msg = self._forced_call_gate(name, args)
@@ -14242,22 +14266,37 @@ class Agent:
             return gate_msg
         return None
 
-    def _agent_request_gate_decision(self, name, tool_instance, args=None):
+    def _agent_request_gate_decision(self, name, tool_instance, args=None, *, park=True):
+        """Gate (e)'s answer for one call as a result string, or None when it runs
+        (`_agent_request_gate`). ``park=False`` asks only for a refusal: a call that would
+        wait for the user's confirmation is not parked and gets None."""
+        return self._agent_request_gate(name, tool_instance, args, park=park)[1]
+
+    def _agent_request_gate(self, name, tool_instance, args=None, *, park=True):
         """Gate (e): a request another agent wrote (the turn binding's ``asked_by_agent``,
         today the agent of the user's Veyllo App) runs no tool that
-        `agent_origin.agent_request_refusal` keeps off: the tools kept off chats, whatever the
+        `agent_origin.agent_request_decision` keeps off: the tools kept off chats, whatever the
         admin's channel lift says, the ones that need the person, start work of their own or
         change how VAF works from now on. The same predicate hides them from the schema (the
         binding), so this answers a name the model writes anyway, with the reason and what the
         user can do instead, and a tool that writes files (``file_access = "write"``) whatever
         its arguments. With the call's repaired ``args`` it also answers for this very call: a
-        tool whose answer depends on them (``mcp_call``, ``cloud_storage``). FAIL CLOSED: an
-        error while deciding refuses. None outside such a turn and for a tool it may run."""
+        tool whose answer depends on them (``mcp_call``, ``cloud_storage``).
+
+        A tool that declares a card kind (``BaseTool.agent_request_confirm_kind``) is not
+        refused: the call is PARKED for the user's confirmation on the phone that asked
+        (`_park_for_confirmation`), and the call the user confirmed passes once
+        (`agent_origin.confirmed_call_allows`).
+
+        Returns ``(confirmed, result)``: ``confirmed`` True for that confirmed call, ``result``
+        the string the call is answered with, or None when it runs. FAIL CLOSED: an error
+        while deciding refuses. ``(False, None)`` outside such a turn and for a tool it may
+        run."""
         asked_by = getattr(self, "_turn_asked_by_agent", None)
         if not asked_by or name == "multi_tool_use.parallel":
-            return None
+            return False, None
         try:
-            from vaf.core.agent_origin import agent_request_refusal
+            from vaf.core.agent_origin import agent_request_decision, confirmed_call_allows
             tool = tool_instance if tool_instance is not None else (self.tools or {}).get(name)
             call_args = args if isinstance(args, dict) else ({} if args is None else None)
             if call_args is None:
@@ -14269,12 +14308,55 @@ class Agent:
                 # its own copy the same way, with the same function.
                 from vaf.core.tool_dispatch import repair_arguments
                 call_args, _errors = repair_arguments(tool, dict(call_args), tool_name=name)
-            return agent_request_refusal(
+            decision = agent_request_decision(
                 name, tool, str(getattr(self, "_current_chat_source", "") or ""),
-                args=call_args)
+                args=call_args, origin=asked_by)
+            if decision is None:
+                return False, None
+            if decision[0] == "refuse":
+                return False, decision[1]
+            if confirmed_call_allows(name, call_args):
+                return True, None
+            if not park:
+                return False, None
+            return False, self._park_for_confirmation(name, tool, call_args, decision[1])
         except Exception:
-            return (f"[APP AGENT] '{name}' does not run on a request of the Veyllo App's agent. "
-                    "It did NOT run, so do not report it as done; say so in your answer.")
+            return False, (f"[APP AGENT] '{name}' does not run on a request of the Veyllo App's "
+                           "agent. It did NOT run, so do not report it as done; say so in your "
+                           "answer.")
+
+    def _park_for_confirmation(self, name, tool, call_args, kind) -> str:
+        """Park one call of a request for the user's confirmation on the phone that asked, and
+        end the turn there: the call does not run, the model gets
+        `agent_origin.parked_result`, and the runner opens the card once the turn is over
+        (vaf/core/app_link/confirmations.py). Refused instead when the card would have to cut
+        it (`agent_origin.WHAT_MAX`), when this round already parked a call or a draft (one
+        card answers one request at a time), and inside a confirmed call (it cannot open a
+        card of its own). The parked call is a value of this round (``_parked_this_round``),
+        never of the agent's life: the runner reads it at the end of the same turn."""
+        from vaf.core import agent_origin
+        if agent_origin.in_confirmed_call() or getattr(self, "_parked_this_round", None) \
+                or getattr(self, "_held_this_round", None):
+            return agent_origin.CONFIRM_ONE_AT_A_TIME.format(name=name)
+        from vaf.core import vocab
+        lang = vocab.resolve_user_language(getattr(self, "_current_user_scope_id", None),
+                                           getattr(self, "_current_username", None))
+        what = agent_origin.confirm_what(name, tool, call_args, lang)
+        too_long = agent_origin.confirm_too_long(name, tool, call_args, what)
+        if too_long:
+            return too_long
+        import json as _json
+        parked = getattr(self, "_parked_this_round", None)
+        if not isinstance(parked, list):
+            parked = []
+        stored = agent_origin._storable(call_args)
+        parked.append(agent_origin.ParkedCall(
+            tool=str(name), args_json=_json.dumps(stored, sort_keys=True, ensure_ascii=False),
+            digest=agent_origin.call_digest(name, stored), kind=str(kind), what=what))
+        self._parked_this_round = parked
+        from vaf.core import outbound_hold
+        self._close_turn(outbound_hold.TURN_ENDS_AT_DRAFT, visible=False)
+        return agent_origin.parked_result(name)
 
     def _ask_user_about_gate(self, name, reason, preview=None, choices=None, gate_id=None):
         """How THIS lane reaches a human. Prefer the WebSocket gate when a web session is

@@ -159,7 +159,10 @@ turn ends there: the card in the conversation sends, edits or discards it (an ed
 call's `message` argument and the preview together, `channel_message_store.revise_held_send`),
 `vaf outbox` does the same from a terminal, and the switch is
 `outward_send_hold` (see [`vaf/core/outbound_hold.py`](../../vaf/core/outbound_hold.py)). A
-request of the Veyllo App's own agent is held the same way, whatever the switch says. The park
+request of the Veyllo App's own agent is held the same way, whatever the switch says, and the
+phone that asked also shows it as a confirmation card (Yes sends it, No discards it, no answer in
+ten minutes leaves it waiting in the web UI; one decision wins on both surfaces,
+[VEYLLO_APP.md](VEYLLO_APP.md#the-apps-agent-can-ask-your-agent)). The park
 stores the CALL, never an outbound message row, because a message row is a message that left, for a message
 nobody has agreed to send, and the approval runs the tool again with the approving person's
 identity so the file jail and the bridge path stay the tool's own. What the send answered decides

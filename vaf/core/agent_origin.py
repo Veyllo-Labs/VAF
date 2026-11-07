@@ -17,8 +17,16 @@ user did not type it, and the phone's agent may pass on text it read elsewhere. 
   confirmation is refused at once instead of waiting for a dialog, and the admin's
   ``channel_tools_unrestricted`` lift does not apply (``ToolCaller(channel_lift=False)``);
 - a send that can reach somebody other than the user is parked as a draft for the user's
-  approval in the web UI (vaf/core/outbound_hold.py, ``asked_by_agent``), never sent from it;
-  when the park fails, the call is refused (fails closed);
+  approval in the web UI and on the phone that asked (vaf/core/outbound_hold.py,
+  ``asked_by_agent``), never sent from it; when the park fails, the call is refused (fails
+  closed);
+- a tool among the refused ones that declares a card kind (``BaseTool.agent_request_confirm_kind``)
+  is parked instead (``agent_request_decision`` answers ``("confirm", kind)``): the call does
+  not run, the turn ends, and the phone that asked shows ``confirm_what``, VAF's own text of
+  exactly that call, never cut (``WHAT_MAX``). Only the user's Yes on that card runs it, once,
+  inside ``confirmed_call_scope``: one pass through the request gate for exactly that tool and
+  ``call_digest``, with every other limit of the request standing
+  (vaf/core/app_link/confirmations.py);
 - a memory written in it carries ``metadata.origin`` (the ``request_origin`` identity key,
   vaf/core/tool_dispatch.py) and is read back inside ``app_agent_memory_text``'s fence by the
   one helper every reader of memories asks (``vaf.memory.rag._readable_memory_text``); a
@@ -41,6 +49,19 @@ categories that start or steer later work (automations, workflows, timers, rooms
 contacts) and every sub-agent spawner declare itself or name its reason, and every tool a
 request may run whose module writes files name its reason, so a new one cannot slip through
 unseen.
+
+NAMED BOUNDARY, the confirmation is not on the facade. A stranger's tool takes part by its
+declaration (``agent_request_confirm_kind``), and the decision, the card's text, the digest and
+the one-shot pass are this module's; the card's transport is the Veyllo App link, a named
+first-party boundary (vaf/core/app_link/__init__.py). Lanes that park a call for a person's
+later word: three (the held mail, the parked messenger call, this card), each with its own
+artifact and its own verb, so no one primitive for all of them is proven. Re-measure when an
+embedder forwards another agent's request and wants a deferred confirmation of its own. What
+stays a refusal with no card: ``refuse_person``, ``refuse_write``, ``refuse_own_messenger``,
+the tools kept off chats, and a refuse class without a declared kind (the contacts, the room
+tools, ``thinking_note_add``, ...: no card kind fits them). ``schedule_reminder`` stays
+allowed: it delivers its own text verbatim to the user's own messenger at the time set, and
+no turn runs from it.
 
 NAMED BOUNDARIES, measured on the full registry (139 tools):
 
@@ -88,9 +109,12 @@ NAMED BOUNDARIES, measured on the full registry (139 tools):
 """
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import html
 import re
 import unicodedata
+from dataclasses import dataclass
 from typing import Any, List, Mapping, Optional, Tuple
 
 #: The ``kind`` of a stored user message the app's agent wrote.
@@ -295,25 +319,215 @@ def agent_request_kind(name: str, tool: Any, source: str = "",
     return None if kind == "allow" else kind
 
 
-def agent_request_refusal(name: str, tool: Any, source: str = "",
-                          args: Optional[Mapping[str, Any]] = None) -> Optional[str]:
-    """The result a call gets in a turn another agent asked for when the tool stays off there
-    (`agent_request_kind`), or None when it may run. It says why in words the requesting
-    agent can pass on, and what happens instead. The one predicate the schema's hiding (no
-    ``args``: what a tool's class says) and the turn gate (the call's ``args``) share."""
+def agent_request_decision(name: str, tool: Any, source: str = "",
+                           args: Optional[Mapping[str, Any]] = None,
+                           origin: Optional[str] = APP_AGENT_ORIGIN) -> Optional[Tuple[str, str]]:
+    """How a call is answered in a turn another agent asked for: None when it runs,
+    ``("refuse", text)`` when the tool stays off there (`agent_request_kind`; the text says
+    why, in words the requesting agent can pass on, and what happens instead), or
+    ``("confirm", kind)`` when the user can confirm exactly this call on the phone that asked:
+    a ``refuse_work`` or ``refuse_standing`` tool that declares a card kind
+    (``BaseTool.agent_request_confirm_kind``), in a request of the Veyllo App's agent
+    (``origin``). Every other refusal stays one: a tool kept off chats, one that needs the
+    person (``refuse_person``), one that writes files (``refuse_write``) or sends to the user's
+    own messenger (``refuse_own_messenger``), a tool without a declared kind, any other
+    origin. The one predicate the schema's hiding (no ``args``: what a tool's class says) and
+    the turn gate (the call's ``args``) share. Fail closed: a kind that cannot be read
+    refuses."""
     kind = agent_request_kind(str(name), tool, str(source or ""), args)
     if kind is None:
         return None
+    if kind in ("refuse_work", "refuse_standing") and origin == APP_AGENT_ORIGIN:
+        try:
+            from vaf.core.tool_contract import resolve_tool_contract
+            card = resolve_tool_contract(str(name), tool).agent_request_confirm_kind
+        except Exception:
+            card = ""
+        if card:
+            return ("confirm", card)
     why, how = _WHY[kind]
-    return _REFUSED.format(name=name, why=why, how=how)
+    return ("refuse", _REFUSED.format(name=name, why=why, how=how))
 
 
-def refused_on_agent_request(name: str, tool: Any, source: str = "") -> bool:
-    """Whether ``agent_request_refusal`` refuses the tool."""
-    return agent_request_refusal(name, tool, source) is not None
+def agent_request_refusal(name: str, tool: Any, source: str = "",
+                          args: Optional[Mapping[str, Any]] = None,
+                          origin: Optional[str] = APP_AGENT_ORIGIN) -> Optional[str]:
+    """The result a call gets in a turn another agent asked for when the tool stays off there
+    (`agent_request_decision`), or None when it runs or waits for the user's confirmation."""
+    decision = agent_request_decision(name, tool, source, args, origin)
+    return decision[1] if decision is not None and decision[0] == "refuse" else None
 
 
-def refused_tool_names(tools: Mapping[str, Any], source: str = "") -> frozenset:
+def refused_on_agent_request(name: str, tool: Any, source: str = "",
+                             origin: Optional[str] = APP_AGENT_ORIGIN) -> bool:
+    """Whether ``agent_request_refusal`` refuses the tool. A tool the user confirms on the
+    phone is not refused: it stays offered, so the model can call it and the call can park."""
+    return agent_request_refusal(name, tool, source, origin=origin) is not None
+
+
+def refused_tool_names(tools: Mapping[str, Any], source: str = "",
+                       origin: Optional[str] = APP_AGENT_ORIGIN) -> frozenset:
     """The names in a registry that ``refused_on_agent_request`` refuses."""
     return frozenset(name for name, tool in dict(tools or {}).items()
-                     if refused_on_agent_request(name, tool, source))
+                     if refused_on_agent_request(name, tool, source, origin))
+
+
+# ── the confirmation card: a refused call the user confirms on the phone ─────────────────
+
+#: How long a parked call waits for the user's answer on the phone.
+CONFIRM_SECONDS = 600
+#: The most a card's text (`confirm_what`) may hold, in Unicode code points. A longer one is
+#: never cut: a card that showed the head of a call and ran its tail would confirm what the
+#: user did not read, so the call is refused with a hint instead.
+WHAT_MAX = 4000
+
+@dataclass(frozen=True)
+class ParkedCall:
+    """One call of a request that waits for the user's confirmation on the phone: the tool, its
+    stored arguments (``outbound_hold.storable_args``, as JSON with sorted keys), their
+    ``call_digest``, the card kind and the card's text (``confirm_what``)."""
+    tool: str
+    args_json: str
+    digest: str
+    kind: str
+    what: str
+
+
+#: Every result of a parked call starts with this; it says nothing that reads as done.
+PARKED_PREFIX = "NOT RUN YET."
+_PARKED = (PARKED_PREFIX + " '{name}' waits for your user's confirmation in the Veyllo App, "
+           "for {minutes} minutes. Your turn ends here. If your user confirms, it runs once "
+           "and a later message in this chat reports it; without that message it did NOT run. "
+           "Do not call it again for the same request.")
+#: A request parks one call or one draft at a time (the card answers its request).
+CONFIRM_ONE_AT_A_TIME = (
+    "[APP AGENT] '{name}' did NOT run: one action can wait for your user's confirmation at a "
+    "time, and one already waits for this request. Tell your user it was not done; it can be "
+    "asked for again once the first one is decided.")
+CONFIRM_TOO_LONG = (
+    "[APP AGENT] '{name}' is too long to confirm in the Veyllo App ({length} characters, at "
+    "most {limit}). It did NOT run. Shorten {longest} and call it again, or your user can ask "
+    "for it by writing to VAF directly.")
+
+
+def _arg_text(value: Any) -> str:
+    """One argument as the card shows it: a string verbatim, line breaks and all; anything
+    else as compact JSON."""
+    if isinstance(value, str):
+        return value
+    import json
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                      default=str)
+
+
+def _storable(args: Optional[Mapping[str, Any]]) -> dict:
+    from vaf.core.outbound_hold import storable_args
+    return storable_args(dict(args or {}))
+
+
+def confirm_headline(key: str, lang: Optional[str]) -> str:
+    """The card's first line for ``key`` (a tool name, or ``send_mail``/``send_whatsapp``):
+    the one phrasing of vocab key ``app_confirm_<key>`` in the user's language, "" when there
+    is none. One phrasing, so a card and its resend read the same."""
+    try:
+        from vaf.core import vocab
+        found = vocab.phrasings(f"app_confirm_{key}", lang)
+        return str(found[0]).strip() if found else ""
+    except Exception:
+        return ""
+
+
+def _argument_order(tool: Any, args: Mapping[str, Any]) -> List[str]:
+    try:
+        props = list(((getattr(tool, "parameters", None) or {}).get("properties") or {}))
+    except Exception:
+        props = []
+    ordered = [k for k in props if k in args]
+    return ordered + sorted(k for k in args if k not in ordered)
+
+
+def confirm_what(name: str, tool: Any, args: Optional[Mapping[str, Any]],
+                 lang: Optional[str] = None) -> str:
+    """VAF's own plain text of exactly the call a card confirms: the headline
+    (`confirm_headline`, the tool name when there is none), an empty line, then every argument
+    the call carries as ``name: value``, in the order of the tool's schema and the rest
+    sorted. Nothing is left out and nothing is cut (``WHAT_MAX`` is checked by the caller);
+    never the requesting agent's own words about the call."""
+    stored = _storable(args)
+    lines = [f"{key}: {_arg_text(stored[key])}" for key in _argument_order(tool, stored)]
+    headline = confirm_headline(str(name), lang) or str(name)
+    return "\n".join([headline, ""] + lines) if lines else headline
+
+
+def confirm_too_long(name: str, tool: Any, args: Optional[Mapping[str, Any]],
+                     what: str) -> Optional[str]:
+    """The refusal of a call whose card text is over ``WHAT_MAX``, naming its longest
+    argument, or None when it fits."""
+    if len(what) <= WHAT_MAX:
+        return None
+    stored = _storable(args)
+    longest = max(stored, key=lambda k: len(_arg_text(stored[k])), default="")
+    return CONFIRM_TOO_LONG.format(name=name, length=len(what), limit=WHAT_MAX,
+                                   longest=f"'{longest}'" if longest else "the request")
+
+
+def call_digest(name: str, args: Optional[Mapping[str, Any]]) -> str:
+    """The fingerprint of one call, tool and stored arguments: what a card confirms is
+    exactly this, and a call with any other argument is another call."""
+    import hashlib
+    import json
+    canon = json.dumps({"tool": str(name), "args": _storable(args)}, ensure_ascii=False,
+                       sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+
+def parked_result(name: str) -> str:
+    """The result a parked call returns to the model. Neither the card's nor the request's id:
+    the model never learns what answers it."""
+    return _PARKED.format(name=name, minutes=CONFIRM_SECONDS // 60)
+
+
+_CONFIRMED: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar(
+    "vaf_confirmed_call", default=None)
+
+
+@contextlib.contextmanager
+def confirmed_call_scope(name: str, digest: str):
+    """While the user's confirmed call runs: one pass through the request gate for exactly that
+    call (tool and ``call_digest``), spent by the first call that matches. Everything else in
+    the scope, a second identical call and a call the confirmed one makes in turn included,
+    is answered as in any request (`confirmed_call_allows`, `in_confirmed_call`)."""
+    token = _CONFIRMED.set({"tool": str(name), "digest": str(digest), "spent": False})
+    try:
+        yield
+    finally:
+        _CONFIRMED.reset(token)
+
+
+def _confirmed_match(name: str, args: Optional[Mapping[str, Any]]) -> Optional[dict]:
+    pass_ = _CONFIRMED.get()
+    if not pass_ or pass_["spent"] or pass_["tool"] != str(name):
+        return None
+    try:
+        return pass_ if call_digest(name, args) == pass_["digest"] else None
+    except Exception:
+        return None
+
+
+def confirmed_call_pending(name: str, args: Optional[Mapping[str, Any]]) -> bool:
+    """Whether this call is the confirmed one and its pass is not spent yet (nothing changes)."""
+    return _confirmed_match(name, args) is not None
+
+
+def confirmed_call_allows(name: str, args: Optional[Mapping[str, Any]]) -> bool:
+    """Spend the pass on this call when it is the confirmed one; whether it was."""
+    match = _confirmed_match(name, args)
+    if match is None:
+        return False
+    match["spent"] = True
+    return True
+
+
+def in_confirmed_call() -> bool:
+    """Whether a confirmed call is running in this context (its pass spent or not)."""
+    return _CONFIRMED.get() is not None

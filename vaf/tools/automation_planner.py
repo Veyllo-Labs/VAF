@@ -32,6 +32,7 @@ class AddAutomationNoteTool(BaseTool):
     identity_kwargs = ("user_scope_id",)
     name = "add_automation_note"
     agent_request = "refuse_standing"
+    agent_request_confirm_kind = "automation"
     category    = "automations"
     permission_level = "write"
     side_effect_class = "reversible"
@@ -67,6 +68,7 @@ class AddAutomationTodoTool(BaseTool):
     identity_kwargs = ("user_scope_id",)
     name = "add_automation_todo"
     agent_request = "refuse_standing"
+    agent_request_confirm_kind = "automation"
     category    = "automations"
     permission_level = "write"
     side_effect_class = "reversible"

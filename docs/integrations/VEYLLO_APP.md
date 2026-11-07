@@ -135,43 +135,84 @@ is a turn of your account's app chat, with these differences
   history tools) reads it the same way. It is not stored as your message in the inbox, does not
   become your last words shown in your other chats, and does not answer a question your agent
   is waiting on.
-- **Tools that need you stay off, and so does work that would run later.** Each tool declares
-  how it answers such a request (`BaseTool.agent_request`, read by
-  `vaf/core/agent_origin.py`); refused ones are not offered either, and the app's agent is
-  told why. Refused: every tool kept off chats, whatever `channel_tools_unrestricted` says;
-  work that keeps running after the request (`coding_agent`, `create_automation`,
-  `update_automation`, `restore_automation`, `execute_workflow`, `set_timer`, and the room
-  tools that make other agents act, `room_send`, `room_open`, `room_invite`, `room_join`,
-  `room_react`); changes to how VAF works for you from now on (`create_skill`, `update_skill`,
-  `delete_skill`, `update_user_identity`, `create_contact`, `update_contact`, and the notes
-  later automation and thinking runs act on, `add_automation_note`, `add_automation_todo`,
-  `thinking_note_add`, a context checkpoint, `checkpoint_context`, whose summary later turns
-  read as yours, the coder's codex and scratchpad, `update_codex` and `add_memory`, and the
-  co-author line of VAF's commits, `set_git_coauthor`); the librarian (`librarian_agent`),
-  whose own file tools would run outside these limits; every tool that writes files, for every
-  account and wherever it writes (`write_file`, `edit_file`, `download_file`,
-  `document_writer`, the document agent `document_agent`, the git tools `git_init` and
-  `git_add_commit`, and `cloud_storage` with `save`, `download` or `retrieve`; a tool
-  declaring `file_access = "write"` is refused whatever its path), so no request writes a
-  `VAF.md` or a file that runs later (`.git/hooks`, `package.json` scripts, a `Makefile`,
-  `.envrc`, `.vscode/tasks.json`, `~/.bashrc`, an autostart entry); code in the Python sandbox
-  (`python_sandbox`, whatever its arguments: your sandbox container lives on between runs, so
-  what a request leaves there would run again in your later runs); a message to your own
-  messenger (`send_to_user`, `send_telegram`, `send_discord`, `send_veyllo_app`, and
-  `send_whatsapp` without a number, which goes to your own; the app's agent is told that it
-  sends a message, not that it writes files); and what needs your confirmation for another
-  reason (`user_phone`, `store_credential`, `github_create_issue`, `github_update_file`, and
-  every MCP tool an administrator has not set to read, `mcp_call` included). Confirming these
-  from the app comes with a later update. A call that needs a confirmation is refused at once; no dialog
-  appears in the web UI and nothing waits. Answers you gave ahead still hold: a tool you
+- **Work that would run later and changes to how VAF works ask you on the phone first.** A
+  coder run (`coding_agent`), an automation (`create_automation`, `update_automation`,
+  `restore_automation`, and the notes later automation runs act on, `add_automation_note`,
+  `add_automation_todo`), a workflow (`execute_workflow`), a skill (`create_skill`,
+  `update_skill`, `delete_skill`) or a change of your profile (`update_user_identity`) does not
+  run on a request: the call is parked, the request's turn ends there, and the phone that asked
+  shows a confirmation card (each such tool declares its card,
+  `BaseTool.agent_request_confirm_kind`, read by `vaf/core/agent_origin.py`). So does a mail
+  (`send_mail`, `reply_mail`, `forward_mail`) or a WhatsApp message to a number
+  (`send_whatsapp` with `to_phone` or `phone_number`). The card is VAF's own text of exactly
+  that call: what it does, then every argument the call carries (for a message every
+  recipient, Cc and Bcc, the subject, the attachment names and the whole text). Nothing is cut:
+  a call whose text would be longer than 4000 characters is refused, and the app's agent is
+  told to make the request smaller. Your answer counts only from a tap on that card on that
+  phone:
+  - **Yes** runs exactly that call once (a message leaves as when you press Send in the web
+    UI), and the app's agent gets its outcome as the answer to its request. The confirmed work
+    then runs with its own limits, as when you ask for it in the app chat yourself: the card
+    lifts the refusal for that one call and nothing else, and a policy confirmation of that
+    call counts as given once, never always. Your VAF chat shows the run as a "Confirmed in the
+    app" line.
+  - **No** answers the request that it did not run; a message is discarded.
+  - **No answer within 10 minutes** answers the request that it did not run; a message still
+    waits as a draft in the web UI.
+  - **A decision in the web UI** settles the card: a message you send, discard or edit in the
+    web UI's Veyllo App chat answers the request with what became of it, within seconds, and a
+    later tap on the phone is told it is decided. One decision wins: a draft leaves at most
+    once, and the phone never sends a draft that was edited after its card went out.
+  - **Cancel** of the request on the phone drops the card (and the message).
+  - One card waits per request at a time, and a request opens at most three in a row (a
+    confirmed turn may need another). A second action in the same round is refused; a second
+    message in it stays a draft in the web UI only.
+  - **The phone is away:** the card waits until it runs out, the relay sends a push (a
+    relay-paired phone), and the card comes again after the app connects, with the same id.
+    It is never in the outbox.
+  - **An older app** that does not know the card answers "unknown type": every card sent to
+    that connection is answered as not run (a message waits in the web UI), and the next one
+    is not sent.
+  - **A restart of VAF** drops every open card; nothing runs after it, and a message still
+    waits in the web UI.
+
+  On the wire: VAF sends `{"t": "confirm", "id", "ask", "kind", "what", "exp"}` to the asking
+  device only (`kind` one of `coder`, `automation`, `workflow`, `skill`, `identity`, `send`;
+  `exp` ten minutes on), the app answers `{"t": "confirm_answer", "id", "ok"}`, and VAF sends
+  no frame back for an answer that counts: the outcome is the request's own `done`. An answer
+  is refused with `expired` after `exp`, `used` once the card is decided, and
+  `confirm_invalid` from another device, another account or for an unknown id. Every `welcome`
+  carries `"confirm": true` (`vaf/core/app_link/confirmations.py`).
+- **Tools that need you in person stay off.** Each tool declares how it answers such a request
+  (`BaseTool.agent_request`); refused ones are not offered either, and the app's agent is told
+  why. Refused: every tool kept off chats, whatever `channel_tools_unrestricted` says (the
+  sandbox, the browser agent, timers, background processes); work whose own limits a request
+  cannot reach (`set_timer`, the room tools that make other agents act, `room_send`,
+  `room_open`, `room_invite`, `room_join`, `room_react`, and the librarian, `librarian_agent`,
+  whose own file tools would run outside these limits); changes to how VAF works for you that
+  no card covers yet (`create_contact`, `update_contact`, `thinking_note_add`, a context
+  checkpoint, `checkpoint_context`, whose summary later turns read as yours, the coder's codex
+  and scratchpad, `update_codex` and `add_memory`, and the co-author line of VAF's commits,
+  `set_git_coauthor`); every tool that writes files, for every account and wherever it writes
+  (`write_file`, `edit_file`, `download_file`, `document_writer`, the document agent
+  `document_agent`, the git tools `git_init` and `git_add_commit`, and `cloud_storage` with
+  `save`, `download` or `retrieve`; a tool declaring `file_access = "write"` is refused
+  whatever its path), so no request writes a `VAF.md` or a file that runs later (`.git/hooks`,
+  `package.json` scripts, a `Makefile`, `.envrc`, `.vscode/tasks.json`, `~/.bashrc`, an
+  autostart entry); code in the Python sandbox (`python_sandbox`, whatever its arguments: your
+  sandbox container lives on between runs, so what a request leaves there would run again in
+  your later runs); a message to your own messenger (`send_to_user`, `send_telegram`,
+  `send_discord`, `send_veyllo_app`, and `send_whatsapp` without a number, which goes to your
+  own; the app's agent is told that it sends a message, not that it writes files); and what
+  needs your confirmation for another reason (`user_phone`, `store_credential`,
+  `github_create_issue`, `github_update_file`, and every MCP tool an administrator has not set
+  to read, `mcp_call` included). A call that needs a policy confirmation is refused at once; no
+  dialog appears in the web UI and nothing waits. Answers you gave ahead still hold: a tool you
   allowed always, a trusted folder, an "allow for this chat" in the app chat, and the admin
-  bypass.
-- **A message to somebody else waits for you.** A mail (`send_mail`, `reply_mail`,
-  `forward_mail`) or a WhatsApp message to a number (`send_whatsapp` with `to_phone` or
-  `phone_number`) is parked as a draft, as when you ask for one in the web chat
-  ([`outbound_hold`](../../vaf/core/outbound_hold.py)), whatever `outward_send_hold` says; the
-  card waits in the web UI's Veyllo App chat, and the app's agent is told that the message is
-  prepared and not sent. When it cannot be parked, it is not sent either.
+  bypass. A reminder (`schedule_reminder`) stays possible: it only delivers its own text to
+  your own messenger at the time you set, and no turn runs from it.
+- **A message that cannot be parked is not sent.** When the draft of a message to somebody
+  else cannot be prepared, it is not sent either, and the app's agent is told so.
 - **What stays possible, deliberately.** Everything else the app chat may do without a
   confirmation: reading your mail, calendar and contacts; memory entries (`memory_save`,
   `memory_update`, `learn_document`), which carry a mark of their origin and come back inside

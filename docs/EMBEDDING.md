@@ -1490,6 +1490,15 @@ Key declarative rules the runtime enforces:
   `file_access = "write"` is refused in such a turn whatever its arguments, unless it declares
   `"hold"` and VAF's park lane holds the call; a tool that writes files without that mode
   declares a refusal here.
+- `agent_request_confirm_kind` - for a `"refuse_work"` or `"refuse_standing"` tool, the kind of
+  the confirmation card the user can answer on the phone that asked instead (`"coder"`,
+  `"automation"`, `"workflow"`, `"skill"`, `"identity"`; `""`, the default, keeps the refusal).
+  In a request of the Veyllo App's agent such a call does not run and is not refused: it is
+  parked, the turn ends, the phone shows VAF's own text of exactly that call (every argument,
+  never cut), and only the user's Yes runs it, once. A value outside the list keeps the
+  refusal, so a typo never opens a tool. The card itself is the Veyllo App link's
+  (`vaf/core/app_link/confirmations.py`, a named first-party boundary below); a stranger's
+  tool takes part by declaring this one attribute.
 - `category` - which bundle the tool appears under in the human-facing tool
   lists (the web tools window, the CLI table, the TUI overlay, `list_tools`).
   The in-tree vocabulary is `TOOL_CATEGORIES` in `vaf/core/tool_contract.py`,

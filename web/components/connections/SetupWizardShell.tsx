@@ -9,11 +9,16 @@
 //
 // The class strings are the Discord, Telegram, Cloud and GitHub windows' own, copied verbatim
 // so a test can hold them against DiscordSetupWizard.tsx: those four still carry the frame by
-// hand, and this is the one place they can move to. Two things are added over those copies:
-// the dialog semantics (role, aria-modal, Escape and a click beside the panel all close), and a
+// hand, and this is the one place they can move to. Three things are added over those copies:
+// the dialog semantics (role, aria-modal, Escape and a click beside the panel all close); a
 // height cap with a scrolling body on a desktop, since a step taller than the screen would
-// otherwise push the footer out of the panel. The cap is the screen less 1rem above and below,
-// not 90vh: on a 793 px window 90vh left 40 px unused while the QR step's body scrolled.
+// otherwise push the footer out of the panel (the cap is the screen less 1rem above and below,
+// not 90vh: on a 793 px window 90vh left 40 px unused while the QR step's body scrolled); and a
+// ring around the current step, dark in the light theme and white in the dark one, because the
+// completed steps share its black and white and the current one must read as current without a
+// colour of its own. The ring's gap takes the panel's own surface colour (--sfc-white), so it
+// shows no light halo on the dark panel; the windows that still draw their own stepper get the
+// ring when they move onto this frame.
 //
 // The disabled Back is `text-gray-300`, which the dark theme does not fold (the text ramp
 // folds 400 to 900), so on the dark panel it would read as an active button; it gets a dark
@@ -82,7 +87,7 @@ export default function SetupWizardShell({ title, subtitle, icon, steps, current
                                 <div className={cn(
                                     'w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium transition-all shrink-0',
                                     idx < current ? 'bg-gray-900 text-white dark:bg-[#e6e6e6] dark:text-[#181818]' :
-                                    idx === current ? 'bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white' :
+                                    idx === current ? 'bg-gray-900 text-white dark:bg-[#3a3a3a] dark:text-white ring-2 ring-gray-900 dark:ring-white ring-offset-2 ring-offset-[rgb(var(--sfc-white))]' :
                                     'bg-gray-200 text-gray-500'
                                 )}>
                                     {idx < current ? <Check className="w-4 h-4" /> : idx + 1}

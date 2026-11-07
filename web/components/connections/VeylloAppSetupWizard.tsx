@@ -34,7 +34,7 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocale, useTranslations } from 'next-intl';
-import { Bell, CalendarCheck, Check, ChevronRight, ExternalLink, Loader2, Smartphone } from 'lucide-react';
+import { Bell, CalendarCheck, Check, ExternalLink, Loader2, Smartphone } from 'lucide-react';
 import ConfirmDialog from '@/components/ui/ConfirmDialog';
 import Skeleton from '@/components/ui/Skeleton';
 import { Switch, switchWord } from '@/components/ui/Switch';
@@ -543,14 +543,22 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
         </div>
     );
 
-    // The step's title in the header says "What Veyllo sees"; the card carries the rest.
+    // Two questions, each under a heading of its own in the body: a small header line alone was
+    // not read as the step's subject, and the cost is a second question rather than a footnote
+    // to the first.
     const sees = (
-        <div className={card}>
-            <ul className="list-disc ps-5 space-y-1 text-sm text-gray-700">
-                <li>{t('seesRelay')}</li>
-                <li>{t('seesDirect')}</li>
-            </ul>
-            <p className="text-sm text-gray-700 mt-2">{t('costSentence')}</p>
+        <div className="space-y-4">
+            <section className={card}>
+                <h3 className="font-semibold text-gray-900">{t('seesTitle')}</h3>
+                <ul className="list-disc ps-5 space-y-1 text-sm text-gray-700 mt-2">
+                    <li>{t('seesRelay')}</li>
+                    <li>{t('seesDirect')}</li>
+                </ul>
+            </section>
+            <section className={card}>
+                <h3 className="font-semibold text-gray-900">{t('costTitle')}</h3>
+                <p className="text-sm text-gray-700 mt-2">{t('costSentence')}</p>
+            </section>
         </div>
     );
 
@@ -739,13 +747,14 @@ export default function VeylloAppSetupWizard({ isOpen, onClose, onComplete, isAd
 }
 
 /** The relay for every account, and every account's devices: admins only (the routes answer
- *  403 to anybody else). Collapsed until opened, so the pairing stays the window's subject. */
+ *  403 to anybody else). Always shown, never collapsed: a folded heading read as the state of the
+ *  pairing in progress, so the block names itself and says in its first sentence that it decides
+ *  for every account of the installation and that this phone's way is chosen under the QR code. */
 function RelayAdminSection({ onChanged }: { onChanged: () => void }) {
     const t = useTranslations('settings.veylloApp');
     const tAccount = useTranslations('account');
     const tCommon = useTranslations('common');
     const locale = useLocale();
-    const [open, setOpen] = useState(false);
     const [relay, setRelay] = useState<RelayAdmin | null>(null);
     const [rows, setRows] = useState<DeviceRow[] | null>(null);
     const [failed, setFailed] = useState(false);
@@ -772,7 +781,7 @@ function RelayAdminSection({ onChanged }: { onChanged: () => void }) {
         }
     }, []);
 
-    useEffect(() => { if (open) void load(); }, [open, load]);
+    useEffect(() => { void load(); }, [load]);
 
     const format = (sec: number | null) => {
         if (!sec) return '-';
@@ -884,117 +893,112 @@ function RelayAdminSection({ onChanged }: { onChanged: () => void }) {
     const meta = 'text-xs text-gray-500 mt-0.5 break-words';
 
     return (
-        <div className="mt-6 pt-4 border-t border-gray-200">
-            <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
-                className="w-full flex items-center justify-between gap-3 text-start">
-                <span className="text-sm font-semibold text-gray-900">{t('adminTitle')}</span>
-                <ChevronRight className={cn('w-4 h-4 text-gray-500 transition-transform', open && 'rotate-90')} aria-hidden="true" />
-            </button>
-            {open && (
-                <div className="mt-3 space-y-4">
-                    {failed && !relay ? (
-                        <div className="flex items-center gap-3">
-                            <p className="text-sm text-red-600 flex-1">{t('adminFailed')}</p>
-                            <button type="button" onClick={() => void load()}
-                                className="text-xs font-medium text-gray-700 hover:text-gray-900 hover:underline">
-                                {tAccount('retry')}
-                            </button>
-                        </div>
-                    ) : !relay ? (
-                        <Skeleton className="h-[120px]" />
-                    ) : (
-                        <>
-                            <div className={card}>
-                                <div className="flex items-center justify-between gap-3">
-                                    <span className="text-sm font-medium text-gray-900">{t('wayRelay')}</span>
-                                    <div className="flex items-center gap-2 text-sm">
-                                        <span className={switchWord(!relay.enabled)}>{t('off')}</span>
-                                        <Switch on={relay.enabled} disabled={busy !== null} label={t('relaySwitchLabel')} onClick={() => void switchRelay()} />
-                                        <span className={switchWord(relay.enabled)}>{t('on')}</span>
-                                    </div>
+        <section className="mt-6 pt-4 border-t border-gray-200" aria-labelledby="veyllo-relay-admin-title">
+            <h3 id="veyllo-relay-admin-title" className="text-sm font-semibold text-gray-900">{t('adminTitle')}</h3>
+            <p className="text-sm text-gray-600 mt-1">{t('adminIntro')}</p>
+            <div className="mt-3 space-y-4">
+                {failed && !relay ? (
+                    <div className="flex items-center gap-3">
+                        <p className="text-sm text-red-600 flex-1">{t('adminFailed')}</p>
+                        <button type="button" onClick={() => void load()}
+                            className="text-xs font-medium text-gray-700 hover:text-gray-900 hover:underline">
+                            {tAccount('retry')}
+                        </button>
+                    </div>
+                ) : !relay ? (
+                    <Skeleton className="h-[120px]" />
+                ) : (
+                    <>
+                        <div className={card}>
+                            <div className="flex items-center justify-between gap-3">
+                                <span className="text-sm font-medium text-gray-900">{t('wayRelay')}</span>
+                                <div className="flex items-center gap-2 text-sm">
+                                    <span className={switchWord(!relay.enabled)}>{t('off')}</span>
+                                    <Switch on={relay.enabled} disabled={busy !== null} label={t('relaySwitchLabel')} onClick={() => void switchRelay()} />
+                                    <span className={switchWord(relay.enabled)}>{t('on')}</span>
                                 </div>
-                                <p className="text-sm text-gray-700 mt-2">
-                                    {relay.state === 'connected' && relay.connected_since
-                                        ? t('relayConnectedSince', { when: format(relay.connected_since) })
-                                        : t(`relayStates.${relay.state}`)}
-                                </p>
-                                {RELAY_STATE_HELP.includes(relay.state) && (
-                                    <p className="text-sm text-gray-600 mt-1">{t(`relayStateHelp.${relay.state}`)}</p>
-                                )}
-                                <p className="text-xs text-gray-500 mt-2">
-                                    {relay.instance ? t('counts', { members: relay.members, onRelay: relay.devices_on_relay }) : t('noInstance')}
-                                </p>
-                                <div className="flex flex-wrap gap-2 mt-3">
-                                    <button type="button" disabled={busy !== null || !relay.instance} onClick={() => setAsking('rotate')} className={cn(secondary, 'text-xs px-3 py-1.5')}>
-                                        {t('rotate')}
-                                    </button>
-                                    {!dissolving && (
-                                        <button type="button" disabled={busy !== null || !relay.instance} onClick={() => setDissolving(true)}
-                                            className="px-3 py-1.5 text-xs font-medium rounded-lg border border-red-300 text-red-700 hover:bg-red-50 transition-colors disabled:opacity-50">
-                                            {t('dissolve')}
-                                        </button>
-                                    )}
-                                </div>
-                                {note && <p className={`text-xs mt-3 ${note.ok ? 'text-gray-600' : 'text-red-600'}`}>{note.text}</p>}
                             </div>
-                            {dissolving && (
-                                <form className="rounded-xl border border-red-300 p-4 space-y-3" onSubmit={e => { e.preventDefault(); void dissolve(); }}>
-                                    <p className="text-sm font-semibold text-gray-900">{t('dissolve')}</p>
-                                    <p className="text-sm text-gray-700">{t('dissolveBody')}</p>
-                                    <div className="flex items-end gap-3 max-md:flex-col max-md:items-stretch">
-                                        <div>
-                                            <label className={label} htmlFor="veyllo-relay-code">{tAccount('code')}</label>
-                                            <input id="veyllo-relay-code" value={code} onChange={e => setCode(e.target.value)} inputMode="numeric"
-                                                autoComplete="one-time-code" placeholder="123456" className={`${field} font-mono w-32 max-md:w-full`} />
-                                        </div>
-                                        <button type="submit" disabled={busy !== null || !code.trim()}
-                                            className="px-4 py-2 text-sm font-medium rounded-lg bg-red-600 hover:bg-red-700 text-white transition-colors disabled:opacity-50">
-                                            {t('dissolveConfirm')}
-                                        </button>
-                                        <button type="button" onClick={() => { setDissolving(false); setCode(''); setCodeNote(null); }} className={secondary}>
-                                            {tCommon('cancel')}
-                                        </button>
-                                    </div>
-                                    {codeNote && <p className="text-xs text-red-600">{codeNote}</p>}
-                                </form>
+                            <p className="text-sm text-gray-700 mt-2">
+                                {relay.state === 'connected' && relay.connected_since
+                                    ? t('relayConnectedSince', { when: format(relay.connected_since) })
+                                    : t(`relayStates.${relay.state}`)}
+                            </p>
+                            {RELAY_STATE_HELP.includes(relay.state) && (
+                                <p className="text-sm text-gray-600 mt-1">{t(`relayStateHelp.${relay.state}`)}</p>
                             )}
-                            <div>
-                                <h4 className="text-sm font-semibold text-gray-900 mb-2">{t('allDevicesTitle')}</h4>
-                                {rows && rows.length === 0 ? (
-                                    <p className="text-sm text-gray-500">{t('allDevicesNone')}</p>
-                                ) : (
-                                    <ul className="flex flex-col gap-2">
-                                        {(rows ?? []).map(row => (
-                                            <li key={row.id} className="flex items-start gap-3 px-3 py-2.5 rounded-lg border border-gray-200 bg-white max-md:flex-wrap">
-                                                <Smartphone className="w-4 h-4 text-gray-500 shrink-0 mt-0.5" aria-hidden="true" />
-                                                <div className="flex-1 min-w-0">
-                                                    <div className="flex items-center gap-2 flex-wrap">
-                                                        <span className="text-sm font-medium text-gray-800 break-words">{row.model || t('phoneFallback')}</span>
-                                                        <span className={badge}>{row.username}</span>
-                                                        <span className={badge}>{row.last_transport === 'relay' ? tAccount('wayRelay') : tAccount('wayDirect')}</span>
-                                                        {row.connected && <span className={badge}>{tAccount('connectedNow')}</span>}
-                                                    </div>
-                                                    <p className={meta}>{tAccount('appLastConnected', { when: format(row.last_seen_at) })}</p>
-                                                    <p className={meta}>
-                                                        {tAccount('appPaired', { when: format(row.created_at) })}
-                                                        {/* Below md the fingerprint takes a line of its own, so no dot ends a line. */}
-                                                        <span className="max-md:hidden">{' · '}</span>
-                                                        <span className="font-mono whitespace-nowrap max-md:block">{tAccount('appFingerprint', { fingerprint: row.fingerprint })}</span>
-                                                    </p>
-                                                </div>
-                                                <button type="button" disabled={busy !== null} onClick={() => setAsking({ remove: row })}
-                                                    className={`${linkButton} max-md:basis-full max-md:text-left max-md:pl-7`}>
-                                                    {tAccount('removeApp')}
-                                                </button>
-                                            </li>
-                                        ))}
-                                    </ul>
+                            <p className="text-xs text-gray-500 mt-2">
+                                {relay.instance ? t('counts', { members: relay.members, onRelay: relay.devices_on_relay }) : t('noInstance')}
+                            </p>
+                            <div className="flex flex-wrap gap-2 mt-3">
+                                <button type="button" disabled={busy !== null || !relay.instance} onClick={() => setAsking('rotate')} className={cn(secondary, 'text-xs px-3 py-1.5')}>
+                                    {t('rotate')}
+                                </button>
+                                {!dissolving && (
+                                    <button type="button" disabled={busy !== null || !relay.instance} onClick={() => setDissolving(true)}
+                                        className="px-3 py-1.5 text-xs font-medium rounded-lg border border-red-300 text-red-700 hover:bg-red-50 transition-colors disabled:opacity-50">
+                                        {t('dissolve')}
+                                    </button>
                                 )}
                             </div>
-                        </>
-                    )}
-                </div>
-            )}
+                            {note && <p className={`text-xs mt-3 ${note.ok ? 'text-gray-600' : 'text-red-600'}`}>{note.text}</p>}
+                        </div>
+                        {dissolving && (
+                            <form className="rounded-xl border border-red-300 p-4 space-y-3" onSubmit={e => { e.preventDefault(); void dissolve(); }}>
+                                <p className="text-sm font-semibold text-gray-900">{t('dissolve')}</p>
+                                <p className="text-sm text-gray-700">{t('dissolveBody')}</p>
+                                <div className="flex items-end gap-3 max-md:flex-col max-md:items-stretch">
+                                    <div>
+                                        <label className={label} htmlFor="veyllo-relay-code">{tAccount('code')}</label>
+                                        <input id="veyllo-relay-code" value={code} onChange={e => setCode(e.target.value)} inputMode="numeric"
+                                            autoComplete="one-time-code" placeholder="123456" className={`${field} font-mono w-32 max-md:w-full`} />
+                                    </div>
+                                    <button type="submit" disabled={busy !== null || !code.trim()}
+                                        className="px-4 py-2 text-sm font-medium rounded-lg bg-red-600 hover:bg-red-700 text-white transition-colors disabled:opacity-50">
+                                        {t('dissolveConfirm')}
+                                    </button>
+                                    <button type="button" onClick={() => { setDissolving(false); setCode(''); setCodeNote(null); }} className={secondary}>
+                                        {tCommon('cancel')}
+                                    </button>
+                                </div>
+                                {codeNote && <p className="text-xs text-red-600">{codeNote}</p>}
+                            </form>
+                        )}
+                        <div>
+                            <h4 className="text-sm font-semibold text-gray-900 mb-2">{t('allDevicesTitle')}</h4>
+                            {rows && rows.length === 0 ? (
+                                <p className="text-sm text-gray-500">{t('allDevicesNone')}</p>
+                            ) : (
+                                <ul className="flex flex-col gap-2">
+                                    {(rows ?? []).map(row => (
+                                        <li key={row.id} className="flex items-start gap-3 px-3 py-2.5 rounded-lg border border-gray-200 bg-white max-md:flex-wrap">
+                                            <Smartphone className="w-4 h-4 text-gray-500 shrink-0 mt-0.5" aria-hidden="true" />
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                    <span className="text-sm font-medium text-gray-800 break-words">{row.model || t('phoneFallback')}</span>
+                                                    <span className={badge}>{row.username}</span>
+                                                    <span className={badge}>{row.last_transport === 'relay' ? tAccount('wayRelay') : tAccount('wayDirect')}</span>
+                                                    {row.connected && <span className={badge}>{tAccount('connectedNow')}</span>}
+                                                </div>
+                                                <p className={meta}>{tAccount('appLastConnected', { when: format(row.last_seen_at) })}</p>
+                                                <p className={meta}>
+                                                    {tAccount('appPaired', { when: format(row.created_at) })}
+                                                    {/* Below md the fingerprint takes a line of its own, so no dot ends a line. */}
+                                                    <span className="max-md:hidden">{' · '}</span>
+                                                    <span className="font-mono whitespace-nowrap max-md:block">{tAccount('appFingerprint', { fingerprint: row.fingerprint })}</span>
+                                                </p>
+                                            </div>
+                                            <button type="button" disabled={busy !== null} onClick={() => setAsking({ remove: row })}
+                                                className={`${linkButton} max-md:basis-full max-md:text-left max-md:pl-7`}>
+                                                {tAccount('removeApp')}
+                                            </button>
+                                        </li>
+                                    ))}
+                                </ul>
+                            )}
+                        </div>
+                    </>
+                )}
+            </div>
             <ConfirmDialog
                 open={asking === 'rotate'}
                 title={t('rotateTitle')}
@@ -1015,6 +1019,6 @@ function RelayAdminSection({ onChanged }: { onChanged: () => void }) {
                 onConfirm={() => { if (typeof asking === 'object' && asking !== null) void remove(asking.remove); }}
                 onCancel={() => setAsking(null)}
             />
-        </div>
+        </section>
     );
 }

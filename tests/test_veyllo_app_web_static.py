@@ -39,6 +39,14 @@ def _window_keys(locale: str = "en") -> dict:
     return _catalog(locale)["settings"]["veylloApp"]
 
 
+def _key(keys: dict, dotted: str) -> str:
+    """A catalogue value by its dotted path inside settings.veylloApp."""
+    node = keys
+    for part in dotted.split("."):
+        node = node[part]
+    return node
+
+
 def _const_block(source: str, name: str) -> str:
     match = re.search(rf"const {name}\b[^=]*=\s*([\[{{][\s\S]*?[\]}}])(?: as const)?;", source)
     assert match, f"{name} moved or was renamed"
@@ -107,15 +115,17 @@ def test_the_veyllo_app_card_comes_first_under_communication():
 def test_step_one_says_what_the_frd_asks():
     """What the app can do, what Veyllo sees, the cost of each way, the app's name for VAF and
     that the app's agent uses VAF as a tool with the privacy policy beside it, each on its
-    step: the first two before the code, the code hint on the code step. MUTATION: delete the
-    agentUsesVaf line from the JSX - red."""
+    step: the first two before the code, the code hint on the code step. Step 2 heads what
+    Veyllo sees and what it costs each in its own card, since the header's small subtitle alone
+    was not read as the step's subject. MUTATIONS: delete the agentUsesVaf line from the JSX;
+    drop the costTitle heading - red."""
     src = _src(WIZARD)
     pages = {
         "intro": (_between(src, "const intro = (", "const sees = ("),
                   ("canChat", "canReceive", "canTasks", "appName", "agentUsesVaf", "privacyLink",
                    "introTitle", "featureMessages", "featureTasks")),
         "sees": (_between(src, "const sees = (", "const codeStep = ("),
-                 ("seesRelay", "seesDirect", "costSentence")),
+                 ("seesTitle", "seesRelay", "seesDirect", "costTitle", "costSentence")),
         "code": (_between(src, "const codeStep = (", "const qr = ("), ("codeHint",)),
     }
     for page, (block, keys) in pages.items():
@@ -123,6 +133,16 @@ def test_step_one_says_what_the_frd_asks():
             assert f"t('{key}')" in block, (page, key)
             for locale in LOCALES:
                 assert _window_keys(locale).get(key), (locale, key)
+    # Step 2: two cards, each under its own heading, the text below the heading it belongs to.
+    sees = pages["sees"][0]
+    cards = sees.split("<section className={card}>")[1:]
+    assert len(cards) == 2, "what Veyllo sees and what it costs are two cards"
+    for card, (title, texts) in zip(cards, (("seesTitle", ("seesRelay", "seesDirect")),
+                                            ("costTitle", ("costSentence",)))):
+        heading = f'<h3 className="font-semibold text-gray-900">{{t(\'{title}\')}}</h3>'
+        assert heading in card, title
+        for text in texts:
+            assert card.index(heading) < card.index(f"t('{text}')"), (title, text)
     # The two card titles are the steps' header lines now.
     subtitles = dict(re.findall(r"(\w+): '([\w.]+)'", _const_block(src, "STEP_SUBTITLE")))
     assert subtitles["intro"] == "canDoTitle" and subtitles["sees"] == "seesTitle"
@@ -417,19 +437,54 @@ def test_admin_section_is_admins_only():
     assert "<Switch on={relay.enabled}" in section and "{row.username}" in section
 
 
+# The relay's two prices as Intl.NumberFormat(locale, {style: 'currency', currency: 'EUR'})
+# writes them; German keeps a no-break space so an amount never breaks across two lines.
+_AMOUNTS = {
+    "en": ("€0.01", "€0.005"),
+    "de": ("0,01\u00a0€", "0,005\u00a0€"),
+    "ja": ("€0.01", "€0.005"),
+    "ko": ("€0.01", "€0.005"),
+    "th": ("€0.01", "€0.005"),
+    "tr": ("€0,01", "€0,005"),
+    "zh": ("€0.01", "€0.005"),
+}
+
+
+def test_the_relay_admin_block_is_always_open():
+    """The admin block is shown open and cannot be folded away: a folded heading read as the
+    state of the pairing in progress. It names itself, says what it decides, and loads when it
+    mounts. MUTATION: put back useState(false) with the `{open && (` gate - red."""
+    src = _src(WIZARD)
+    section = src[src.index("function RelayAdminSection("):]
+    for gone in ("aria-expanded", "const [open,", "setOpen", "{open &&", "ChevronRight"):
+        assert gone not in section, gone
+    assert "useEffect(() => { void load(); }, [load]);" in section
+    head = section.index('<section className="mt-6 pt-4 border-t border-gray-200" aria-labelledby="veyllo-relay-admin-title">')
+    order = [section.index(n, head) for n in ('<h3 id="veyllo-relay-admin-title"', "{t('adminTitle')}",
+                                              "{t('adminIntro')}", "<Switch")]
+    assert order == sorted(order), order
+    lucide = _between(src, "import {", "} from 'lucide-react';")
+    assert "ChevronRight" not in lucide
+    for locale in LOCALES:
+        keys = _window_keys(locale)
+        assert keys["adminIntro"].strip() and keys["costTitle"].strip(), locale
+
+
 def test_the_window_promises_what_each_way_delivers():
     """Push reaches a phone only when it paired through the Veyllo relay (no relay member, no
-    notify), a task for the phone costs half a cent per direction, 2FA is set up at sign-in or
-    after an admin's reset, and the switch that gives the phone a direct address is named as the
-    Local Network tab names it. MUTATION: the old Local text without the push sentence in one
-    locale; the cost sentence without the task price - red."""
+    notify), a message costs 0.01 euro and a task for the phone 0.005 euro per direction, written
+    in each locale's own number format, 2FA is set up at sign-in or after an admin's reset, and
+    the switch that gives the phone a direct address is named as the Local Network tab names it.
+    MUTATIONS: the old Local text without the push sentence in one locale; the Turkish cost
+    sentence with its old "1 sent" - red."""
     for locale in LOCALES:
         cat = _catalog(locale)
         keys = cat["settings"]["veylloApp"]
         assert "veyllo relay" in keys["canReceive"].lower(), locale
         assert "Veyllo Relay" in keys["explainLocal"], locale
         for key in ("costSentence", "explainRelay"):
-            assert any(w in keys[key] for w in ("half", "halbe", "0.5", "yarım")), (locale, key)
+            for amount in _AMOUNTS[locale]:
+                assert amount in keys[key], (locale, key, amount)
         hosting = cat["settings"]["localNetwork"]["enableHosting"]
         for text in (keys["impossibleAdmin"], keys["refusalNoDirectAdmin"], keys["refusals"]["no_direct_path"]):
             assert hosting in text, (locale, text)
@@ -500,6 +555,28 @@ def test_the_shell_is_the_discord_frame():
     assert 'className="flex items-center gap-2" aria-hidden="true"' in shell
 
 
+def test_the_current_step_is_ringed():
+    """The current step carries a ring with a gap, dark in the light theme and white in the
+    dark one, since the completed steps share its black and white. The gap takes the panel's
+    surface colour, so the dark panel shows no light halo in it. Only the current step is
+    ringed. MUTATIONS: drop dark:ring-white; move the ring to the completed steps;
+    ring-offset-white for the gap - red."""
+    shell = _src(SHELL)
+    circle = _between(shell, "idx < current ? 'bg-gray-900", ")}>")
+    done, rest = circle.split("idx === current ?", 1)
+    current, future = rest.split("' :", 1)
+    ring = ("ring-2", "ring-gray-900", "dark:ring-white", "ring-offset-2",
+            "ring-offset-[rgb(var(--sfc-white))]")
+    classes = current.split()
+    for cls in ring:
+        assert cls in classes, cls
+    assert current.strip().startswith("'" + _DISCORD_FRAME["current"] + " ")
+    assert "ring-offset-white" not in classes
+    assert "ring-" not in done and "ring-" not in future
+    # The ring's gap follows the panel: the panel is bg-white, which is that same variable.
+    assert 'white: v("sfc-white")' in _src(WEB / "tailwind.config.ts")
+
+
 def test_the_veyllo_window_uses_the_shell():
     """The window is the shared frame, not a frame of its own. MUTATION: put back the old
     `max-w-md` card - red."""
@@ -540,37 +617,184 @@ def test_the_steps_run_in_order():
 
 
 def test_the_approved_texts_are_word_for_word():
-    """The approved sentences keep their words in the new steps.
-    MUTATION: change one word of the DE costSentence - red."""
-    approved = {
+    """The approved sentences keep their words. The relay texts replace the earlier ones that
+    priced in cents and named a relay secret and a relay instance: the window now says euro, a
+    relay key and signing the installation out of the relay, and no new text of the window
+    carries a colon. MUTATIONS: change one word of the DE dissolveBody; put the colon back into
+    the DE relayStates.off; a colon in the EN relayStates.unavailable - red."""
+    kept = {
         "en": {
-            "agentUsesVaf": "The agent in the Veyllo app uses this VAF as a tool, reads its answers "
-                            "and processes them with the app's chat model.",
+            "agentUsesVaf": "The agent in the Veyllo app uses this VAF as a tool, reads its "
+                "answers and processes them with the app's chat model.",
             "privacyLink": "Veyllo privacy policy",
             "seesTitle": "What Veyllo sees",
             "canDoTitle": "What the app can do",
-            "costSentence": "Through the Veyllo relay each message costs 1 cent on your Veyllo account, "
-                            "in both directions and also when VAF writes by itself, and a task for the "
-                            "phone half a cent per direction; the direct way is free.",
             "codeHint": "Pairing is for your own account and starts with your 2FA code.",
         },
         "de": {
-            "agentUsesVaf": "Der Agent in der Veyllo App nutzt dieses VAF als Werkzeug, liest seine "
-                            "Antworten und verarbeitet sie mit dem Chat-Modell der App.",
+            "agentUsesVaf": "Der Agent in der Veyllo App nutzt dieses VAF als Werkzeug, liest "
+                "seine Antworten und verarbeitet sie mit dem Chat-Modell der App.",
             "privacyLink": "Datenschutzerkl\u00e4rung von Veyllo",
             "seesTitle": "Was Veyllo sieht",
             "canDoTitle": "Was die App kann",
-            "costSentence": "\u00dcber das Veyllo Relay kostet jede Nachricht 1 Cent auf deinem "
-                            "Veyllo-Konto, in beide Richtungen und auch, wenn VAF von sich aus "
-                            "schreibt, ein Auftrag ans Handy einen halben Cent pro Richtung; der "
-                            "direkte Weg ist kostenlos.",
-            "codeHint": "Gekoppelt wird nur mit deinem eigenen Konto, und es beginnt mit deinem 2FA-Code.",
+            "codeHint": "Gekoppelt wird nur mit deinem eigenen Konto, und es beginnt mit "
+                "deinem 2FA-Code.",
         },
     }
-    for locale, texts in approved.items():
+    relay = {
+        "en": {
+            "seesRelay": "Through the Veyllo Relay, Veyllo only sees when messages travel, how "
+                "many there are, how large they are and which VAF installation they come from, "
+                "plus technical connection data such as the IP address. Veyllo never sees the "
+                "content, because it is end-to-end encrypted.",
+            "seesDirect": "If you connect directly through your own network, Veyllo sees "
+                "nothing.",
+            "costTitle": "What it costs",
+            "costSentence": "Through the Veyllo Relay, each message costs \u20ac0.01, in both "
+                "directions and also when VAF writes on its own. A task from VAF to your phone "
+                "costs \u20ac0.005 per direction. Your subscription pays first, then your "
+                "credit. The direct way is free.",
+            "adminTitle": "Veyllo Relay for this VAF installation",
+            "adminIntro": "As an admin, you decide here for all accounts of this installation "
+                "whether phones may connect through the Veyllo Relay. Whether your own phone "
+                "connects through the relay or directly through your network is chosen in the "
+                "next step, below the QR code.",
+            "relayStates.idle": "The relay is allowed. VAF only connects to the relay while a "
+                "phone needs it.",
+            "noInstance": "This installation is not registered with the relay yet. This "
+                "happens automatically as soon as the first phone pairs through the relay.",
+            "rotate": "Renew relay key",
+            "dissolve": "Sign out of the relay",
+            "dissolveBody": "This installation will be signed out of the Veyllo Relay, for all "
+                "accounts. Phones stay paired and can still reach VAF directly through your "
+                "network, for example at home or over a VPN. They can only reach VAF through "
+                "the relay again after pairing anew.",
+            "explainRelay": "With the Veyllo Relay you reach VAF from anywhere. Each message "
+                "costs \u20ac0.01, also when VAF writes on its own, a task to the phone "
+                "\u20ac0.005 per direction. Veyllo only sees when messages travel and how "
+                "large they are, never the content.",
+            "relayStates.off": "The relay is switched off. Phones pair and connect only "
+                "directly.",
+            "relayStates.replaced": "Another VAF with the same relay key took the connection.",
+            "relayStates.revoked": "The relay ended this installation's access.",
+            "relayStates.secret_rejected": "The relay does not accept this installation's "
+                "relay key.",
+            "relayStates.secret_not_stored": "The relay key could not be stored on this "
+                "machine.",
+            "relayStateHelp.secret_rejected": "Renew the relay key, or sign this installation "
+                "out of the relay and pair the phones again.",
+            "relayStateHelp.replaced": "A backup restored on a second machine uses the same "
+                "relay key. Renew it on one of the two machines. VAF tries again after five "
+                "minutes.",
+            "relayStateHelp.revoked": "Sign this installation out of the relay and pair the "
+                "phones again for the relay.",
+            "relayErrors.secret_rejected": "The relay does not accept this installation's "
+                "relay key. An admin can renew it.",
+            "relayErrors.secret_not_stored": "The relay key could not be stored on this "
+                "machine. An admin should check the machine's key ring, then you pair the "
+                "phone again.",
+            "rotateTitle": "Renew the relay key?",
+            "rotateBody": "The relay key is renewed, and VAF then reconnects to the relay. "
+                "Phones stay paired.",
+            "rotateConfirm": "Renew",
+            "rotated": "The relay key was renewed.",
+            "dissolveConfirm": "Sign out",
+            "dissolved": "This installation is signed out of the relay.",
+        },
+        "de": {
+            "seesRelay": "\u00dcber das Veyllo Relay sieht Veyllo nur, wann Nachrichten "
+                "laufen, wie viele und wie gro\u00df sie sind und von welcher VAF-Installation "
+                "sie kommen, dazu technische Verbindungsdaten wie die IP-Adresse. Den Inhalt "
+                "sieht Veyllo nie, denn er ist Ende-zu-Ende verschl\u00fcsselt.",
+            "seesDirect": "Verbindest du dich direkt \u00fcber dein eigenes Netz, sieht Veyllo "
+                "nichts.",
+            "costTitle": "Was es kostet",
+            "costSentence": "\u00dcber das Veyllo Relay kostet jede Nachricht "
+                "0,01\u00a0\u20ac, in beide Richtungen und auch dann, wenn VAF von sich aus "
+                "schreibt. Ein Auftrag von VAF an dein Handy kostet 0,005\u00a0\u20ac pro "
+                "Richtung. Bezahlt wird zuerst mit deinem Abo, dann mit deinem Guthaben. Der "
+                "direkte Weg ist kostenlos.",
+            "adminTitle": "Veyllo Relay f\u00fcr diese VAF-Installation",
+            "adminIntro": "Hier legst du als Admin f\u00fcr alle Konten dieser Installation "
+                "fest, ob sich Handys \u00fcber das Veyllo Relay verbinden d\u00fcrfen. Ob "
+                "dein eigenes Handy \u00fcber das Relay oder direkt \u00fcber dein Netz "
+                "verbunden wird, w\u00e4hlst du im n\u00e4chsten Schritt unter dem QR-Code.",
+            "relayStates.idle": "Das Relay ist erlaubt. VAF verbindet sich nur dann mit dem "
+                "Relay, wenn ein Handy es gerade braucht.",
+            "noInstance": "Diese Installation ist beim Relay noch nicht angemeldet. Das "
+                "geschieht automatisch, sobald das erste Handy \u00fcber das Relay koppelt.",
+            "rotate": "Relay-Schl\u00fcssel erneuern",
+            "dissolve": "Beim Relay abmelden",
+            "dissolveBody": "Diese Installation wird beim Veyllo Relay abgemeldet, f\u00fcr "
+                "alle Konten. Die Handys bleiben gekoppelt und erreichen VAF weiter direkt "
+                "\u00fcber dein Netz, etwa zu Hause oder per VPN. \u00dcber das Relay "
+                "erreichen sie VAF erst wieder, wenn sie neu koppeln.",
+            "explainRelay": "\u00dcber das Veyllo Relay erreichst du VAF von \u00fcberall. "
+                "Jede Nachricht kostet 0,01\u00a0\u20ac, auch wenn VAF von sich aus schreibt, "
+                "ein Auftrag ans Handy 0,005\u00a0\u20ac pro Richtung. Veyllo sieht dabei nur, "
+                "wann Nachrichten laufen und wie gro\u00df sie sind, den Inhalt nie.",
+            "relayStates.off": "Das Relay ist ausgeschaltet. Handys koppeln und verbinden sich "
+                "nur direkt.",
+            "relayStates.replaced": "Ein anderes VAF mit demselben Relay-Schl\u00fcssel hat "
+                "die Verbindung \u00fcbernommen.",
+            "relayStates.revoked": "Das Relay hat dieser Installation den Zugang entzogen.",
+            "relayStates.secret_rejected": "Das Relay nimmt den Relay-Schl\u00fcssel dieser "
+                "Installation nicht an.",
+            "relayStates.secret_not_stored": "Der Relay-Schl\u00fcssel konnte auf diesem "
+                "Rechner nicht gespeichert werden.",
+            "relayStateHelp.secret_rejected": "Erneuere den Relay-Schl\u00fcssel, oder melde "
+                "diese Installation beim Relay ab und kopple die Handys neu.",
+            "relayStateHelp.replaced": "Eine Sicherung, die auf einem zweiten Rechner "
+                "wiederhergestellt wurde, nutzt denselben Relay-Schl\u00fcssel. Erneuere ihn "
+                "auf einem der beiden Rechner. VAF versucht es nach f\u00fcnf Minuten erneut.",
+            "relayStateHelp.revoked": "Melde diese Installation beim Relay ab und kopple die "
+                "Handys f\u00fcr das Relay neu.",
+            "relayErrors.secret_rejected": "Das Relay nimmt den Relay-Schl\u00fcssel dieser "
+                "Installation nicht an. Ein Admin kann ihn erneuern.",
+            "relayErrors.secret_not_stored": "Der Relay-Schl\u00fcssel konnte auf diesem "
+                "Rechner nicht gespeichert werden. Ein Admin sollte den Schl\u00fcsselbund des "
+                "Rechners pr\u00fcfen, danach koppelst du das Handy neu.",
+            "rotateTitle": "Relay-Schl\u00fcssel erneuern?",
+            "rotateBody": "Der Relay-Schl\u00fcssel wird erneuert, und VAF verbindet sich "
+                "danach neu mit dem Relay. Die Handys bleiben gekoppelt.",
+            "rotateConfirm": "Erneuern",
+            "rotated": "Der Relay-Schl\u00fcssel wurde erneuert.",
+            "dissolveConfirm": "Abmelden",
+            "dissolved": "Diese Installation ist beim Relay abgemeldet.",
+        },
+    }
+    for table in (kept, relay):
+        for locale, texts in table.items():
+            keys = _window_keys(locale)
+            for key, text in texts.items():
+                assert _key(keys, key) == text, (locale, key)
+    # No colon in running text: the new texts, and every relay state and its help text.
+    for locale, texts in relay.items():
         keys = _window_keys(locale)
-        for key, text in texts.items():
-            assert keys[key] == text, (locale, key)
+        checked = list(texts) + [f"{group}.{state}" for group in ("relayStates", "relayStateHelp")
+                                 for state in keys[group]]
+        for key in checked:
+            assert ":" not in _key(keys, key), (locale, key)
+
+
+def test_no_old_relay_terms_in_the_window():
+    """The window names a relay key and signing the installation out of the relay, priced in
+    euro: no text of it says relay secret, relay instance, dissolve or cent any more, so no
+    help text points at a button that is no longer there. MUTATION: put back "Replace relay
+    secret" as the EN rotate - red."""
+    old = {"en": re.compile(r"secret|instance|dissolv|\bcents?\b", re.I),
+           "de": re.compile(r"Geheimnis|Instanz|aufl\u00f6s|Cent")}
+
+    def texts(node, path=""):
+        for key, value in node.items():
+            if isinstance(value, dict):
+                yield from texts(value, f"{path}{key}.")
+            else:
+                yield f"{path}{key}", value
+
+    for locale, pattern in old.items():
+        hits = [key for key, text in texts(_window_keys(locale)) if pattern.search(text)]
+        assert not hits, (locale, hits)
 
 
 def test_the_footer_actions():

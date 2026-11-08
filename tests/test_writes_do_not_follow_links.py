@@ -326,6 +326,11 @@ def test_discard_written_removes_only_its_own_file(lab, monkeypatch, dir_fd):
     out.close()
     assert not (real / "partial.bin").exists()
 
+    if os.name == "nt":
+        # Windows refuses to rename a folder while a file in it is open (measured on the
+        # Windows CI: WinError 5), so the swap this half stages cannot happen there while
+        # the write is open; it is the POSIX attack.
+        return
     out = open_for_write(real / "main.py", "wb", expect_folder=real)
     _swap_for_link(real, other)
     assert discard_written(real / "main.py", out) is False

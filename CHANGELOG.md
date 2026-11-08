@@ -80,6 +80,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Windows: a download that fails halfway no longer leaves a partial file.** Windows
+  refuses to delete a file that is still open, so the half-written copy stayed in Downloads.
+
 - **Windows: a stopped database no longer slows every Veyllo App message.** When the
   account store cannot be reached, VAF now waits 30 seconds before asking it again instead of
   trying on every message, which on Windows cost about two seconds each time.

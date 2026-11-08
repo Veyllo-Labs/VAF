@@ -349,13 +349,16 @@ def discard_written(path, fileobj) -> bool:
     never cost another folder its file of the same name. The look and the removal are made
     relative to one folder handle, so nothing is swapped in between them. True if it was
     removed. NAMED BOUNDARY, Windows (no folder handles): the look and the removal are two
-    calls by path. Never raises."""
+    calls by path, and ``fileobj`` is closed between them, because Windows refuses to
+    remove a file that is still open (Python's ``open`` does not share delete access);
+    closing it again afterwards is harmless. Never raises."""
     try:
         raw = os.path.abspath(os.fspath(path))
         parent, name = os.path.split(raw)
         mine = os.fstat(fileobj.fileno())
         if not _DIR_FD:
             if os.path.samestat(os.lstat(raw), mine):
+                fileobj.close()
                 os.unlink(raw)
                 return True
             return False

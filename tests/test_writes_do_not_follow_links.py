@@ -310,6 +310,18 @@ def test_discard_written_removes_only_its_own_file(lab, monkeypatch, dir_fd):
     real, other = _expect_lab(lab)
     out = open_for_write(real / "partial.bin", "wb", expect_folder=real)
     out.write(b"half")
+    if not dir_fd:
+        # Windows semantics behind a seam: a file that is still open cannot be removed
+        # (Python's open does not share delete access). MUTATION: drop the close in the
+        # no-handles branch of discard_written - red here, as it was on the Windows CI.
+        real_unlink = path_jail.os.unlink
+
+        def windows_unlink(target, *a, **k):
+            if not out.closed:
+                raise PermissionError(13, "The process cannot access the file", str(target))
+            return real_unlink(target, *a, **k)
+
+        monkeypatch.setattr(path_jail.os, "unlink", windows_unlink)
     assert discard_written(real / "partial.bin", out) is True
     out.close()
     assert not (real / "partial.bin").exists()

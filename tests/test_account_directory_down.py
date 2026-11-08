@@ -105,3 +105,13 @@ def test_the_permission_row_remembers_the_outage_too(store, monkeypatch):
 
 async def _async(value):
     return value
+
+
+def test_an_invalidation_forgets_the_outage(store):
+    """The admin save that invalidates the caches reached the store; a test or a route that
+    invalidates must not be answered from an outage another caller remembered.
+    MUTATION: drop the clear in invalidate_permissions_cache - red."""
+    permissions.list_accounts()
+    assert permissions._store_down
+    permissions.invalidate_permissions_cache()
+    assert permissions._store_down == {}

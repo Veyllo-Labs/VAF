@@ -347,7 +347,10 @@ def token_still_stands(standing: tuple, token_role: Optional[str]) -> bool:
 
 def invalidate_permissions_cache(user_scope_id: Optional[str] = None) -> None:
     """Called by the admin update route so a revocation beats the TTL. Clears BOTH
-    allowlists: the route writes tools and workflows in one save."""
+    allowlists: the route writes tools and workflows in one save. It also forgets a
+    remembered store outage: whoever just saved reached the store, so the next lookup asks
+    it at once instead of answering from the outage."""
+    _store_down.clear()
     with _cache_lock:
         if user_scope_id is None:
             _cache.clear()

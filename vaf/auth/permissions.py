@@ -50,6 +50,27 @@ _wf_cache: dict = {}       # workflows: scope -> (monotonic_ts, frozenset | None
 _cache_lock = threading.Lock()
 
 
+# How long an auth store that could not be reached counts as unreachable before it is
+# asked again. Deliberate: the directory and the permission row are read on hot paths
+# (every send to a Veyllo App device asks whether its account still stands, every tool
+# call asks the account's allowlist), and on Windows a connect to a closed
+# local port is refused only after about two seconds of SYN retries, not at once as on
+# Linux; measured on the Windows CI, the app-link test files took 20 to 150 minutes there
+# and seconds elsewhere. Answering "unreachable" again for this long changes no answer -
+# each caller gets exactly what an unreachable store gives it - it only delays noticing
+# that the store is back by at most this long.
+_STORE_DOWN_S = 30.0
+_store_down: dict = {}   # database url -> monotonic time the store counts as down until
+
+
+def _store_url() -> str:
+    try:
+        from vaf.memory.database import get_database_url
+        return str(get_database_url() or "")
+    except Exception:
+        return ""
+
+
 def _fetch_permissions_row(user_scope_id: str):
     """One DB read: the permissions dict of the ACTIVE account with this scope, or
     `_NO_ACCOUNT` when there is none (deleted, deactivated, never existed). An unreachable
@@ -74,7 +95,16 @@ def _fetch_permissions_row(user_scope_id: str):
                 return _NO_ACCOUNT
             return user.permissions
 
-    return asyncio.run(_query())
+    url = _store_url()
+    if time.monotonic() < _store_down.get(url, 0.0):
+        raise ConnectionError("auth store unreachable (asked again after a pause)")
+    try:
+        row = asyncio.run(_query())
+    except Exception:
+        _store_down[url] = time.monotonic() + _STORE_DOWN_S
+        raise
+    _store_down.pop(url, None)
+    return row
 
 
 def _lookup_allowed_tools(user_scope_id: str) -> Optional[frozenset]:
@@ -205,7 +235,9 @@ def list_accounts() -> list:
     for the one thing built on it - finding somebody to invite - is the safe answer.
     Runs the async store from a sync caller the way the other resolvers here do; when
     an event loop is already running (a WebSocket handler) the lookup goes to a side
-    thread, so callers on the loop should hand this to an executor.
+    thread, so callers on the loop should hand this to an executor. A store that could
+    not be reached is not asked again for ``_STORE_DOWN_S`` seconds (per database
+    url); the answer meanwhile is the same empty directory.
     """
     import asyncio
 
@@ -222,6 +254,9 @@ def list_accounts() -> list:
                  "role": str(u.role or "")}
                 for u in users if u.username and u.user_scope_id]
 
+    url = _store_url()
+    if time.monotonic() < _store_down.get(url, 0.0):
+        return []
     try:
         try:
             asyncio.get_running_loop()
@@ -229,22 +264,27 @@ def list_accounts() -> list:
         except RuntimeError:
             running = False
         if not running:
-            return asyncio.run(_lookup())
-        import threading
-        box: list = [[]]
+            rows = asyncio.run(_lookup())
+        else:
+            box: list = [None]
 
-        def _run() -> None:
-            try:
-                box[0] = asyncio.run(_lookup())
-            except Exception:
-                box[0] = []
+            def _run() -> None:
+                try:
+                    box[0] = asyncio.run(_lookup())
+                except Exception:
+                    box[0] = None
 
-        worker = threading.Thread(target=_run, daemon=True)
-        worker.start()
-        worker.join(timeout=5.0)
-        return list(box[0] or [])
+            worker = threading.Thread(target=_run, daemon=True)
+            worker.start()
+            worker.join(timeout=5.0)
+            if box[0] is None:
+                raise RuntimeError("account directory lookup failed or timed out")
+            rows = box[0]
     except Exception:
+        _store_down[url] = time.monotonic() + _STORE_DOWN_S
         return []
+    _store_down.pop(url, None)
+    return list(rows or [])
 
 
 _standing_cache: dict = {}   # scope -> (monotonic_ts, (standing, role))

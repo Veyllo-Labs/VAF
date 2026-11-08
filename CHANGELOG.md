@@ -80,6 +80,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **Windows: a stopped database no longer slows every Veyllo App message.** When the
+  account store cannot be reached, VAF now waits 30 seconds before asking it again instead of
+  trying on every message, which on Windows cost about two seconds each time.
+
 - **Veyllo App: your agent answers you, not an old question of the app's agent.** A request
   of the agent in the Veyllo App now runs in a chat of its own beside your app chat. Before, it
   stayed in your app chat and read as your own open question, so a later message of yours could

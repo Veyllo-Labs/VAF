@@ -602,7 +602,13 @@ there too - cleared before the commit, a lookup in between re-cached the old ans
   a tool call already running ends through the funnel's own stop check, and the runner drops
   the account's queued turns. Queued turns and automations also ask `account_stands`, which
   reads the account directory, so a deactivated account's paired messenger and scheduled
-  automations stay silent after a restart as well.
+  automations stay silent after a restart as well. A store the directory cannot reach is an
+  empty directory (the account stands, the desktop default), and the directory does not ask
+  it again for 30 seconds (`_STORE_DOWN_S` in `vaf/auth/permissions.py`; the per-account tool permission row is read the same way): it is asked on
+  every send to a Veyllo App device, and on Windows each refused connect costs about two
+  seconds. NAMED BOUNDARY: once the store is back, an account deactivated during the outage
+  can stand for up to those 30 seconds more; the in-memory revocation mark, asked first,
+  is not affected.
 - **Standing grants can be taken back.** "Always" and "for this chat" skip the question
   before any event is emitted, so a grant nobody can see only grows. Each account lists and
   revokes its own under Settings, Account (`GET /api/security/grants`,

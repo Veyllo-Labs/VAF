@@ -31,6 +31,38 @@ export interface ChangelogEntry {
 // the full technical record lives in /CHANGELOG.md.
 export const CHANGELOG: ChangelogEntry[] = [
   {
+    version: '0.1.0a36',
+    date: '2026-11-09',
+    sections: [
+      {
+        kind: 'new',
+        items: [
+          'Veyllo App: chat with your agent from anywhere through the Veyllo Relay, or directly in your own network. Set it up under Settings, Connections, Veyllo App.',
+          'The agent in the Veyllo App can ask your agent for things, and you confirm on the app what it asked for.',
+          'DeepSeek: choose how long the model thinks before it answers.',
+          'Mail to addresses in other scripts, such as Cyrillic or Chinese domains.',
+        ],
+      },
+      {
+        kind: 'improved',
+        items: [
+          'Every setup window with numbered steps now uses the same stepper.',
+          'VAF respects the request limit of your Veyllo API key.',
+        ],
+      },
+      {
+        kind: 'fixed',
+        items: [
+          'A chat the AI provider refuses as too large is summarized and answered anyway, without sending your message twice.',
+          'Windows: a stopped database no longer slows every message, and a failed download leaves no partial file.',
+          'Cloud accounts, cloud downloads and the coding agent stay within the folders of each account.',
+          'The WhatsApp setup draws its link code itself instead of sending it to an outside QR service.',
+          'The agent can no longer change VAF\'s own settings or plant a tool through its file tools.',
+        ],
+      },
+    ],
+  },
+  {
     version: '0.1.0a35',
     date: '2026-11-05',
     sections: [

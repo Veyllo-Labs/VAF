@@ -11,6 +11,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+## [0.1.0a36] - 2026-11-09
+
 ### Added
 
 - **Veyllo App: chat with your agent in the Veyllo App, from anywhere through the Veyllo relay

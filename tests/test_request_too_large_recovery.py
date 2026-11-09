@@ -70,3 +70,25 @@ def test_the_failed_round_compresses_on_a_too_large_refusal():
     branch = branch[:branch.index("_end_turn_without_answer(_round_failure")]
     assert "request_too_large(_round_failure)" in branch
     assert "_compress_history_if_needed(force=True)" in branch
+
+
+def test_a_refused_chat_keeps_a_lower_limit_across_reloads(monkeypatch):
+    """Every turn reloads the chat from its file, so the compressed history alone did not
+    last (measured: the next request was 75,000 tokens again). The chat keeps a limit below
+    70,000 instead, lowered by each further refusal, never below the settings floor.
+    MUTATION: drop the cap in _compression_limit - red."""
+    from vaf.core.context import CONTEXT_EFFORT_MIN
+    monkeypatch.setattr(agent_module, "_session_compress_caps", {})
+    fake = SimpleNamespace(api_backend=object(), config={"context_compress_tokens": 1_000_000},
+                           current_session_id="yellow012345")
+    assert Agent._compression_limit(fake, 128_000) == 128_000
+    assert agent_module.tighten_session_cap("yellow012345") == agent_module.REQUEST_TOO_LARGE_CAP
+    assert agent_module.REQUEST_TOO_LARGE_CAP < 70_000
+    assert Agent._compression_limit(fake, 128_000) == agent_module.REQUEST_TOO_LARGE_CAP
+    # Another chat is not affected.
+    other = SimpleNamespace(api_backend=object(), config={"context_compress_tokens": 1_000_000},
+                            current_session_id="green123456")
+    assert Agent._compression_limit(other, 128_000) == 128_000
+    # Each further refusal lowers it, bounded by the floor.
+    caps = [agent_module.tighten_session_cap("yellow012345") for _ in range(10)]
+    assert caps[0] < agent_module.REQUEST_TOO_LARGE_CAP and caps[-1] == CONTEXT_EFFORT_MIN

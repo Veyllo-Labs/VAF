@@ -1452,6 +1452,26 @@ def _active_local_model_name(agent) -> str:
     return getattr(agent, "filename", "") or ""
 
 
+# The compression limit a chat gets after the provider refused one of its requests as too
+# large, per session id, for this process. Deliberate: below 70,000 tokens, where the Veyllo
+# API refused live requests (about 75,000), and lowered again by each further refusal of the
+# same chat, never below the settings floor. Kept per process on purpose: every turn reloads
+# the chat from its file, so a compressed in-memory history alone was replaced by the full one
+# at the next message (measured: the forced compression ran, the next request was 75,000 again).
+REQUEST_TOO_LARGE_CAP = 60_000
+_session_compress_caps: dict = {}
+
+
+def tighten_session_cap(session_id) -> int:
+    """Record that ``session_id``'s request was refused as too large; returns its new cap."""
+    from vaf.core.context import CONTEXT_EFFORT_MIN
+    key = str(session_id or "")
+    current = _session_compress_caps.get(key)
+    cap = REQUEST_TOO_LARGE_CAP if current is None else max(CONTEXT_EFFORT_MIN, int(current * 0.6))
+    _session_compress_caps[key] = cap
+    return cap
+
+
 def request_too_large(failure_text: str) -> bool:
     """Whether a backend failure says the request itself was too large (HTTP 413,
     ``request_too_large``, a context-length refusal): the one failure that a smaller history
@@ -7069,12 +7089,15 @@ class Agent:
         except Exception:
             budget = 0
         if budget <= 0:
-            return window_tokens
+            cap = _session_compress_caps.get(str(getattr(self, "current_session_id", None) or ""))
+            return min(window_tokens, cap) if cap else window_tokens
         # Same floor the settings ladder starts at, applied here too: a
         # hand-edited config asking for 500 tokens would otherwise compress on
         # every single turn and never fit a system prompt.
         from vaf.core.context import CONTEXT_EFFORT_MIN
-        return min(window_tokens, max(budget, min(CONTEXT_EFFORT_MIN, window_tokens)))
+        limit = min(window_tokens, max(budget, min(CONTEXT_EFFORT_MIN, window_tokens)))
+        cap = _session_compress_caps.get(str(getattr(self, "current_session_id", None) or ""))
+        return min(limit, cap) if cap else limit
 
     def _sync_compression_limit(self, window_tokens: int) -> None:
         """Pin the ONE ContextManager to the effective compression limit.
@@ -11442,6 +11465,9 @@ class Agent:
                         # message goes through; the summary keeps the recent turns raw.
                         if request_too_large(_round_failure):
                             try:
+                                _cap = tighten_session_cap(getattr(self, "current_session_id", None))
+                                append_domain_log("backend", f"round_failed: compression limit of "
+                                                             f"this chat now {_cap} tokens")
                                 if self._compress_history_if_needed(force=True):
                                     append_domain_log("backend", "round_failed: request too large, "
                                                                  "history compressed for the next turn")

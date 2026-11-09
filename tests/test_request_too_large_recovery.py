@@ -92,3 +92,20 @@ def test_a_refused_chat_keeps_a_lower_limit_across_reloads(monkeypatch):
     # Each further refusal lowers it, bounded by the floor.
     caps = [agent_module.tighten_session_cap("yellow012345") for _ in range(10)]
     assert caps[0] < agent_module.REQUEST_TOO_LARGE_CAP and caps[-1] == CONTEXT_EFFORT_MIN
+
+
+def test_the_round_is_asked_again_once_without_showing_the_refusal():
+    """The person must not send the message again: a refusal as too large, before any text,
+    is not streamed, the history is compressed and the round runs again, once per turn.
+    MUTATION: drop the `continue` or the single-use flag - red."""
+    source = inspect.getsource(agent_module.Agent.chat_step)
+    assert "_too_large_retried = False" in source
+    stream_side = source[source.index("if is_failure_chunk(chunk):"):]
+    stream_side = stream_side[:stream_side.index("full_response += chunk")]
+    assert "request_too_large(chunk)" in stream_side and "not _too_large_retried" in stream_side
+    assert "break" in stream_side
+    retry = source[source.index("and request_too_large(_round_failure)):"):]
+    retry = retry[:retry.index("if _round_failure:")]
+    assert "_too_large_retried = True" in retry
+    assert "_compress_history_if_needed(force=True)" in retry
+    assert retry.rstrip().endswith("continue")

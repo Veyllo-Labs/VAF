@@ -11082,6 +11082,10 @@ class Agent:
         
         # Retry counter for empty responses
         empty_retry_count = 0
+        # One automatic retry per turn after the provider refused the request as too large:
+        # the history is compressed and the same round is asked again, so the person does not
+        # have to send the message again. One, never more: a second refusal ends the turn.
+        _too_large_retried = False
         MAX_EMPTY_RETRIES = 10  # Allow up to 10 attempts before hard stop
         # Loop-protection counter for blocked redundant tool calls (per user turn). Kept SEPARATE from
         # empty_retry_count so a redundant block never climbs into the empty-response abort.
@@ -11396,6 +11400,11 @@ class Agent:
                             # any chunk, so the person sees it, and marks the round failed.
                             if is_failure_chunk(chunk):
                                 _round_failure = chunk
+                                # A refusal as too large before any text, with the retry still
+                                # unused: not shown, the round is asked again after compressing.
+                                if (not full_response and not _too_large_retried
+                                        and request_too_large(chunk)):
+                                    break
                             full_response += chunk
                             
                             # DEBUG: Log content chunk (consolidated in backend.log)
@@ -11454,6 +11463,17 @@ class Agent:
                     # internal detail (a provider's raw answer, a masked key, a path) the
                     # model would repeat as its own words, to whoever the chat is with. Its
                     # tool calls are a stream cut off mid-way and do not run.
+                    if (_round_failure and not full_response and not _too_large_retried
+                            and request_too_large(_round_failure)):
+                        _too_large_retried = True
+                        _cap = tighten_session_cap(getattr(self, "current_session_id", None))
+                        try:
+                            self._compress_history_if_needed(force=True)
+                        except Exception as e:
+                            append_domain_log("backend", f"too large: compression failed: {e}")
+                        append_domain_log("backend", f"too large: history compressed (limit {_cap} "
+                                                     f"tokens), the round is asked again")
+                        continue
                     if _round_failure:
                         if stream_callback and _round_failure not in full_response:
                             stream_callback(_round_failure)

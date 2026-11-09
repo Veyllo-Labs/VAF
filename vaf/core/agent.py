@@ -1451,6 +1451,16 @@ def _active_local_model_name(agent) -> str:
         return local_engine.resolve_vllm_model()
     return getattr(agent, "filename", "") or ""
 
+
+def request_too_large(failure_text: str) -> bool:
+    """Whether a backend failure says the request itself was too large (HTTP 413,
+    ``request_too_large``, a context-length refusal): the one failure that a smaller history
+    fixes. Rate limits, auth and server errors are not this and are never answered by
+    compressing."""
+    text = str(failure_text or "").lower()
+    return ("request_too_large" in text or "error code: 413" in text
+            or "context_length_exceeded" in text or "maximum context length" in text)
+
 class Agent:
     """The VAF engine: one instance = one conversation over one LLM backend.
 
@@ -7746,7 +7756,7 @@ class Agent:
 
         return f"[checkpoint] Context reset: {old_len} -> {len(new_history)} messages. Plan and working memory preserved."
 
-    def _compress_history_if_needed(self) -> bool:
+    def _compress_history_if_needed(self, force: bool = False) -> bool:
         """Structurally compress the history once it crossed the effective limit.
 
         Shared by the per-turn check in chat_step AND the session-load path, so
@@ -7766,7 +7776,7 @@ class Agent:
             self._sync_compression_limit(window)
         except Exception:
             pass
-        if not cm.should_compress(self.history):
+        if not force and not cm.should_compress(self.history):
             return False
         from vaf.cli.ui import UI
         old_count = len(self.history)
@@ -11426,6 +11436,17 @@ class Agent:
                             stream_callback(_round_failure)
                         append_domain_log("backend", "round_failed: the backend's failure is "
                                                      "not committed to the history")
+                        # A request the provider refused as too large is refused again on every
+                        # later message of the chat (measured: a 1136-message chat answered 413
+                        # to each new message). Compress now, below the budget, so the next
+                        # message goes through; the summary keeps the recent turns raw.
+                        if request_too_large(_round_failure):
+                            try:
+                                if self._compress_history_if_needed(force=True):
+                                    append_domain_log("backend", "round_failed: request too large, "
+                                                                 "history compressed for the next turn")
+                            except Exception as e:
+                                append_domain_log("backend", f"round_failed: compression failed: {e}")
                         return _end_turn_without_answer(_round_failure, streamed=bool(stream_callback))
 
                     # POST-LOOP: Convert accumulator to list

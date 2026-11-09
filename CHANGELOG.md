@@ -80,6 +80,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **A chat the AI provider refused as too large works again with the next message.**
+  After a "request too large" answer, VAF now summarizes the older part of the chat at once,
+  so the next message goes through instead of being refused again and again.
+
 - **Windows: a download that fails halfway no longer leaves a partial file.** Windows
   refuses to delete a file that is still open, so the half-written copy stayed in Downloads.
 

@@ -11467,13 +11467,18 @@ class Agent:
                             and request_too_large(_round_failure)):
                         _too_large_retried = True
                         _cap = tighten_session_cap(getattr(self, "current_session_id", None))
+                        _before = len(self.history)
                         try:
                             self._compress_history_if_needed(force=True)
                         except Exception as e:
                             append_domain_log("backend", f"too large: compression failed: {e}")
-                        append_domain_log("backend", f"too large: history compressed (limit {_cap} "
-                                                     f"tokens), the round is asked again")
-                        continue
+                        # Asked again only with a smaller history: the same request would be
+                        # refused the same way, so a compression that failed or kept everything
+                        # ends the turn below as before.
+                        if len(self.history) < _before:
+                            append_domain_log("backend", f"too large: history compressed (limit "
+                                                         f"{_cap} tokens), the round is asked again")
+                            continue
                     if _round_failure:
                         if stream_callback and _round_failure not in full_response:
                             stream_callback(_round_failure)

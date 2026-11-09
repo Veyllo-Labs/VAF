@@ -108,4 +108,6 @@ def test_the_round_is_asked_again_once_without_showing_the_refusal():
     retry = retry[:retry.index("if _round_failure:")]
     assert "_too_large_retried = True" in retry
     assert "_compress_history_if_needed(force=True)" in retry
+    # Asked again only when the history got smaller (an unchanged request is refused again).
+    assert "if len(self.history) < _before:" in retry
     assert retry.rstrip().endswith("continue")

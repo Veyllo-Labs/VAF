@@ -308,7 +308,14 @@ def test_openrouter_vision_default_and_deepseek():
     assert default_vision_model("openrouter") == Config.get_default_model("openrouter")
     assert model_supports_vision("openrouter", Config.get_default_model("openrouter")) is True
     assert model_supports_vision("openai", "openai/gpt-5.6-terra") is True
-    assert model_supports_vision("deepseek", "deepseek-flash") is False
+    # DeepSeek: flash takes images (probed live 2026-11-09: it named a red square and a blue
+    # circle, also with thinking on and tools offered); pro is text only, and deepseek-auto,
+    # which may send a turn to pro, gets none. MUTATION: drop vision=True on deepseek-flash,
+    # or the deepseek rule in model_supports_vision - red.
+    assert model_supports_vision("deepseek", "deepseek-flash") is True
+    assert model_supports_vision("deepseek", "deepseek-v4-pro") is False
+    assert model_supports_vision("deepseek", "deepseek-auto") is False
+    assert default_vision_model("deepseek") == "deepseek-flash"
     # OpenRouter's DeepSeek is text only, and the entry says so.
     assert model_supports_vision("openrouter", "deepseek/deepseek-v4-pro") is False
 

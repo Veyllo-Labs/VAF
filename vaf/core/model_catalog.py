@@ -201,13 +201,13 @@ _DEEPSEEK = ProviderCatalog(
     # from the published 0.02x and 0.033x; every entry carries its own rate.
     cache_read_multiplier=0.04, cache_write_multiplier=1.00,
     models=(
-        # DeepSeek lists image input for deepseek-flash; VAF sends none until the
-        # wire format is probed (ProviderSpec.vision_capable is False).
-        ModelEntry("deepseek-flash", 0.30, 1.20, 0.006, offered=True,
+        # Image input: deepseek-flash only (DeepSeek's feature table marks
+        # deepseek-v4-pro "Not supported"); OpenAI-style image_url parts.
+        ModelEntry("deepseek-flash", 0.30, 1.20, 0.006, vision=True, offered=True,
                    note="served by DeepSeek-V4.1-Flash-1017"),
         ModelEntry("deepseek-v4-pro", 1.32, 3.96, 0.044, offered=True,
                    note="DeepSeek-V4-Pro-0813"),
-        ModelEntry("deepseek-v4-flash", 0.30, 1.20, 0.006, legacy=True,
+        ModelEntry("deepseek-v4-flash", 0.30, 1.20, 0.006, vision=True, legacy=True,
                    shutdown_on="2026-09-10", replaced_by="deepseek-flash",
                    note="retired; the name still routes to V4.1-Flash at the Flash price"),
     ),

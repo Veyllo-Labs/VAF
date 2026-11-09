@@ -152,7 +152,10 @@ PROVIDER_SPECS: Dict[str, ProviderSpec] = {
             coder_base_url="https://api.deepseek.com/v1",
             # Discovery deliberately has NO /v1 (api.deepseek.com/models).
             models_url="https://api.deepseek.com/models",
-            vision_capable=False,
+            # deepseek-flash takes images (OpenAI image_url parts); deepseek-v4-pro does
+            # not, so the per-model answer comes from the catalog's `vision` flag.
+            vision_capable=True,
+            vision_default_model="deepseek-flash",
         ),
         ProviderSpec(
             name="google",
@@ -319,6 +322,10 @@ def model_supports_vision(provider: str, model: str, probe_local: bool = True) -
             return hit[1].vision
     if provider in ("anthropic", "google", "veyllo"):
         return True
+    if provider == "deepseek":
+        # Only the catalog's flash entries take images. An id it does not name -
+        # deepseek-auto, which may send a turn to the text-only pro model - gets none.
+        return False
     # Family patterns for ids the catalog does not name. Only the families that
     # take image input: plain gpt-4 (gpt-4-0613), gpt-3.5 and claude-2 are text.
     if provider == "openai":

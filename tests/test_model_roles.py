@@ -105,7 +105,7 @@ EXPECTED = {
         {"provider": "anthropic", "api_model_anthropic": "claude-sonnet-4-6"}, {"anthropic"}, False,
         "ocr", _row("ocr", "anthropic", "claude-sonnet-4-6", "via_vision")),
     "ocr-nothing": (
-        {"provider": "deepseek"}, {"deepseek"}, False,
+        {"provider": "deepseek", "api_model_deepseek": "deepseek-v4-pro"}, {"deepseek"}, False,
         "ocr", _row("ocr", None, None, "unavailable", "ocr_no_engine")),
     "browser-follow-blind": (
         {"provider": "deepseek", "api_model_deepseek": "deepseek-v4-pro"}, {"deepseek"}, False,
@@ -220,7 +220,8 @@ def test_expected_rows(machine, name):
 def test_a_mapping_is_read_instead_of_the_machine(machine):
     """The draft preview: every lane that takes `config` reads the mapping, not the
     machine's file (only the API keys stay the machine's)."""
-    machine.update(cfg={"provider": "deepseek"}, keys={"deepseek", "openai", "anthropic"})
+    machine.update(cfg={"provider": "deepseek", "api_model_deepseek": "deepseek-v4-pro"},
+                   keys={"deepseek", "openai", "anthropic"})
     draft = {**Config.DEFAULTS, "provider": "anthropic", "api_model_anthropic": "claude-sonnet-4-6",
              "ocr_engine": "tesseract", "speech_stt_enabled": True, "speech_stt_provider": "openai",
              "speech_stt_api_model": "gpt-4o-transcribe", "speech_tts_enabled": True,
@@ -249,7 +250,8 @@ def test_a_mapping_is_read_instead_of_the_machine(machine):
 def test_ocr_follows_the_drafts_vision_row(machine, draft, want):
     """The previewed OCR row must use the DRAFT's vision row, not the saved one."""
     from vaf.core.vision_infer import select_vision_backend
-    machine.update(cfg={"provider": "deepseek", "vision_provider": "google"},
+    machine.update(cfg={"provider": "deepseek", "api_model_deepseek": "deepseek-v4-pro",
+                            "vision_provider": "google"},
                    keys={"deepseek", "openai", "anthropic", "google"}, tesseract=False)
     cfg = {**Config.DEFAULTS, **machine["cfg"], **draft}
     rows = {a.role: a for a in mr.resolve_roles(cfg)}

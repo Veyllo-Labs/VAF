@@ -262,8 +262,8 @@ def test_select_backend_falls_back_to_multimodal_main_provider(monkeypatch):
 
 
 def test_select_backend_none_when_main_provider_is_not_vision(monkeypatch):
-    # DeepSeek can't see images and no vision provider configured → no backend.
-    _patch_config(monkeypatch, {"vision_provider": "", "provider": "deepseek", "api_model_deepseek": "deepseek-v4-flash"})
+    # deepseek-v4-pro can't see images and no vision provider configured → no backend.
+    _patch_config(monkeypatch, {"vision_provider": "", "provider": "deepseek", "api_model_deepseek": "deepseek-v4-pro"})
     assert select_vision_backend() == (None, None)
 
 

@@ -11,6 +11,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ## [Unreleased]
 
+### Added
+
+- **DeepSeek reads images.** With `deepseek-flash` as the model, VAF now sends images to
+  DeepSeek itself instead of needing a separate vision provider. `deepseek-v4-pro` and
+  `deepseek-auto` still cannot read images; choose a vision provider for them as before.
+
 ## [0.1.0a36] - 2026-11-09
 
 ### Added

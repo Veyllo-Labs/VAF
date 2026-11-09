@@ -28,7 +28,7 @@ def test_vision_capable_model_sees(monkeypatch):
 def test_text_only_model_with_vision_provider_gets_descriptions(monkeypatch):
     monkeypatch.setattr(ba, "_model_supports_vision", lambda p, m: False)
     monkeypatch.setattr(ba, "_vision_available", lambda: True)
-    assert ba._browser_vision_mode("deepseek", "deepseek-v4-flash") == (False, "described")
+    assert ba._browser_vision_mode("deepseek", "deepseek-v4-pro") == (False, "described")
 
 
 def test_no_vision_anywhere_still_runs_dom_only(monkeypatch):
@@ -63,7 +63,7 @@ def test_a_seeing_main_model_counts_even_without_an_explicit_vision_provider(mon
                               "provider": "openai"}.get(k, d)))
     monkeypatch.setattr(Config, "load", classmethod(
         lambda cls: {"provider": "openai", "api_model_openai": "gpt-4o"}))
-    assert ba._browser_vision_mode("deepseek", "deepseek-v4-flash") == (False, "described")
+    assert ba._browser_vision_mode("deepseek", "deepseek-v4-pro") == (False, "described")
 
 
 # ── guidance ──────────────────────────────────────────────────────────────

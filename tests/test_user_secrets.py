@@ -169,6 +169,8 @@ def test_expand_refuses_rather_than_passing_a_name_on(monkeypatch):
     "import importlib\nimportlib.import_module('ftplib')",
     "import urllib.request\nurllib.request.urlopen('ftp://h/x')",
     "h = 'x'\nprint(f'FTPS://{h}/x')",
+    'exec("import ftplib")',
+    'import importlib\nimportlib.import_module(name="ftplib").FTP("example.org")',
 ])
 def test_python_exec_hands_ftp_to_the_ftp_tool(monkeypatch, code):
     """Measured live: refused curl in host_bash, the model wrote the transfer with ftplib in

@@ -255,6 +255,60 @@ def test_python_without_ftp_is_not_refused(cmd):
     assert "ftp_transfer" not in classify_command(cmd, profile="host").categories, cmd
 
 
+
+@pytest.mark.parametrize("code", [
+    'exec("import ftplib")',
+    "exec(b'from ftplib import FTP')",
+    'eval(compile("import ftplib", "x", "exec"))',
+    'compile(source="import ftplib", filename="x", mode="exec")',
+    """exec('exec("import ftplib")')""",
+    'import importlib\nimportlib.import_module(name="ftplib")',
+    '__import__(name="ftplib")',
+])
+def test_python_ftp_handed_to_exec_or_named_by_keyword_is_seen(code):
+    """A constant string to exec/eval/compile is code, and import_module/__import__ take the
+    name as `name=` too (measured: all of these returned no category).
+    MUTATION: drop the exec/eval/compile branch - red (the first five);
+    MUTATION: read only node.args in _call_argument - red (the keyword forms)."""
+    from vaf.core.command_policy import python_code_categories
+    assert python_code_categories(code) == ["ftp_transfer"], code
+
+
+def test_python_ftp_nested_past_the_parse_depth_is_searched_as_text():
+    """MUTATION: return [] past _MAX_CODE_DEPTH - red."""
+    from vaf.core.command_policy import _MAX_CODE_DEPTH, python_code_categories
+    code = "import ftplib"
+    for _ in range(_MAX_CODE_DEPTH + 3):
+        code = f"exec({code!r})"
+    assert python_code_categories(code) == ["ftp_transfer"]
+    assert python_code_categories('exec("print(1)")') == []
+
+
+@pytest.mark.parametrize("cmd", [
+    """python3 -c 'exec("import ftplib")'""",
+    'uv run python -c "import ftplib"',
+    'uv run --with requests python3 -c "import ftplib"',
+    'poetry run python -m ftplib h',
+    'conda run -n py python -c "import ftplib"',
+    "pypy3 -c 'import ftplib'",
+    "python3.13t -c 'import ftplib'",
+])
+def test_python_ftp_under_another_interpreter_name_or_a_runner_is_refused(cmd):
+    """MUTATION: drop the runner branch in _python_invocations - red (uv, poetry, conda);
+    MUTATION: restore the old interpreter pattern without pypy and the t suffix - red."""
+    v = classify_command(cmd, profile="host")
+    assert v.blocked and "ftp_transfer" in v.categories, cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    'uv run python -c "print(1)"',
+    "uv run pytest -q",
+    "pypy3 -c 'print(1)'",
+    "poetry run python manage.py --ftplib",
+])
+def test_runners_without_python_ftp_are_not_refused(cmd):
+    assert "ftp_transfer" not in classify_command(cmd, profile="host").categories, cmd
+
 def test_the_sandbox_environment_lane_refuses_python_ftp_too():
     """bash in a sandbox environment refuses ftp_transfer by the host profile's categories, so
     the Python forms reach it with no edit there. MUTATION: delete the python branch - red."""

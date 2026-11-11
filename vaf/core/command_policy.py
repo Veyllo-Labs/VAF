@@ -36,16 +36,20 @@ wrapped forms went through). The nesting has a depth limit, and past it the
 command is refused, because a reviewer cannot follow it either.
 
 Python that moves files over FTP is the same `ftp_transfer` as an FTP client
-(`python_code_categories`): ftplib, `__import__`/`importlib` of it, or an
-`ftp://`/`ftps://` address in the code. One check for both Python lanes:
-python_exec runs it on its code, and this classifier on `python -c CODE` and
-`python -m ftplib` in a shell command. Measured before it existed: a model
-denied curl and lftp in host_bash wrote the same transfer with ftplib in
+(`python_code_categories`): ftplib, `__import__`/`importlib` of it, an
+`ftp://`/`ftps://` address in the code, or such code as a constant string handed
+to exec, eval or compile. One check for both Python lanes: python_exec runs it on
+its code, and this classifier on `python -c CODE` and `python -m ftplib` in a
+shell command (python, pypy, a versioned or free-threaded name, Windows' py, and
+the same behind a project runner such as `uv run`). Measured before it existed: a
+model denied curl and lftp in host_bash wrote the same transfer with ftplib in
 python_exec, reading the stored password from its environment.
 NAMED BOUNDARY: the check reads the code it is given. Code built at runtime
-(`"ftp" + "lib"`), a script file, or a heredoc or stdin fed to the interpreter is
-not seen, exactly as a shell script's content is not read. It points at the right
-tool; the control for host code stays the confirmation and the account opt-in.
+(`"ftp" + "lib"`, a string assembled before exec), a script file, a heredoc or stdin
+fed to the interpreter, or an interpreter started under another name or inside a
+container is not seen, exactly as a shell script's content is not read. It points
+at the right tool; the control for host code stays the confirmation and the
+account opt-in.
 
 This module lives in vaf/core, not next to the tools, because the confirmation
 gate (vaf/core/tool_dispatch.py) renders the verdict: vaf/core importing
@@ -107,8 +111,16 @@ _REMOTE_LOGINS = frozenset({"ssh", "scp", "sftp"})
 _FTP_CLIENTS = frozenset({"ftp", "lftp", "ncftp", "ncftpput", "ncftpget", "tnftp", "pftp"})
 # The address alone, or as an option's value (`--url=ftp://...`).
 _FTP_URL_RE = re.compile(r"^(?:--?[A-Za-z][\w-]*=)?['\"]?ftps?://", re.IGNORECASE)
-# The Python interpreter by name (`python`, `python3`, `python3.13`; Windows' `py` launcher).
-_PYTHON_EXE_RE = re.compile(r"^(?:python(?:\d+(?:\.\d+)?)?|py)$")
+# The Python interpreter by name (`python`, `python3`, `python3.13`, the free-threaded
+# `python3.13t`, PyPy's `pypy3`; Windows' `py` launcher).
+_PYTHON_EXE_RE = re.compile(r"^(?:(?:python|pypy)(?:\d+(?:\.\d+)?)?t?|py)$")
+# Project runners that start an interpreter given as a later word (`uv run python -c ...`).
+_PYTHON_RUNNERS = frozenset({"uv", "uvx", "poetry", "pipenv", "pdm", "hatch", "rye", "conda",
+                             "pixi"})
+# Builtins that run Python code they are given as a string: the string is read like the code.
+_CODE_STRING_CALLS = frozenset({"exec", "eval", "compile"})
+# How deep `exec("exec('...')")` is parsed; deeper code is searched as text.
+_MAX_CODE_DEPTH = 4
 # Python's short options that take a value besides -c and -m.
 _PYTHON_VALUE_LETTERS = frozenset("WX")
 # Code that does not parse is searched as text: the module name, or a quoted ftp:// address.
@@ -149,9 +161,10 @@ CATEGORY_REASONS = {
     "remote_login": "logs in to another machine with this computer's own SSH setup; use the "
                     "ssh tool, which keeps each account's key and servers apart and answers "
                     "the password prompt",
-    "ftp_transfer": "moves files over FTP with this computer's own tools and the password on "
-                    "the command line; use the ftp tool, which asks before a new server, "
-                    "checks its certificate and keeps the password out of every command",
+    "ftp_transfer": "moves files over FTP with this computer's own tools (an FTP client, curl "
+                    "or Python's ftplib), with the password in the command or the code; use the "
+                    "ftp tool, which asks before a new server, checks its certificate and keeps "
+                    "the password out of every command",
 }
 
 # What each profile refuses outright. Everything else in CATEGORY_REASONS is a note.
@@ -410,17 +423,29 @@ def _is_ftplib(name) -> bool:
     return isinstance(name, str) and name.split(".", 1)[0] == "ftplib"
 
 
-def python_code_categories(code: str) -> List[str]:
+def _call_argument(node, keyword: str):
+    """The constant first argument of a call, positional or as `keyword=`, or None."""
+    import ast
+    value = node.args[0] if node.args else next(
+        (k.value for k in node.keywords if k.arg == keyword), None)
+    return value.value if isinstance(value, ast.Constant) else None
+
+
+def python_code_categories(code: str, *, _depth: int = 0) -> List[str]:
     """["ftp_transfer"] when Python `code` moves files over FTP, else []. Read from the syntax
     tree, so a comment naming ftplib does not count: an import of ftplib (also `from ftplib
-    import ...`), `__import__("ftplib")` or `importlib.import_module("ftplib")`, or a string
-    that starts with ftp:// or ftps:// (urllib's FTP, an f-string's literal part). Code that
-    does not parse is searched as text. Never raises."""
+    import ...`), `__import__("ftplib")` or `importlib.import_module("ftplib")` (the name also
+    as `name=`), or a string that starts with ftp:// or ftps:// (urllib's FTP, an f-string's
+    literal part). A constant string handed to exec, eval or compile is read as code too, a
+    few levels deep. Code that does not parse, or nests deeper, is searched as text. Never
+    raises."""
     import ast
-    text = str(code or "")
+    text = code.decode("utf-8", "replace") if isinstance(code, bytes) else str(code or "")
+    if _depth > _MAX_CODE_DEPTH:
+        return ["ftp_transfer"] if _PYTHON_FTP_TEXT_RE.search(text) else []
     try:
         tree = ast.parse(text)
-    except (SyntaxError, ValueError):
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
         return ["ftp_transfer"] if _PYTHON_FTP_TEXT_RE.search(text) else []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -431,8 +456,14 @@ def python_code_categories(code: str) -> List[str]:
             fn = node.func
             called = fn.id if isinstance(fn, ast.Name) else (
                 fn.attr if isinstance(fn, ast.Attribute) else "")
-            hit = (called in ("__import__", "import_module") and bool(node.args)
-                   and isinstance(node.args[0], ast.Constant) and _is_ftplib(node.args[0].value))
+            if called in ("__import__", "import_module"):
+                hit = _is_ftplib(_call_argument(node, "name"))
+            elif called in _CODE_STRING_CALLS:
+                inner = _call_argument(node, "source")
+                hit = isinstance(inner, (str, bytes)) and bool(
+                    python_code_categories(inner, _depth=_depth + 1))
+            else:
+                hit = False
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
             hit = node.value.lstrip().lower().startswith(("ftp://", "ftps://"))
         else:
@@ -440,6 +471,24 @@ def python_code_categories(code: str) -> List[str]:
         if hit:
             return ["ftp_transfer"]
     return []
+
+
+def _python_invocations(exe: str, args: List[str]) -> List[List[str]]:
+    """The interpreter's own arguments for every way this command may start Python: the
+    interpreter itself, or each later word of a project runner (`uv run python ...`) that
+    names one. Every candidate counts, because a runner's option value can look like an
+    interpreter too (`conda run -n py python -c ...`)."""
+    if _PYTHON_EXE_RE.match(exe):
+        return [args]
+    if exe not in _PYTHON_RUNNERS:
+        return []
+    found = []
+    for pos, tok in enumerate(args):
+        base = tok.rsplit("/", 1)[-1].lower()
+        base = base[:-4] if base.endswith(".exe") else base
+        if _PYTHON_EXE_RE.match(base):
+            found.append(args[pos + 1:])
+    return found
 
 
 def _python_command_categories(args: List[str]) -> List[str]:
@@ -553,7 +602,7 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0) ->
             cats.append("remote_login")
         if (exe in _FTP_CLIENTS or (exe in _NETWORK_FETCHERS
                                     and any(_FTP_URL_RE.match(a) for a in args))
-                or (_PYTHON_EXE_RE.match(exe) and _python_command_categories(args))) \
+                or any(_python_command_categories(a) for a in _python_invocations(exe, args))) \
                 and "ftp_transfer" not in cats:
             cats.append("ftp_transfer")
 

@@ -8,8 +8,9 @@ STOR, RETR, REST, SIZE, MDTM, MLST, MLSD, LIST, MKD, DELE, PWD, QUIT. Files live
 folder. One client at a time, which is all a test needs. `pasv_host` is the address the PASV
 answer NAMES - a test sets it to one nobody listens on, to see that the client ignores it.
 `rest`, `size` and `mlst_single` switch REST, SIZE and MLST off (answered 502/500, as a server
-without them does); `listing_extra` is raw bytes appended to every LIST and MLSD answer (a
-name in another encoding). Names go over the wire as UTF-8.
+without them does); `mlst_facts` names the facts an MLST and MLSD answer carries (RFC 3659
+lets a server leave any of them out, or all); `listing_extra` is raw bytes appended to every LIST and
+MLSD answer (a name in another encoding). Names go over the wire as UTF-8.
 
 Certificates come from `cryptography` (already a dependency of VAF): `make_ca()` and
 `make_cert()` build a test authority and leaf certificates signed by it or by themselves;
@@ -107,7 +108,9 @@ class FtpStub:
     def __init__(self, root: Path, *, cert: Optional[Path] = None, user: str = "alice",
                  password: str = "s3cret-pass", pasv_host: str = "127.0.0.1",
                  mlsd: bool = True, rest: bool = True, size: bool = True,
-                 mlst_single: bool = True, listing_extra: bytes = b""):
+                 mlst_single: bool = True,
+                 mlst_facts: Tuple[str, ...] = ("type", "size", "modify"),
+                 listing_extra: bytes = b""):
         self.root = Path(root)
         self.cert = cert
         self.user = user
@@ -117,6 +120,7 @@ class FtpStub:
         self.rest = rest
         self.size = size
         self.mlst_single = mlst_single
+        self.mlst_facts = tuple(mlst_facts)
         self.listing_extra = listing_extra
         #: Every command with its argument (PASS hidden), for a test that checks what was sent.
         self.lines: List[str] = []
@@ -262,6 +266,10 @@ class FtpStub:
                     send(f"213 {self._stamp(path)}")
                 else:
                     send("550 no such file")
+            elif cmd == "OPTS" and arg.upper().startswith("MLST"):
+                # ftplib's mlsd(facts=...) asks for its facts first; without this answer
+                # every listing fell back to LIST and MLSD was never exercised.
+                send(f"200 {arg}")
             elif cmd == "MLST" and self.mlst_single:
                 path = self._safe(state["cwd"], arg or ".")
                 if path is None or not path.exists():
@@ -269,8 +277,10 @@ class FtpStub:
                 else:
                     kind = "dir" if path.is_dir() else "file"
                     size = path.stat().st_size if path.is_file() else 0
+                    known = {"type": kind, "size": size, "modify": self._stamp(path)}
+                    facts = "".join(f"{k}={known[k]};" for k in self.mlst_facts)
                     send(f"250-Listing {arg}")
-                    send(f" type={kind};size={size};modify={self._stamp(path)}; {arg}")
+                    send(f" {facts} {arg}")
                     send("250 End")
             elif cmd == "MLST":
                 send("500 unknown command")
@@ -341,7 +351,9 @@ class FtpStub:
                 for entry in sorted(path.iterdir()):
                     kind = "dir" if entry.is_dir() else "file"
                     size = entry.stat().st_size if entry.is_file() else 0
-                    lines.append(f"type={kind};size={size}; {entry.name}\r\n")
+                    known = {"type": kind, "size": size}
+                    facts = "".join(f"{k}={known[k]};" for k in self.mlst_facts if k in known)
+                    lines.append(f"{facts} {entry.name}\r\n")
                 data.sendall("".join(lines).encode("utf-8") + self.listing_extra)
             else:
                 lines = [f"{'d' if e.is_dir() else '-'}rw-r--r-- 1 u g {e.stat().st_size} "

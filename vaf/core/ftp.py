@@ -443,17 +443,23 @@ def _stop_check(check_stop: Optional[Callable[[], bool]]) -> Callable[[], bool]:
 
 @_names_as_utf8()
 def list_dir(session: Session, path: str = ".") -> List[str]:
-    """One line per entry: `d name` for a folder, `- name  <size>` for a file. MLSD where the
-    server has it, the server's own LIST lines otherwise."""
+    """One line per entry: `d name` for a folder, `- name  <size>` for a file, `? name  <size>`
+    when the server does not say which. MLSD where the server has it, the server's own LIST
+    lines otherwise."""
     lines: List[str] = []
     try:
         for name, facts in session.ftp.mlsd(path, facts=["type", "size"]):
             if name in (".", ".."):
                 continue
-            kind = facts.get("type", "")
+            kind = facts.get("type", "").lower()
             if kind in ("cdir", "pdir"):
                 continue
-            lines.append(f"d {name}" if kind == "dir" else f"- {name}  {facts.get('size', '?')}")
+            if kind == "dir":
+                lines.append(f"d {name}")
+            elif kind == "file":
+                lines.append(f"- {name}  {facts.get('size', '?')}")
+            else:           # RFC 3659 lets a server leave the type out: not called a file
+                lines.append(f"? {name}  {facts.get('size', '?')}")
         return lines
     except ftplib.error_perm:
         pass
@@ -601,10 +607,37 @@ def _size(ftp: ftplib.FTP, remote: str) -> Optional[int]:
         return None
 
 
+def _mlst_facts(answer: str) -> Optional[Dict[str, str]]:
+    """The facts of an MLST answer, or None when it carries no entry line. The entry is the
+    line indented by one space, `[facts] SP name` (RFC 3659 7.2): ` type=file;size=12; a.txt`,
+    or `  a.txt` when the server sends no facts at all."""
+    for line in answer.splitlines():
+        if not line.startswith(" "):
+            continue
+        head, _, _name = line[1:].partition(" ")
+        facts: Dict[str, str] = {}
+        for fact in head.split(";"):
+            key, eq, value = fact.partition("=")
+            if eq and key.strip():
+                facts[key.strip().lower()] = value.strip()
+        return facts
+    return None
+
+
+def _mdtm(ftp: ftplib.FTP, remote: str) -> Optional[str]:
+    try:
+        return _utc(ftp.sendcmd(f"MDTM {remote}")[4:])
+    except (ftplib.error_perm, ftplib.error_reply):
+        return None
+
+
 @_names_as_utf8()
 def stat(session: Session, remote: str) -> Dict[str, Any]:
-    """{"type": "file"|"folder", "size": int|None, "modified": "YYYY-MM-DD HH:MM:SS UTC"|None}
-    of one remote path: MLST where the server has it, SIZE and MDTM otherwise."""
+    """{"type": "file"|"folder"|None, "size": int|None,
+    "modified": "YYYY-MM-DD HH:MM:SS UTC"|None} of one remote path: MLST where the server has
+    it, SIZE and MDTM for what it leaves out or when it has none. RFC 3659 lets an MLST answer
+    omit any fact, so a missing one is asked for, never assumed: "file" needs the type fact or
+    an answered SIZE (a folder has no size), and with neither the type is None."""
     missing = FtpError(f"{remote} was not found, or it is a folder (list shows a folder)")
     ftp = session.ftp
     try:
@@ -615,28 +648,21 @@ def stat(session: Session, remote: str) -> Dict[str, Any]:
         if _code(e) not in _NOT_IMPLEMENTED:
             raise
         answer = ""
-    # The facts line is the one indented by a space: ` type=file;size=12;modify=...; name`.
-    for line in answer.splitlines():
-        if not line.startswith(" "):
-            continue
-        facts = {}
-        for fact in line.strip().split(" ", 1)[0].split(";"):
-            key, _, value = fact.partition("=")
-            if key:
-                facts[key.strip().lower()] = value.strip()
-        kind = facts.get("type", "").lower()
-        size = facts.get("size", "")
-        return {"type": "folder" if kind in ("dir", "cdir", "pdir") else "file",
-                "size": int(size) if size.isdigit() else None,
-                "modified": _utc(facts.get("modify", ""))}
-    size = _size(ftp, remote)
-    try:
-        modified = _utc(ftp.sendcmd(f"MDTM {remote}")[4:])
-    except (ftplib.error_perm, ftplib.error_reply):
-        modified = None
-    if size is None and modified is None:
+    facts = _mlst_facts(answer)
+    kind = (facts or {}).get("type", "").lower()
+    modified = _utc((facts or {}).get("modify", ""))
+    if kind in ("dir", "cdir", "pdir"):
+        return {"type": "folder", "size": None, "modified": modified}
+    size_fact = (facts or {}).get("size", "")
+    size = int(size_fact) if size_fact.isdigit() else _size(ftp, remote)
+    if modified is None:
+        modified = _mdtm(ftp, remote)
+    if kind == "file" or size is not None:
+        return {"type": "file", "size": size, "modified": modified}
+    if facts is None and modified is None:
         raise missing
-    return {"type": "file", "size": size, "modified": modified}
+    # The path is there (MLST named it, or MDTM answered), but nothing says which kind.
+    return {"type": None, "size": None, "modified": modified}
 
 
 class _Enough(Exception):

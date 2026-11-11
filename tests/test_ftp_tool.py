@@ -279,14 +279,14 @@ NAMED = "ftps://$FTP_USER@$FTP_HOST:$FTP_PORT"
 
 def test_the_server_can_come_from_stored_credentials(lab):
     """The live chat had host, port and login stored and wrote them as names; the tool took the
-    text literally. MUTATION: drop the expansion env from secrets_env - red: the port and
-    127.0.0.1 come back in the not-confirmed error."""
+    text literally. MUTATION: name the resolved target in the not-confirmed error - red: the
+    login comes back (the port and 127.0.0.1 are scrubbed whole)."""
     tmp, root, server = lab
     (root / "world").mkdir()
     (root / "world" / "level.dat").write_bytes(b"x" * 10)
     _store_server(server)
     refused = _tool(server, server=NAMED, action="list")
-    assert refused.startswith("Error:") and "[VAF_SECRET_FTP_HOST]" in refused
+    assert refused.startswith(f"Error: {NAMED} is a server this account has not"), refused
     out = _tool(server, server=NAMED, action="list", _call_confirmed=True)
     assert out.startswith(f"[FTP {NAMED}]") and "world" in out and out.endswith("OK"), out
     listed = _tool(server, server=NAMED, action="list", remote_path="world")
@@ -320,15 +320,16 @@ def test_a_server_written_with_names_is_asked_once_and_shows_where(lab):
 
 
 def test_every_answer_is_scrubbed(lab, monkeypatch):
-    """A stored value that breaks the server text is quoted by the parse error, and a fault
-    that is no FtpError used to reach the dispatcher raw. MUTATION: drop the scrub in run - red;
-    drop the connect except branch - red (no [FTP ...] header)."""
+    """A stored value that breaks the server text is answered by name, and a fault that is no
+    FtpError used to reach the dispatcher raw. MUTATION: drop the scrub in run - red (the
+    ValueError's host); drop the connect except branch - red (no [FTP ...] header)."""
     tmp, root, server = lab
     from vaf.core import user_secrets
     user_secrets.set_secret("FTP_HOST", "bad host value", user_scope_id=ALICE)
     out = _tool(server, server="ftps://alice@$FTP_HOST", _call_confirmed=True)
-    assert out.startswith("Error:") and "bad host value" not in out
-    assert "[VAF_SECRET_FTP_HOST]" in out
+    assert out.startswith("Error: server: ftps://alice@$FTP_HOST is not a server once "
+                          "FTP_HOST is filled in"), out
+    assert "bad" not in out and "value" not in out
     missing = _tool(server, server="ftps://alice@$FTP_NOWHERE", _call_confirmed=True)
     assert "no stored credential is named FTP_NOWHERE" in missing
     _store_server(server)
@@ -364,3 +365,87 @@ def test_read_and_stat_through_the_tool(lab):
     assert "needs remote_path" in _tool(server, action="read")
     assert "whole numbers" in _tool(server, action="read", remote_path="x", offset="end")
     assert set(FtpTool.parameters["properties"]["action"]["enum"]) >= {"read", "stat"}
+    # A path MLST named without saying which kind it is (ftp.stat's type None).
+    assert FtpTool._stat_line({"type": None, "size": None, "modified": None}) == (
+        "there, but the server does not say whether file or folder")
+
+
+def _substrings(value, n=4):
+    return {value[i:i + n] for i in range(len(value) - n + 1)}
+
+
+def test_a_server_that_does_not_parse_is_answered_by_its_names_only(lab):
+    """A parse error quotes the part it refused, split at the last '@' or at ':', and that part
+    is a fragment of the stored value, which the whole-value scrub does not recognise
+    (measured: 'Zr9#Lm' from a password holding '@'). MUTATION: answer a parse error after an
+    expansion with the parser's own text - red."""
+    from vaf.core import user_secrets
+    tmp, root, server = lab
+    values = {"MAIL_PASS": "Hx7!q@Zr9#Lm", "COLON_PASS": "Qw9zz:Tk!42xy",
+              "DOLLAR_PASS": "Pq7$Wm4@Vb8x", "SPACED": "Ab12 Cd34:Ef56"}
+    for name, value in values.items():
+        user_secrets.set_secret(name, value, user_scope_id=ALICE)
+    for written in ("$MAIL_PASS", "ftp://u@$COLON_PASS", "ftp://u@$DOLLAR_PASS",
+                    "ftps://$DOLLAR_PASS@h.example", "ftp://u@h.example:$SPACED",
+                    "ftp://$MAIL_PASS@$COLON_PASS"):
+        out = _tool(server, server=written, _call_confirmed=True)
+        assert out.startswith(f"Error: server: {written} is not a server once "), out
+        for value in values.values():
+            leaked = [s for s in _substrings(value) if s in out]
+            assert not leaked, (written, leaked, out)
+
+
+def test_an_error_masks_a_short_stored_login_and_port(lab, monkeypatch):
+    """The scrub leaves a value under 4 characters, so the not-confirmed error rendered a
+    stored login `bob` and an error naming the server rendered its port. MUTATION: return
+    the text unchanged from _hide_stored_parts - red; name the resolved target in the
+    not-confirmed error - red."""
+    from vaf.core import user_secrets
+    tmp, root, server = lab
+    user_secrets.set_secret("FTP_HOST", "127.0.0.1", user_scope_id=ALICE)
+    user_secrets.set_secret("FTP_USER", "bob", user_scope_id=ALICE)
+    user_secrets.set_secret("FTP_PORT", "990", user_scope_id=ALICE)
+    named = "ftps://$FTP_USER@$FTP_HOST:$FTP_PORT"
+    refused = _tool(server, server=named)
+    assert refused.startswith(f"Error: {named} is a server"), refused
+
+    def _refuse(target, **kw):
+        raise ftp.FtpError(f"the server does not offer encryption at {target.name}. If it is "
+                           f"plain FTP, write ftp://{target.user}@... (530 user {target.user})")
+
+    monkeypatch.setattr(ftp, "connect", _refuse)
+    out = _tool(server, server=named, _call_confirmed=True)
+    assert out.startswith(f"[FTP {named}]"), out
+    for value in ("bob", "990", "127.0.0.1"):
+        assert value not in out.replace(named, ""), (value, out)
+    assert "ftp://<stored login>@..." in out and "<stored host>:<stored port>" in out
+    # A part the model wrote itself is not a stored value and stays readable.
+    out = _tool(server, server="ftps://$FTP_USER@127.0.0.1:2121", _call_confirmed=True)
+    assert "ftps://127.0.0.1:2121" in out and "bob" not in out
+
+
+def test_where_nobody_is_asked_the_model_never_reads_the_resolved_server(lab):
+    """The first-connection question names the resolved host and port for the PERSON. A lane
+    that cannot ask (another agent's turn, a VAF_NONINTERACTIVE run, an embedder by default)
+    returned that question to the model, and $NAME takes ANY stored credential (measured: an
+    API token as the host, a PIN as the port). MUTATION: pass model_reason=None from the
+    funnel - red."""
+    from vaf.core import user_secrets
+    from vaf.core.tool_dispatch import ToolCaller
+    from vaf.tools.ftp import FtpTool
+    tmp, root, server = lab
+    user_secrets.set_secret("API_TOKEN", "tok3n-Abcdef987654", user_scope_id=ALICE)
+    user_secrets.set_secret("BANK_PIN", "48213", user_scope_id=ALICE)
+    asked = []
+    for written in ("ftp://u@$API_TOKEN", "ftp://u@h.example:$BANK_PIN"):
+        caller = ToolCaller({"ftp": FtpTool()}, interactive=False, user_scope_id=ALICE,
+                            username="alice", user_role="admin", session_id="web_chat-1")
+        out = caller.execute("ftp", {"server": written})
+        assert out.startswith("[ERROR] Tool 'ftp' requires confirmation"), out
+        assert "tok3n" not in out and "48213" not in out, out
+        caller = ToolCaller({"ftp": FtpTool()}, interactive=True, user_scope_id=ALICE,
+                            username="alice", user_role="admin", session_id="web_chat-1",
+                            decide=lambda name, reason, **k: asked.append(reason) or "cancel")
+        caller.execute("ftp", {"server": written})
+    # The person, asked, sees where the password would go.
+    assert "tok3n-Abcdef987654" in asked[0] and "h.example:48213" in asked[1], asked

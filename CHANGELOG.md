@@ -40,7 +40,7 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **FTP from Python no longer goes around the ftp tool.** Code run on this computer with
   `python_exec`, or `python -c` in a shell command, that uses ftplib or an `ftp://` address is
   refused and pointed at the `ftp` tool, which asks before a new server and checks its
-  certificate. A server name the server sends in an older encoding is now reported as such.
+  certificate. A file name the server sends in an older encoding is now reported as such.
 
 ## [0.1.0a36] - 2026-11-09
 

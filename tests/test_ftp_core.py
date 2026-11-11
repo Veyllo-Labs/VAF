@@ -418,6 +418,37 @@ def test_stat_by_mlst_and_by_size_and_mdtm(lab):
         _done(server, s)
 
 
+def test_stat_asks_for_what_an_mlst_answer_leaves_out(lab):
+    """RFC 3659 lets an MLST answer omit any fact. Without the type fact a folder was called a
+    file, and a missing size or time was not asked for. MUTATION: treat a missing type fact
+    as "file" - red (the fact-less folder); skip SIZE/MDTM for missing facts - red."""
+    import os
+    tmp, root = lab
+    (root / "site").mkdir()
+    (root / "site" / "index.html").write_bytes(b"<h1>hi</h1>")
+    os.utime(root / "site" / "index.html", (1700000000, 1700000000))
+    server, s = _stub_session(lab, mlst_facts=())
+    try:
+        assert ftp.stat(s, "site/index.html") == {
+            "type": "file", "size": 11, "modified": "2023-11-14 22:13:20 UTC"}
+        assert {"SIZE", "MDTM"} <= set(server.commands)
+        # MLST named the folder; SIZE and MDTM refuse it: there, but of no stated kind.
+        assert ftp.stat(s, "site") == {"type": None, "size": None, "modified": None}
+        with pytest.raises(ftp.FtpError, match="was not found, or it is a folder"):
+            ftp.stat(s, "site/missing.html")
+        assert ftp.list_dir(s, "site") == ["? index.html  ?"]
+    finally:
+        _done(server, s)
+    server, s = _stub_session(lab, mlst_facts=("type",))
+    try:
+        assert ftp.stat(s, "site/index.html")["size"] == 11
+        assert ftp.stat(s, "site/index.html")["modified"] == "2023-11-14 22:13:20 UTC"
+        assert ftp.stat(s, "site")["type"] == "folder"
+        assert ftp.list_dir(s, "site") == ["- index.html  ?"]
+    finally:
+        _done(server, s)
+
+
 # ── names that are not ASCII ──────────────────────────────────────────────────
 
 def test_non_ascii_names_round_trip(session):

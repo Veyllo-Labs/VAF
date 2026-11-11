@@ -134,16 +134,22 @@ its NAME (`login_credential`).
 
 - **The server from stored credentials.** When the host, login or port are stored as
   credentials too, the agent writes them by name: `ftp://$FTP_USER@$FTP_HOST:$FTP_PORT`
-  (also `${FTP_HOST}` or `$VAF_SECRET_FTP_HOST`). VAF fills in the values, and they are taken
-  out of every answer like the password. The first connection asks with the real host and port
-  (the agent can store a value under any name itself, so the person sees where the password
-  goes); the login and the password stay names. A name nobody stored is refused with that
-  cause, and `deploy_to` takes the server only written out.
+  (also `${FTP_HOST}` or `$VAF_SECRET_FTP_HOST`). VAF fills in the values and keeps them out
+  of what the agent reads: the answers show the server as written, a server that does not
+  make sense once filled in is answered with the names alone (never a piece of a value), and
+  an error that would name the host, login or port masks every part that came from a stored
+  value, also one shorter than the 4 characters the general scrub needs. The first connection
+  asks with the real host and port (the agent can store a value under any name itself, so the
+  person sees where the password goes); the login and the password stay names. Where nobody
+  can be asked, the agent reads only that the call needs the person, not that question. A
+  name nobody stored is refused with that cause, and `deploy_to` takes the server only
+  written out.
 - **Read and stat without downloading.** `read` returns part of a file, at most 64 KB: a
   negative offset counts from the end (`offset=-20000`, the last 20 KB of a big log), and the
   server starts the transfer there (SIZE, then REST). `stat` shows a file's size and
-  modification time (MLST, or SIZE and MDTM). A server without SIZE or REST gets a message
-  saying which one is missing.
+  modification time (MLST, and SIZE and MDTM for what the server's MLST leaves out or when it
+  has none; a path whose kind the server does not state is not called a file). A server
+  without SIZE or REST gets a message saying which one is missing.
 
 - **Encrypted unless written otherwise.** `ftps://user@host` (explicit TLS, the data channel
   encrypted too) is the default, also when the scheme is left out. `ftp://user@host` is
@@ -164,7 +170,8 @@ its NAME (`login_credential`).
   names it. `host_bash` refuses the FTP clients (`ftp`, `lftp`, the `ncftp` tools) and
   `curl`/`wget` with an `ftp://` or `ftps://` address and points at this tool: those carry the password on the command line, ask nobody
   about a new server and notice no changed certificate. Python's ftplib is refused the same
-  way, in `python_exec` and as `python -c` or `python -m ftplib` in `host_bash`.
+  way, in `python_exec` and as `python -c` or `python -m ftplib` in `host_bash` (also through
+  exec or eval of a written-out string, under `pypy` or a runner such as `uv run`).
 - **The coder deploys to a web space too.** `coding_agent(deploy_to="ftps://user@host/folder")`
   gives the coder the `ftp` tool for that one web space and folder (no `ssh` in such a run),
   under the same rules as the SSH deploy above: only when the person asked, only to a server
@@ -179,7 +186,9 @@ its NAME (`login_credential`).
   offered; every hoster measured offers explicit TLS on port 21. An upload adds and
   overwrites; there is no mirroring that deletes on the server. File names travel as UTF-8
   (`Ordner ü/Grüße ä.txt` works); a server that keeps names in an older encoding is reported
-  as such, not converted. There is no automatic fall back from FTPS to plain FTP: an attacker
+  as such, not converted. What the server itself sends as data (a listing's owner column, a
+  file's content) is scrubbed like every tool output: a stored value whole, from 4
+  characters. There is no automatic fallback from FTPS to plain FTP: an attacker
   on the way could force it by hiding the server's TLS offer.
 
 ### Developer

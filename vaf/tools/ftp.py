@@ -18,9 +18,16 @@ transfers); this module is the tool's contract around it, the same one as the ss
   (vaf/core/user_secrets.py), and its value is taken out of everything the tool returns.
 - A stored host, login or port is written `$NAME` inside `server`
   (`ftp://$FTP_USER@$FTP_HOST:$FTP_PORT`) and filled in here (`user_secrets.expand`); the values
-  are taken out of every answer too. The first-connection question names the resolved host and
-  port: the agent can store a value under any name itself (store_credential), so consent given
-  on names alone could send the password to a host it planted.
+  never reach the model: the server is shown as written, a server that does not parse once
+  filled in is answered with the names alone (a parse error would quote a PART of a value,
+  which no whole-value scrub recognises), and every error masks the host, login and port that
+  came from a stored value, whatever their length. The first-connection question names the
+  resolved host and port to the PERSON: the agent can store a value under any name itself
+  (store_credential), so consent given on names alone could send the password to a host it
+  planted. Where nobody can be asked, the dispatcher gives the model a generic text instead of
+  that question (tool_dispatch.OWN_QUESTION_FOR_MODEL).
+  NAMED BOUNDARY: what the server itself sends as data (a LIST line's owner column, a file's
+  content) is scrubbed like every tool output, a stored value whole and from 4 characters.
 - `read` takes part of a file (the end of a big log) without downloading it, `stat` its size
   and modification time.
 - `upload` takes a folder as well (a built site): its files land INSIDE remote_path, without
@@ -183,17 +190,28 @@ class FtpTool(BaseTool):
             return (f"Error: server: {e}. A stored host, login or port is written $NAME, NAME "
                     "being a credential the user stored (store_credential, or Settings, "
                     "Connections, Credentials for commands).")
-        # Registered before parsing: a parse error quotes the filled-in text.
         secrets_env.update(used)
         try:
             target = ftp.parse_server(expanded)
         except ftp.FtpError as e:
-            return f"Error: {e}."
+            if not used:
+                return f"Error: {e}."
+            # The parse error quotes the part it refused, and that part is a FRAGMENT of a
+            # stored value (split at '@' or ':'), which no whole-value scrub recognises.
+            names = ", ".join(sorted(n[len(user_secrets.ENV_PREFIX):] for n in used))
+            return (f"Error: server: {written} is not a server once {names} "
+                    f"{'is' if len(used) == 1 else 'are'} filled in. Write "
+                    "ftps://user@host[:port]; a stored name holds one part (a host, a login "
+                    "or a port) or the whole server. Ask the user what is stored under it.")
         # The server as written when it came from stored names: its values stay out of the
         # answer, as the password does.
         shown = written if used else str(target)
+
+        def _hide(text: str) -> str:
+            return self._hide_stored_parts(text, target, used)
+
         if not ftp.is_known(target, scope) and not kwargs.get("_call_confirmed"):
-            return (f"Error: {target} is a server this account has not connected to yet. The "
+            return (f"Error: {shown} is a server this account has not connected to yet. The "
                     "first connection must be confirmed by the user in the app; ask them.")
 
         password: Optional[str] = None
@@ -243,9 +261,9 @@ class FtpTool(BaseTool):
             session = ftp.connect(target, user_scope_id=scope, password=password,
                                   confirmed=bool(kwargs.get("_call_confirmed")))
         except ftp.FtpError as e:
-            return f"[FTP {shown}] {e}."
+            return f"[FTP {shown}] {_hide(str(e))}."
         except Exception as e:      # noqa: BLE001 - a fault outside ftplib's own errors
-            return f"[FTP {shown}] Error: {e}"
+            return f"[FTP {shown}] Error: {_hide(str(e))}"
         try:
             if session.first_contact:
                 lines.append(self._first_contact_line(session))
@@ -274,15 +292,34 @@ class FtpTool(BaseTool):
                 ftp.delete(session, remote)
                 lines.append(f"Deleted {remote}.")
         except ftp.FtpError as e:
-            lines.append(f"Error: {e}.")
+            lines.append(f"Error: {_hide(str(e))}.")
             return "\n".join(lines)
         except Exception as e:      # the server's own refusal (550 ...), a dropped connection
-            lines.append(f"Error: {e}")
+            lines.append(f"Error: {_hide(str(e))}")
             return "\n".join(lines)
         finally:
             ftp.close(session)
         lines.append("OK")
         return "\n".join(lines)
+
+    @staticmethod
+    def _hide_stored_parts(text: str, target, used: Dict[str, str]) -> str:
+        """`text` with the target's host, login and port masked wherever they came from a
+        stored value, as whole words and whatever their length. An error renders them (the
+        server's name, `write ftp://<login>@...`, a server reply quoting the home folder), and
+        the scrub leaves a value under 4 characters (a login `bob`, a port `990`) and any part
+        of a value that holds the whole server."""
+        import re
+        if not used:
+            return text
+        parts = [(target.host, "<stored host>"), (target.user, "<stored login>"),
+                 (str(target.port), "<stored port>")]
+        out = text
+        for part, mask in sorted(parts, key=lambda pm: -len(pm[0])):
+            if part and any(part in value for value in used.values()):
+                out = re.sub(r"(?<![A-Za-z0-9])" + re.escape(part) + r"(?![A-Za-z0-9])",
+                             mask, out)
+        return out
 
     @staticmethod
     def _read_text(result: Dict[str, Any]) -> str:
@@ -300,6 +337,8 @@ class FtpTool(BaseTool):
         when = f", modified {info['modified']}" if info.get("modified") else ""
         if info.get("type") == "folder":
             return f"folder{when}"
+        if info.get("type") is None:
+            return f"there, but the server does not say whether file or folder{when}"
         size = "size unknown" if info.get("size") is None else f"{info['size']} bytes"
         return f"file, {size}{when}"
 

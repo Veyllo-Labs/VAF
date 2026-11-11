@@ -269,7 +269,7 @@ def test_python_ftp_handed_to_exec_or_named_by_keyword_is_seen(code):
     """A constant string to exec/eval/compile is code, and import_module/__import__ take the
     name as `name=` too (measured: all of these returned no category).
     MUTATION: drop the exec/eval/compile branch - red (the first five);
-    MUTATION: read only node.args in _call_argument - red (the keyword forms)."""
+    MUTATION: read only node.args in _call_argument - red (compile's `source=`)."""
     from vaf.core.command_policy import python_code_categories
     assert python_code_categories(code) == ["ftp_transfer"], code
 
@@ -290,6 +290,9 @@ def test_python_ftp_nested_past_the_parse_depth_is_searched_as_text():
     'uv run --with requests python3 -c "import ftplib"',
     'poetry run python -m ftplib h',
     'conda run -n py python -c "import ftplib"',
+    'conda run -n py --no-capture-output python -c "import ftplib"',
+    "uv run -- python3 -c 'import ftplib'",
+    "uv tool run python -c 'import ftplib'",
     "pypy3 -c 'import ftplib'",
     "python3.13t -c 'import ftplib'",
 ])
@@ -308,6 +311,45 @@ def test_python_ftp_under_another_interpreter_name_or_a_runner_is_refused(cmd):
 ])
 def test_runners_without_python_ftp_are_not_refused(cmd):
     assert "ftp_transfer" not in classify_command(cmd, profile="host").categories, cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "uv run printf '%s\\n' python -c 'import ftplib'",
+    "uv run echo python -c 'import ftplib'",
+    "conda run -n py printf python -c 'import ftplib'",
+    "poetry run -- printf python -m ftplib",
+])
+def test_words_after_a_runners_command_are_that_commands_data(cmd):
+    """A runner starts ITS command; the words after it are that command's (measured: every
+    one of these was refused as ftp_transfer, `printf` started nothing).
+    MUTATION: keep scanning past the runner's command - red (the first three);
+    MUTATION: drop the `--` branch, so the word after it reads as an option's value - red
+    (the last)."""
+    assert "ftp_transfer" not in classify_command(cmd, profile="host").categories, cmd
+
+
+@pytest.mark.parametrize("code", [
+    "from importlib import import_module as im\nim('ftplib')",
+    "getattr(__builtins__, '__import__')('ftplib')",
+    "import subprocess\nsubprocess.run(['python3', '-m', 'ftplib', 'example.org'])",
+    "__import__('ftplib.FTP'.split('.')[0])",
+])
+def test_a_string_that_names_ftplib_counts_whatever_imports_it(code):
+    """An alias, a getattr of __import__ and `-m ftplib` in an argument list all hand the
+    module's name over as a string (measured: each returned no category).
+    MUTATION: drop the `_is_ftplib(node.value)` half of the string rule - red."""
+    from vaf.core.command_policy import python_code_categories
+    assert python_code_categories(code) == ["ftp_transfer"], code
+
+
+@pytest.mark.parametrize("code", [
+    "print('the ftplib module is not used here')",
+    "# import ftplib\nprint(1)",
+    "name = 'ftplibrary'",
+])
+def test_a_string_that_only_mentions_ftplib_does_not_count(code):
+    from vaf.core.command_policy import python_code_categories
+    assert python_code_categories(code) == [], code
 
 def test_the_sandbox_environment_lane_refuses_python_ftp_too():
     """bash in a sandbox environment refuses ftp_transfer by the host profile's categories, so

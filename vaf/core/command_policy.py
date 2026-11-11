@@ -36,12 +36,14 @@ wrapped forms went through). The nesting has a depth limit, and past it the
 command is refused, because a reviewer cannot follow it either.
 
 Python that moves files over FTP is the same `ftp_transfer` as an FTP client
-(`python_code_categories`): ftplib, `__import__`/`importlib` of it, an
-`ftp://`/`ftps://` address in the code, or such code as a constant string handed
-to exec, eval or compile. One check for both Python lanes: python_exec runs it on
-its code, and this classifier on `python -c CODE` and `python -m ftplib` in a
-shell command (python, pypy, a versioned or free-threaded name, Windows' py, and
-the same behind a project runner such as `uv run`). Measured before it existed: a
+(`python_code_categories`): an import of ftplib, a string naming it (what
+`__import__`, `importlib` or `-m` takes), an `ftp://`/`ftps://` address in the
+code, or such code as a constant string handed to exec, eval or compile. One check
+for both Python lanes: python_exec runs it on its code, and this classifier on
+`python -c CODE` and `python -m ftplib` in a shell command (python, pypy, a
+versioned or free-threaded name, Windows' py, and the same as the command a
+project runner such as `uv run` starts; the words after a runner's command are
+that command's data). Measured before it existed: a
 model denied curl and lftp in host_bash wrote the same transfer with ftplib in
 python_exec, reading the stored password from its environment.
 NAMED BOUNDARY: the check reads the code it is given. Code built at runtime
@@ -117,6 +119,8 @@ _PYTHON_EXE_RE = re.compile(r"^(?:(?:python|pypy)(?:\d+(?:\.\d+)?)?t?|py)$")
 # Project runners that start an interpreter given as a later word (`uv run python -c ...`).
 _PYTHON_RUNNERS = frozenset({"uv", "uvx", "poetry", "pipenv", "pdm", "hatch", "rye", "conda",
                              "pixi"})
+# The words between a runner and its command that select what it does (`uv tool run`).
+_RUNNER_VERBS = frozenset({"run", "exec", "tool"})
 # Builtins that run Python code they are given as a string: the string is read like the code.
 _CODE_STRING_CALLS = frozenset({"exec", "eval", "compile"})
 # How deep `exec("exec('...')")` is parsed; deeper code is searched as text.
@@ -336,11 +340,9 @@ def _executable_at(tokens: List[str]) -> tuple:
     i = 0
     while i < len(tokens):
         tok = tokens[i]
-        base = tok.rsplit("/", 1)[-1].lower()
         # `curl.exe` and `ftp.exe` on a Windows host are curl and ftp: judged by the name
         # without the suffix, or every rule below was one `.exe` away from passing.
-        if base.endswith(".exe"):
-            base = base[:-4]
+        base = _exe_base(tok)
         if not base:
             i += 1
             continue
@@ -434,11 +436,12 @@ def _call_argument(node, keyword: str):
 def python_code_categories(code: str, *, _depth: int = 0) -> List[str]:
     """["ftp_transfer"] when Python `code` moves files over FTP, else []. Read from the syntax
     tree, so a comment naming ftplib does not count: an import of ftplib (also `from ftplib
-    import ...`), `__import__("ftplib")` or `importlib.import_module("ftplib")` (the name also
-    as `name=`), or a string that starts with ftp:// or ftps:// (urllib's FTP, an f-string's
-    literal part). A constant string handed to exec, eval or compile is read as code too, a
-    few levels deep. Code that does not parse, or nests deeper, is searched as text. Never
-    raises."""
+    import ...`), a string that IS the module's name, `ftplib` or `ftplib.<name>` (whatever
+    imports it: `__import__`, `importlib.import_module` also under an alias, a getattr of
+    `__import__`, `-m ftplib` in a subprocess argument list), or a string that starts with
+    ftp:// or ftps:// (urllib's FTP, an f-string's literal part). A constant string handed to
+    exec, eval or compile is read as code too, a few levels deep. Code that does not parse,
+    or nests deeper, is searched as text. Never raises."""
     import ast
     text = code.decode("utf-8", "replace") if isinstance(code, bytes) else str(code or "")
     if _depth > _MAX_CODE_DEPTH:
@@ -456,16 +459,15 @@ def python_code_categories(code: str, *, _depth: int = 0) -> List[str]:
             fn = node.func
             called = fn.id if isinstance(fn, ast.Name) else (
                 fn.attr if isinstance(fn, ast.Attribute) else "")
-            if called in ("__import__", "import_module"):
-                hit = _is_ftplib(_call_argument(node, "name"))
-            elif called in _CODE_STRING_CALLS:
+            if called in _CODE_STRING_CALLS:
                 inner = _call_argument(node, "source")
                 hit = isinstance(inner, (str, bytes)) and bool(
                     python_code_categories(inner, _depth=_depth + 1))
             else:
                 hit = False
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            hit = node.value.lstrip().lower().startswith(("ftp://", "ftps://"))
+            hit = (_is_ftplib(node.value)
+                   or node.value.lstrip().lower().startswith(("ftp://", "ftps://")))
         else:
             hit = False
         if hit:
@@ -475,20 +477,44 @@ def python_code_categories(code: str, *, _depth: int = 0) -> List[str]:
 
 def _python_invocations(exe: str, args: List[str]) -> List[List[str]]:
     """The interpreter's own arguments for every way this command may start Python: the
-    interpreter itself, or each later word of a project runner (`uv run python ...`) that
-    names one. Every candidate counts, because a runner's option value can look like an
-    interpreter too (`conda run -n py python -c ...`)."""
+    interpreter itself, or the command a project runner starts (`uv run python ...`) when
+    that command is one.
+
+    A runner's words are read up to its command: its verbs (`run`, `exec`, `tool`), its
+    options, and the word after an option, which may be that option's value. An
+    interpreter-shaped word there is a candidate, because the value can look like an
+    interpreter too (`conda run -n py python -c ...`); after an option that takes no value
+    the same word is the command. The first other word is the command, and what follows it
+    is that command's data (`uv run printf '%s' python -c ...` prints, it starts nothing)."""
     if _PYTHON_EXE_RE.match(exe):
         return [args]
     if exe not in _PYTHON_RUNNERS:
         return []
-    found = []
+    found: List[List[str]] = []
+    maybe_value = False                 # the word before was an option without `=value`
     for pos, tok in enumerate(args):
-        base = tok.rsplit("/", 1)[-1].lower()
-        base = base[:-4] if base.endswith(".exe") else base
-        if _PYTHON_EXE_RE.match(base):
+        if tok == "--":                 # the next word is the command, whatever it looks like
+            rest = args[pos + 1:]
+            if rest and _PYTHON_EXE_RE.match(_exe_base(rest[0])):
+                found.append(rest[1:])
+            return found
+        if tok.startswith("-"):
+            maybe_value = "=" not in tok
+            continue
+        if _PYTHON_EXE_RE.match(_exe_base(tok)):
             found.append(args[pos + 1:])
+            if not maybe_value:
+                return found            # the command itself; its words are Python's
+        elif not maybe_value and tok not in _RUNNER_VERBS:
+            return found                # another program: its words are its data
+        maybe_value = False
     return found
+
+
+def _exe_base(word: str) -> str:
+    """`/usr/bin/python3.exe` -> `python3`: the program name a path or a Windows name gives."""
+    base = word.rsplit("/", 1)[-1].lower()
+    return base[:-4] if base.endswith(".exe") else base
 
 
 def _python_command_categories(args: List[str]) -> List[str]:

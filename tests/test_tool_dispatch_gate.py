@@ -261,8 +261,11 @@ def test_anything_that_is_not_an_exact_grant_cancels(trust, answer):
 
 
 def test_a_missing_decider_cancels_rather_than_allowing(trust):
-    """An interactive caller that forgot to supply one must not accidentally grant."""
-    assert _gate(decide=None).startswith("[CANCELLED]")
+    """An interactive caller that forgot to supply one must not accidentally grant, and the
+    answer quotes no reason (docs/agents/TOOL_ROUTER_ARCHITECTURE.md, step 3).
+    MUTATION: quote the reason in the cancel string - red."""
+    result = _gate(decide=None)
+    assert result.startswith("[CANCELLED]") and REASON not in result
 
 
 # ── the shared path stays free of the product's UI ───────────────────────────

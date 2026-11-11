@@ -21,7 +21,8 @@ transfers); this module is the tool's contract around it, the same one as the ss
   never reach the model: the server is shown as written, a server that does not parse once
   filled in is answered with the names alone (a parse error would quote a PART of a value,
   which no whole-value scrub recognises), and every error masks the host, login and port that
-  came from a stored value, whatever their length. The first-connection question names the
+  came from a stored value, whatever their length and also inside a longer word, in the same
+  pass as the password, so neither mask can split the other. The first-connection question names the
   resolved host and port to the PERSON: the agent can store a value under any name itself
   (store_credential), so consent given on names alone could send the password to a host it
   planted. Where nobody can be asked, the dispatcher gives the model a generic text instead of
@@ -208,7 +209,8 @@ class FtpTool(BaseTool):
         shown = written if used else str(target)
 
         def _hide(text: str) -> str:
-            return self._hide_stored_parts(text, target, used)
+            # secrets_env is read at call time, so the password stored below counts too.
+            return self._hide_stored_parts(text, target, used, secrets_env)
 
         if not ftp.is_known(target, scope) and not kwargs.get("_call_confirmed"):
             return (f"Error: {shown} is a server this account has not connected to yet. The "
@@ -303,23 +305,54 @@ class FtpTool(BaseTool):
         return "\n".join(lines)
 
     @staticmethod
-    def _hide_stored_parts(text: str, target, used: Dict[str, str]) -> str:
-        """`text` with the target's host, login and port masked wherever they came from a
-        stored value, as whole words and whatever their length. An error renders them (the
-        server's name, `write ftp://<login>@...`, a server reply quoting the home folder), and
-        the scrub leaves a value under 4 characters (a login `bob`, a port `990`) and any part
-        of a value that holds the whole server."""
+    def _hide_stored_parts(text: str, target, used: Dict[str, str],
+                           secrets: Dict[str, str]) -> str:
+        """`text` with every stored value this call used masked: the target's host, login
+        and port wherever they came from a stored value (whatever their length, also inside
+        a longer word such as a folder `/srv/ftp/bob123`), and each complete value in
+        `secrets` (the password, a stored whole server) as `user_secrets.scrub` would.
+
+        An error renders these parts (the server's name, `write ftp://<login>@...`, a server
+        reply quoting the home folder), and the scrub leaves a value under 4 characters (a
+        login `bob`, a port `990`) and any part of a value that holds the whole server.
+
+        One pass over the ORIGINAL text, not one replacement after another: a part masked
+        first inside a longer value (a login `bob` inside the password `bob-secret-123`)
+        leaves the rest of that value unrecognisable to the next step, and a value masked
+        first leaves the rest of an overlapping part. Every occurrence of every value is
+        found, overlapping ones are merged, and each run is masked once. A short part masks
+        inside other words too (a stored port 21 in a reply code 421); garbled is the safe
+        side of that trade."""
         import re
-        if not used:
-            return text
+
+        from vaf.core import user_secrets
+        found = []                    # (start, end, label); parts first, so a tie keeps theirs
         parts = [(target.host, "<stored host>"), (target.user, "<stored login>"),
                  (str(target.port), "<stored port>")]
-        out = text
-        for part, mask in sorted(parts, key=lambda pm: -len(pm[0])):
+        for part, label in parts:
             if part and any(part in value for value in used.values()):
-                out = re.sub(r"(?<![A-Za-z0-9])" + re.escape(part) + r"(?![A-Za-z0-9])",
-                             mask, out)
-        return out
+                # Case-blind: a server may echo a host name in another case.
+                for m in re.finditer("(?=" + re.escape(part) + ")", text, re.IGNORECASE):
+                    found.append((m.start(), m.start() + len(part), label))
+        for var, value in (secrets or {}).items():
+            if value and len(value) >= user_secrets.MIN_SCRUB_LENGTH:
+                for m in re.finditer("(?=" + re.escape(value) + ")", text):
+                    found.append((m.start(), m.start() + len(value), f"[{var}]"))
+        if not found:
+            return text
+        found.sort(key=lambda s: (s[0], -(s[1] - s[0])))
+        out, run = [], None
+        for start, end, label in found:
+            if run is not None and start < run[1]:
+                run[1] = max(run[1], end)       # overlaps the run: one mask covers both
+                continue
+            if run is not None:
+                out.append(run[2])
+            out.append(text[(run[1] if run is not None else 0):start])
+            run = [start, end, label]
+        out.append(run[2])
+        out.append(text[run[1]:])
+        return "".join(out)
 
     @staticmethod
     def _read_text(result: Dict[str, Any]) -> str:

@@ -424,6 +424,55 @@ def test_an_error_masks_a_short_stored_login_and_port(lab, monkeypatch):
     assert "ftps://127.0.0.1:2121" in out and "bob" not in out
 
 
+def test_a_password_that_starts_with_the_login_is_masked_whole(lab, monkeypatch):
+    """The login was masked first, inside the password too, so `bob-secret-123` became
+    `<stored login>-secret-123` and the scrub after it no longer matched the password. And
+    the login inside a longer word (`/srv/ftp/bob123`) was not masked at all. Pins the connect
+    stage's catch-all branch as well.
+    MUTATION: leave the complete values out of the one pass (parts first, scrub after) - red;
+    MUTATION: mask a part only as a whole word again - red;
+    MUTATION: return the raw text from the connect stage's catch-all branch - red."""
+    from vaf.core import user_secrets
+    tmp, root, server = lab
+    user_secrets.set_secret("FTP_USER", "bob", user_scope_id=ALICE)
+    user_secrets.set_secret("BOB_PASS", "bob-secret-123", user_scope_id=ALICE)
+    named = f"ftps://$FTP_USER@127.0.0.1:{server.port}"
+
+    def _fail(target, *, password=None, **kw):
+        raise RuntimeError(f"login {password} refused for /srv/ftp/{target.user}123")
+
+    monkeypatch.setattr(ftp, "connect", _fail)
+    out = _tool(server, server=named, login_credential="BOB_PASS", _call_confirmed=True)
+    rest = out.replace(named, "")
+    for piece in ("bob", "secret", "-123"):
+        assert piece not in rest, (piece, out)
+    assert "[VAF_SECRET_BOB_PASS]" in out and "/srv/ftp/<stored login>123" in out, out
+
+
+@pytest.mark.parametrize("operation, raised", [
+    ("list_dir", lambda user: ftp.FtpError(f"550 /srv/ftp/{user}2: no access")),
+    ("list_dir", lambda user: OSError(f"550 /srv/ftp/{user}2: no access")),
+])
+def test_an_operation_error_masks_a_stored_login(lab, monkeypatch, operation, raised):
+    """The two error branches after a connection (an FtpError, and anything else such as the
+    server's own refusal) mask what came from a stored value, like the connect stage.
+    MUTATION: return the raw text from either operation-stage branch - red."""
+    from vaf.core import user_secrets
+    tmp, root, server = lab
+    user_secrets.set_secret("FTP_USER", "alice", user_scope_id=ALICE)
+    named = f"ftps://$FTP_USER@127.0.0.1:{server.port}"
+    error = raised("alice")
+
+    def _refuse(*a, **k):
+        raise error
+
+    monkeypatch.setattr(ftp, operation, _refuse)
+    out = _tool(server, server=named, _call_confirmed=True)
+    assert out.startswith(f"[FTP {named}]") and "Error:" in out, out
+    assert "alice" not in out.replace(named, ""), out
+    assert "/srv/ftp/<stored login>2" in out, out
+
+
 def test_where_nobody_is_asked_the_model_never_reads_the_resolved_server(lab):
     """The first-connection question names the resolved host and port for the PERSON. A lane
     that cannot ask (another agent's turn, a VAF_NONINTERACTIVE run, an embedder by default)

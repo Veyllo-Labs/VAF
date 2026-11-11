@@ -230,8 +230,9 @@ The `python_exec` tool runs code directly on your host system. It is:
 - Shows clear warnings when used
 - Never run from a messaging channel in the chat, also with `channel_tools_unrestricted` on
   (it needs a person, like `host_bash`, see "Shell execution surfaces" below)
-- Refuses code that moves files over FTP (an import of ftplib, `__import__` or
-  `importlib.import_module` of it, also with `name=`, an `ftp://` or `ftps://` address, or such
+- Refuses code that moves files over FTP (an import of ftplib, a string that names it as
+  `__import__`, `importlib.import_module` (also under an alias) or `-m` takes it, an `ftp://`
+  or `ftps://` address, or such
   code as a written-out string handed to exec, eval or compile) and points at the `ftp`
   tool, before its trust check, so a stored "always" does not run it either. The same check
   (`python_code_categories` in `vaf/core/command_policy.py`) judges `python -c CODE` and

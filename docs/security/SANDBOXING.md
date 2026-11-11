@@ -236,12 +236,17 @@ The `python_exec` tool runs code directly on your host system. It is:
   code as a written-out string handed to exec, eval or compile) and points at the `ftp`
   tool, before its trust check, so a stored "always" does not run it either. The same check
   (`python_code_categories` in `vaf/core/command_policy.py`) judges `python -c CODE` and
-  `python -m ftplib` in `host_bash`, also under `pypy`, a free-threaded `python3.13t`, and a
-  runner such as `uv run`, `poetry run` or `conda run`. A runner's option table is not kept,
-  so the word after any runner option counts as that option's possible value: after an
-  option without one (`conda run -n py --no-capture-output echo python -c 'import ftplib'`)
-  a harmless command is refused too. That is the safe side, and `--` before the command
-  lifts it. Named boundary: the check reads the
+  `python -m ftplib` in `host_bash`, also under `pypy`, a free-threaded `python3.13t`, and
+  behind a wrapper, a shell or a project runner. The command a runner starts (`uv run`,
+  `poetry run`, `conda run` ...) is classified like one `bash -c` carries, for every
+  category, so `uv run env python -c ...`, `uv run bash -c "python -c ..."` and
+  `uv run rm -rf /` are refused like the same commands without the runner. A runner's option
+  table is not kept, so the word after any runner option is read both as that option's value
+  and as the command. A harmless command after such an option is therefore refused only when
+  what follows it is refused in its own right (`conda run -n py --no-capture-output echo
+  python -c 'import ftplib'`; `uv run -q echo hi` passes), and a value that is itself a
+  refused program's name is refused as one (`uv run --with ssh pytest`). That is the safe
+  side, and `--` before the command lifts both. Named boundary: the check reads the
   code it is given; code built at runtime (`"ftp" + "lib"`, a string assembled before exec), a
   script file, a heredoc fed to the interpreter, or an interpreter under another name or in a
   container is not seen, as a shell script's content is not read. The control for host code
@@ -780,7 +785,8 @@ delete of a system or home root, and a command whose executable is built by a su
 (there the approved text is not the text that would run). It tokenizes quote-aware and
 descends into substitutions rather than matching substrings, so `rm -rf /tmp/scratch` is
 ordinary work while `rm  -rf  /` is not. It also classifies the command a command carries:
-`bash -c '...'`, `su -c '...'`, `eval ...` with the lane's own profile, and `ssh host '...'`
+`bash -c '...'`, `su -c '...'`, `eval ...` and the command a project runner starts
+(`uv run ...`, `poetry run ...`) with the lane's own profile, and `ssh host '...'`
 with the `remote` profile (the catastrophic core, while an installer piped into a shell is
 named rather than refused, because that is how a server is commonly set up). A wrapper's
 option values are stepped over (`sudo -u root rm -rf /` is judged as `rm -rf /`), and a
@@ -809,6 +815,12 @@ after the host). The controls:
    nobody is asked (a workflow step) it is refused (`accepts_call_confirmation`), so an
    unattended run reaches only servers a person confirmed. A server that later shows a
    different key is refused (`StrictHostKeyChecking=accept-new` on the account's own list).
+   The call goes only to the server the person was asked about: the funnel hands the tool
+   the question it put (`_call_question`), the tool builds it again from the server it is
+   about to use, and a server forgotten in between (another tab, `vaf ssh forget`, also
+   after a standing grant) is refused (`BaseTool.changed_since_asked`). Named boundary: a
+   forget in the milliseconds between that check and OpenSSH reading the account's list is
+   taken as a new key, because OpenSSH's `accept-new` has no "confirmed" to refuse it with.
 3. **Never over a messaging channel** (dangerous and restricted with `"channel"`, see 3 in
    the `host_bash` section), and **a regular account only when its allowlist names it**
    (`account_opt_in`).
@@ -826,8 +838,13 @@ Lists, uploads (a file or a folder), downloads, deletes, reads part of a file an
 over FTPS, or plain FTP when written `ftp://` (`vaf/core/ftp.py`, Python's ftplib); a stored
 host, login or port is written `$NAME` in `server` and filled in by the tool. The controls are the `ssh` tool's:
 confirmed in the chat, a trusted folder does not silence it, the first connection to a server
-is always asked and refused where nobody is asked, never over a messaging channel, a regular
-account only when its allowlist names it, the local side under the account's write jail. Its
+is always asked and refused where nobody is asked, the call goes only to the server the person
+was asked about, never over a messaging channel, a regular
+account only when its allowlist names it, the local side under the account's write jail. For
+`ftp` the server is filled in again at the call, so a stored host changed while the question
+was open (a second chat's `store_credential`) or after a standing grant is refused instead of
+reached, and a first contact is remembered only after a first-contact question, so a server
+forgotten in the last moment is refused by the connection itself. Its
 own: the certificate is checked (an authority's, or the fingerprint remembered at the first
 connection), the address a server names for passive transfers is not followed, cloud metadata
 addresses are refused, and `host_bash` refuses the FTP clients (`ftp`, `lftp`, `ncftp`,

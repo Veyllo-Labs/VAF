@@ -517,3 +517,98 @@ def test_where_nobody_is_asked_the_model_never_reads_the_resolved_server(lab):
         caller.execute("ftp", {"server": written})
     # The person, asked, sees where the password would go.
     assert "tok3n-Abcdef987654" in asked[0] and "h.example:48213" in asked[1], asked
+
+
+# -- the call goes to the server the person was asked about ----------------------------
+
+def _caller(decide=None, hooks=None):
+    from vaf.core.tool_dispatch import ToolCaller
+    from vaf.tools.ftp import FtpTool
+    return ToolCaller({"ftp": FtpTool()}, interactive=True, user_scope_id=ALICE,
+                      username="alice", user_role="admin", session_id="web_chat-1",
+                      decide=decide, hooks=hooks)
+
+
+def _record_connect(monkeypatch):
+    calls = []
+
+    def _connect(target, **kw):
+        calls.append((target.name, kw.get("confirmed")))
+        raise ftp.FtpError("recorded, not connected")
+
+    monkeypatch.setattr(ftp, "connect", _connect)
+    return calls
+
+
+def _store(name, value):
+    from vaf.core import user_secrets
+    user_secrets.set_secret(name, value, user_scope_id=ALICE)
+
+
+def test_a_host_changed_while_the_question_was_open_is_refused(lab, monkeypatch):
+    """The person read "first connection to h1"; a second chat stored another FTP_HOST before
+    the answer, and the call went to h2 as a confirmed first contact (measured). MUTATION:
+    drop the changed_since_asked check in _run - red (connect is called with h2)."""
+    tmp, root, server = lab
+    _store_server(server, host="h1.example")
+    calls = _record_connect(monkeypatch)
+    asked = []
+
+    def decide(name, reason, choices=None):
+        asked.append(reason)
+        _store("FTP_HOST", "h2.example")         # a second chat, while the question is open
+        return "allow_once"
+
+    out = _caller(decide).execute("ftp", {"server": NAMED, "login_credential": "FTP_PASS"})
+    assert asked and "h1.example" in asked[0]
+    assert "changed after the user was asked" in out, out
+    assert calls == [], "nothing may connect"
+    assert "h1.example" not in out and "h2.example" not in out, out
+    assert not ftp.is_known(ftp.parse_server(f"ftps://alice@h2.example:{server.port}"), ALICE)
+
+
+def test_a_host_changed_after_a_standing_grant_is_refused(lab, monkeypatch):
+    """A standing "always" and a confirmed h1; the stored host turns into an unknown h3
+    after the gate. Nobody was asked, and the call reached h3 as a confirmed first contact
+    (measured). MUTATION: drop the changed_since_asked check in _run - red."""
+    from vaf.core.tool_dispatch import ToolCallHooks
+    tmp, root, server = lab
+    monkeypatch.setattr("vaf.core.trust.get_tool_policy", lambda n, user_scope_id=None: "allow")
+    plain = "ftp://$FTP_USER@$FTP_HOST:$FTP_PORT"
+    _store_server(server, host="h1.example")
+    ftp._remember(ftp.parse_server(f"ftp://alice@h1.example:{server.port}"), ALICE, "none", "")
+    calls = _record_connect(monkeypatch)
+    asked = []
+
+    def before_dispatch(name, tool_args):
+        _store("FTP_HOST", "h3.example")
+        return None
+
+    out = _caller(lambda *a, **k: asked.append(a) or "allow_once",
+                  hooks=ToolCallHooks(before_dispatch=before_dispatch)).execute(
+        "ftp", {"server": plain})
+    assert asked == [], "a standing grant and a known server ask nothing"
+    assert "changed after the user was asked" in out, out
+    assert calls == []
+
+
+def test_an_answered_first_connection_still_connects_and_a_known_one_is_not_confirmed(
+        lab, monkeypatch):
+    """The ordinary path is unchanged: asked, answered once, nothing changed - it connects and
+    remembers. A server known before the call is not handed to connect as confirmed, so one
+    forgotten in the last moment is refused there instead of taken as a new first contact.
+    MUTATION: refuse whenever _call_question is non-empty - red (the first call); pass
+    _call_confirmed straight to connect - red (confirmed=True)."""
+    tmp, root, server = lab
+    _store_server(server)
+    asked = []
+    out = _caller(lambda name, reason, choices=None: asked.append(reason) or "allow_once"
+                  ).execute("ftp", {"server": NAMED, "login_credential": "FTP_PASS"})
+    assert len(asked) == 1 and out.startswith(f"[FTP {NAMED}]") and out.endswith("OK"), out
+    assert ftp.is_known(ftp.parse_server(f"ftps://alice@127.0.0.1:{server.port}"), ALICE)
+    monkeypatch.setattr("vaf.core.trust.get_tool_policy", lambda n, user_scope_id=None: "allow")
+    calls = _record_connect(monkeypatch)
+    _caller(lambda *a, **k: "allow_once").execute(
+        "ftp", {"server": NAMED, "login_credential": "FTP_PASS"})
+    target = ftp.parse_server(f"ftps://alice@127.0.0.1:{server.port}")
+    assert calls == [(target.name, False)], calls

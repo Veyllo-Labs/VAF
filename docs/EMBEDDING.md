@@ -1372,6 +1372,21 @@ see (VAF's ftp tool shows the address a stored credential resolves to). Where no
 `_call_confirmed = False` for a tool that declared `accepts_call_confirmation`,
 which is how such a tool refuses on its own.
 
+What the question named can change before `run` starts: a stored value the tool
+fills in, a server forgotten in another tab, both while the question is open or
+after a standing grant let the call through. A tool with its own `ask_reason`
+that declared `accepts_call_confirmation` therefore also receives
+`_call_question`, ASSIGNED like `_call_confirmed`: the question as the funnel
+got it from `ask_reason`, `""` when it had nothing to ask, None when it was not
+consulted (your authorizer `allow()`ed the call). In `run`, compute the question
+again from the very values you are about to use and call
+`self.changed_since_asked(kwargs, now)`: it returns a refusal text (naming no
+value) when the two differ, else None, and None as well when there was nothing to
+compare. VAF's `ssh` and `ftp` tools do this, so an answer to "first connection
+to h1" never sends the call to h2. A tool without its own `ask_reason` does not
+receive the key, so a `run` that lists its parameters is not handed one it never
+declared.
+
 **A tool that is not part of "everything".** `account_opt_in = True` keeps a
 tool away from a regular account unless the account's allowlist NAMES it; a
 missing or empty list means "everything" for every other tool. Admins and a

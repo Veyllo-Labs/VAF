@@ -162,6 +162,15 @@ def assign_declared_identity(tool: Any, args: dict, *, user_scope_id: str | None
     return args
 
 
+def _asks_its_own_question(tool: Any) -> bool:
+    """True when the tool overrides BaseTool.ask_reason, i.e. may put a question of its own.
+    Only such a tool is handed `_call_question`: one that never asks has nothing to compare,
+    and a `run` that lists its parameters must not receive a key it never declared."""
+    from vaf.tools.base import BaseTool
+    own = getattr(type(tool), "ask_reason", None)
+    return callable(own) and own is not BaseTool.ask_reason
+
+
 def repair_arguments(tool: Any, args: dict, *, tool_name: str,
                      model_name: str | None = None) -> tuple[dict, list]:
     """Validate the model's arguments against the tool's schema and repair weak shapes.
@@ -1559,9 +1568,13 @@ class ToolCaller:
         forced_ask = verdict.decision == "ask"
         ask_reason = verdict.reason if forced_ask else ""
         model_reason = ask_reason
+        # The tool's own question as it was put (or would have been, "" for none), handed to
+        # the tool as `_call_question`; None when it was not consulted (an authorizer allow).
+        asked: str | None = None
         if verdict.decision != "allow" and tool is not None:
             # The tool's own say about THIS call (BaseTool.ask_reason), e.g. a first contact.
             own_reason = self._tool_ask_reason(tool, args)
+            asked = own_reason
             if own_reason:
                 # Joined, never replacing: an authorizer's ask() is the application's reason
                 # and the person must still read it.
@@ -1601,7 +1614,7 @@ class ToolCaller:
                                    "args": self._preview(name, args)})
         started = time.monotonic()
         try:
-            result = self._dispatch(name, tool, args, confirmed=confirmed)
+            result = self._dispatch(name, tool, args, confirmed=confirmed, asked=asked)
         except Exception as exc:                                  # noqa: BLE001
             result = f"Tool Error: {exc}"
 
@@ -1765,7 +1778,8 @@ class ToolCaller:
         except Exception:
             return serializable
 
-    def _dispatch(self, name, tool, args, confirmed: bool = False):
+    def _dispatch(self, name, tool, args, confirmed: bool = False,
+                  asked: str | None = None):
         if tool is None:
             # The prefix is contract; the correction after it is what turns the refusal
             # into a retry the model can get right (see unknown_tool_hint).
@@ -1793,6 +1807,11 @@ class ToolCaller:
             # ASSIGNED like an identity key, never defaulted: the model's own
             # `_call_confirmed: true` must not be what a tool trusts.
             tool_args["_call_confirmed"] = bool(confirmed)
+            if _asks_its_own_question(tool):
+                # What the person was asked, so the tool can check that what it is about to
+                # use is still what that question named (BaseTool.changed_since_asked).
+                # Assigned for the same reason, and only to a tool with its own question.
+                tool_args["_call_question"] = asked
         if callable(self.hooks.before_dispatch):
             refusal = self.hooks.before_dispatch(name, tool_args)
             if refusal is not None and errors:

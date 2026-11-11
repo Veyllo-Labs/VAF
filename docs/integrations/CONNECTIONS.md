@@ -166,7 +166,9 @@ its NAME (`login_credential`).
   renewed certificate does not break anything. A server whose certificate no authority
   vouches for (a hoster's shared certificate, a self-signed one) is remembered by its
   fingerprint, and a different certificate later is refused until the person removes the
-  server.
+  server. The call goes only to the server the person was asked about: a stored host that
+  changes while the question is open (another chat stores a new `FTP_HOST`), or a server
+  removed in between, refuses the call, and the next call asks again.
 - **What a folder upload leaves out.** Links (one could point outside the folder), `.git`
   and `.vaf`; the whole folder is checked against 500 MB before the first byte.
 - **Confirmed in the chat, like `ssh`.** A trusted folder does not silence it, not over
@@ -175,7 +177,8 @@ its NAME (`login_credential`).
   `curl`/`wget` with an `ftp://` or `ftps://` address and points at this tool: those carry the password on the command line, ask nobody
   about a new server and notice no changed certificate. Python's ftplib is refused the same
   way, in `python_exec` and as `python -c` or `python -m ftplib` in `host_bash` (also through
-  exec or eval of a written-out string, under `pypy` or a runner such as `uv run`).
+  exec or eval of a written-out string, under `pypy` or a runner such as `uv run`, also
+  behind a wrapper or a shell the runner starts: `uv run env python -c ...`).
 - **The coder deploys to a web space too.** `coding_agent(deploy_to="ftps://user@host/folder")`
   gives the coder the `ftp` tool for that one web space and folder (no `ssh` in such a run),
   under the same rules as the SSH deploy above: only when the person asked, only to a server

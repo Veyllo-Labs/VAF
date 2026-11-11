@@ -11,7 +11,10 @@ transfers); this module is the tool's contract around it, the same one as the ss
   server this account has not confirmed is always asked (`ask_reason`), also under "always";
   where nobody is asked (a workflow step) it is refused (`accepts_call_confirmation`), so an
   unattended run only reaches servers a person confirmed. A plain `ftp://` server says in that
-  question that the password and the files cross the network readable.
+  question that the password and the files cross the network readable. The call goes only
+  to the server the person was asked about: `run` fills in `$NAME` again and builds the same
+  question, and a stored value changed or a server forgotten since then is refused
+  (`BaseTool.changed_since_asked`).
 - Not over messaging channels, and a regular account gets it only when its allowlist names it
   (`account_opt_in`).
 - The password is never an argument: `login_credential` NAMES a credential the person stored
@@ -134,16 +137,26 @@ class FtpTool(BaseTool):
                or args.get("destination"))
         try:
             text, used = self._expand(raw, user_scope_id, username)
-            target = ftp.parse_server(text)
-            if ftp.is_known(target, user_scope_id):
-                return None
+            return self._question(raw, ftp.parse_server(text), used, user_scope_id)
         except Exception:
             return f"The server '{raw}' could not be checked, so this call is put to you."
+
+    @staticmethod
+    def _question(written, target, used, user_scope_id) -> Optional[str]:
+        """The first-connection question for `target`, or None for a server this account
+        confirmed. One text for ask_reason and for _run, so _run can tell whether the server
+        it is about to use is the one the person was asked about (changed_since_asked)."""
+        from vaf.core import ftp
+        if ftp.is_known(target, user_scope_id):
+            return None
+        # Stripped: ask_reason reads the model's raw text, _run the repaired one.
+        written = str(written or "").strip()
         if used:
             # The resolved scheme, host and port, never the login or a password: the person
             # must see where the password goes, not only which names were written.
             names = ", ".join(sorted(n[len("VAF_SECRET_"):] for n in used))
-            where = f"{target.name} (written {raw}; {names} filled in from stored credentials)"
+            where = (f"{target.name} (written {written}; {names} filled in from stored "
+                     "credentials)")
         else:
             where = str(target)
         if not target.tls:
@@ -212,6 +225,11 @@ class FtpTool(BaseTool):
             # secrets_env is read at call time, so the password stored below counts too.
             return self._hide_stored_parts(text, target, used, secrets_env)
 
+        # Filled in again here, so a stored value or the list of confirmed servers may have
+        # changed since the question: the call goes only where the person was asked about.
+        changed = self.changed_since_asked(kwargs, self._question(written, target, used, scope))
+        if changed:
+            return changed
         if not ftp.is_known(target, scope) and not kwargs.get("_call_confirmed"):
             return (f"Error: {shown} is a server this account has not connected to yet. The "
                     "first connection must be confirmed by the user in the app; ask them.")
@@ -260,8 +278,13 @@ class FtpTool(BaseTool):
 
         lines = [f"[FTP {shown}]"]
         try:
+            # A first contact is remembered only after a first-contact question (proven the
+            # same above) or an application's allow(): a known server forgotten between the
+            # check above and the login is then refused by connect, not taken as confirmed.
+            asked = kwargs.get("_call_question")
             session = ftp.connect(target, user_scope_id=scope, password=password,
-                                  confirmed=bool(kwargs.get("_call_confirmed")))
+                                  confirmed=bool(kwargs.get("_call_confirmed"))
+                                  and (asked is None or bool(asked)))
         except ftp.FtpError as e:
             return f"[FTP {shown}] {_hide(str(e))}."
         except Exception as e:      # noqa: BLE001 - a fault outside ftplib's own errors

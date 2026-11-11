@@ -10,7 +10,13 @@ line); this module is the tool's contract around it:
   (`trusted_dir_grants = False`): a server is not in a folder. The FIRST connection to a
   server this account has not confirmed is always asked (`ask_reason`), also under "always";
   where nobody is asked (a workflow step) it is refused (`accepts_call_confirmation`), so an
-  unattended run only reaches servers a person confirmed.
+  unattended run only reaches servers a person confirmed. The call goes only to the server
+  the person was asked about: `run` builds the same question again, and a server forgotten
+  since then is refused (`BaseTool.changed_since_asked`).
+  NAMED BOUNDARY: between that check and OpenSSH reading the account's known_hosts, a forget
+  lands in a window of milliseconds inside one call; OpenSSH then takes the key as new
+  (`accept-new`), because the ssh engine has no `confirmed` to refuse it with, unlike the ftp
+  one. It needs the person's own forget at that exact instant.
 - Not over messaging channels: dangerous and restricted with "channel", which the policy
   refuses there before any admin lift (vaf/core/tool_contract.py, section 1a).
 - A regular account gets it only when its allowlist names it (`account_opt_in`).
@@ -136,11 +142,17 @@ class SshTool(BaseTool):
         raw = args.get("server") or args.get("host") or args.get("target") \
             or args.get("destination")
         try:
-            target = ssh.parse_server(raw)
-            if ssh.is_known(target, user_scope_id):
-                return None
+            return self._question(ssh.parse_server(raw), user_scope_id)
         except Exception:
             return (f"The server '{raw}' could not be checked, so this call is put to you.")
+
+    @staticmethod
+    def _question(target, user_scope_id) -> Optional[str]:
+        """The first-connection question for `target`, or None for a server this account
+        confirmed: one text for ask_reason and run (changed_since_asked)."""
+        from vaf.core import ssh
+        if ssh.is_known(target, user_scope_id):
+            return None
         return (f"First connection to {target}: the key it shows is remembered for this "
                 "account, and a different key later is refused.")
 
@@ -158,6 +170,11 @@ class SshTool(BaseTool):
             ssh.require_openssh()
         except ssh.SshError as e:
             return f"Error: {e}."
+        # A server forgotten since the question (another tab, `vaf ssh forget`) is not taken
+        # as a confirmed first contact: the call goes only where the person was asked about.
+        changed = self.changed_since_asked(kwargs, self._question(target, scope))
+        if changed:
+            return changed
         if not ssh.is_known(target, scope) and not kwargs.get("_call_confirmed"):
             return (f"Error: {target} is a server this account has not connected to yet. The "
                     "first connection must be confirmed by the user in the app; ask them.")

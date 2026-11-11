@@ -32,6 +32,12 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 ### Fixed
 
+- **FTP and SSH connect only to the server you were asked about.** If a stored host changes
+  or a server is forgotten while the question is open, or after a standing "always", the call
+  is refused instead of going somewhere else. The command check also looks inside what
+  `uv run`, `poetry run` or `conda run` start (`uv run env python ...`, `uv run bash -c ...`,
+  `uv run rm -rf /`), as it already did for `bash -c`. For embedders: a tool with its own
+  `ask_reason` receives `_call_question` and checks it with `BaseTool.changed_since_asked`.
 - **`vaf prompt` prints the answer.** `--output-format json` and `text` printed `...` (and
   the raw stream before it) instead of the answer, and an agent room now receives an agent's
   plain-text answer. For embedders: `CoreAgent.chat_step` returns the turn's answer instead

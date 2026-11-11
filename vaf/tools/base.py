@@ -119,7 +119,8 @@ class BaseTool(ABC):
     # answered yes (once, for this chat, or always) or an application's authorizer allow()ed
     # the call, False on every other path - overwriting whatever the model wrote into it. Without
     # it "only this time" was offered by the dialog and then refused by the tool, which could
-    # not tell that it had been given.
+    # not tell that it had been given. A tool that also has its own ask_reason is handed
+    # `_call_question` as well, the question it was asked about (see changed_since_asked).
     accepts_call_confirmation: bool = False
 
     # Set to False when a trusted FOLDER says nothing about whether this tool may run, because
@@ -141,8 +142,33 @@ class BaseTool(ABC):
         question then offers only "this time" and "cancel", because a standing answer would
         outlive the question it was given to. Where nobody is asked (the coder, a workflow
         step) the call is not confirmed; a tool that must refuse then declares
-        `accepts_call_confirmation` and reads `_call_confirmed`."""
+        `accepts_call_confirmation` and reads `_call_confirmed`.
+
+        Such a tool is also handed `_call_question`: this method's answer as the funnel got it
+        ("" for none), or None when it was not consulted (an authorizer allow()ed the call).
+        What the question named can change before `run` (a stored value, a server forgotten
+        in another tab), so `run` computes the question again from the values it is about to
+        use and refuses through `changed_since_asked` when it differs."""
         return None
+
+    def changed_since_asked(self, kwargs: Dict[str, Any], now: Optional[str]) -> Optional[str]:
+        """A refusal when the question this call would raise NOW differs from the one the
+        funnel put (`_call_question`), else None. `now` is ask_reason's answer computed from
+        the values `run` is about to use. None also when nothing was asked to compare with
+        (`_call_question` absent or None: a direct call, or an authorizer's allow()).
+
+        Deliberate: strict equality of the text, so a server that became confirmed meanwhile
+        is refused once too; the retry then passes without a question. Without this, an
+        answer to "first connection to h1" let the call go to h2, and a standing grant for a
+        known server let it reach one that was forgotten after the gate, as a confirmed first
+        contact. The refusal names no value: the question may hold what a stored name
+        resolved to, and this text goes to the model."""
+        asked = kwargs.get("_call_question")
+        if asked is None or (now or "") == str(asked):
+            return None
+        return ("Error: what this call would reach changed after the user was asked about it "
+                "(a stored value, or a confirmed server, changed in between). Nothing was "
+                "done. Call again, and the user is asked about what it uses now.")
 
     # Set to True when a call of this tool hands the next move to the person, so the chat
     # turn ENDS after it: the agent loop answers every other call of the round, makes no

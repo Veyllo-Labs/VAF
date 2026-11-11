@@ -454,6 +454,7 @@ def _probe_tool():
             super().__init__()
             self.asked_with = None
             self.confirmed = None
+            self.question = _ABSENT
 
         def ask_reason(self, args, *, user_scope_id=None, username=None):
             self.asked_with = (args.get("server"), user_scope_id, username)
@@ -463,9 +464,13 @@ def _probe_tool():
 
         def run(self, **kwargs):
             self.confirmed = kwargs.get("_call_confirmed")
+            self.question = kwargs.get("_call_question", _ABSENT)
             return "RAN"
 
     return _Remote()
+
+
+_ABSENT = object()
 
 
 def _funnel(tool, asked, **kw):
@@ -559,3 +564,50 @@ def test_where_nobody_can_be_asked_the_model_does_not_read_the_tools_question(tr
     asked = []
     assert _funnel(tool, asked).execute("remote_probe", {"server": "new"}) == "RAN"
     assert asked[0][0] == "first connection"
+
+
+def test_the_question_the_person_answered_travels_to_the_call(trust):
+    """`_call_question` is the tool's own question as the funnel got it, so the tool can
+    check that what it is about to use is what the person was asked about.
+    MUTATION: do not assign the key - red; assign `asked` only when non-empty - red (the ""
+    under a standing grant); assign it to every accepts_call_confirmation tool - red (the
+    tool without its own question)."""
+    trust["policy"] = "allow"
+    tool, asked = _probe_tool(), []
+    caller = _funnel(tool, asked)
+    assert caller.execute("remote_probe", {"server": "new"}) == "RAN"
+    assert tool.question == "first connection"
+    # A standing grant and nothing of the tool's own to ask: consulted, empty.
+    assert caller.execute("remote_probe", {"server": "known"}) == "RAN"
+    assert asked == [("first connection", ("allow_once", "cancel"))]
+    assert tool.question == ""
+    # Assigned, never the model's own value.
+    assert caller.execute("remote_probe", {"server": "known",
+                                           "_call_question": "first connection"}) == "RAN"
+    assert tool.question == ""
+    # An application's allow(): the tool's question was never consulted.
+    allowed = _funnel(tool, [], authorize=lambda req: req.allow())
+    assert allowed.execute("remote_probe", {"server": "new"}) == "RAN"
+    assert tool.question is None and tool.confirmed is True
+
+
+def test_a_tool_without_its_own_question_gets_no_call_question(trust):
+    """python_exec, and an embedder's tool whose run lists its parameters, declare
+    accepts_call_confirmation without a question of their own: no extra key for them."""
+    from vaf.tools.base import BaseTool
+
+    class _Plain(BaseTool):
+        name = "plain_probe"
+        description = "probe"
+        permission_level = "dangerous"
+        accepts_call_confirmation = True
+        parameters = {"type": "object", "properties": {}}
+
+        def run(self, **kwargs):
+            self.seen = dict(kwargs)
+            return "RAN"
+
+    trust["policy"] = "allow"
+    tool = _Plain()
+    assert _funnel(tool, []).execute("plain_probe", {}) == "RAN"
+    assert "_call_confirmed" in tool.seen and "_call_question" not in tool.seen

@@ -473,6 +473,48 @@ def test_the_tool_asks_about_a_new_server_and_not_about_a_known_one(lab):
     assert "could not be checked" in tool.ask_reason({"server": "-oX=y"}, user_scope_id=ALICE)
 
 
+def _caller(decide, hooks=None):
+    from vaf.core.tool_dispatch import ToolCaller
+    from vaf.tools.ssh import SshTool
+    return ToolCaller({"ssh": SshTool()}, interactive=True, user_scope_id=ALICE,
+                      username="alice", user_role="admin", session_id="web_chat-1",
+                      decide=decide, hooks=hooks)
+
+
+def test_a_server_forgotten_after_the_gate_is_not_reached(lab, monkeypatch):
+    """A standing grant covered a known server; it was forgotten (another tab, `vaf ssh
+    forget`) after the gate, and the call connected with accept-new, taking a key nobody was
+    asked about. MUTATION: drop the changed_since_asked check in run - red (ssh runs)."""
+    from vaf.core import ssh
+    from vaf.core.tool_dispatch import ToolCallHooks
+    _tool(command="true", login_credential="SERVER_PASS", _call_confirmed=True)
+    before = len(lab.calls())
+    monkeypatch.setattr("vaf.core.trust.get_tool_policy", lambda n, user_scope_id=None: "allow")
+    asked = []
+
+    def before_dispatch(name, tool_args):
+        assert ssh.forget_host("[127.0.0.1]:2222", ALICE)
+        return None
+
+    out = _caller(lambda *a, **k: asked.append(a) or "allow_once",
+                  hooks=ToolCallHooks(before_dispatch=before_dispatch)).execute(
+        "ssh", {"server": "tester@127.0.0.1:2222", "command": "true",
+                "login_credential": "SERVER_PASS"})
+    assert asked == [], "a standing grant and a known server ask nothing"
+    assert "changed after the user was asked" in out, out
+    assert len(lab.calls()) == before, "ssh ran against a server nobody confirmed"
+
+
+def test_an_answered_first_connection_still_runs(lab):
+    asked = []
+    out = _caller(lambda name, reason, choices=None: asked.append(reason) or "allow_once"
+                  ).execute("ssh", {"server": "tester@127.0.0.1:2222",
+                                    "command": "echo through-the-funnel",
+                                    "login_credential": "SERVER_PASS"})
+    assert len(asked) == 1 and "First connection" in asked[0]
+    assert "through-the-funnel" in out and "First connection" in out, out
+
+
 def test_the_contract_the_policy_reads():
     from vaf.tools.ssh import SshTool
     t = SshTool

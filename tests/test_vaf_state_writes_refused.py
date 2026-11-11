@@ -95,16 +95,18 @@ def test_the_docker_mode_config_folder_is_state_too(roots):
     assert is_safe_path(str(Path(Config.APP_DIR) / "anything.py"))[0] is False
 
 
-# -- 2. the read rule is unchanged --------------------------------------------------------
+# -- 2. the read rule: only the agent_readable rows ----------------------------------------
 
 @pytest.mark.parametrize("root,relative", [
     ("data", "custom_tools/x.py"), ("vaf", "skills/demo/reference.md"), ("vaf", "workflows/x.py"),
 ])
-def test_reading_vafs_state_is_unchanged(roots, root, relative):
-    """use_skill hands the model the paths of a skill's bundled files to read.
+def test_only_the_readable_store_rows_can_be_read(roots, root, relative):
+    """use_skill hands the model the paths of a skill's bundled files to read, and
+    create_agent_tool's edit needs the source it replaces; every other state path is refused
+    to reads too (tests/test_host_config_and_state_reads.py).
 
-    MUTATION: make the write check ignore read_only - red. Delete the skills/workflows read
-    exception - the skills and workflows cases go red."""
+    MUTATION: make the write check ignore read_only - red. Set agent_readable=False on the
+    skills, workflows or custom_tools row - that case goes red."""
     (path,) = _paths(roots, (root, relative))
     ok, verdict = is_safe_path(path, read_only=True)
     assert ok is True, verdict
@@ -116,8 +118,10 @@ def test_the_credential_store_stays_unreadable(roots):
 
 
 def test_an_ordinary_write_is_unaffected(roots):
+    """A neighbour of the data root is not state. Beside XDG_DATA_HOME, not inside it: that
+    folder is the home directory's configuration (workspace_guard.is_host_config)."""
     for path in (roots.docs / "notes.md", roots.docs / "VAF_Projects" / "p" / "a.py",
-                 roots.data.parent / "fonts" / "a.ttf"):
+                 roots.data.parent.parent / "fonts" / "a.ttf"):
         ok, verdict = is_safe_path(str(path))
         assert ok is True, (path, verdict)
 

@@ -150,6 +150,9 @@ class BashTool(BaseTool):
     # coder entirely, or allow the coder and withhold bash by name - it is offered in the
     # user manager's picker via GET /api/users/tool-universe. What remains true: a tenant
     # who is ALLOWED bash has an unjailed shell, by design, so granting it is the decision.
+    # Which FOLDER that shell runs in is still asked against the caller: the identity is
+    # bound at construction (owner_scope/owner_role) and run_in_workspace refuses a folder
+    # in another account's tree (project_dir_refusal) on every call.
     # Frozen in tests/test_coder_identity_boundary.py so a silent change shows up.
     # The description says what the jail really is. It used to offer "npm install" as an
     # example while the jail has no network at all (workspace_exec: --unshare-net), so every
@@ -206,7 +209,8 @@ Examples:
             budget += EnvironmentManager.GIVE_BACK_TIMEOUT
         return budget
 
-    def __init__(self, base_dir: str = None, environment=None, owner_scope=None):
+    def __init__(self, base_dir: str = None, environment=None, owner_scope=None,
+                 owner_role=None, *, scratch: bool = False):
         # base_dir = the coder's project workspace. Bound at registration (like the git
         # tools) so bash defaults to the project, not the tray process cwd, and so the
         # sandbox confines writes to exactly this workspace.
@@ -216,7 +220,14 @@ Examples:
         # packages, and may start a dev server that keeps running. Bound per instance,
         # never on the class: the coder builds one per run, for one caller.
         self.environment = environment
+        # Whose run this is, bound by the trusted code that builds the tool (the coder for
+        # its caller, the workflow lane for the engine's identity), never taken from the
+        # model, so identity_kwargs stays empty. The jailed shell asks the folder against it
+        # on every call (run_in_workspace -> project_dir_refusal). ``scratch`` marks the
+        # coder's content-only temp folder, which lies outside every account's tree.
         self.owner_scope = owner_scope
+        self.owner_role = owner_role
+        self.scratch = bool(scratch)
         # Background processes this run started, as (handle, keep_running).
         self.started = []
 
@@ -262,7 +273,9 @@ Examples:
             run_command = f"cd {_shlex.quote(str(cwd))} && {command}"
 
         from vaf.tools.workspace_exec import run_in_workspace
-        rc, out, err, mode = run_in_workspace(workspace, run_command, timeout=timeout)
+        rc, out, err, mode = run_in_workspace(workspace, run_command, timeout=timeout,
+                                              user_scope_id=self.owner_scope,
+                                              user_role=self.owner_role, scratch=self.scratch)
 
         parts = []
         if warning:

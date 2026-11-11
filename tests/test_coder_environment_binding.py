@@ -218,7 +218,7 @@ def test_bash_is_offered_in_every_context_and_as_root_only_when_bound():
 def test_bash_without_an_environment_keeps_the_jail(monkeypatch):
     import vaf.tools.workspace_exec as wx
     seen = []
-    monkeypatch.setattr(wx, "run_in_workspace", lambda ws, cmd, timeout: (seen.append(ws) or (0, "", "", "bwrap")))
+    monkeypatch.setattr(wx, "run_in_workspace", lambda ws, cmd, timeout, **_: (seen.append(ws) or (0, "", "", "bwrap")))
     BashTool("/p").run(command="ls")
     assert seen == ["/p"]
 

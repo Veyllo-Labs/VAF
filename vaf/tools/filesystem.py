@@ -149,8 +149,10 @@ def compute_user_jail(user_scope_id, user_role=None, *, mode="write"):
     writing: "read" adds the folders of the skills visible to this user (see
     _visible_skill_roots). "write" - the default, and what every existing caller gets -
     stays at the caller's own project tree. A tool installs the jail for the operation it
-    performs. is_safe_path knows the difference only for VAF's own state (its
-    ``read_only`` flag); the per-account roots come from the jail installed here.
+    performs. is_safe_path knows the difference only for its static screens (its
+    ``read_only`` flag): VAF's own state is refused to both, except the readable store rows
+    for reads (is_vaf_state mode="read"), and the home directory's configuration only to
+    writes (is_host_config); the per-account roots come from the jail installed here.
 
     Admin means the same thing here as everywhere else in VAF (is_admin_identity):
     the DB role, OR the configured local-admin scope. The scope half is not
@@ -328,7 +330,10 @@ def jail_allows(path, *, user_scope_id, user_role=None, mode="read") -> bool:
     means "no account", not "an account that could not be identified".
 
     Only the per-account half of `is_safe_path`: the static screens (system folders, VAF's
-    own data directory, key file names) are a separate question. It neither reads nor
+    own data directory, key file names) are a separate question. A route asks those too:
+    `vaf.is_vaf_state(path, mode=...)` for VAF's own data (in "read" mode as well, or an
+    admin is served the credential stores) and, before storing, `vaf.is_host_config(path)`
+    for the home directory's configuration. It neither reads nor
     changes the jail of the run it is called from. ``path`` is resolved, so a link inside an
     allowed folder is judged by where it points. Fail-closed: any error is False."""
     try:
@@ -520,6 +525,12 @@ VAF_SETTINGS_WRITE_REFUSAL = (
     "or the configuration), which the file tools do not change; settings have their own "
     "commands")
 _STATE_CONTENT_FOLDERS = frozenset({"custom_tools", "skills", "workflows"})
+VAF_STATE_READ_REFUSAL = "Access denied: VAF's own data directory"
+HOST_CONFIG_WRITE_REFUSAL = (
+    "Access denied: the home directory's configuration (dot files and folders such as "
+    "~/.bashrc, ~/.config or ~/.local, autostart entries) runs or steers programs outside VAF "
+    "and is not changed by the file tools; change it in a terminal yourself, or with "
+    "host_bash, which asks first")
 
 
 def _vaf_state_refusal(path) -> str:
@@ -555,10 +566,29 @@ def is_safe_path(path, *, read_only=False):
         # data_stores.roots() less the projects (one list), compared in every spelling.
         # Before the ~/.vaf screen below, so a write into skills/ or workflows/ gets this
         # answer and not the credential-store one.
-        if not read_only:
-            from vaf.core.data_stores import is_vaf_state
+        #
+        # Reading them is refused too (is_vaf_state mode="read"): the same roots hold every
+        # account's messages, mail and contacts, the key files, the MCP commands and the
+        # tool grants, and a credential read out through a chat or sent on as an attachment
+        # outlives anything this instance can revoke. The exceptions are the store rows
+        # marked agent_readable (skills, workflows, custom tools), which tools hand the
+        # model paths into.
+        #
+        # The home directory's configuration (vaf.core.workspace_guard.is_host_config: its
+        # dot entries, autostart, the Python user site, launch agents) is refused to writes
+        # for every caller as well: a file there runs at the next login, shell or Python
+        # start, outside every VAF containment, and these tools run unconfirmed on lanes
+        # where injected text drives them. host_bash, which asks first, is the owner's way.
+        from vaf.core.data_stores import is_vaf_state
+        if read_only:
+            if is_vaf_state(abs_path, mode="read"):
+                return False, VAF_STATE_READ_REFUSAL
+        else:
             if is_vaf_state(abs_path):
                 return False, _vaf_state_refusal(abs_path)
+            from vaf.core.workspace_guard import is_host_config
+            if is_host_config(abs_path):
+                return False, HOST_CONFIG_WRITE_REFUSAL
 
         # CRITICAL: Never allow access to VAF program root (source, config, secrets)
         try:
@@ -596,54 +626,21 @@ def is_safe_path(path, *, read_only=False):
                     return False, f"Access denied: {blocked}"
             elif blocked in components:
                 return False, f"Access denied: {blocked}"
-        # VAF's own data directory is the credential store, and no file tool has a
-        # legitimate reason to open it: settings are read through Config.get(), never
-        # through read_file. It holds config.json (every api_key_*, the JWT secret) and
-        # its .bak copies, secrets/, ssl/ private keys, browser_sessions/ (live logged-in
-        # cookies), speaker_profiles/ (voice biometrics) and sessions/ (every
-        # conversation). This is blocked for EVERYONE, the machine owner included: an API
-        # key extracted through a chat prompt keeps working outside VAF and outlives any
-        # access this instance could revoke, so it is not a per-user permission question.
-        #
-        # Deny-by-default, so a new folder under ~/.vaf is protected the day it is added
-        # rather than the day someone remembers to list it. The exceptions are the folders
-        # holding USER-CREATED CONTENT, which the agent READS and which is governed by the
-        # per-user jail below like anything else - not by this block, whose job is only the
-        # credential store. Writing them is refused further up (VAF's own state), so these
-        # exceptions only ever reach a read_only caller:
-        #   skills/    - use_skill hands the model absolute paths to a skill's bundled
-        #                files and tells it to open them with read_file (use_skill.py:33,92)
-        #   workflows/ - agent-created workflows; the same category as skills and as the
-        #                custom tools in data_dir/custom_tools
-        # Fail-closed: if the data dir cannot be resolved, nothing under .vaf is allowed.
-        #
-        # BOTH spellings of the data dir, like _TEMP_ROOTS: `norm` is not resolved
-        # here, so under a home reached through a symlink (macOS /var ->
-        # /private/var, a home moved to another disk and linked back) it never
-        # starts with the RESOLVED root, and every skill file was refused. The
-        # link-following recheck at the end of this function never ran, because
-        # the refusal came first.
-        # Case-folded, because macOS and Windows open ~/.VAF as ~/.vaf. The skills and
-        # workflows exception below stays exact, so a differently cased spelling of them is
-        # refused rather than let through.
+        # A ``.vaf`` component anywhere is refused to every caller, for reads as well, the
+        # machine owner included: ~/.vaf holds config.json (every api_key_*, the JWT secret),
+        # ssl/ private keys, browser_sessions/ (live cookies), speaker_profiles/ and
+        # sessions/, and a project's own .vaf/ (codex, memory) or the launch directory's
+        # .vaf/main are VAF's working memory, not files for a tool. Deny-by-default, so a
+        # new folder there is protected the day it is added. The state check above already
+        # answered for ~/.vaf itself; this screen also covers the .vaf folders outside the
+        # state roots. The only exceptions are the store rows marked agent_readable
+        # (vaf.core.data_stores: skills/ and workflows/), compared case-exact in both
+        # spellings, so a differently cased spelling of them is refused rather than let
+        # through. Case-folded here, because macOS and Windows open ~/.VAF as ~/.vaf.
         if ".vaf" in (c.casefold() for c in components):
-            _content_ok = False
-            try:
-                from vaf.core.platform import Platform as _PlatFS
-                _vaf_dir = Path(_PlatFS.vaf_dir())
-                for _vaf_root in dict.fromkeys((Path(os.path.abspath(str(_vaf_dir))),
-                                                _vaf_dir.resolve())):
-                    for _sub in ("skills", "workflows"):
-                        _root = str(_vaf_root / _sub).replace("\\", "/")
-                        if norm == _root or norm.startswith(_root + "/"):
-                            _content_ok = True
-                            break
-                    if _content_ok:
-                        break
-            except Exception:
-                _content_ok = False
-            if not _content_ok:
-                return False, "Access denied: VAF's own data directory"
+            from vaf.core.data_stores import is_agent_readable_state
+            if not is_agent_readable_state(abs_path):
+                return False, VAF_STATE_READ_REFUSAL
         # Librarian per-user jail (no-op unless a librarian run set the scope contextvar).
         if not _librarian_jail_ok(abs_path):
             return False, "Access denied: outside your own data"
@@ -1178,7 +1175,8 @@ class WriteFileTool(BaseTool):
         "Writes content to a file (creates or overwrites). Use for saving any single-file "
         "artifact the content of which you already have (html, svg, txt, code, ...). "
         "A relative path lands in the current chat workspace; an absolute or ~ path is "
-        "honored (VAF's own directory and system locations are protected). "
+        "honored (VAF's own directory, system locations and the home directory's "
+        "configuration, such as ~/.bashrc, ~/.config or ~/.local, are protected). "
         "For files PRODUCED BY CODE in python_sandbox (images, PDFs), do NOT route them "
         "through here as base64 - use the sandbox's export_files parameter instead (large "
         "base64 gets truncated in context). content_base64 exists only for SMALL binary "
@@ -1247,8 +1245,9 @@ class WriteFileTool(BaseTool):
         # (e.g. ~/my_project/) nor leaves a cwd-relative bare filename at the home
         # root (e.g. a workflow write_file step with path="draft" run from a
         # process whose cwd is the home dir). An EXPLICIT absolute or ~-anchored
-        # target is the user's deliberate choice (e.g. read-modify-write of
-        # ~/.bashrc) and is written in place.
+        # target is the user's deliberate choice (e.g. ~/notes.md) and is written in
+        # place; the home directory's dot entries never get here (is_safe_path refuses
+        # them as its configuration).
         _explicit_target = os.path.isabs(os.path.expanduser(path or ""))
         try:
             from vaf.core.platform import Platform as _Plat
@@ -1267,7 +1266,7 @@ class WriteFileTool(BaseTool):
             _out = _Plat.get_vaf_output_dir()
             if _first and _first not in _known_home_dirs and not (_home / _first).exists():
                 # New home-level target. An unrecognized multi-segment home dir is always
-                # rerouted; an explicit single new file (e.g. "create ~/.vimrc") is the
+                # rerouted; an explicit single new file (e.g. "create ~/todo.txt") is the
                 # user's choice and written in place.
                 if _multi_segment or not _explicit_target:
                     res = str(_out / _rel)
@@ -1717,12 +1716,19 @@ class MoveFileTool(BaseTool):
             safe_in, res_in = is_safe_path(landing)
             if not safe_in: return f"Dest Error: {res_in}"
         # A FOLDER that lands where a missing parent of VAF's state belongs brings that state
-        # with it (Documents/.config holding vaf/trust/ moved to ~/.config).
+        # with it (Documents/cfg holding vaf/trust/ moved to where the config folder's parent
+        # belongs), and one that lands where a missing parent of the home directory's
+        # configuration belongs brings that (Documents/Library holding LaunchAgents/ moved to
+        # a missing ~/Library).
         if os.path.isdir(res_src) and not os.path.islink(res_src):
             from vaf.core.data_stores import holds_vaf_state
+            from vaf.core.workspace_guard import holds_host_config
             if holds_vaf_state(landing):
                 return (f"Dest Error: Access denied: the folder would become {landing}, which "
                         "holds VAF's own data; move it somewhere else")
+            if holds_host_config(landing):
+                return (f"Dest Error: Access denied: the folder would become {landing}, which "
+                        "holds the home directory's configuration; move it somewhere else")
 
         try:
             shutil.move(res_src, res_dst)

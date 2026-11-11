@@ -8693,7 +8693,17 @@ class Agent:
             # Create engine with ALL tools (including coder-only tools)
             # Workflows need access to write_file, read_file, coding_agent, etc.
             all_tools = {**self.tools}
-            
+
+            # This lane never passed an identity either, although `self` is right here. Formed
+            # once: the engine runs as it, and the bash it hands a folder asks that folder
+            # against it (the engine assigns bash's base_dir, the shell checks whose it is).
+            from vaf.workflows.engine import identity_for_engine
+            _wf_ident = identity_for_engine(
+                getattr(self, "_current_user_scope_id", None),
+                getattr(self, "_current_username", None),
+                user_role=getattr(self, "_current_user_role", None),
+            )
+
             # Load additional tools that are normally coder-only
             try:
                 from vaf.tools.filesystem import WriteFileTool, ReadFileTool, ListFilesTool, MoveFileTool
@@ -8704,7 +8714,8 @@ class Agent:
                 all_tools["read_file"] = ReadFileTool()
                 all_tools["list_files"] = ListFilesTool()
                 all_tools["move_file"] = MoveFileTool()
-                all_tools["bash"] = BashTool()
+                all_tools["bash"] = BashTool(owner_scope=_wf_ident.get("user_scope_id"),
+                                             owner_role=_wf_ident.get("user_role"))
                 all_tools["coding_agent"] = CodingAgentTool()  # WICHTIG für Website-Workflow!
             except ImportError as e:
                 UI.event("Warning", f"Could not load tools: {e}", style="warning")
@@ -8714,15 +8725,8 @@ class Agent:
                 if stream_callback and event == "success":
                     stream_callback(f"\n✓ Step {current}/{total}: {step.tool}\n")
             
-            # This lane never passed an identity either, although `self` is right here.
-            from vaf.workflows.engine import identity_for_engine
             engine = WorkflowEngine(
-                all_tools, callback=workflow_callback,
-                **identity_for_engine(
-                    getattr(self, "_current_user_scope_id", None),
-                    getattr(self, "_current_username", None),
-                    user_role=getattr(self, "_current_user_role", None),
-                ),
+                all_tools, callback=workflow_callback, **_wf_ident,
                 authorize=getattr(self, "_tool_authorizer", None),
             )
 

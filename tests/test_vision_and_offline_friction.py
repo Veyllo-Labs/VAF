@@ -108,7 +108,7 @@ def test_the_jailed_shell_says_it_has_no_network():
 def test_a_download_that_failed_for_want_of_a_network_is_named(monkeypatch, tmp_path, output, hinted):
     import vaf.tools.workspace_exec as we
     from vaf.tools.bash import BashTool
-    monkeypatch.setattr(we, "run_in_workspace", lambda ws, cmd, timeout=120: (1, "", output, "host-jail (bwrap)"))
+    monkeypatch.setattr(we, "run_in_workspace", lambda ws, cmd, timeout=120, **_: (1, "", output, "host-jail (bwrap)"))
     out = BashTool(base_dir=str(tmp_path)).run(command="./build.sh")
     assert ("has no network" in out) is hinted, out
     assert json.dumps(out)

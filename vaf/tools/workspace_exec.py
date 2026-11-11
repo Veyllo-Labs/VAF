@@ -42,8 +42,8 @@ import subprocess
 import uuid
 from typing import Tuple
 
-# The workspace guard (VAF's code, HOME and / are refused) is the core one, shared with
-# the sandbox environments' project mount.
+# The workspace guard (VAF's code, VAF's state, the home directory's configuration, HOME and
+# / are refused) is the core one, shared with the sandbox environments' project mount.
 from vaf.core.workspace_guard import assert_safe_workspace as _assert_safe_workspace  # noqa: E402
 SANDBOX_IMAGE = "python:3.11-slim"
 _DOCKER_SOCK_CANDIDATES = ("/var/run/docker.sock", "/run/docker.sock")
@@ -126,15 +126,32 @@ def _build_bwrap_argv(workspace: str, command: str, timeout: int) -> list:
     return argv
 
 
-def run_in_workspace(base_dir: str, command: str, timeout: int = 180) -> Tuple[int, str, str, str]:
+def run_in_workspace(base_dir: str, command: str, timeout: int = 180, *, user_scope_id,
+                     user_role, scratch: bool = False) -> Tuple[int, str, str, str]:
     """Execute ``command`` confined to ``base_dir``. Returns (rc, stdout, stderr, mode).
 
     rc == -2 signals a refusal/precondition failure (message in stderr, mode="refused").
+
+    ``user_scope_id`` and ``user_role`` say whose run this is, and have no default: a caller
+    that forgets them gets a TypeError instead of a shell. The folder is asked
+    `vaf.core.workspace_guard.project_dir_refusal` for that identity before anything runs,
+    so the jail is never rooted in another account's tree, whatever handed the folder in.
+    Both come from trusted code (the coder's caller, the workflow engine's identity), never
+    from a model's argument; None for both is a caller with no account (the machine owner's
+    freedoms). ``scratch=True`` is a run's own throwaway folder (the coder's content-only
+    mode, ``tempfile.mkdtemp``): it lies outside every account's project tree, so the
+    account half is skipped for it, but only when the folder lies inside the system temp
+    folder.
     """
     if not base_dir or not os.path.isdir(base_dir):
         return -2, "", f"Workspace not found: {base_dir!r}", "refused"
     ws = os.path.realpath(base_dir)
     _assert_safe_workspace(ws)
+    from vaf.core.workspace_guard import is_inside_temp, project_dir_refusal
+    if not (scratch and is_inside_temp(ws)):
+        reason = project_dir_refusal(ws, user_scope_id=user_scope_id, user_role=user_role)
+        if reason:
+            return -2, "", f"Refused: cannot run in {ws}: {reason}.", "refused"
 
     if _invokes_docker(command):
         return -2, "", (

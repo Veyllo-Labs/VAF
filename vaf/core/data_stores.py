@@ -51,6 +51,11 @@ Two more columns say how a store is protected at rest, and the at-rest sweep
   so encrypting them would lock their own loaders out; modes are the half that applies to
   them today. The list once hardened a folder no code writes while the real one sat open.
 
+A last column says whether the agent's file tools may READ a store: ``agent_readable``.
+Every state root is refused to them for reads as well as writes (`is_vaf_state` with
+``mode="read"``); the rows set here are the exceptions, the only folders a tool hands the
+model a path into (see `is_vaf_state`).
+
 What is not a file: Postgres, the Docker volumes of the sandbox environments and the
 personal browsers, and OS keyring entries. ``EXTERNAL`` names them; the backup engine
 reads each with its own tool.
@@ -96,10 +101,11 @@ class Store:
     note: str = ""
     sealed: Tuple[str, ...] = ()   # globs relative to the root, written through data_files
     harden: bool = False           # owner-only modes on every start
+    agent_readable: bool = False   # the file tools may read it (is_vaf_state mode="read")
 
 
-def _s(root, pattern, kind, owner, note="", *, sealed=(), harden=False):
-    return Store(root, pattern, kind, owner, note, tuple(sealed), harden)
+def _s(root, pattern, kind, owner, note="", *, sealed=(), harden=False, agent_readable=False):
+    return Store(root, pattern, kind, owner, note, tuple(sealed), harden, agent_readable)
 
 
 STORES: Tuple[Store, ...] = (
@@ -167,8 +173,8 @@ STORES: Tuple[Store, ...] = (
        sealed=("browser_sessions/*/[!.]*.json",)),
     _s("vaf", "speaker_profiles", DATA, "vaf/core/speaker_id.py"),
     _s("vaf", "speaker_confirm", RUNTIME, "vaf/core/speaker_confirm.py"),
-    _s("vaf", "skills", DATA, "vaf/core/skills_registry.py"),
-    _s("vaf", "workflows", DATA, "vaf/workflows/templates.py"),
+    _s("vaf", "skills", DATA, "vaf/core/skills_registry.py", agent_readable=True),
+    _s("vaf", "workflows", DATA, "vaf/workflows/templates.py", agent_readable=True),
     _s("vaf", "autosuggest.json", DERIVED, "vaf/cli/autosuggest.py",
        sealed=("autosuggest.json",)),
     _s("vaf", "autosuggest", DERIVED, "vaf/cli/autosuggest.py", sealed=("autosuggest/*.json",)),
@@ -227,7 +233,8 @@ STORES: Tuple[Store, ...] = (
     _s("data", "last_interaction.json", RUNTIME, "vaf/core/last_interaction.py"),
     _s("data", "messaging_endpoints.json", DATA, "vaf/core/messaging_connections.py"),
     _s("data", "mcp_servers.json", DATA, "vaf/core/mcp_registry.py"),
-    _s("data", "custom_tools", DATA, "vaf/core/custom_tools_registry.py"),
+    _s("data", "custom_tools", DATA, "vaf/core/custom_tools_registry.py",
+       agent_readable=True),
     _s("data", "cloud_sync_*.db*", DERIVED, "vaf/cloud/sync_worker.py"),
     _s("data", "github_activity.json", DERIVED, "vaf/github/activity.py"),
     _s("data", "logs", LOG, "vaf/core/log_helper.py", harden=True),
@@ -355,18 +362,32 @@ def _state_root_spellings() -> List[Tuple[str, ...]]:
     return out
 
 
-def is_vaf_state(path: Any) -> bool:
+def is_vaf_state(path: Any, *, mode: str = "write") -> bool:
     """Whether ``path`` is one of VAF's own state roots or lies inside one: ``~/.vaf`` (or
     ``$VAF_CONFIG_DIR`` in Docker mode), ``Platform.data_dir()`` and ``Platform.config_dir()``,
-    taken from `roots()` at call time.
+    taken from `roots()` at call time. ``mode="write"`` (the default) asks whether a write
+    there must be refused, ``mode="read"`` whether a read must be; any other mode answers
+    True.
 
     Those folders hold what VAF executes or obeys later: the custom tools, whose Python runs
     at every agent load; the MCP server list, whose commands VAF starts; the standing tool
     grants; the messaging endpoints; the skills and workflows, matched against later
     messages. Each is written by its own registry, which checks what it saves, and never by
     a generic file write. So a surface that writes a file on a model's, a request's or a
-    peer's behalf asks this first and refuses on True. Reading is a different question and
-    is not answered here.
+    peer's behalf asks this first and refuses on True.
+
+    The read half: the same roots also hold every account's messages, mail and contacts,
+    the key files, the MCP commands and the tool grants, and a credential read out through a
+    chat prompt or sent on as an attachment outlives anything this instance can revoke. The
+    owner reads settings through VAF's own screens, never through a file tool. So a surface
+    that reads a file on a model's behalf asks ``mode="read"`` and refuses on True, the
+    machine owner included. The exceptions are the rows marked ``agent_readable``, each one
+    a folder a tool hands the model a path into: ``skills`` (use_skill names a skill's
+    bundled files for read_file), ``workflows`` (the agent-created workflows, the same
+    category) and the data directory's ``custom_tools`` (create_agent_tool's edit replaces a
+    tool's whole source, so the model reads the source it edits). Those are compared
+    case-exact (`is_agent_readable_state`), so another spelling of them errs towards
+    refusing.
 
     Compared component by component, never as a string prefix, in every spelling: as given
     and resolved, for the path and for each root, normalised by `_norm_parts`. Fail-closed:
@@ -390,16 +411,54 @@ def is_vaf_state(path: Any) -> bool:
     half (``realpath`` asks for the final path); a short name of a folder that does not exist
     yet has nothing to expand and stays unseen. The web UI's own save routes let a signed-in
     admin save into the data directory on purpose (``_allowed_file_path`` in web_server.py):
-    a person's authenticated save, not a lane a model drives, and not decided here."""
+    a person's authenticated save, not a lane a model drives, and not decided here. The
+    same routes serve the data directory to that admin for reading, for the same reason."""
     try:
+        if mode not in ("write", "read"):
+            return True
         mine = _spellings(path)
+        inside = False
         for root in _state_root_spellings():
             for parts in mine:
                 if parts[:len(root)] == root:
+                    inside = True
+        if not inside:
+            return False
+        if mode == "read" and is_agent_readable_state(path):
+            return False
+        return True
+    except Exception:
+        return True
+
+
+def _exact_parts(spelled: str) -> Tuple[str, ...]:
+    """Components with the separators unified and nothing else changed: no case-folding, no
+    stream or trailing-dot strip. The readable-row comparison is deliberately stricter than
+    `_norm_parts`, so a spelling the state check folds onto a root is still not let through
+    as readable."""
+    return tuple(c for c in spelled.replace("\\", "/").split("/") if c)
+
+
+def is_agent_readable_state(path: Any) -> bool:
+    """Whether ``path`` equals or lies inside the folder of a row marked ``agent_readable``
+    (``roots()[row.root] / row.pattern``). Both spellings, as given and resolved, of the path
+    and of each row folder, compared case-exact (`_exact_parts`). Any error answers False,
+    which makes `is_vaf_state` refuse the read."""
+    try:
+        named = roots()
+        raw = _pathmod.expanduser(os.fspath(path))
+        mine = {_exact_parts(s) for s in (_pathmod.abspath(raw), _pathmod.realpath(raw))}
+        for row in STORES:
+            if not row.agent_readable:
+                continue
+            folder = os.fspath(named[row.root] / row.pattern)
+            for spelled in (_pathmod.abspath(folder), _pathmod.realpath(folder)):
+                want = _exact_parts(spelled)
+                if want and any(parts[:len(want)] == want for parts in mine):
                     return True
         return False
     except Exception:
-        return True
+        return False
 
 
 def holds_vaf_state(path: Any) -> bool:

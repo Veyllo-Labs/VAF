@@ -56,11 +56,13 @@ __all__ = ["__version__", "Agent", "AuditFinding", "AuditReport", "BOOKKEEPING_K
            "describe_room_entry", "egress_session", "extract_pdf_markdown",
            "fold_room_owners", "fold_room_tasks", "fold_room_votes", "get_environment_manager",
            "inspect_upload",
-           "install_thread_excepthook", "invited_rooms", "is_error_reply", "is_vaf_state",
+           "install_thread_excepthook", "invited_rooms", "is_error_reply", "is_host_config",
+           "is_vaf_state",
            "jail_allows", "joined_rooms",
            "list_standing_grants", "mark_trusted_dir", "markers", "model_text",
            "open_for_write",
-           "participant_key", "queue_metrics", "record_threat", "remove_revocation_listener",
+           "participant_key", "project_dir_refusal", "queue_metrics", "record_threat",
+           "remove_revocation_listener",
            "resource_queue", "restore_account", "revoke_account", "revoke_standing_grants",
            "room_invitation",
            "run_project_git", "safe_entry_name", "set_account_allowlist_resolver",
@@ -146,6 +148,18 @@ def __getattr__(name):
         # screen at all without it. Stdlib at module level. See docs/EMBEDDING.md.
         from .core.data_stores import is_vaf_state
         return is_vaf_state
+    if name in ("is_host_config", "project_dir_refusal"):
+        # is_host_config: is this path part of the home directory's configuration (its dot
+        # entries, autostart, the Python user site, launch agents), which runs or steers
+        # programs outside any containment at the next login or start? The third static
+        # half of a write screen, beside is_vaf_state and jail_allows; VAF's file tools,
+        # project and mount checks and the sandbox copy-out ask it.
+        # project_dir_refusal: may THIS caller use a folder as a project (not unsafe, and
+        # inside the caller's own tree)? VAF's web workspace resolver, its headless runner,
+        # the coder and the jailed shell ask both halves together for a folder a stored
+        # record names. Stdlib at module level. See docs/EMBEDDING.md.
+        from .core import workspace_guard
+        return getattr(workspace_guard, name)
     if name in ("VoiceTurnEngine", "TurnOutcome"):
         # The live-call turn pipeline as an object: audio bytes in, ONE decided
         # TurnOutcome back - noise gate, STT, speaker verification with the

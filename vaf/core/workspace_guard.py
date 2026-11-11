@@ -30,14 +30,46 @@ half is `is_unsafe_project_dir`, the account half is the file jail's own
 about whose tree a path is in. The coder asks it for every folder it may work in (an
 explicit `project_path`, a path in the task, the chat's last project, the cwd, the folder
 it settles on) and the project history and rollback ask it for the folder they open.
-Named boundary: it is not on the facade. The account half already is (`vaf.jail_allows`),
-the unsafe half encodes VAF's own data layout, and no harness lane asks the combined
-question yet (the web workspace resolver asks only the unsafe half, after its own owner
-check). Export it when a harness lane or an embedder needs both halves together.
+It is on the facade (`vaf.project_dir_refusal`), because harness lanes ask both halves
+together: the web workspace resolver serves a chat's stored folder to the caller, and the
+headless runner hands the same stored folder to a turn as its project (and reads its
+VAF.md into the prompt). A folder recorded before the account half existed can name
+another account's tree, and the unsafe half alone does not see that. The jailed shell
+(`vaf.tools.workspace_exec.run_in_workspace`) asks it too, for the folder it is about to
+bind.
+
+The home directory's configuration is the fourth thing no agent may use: `is_host_config`
+(and `holds_host_config` for a folder above it). Files there run or steer programs outside
+every VAF containment at the next login, shell or Python start (shell start files,
+autostart entries, systemd user units, the Python user site, launch agents, the PowerShell
+profiles). Two parts, so there is no list of file names to drift:
+
+- every entry of the home directory whose name starts with a dot, and all below it
+  (deny-by-default, the same polarity as ``~/.vaf``);
+- explicit roots that hold configuration outside a dot folder: ``$XDG_CONFIG_HOME`` and
+  ``$XDG_DATA_HOME`` when set to an absolute path, ``%APPDATA%`` and ``%LOCALAPPDATA%``,
+  ``~/Library/LaunchAgents`` and ``Documents/PowerShell`` / ``Documents/WindowsPowerShell``.
+
+The file tools refuse writes there (``vaf.tools.filesystem.is_safe_path``), a project or a
+mount there is unsafe, and the sandbox copy-out refuses members that would land there.
+Reading is not refused: the rule is about what runs later, not about secrets (``~/.ssh``
+and key file names are refused to reads by their own screen).
+
+NAMED BOUNDARIES of the host rule. A path inside the system temp folder is exempt from an
+explicit root that CONTAINS the temp folder, and from nothing else: Windows' temp folder
+lies inside ``%LOCALAPPDATA%`` and every staging lane writes there. Exempting temp from
+every rule would switch the rule off exactly where it is tested, because a scratch home
+(the tests, macOS' ``/var/folders``) lies in temp. A ``TMPDIR`` inside a home dot folder
+makes temp writes through the file tools refused.
+An entry named only by dots (``~/...``) is folded away by the shared normaliser and is not
+a dot entry; no program reads configuration from such a name. The rule answers for a path
+at the moment it is asked; a folder swapped for a link afterwards is the race
+`vaf.core.path_jail.open_for_write` narrows for VAF's own state.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 # The checkout or installed package root: vaf/core/workspace_guard.py -> parents[2].
@@ -57,6 +89,8 @@ def is_unsafe_project_dir(path: str) -> bool:
       (subdirectories of them are fine, e.g. Documents/VAF_Projects/...)
     - VAF's own state (`data_stores.is_vaf_state`: ~/.vaf, the data and the config
       directory) and every folder that contains part of it
+    - the home directory's configuration (`is_host_config`: the dot entries of home,
+      autostart, the Python user site, ...) and every folder that contains part of it
     - anything inside the VAF program/source tree
 
     Also used by web_server/headless_runner to refuse persisting or re-injecting
@@ -81,6 +115,10 @@ def is_unsafe_project_dir(path: str) -> bool:
     # VAF's own state and every folder that contains part of it
     from vaf.core.data_stores import holds_vaf_state, is_vaf_state
     if is_vaf_state(p) or holds_vaf_state(p):
+        return True
+
+    # The home directory's configuration, and every folder that contains part of it
+    if is_host_config(p) or holds_host_config(p):
         return True
 
     # VAF program/source tree and everything inside it
@@ -112,8 +150,8 @@ def project_dir_refusal(path, *, user_scope_id, user_role=None):
     """
     try:
         if is_unsafe_project_dir(str(path)):
-            return ("it is the home directory, a standard folder itself, VAF's own data "
-                    "or VAF's code, not a project folder")
+            return ("it is the home directory, a standard folder itself, VAF's own data, "
+                    "the home directory's configuration or VAF's code, not a project folder")
         from vaf.tools.filesystem import jail_allows
         if not jail_allows(str(path), user_scope_id=user_scope_id, user_role=user_role,
                            mode="write"):
@@ -133,6 +171,10 @@ def assert_safe_workspace(ws: str) -> None:
     if is_vaf_state(p) or holds_vaf_state(p):
         raise ValueError(f"refusing to run: workspace {p} is or contains VAF's own data; "
                          "choose a folder under Documents")
+    if is_host_config(p) or holds_host_config(p):
+        raise ValueError(f"refusing to run: workspace {p} is or contains the home directory's "
+                         "configuration (dot folders, autostart, the Python user site); "
+                         "choose a folder under Documents")
     # Never root a jail at the real HOME, anything above it (/home holds every account's home)
     # or the filesystem root: that would bind-mount a home (incl. ~/.vaf secrets) or the
     # whole system read-write. The same rule as is_unsafe_project_dir.
@@ -140,3 +182,115 @@ def assert_safe_workspace(ws: str) -> None:
     if home.is_relative_to(p) or p == Path(p.anchor):
         raise ValueError(f"refusing to run: workspace {p} is the home directory, a folder above "
                          "it or the root directory, not a project")
+
+
+# Seams, read at call time so a test's HOME, USERPROFILE and environment redirect applies,
+# and so the Windows layout can be proven from another host (the ntpath seam in
+# vaf.core.data_stores spells the paths these return).
+def _home() -> str:
+    return os.fspath(Path.home())
+
+
+def _documents_dirs() -> list:
+    from vaf.core.platform import Platform
+    return [os.fspath(Platform.documents_dir())]
+
+
+def _temp_roots() -> list:
+    import tempfile
+    return [tempfile.gettempdir()]
+
+
+def _explicit_host_config_roots() -> list:
+    """The configuration roots outside a home dot folder, as path strings (see the module
+    docstring). Not gated by platform: on a host where one means nothing, refusing a write
+    there costs nothing."""
+    from vaf.core import data_stores as _ds
+    pm = _ds._pathmod
+    home = _home()
+    out = []
+    for var in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "APPDATA", "LOCALAPPDATA"):
+        value = (os.environ.get(var) or "").strip()
+        # The XDG specification ignores a relative value; so does this rule, rather than
+        # refusing a folder relative to whatever the current directory is.
+        if value and pm.isabs(value):
+            out.append(value)
+    out.append(pm.join(home, "Library", "LaunchAgents"))
+    for docs in [pm.join(home, "Documents")] + _documents_dirs():
+        out.append(pm.join(docs, "PowerShell"))
+        out.append(pm.join(docs, "WindowsPowerShell"))
+    return out
+
+
+def _spelled(paths) -> list:
+    from vaf.core.data_stores import _spellings
+    out = []
+    for path in paths:
+        for parts in _spellings(path):
+            if parts and parts not in out:
+                out.append(parts)
+    return out
+
+
+def _inside(parts, root) -> bool:
+    return parts[:len(root)] == root
+
+
+def is_inside_temp(path) -> bool:
+    """Whether ``path`` lies strictly inside the system temp folder, in either spelling of
+    both. Fail-closed for a caller that grants something on True: any error answers False."""
+    try:
+        temps = _spelled(_temp_roots())
+        return any(len(parts) > len(t) and _inside(parts, t)
+                   for parts in _spelled([path]) for t in temps)
+    except Exception:
+        return False
+
+
+def is_host_config(path) -> bool:
+    """Whether ``path`` is part of the home directory's configuration, which other programs
+    run or obey: an entry of the home directory whose name starts with a dot, or anything
+    below one, or a path inside one of the explicit roots (``$XDG_CONFIG_HOME``,
+    ``$XDG_DATA_HOME``, ``%APPDATA%``, ``%LOCALAPPDATA%``, ``~/Library/LaunchAgents``, the
+    PowerShell profile folders). The module docstring says why and names the boundaries.
+
+    Compared component by component in every spelling (as given and resolved, case-folded,
+    stream suffixes and trailing dots cut) by the normaliser `is_vaf_state` uses, for the
+    path and for the home directory. A path inside the system temp folder is exempt from an
+    explicit root that contains the temp folder (Windows' temp inside ``%LOCALAPPDATA%``),
+    never from the dot rule. Fail-closed: any error answers True."""
+    try:
+        mine = _spelled([path])
+        for home in _spelled([_home()]):
+            for parts in mine:
+                if len(parts) > len(home) and _inside(parts, home) \
+                        and parts[len(home)].startswith("."):
+                    return True
+        temps = _spelled(_temp_roots())
+        for root in _spelled(_explicit_host_config_roots()):
+            if not any(_inside(parts, root) for parts in mine):
+                continue
+            # The temp folder inside this root is where staging lanes write, not configuration.
+            if any(_inside(t, root) and _inside(parts, t) for parts in mine for t in temps):
+                continue
+            return True
+        return False
+    except Exception:
+        return True
+
+
+def holds_host_config(path) -> bool:
+    """Whether ``path`` contains part of the home directory's configuration: it is the home
+    directory or a folder above it (either spelling), or an explicit root of `is_host_config`
+    lies strictly inside it. Fail-closed: any error answers True."""
+    try:
+        mine = _spelled([path])
+        for home in _spelled([_home()]):
+            if any(_inside(home, parts) for parts in mine):
+                return True
+        for root in _spelled(_explicit_host_config_roots()):
+            if any(len(parts) < len(root) and _inside(root, parts) for parts in mine):
+                return True
+        return False
+    except Exception:
+        return True

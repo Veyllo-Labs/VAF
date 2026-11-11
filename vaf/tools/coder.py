@@ -2967,20 +2967,31 @@ def _choose_base_dir(tool, task, project_path, *, scope, role, content_only):
     return _BaseDirChoice(base_dir, hint, notes, "", "chosen")
 
 
-def _base_dir_tool(tool_class, base_dir):
+def _base_dir_tool(tool_class, base_dir, *, owner_scope, owner_role):
     """A coder inner tool bound to the run's project folder: every call gets ``base_dir``.
 
     The wrapper shows the wrapped tool's ``identity_kwargs``, so the coder's funnel assigns
     the caller to it like to any other inner tool. Without that, `project_history` and
     `project_rollback` would judge a model-written ``project_path`` as the machine owner.
+
+    ``owner_scope``/``owner_role`` are the run's caller, required so a construction that
+    forgets them fails: every call first asks `project_dir_refusal` for ``base_dir`` against
+    that caller, so the git tools and the codex/memory writers never work in a folder of
+    another account's tree, whatever chose it.
     """
     class GitToolWrapper:
         def __init__(self, tool, base_dir):
             self.tool = tool
             self.base_dir = base_dir
+            self.owner_scope = owner_scope
+            self.owner_role = owner_role
             self.identity_kwargs = tuple(getattr(tool, "identity_kwargs", ()) or ())
 
         def run(self, **kwargs):
+            reason = project_dir_refusal(self.base_dir, user_scope_id=self.owner_scope,
+                                         user_role=self.owner_role)
+            if reason:
+                return f"Error: cannot work in '{self.base_dir}': {reason}."
             kwargs['base_dir'] = self.base_dir
             return self.tool.run(**kwargs)
 
@@ -4242,31 +4253,37 @@ Thumbs.db
         except Exception:
             _initial_file_names = set()
         
+        # The run's caller (the identity _choose_base_dir judged), for every tool bound to
+        # base_dir below: the wrappers and bash ask the folder against it on every call.
+        _env_owner, _env_role = caller_scope, caller_role
+        _owner = {"owner_scope": _env_owner, "owner_role": _env_role}
+
         # Add Git tools with base_dir context (only if not CONTENT_ONLY). _base_dir_tool
         # passes base_dir and shows the wrapped tool's identity declaration to the funnel.
         if not skip_template:
-            self.local_tools["git_init"] = _base_dir_tool(GitInitTool, base_dir)
-            self.local_tools["git_add_commit"] = _base_dir_tool(GitAddCommitTool, base_dir)
-            self.local_tools["git_status"] = _base_dir_tool(GitStatusTool, base_dir)
-            self.local_tools["git_log"] = _base_dir_tool(GitLogTool, base_dir)
+            self.local_tools["git_init"] = _base_dir_tool(GitInitTool, base_dir, **_owner)
+            self.local_tools["git_add_commit"] = _base_dir_tool(GitAddCommitTool, base_dir, **_owner)
+            self.local_tools["git_status"] = _base_dir_tool(GitStatusTool, base_dir, **_owner)
+            self.local_tools["git_log"] = _base_dir_tool(GitLogTool, base_dir, **_owner)
 
             # Version history + safe rollback (coder-owned; also reachable for the
             # model so it can restore a known-good state at its own discretion)
             from vaf.tools.project_git import ProjectHistoryTool, ProjectRollbackTool
-            self.local_tools["project_history"] = _base_dir_tool(ProjectHistoryTool, base_dir)
-            self.local_tools["project_rollback"] = _base_dir_tool(ProjectRollbackTool, base_dir)
+            self.local_tools["project_history"] = _base_dir_tool(ProjectHistoryTool, base_dir,
+                                                                 **_owner)
+            self.local_tools["project_rollback"] = _base_dir_tool(ProjectRollbackTool, base_dir,
+                                                                  **_owner)
             
             # Add Knowledge Tools (wrapped to inject base_dir)
             from vaf.tools.knowledge import UpdateCodexTool, AddMemoryTool
-            self.local_tools["update_codex"] = _base_dir_tool(UpdateCodexTool, base_dir)
-            self.local_tools["add_memory"] = _base_dir_tool(AddMemoryTool, base_dir)
+            self.local_tools["update_codex"] = _base_dir_tool(UpdateCodexTool, base_dir, **_owner)
+            self.local_tools["add_memory"] = _base_dir_tool(AddMemoryTool, base_dir, **_owner)
 
         # The sandbox environment this run works in, decided AFTER base_dir: the caller's
         # project environment mounted at exactly this folder (an explicit `environment`
         # must match it), or none. A local, never instance state - the tool object is
         # shared across turns and users. A content-only run has no project to bind.
         _env_binding = None
-        _env_owner = _caller_identity(kwargs)[0]
         if not skip_template:
             _env_refusal = None
             try:
@@ -4329,15 +4346,19 @@ Thumbs.db
         self.local_tools["codesearch"] = CodeSearchTool(base_dir)
 
         # Re-bind bash to the project workspace: it now runs inside a kernel-confined
-        # jail (bwrap) rooted at base_dir - full workspace access (incl. host docker),
-        # but VAF's core, secrets and the agent itself are structurally out of reach.
-        # The jail mounts no other part of the home directory, so this folder is all of the
-        # host bash can write, and _choose_base_dir has made it one the caller may write.
-        # This is the only bash bound to a folder: the workflow lane's has none and the
-        # engine pins its workspace.
+        # jail (bwrap) rooted at base_dir - full access to the workspace and nothing else:
+        # no docker (run_in_workspace refuses every docker command, the socket is
+        # host-root), and VAF's core, secrets and the agent itself are structurally out of
+        # reach. The jail mounts no other part of the home directory, so this folder is all
+        # of the host bash can write. _choose_base_dir has made it one the caller may write,
+        # and the shell asks it again on every call (project_dir_refusal for the bound
+        # caller); a content-only run's temp folder is marked scratch, because it lies
+        # outside every account's tree. This is the only bash bound to a folder: the
+        # workflow lane's has none and the engine pins its workspace.
         if HAS_CODING_TOOLS:
             self.local_tools["bash"] = BashTool(base_dir, environment=_env_binding,
-                                                owner_scope=_env_owner)
+                                                owner_scope=_env_owner, owner_role=_env_role,
+                                                scratch=(_choice.source == "content_only"))
         # ssh or ftp only for a run started with deploy_to, the one its target names:
         # registered here, never auto-discovered (MANUALLY_ADDED_TOOLS below), and every call
         # pinned by _deploy_refusal.

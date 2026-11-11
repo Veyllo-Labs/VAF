@@ -63,21 +63,32 @@ def test_known_home_dirs_stay_put(fake_home):
 
 
 def test_explicit_absolute_home_file_written_in_place(fake_home):
-    """An explicit absolute path to an existing home-root dotfile (read-modify-write
-    of ~/.bashrc) must be written IN PLACE, not forked into Documents/VAF."""
-    dotfile = fake_home / ".bashrc"
-    dotfile.write_text("old")
-    WriteFileTool().run(path=str(dotfile), content="new")
-    assert dotfile.read_text() == "new"
-    assert not (fake_home / "Documents" / "VAF" / ".bashrc").exists()
+    """An explicit absolute path to an existing home-root file must be written IN PLACE,
+    not forked into Documents/VAF."""
+    target = fake_home / "notes.txt"
+    target.write_text("old")
+    WriteFileTool().run(path=str(target), content="new")
+    assert target.read_text() == "new"
+    assert not (fake_home / "Documents" / "VAF" / "notes.txt").exists()
 
 
 def test_explicit_tilde_home_file_written_in_place(fake_home):
     """Same via a ~-anchored path."""
-    (fake_home / ".gitconfig").write_text("old")
-    WriteFileTool().run(path="~/.gitconfig", content="new")
-    assert (fake_home / ".gitconfig").read_text() == "new"
-    assert not (fake_home / "Documents" / "VAF" / ".gitconfig").exists()
+    (fake_home / "todo.txt").write_text("old")
+    WriteFileTool().run(path="~/todo.txt", content="new")
+    assert (fake_home / "todo.txt").read_text() == "new"
+    assert not (fake_home / "Documents" / "VAF" / "todo.txt").exists()
+
+
+@pytest.mark.parametrize("name", [".bashrc", ".gitconfig"])
+def test_a_home_dotfile_is_refused_not_rerouted(fake_home, name):
+    """The home directory's configuration is refused before the reroute is reached: the
+    file stays as it was, and no copy appears in Documents/VAF either."""
+    (fake_home / name).write_text("old")
+    out = WriteFileTool().run(path=f"~/{name}", content="new")
+    assert "home directory's configuration" in out
+    assert (fake_home / name).read_text() == "old"
+    assert not (fake_home / "Documents" / "VAF" / name).exists()
 
 
 def test_symlinked_home_still_reroutes(tmp_path, monkeypatch):

@@ -642,7 +642,8 @@ class EnvironmentManager:
     @staticmethod
     def _safe_mount_path(project_path: str) -> str:
         """The resolved directory, when it may be mounted at /workspace at all: not the home
-        directory or a folder above it, not VAF's own data or code (the `:z` relabel must
+        directory or a folder above it, not VAF's own data, the home directory's
+        configuration or VAF's code (the `:z` relabel must
         never reach those). Raises EnvironmentRefused."""
         from vaf.core.workspace_guard import assert_safe_workspace, is_unsafe_project_dir
         p = os.path.realpath(os.path.expanduser(str(project_path)))
@@ -650,7 +651,8 @@ class EnvironmentManager:
             raise EnvironmentRefused(f"{project_path} is not a directory")
         if is_unsafe_project_dir(p):
             raise EnvironmentRefused(f"{p} cannot be mounted: it is the home directory, a "
-                                     f"standard folder itself, VAF's own data or VAF's code; "
+                                     f"standard folder itself, VAF's own data, the home "
+                                     f"directory's configuration or VAF's code; "
                                      f"choose a folder under Documents")
         try:
             assert_safe_workspace(p)
@@ -1118,7 +1120,9 @@ class EnvironmentManager:
         target is dropped, so code in the environment cannot plant a pointer to a host
         file (docker cp would have copied a link as a link).
 
-        Nothing lands in VAF's own state (`data_stores.is_vaf_state`): the folders of the
+        Nothing lands in VAF's own state (`data_stores.is_vaf_state`) or in the home
+        directory's configuration (`workspace_guard.is_host_config`: a member ``.bashrc``
+        copied into the home folder): the folders of the
         stream are chosen inside the environment, so a host folder that only CONTAINS that
         state (the parent of the data directory) would let a member named
         ``vaf/custom_tools/...`` plant code VAF runs. Every member is checked before the
@@ -1145,15 +1149,20 @@ class EnvironmentManager:
         if len(r.stdout) > TRANSFER_LIMIT_BYTES:
             raise EnvironmentRefused(f"{p} is larger than {TRANSFER_LIMIT_BYTES // (1024 * 1024)} MB")
         from vaf.core.data_stores import holds_vaf_state, is_vaf_state
+        from vaf.core.workspace_guard import holds_host_config, is_host_config
         dest_root = Path(host_dir).resolve()
         if is_vaf_state(dest_root):
             raise EnvironmentRefused(f"cannot copy into {dest_root}: it is VAF's own data; "
                                      "pick another folder")
+        if is_host_config(dest_root):
+            raise EnvironmentRefused(f"cannot copy into {dest_root}: it is the home directory's "
+                                     "configuration; pick another folder")
         dest_root.mkdir(parents=True, exist_ok=True)
         written: List[str] = []
-        # A target outside dest_root is dropped, so only a dest_root that holds state can
-        # receive a member inside it; the per-member state check is skipped otherwise.
-        check = holds_vaf_state(dest_root)
+        # A target outside dest_root is dropped, so only a dest_root that holds state or the
+        # home directory's configuration (the home itself: a member named .bashrc) can
+        # receive a member inside it; the per-member check is skipped otherwise.
+        check = holds_vaf_state(dest_root) or holds_host_config(dest_root)
 
         def _target(member: tarfile.TarInfo) -> Optional[Path]:
             target = (dest_root / member.name).resolve()
@@ -1162,6 +1171,10 @@ class EnvironmentManager:
             if check and is_vaf_state(target):
                 raise EnvironmentRefused(f"cannot copy {member.name} into {dest_root}: it "
                                          f"would write into VAF's own data; pick another folder")
+            if check and is_host_config(target):
+                raise EnvironmentRefused(f"cannot copy {member.name} into {dest_root}: it "
+                                         "would write into the home directory's configuration; "
+                                         "pick another folder")
             return target
 
         with tarfile.open(fileobj=io.BytesIO(r.stdout), mode="r") as tar:

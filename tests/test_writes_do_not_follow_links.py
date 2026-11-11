@@ -580,20 +580,38 @@ def test_render_check_saves_an_ordinary_screenshot(lab, monkeypatch):
 
 # -- move_file -----------------------------------------------------------------------------
 
-def test_move_file_cannot_bring_vafs_state_into_place(lab, tmp_path):
+def test_move_file_cannot_bring_vafs_state_into_place(lab, tmp_path, monkeypatch):
     """A folder that becomes a missing parent of a state root brings the state with it:
-    Documents/cfg holding vaf/trust/s.json moved to where the config folder's parent
-    belongs. MUTATION: drop the holds_vaf_state check in MoveFileTool - red."""
+    Documents/cfg holding xdg-config/vaf/trust/s.json moved to the folder above
+    XDG_CONFIG_HOME (XDG_CONFIG_HOME itself is the home directory's configuration and
+    refused before this check). MUTATION: drop the holds_vaf_state check in MoveFileTool -
+    red."""
     from vaf.core.platform import Platform
     from vaf.tools.filesystem import MoveFileTool
-    config_parent = Platform.config_dir().parent
-    assert not config_parent.exists()
+    outer = tmp_path / "outer"
+    for var in ("XDG_CONFIG_HOME", "APPDATA"):
+        monkeypatch.setenv(var, str(outer / "xdg-config"))
+    assert not outer.exists()
     src = lab.home / "Documents" / "cfg"
-    (src / Platform.config_dir().name / "trust").mkdir(parents=True)
-    (src / Platform.config_dir().name / "trust" / "s.json").write_text("{}")
-    out = MoveFileTool().run(src=str(src), dst=str(config_parent))
+    nested = src / "xdg-config" / Platform.config_dir().name / "trust"
+    nested.mkdir(parents=True)
+    (nested / "s.json").write_text("{}")
+    out = MoveFileTool().run(src=str(src), dst=str(outer))
     assert "Access denied" in out and "VAF's own data" in out, out
-    assert not config_parent.exists() and src.exists()
+    assert not outer.exists() and src.exists()
+
+
+def test_move_file_cannot_bring_the_home_configuration_into_place(lab):
+    """Documents/Library holding LaunchAgents/x.plist moved to a missing ~/Library would
+    put a launch agent in place. MUTATION: drop the holds_host_config check in
+    MoveFileTool - red."""
+    from vaf.tools.filesystem import MoveFileTool
+    src = lab.home / "Documents" / "Library"
+    (src / "LaunchAgents").mkdir(parents=True)
+    (src / "LaunchAgents" / "x.plist").write_text("<plist/>")
+    out = MoveFileTool().run(src=str(src), dst=str(lab.home / "Library"))
+    assert "Access denied" in out and "home directory's configuration" in out, out
+    assert not (lab.home / "Library").exists() and src.exists()
 
 
 def test_move_file_still_moves_a_folder_elsewhere(lab):

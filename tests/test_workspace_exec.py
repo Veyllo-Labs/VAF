@@ -4,13 +4,14 @@
 """Coder bash workspace confinement.
 
 The coding agent's bash gets full access to its project workspace (run scripts,
-installs, host docker for Docker projects) but VAF's own source, secrets and the
+installs; never docker, whose socket is host-root) but VAF's own source, secrets and the
 agent itself must be structurally out of reach - confined by the kernel (bubblewrap),
 not by a bypassable command string filter. These tests pin the guard logic and, where
 bubblewrap is present, prove real escape attempts fail.
 """
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -25,6 +26,9 @@ from vaf.tools.workspace_exec import (
 from vaf.core.workspace_guard import _VAF_ROOT
 
 VAF_ROOT = str(_VAF_ROOT)
+# A caller with no account (the machine owner's freedoms): the confinement these tests pin
+# is the kernel jail, not the account half, which has tests of its own below.
+_NO_ACCOUNT = {"user_scope_id": None, "user_role": None}
 
 
 # --- guard logic (no bwrap/docker needed) ----------------------------------
@@ -61,20 +65,20 @@ def test_docker_is_always_refused(tmp_path, monkeypatch):
         "docker run --rm -v/:/hostfs alpine ls",
         "docker run -v $(pwd)/../../..:/x alpine ls",
     ):
-        rc, out, err, mode = run_in_workspace(str(tmp_path), cmd)
+        rc, out, err, mode = run_in_workspace(str(tmp_path), cmd, **_NO_ACCOUNT)
         assert rc == -2 and mode == "refused", cmd
     assert not ran["x"], "a docker command must never reach the executor"
 
 
 def test_missing_workspace_is_refused():
-    rc, out, err, mode = run_in_workspace("/no/such/dir", "echo x")
+    rc, out, err, mode = run_in_workspace("/no/such/dir", "echo x", **_NO_ACCOUNT)
     assert rc == -2 and mode == "refused"
 
 
 def test_refuses_when_no_sandbox_available(tmp_path, monkeypatch):
     monkeypatch.setattr(wx, "_bwrap_available", lambda: False)
     monkeypatch.setattr(wx, "_docker_available", lambda: False)
-    rc, out, err, mode = run_in_workspace(str(tmp_path), "echo x")
+    rc, out, err, mode = run_in_workspace(str(tmp_path), "echo x", **_NO_ACCOUNT)
     assert rc == -2 and mode == "refused"
     assert "no sandbox" in err.lower()
 
@@ -100,7 +104,7 @@ _HAS_BWRAP = wx._bwrap_available()
 
 @pytest.mark.skipif(not _HAS_BWRAP, reason="bubblewrap not available")
 def test_real_workspace_write_persists(tmp_path):
-    rc, out, err, mode = run_in_workspace(str(tmp_path), "echo hi > f.txt")
+    rc, out, err, mode = run_in_workspace(str(tmp_path), "echo hi > f.txt", **_NO_ACCOUNT)
     assert rc == 0, (rc, err)
     assert (tmp_path / "f.txt").read_text().strip() == "hi"
 
@@ -109,7 +113,7 @@ def test_real_workspace_write_persists(tmp_path):
 def test_real_vaf_core_write_is_blocked(tmp_path):
     target = os.path.join(VAF_ROOT, "vaf", "core", "agent.py")
     before = open(target).read()
-    rc, out, err, mode = run_in_workspace(str(tmp_path), f"echo HACKED > {target}; echo done")
+    rc, out, err, mode = run_in_workspace(str(tmp_path), f"echo HACKED > {target}; echo done", **_NO_ACCOUNT)
     # The redirect's error is the shell's own wording, and /bin/sh differs by system: bash
     # says "No such file or directory", dash (Debian, Ubuntu) "cannot create ...: Directory
     # nonexistent". Either way the shell names the path it could not write.
@@ -119,7 +123,7 @@ def test_real_vaf_core_write_is_blocked(tmp_path):
 
 @pytest.mark.skipif(not _HAS_BWRAP, reason="bubblewrap not available")
 def test_real_vaf_source_is_invisible(tmp_path):
-    rc, out, err, mode = run_in_workspace(str(tmp_path), f"ls {VAF_ROOT}")
+    rc, out, err, mode = run_in_workspace(str(tmp_path), f"ls {VAF_ROOT}", **_NO_ACCOUNT)
     assert VAF_ROOT.encode
     assert "No such file" in (out + err) or rc != 0
 
@@ -134,7 +138,7 @@ def test_real_network_isolated_from_host_services(tmp_path):
         "    socket.create_connection(('127.0.0.1',5432),2); print('REACHED_HOST_DB')\n"
         "except OSError: print('blocked')\""
     )
-    rc, out, err, mode = run_in_workspace(str(tmp_path), code)
+    rc, out, err, mode = run_in_workspace(str(tmp_path), code, **_NO_ACCOUNT)
     assert "REACHED_HOST_DB" not in out, (out, err)
     assert "blocked" in out, (out, err)
 
@@ -142,7 +146,7 @@ def test_real_network_isolated_from_host_services(tmp_path):
 @pytest.mark.skipif(not _HAS_BWRAP, reason="bubblewrap not available")
 def test_real_env_secrets_not_leaked(tmp_path, monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-should-not-leak")
-    rc, out, err, mode = run_in_workspace(str(tmp_path), "env")
+    rc, out, err, mode = run_in_workspace(str(tmp_path), "env", **_NO_ACCOUNT)
     assert "sk-should-not-leak" not in (out + err), "tray env secrets leaked into the jail"
 
 
@@ -160,3 +164,121 @@ def test_refuses_a_folder_above_home(tmp_path, monkeypatch):
     assert not _VAF_ROOT.is_relative_to(homes.resolve())
     with pytest.raises(ValueError, match="above"):
         _assert_safe_workspace(str(homes))
+
+
+# --- whose folder the shell runs in (the account half) ---------------------
+
+_A = "ab12cd34-0000-4000-8000-00000000000a"
+_B = "cd34ef56-0000-4000-8000-00000000000b"
+
+
+@pytest.fixture
+def accounts(tmp_path, monkeypatch):
+    """Two accounts' project trees under a scratch home, a system temp folder of its own
+    (the test's home lies in the real temp folder), and a shell that records instead of
+    running."""
+    import vaf.core.workspace_guard as wg
+    import vaf.tools.filesystem as fs
+    home = tmp_path / "home"
+    (home / "Documents").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    systemp = tmp_path / "systemp"
+    systemp.mkdir()
+    monkeypatch.setattr(wg, "_temp_roots", lambda: [str(systemp)])
+    fs._shared_room_roots_cache.clear()
+    monkeypatch.setattr(fs, "_shared_room_roots", lambda scope: [])
+    from vaf.core.session import get_user_projects_root
+    a_proj = get_user_projects_root(_A) / "chat" / "site"
+    b_proj = get_user_projects_root(_B) / "chat" / "site"
+    a_proj.mkdir(parents=True)
+    b_proj.mkdir(parents=True)
+    ran = []
+    monkeypatch.setattr(wx, "_bwrap_available", lambda: True)
+    monkeypatch.setattr(wx, "_run", lambda argv, *a, **k: ran.append(argv) or (0, "ok", ""))
+    yield SimpleNamespace(a_proj=a_proj, b_proj=b_proj, systemp=systemp, ran=ran)
+    fs._shared_room_roots_cache.clear()
+
+
+def test_the_identity_keywords_have_no_default(accounts):
+    """A caller that forgets whose run it is gets no shell.
+    MUTATION: give user_scope_id/user_role a default of None - red."""
+    with pytest.raises(TypeError):
+        run_in_workspace(str(accounts.a_proj), "echo x")
+    assert accounts.ran == []
+
+
+def test_another_accounts_folder_is_refused_and_nothing_runs(accounts):
+    """MUTATION: remove the project_dir_refusal call from run_in_workspace - red."""
+    rc, out, err, mode = run_in_workspace(str(accounts.b_proj), "touch marker",
+                                          user_scope_id=_A, user_role="user")
+    assert (rc, mode) == (-2, "refused")
+    assert "outside the folders this account may write" in err
+    assert accounts.ran == []
+    rc, _, _, mode = run_in_workspace(str(accounts.a_proj), "true",
+                                      user_scope_id=_A, user_role="user")
+    assert mode != "refused" and len(accounts.ran) == 1
+    # An admin reaches every tree, as before.
+    rc, _, _, mode = run_in_workspace(str(accounts.b_proj), "true",
+                                      user_scope_id=_A, user_role="admin")
+    assert mode != "refused" and len(accounts.ran) == 2
+
+
+def test_a_scratch_folder_runs_only_inside_temp(accounts):
+    """The coder's content-only folder (tempfile.mkdtemp) lies outside every account's tree.
+    MUTATION: drop the temp containment of scratch - the B case goes red."""
+    scratch = accounts.systemp / "vaf_content_x"
+    scratch.mkdir()
+    _, _, err, mode = run_in_workspace(str(scratch), "true", user_scope_id=_A, user_role="user")
+    assert mode == "refused"  # without the flag the account half answers
+    _, _, err, mode = run_in_workspace(str(scratch), "true", user_scope_id=_A,
+                                       user_role="user", scratch=True)
+    assert mode != "refused", err
+    _, _, err, mode = run_in_workspace(str(accounts.b_proj), "touch marker",
+                                       user_scope_id=_A, user_role="user", scratch=True)
+    assert mode == "refused"
+    assert len(accounts.ran) == 1
+
+
+def test_bash_asks_the_folder_against_its_bound_identity(accounts):
+    """The identity is bound at construction by trusted code, never taken from the model, so
+    the frozen declaration (no identity_kwargs, no file_access) holds.
+    MUTATION: stop passing owner_scope/owner_role to run_in_workspace in BashTool.run - red."""
+    from vaf.tools.bash import BashTool
+    assert BashTool.identity_kwargs == () and BashTool.file_access is None
+    out = BashTool(str(accounts.b_proj), owner_scope=_A, owner_role="user").run(
+        command="touch marker")
+    assert "outside the folders this account may write" in out
+    assert accounts.ran == []
+    BashTool(str(accounts.a_proj), owner_scope=_A, owner_role="user").run(command="ls")
+    assert len(accounts.ran) == 1
+
+
+def test_the_workflow_lane_builds_bash_with_the_engines_identity():
+    """The engine assigns bash's base_dir; the shell must know whose run it is.
+    MUTATION: construct BashTool() without identity in Agent._try_workflow - red."""
+    import inspect
+
+    from vaf.core.agent import Agent
+    src = inspect.getsource(Agent._try_workflow)
+    assert 'BashTool(owner_scope=_wf_ident.get("user_scope_id"),' in src
+    assert 'owner_role=_wf_ident.get("user_role"))' in src
+    assert "**_wf_ident" in src
+    assert "BashTool()" not in src
+
+
+@pytest.mark.skipif(not _HAS_BWRAP, reason="bubblewrap not available")
+def test_real_jail_never_runs_in_another_accounts_folder(tmp_path, monkeypatch):
+    import vaf.tools.filesystem as fs
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(fs, "_shared_room_roots", lambda scope: [])
+    fs._shared_room_roots_cache.clear()
+    from vaf.core.session import get_user_projects_root
+    b_proj = get_user_projects_root(_B) / "proj"
+    b_proj.mkdir(parents=True)
+    rc, out, err, mode = run_in_workspace(str(b_proj), "touch marker",
+                                          user_scope_id=_A, user_role="user")
+    assert mode == "refused"
+    assert not (b_proj / "marker").exists()
+    fs._shared_room_roots_cache.clear()

@@ -403,8 +403,10 @@ def test_inside_a_run_a_model_written_project_path_is_judged_for_the_caller(worl
     from vaf.tools.project_git import ProjectHistoryTool, ProjectRollbackTool
     a_proj = world.a_root / "chat" / "mine"
     a_proj.mkdir(parents=True)
-    tools = {"project_history": _base_dir_tool(ProjectHistoryTool, str(a_proj)),
-             "project_rollback": _base_dir_tool(ProjectRollbackTool, str(a_proj))}
+    tools = {"project_history": _base_dir_tool(ProjectHistoryTool, str(a_proj),
+                                               owner_scope=A, owner_role="user"),
+             "project_rollback": _base_dir_tool(ProjectRollbackTool, str(a_proj),
+                                                owner_scope=A, owner_role="user")}
     funnel = _coder_funnel(tools, scope=A, role="user", session_id=None)
     (world.b_proj / "secret.txt").write_text("v2\n")
     _git("commit", "-qam", "B second commit", cwd=world.b_proj)
@@ -416,3 +418,46 @@ def test_inside_a_run_a_model_written_project_path_is_judged_for_the_caller(worl
     assert "outside the folders this account may write" in out
     assert "B private commit" not in out
     assert _count(world.b_proj) == before
+
+
+# ── the base-dir wrappers ask the folder themselves ────────────────────────────────────
+
+@pytest.mark.parametrize("tool_name", ["GitStatusTool", "GitLogTool", "GitInitTool"])
+def test_a_wrapped_git_tool_never_runs_in_another_accounts_folder(world, monkeypatch, tool_name):
+    """Today only _choose_base_dir keeps a run's folder in the caller's tree; the wrapper now
+    asks again, so a future caller that hands it a foreign folder fails closed.
+    MUTATION: remove the project_dir_refusal check in GitToolWrapper.run - red."""
+    import vaf.core.git_runner as git_runner
+    import vaf.tools.coder as coder
+
+    def _no_git(*a, **k):
+        raise AssertionError("git ran in another account's folder")
+
+    monkeypatch.setattr(git_runner, "run_project_git", _no_git)
+    wrapped = coder._base_dir_tool(getattr(coder, tool_name), str(world.b_proj),
+                                   owner_scope=A, owner_role="user")
+    out = wrapped.run()
+    assert out.startswith(f"Error: cannot work in '{world.b_proj}'")
+    assert OUTSIDE_ACCOUNT in out
+    # The caller's own folder still works.
+    mine = world.a_root / "chat" / "site"
+    mine.mkdir(parents=True)
+    monkeypatch.setattr(git_runner, "run_project_git",
+                        lambda *a, **k: SimpleNamespace(returncode=0, stdout="", stderr=""))
+    assert not coder._base_dir_tool(getattr(coder, tool_name), str(mine), owner_scope=A,
+                                    owner_role="user").run().startswith("Error: cannot work")
+
+
+def test_the_wrapper_requires_the_callers_identity(world):
+    """MUTATION: give owner_scope/owner_role a default - red."""
+    from vaf.tools.coder import GitStatusTool, _base_dir_tool
+    with pytest.raises(TypeError):
+        _base_dir_tool(GitStatusTool, str(world.b_proj))
+
+
+def test_the_coder_shell_comment_no_longer_promises_docker():
+    """run_in_workspace refuses every docker command; the comment said the opposite."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "tools" / "coder.py").read_text(
+        encoding="utf-8")
+    assert "incl. host docker" not in src

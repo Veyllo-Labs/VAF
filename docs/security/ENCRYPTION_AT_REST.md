@@ -226,7 +226,8 @@ reason to skip the backup - losing the keys is the unrecoverable direction.
 | User profile cache | `~/.vaf/user_profile_cache/` | AES-256-GCM (unchanged) |
 | Word suggestions learned from what a person types | `~/.vaf/autosuggest.json` (machine owner), `~/.vaf/autosuggest/<scope>.json` | AES-256-GCM; a plaintext corpus from before opens and is encrypted on its next write |
 | Agent rooms (A2A): the room, its log, members, read positions, invitations | `~/.vaf/a2a/rooms/<room>/` | AES-256-GCM |
-| Paired Veyllo App devices: account, public key hash, model, the outbox of ids still to deliver, one chat key per account | `~/.vaf/app_link/devices.json` | AES-256-GCM |
+| Paired Veyllo App devices: account, public key hash, model, the outbox of ids still to deliver, one chat key per account, and the records of the files kept for an absent device (name, type, size, hash) | `~/.vaf/app_link/devices.json` | AES-256-GCM |
+| Files a message to the Veyllo App carries, kept until every device of the account has them (at most 10 per account, seven days) | `~/.vaf/app_link_spool/` | AES-256-GCM |
 | An account's SSH key (`vaf/core/ssh.py`) | `~/.vaf/ssh/<account>/id_ed25519` | OpenSSH's own key encryption (bcrypt KDF, 64 rounds); the passphrase is in `user_secrets.enc` (envelope) under the namespace `ssh`, and reaches OpenSSH only through its prompt, never a file or a command line |
 
 File format: `VAFENC1:` ‖ 12-byte nonce ‖ ciphertext. A file WITHOUT that prefix

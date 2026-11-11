@@ -1050,7 +1050,7 @@ Where VAF reaches an account on Telegram (`messaging_endpoints.json`, `by_scope`
   (`vaf/core/app_link/session.py`); no message field, relay connection id or client address
   ever decides it, and a turn is queued with that row's scope and username.
 - **One chat per account**, `veyllo_app_<key>` with a random key minted once, so no scope id
-  reaches the phone; every device of the account shares it.
+  reaches the Veyllo App; every device of the account shares it.
 - **Pairing is the account's own**: the window opens with the account's own 2FA code, no
   route takes another account's id, and the device exists only after the account confirmed
   its fingerprint in the web UI.
@@ -1073,10 +1073,10 @@ Where VAF reaches an account on Telegram (`messaging_endpoints.json`, `by_scope`
   `vaf/core/agent_origin.py`). The tools kept off chats and every tool whose
   `BaseTool.agent_request` refuses (work that keeps running after the request, changes to how
   VAF works from now on, what needs the person; a tool among them that declares a card kind is
-  parked for the user's confirmation on the phone instead, below) are hidden and refused whatever
+  parked for the user's confirmation in the Veyllo App instead, below) are hidden and refused whatever
   `channel_tools_unrestricted` says, a call that needs a confirmation is refused at once, and a
   mail or WhatsApp message to a third party is parked for the user's approval (`outbound_hold`,
-  in the web UI or on the phone's card; a park that fails refuses). Every tool that writes files is refused, for every role and
+  in the web UI or on the app's card; a park that fails refuses). Every tool that writes files is refused, for every role and
   wherever it would write: by its `file_access = "write"` declaration (only a send the park
   lane holds stays open) or by its own `agent_request` (per call: `agent_request_for`,
   `cloud_storage`'s save and downloads). A memory stored in such a turn carries `metadata.origin` and
@@ -1086,7 +1086,7 @@ Where VAF reaches an account on Telegram (`messaging_endpoints.json`, `by_scope`
   contain; what the app chat may do without a confirmation stays reachable for the request,
   and answers the person gave ahead (an "always", a trusted folder, a grant for this chat, the
   admin bypass) still hold.
-- **A request's confirmation card counts only from the phone that asked**
+- **A request's confirmation card counts only from the device that asked**
   (`vaf/core/app_link/confirmations.py`). A tool that declares a card kind
   (`BaseTool.agent_request_confirm_kind`) and a mail or WhatsApp message to a third party are
   parked instead of refused, and the card goes to the asking device only, by its id. An
@@ -1096,7 +1096,7 @@ Where VAF reaches an account on Telegram (`messaging_endpoints.json`, `by_scope`
   (a second answer gets `used`), lasts ten minutes (`expired`), and is bound to the exact call:
   the tool and the digest of its stored arguments (`agent_origin.call_digest`), or for a
   message the draft's digest (`outbound_hold.draft_digest`), so an edit in the web UI settles
-  the card instead of letting the phone send another text. The confirmed call runs in a turn
+  the card instead of letting the Veyllo App send another text. The confirmed call runs in a turn
   that keeps every limit of the request (`asked_by_agent`, no channel lift, the policy and its
   hard blocks); only gate (e) lets that one call pass, once (`confirmed_call_scope`), and a
   policy confirmation of it is answered once, never as a standing grant. What that call

@@ -40,7 +40,8 @@ per closed window ("Veyllo API limit reached, continuing in 41 s").
 Named boundaries:
   * ``/v1/models`` listings are not gated (``api_backend.list_models``, the web
     server's model listing, the CLI settings listing, the setup wizard's key
-    check with a key that is not stored yet). The backend's contract does not
+    check with a key that is not stored yet, and the Settings check of a saved
+    key, ``config_routes.check_api_key``). The backend's contract does not
     list that endpoint, every caller is started by a person or runs once per
     selection, and a 429 there already falls back to the static model list.
     Revisit when the backend counts ``/v1/models`` against the window AND a

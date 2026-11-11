@@ -88,7 +88,7 @@ def list_devices():
 
 @app.command("remove")
 def remove_device(device: str = typer.Argument(..., help="The device id or its first 8 characters")):
-    """Remove a device (a lost phone too): its access ends at once; it has to pair again."""
+    """Remove a device (a lost one too): its access ends at once; it has to pair again."""
     from vaf.core.app_link import devices
     row = devices.resolve(device)
     if row is None:

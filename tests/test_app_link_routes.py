@@ -382,3 +382,31 @@ def test_relay_failures_name_their_reason(app_link_home, monkeypatch):
             r = admin.post(path, json=body)
             assert r.status_code == 502 and r.json()["reason"] == reason, (path, error, r.text)
             assert r.json()["detail"] == relay.admin_failure(error)
+
+
+def test_busy_reason_carries_retry_after(app_link_home, monkeypatch):
+    """A relay that asked to wait: the route says `busy` and how long, for the window to word
+    it. MUTATION: drop `retry_after` from `_admin_failed` - red."""
+    from vaf.core.app_link import relay
+
+    class _Busy:
+        last_error = "busy:41"
+
+        async def rotate(self, username=""):
+            return False
+
+        async def dissolve(self, username=""):
+            return False
+
+        def status(self):
+            return {"enabled": True, "state": "idle"}
+    monkeypatch.setattr(relay, "connector", lambda: _Busy())
+    admin = _app(monkeypatch, as_scope=SCOPE_A, role="admin")
+    for path, body in (("/api/app-link/relay/rotate", None),
+                       ("/api/app-link/relay/dissolve", {"code": "123456"})):
+        r = admin.post(path, json=body)
+        assert r.status_code == 502, r.text
+        assert r.json()["reason"] == "busy" and r.json()["retry_after"] == 41
+        assert r.json()["detail"] == "The Veyllo relay is busy; nothing was changed. Try again in 41 seconds."
+    _Busy.last_error = "rotate:409"
+    assert "retry_after" not in admin.post("/api/app-link/relay/rotate").json()

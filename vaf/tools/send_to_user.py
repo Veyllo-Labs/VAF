@@ -110,10 +110,21 @@ class SendToUserTool(BaseTool):
         sent, channel = send_to_main_messenger(user_scope_id, username, out, file_path=attach)
         if sent and channel:
             label = channel_label(channel)
+            # The Veyllo App keeps a message no device took at once: say so, with whether a
+            # push notice goes out, so the model does not send it again.
+            kept = ""
+            if channel == "veyllo_app":
+                try:
+                    from vaf.core.app_link import bridge as app_bridge
+                    note = app_bridge.delivery_note(user_scope_id)
+                    kept = f" {note}" if note else ""
+                except Exception:
+                    kept = ""
             if attach:
                 import os as _os
-                return f"Message and document {_os.path.basename(attach)} sent to the user via {label}." + attach_warning
-            return f"Message sent to the user via {label}." + attach_warning
+                return (f"Message and document {_os.path.basename(attach)} sent to the user via "
+                        f"{label}." + kept + attach_warning)
+            return f"Message sent to the user via {label}." + kept + attach_warning
 
         # No messenger reachable (main_messenger unset, channel not connected, or the
         # send failed). Never drop silently: surface a preview in the Web UI

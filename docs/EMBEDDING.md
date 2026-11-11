@@ -1330,8 +1330,10 @@ other call of the round, makes no further model call, and streams
 never an error - the model has to see that and go on). Override `turn_closing`
 when only some results end the turn or when the person should read something
 other than what the model is told. The person's reply is simply your next
-`run()`; nothing is held open for it. VAF's own `ask_user` is built on it. A
-loop of your own around `ToolCaller` reads the declaration itself.
+`run()`; nothing is held open for it. VAF's own `ask_user` is built on it, and so
+is `user_phone`, which ends the turn only at its second "not connected" in a chat
+(its `turn_closing` reads its own result). A loop of your own around `ToolCaller`
+reads the declaration itself.
 
 **A tool that checks for itself whether it may run.** Some tools cannot rely on
 the confirmation gate, because a lane without one (a workflow step) reaches them
@@ -1503,10 +1505,10 @@ Key declarative rules the runtime enforces:
   `"hold"` and VAF's park lane holds the call; a tool that writes files without that mode
   declares a refusal here.
 - `agent_request_confirm_kind` - for a `"refuse_work"` or `"refuse_standing"` tool, the kind of
-  the confirmation card the user can answer on the phone that asked instead (`"coder"`,
+  the confirmation card the user can answer on the device that asked instead (`"coder"`,
   `"automation"`, `"workflow"`, `"skill"`, `"identity"`; `""`, the default, keeps the refusal).
   In a request of the Veyllo App's agent such a call does not run and is not refused: it is
-  parked, the turn ends, the phone shows VAF's own text of exactly that call (every argument,
+  parked, the turn ends, the Veyllo App shows VAF's own text of exactly that call (every argument,
   never cut), and only the user's Yes runs it, once. A value outside the list keeps the
   refusal, so a typo never opens a tool. The card itself is the Veyllo App link's
   (`vaf/core/app_link/confirmations.py`, a named first-party boundary below); a stranger's
@@ -2240,7 +2242,7 @@ vaf.stop_session(session_id)    # your Stop button for one chat
   turn and no automation there.
 
 **The Veyllo App link is not on the facade (named boundary).** `vaf/core/app_link/` pairs a
-phone with an account and carries its chat over the Veyllo relay or a direct WebSocket. It is
+device with an account and carries its chat over the Veyllo relay or a direct WebSocket. It is
 first-party like the channel registry: the relay is Veyllo's service and the app is closed, so
 no embedder can pair an app of their own on it (measured embedders asking for it: 0;
 re-measured when one does). What it is built from is reachable to you as engine modules: the

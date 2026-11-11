@@ -103,14 +103,14 @@ export const CONNECTION_APPS: ConnectionApp[] = [
 
     // ============ Communication ============
     {
-        // The account's own phones: no on/off switch and no disconnect here. Access ends per
+        // The account's own devices: no on/off switch and no disconnect here. Access ends per
         // device (Settings, Account), the channel's switch is the installation's, and the
         // relay secret goes only with the relay instance.
         id: 'veyllo_app',
         name: 'Veyllo App',
         icon: Smartphone,
         category: 'communication',
-        description: 'Chat with your agent from your phone, through the Veyllo relay or over your own network',
+        description: 'Chat with your agent in the Veyllo App, through the Veyllo Relay or over your own network',
         configKey: 'veyllo_app_config',
         available: true,
         comingSoon: false,

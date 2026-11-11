@@ -12,7 +12,10 @@ complete and the purpose is clear:
 - SNI ``link.vaf.internal``: a device. A client certificate verified against the device CA
   is required, and its public key must name a device row that stands, with the same serial.
   The account comes ONLY from that row. Then exactly one ``hello`` naming that device, then
-  the messages (bridge.py).
+  the messages (bridge.py). A certificate of the device CA whose key has no row any more (the
+  device was removed) hears ``bye`` with ``removed``, so the app can tell it was unpaired;
+  every other refusal (no certificate, another serial, a row that does not stand) closes
+  without a word.
 
 Every TLS error (tampered, replayed, reordered or truncated bytes) closes the session; the
 frame reader refuses what is malformed. The limits VAF enforces by itself are constants
@@ -218,6 +221,12 @@ class LinkSession:
         der = self._tls.getpeercert(binary_form=True)
         row = _device_for_certificate(der)
         if row is None:
+            if der and _row_for_key(der) is None and _certificate(der) is not None:
+                # TLS verified this certificate against the device CA; no row holds its key:
+                # the device was removed. Said inside the session, so only that device hears it.
+                self.state = "closing"
+                self.close("removed", bye=True)
+                return False
             self.close("unknown_device", bye=False)
             return False
         self.device = row
@@ -278,8 +287,15 @@ class LinkSession:
     def send_chunk(self, xfer: bytes, index: int, data: bytes) -> bool:
         return self._write(pr.encode_chunk(xfer, index, data))
 
-    def send_file(self, xfer: bytes, path) -> bool:
-        with open(path, "rb") as handle:
+    def send_file(self, xfer: bytes, source) -> bool:
+        """The chunks of one file: ``source`` is a path, or the file's bytes (a spooled file)."""
+        if isinstance(source, (bytes, bytearray)):
+            data = bytes(source)
+            for index, start in enumerate(range(0, len(data), pr.CHUNK_DATA_MAX)):
+                if not self.send_chunk(xfer, index, data[start:start + pr.CHUNK_DATA_MAX]):
+                    return False
+            return True
+        with open(source, "rb") as handle:
             index = 0
             while True:
                 data = handle.read(pr.CHUNK_DATA_MAX)
@@ -501,19 +517,33 @@ def _drop_spool(transfer: Transfer) -> None:
         pass
 
 
-def _device_for_certificate(der: Optional[bytes]) -> Optional[Dict[str, Any]]:
-    """The device row a verified client certificate names, when it stands and its serial is
-    the one issued at pairing; else None."""
+def _certificate(der: Optional[bytes]):
     if not der:
         return None
     from cryptography import x509
-
-    from vaf.core.app_link import devices, pki
     try:
-        cert = x509.load_der_x509_certificate(der)
+        return x509.load_der_x509_certificate(der)
     except Exception:
         return None
-    row = devices.by_spki(pki.spki_sha256(cert.public_key()))
+
+
+def _row_for_key(der: Optional[bytes]) -> Optional[Dict[str, Any]]:
+    """The device row holding a certificate's public key, whatever its state or serial."""
+    cert = _certificate(der)
+    if cert is None:
+        return None
+    from vaf.core.app_link import devices, pki
+    return devices.by_spki(pki.spki_sha256(cert.public_key()))
+
+
+def _device_for_certificate(der: Optional[bytes]) -> Optional[Dict[str, Any]]:
+    """The device row a verified client certificate names, when it stands and its serial is
+    the one issued at pairing; else None."""
+    cert = _certificate(der)
+    if cert is None:
+        return None
+    from vaf.core.app_link import devices
+    row = _row_for_key(der)
     if row is None or str(row.get("cert_serial")) != str(cert.serial_number):
         return None
     if not devices.row_stands(row):

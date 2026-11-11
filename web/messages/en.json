@@ -1142,7 +1142,8 @@
       "failureReasons": {
         "not_set_up": "This installation is not registered with the relay yet. This happens automatically as soon as the first Veyllo App pairs through the relay.",
         "unreachable": "The relay could not be reached; nothing was changed. Try again in a moment.",
-        "refused": "The relay refused it; nothing was changed. Try again later."
+        "refused": "The relay refused it; nothing was changed. Try again later.",
+        "busy": "The Veyllo Relay is busy right now; nothing was changed. Try again in {seconds} seconds."
       },
       "adminTitle": "Veyllo Relay for this VAF installation",
       "adminIntro": "As an admin, you decide here for all accounts of this installation whether the Veyllo App may connect through the Veyllo Relay. Whether your Veyllo App connects through the relay or directly through your network is chosen in the next step, below the QR code.",

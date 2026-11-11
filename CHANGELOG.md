@@ -25,6 +25,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   log, without downloading it) and shows a file's size and modification time. When you stored
   the host, login or port as credentials, your agent writes `ftp://$FTP_USER@$FTP_HOST:$FTP_PORT`
   and VAF fills them in; the first connection still asks you and shows the server.
+- **Veyllo App: files reach the app later too.** A file your agent sends while the Veyllo App
+  is not connected now arrives with its message when the app connects again (up to 10 files
+  per account, 25 MiB each, kept for 7 days); before, only its name arrived.
+- **Unpair from the app.** Removing VAF in the Veyllo App now also removes the device in VAF.
 
 ### Fixed
 
@@ -42,6 +46,16 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   `ftp://` address is refused and pointed at the `ftp` tool, which asks before a new server
   and checks its certificate. A file name the server sends in an older encoding is now
   reported as such.
+- **Veyllo relay: wait times are honoured.** The Veyllo relay's wait times are honoured on
+  every call, and an admin action on a busy relay says how long to wait. Each push notice's
+  outcome is now in VAF's log (the HTTP status and the relay's error code, nothing else).
+
+### Changed
+
+- **Veyllo App: no more probing an app that is not connected.** When the Veyllo App is not
+  connected, your agent asks it at most twice per turn and then tells you to open the app; its
+  send tools say the message is kept and whether a push notice goes out. VAF calls the paired
+  device the Veyllo App everywhere.
 
 ## [0.1.0a36] - 2026-11-09
 

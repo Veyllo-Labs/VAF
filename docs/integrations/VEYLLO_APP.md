@@ -1,8 +1,8 @@
 # Connecting the Veyllo App
 
-The Veyllo App on your phone talks to your own agent on your VAF: you chat with it from
-anywhere, it sends you its messages (reminders, automation results, sub-agent results), and
-your agent can hand a task to the phone (`user_phone`). This page says how the link works,
+The Veyllo App talks to your own agent on your VAF: you chat with it from anywhere, it sends
+you its messages (reminders, automation results, sub-agent results), and your agent can hand
+a task to the Veyllo App (`user_phone`). This page says how the link works,
 what each party can see, what it costs and where its limits are.
 
 The code lives in `vaf/core/app_link/` (its module docstring names the pieces), the routes in
@@ -16,8 +16,8 @@ The code lives in `vaf/core/app_link/` (its module docstring names the pieces), 
   relay. Without that there is no connection at all. The relay forwards bytes between the
   app and VAF; nothing reaches VAF through it except the link protocol of paired devices.
   The sign-in, the web UI and the API are never reachable through the relay.
-- **Directly** (`wss://<address>:<https port>/api/app-link`). Your phone reaches VAF on the
-  local network or through your own VPN on the phone. Offered only while Local Network and
+- **Directly** (`wss://<address>:<https port>/api/app-link`). The Veyllo App reaches VAF on
+  the local network or through your own VPN on the device. Offered only while Local Network and
   its TLS are on (the protocol is `wss` only); the address is admitted like every other
   connection ([NETWORK_FEATURES.md](../setup/NETWORK_FEATURES.md)). Nothing is sent to
   Veyllo for these messages and they cost nothing.
@@ -51,7 +51,7 @@ Pairing happens in the web UI, in **Settings, Connections, Veyllo App**
    certificate authority, and for the relay a separate relay value. Everything secret sits in
    the URL's fragment, which a browser never sends; the code is valid for ten minutes and is
    neither logged nor stored on disk.
-3. The app creates a key in the phone's hardware store, checks VAF's certificate against the
+3. The app creates a key in the device's hardware store, checks VAF's certificate against the
    authority's fingerprint from the QR code, and sends a certificate request with the
    one-time value. VAF checks the request first (a bad one does not use up the code), then
    the code: a code used once is "used", an unknown or expired one "expired", a second
@@ -64,14 +64,15 @@ Pairing happens in the web UI, in **Settings, Connections, Veyllo App**
 
 The window asks the server every two seconds while it is open, visible and the pairing is still
 running. Closing it (the X, Escape, a click beside it) withdraws a QR code that is still live
-and refuses a phone that is waiting for the confirmation, so no pairing nobody watches stays
+and refuses a device that is waiting for the confirmation, so no pairing nobody watches stays
 open. Refused, expired and failed pairings each say what happened and offer a new code.
 
 Every refused pairing is a security event (`app_pairing_refused`), every paired and removed
 device too (`channel_paired`, `channel_unpaired`).
 
 The protocol's vectors (the QR code, the frames, the fingerprint) are in
-`tests/fixtures/app_link/`, made by `scripts/app_link_vectors.py`.
+`tests/fixtures/app_link/`, made by `scripts/app_link_vectors.py`. File transfer ids (`xfer`)
+are 16 random bytes as base64url without padding (22 characters).
 
 ## What each party sees
 
@@ -81,39 +82,57 @@ The protocol's vectors (the QR code, the frames, the fingerprint) are in
   the QR code, and VAF knows a device only by its certificate. A relay that changes, replays,
   reorders or cuts bytes ends the session; a relay that moves one device's stream to another
   connection id still gets that device, because the id never decides who is talking. The
-  relay's connection goes only to the API's host (`relay_api_base`) or `relay.veyllo.com`,
-  at an address VAF resolved and checked as public itself, with TLS checked against the
-  name; behind a site proxy the proxy resolves the name, as for every outbound fetch.
+  relay's connection goes only to the API's host (`relay_api_base`) or `relay.veyllo.com`.
+  VAF resolves that name itself, checks that the address is public and connects to that one
+  address (IPv4 first, no fallback to another), with TLS checked against the name. Behind a
+  site proxy the proxy resolves the name instead, as it does for all of VAF's outbound
+  connections. A redirect of the relay is followed only to the relay's own address and port.
   A session that has not said who it is gets 20 seconds and small frames only.
 - **The agent in the Veyllo App** uses your VAF as a tool and reads its answers with the app's
   own chat model; there is no switch for that. The pairing window says so in one sentence and
   links Veyllo's privacy policy (https://veyllo.app/legal/privacy), which names it.
-- **Google and Apple** see when a push notice reaches the phone (it carries no content).
+- **Google and Apple** see when a push notice reaches the device (it carries no content).
 - **The app is closed source.** The end-to-end promise holds against the relay, not against a
   changed app. When you use Veyllo's models in the app, that content goes to Veyllo.
 
-## Messages, replies and the phone being away
+## Messages, replies and the Veyllo App being away
 
 Your message becomes a turn of your agent in your account's one Veyllo App chat; the account
-comes from the device, never from the message. The reply streams to the phone and ends with
-its final text. A message VAF sends by itself (`send_to_user` with the Veyllo App as your main
-messenger, the `send_veyllo_app` tool) and every finished reply are stored once in VAF's chat
-history and held per device until that device confirms it: a phone that was away gets them,
-in order, when it connects again, a reply that finished meanwhile as one message. Up to 200
-entries and seven days are held per device; older ones stay in VAF's chat history, and the
-phone gets one notice that they are there. A file sent while a phone is away reaches it as its
-text line only.
+comes from the device, never from the message. The reply streams to the Veyllo App and ends
+with its final text. A message VAF sends by itself (`send_to_user` with the Veyllo App as your
+main messenger, the `send_veyllo_app` tool) and every finished reply are stored once in VAF's
+chat history and held per device until that device confirms it: a device that was away gets
+them, in order, when it connects again, a reply that finished meanwhile as one message. Up to
+200 entries and seven days are held per device; older ones stay in VAF's chat history, and the
+device gets one notice that they are there. When no device took a message at once, the send
+tools tell your agent that it is kept, whether a push notice goes out, and not to send it
+again.
 
-**Push.** When something waits for a phone that is not connected, VAF waits 30 seconds (the
-phone often reconnects), then asks the relay to notify it, and then at most once every five
-minutes while something still waits. Push needs the phone to be paired with Veyllo: without
-Veyllo there is no push, and on the direct way alone the app learns about new messages only
-while it is open. With the relay switched off there are no push notices either.
+**Files.** A file VAF sends with a message is kept, encrypted, in `~/.vaf/app_link_spool/`
+until every device of the account has confirmed that message (`vaf/core/app_link/spool.py`).
+A device that was away, or dropped before it confirmed, gets the message with its file when
+it connects again. Up to 10 files per account are kept (the oldest goes first), 25 MiB each,
+for seven days, and each device is sent a file at most three times. Beyond that the message
+arrives as its text with the line `[File: <name>]`, which the app shows as a file that did not
+arrive. The kept files are not in a backup.
 
-**Tasks for the phone.** `user_phone` hands the phone's agent a task (a calendar entry, a
-reminder) and waits for its answer, up to its timeout. With no phone connected it says so at
-once and nothing is sent or kept for later. Its answer reaches your agent marked as data the
-phone reported, never as instructions. The phone asks you itself before sensitive actions.
+**Push.** When something waits for a device that is not connected, VAF waits 30 seconds (the
+app often reconnects), then asks the relay to notify it, and then at most once every five
+minutes while something still waits. When the relay answers that it is busy (429 or 503), VAF
+waits as long as the relay's `retry-after` says, on every call to the relay. Each notice's
+outcome is a line in VAF's log: the device id's first eight characters, the HTTP status and the
+relay's error code (`not_reachable`, `rate_limited`, `unavailable`), never the content, the
+relay member or the secret. Push needs the device to be paired with Veyllo: without Veyllo
+there is no push, and on the direct way alone the app learns about new messages only while it
+is open. With the relay switched off there are no push notices either.
+
+**Tasks for the Veyllo App.** `user_phone` hands the agent in your Veyllo App a task (a
+calendar entry, a reminder) and waits for its answer, up to its timeout. With no Veyllo App
+connected it says so at once and nothing is sent or kept for later. Asked a second time in the
+same chat within five minutes with still no device connected, the turn ends there: you read
+that your Veyllo App is not connected and that you should open it, in your language, and your
+agent makes no further call. Its answer reaches your agent marked as data the app reported,
+never as instructions. The Veyllo App asks you itself before sensitive actions.
 
 **Tools in the app chat** follow the rules of every messaging channel
 (`vaf/core/tool_contract.py`, `evaluate_tool_policy`), because protocol v1 has no confirmation
@@ -141,12 +160,12 @@ differences (`vaf/core/app_link/bridge.py`, `vaf/core/agent_origin.py`):
   history tools) reads it the same way. It is not stored as your message in the inbox, does not
   become your last words shown in your other chats, and does not answer a question your agent
   is waiting on.
-- **Work that would run later and changes to how VAF works ask you on the phone first.** A
+- **Work that would run later and changes to how VAF works ask you in the Veyllo App first.** A
   coder run (`coding_agent`), an automation (`create_automation`, `update_automation`,
   `restore_automation`, and the notes later automation runs act on, `add_automation_note`,
   `add_automation_todo`), a workflow (`execute_workflow`), a skill (`create_skill`,
   `update_skill`, `delete_skill`) or a change of your profile (`update_user_identity`) does not
-  run on a request: the call is parked, the request's turn ends there, and the phone that asked
+  run on a request: the call is parked, the request's turn ends there, and the device that asked
   shows a confirmation card (each such tool declares its card,
   `BaseTool.agent_request_confirm_kind`, read by `vaf/core/agent_origin.py`). So does a mail
   (`send_mail`, `reply_mail`, `forward_mail`) or a WhatsApp message to a number
@@ -187,7 +206,7 @@ differences (`vaf/core/app_link/bridge.py`, `vaf/core/agent_origin.py`):
   before it is parked; the app's agent gets the reason. What runs is still exactly the
   stored call. Nothing is cut: a call whose text as shown would be longer than
   4000 characters is refused, and the app's agent is told to make the request smaller. Your answer counts only from a tap on that card on that
-  phone:
+  device:
   - **Yes** runs exactly that call once (a message leaves as when you press Send in the web
     UI), and the app's agent gets its outcome as the answer to its request. The confirmed work
     then runs with its own limits, as when you ask for it in the app chat yourself: the card
@@ -199,17 +218,17 @@ differences (`vaf/core/app_link/bridge.py`, `vaf/core/agent_origin.py`):
     waits as a draft in the web UI.
   - **A decision in the web UI** settles the card: a message you send, discard or edit in the
     web UI's Veyllo App chat answers the request with what became of it, within seconds, and a
-    later tap on the phone is told it is decided. One decision wins: a draft leaves at most
-    once, and the phone never sends a draft that was edited after its card went out.
-  - **Cancel** of the request on the phone drops the card (and the message).
+    later tap in the Veyllo App is told it is decided. One decision wins: a draft leaves at
+    most once, and the Veyllo App never sends a draft that was edited after its card went out.
+  - **Cancel** of the request in the Veyllo App drops the card (and the message).
   - One card waits per request at a time, and a request opens at most three in a row. A
     second action in the same round is refused. A message prepared in the same round as an
     action (or a second message) gets its own card, with its own id, once the card before it
     was answered Yes and its outcome is in; the request's answer then carries both outcomes.
     When the card before it ends any other way (No, no answer, a decision in the web UI), no
     further card comes: the message waits as a draft in the web UI, and the answer says so.
-  - **The phone is away:** the card waits until it runs out, the relay sends a push (a
-    relay-paired phone), and the card comes again after the app connects, with the same id.
+  - **The Veyllo App is away:** the card waits until it runs out, the relay sends a push (a
+    relay-paired device), and the card comes again after the app connects, with the same id.
     It is never in the outbox.
   - **An older app** that does not know the card answers "unknown type": every card sent to
     that connection is answered as not run (a message waits in the web UI), and the next one
@@ -272,9 +291,9 @@ differences (`vaf/core/app_link/bridge.py`, `vaf/core/agent_origin.py`):
   (`vaf-audit/last.json` inside the git folder of the project it audits). Your cloud storage
   stays readable (`cloud_storage` browse, search, read, and showing a file in the document
   viewer).
-- **The answer goes to the phone that asked.** It streams as `delta` and ends with `done`, both
+- **The answer goes to the device that asked.** It streams as `delta` and ends with `done`, both
   under the request's own id, to that device only, without "read" or "typing"; it is held in
-  that device's outbox only, and only that device gets a push. Your other phones see nothing
+  that device's outbox only, and only that device gets a push. Your other devices see nothing
   of it in the app (VAF's chat history keeps both). After a dropped connection the app sends the
   same id again and gets only an acknowledgement; the answer reaches the device on its new
   connection, or later from the outbox as a message with that id.
@@ -302,8 +321,12 @@ links that page instead of quoting amounts, which an installed VAF could not kee
 - Your paired devices are rows of **Settings, Account, Signed-in devices**, with the way they
   last used (relay or direct), whether one is connected now, when it last connected, when it
   was paired and its fingerprint. **Remove** asks first; its access then ends at once, also
-  when its certificate is still valid (a lost phone too). In the terminal: `vaf devices list`,
+  when its certificate is still valid (a lost device too). In the terminal: `vaf devices list`,
   `vaf devices remove <id>`.
+- **Removing VAF in the Veyllo App** removes that device in VAF too (the app sends `unpair`;
+  the device comes from its certificate, so a device can only remove itself). It is logged as
+  "unpaired in the Veyllo App". A removed device that connects again hears `bye` with the
+  reason `removed`, so the app can tell you it is no longer paired.
 - An admin sees every account's devices, with the account, in the admin section on the code
   step of the Veyllo App window ("Veyllo Relay for this VAF installation", always open, with a
   sentence saying it decides for every account and that the way of the account's own Veyllo App
@@ -319,8 +342,10 @@ links that page instead of quoting amounts, which an installed VAF could not kee
   out of the relay" in the window, with the admin's own 2FA code) signs the installation out
   of the relay for every account and deletes the instance; the devices stay paired for the
   direct way and need a new pairing for the relay. A failed action says whether
-  no relay is set up, the relay could not be reached or it refused (`reason` in the route's
-  answer).
+  no relay is set up, the relay could not be reached, it is busy or it refused (`reason` in
+  the route's answer). Busy means the relay answered 429 or 503: the window says how many
+  seconds to wait (`retry_after`), and until then VAF refuses the action itself without asking
+  the relay. A refusal names the relay's own answer at the end, for support.
 - `vaf health` has an `app_link` row, `vaf doctor` reports a relay that carries devices and an
   instance whose secret is missing.
 

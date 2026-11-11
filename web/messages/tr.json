@@ -1142,7 +1142,8 @@
       "failureReasons": {
         "not_set_up": "Bu kurulum henüz röleye kayıtlı değil. İlk Veyllo App röle üzerinden eşleştiğinde bu otomatik olarak olur.",
         "unreachable": "Röleye ulaşılamadı; hiçbir şey değiştirilmedi. Birazdan tekrar dene.",
-        "refused": "Röle reddetti; hiçbir şey değiştirilmedi. Daha sonra tekrar dene."
+        "refused": "Röle reddetti; hiçbir şey değiştirilmedi. Daha sonra tekrar dene.",
+        "busy": "Röle şu anda meşgul; hiçbir şey değiştirilmedi. {seconds} saniye sonra tekrar dene."
       },
       "adminTitle": "Bu VAF kurulumu için Veyllo Relay",
       "adminIntro": "Yönetici olarak burada bu kurulumun tüm hesapları için Veyllo App'in Veyllo Relay üzerinden bağlanıp bağlanamayacağına karar verirsin. Kendi Veyllo App'inin röle üzerinden mi yoksa doğrudan kendi ağın üzerinden mi bağlanacağını bir sonraki adımda, QR kodunun altında seçersin.",

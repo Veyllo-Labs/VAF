@@ -1142,7 +1142,8 @@
       "failureReasons": {
         "not_set_up": "Diese Installation ist beim Relay noch nicht angemeldet. Das geschieht automatisch, sobald sich die erste Veyllo App über das Relay koppelt.",
         "unreachable": "Das Relay war nicht erreichbar; es wurde nichts geändert. Versuch es gleich noch einmal.",
-        "refused": "Das Relay hat abgelehnt; es wurde nichts geändert. Versuch es später noch einmal."
+        "refused": "Das Relay hat abgelehnt; es wurde nichts geändert. Versuch es später noch einmal.",
+        "busy": "Das Relay ist gerade ausgelastet; es wurde nichts geändert. Versuch es in {seconds} Sekunden noch einmal."
       },
       "adminTitle": "Veyllo Relay für diese VAF-Installation",
       "adminIntro": "Hier legst du als Admin für alle Konten dieser Installation fest, ob sich die Veyllo App über das Veyllo Relay verbinden darf. Ob deine Veyllo App über das Relay oder direkt über dein Netz verbunden wird, wählst du im nächsten Schritt unter dem QR-Code.",

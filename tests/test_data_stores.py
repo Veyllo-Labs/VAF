@@ -231,6 +231,7 @@ def test_the_sealed_globs_stay_inside_their_store():
     "a2a/rooms/r1/log/peer-a/000001.json",
     "autosuggest/ab12cd34.json",
     "autosuggest.json",
+    "app_link_spool/0f8fad5b-d9cb-469f-a165-70867728950e.bin",
 ])
 def test_the_key_probe_finds_ciphertext_in_every_sealed_store(fake_roots, rel):
     """Before minting a file-store key, data_files asks whether ciphertext already exists. Its

@@ -263,3 +263,22 @@ def test_a_waiting_pairing_session_has_a_hard_end(app_link_home):
     assert not session.closed
     session.check_timeouts(session.pair_wait_since + sess.PAIR_WAIT_SECONDS + 1)
     assert session.closed and session.close_reason == "pair_wait_timeout"
+
+
+def test_a_failure_after_add_device_leaves_no_row(app_link_home, monkeypatch):
+    """The account's lane could not be switched on after the row was written: the pairing ends
+    as failed and the row goes with it. MUTATION: drop the `remove_device` in `_accept` - red."""
+    p = _issue()
+    client, pipe, _key = _scan(p)
+
+    def _broken(scope):
+        raise OSError("config.json is read-only")
+    monkeypatch.setattr(pairing, "_switch_lane_on", _broken)
+    with pytest.raises(OSError):
+        pairing.confirm(SCOPE_A, True)
+    client.pump()
+    assert devices.all_devices() == []
+    assert pairing.current(SCOPE_A)["state"] == "failed"
+    assert client.of("pair_error") == [{"t": "pair_error", "code": "expired"}]
+    removed = [f for k, f in app_link_home.events if k == "channel_unpaired"]
+    assert removed and removed[-1]["detail"].endswith("pairing failed before it finished")

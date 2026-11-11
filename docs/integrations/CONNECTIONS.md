@@ -17,7 +17,7 @@ Connect external apps and services to interact with your VAF agent.
 | Microsoft Teams | Coming Soon | Bot Framework for Teams integration |
 | Matrix (Element) | Coming Soon | Open-source chat protocol |
 | IRC | Coming Soon | Classic IRC for communities |
-| **Veyllo App** | Available | Chat with your agent from your phone, through the Veyllo relay or directly over your VPN; your agent can hand tasks to the phone ([VEYLLO_APP.md](VEYLLO_APP.md)) |
+| **Veyllo App** | Available | Chat with your agent in the Veyllo App, through the Veyllo relay or directly over your VPN; your agent can hand tasks to the Veyllo App ([VEYLLO_APP.md](VEYLLO_APP.md)) |
 | **Contacts** | Available | Central contact list with personal file and assistant whitelist |
 
 ### Calendar
@@ -609,7 +609,7 @@ When you have one or more messaging connections (e.g. Telegram, Discord), the ag
 - **First time**: If you have not set a preferred channel, the agent will ask once (e.g. "Should I send it via WhatsApp, Telegram or Discord?") and store your answer in User Identity as `main_messenger` (via the `update_user_identity` tool). Only a channel VAF can deliver to can be the main messenger (`MAIN_MESSENGERS` in `vaf/core/channels.py`); any other stored value reads as "not set", so the agent asks again rather than delivering somewhere the setting does not name.
 - **Sending**: When you named a platform ("send it via Telegram"), the agent uses the matching tool (`send_telegram`, `send_discord`, `send_whatsapp` or `send_veyllo_app`). When no platform was named - and always in automations/workflows - it uses `send_to_user`, which resolves `main_messenger` at run time. For **Telegram**, the agent can send to you once your Telegram is paired with your account; it writes to your own paired Telegram (the one you last wrote from, when you paired two), never to a contact who wrote to the bot. For **WhatsApp**, the whitelist phone number is used. Chat IDs / endpoints are stored in `messaging_endpoints.json` under the platform data directory.
 - **Discord**: Proactive send is implemented via `send_discord` (with the same user-scope checks used by other messaging tools).
-- **Veyllo App**: `send_veyllo_app` (and `send_to_user` with the Veyllo App as main messenger) reaches the account's own paired devices that may still receive; a phone that is away gets the message when it connects again. With no such device the delivery says no and `send_to_user` falls back to the Web UI ([VEYLLO_APP.md](VEYLLO_APP.md)).
+- **Veyllo App**: `send_veyllo_app` (and `send_to_user` with the Veyllo App as main messenger) reaches the account's own paired devices that may still receive; a device that is away gets the message, and its file, when it connects again. With no such device the delivery says no and `send_to_user` falls back to the Web UI ([VEYLLO_APP.md](VEYLLO_APP.md)).
 
 ## Channel model
 
@@ -754,8 +754,8 @@ accounts="shared")`. What differs ([VEYLLO_APP.md](VEYLLO_APP.md) for the whole 
 - **Delivery**: the `send_to_main_messenger` branch stores the message once and lists it in
   every device's outbox; a device that is away gets it when it connects again.
 - **The card in Settings, Connections** opens the Veyllo App window, where the account pairs a
-  phone and an admin manages the relay ([VEYLLO_APP.md](VEYLLO_APP.md#pairing)). It shows how
-  many phones the account has paired and whether the relay is on, and it has no on/off switch
+  device and an admin manages the relay ([VEYLLO_APP.md](VEYLLO_APP.md#pairing)). It shows how
+  many devices the account has paired and whether the relay is on, and it has no on/off switch
   and no disconnect: access ends per device (Settings, Account), the channel's switch is the
   installation's, and the relay secret goes only with the relay instance.
 

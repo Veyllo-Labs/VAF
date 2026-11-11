@@ -23,9 +23,10 @@ class SendVeylloAppTool(BaseTool):
     permission_level = "write"
     side_effect_class = "irreversible"
     description = (
-        "Send a message to the user on their Veyllo App (their phone). "
+        "Send a message to the user in their Veyllo App. "
         "Use when the user asked to get something on the app or their main messenger is the "
-        "Veyllo App. A phone that is not connected right now gets it when it connects again. "
+        "Veyllo App. A Veyllo App that is not connected right now gets it when it connects "
+        "again. "
         "For a document, pass file_path with the full path to the file."
     )
     parameters = {
@@ -84,7 +85,7 @@ class SendVeylloAppTool(BaseTool):
                              str(file_path) if file_path else None)
         except Exception:
             pass
-        reached = len(bridge.connected_devices(scope))
-        if reached:
+        note = bridge.delivery_note(scope)
+        if not note:
             return "Message sent to the Veyllo App."
-        return "Message stored for the Veyllo App; the phone gets it when it connects again."
+        return "Message stored for the Veyllo App. " + note

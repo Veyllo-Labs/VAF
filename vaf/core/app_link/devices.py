@@ -11,8 +11,9 @@ row ends access at once, even while the certificate is still valid.
 Also here, because they belong to the devices: one chat per account (``chats``, a random
 key minted once, so no scope id ever goes to the phone; the session id is
 ``veyllo_app_<key>``), the per-device outbox of ids still to be delivered (the text stays
-in the channel message store, the one copy), and the relay members still to delete
-(``member_tombstones``).
+in the channel message store, the one copy), the relay members still to delete
+(``member_tombstones``), and the records of the files held for a device that was away
+(``spool``: name, type, size and hash per message id; the bytes are in spool.py's store).
 
 Under a thread lock plus a file lock, so the CLI's ``vaf devices remove`` and the running
 VAF never write over each other; ``generation()`` lets the running VAF see a change made by
@@ -68,7 +69,8 @@ def _locked() -> Iterator[None]:
 
 
 def _empty() -> Dict[str, Any]:
-    return {"format": DEVICES_FORMAT, "devices": [], "chats": {}, "member_tombstones": []}
+    return {"format": DEVICES_FORMAT, "devices": [], "chats": {}, "member_tombstones": [],
+            "spool": {}}
 
 
 def _load() -> Dict[str, Any]:
@@ -89,6 +91,11 @@ def _load() -> Dict[str, Any]:
                       and d.get("device_id") and d.get("user_scope_id")]
     out["chats"] = {str(k): str(v) for k, v in (state.get("chats") or {}).items()}
     out["member_tombstones"] = [str(m) for m in state.get("member_tombstones") or [] if m]
+    # Additive key: a file written before it has none, and a loader before it drops it (the
+    # files then replay as their text line, as they always did).
+    spool = state.get("spool")
+    out["spool"] = {str(k): dict(v) for k, v in spool.items()
+                    if isinstance(v, dict)} if isinstance(spool, dict) else {}
     return out
 
 
@@ -324,6 +331,72 @@ def outbox_due(device_id: str, now: Optional[float] = None) -> Tuple[List[Dict[s
         return [dict(e) for e in fresh], int(row["outbox_dropped"])
     result = _update(device_id, _change)
     return result if result is not None else ([], 0)
+
+
+def outbox_file_sent(device_id: str, message_id: str) -> int:
+    """Count one more replay of an outbox entry's file to this device; the new count (0 when
+    the entry is gone)."""
+    def _change(row):
+        for entry in row.get("outbox") or []:
+            if entry.get("id") == str(message_id):
+                entry["sends"] = int(entry.get("sends") or 0) + 1
+                return entry["sends"]
+        return 0
+    return int(_update(device_id, _change) or 0)
+
+
+# ── the records of spooled files (the bytes: spool.py) ────────────────────────
+
+def spool_add(user_scope_id: Any, message_id: str, meta: Dict[str, Any], keep: int) -> List[str]:
+    """Record a spooled file of the account. The account's oldest records beyond ``keep`` go;
+    their ids are returned so their bytes go too. Another account's records are untouched."""
+    scope = _scope(user_scope_id)
+    with _locked():
+        state = _load()
+        spool = state["spool"]
+        spool[str(message_id)] = dict(meta, scope=scope)
+        mine = sorted((float(v.get("ts") or 0), k) for k, v in spool.items()
+                      if _scope(v.get("scope")) == scope)
+        evicted = [k for _ts, k in mine[:max(0, len(mine) - max(0, int(keep)))]]
+        for key in evicted:
+            spool.pop(key, None)
+        _save(state)
+        return evicted
+
+
+def spool_get(message_id: str) -> Optional[Dict[str, Any]]:
+    with _lock:
+        record = _load()["spool"].get(str(message_id))
+    return dict(record) if record is not None else None
+
+
+def spool_ids() -> List[str]:
+    with _lock:
+        return list(_load()["spool"])
+
+
+def spool_drop(ids: List[str]) -> None:
+    ids = [str(i) for i in ids]
+    if not ids:
+        return
+    with _locked():
+        state = _load()
+        if not any(i in state["spool"] for i in ids):
+            return
+        for key in ids:
+            state["spool"].pop(key, None)
+        _save(state)
+
+
+def spool_unreferenced(now: Optional[float] = None) -> List[str]:
+    """The spooled files no device's outbox holds any more (every device acked it, a device
+    was removed, its entry fell out), or older than the outbox keeps anything."""
+    now = time.time() if now is None else now
+    with _lock:
+        state = _load()
+    held = {str(e.get("id")) for d in state["devices"] for e in d.get("outbox") or []}
+    return [k for k, v in state["spool"].items()
+            if k not in held or now - float(v.get("ts") or 0) > OUTBOX_MAX_AGE_SECONDS]
 
 
 def take_dropped(device_id: str) -> int:

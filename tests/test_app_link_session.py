@@ -47,7 +47,7 @@ def test_link_with_a_paired_device_gets_welcome(app_link_home):
     assert bridge.is_connected(row["device_id"])
 
 
-def _refused_link(monkeypatch, *, key=None, der=None, device_id=None):
+def _refused_link(monkeypatch, *, key=None, der=None, device_id=None, reason="unknown_device"):
     # Another device of the account stands, so a lookup that ignored the certificate would
     # find a row; the hello names the device the certificate claims to be.
     if device_id is None:
@@ -57,15 +57,17 @@ def _refused_link(monkeypatch, *, key=None, der=None, device_id=None):
     client = AppClient(ca_der(), sni=pr.SNI_LINK, key=key, cert_der=der).attach(pipe).connect()
     client.send({"t": "hello", "v": 1, "device_id": device_id, "caps": []})
     assert pipe.session.closed, "the session stayed open"
-    assert pipe.session.close_reason == "unknown_device" or pipe.session.close_reason.startswith("tls:")
+    assert pipe.session.close_reason == reason or pipe.session.close_reason.startswith("tls:")
     assert seen == [] and pipe.session.dispatched == 0
     assert not client.of("welcome")
+    pipe.client = client
     return pipe
 
 
 def test_link_without_certificate_is_refused(app_link_home, monkeypatch):
     pipe = _refused_link(monkeypatch)
     assert pipe.session.close_reason == "unknown_device"
+    assert not pipe.client.of("bye"), "a connection without a certificate hears nothing"
 
 
 def test_link_with_a_foreign_certificate_is_refused(app_link_home, monkeypatch):
@@ -82,25 +84,43 @@ def test_link_with_a_foreign_certificate_is_refused(app_link_home, monkeypatch):
 def test_link_with_a_device_ca_certificate_without_a_row_is_refused(app_link_home, monkeypatch):
     key = ec.generate_private_key(ec.SECP256R1())
     der = pki.issue_device_cert(key.public_key(), "no-row")
-    _refused_link(monkeypatch, key=key, der=der)
+    pipe = _refused_link(monkeypatch, key=key, der=der, reason="removed")
+    assert pipe.client.of("bye") == [{"t": "bye", "reason": "removed"}]
 
 
 def test_link_of_a_removed_device_is_refused(app_link_home, monkeypatch):
     row, key, der = paired_device(SCOPE_A)
     devices.remove_device(row["device_id"], by="alice", reason="lost")
-    _refused_link(monkeypatch, key=key, der=der, device_id=row["device_id"])
+    _refused_link(monkeypatch, key=key, der=der, device_id=row["device_id"], reason="removed")
+
+
+def test_a_removed_device_hears_bye_removed(app_link_home):
+    """A device whose row was removed while it was away learns it on its next connection, inside
+    the session its certificate opened, so the app can say it was unpaired. MUTATION: close it
+    with `bye=False` - red."""
+    device = paired_device(SCOPE_A)
+    client, pipe, row = link(SCOPE_A, device=device)
+    assert client.of("welcome")
+    pipe.session.close("gone", bye=False)
+    devices.remove_device(row["device_id"], by="alice", reason="lost")
+    again, pipe2, _ = link(SCOPE_A, device=device, peer="10.0.0.9", connection="c9", hello=False)
+    assert pipe2.session.closed and pipe2.session.close_reason == "removed"
+    assert again.of("bye") == [{"t": "bye", "reason": "removed"}]
+    assert not again.of("welcome") and pipe2.session.dispatched == 0
 
 
 def test_link_with_a_reissued_serial_is_refused(app_link_home, monkeypatch):
     row, key, _der = paired_device(SCOPE_A)
     other = pki.issue_device_cert(key.public_key(), row["device_id"])
-    _refused_link(monkeypatch, key=key, der=other, device_id=row["device_id"])
+    pipe = _refused_link(monkeypatch, key=key, der=other, device_id=row["device_id"])
+    assert not pipe.client.of("bye"), "another serial for a known key is no removal"
 
 
 def test_link_of_a_device_whose_account_lane_is_off_is_refused(app_link_home, monkeypatch):
     row, key, der = paired_device(SCOPE_A)
     app_link_home.lane(SCOPE_A, False)
-    _refused_link(monkeypatch, key=key, der=der, device_id=row["device_id"])
+    pipe = _refused_link(monkeypatch, key=key, der=der, device_id=row["device_id"])
+    assert not pipe.client.of("bye"), "a row that does not stand is no removal"
 
 
 def test_unknown_or_missing_name_and_missing_alpn_are_refused(app_link_home, monkeypatch):

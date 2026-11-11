@@ -46,7 +46,7 @@ MAX_JSON_DEPTH = 4
 # The message types the app may send in a link session, and in a pairing session. The ONE
 # list: the validator, the dispatcher and the tests read it.
 MESSAGE_TYPES_FROM_APP = ("hello", "msg", "ack", "read", "typing", "cancel", "caps",
-                          "task_result", "error", "bye", "agent_ask", "confirm_answer")
+                          "task_result", "error", "bye", "agent_ask", "confirm_answer", "unpair")
 PAIR_TYPES_FROM_APP = ("pair",)
 TASK_ERRORS = ("declined", "unavailable", "timeout", "failed")
 PAIR_ERRORS = ("expired", "used", "denied", "bad_csr", "busy")
@@ -432,6 +432,10 @@ def validate_from_app(obj: Dict[str, Any], allowed: Iterable[str] = MESSAGE_TYPE
         return out
     if t in ("ack", "read", "cancel"):
         return {"t": t, "id": _uuid(obj.get("id"))}
+    if t == "unpair":
+        # The app removed this VAF: no field is read, because the device comes from the
+        # session's certificate and never from the message.
+        return {"t": t}
     if t == "typing":
         if not isinstance(obj.get("on"), bool):
             raise ProtocolError("bad_field", "on")

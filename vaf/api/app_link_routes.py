@@ -52,8 +52,8 @@ _REFUSALS = {
     "window_closed": "The pairing window is closed. Confirm with your 2FA code to open it again.",
     "relay_off": "The Veyllo relay is switched off on this VAF. Pair over your network or VPN "
                  "instead, or ask an admin to switch the relay on.",
-    "no_direct_path": "There is no direct address for the phone: switch Local Network and its "
-                      "TLS on in Settings, or pair through the Veyllo relay.",
+    "no_direct_path": "There is no direct address for the Veyllo App: switch Local Network and "
+                      "its TLS on in Settings, or pair through the Veyllo relay.",
 }
 
 
@@ -177,7 +177,7 @@ async def issue_pairing(body: PairingBody, request: Request):
     from vaf.core.app_link import pairing
     scope, username = _own(request)
     if body.mode not in ("relay", "local"):
-        return _no_store({"detail": "Choose how the phone connects: \"relay\" (through the "
+        return _no_store({"detail": "Choose how the Veyllo App connects: \"relay\" (through the "
                                     "Veyllo relay) or \"local\" (directly, on your network or "
                                     "VPN).", "code": "bad_mode"}, 400)
     try:
@@ -274,15 +274,25 @@ async def switch_relay(body: RelaySwitch, request: Request):
     return _no_store(_relay_status())
 
 
+def _admin_failed(last_error: str, code: str):
+    """Why an admin action on the relay did not happen: the sentence, its kind (`reason`), and
+    for a busy relay the seconds to wait (`retry_after`)."""
+    from vaf.core.app_link import relay
+    body = {"detail": relay.admin_failure(last_error), "reason": relay.failure_reason(last_error),
+            "code": code}
+    seconds = relay.busy_seconds(last_error)
+    if seconds is not None:
+        body["retry_after"] = seconds
+    return _no_store(body, 502)
+
+
 @router.post("/api/app-link/relay/rotate")
 async def rotate_relay(request: Request):
     from vaf.core.app_link import relay
     user = _admin(request)
     connector = relay.connector()
     if not await connector.rotate(username=str(user.get("username") or "")):
-        return _no_store({"detail": relay.admin_failure(connector.last_error),
-                          "reason": relay.failure_reason(connector.last_error),
-                          "code": "rotate_failed"}, 502)
+        return _admin_failed(connector.last_error, "rotate_failed")
     return _no_store(_relay_status())
 
 
@@ -307,9 +317,7 @@ async def dissolve_relay(body: CodeBody, request: Request):
             return refused
     connector = relay.connector()
     if not await connector.dissolve(username=str(user.get("username") or "")):
-        return _no_store({"detail": relay.admin_failure(connector.last_error),
-                          "reason": relay.failure_reason(connector.last_error),
-                          "code": "dissolve_failed"}, 502)
+        return _admin_failed(connector.last_error, "dissolve_failed")
     return _no_store(_relay_status())
 
 

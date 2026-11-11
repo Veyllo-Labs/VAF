@@ -147,7 +147,7 @@ call with `agent_origin.parked_result` (`NOT RUN YET.`, no id). Refused instead:
 parked call or a call after a draft in the same round (one card per request at a time), a call
 whose card text would be over `WHAT_MAX` (never cut; the refusal names the longest argument),
 and any call inside a confirmed one. The runner hands the round's parked call or first held
-draft to the app link, which sends the asking phone the card
+draft to the app link, which sends the asking device the card
 (`vaf/core/app_link/confirmations.py`). The user's Yes queues a wake turn of kind `confirm`:
 the runner first runs exactly the parked call once through `execute_tool`, inside
 `agent_origin.confirmed_call_scope(tool, digest)`. That scope is a one-shot pass: gate (e)
@@ -280,7 +280,11 @@ so the web chat, the terminal apps and the channels all show it without a branch
 the draft's fixed sentence is not streamed, its card is the answer. Visible wins over the
 draft's sentence, and two visible closings of one round are both kept. The first tool that
 declares it is `ask_user` in a chat: the question with its `options` as a numbered list is the
-answer, and the person's reply, typed or picked, is the chat's next turn.
+answer, and the person's reply, typed or picked, is the chat's next turn. The second is
+`user_phone`: its second "not connected" for the same chat within five minutes, with no Veyllo
+App connected in between, ends the turn with a sentence in the person's language that the app
+is not connected and should be opened (`vaf/core/app_link/phone_tasks.py`, `closing_of`); a
+live turn had probed the absent app eight times before.
 
 **What VAF reported is evidence, and the agent can look a draft up.** The result-grounding
 judge weighs a reply against the turn's tool results, and a wake turn's text is none: in a live

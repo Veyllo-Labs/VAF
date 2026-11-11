@@ -1142,7 +1142,8 @@
       "failureReasons": {
         "not_set_up": "此安装尚未在中继上注册。第一个 Veyllo App 通过中继配对时会自动注册。",
         "unreachable": "无法连接中继；没有做任何更改。请稍后再试。",
-        "refused": "中继拒绝了请求；没有做任何更改。请稍后再试。"
+        "refused": "中继拒绝了请求；没有做任何更改。请稍后再试。",
+        "busy": "中继目前繁忙；没有做任何更改。请在 {seconds} 秒后重试。"
       },
       "adminTitle": "此 VAF 安装的 Veyllo Relay",
       "adminIntro": "作为管理员，你在这里为此安装的所有账号决定 Veyllo App 是否可以通过 Veyllo Relay 连接。你的 Veyllo App 是通过中继连接还是通过你的网络直接连接，在下一步的二维码下方选择。",

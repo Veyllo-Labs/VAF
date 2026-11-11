@@ -365,7 +365,14 @@ def _accept(pairing: Pairing, scope: str) -> str:
         _finish(pairing, "denied")
         _pair_error(session, "denied", "key already paired", pairing.username)
         return "denied"
-    _switch_lane_on(scope)
+    try:
+        _switch_lane_on(scope)
+    except Exception:
+        # The row must not outlive a pairing that failed: the device never got its
+        # certificate, yet the row would list it as paired.
+        devices.remove_device(device_id, by=pairing.username,
+                              reason="pairing failed before it finished")
+        raise
     pairing.device_id = device_id
     _finish(pairing, "paired")
     way = "relay" if session.transport == "relay" else "direct"

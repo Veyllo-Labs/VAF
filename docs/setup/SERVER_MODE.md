@@ -271,9 +271,9 @@ itself; it recognises the VPN interface and admits its devices
   but this machine gets in; the command says so, and so do `vaf server status` and
   `vaf doctor`. A server with a public address starts this way (see above).
 
-**The Veyllo App over the VPN.** With TLS on, a phone in the VPN reaches the server's
+**The Veyllo App over the VPN.** With TLS on, a Veyllo App in the VPN reaches the server's
 `/api/app-link` directly, and the pairing QR code lists that address; without a VPN on the
-phone the app goes through the Veyllo relay, which the server reaches outbound
+device the app goes through the Veyllo relay, which the server reaches outbound
 ([VEYLLO_APP.md](../integrations/VEYLLO_APP.md)).
 
 **Opening it.** Open the web UI in a browser on a device in the VPN, at the address

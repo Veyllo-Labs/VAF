@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Veyllo GmbH
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
-"""The Veyllo App link: a paired phone talks to its account's agent over TLS 1.3 that ends
+"""The Veyllo App link: a paired device talks to its account's agent over TLS 1.3 that ends
 in this process, carried either by the Veyllo relay (an OUTBOUND connection VAF opens) or by
 VAF's own ``wss://.../api/app-link`` on the local network or a VPN. The bytes are the same on
 both ways; only the relay adds a 17-byte envelope (docs/integrations/VEYLLO_APP.md).

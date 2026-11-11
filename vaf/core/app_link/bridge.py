@@ -15,7 +15,10 @@ it; nothing is erased on VAF's side). A message VAF sends by itself (``send_to_u
 send tool) is a ``msg``. Every finished reply and every ``msg`` is stored ONCE in the
 channel message store and its id is put into the outbox of EVERY device of the account; an
 ``ack`` takes it out of that device's outbox only. After ``welcome`` a device gets its due
-entries in order, as ``msg`` with the stored text (streamed deltas are never replayed).
+entries in order, as ``msg`` with the stored text (streamed deltas are never replayed); a
+message with a file still spooled (spool.py) comes with that file, as ``msg`` with
+``attachments`` and its chunks under a fresh ``xfer``. ``unpair`` from a device removes that
+device, the one its certificate names.
 Every send asks whether the device still stands, so a device removed mid-turn receives
 nothing more of it.
 
@@ -34,8 +37,10 @@ stop, a cancel, a removal) is answered with ``done`` and its place freed by the 
 request whose turn parked a call for the user's confirmation stays open, with its place,
 until the card's outcome answers it (vaf/core/app_link/confirmations.py).
 
-NAMED BOUNDARY: a file sent while a device is away reaches it as its text line only; the
-file itself goes to the devices connected at the time (the outbox keeps ids, not bytes).
+NAMED BOUNDARY: a file reaches a device that was away while it is spooled: at most
+``spool.FILES_PER_ACCOUNT`` files per account, 25 MiB each, seven days, and
+``spool.FILE_SENDS_PER_DEVICE`` replays per device. Beyond that the message replays as its
+text with the ``[File: <name>]`` line, which the app shows as a file that did not arrive.
 """
 from __future__ import annotations
 
@@ -285,7 +290,7 @@ def on_hello(session, hello: Dict[str, Any]) -> None:
     session.send_json({"t": "welcome", "v": pr.PROTOCOL_VERSION,
                        "chat": devices.chat_session_id(scope), "account": row.get("username", ""),
                        "agent": agent or "VAF", "server_time": int(time.time()),
-                       "agent_ask": True, "confirm": True})
+                       "agent_ask": True, "confirm": True, "unpair": True})
     _came_online(did)
     replay(session)
     from vaf.core.app_link import confirmations
@@ -319,10 +324,51 @@ def replay(session) -> int:
         if message is None:
             devices.outbox_ack(did, entry["id"])
             continue
-        if session.send_json({"t": "msg", "id": entry["id"], "chat": chat,
-                              "text": message.get("body") or ""}):
+        body = message.get("body") or ""
+        with_file = _replay_file(session, did, chat, entry, body)
+        if with_file is not None:
+            sent += int(with_file)
+            continue
+        if session.send_json({"t": "msg", "id": entry["id"], "chat": chat, "text": body}):
             sent += 1
     return sent
+
+
+def _without_file_line(body: str, name: str) -> str:
+    """The message text without the ``[File: <name>]`` line ``deliver`` stored as its last
+    line; unchanged when it does not end that way."""
+    line = f"[File: {name}]"
+    if body == line:
+        return ""
+    if body.endswith("\n" + line):
+        return body[:-len(line) - 1]
+    return body
+
+
+def _replay_file(session, device_id: str, chat: str, entry: Dict[str, Any],
+                 body: str) -> Optional[bool]:
+    """An outbox entry whose file is still spooled, sent with it: ``msg`` with one attachment,
+    then the chunks under a fresh ``xfer``. Whether it went; None when it has no spooled file,
+    the device had it ``FILE_SENDS_PER_DEVICE`` times already, or the bytes are not intact,
+    and the caller sends the stored text then."""
+    from vaf.core.app_link import spool
+    record = devices.spool_get(entry["id"])
+    if record is None or int(entry.get("sends") or 0) >= spool.FILE_SENDS_PER_DEVICE:
+        return None
+    data = spool.read(entry["id"])
+    if data is None:
+        return None
+    name = str(record.get("name") or "file")
+    xfer = os.urandom(pr.XFER_ID_BYTES)
+    message = {"t": "msg", "id": entry["id"], "chat": chat, "text": _without_file_line(body, name),
+               "attachments": [{"xfer": pr.b64url(xfer), "name": name[:255],
+                                "mime": str(record.get("mime") or "application/octet-stream"),
+                                "size": len(data), "sha256": str(record["sha256"])}]}
+    if not session.send_json(message):
+        return False
+    session.send_file(xfer, data)
+    devices.outbox_file_sent(device_id, entry["id"])
+    return True
 
 
 def on_message(session, message: Dict[str, Any], files: List[Dict[str, Any]]) -> None:
@@ -344,6 +390,14 @@ def on_message(session, message: Dict[str, Any], files: List[Dict[str, Any]]) ->
         confirmations.on_answer(session, row, message)
     elif t == "ack":
         devices.outbox_ack(did, message["id"])
+        if devices.spool_get(message["id"]) is not None:
+            from vaf.core.app_link import spool
+            spool.collect()
+    elif t == "unpair":
+        # Only this device: the one its certificate names. The removal closes its session
+        # with `bye removed` (the removal listener).
+        devices.remove_device(did, by=str(row.get("username") or ""),
+                              reason="unpaired in the Veyllo App")
     elif t == "read":
         try:
             from vaf.core.channel_message_store import mark_seen
@@ -426,7 +480,9 @@ def save_files(scope: str, username: str, chat_sid: str, files: List[Dict[str, A
     folder = get_session_workspace_dir(chat_sid, create=True, user_scope_id=scope)
     if folder is None:
         return None
-    folder = Path(folder) / "from_phone"
+    # Files saved before the folder had this name stay under `from_phone`; their stored
+    # paths keep working.
+    folder = Path(folder) / "from_veyllo_app"
     folder.mkdir(parents=True, exist_ok=True)
     saved = []
     for item in files:
@@ -791,6 +847,11 @@ def deliver(user_scope_id: Any, username: Optional[str], text: str,
     if attach:
         body = (text + "\n" if text else "") + f"[File: {os.path.basename(attach)}]"
     _store_out(scope, str(username or rows[0].get("username") or ""), mid, body, document=bool(attach))
+    if attach:
+        # Kept for a device that is away or drops before its ack; a failure changes nothing
+        # else, the message then replays as its text line.
+        from vaf.core.app_link import spool
+        spool.put(scope, mid, attach)
     chat = devices.chat_session_id(scope)
     message: Dict[str, Any] = {"t": "msg", "id": mid, "chat": chat, "text": text}
     xfer = None
@@ -814,6 +875,25 @@ def deliver(user_scope_id: Any, username: Optional[str], text: str,
         else:
             _went_offline(row)
     return True
+
+
+DELIVERY_NOTE_PUSH = ("It is kept and delivered when the Veyllo App connects again; VAF asks "
+                      "the Veyllo relay to send the device a push notice. Do not send it again.")
+DELIVERY_NOTE_NO_PUSH = ("It is kept and delivered when the Veyllo App is opened and connects "
+                         "again (no push notice: no device of this account is paired through "
+                         "the Veyllo relay, or the relay is off). Do not send it again.")
+
+
+def delivery_note(user_scope_id: Any) -> str:
+    """What a send tool tells the model about a message no device took at once: kept, whether
+    a push notice goes out (relay.notify_lane, the condition the notify itself reads), and not
+    to send it again. Empty when a device of the account is connected."""
+    if connected_devices(user_scope_id):
+        return ""
+    from vaf.core.app_link import relay
+    if any(relay.notify_lane(row) for row in standing_devices(user_scope_id)):
+        return DELIVERY_NOTE_PUSH
+    return DELIVERY_NOTE_NO_PUSH
 
 
 def file_fits(path: str) -> bool:
@@ -877,6 +957,11 @@ def sweep(now: Optional[float] = None) -> None:
             devices.expire_idle(wall)
         except Exception:
             logger.debug("app link: expiring idle devices failed", exc_info=True)
+        try:
+            from vaf.core.app_link import spool
+            spool.collect(wall)
+        except Exception:
+            logger.debug("app link: collecting spooled files failed", exc_info=True)
 
 
 def settle_asks(now: Optional[float] = None) -> int:

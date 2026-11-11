@@ -830,6 +830,10 @@ function RelayAdminSection({ onChanged }: { onChanged: () => void }) {
 
     const failureText = async (res: Response) => {
         const data = await res.json().catch(() => ({}));
+        if (res.status === 502 && data.reason === 'busy') {
+            // The relay asked to wait: how long comes with the answer (`retry_after`).
+            return t('failureReasons.busy', { seconds: Math.max(1, Number(data.retry_after) || 60) });
+        }
         if (res.status === 502 && ['not_set_up', 'unreachable', 'refused'].includes(String(data.reason))) {
             return t(`failureReasons.${data.reason}`);
         }

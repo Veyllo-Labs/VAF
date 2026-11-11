@@ -311,7 +311,7 @@ def test_inbound_file_is_checked_and_saved(app_link_home, monkeypatch):
     assert {"t": "ack", "id": UID} in client.frames
     task = _queued(devices.chat_session_id(SCOPE_A))[0]
     assert "[File: report.txt, saved as" in task.input_text
-    assert (workspace / "from_phone" / "report.txt").read_bytes() == data
+    assert (workspace / "from_veyllo_app" / "report.txt").read_bytes() == data
     # A blocked file: nothing saved, nothing queued.
     monkeypatch.setattr(threat_db, "inspect_upload",
                         lambda data, **k: threat_db.UploadVerdict(blocked=True, reason="listed"))
@@ -321,7 +321,7 @@ def test_inbound_file_is_checked_and_saved(app_link_home, monkeypatch):
     client.send(bad)
     client.send_raw(pr.encode_chunk(xfer2, 0, data))
     assert {"t": "error", "code": "xfer_abort", "ref": pr.b64url(xfer2)} in client.frames
-    assert not (workspace / "from_phone" / "evil.txt").exists()
+    assert not (workspace / "from_veyllo_app" / "evil.txt").exists()
     assert len(_queued(devices.chat_session_id(SCOPE_A))) == 1
 
 
@@ -501,3 +501,60 @@ def test_a_reply_nothing_ended_is_forgotten(app_link_home):
     bridge._replies[(SCOPE_A, rid)].started -= bridge.REPLY_MAX_SECONDS + 1
     bridge.sweep()
     assert (SCOPE_A, rid) not in bridge._replies
+
+
+# ── what the send tools tell the model, and unpair ────────────────────────────────────
+
+MEMBER = "2f8fad5b-d9cb-469f-a165-70867728950e"
+
+
+@pytest.mark.parametrize("member,relay_on,push", [(MEMBER, True, True), (None, True, False),
+                                                 (MEMBER, False, False)])
+def test_the_stored_answer_names_the_push(app_link_home, monkeypatch, member, relay_on, push):
+    """Live: "stored for the Veyllo App" said nothing of a push and the model sent the message
+    again. MUTATION: `notify_lane` answers True unconditionally - the no-push cases go red."""
+    from vaf.core.channel_secrets import set_channel_secret
+    from vaf.tools.send_veyllo_app import SendVeylloAppTool
+    set_channel_secret("veyllo_app", "relay_secret", "vrs_known")
+    app_link_home.set_block(relay_enabled=relay_on)
+    paired_device(SCOPE_A, relay_member=member)
+    out = SendVeylloAppTool().run(message="Your report is ready", user_scope_id=SCOPE_A,
+                                  username="alice")
+    note = bridge.DELIVERY_NOTE_PUSH if push else bridge.DELIVERY_NOTE_NO_PUSH
+    assert out == "Message stored for the Veyllo App. " + note
+    assert "Do not send it again" in out
+    link(SCOPE_A)
+    assert SendVeylloAppTool().run(message="again", user_scope_id=SCOPE_A, username="alice") == \
+        "Message sent to the Veyllo App."
+
+
+def test_send_to_user_says_it_is_kept(app_link_home, monkeypatch):
+    from vaf.auth import user_workspace
+    from vaf.tools.send_to_user import SendToUserTool
+    monkeypatch.setattr(user_workspace, "get_user_workspace", lambda name: SimpleNamespace(
+        get_user_identity=lambda: {"main_messenger": "veyllo_app"}))
+    paired_device(SCOPE_A)
+    out = SendToUserTool().run(message="Your report is ready", user_scope_id=SCOPE_A,
+                               username="alice")
+    assert out == "Message sent to the user via Veyllo App. " + bridge.DELIVERY_NOTE_NO_PUSH
+    link(SCOPE_A)
+    assert SendToUserTool().run(message="again", user_scope_id=SCOPE_A, username="alice") == \
+        "Message sent to the user via Veyllo App."
+
+
+def test_unpair_removes_only_this_device(app_link_home):
+    """MUTATION: drop "unpair" from `MESSAGE_TYPES_FROM_APP` - red (the app hears unknown_type)."""
+    one = paired_device(SCOPE_A, model="Phone", relay_member=MEMBER)
+    two = paired_device(SCOPE_A, model="Tablet")
+    c1, p1, row1 = link(SCOPE_A, device=one)
+    c2, p2, row2 = link(SCOPE_A, device=two, peer="10.0.0.6", connection="c2")
+    assert c1.of("welcome")[0]["unpair"] is True
+    c1.send({"t": "unpair", "device_id": row2["device_id"]})
+    c1.pump()
+    assert devices.get(row1["device_id"]) is None and devices.get(row2["device_id"]) is not None
+    assert p1.session.closed and c1.of("bye") == [{"t": "bye", "reason": "removed"}]
+    assert not p2.session.closed and not c1.of("error")
+    events = [f for k, f in app_link_home.events if k == "channel_unpaired"]
+    assert events[-1]["path"] == row1["device_id"]
+    assert events[-1]["detail"] == "Phone, unpaired in the Veyllo App"
+    assert devices.tombstones() == [MEMBER]

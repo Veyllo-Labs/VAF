@@ -411,7 +411,7 @@ recognise the VPN, admit its devices and name its address.
 
 **The Veyllo App over a VPN.** With Local Network and TLS on, a Veyllo App QR code lists
 `wss://<address>:<https port>/api/app-link` for every admitted address, a VPN's included;
-the phone with your VPN on reaches VAF there directly, without the relay and without cost
+the Veyllo App with your VPN on reaches VAF there directly, without the relay and without cost
 ([VEYLLO_APP.md](../integrations/VEYLLO_APP.md)).
 
 **Detection.** `local_interfaces()` in `vaf/network/binding.py` lists this machine's

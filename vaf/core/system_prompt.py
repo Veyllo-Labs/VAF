@@ -1318,7 +1318,7 @@ Then use the results to answer. Do NOT guess from your training data!
                 if _phones:
                     _caps = sorted({c for row in _phones for c in (row.get("caps") or [])})
                     identity_block += (
-                        f"\nphone: reachable via user_phone (offers: {', '.join(_caps) or 'none reported'})\n")
+                        f"\nveyllo_app: reachable via user_phone (offers: {', '.join(_caps) or 'none reported'})\n")
                 if avail:
                     channel_names = [CHANNEL_LABELS.get(c, c) for c in avail]
                     identity_block += f"\nmessaging_channels: {', '.join(channel_names)}\n"

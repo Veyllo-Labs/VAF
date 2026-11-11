@@ -474,7 +474,7 @@ def test_no_relay_secret_or_token_in_logs_or_events(app_link_home, caplog):
     ("wss://user:pw@relay.test/x", False),
 ])
 def test_a_hostile_relay_cannot_point_the_connection_elsewhere(url, ok):
-    assert relay.ws_url_allowed(url, "https://relay.test") is ok
+    assert (relay.ws_destination(url, "https://relay.test") is not None) is ok
 
 
 def test_a_token_answer_pointing_at_this_machine_is_never_dialled(app_link_home):
@@ -560,9 +560,9 @@ def test_each_half_of_the_url_check_holds_on_its_own(monkeypatch):
     answers = {"evil.example": ["93.184.216.34"], "relay.test": ["192.168.1.10"]}
     monkeypatch.setattr(egress, "_resolve", lambda host, port: answers[host])
     # A public host that is not the relay: refused by the host rule alone.
-    assert relay.ws_url_allowed("wss://evil.example/v1/connect/i", "https://relay.test") is False
+    assert relay.ws_destination("wss://evil.example/v1/connect/i", "https://relay.test") is None
     # The relay's own name resolving into the LAN (DNS rebinding): refused by the address rule.
-    assert relay.ws_url_allowed("wss://relay.test/v1/connect/i", "https://relay.test") is False
+    assert relay.ws_destination("wss://relay.test/v1/connect/i", "https://relay.test") is None
 
 
 def test_the_connection_goes_to_the_checked_address(app_link_home, monkeypatch):
@@ -578,9 +578,8 @@ def test_the_connection_goes_to_the_checked_address(app_link_home, monkeypatch):
     asyncio.run(_go())
     assert connect.addresses == ["93.184.216.34"]
     # The real dialler pins it: TCP to that address, TLS checked against the name.
-    import websockets.asyncio.client as ws_client
     seen = {}
-    monkeypatch.setattr(ws_client, "connect", lambda url, **kw: seen.update(kw) or "ctx")
+    monkeypatch.setattr(relay, "_relay_connect_class", lambda: lambda url, **kw: seen.update(kw) or "ctx")
     monkeypatch.setattr("vaf.network.binding.system_proxy_for", lambda scheme, host: None)
     relay._default_ws_connect("wss://relay.test/v1/connect/i", {"Authorization": "x"}, "93.184.216.34")
     assert seen["host"] == "93.184.216.34" and seen["server_hostname"] == "relay.test"
@@ -639,9 +638,170 @@ def test_failure_reasons():
     """One classification for the terminal, the route and the web UI."""
     cases = {"not_set_up": "not_set_up", "unreachable:ConnectError": "unreachable",
              "unreachable:TimeoutException": "unreachable", "rotate:409": "refused",
-             "dissolve:500": "refused", "rotate:no_secret": "refused", "": "refused"}
+             "dissolve:500": "refused", "rotate:no_secret": "refused", "": "refused",
+             "busy:41": "busy"}
     for code, reason in cases.items():
         assert relay.failure_reason(code) == reason, code
     assert set(cases.values()) == set(relay.FAILURE_REASONS)
+    assert relay.admin_failure("busy:41") == ("The Veyllo relay is busy; nothing was changed. "
+                                              "Try again in 41 seconds.")
+    assert relay.busy_seconds("busy:41") == 41 and relay.busy_seconds("rotate:409") is None
+    # The relay's own code stays for support, labelled, at the end of the sentence.
+    assert relay.admin_failure("rotate:500").endswith("(relay answer: rotate:500).")
     assert "could not be reached" in relay.admin_failure("unreachable:ConnectError")
     assert relay.admin_failure("not_set_up").startswith("No relay is set up")
+
+
+# ── every outcome of a notice is logged, every relay wait is honoured ─────────────────
+
+def _notify_once(app_link_home, response):
+    set_channel_secret("veyllo_app", "relay_secret", "vrs_known")
+    row = paired_device(SCOPE_A, relay_member=MEMBER)[0]
+    devices.outbox_add(row["device_id"], "m1")
+    http = FakeHttp({"POST /v1/relay/notify": response if callable(response) else [response]})
+    c = _connector(http)
+    c.schedule_notify(devices.get(row["device_id"]))
+    c.clock.now += 31
+    _run(lambda: c.notify_tick(c.clock()))
+    return c, http, row
+
+
+class _BrokenBody(FakeResponse):
+    def json(self):
+        raise ValueError("not JSON")
+
+
+@pytest.mark.parametrize("response,line", [
+    (FakeResponse(200), "HTTP 200"),
+    (FakeResponse(404, {"code": "not_reachable"}), "HTTP 404 (not_reachable)"),
+    (FakeResponse(429, {"code": "rate_limited", "member": MEMBER}), "HTTP 429 (rate_limited)"),
+    (FakeResponse(503, {"error": "unavailable"}), "HTTP 503 (unavailable)"),
+    (FakeResponse(400, {"code": "bad\ncode " + MEMBER}), "HTTP 400"),
+    (_BrokenBody(502), "HTTP 502"),
+    ("raise", "failed: ConnectError"),
+])
+def test_every_notify_outcome_is_logged(app_link_home, caplog, response, line):
+    """Whether a push reached the device could not be settled because nothing was logged.
+    Each attempt is one info line: the device's first 8 characters, the status and the relay's
+    code, or the exception's class; never the member, the secret or a body. MUTATION: drop the
+    `_ERROR_CODE` check, or log `row["relay_member"]` - red."""
+    import logging
+
+    import httpx
+    caplog.set_level(logging.INFO, logger="vaf.core.app_link.relay")
+    if response == "raise":
+        def response(call):
+            raise httpx.ConnectError("relay.test:443 down, member " + MEMBER)
+    _c, http, row = _notify_once(app_link_home, response)
+    assert len(http.calls) == 1
+    lines = [r.getMessage() for r in caplog.records if "relay notify" in r.getMessage()]
+    assert len(lines) == 1, lines
+    assert lines[0].startswith(f"app link: relay notify for device {row['device_id'][:8]}")
+    assert lines[0].endswith(line)
+    assert MEMBER not in caplog.text and "vrs_known" not in caplog.text
+    assert "\n" not in lines[0] and "(bad" not in lines[0]
+
+
+@pytest.mark.parametrize("code,header,wait", [(429, "17", 17), (503, "45", 45), (429, None, 60),
+                                               (503, None, 30)])
+def test_notify_honours_retry_after(app_link_home, code, header, wait):
+    """A notice the relay refused with 429 or 503 did not go out: it is due again after the
+    relay's `retry-after`, not after the fixed five minutes. MUTATION: keep
+    `NOTIFY_EVERY_SECONDS` on 429/503 - red."""
+    headers = {"retry-after": header} if header else {}
+    c, http, row = _notify_once(app_link_home, FakeResponse(code, {}, headers))
+    http.script["POST /v1/relay/notify"] = [FakeResponse(200)]
+    c.clock.now += wait - 1
+    _run(lambda: c.notify_tick(c.clock()))
+    assert len(http.calls) == 1
+    c.clock.now += 2
+    _run(lambda: c.notify_tick(c.clock()))
+    assert len(http.calls) == 2
+    # A notice that went out keeps the five-minute rhythm.
+    c.clock.now += relay.NOTIFY_EVERY_SECONDS - 1
+    _run(lambda: c.notify_tick(c.clock()))
+    assert len(http.calls) == 2
+
+
+def test_token_429_holds(app_link_home):
+    """MUTATION: let a token 429 fall into the generic backoff again - red."""
+    set_channel_secret("veyllo_app", "relay_secret", "vrs_known")
+    paired_device(SCOPE_A, relay_member=MEMBER)
+    connect = FakeConnect()
+    c = _connector(FakeHttp({"POST /v1/relay/token": [
+        FakeResponse(429, {"code": "rate_limited"}, {"retry-after": "90"})]}), connect)
+
+    async def _go():
+        await c.tick()
+        for _ in range(10):
+            await asyncio.sleep(0)
+    asyncio.run(_go())
+    assert c.state == "unavailable" and c.last_error == "rate_limited"
+    assert c._hold_until == c.clock.now + 90 and connect.upgrades == []
+
+
+def test_member_delete_honours_retry_after(app_link_home):
+    """MUTATION: treat a 429 like any failure (exponential backoff, 2 s) - red."""
+    set_channel_secret("veyllo_app", "relay_secret", "vrs_known")
+    row = paired_device(SCOPE_A, relay_member=MEMBER)[0]
+    devices.remove_device(row["device_id"], by="alice", reason="lost")
+    http = FakeHttp({"DELETE /v1/relay/members": [FakeResponse(429, {}, {"retry-after": "40"}),
+                                                  FakeResponse(204)]})
+    c = _connector(http)
+    _run(lambda: c.reconcile_members(c.clock()))
+    c.clock.now += 39
+    _run(lambda: c.reconcile_members(c.clock()))
+    assert len(http.calls) == 1 and devices.tombstones() == [MEMBER]
+    c.clock.now += 2
+    _run(lambda: c.reconcile_members(c.clock()))
+    assert len(http.calls) == 2 and devices.tombstones() == []
+    assert f"{MEMBER}:n" not in c._members_retry, "the relay's own wait is no failed try"
+
+
+@pytest.mark.parametrize("action,path", [("rotate", "POST /v1/relay/instance"),
+                                         ("dissolve", "DELETE /v1/relay/instance")])
+def test_admin_calls_hold_after_429(app_link_home, action, path):
+    """An admin action the relay answered 429 or 503 says it is busy and for how long, and a
+    second one before the wait is over makes no request. MUTATION: drop the
+    `_admin_hold_until` check - red."""
+    set_channel_secret("veyllo_app", "relay_secret", "vrs_old")
+    app_link_home.set_block(relay_instance_id="inst-1")
+    http = FakeHttp({path: [FakeResponse(429, {}, {"retry-after": "41"}),
+                            FakeResponse(200, {"secret": "vrs_new"})]})
+    c = _connector(http)
+    assert asyncio.run(getattr(c, action)(username="admin")) is False
+    assert c.last_error == "busy:41" and relay.failure_reason(c.last_error) == "busy"
+    c.clock.now += 30
+    assert asyncio.run(getattr(c, action)(username="admin")) is False
+    assert len(http.calls) == 1 and c.last_error == "busy:11"
+    c.clock.now += 12
+    assert asyncio.run(getattr(c, action)(username="admin")) is True
+    assert len(http.calls) == 2
+
+
+def test_the_proxy_is_passed_explicitly(monkeypatch):
+    """Behind a site proxy the connector hands websockets that proxy, so websockets does not
+    decide a second time from the environment; without one it pins the checked address.
+    MUTATION: leave `proxy` unset on the proxy path - red."""
+    seen = {}
+    monkeypatch.setattr(relay, "_relay_connect_class", lambda: lambda url, **kw: seen.update(kw) or "ctx")
+    monkeypatch.setattr("vaf.network.binding.system_proxy_for",
+                        lambda scheme, host: "http://proxy.test:3128")
+    relay._default_ws_connect("wss://relay.test/v1/connect/i", {"Authorization": "x"}, "93.184.216.34")
+    assert seen["proxy"] == "http://proxy.test:3128" and "host" not in seen
+    assert not hasattr(relay, "ws_url_allowed")
+
+
+def test_a_redirect_goes_only_to_the_relays_own_origin():
+    """websockets refuses a cross-origin redirect only while host and port are pinned; behind a
+    proxy nothing is pinned. MUTATION: return `super().process_redirect(exc)` unchanged - red."""
+    from websockets.datastructures import Headers
+    from websockets.exceptions import InvalidStatus, SecurityError
+    from websockets.http11 import Response
+
+    def _redirect(location):
+        return InvalidStatus(Response(302, "Found", Headers({"Location": location})))
+    dial = relay._relay_connect_class()("wss://relay.test/v1/connect/i", proxy="http://proxy.test:3128")
+    assert dial.process_redirect(_redirect("/v1/connect/other")) == "wss://relay.test/v1/connect/other"
+    assert isinstance(dial.process_redirect(_redirect("wss://evil.example/x")), SecurityError)
+    assert isinstance(dial.process_redirect(_redirect("wss://relay.test:8443/x")), SecurityError)

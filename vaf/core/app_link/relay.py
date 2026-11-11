@@ -24,6 +24,12 @@ The relay contract (veyllo-web docs/relay.md) in what VAF uses of it:
   {action:"rotate"}``, ``DELETE /v1/relay/instance``, ``POST /v1/relay/notify {member}``
   (a push without content; 401 means S is not valid, 404 the device is not reachable).
 
+Every 429 and 503 of the relay carries ``retry-after``; every call waits that long before its
+next try (a claim, a token, a member deletion, a notice, an admin action, which says it is
+busy instead of trying). Each notice's outcome is logged at info: the device id's first eight
+characters, the HTTP status and the relay's error code, never the member, the secret or a
+body.
+
 ``member`` is a UUID as text and ``cid`` 32 lowercase hex characters (the 16 bytes behind
 0x01): both are kept verbatim, in one place each (``_member``, ``_cid_hex``).
 """
@@ -31,7 +37,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import random
+import re
 import threading
 import time
 import uuid
@@ -128,6 +136,9 @@ def ws_destination(url: str, api_base: str) -> Optional[str]:
     against the name, so a name that resolves elsewhere a moment later does not move it. A
     hostile relay cannot point VAF's outbound connection at this machine or the LAN.
 
+    One address is pinned (IPv4 first), with no fallback to the name's other addresses: when
+    it cannot be reached the connection fails and the connector backs off and asks again.
+
     Blocking (it resolves the name): call it off the event loop."""
     parts = urlsplit(str(url or ""))
     host = (parts.hostname or "").lower().rstrip(".")
@@ -147,10 +158,6 @@ def ws_destination(url: str, api_base: str) -> Optional[str]:
         return None
 
 
-def ws_url_allowed(url: str, api_base: str) -> bool:
-    return ws_destination(url, api_base) is not None
-
-
 def _parse_expiry(value: Any, now: float) -> float:
     try:
         number = float(value)
@@ -168,6 +175,34 @@ def _retry_after(response, default: float) -> float:
         return max(1.0, float(response.headers.get("retry-after")))
     except (TypeError, ValueError, AttributeError):
         return default
+
+
+_ERROR_CODE = re.compile(r"[A-Za-z0-9_.-]{1,40}")
+
+
+def _error_code(response) -> str:
+    """The relay's error code from an answer's JSON body (``code``, else ``error``), only when
+    it is a short plain token: nothing else of a body reaches a log line."""
+    try:
+        body = response.json()
+    except Exception:
+        return ""
+    if not isinstance(body, dict):
+        return ""
+    value = body.get("code") or body.get("error")
+    return value if isinstance(value, str) and _ERROR_CODE.fullmatch(value) else ""
+
+
+def notify_lane(row: Optional[Dict[str, Any]], current: Optional["RelayConnector"] = None) -> bool:
+    """Whether a push notice can go out for this device: it is paired through the relay (a
+    member), the relay is on, its secret is stored here and the relay has not refused it. The
+    notify itself and the send tools' sentence read this one condition."""
+    from vaf.core.app_link import settings
+    if not row or not row.get("relay_member"):
+        return False
+    if not settings().get("relay_enabled", True) or not _secret():
+        return False
+    return (current or connector()).state != "secret_rejected"
 
 
 class RelayLink:
@@ -303,8 +338,10 @@ class RelayConnector:
         self._http = None
         # Since when the relay should be connected and is not (for `vaf health`).
         self.down_since: Optional[float] = None
-        # The live connection's per-cid work queues (for the health of the connection).
+        # Test hook: the live connection's per-cid work queues.
         self._feeders: Dict[bytes, Any] = {}
+        # An admin action the relay answered 429 or 503: none before this (the clock's time).
+        self._admin_hold_until = 0.0
 
     # ── the thread ──────────────────────────────────────────────────────────
 
@@ -504,6 +541,8 @@ class RelayConnector:
                                          headers={"Authorization": f"Bearer {_secret()}"})
         if response.status_code == 401:
             raise _Refused("secret_rejected")
+        if response.status_code == 429:
+            raise _Refused("unavailable", _retry_after(response, 60), reason="rate_limited")
         if response.status_code == 503:
             raise _Refused("unavailable", _retry_after(response, 30))
         if response.status_code != 200:
@@ -644,7 +683,7 @@ class RelayConnector:
             self.state, self.last_error = "secret_rejected", "invalid_relay_secret"
             self._hold_until = float("inf")
         elif exc.state == "unavailable":
-            self.state, self.last_error = "unavailable", "relay_unavailable"
+            self.state, self.last_error = "unavailable", exc.reason or "relay_unavailable"
             self._hold_until = self._clock() + exc.wait
         else:
             self.last_error = exc.reason or "token"
@@ -704,16 +743,20 @@ class RelayConnector:
         for member in devices.tombstones():
             if now < self._members_retry.get(member, 0):
                 continue
+            response = None
             try:
                 response = await self._http.delete(f"{base}/v1/relay/members",
                                                    params={"member": member},
                                                    headers={"Authorization": f"Bearer {secret}"})
-                done = response.status_code in (200, 204, 404)
+                code = response.status_code
             except Exception:
-                done = False
-            if done:
+                code = 0
+            if code in (200, 204, 404):
                 devices.drop_tombstone(member)
                 self._members_retry.pop(member, None)
+            elif code in (429, 503):
+                # The relay says when: no extra try is counted for its own wait.
+                self._members_retry[member] = now + _retry_after(response, 60 if code == 429 else 30)
             else:
                 tries = self._members_retry.get(f"{member}:n", 0) + 1
                 self._members_retry[f"{member}:n"] = tries
@@ -749,28 +792,37 @@ class RelayConnector:
             # Due while something waits for the device: an outbox entry, or a confirmation
             # card, which is never in the outbox (confirmations).
             from vaf.core.app_link import confirmations
-            if row is None or not row.get("relay_member") \
+            if not notify_lane(row, self) \
                     or not (row.get("outbox") or confirmations.has_pending(did)) \
                     or bridge.is_connected(did):
                 self._notify.pop(did, None)
                 continue
             state["due"] = 0.0
+            response = None
             try:
                 response = await self._http.post(f"{base}/v1/relay/notify",
                                                  json={"member": row["relay_member"]},
                                                  headers={"Authorization": f"Bearer {secret}"})
                 code = response.status_code
-            except Exception:
+            except Exception as exc:
                 code = 0
-            state["next_allowed"] = now + NOTIFY_EVERY_SECONDS
+                logger.info("app link: relay notify for device %s failed: %s", did[:8],
+                            type(exc).__name__)
+            else:
+                err = _error_code(response)
+                logger.info("app link: relay notify for device %s: HTTP %s%s", did[:8], code,
+                            f" ({err})" if err else "")
+            if code in (429, 503):
+                # Not sent: due again once the relay's wait has passed.
+                state["next_allowed"] = now + _retry_after(response, 60 if code == 429 else 30)
+            else:
+                state["next_allowed"] = now + NOTIFY_EVERY_SECONDS
             if code == 401:
                 self.state, self.last_error = "secret_rejected", "invalid_relay_secret"
                 return
             if code == 404:
-                if not state["unreachable"]:
-                    logger.info("app link: the relay cannot reach device %s with a notice", did[:8])
                 state["unreachable"] = now + NOTIFY_UNREACHABLE_SECONDS
-            # Still something waiting: the next notice no sooner than 5 minutes from now.
+            # Still something waiting: the next notice no sooner than that.
             state["due"] = state["next_allowed"]
 
     # ── admin actions ───────────────────────────────────────────────────────
@@ -782,20 +834,32 @@ class RelayConnector:
 
     async def _admin_call(self, method: str, path: str, **kwargs):
         """One admin call to the relay API, or None (and `last_error`) when there is no relay
-        set up here or the relay cannot be reached."""
+        set up here, the relay cannot be reached, or it is busy: a 429 or 503 holds every
+        admin call for its ``retry-after``, and a call while held makes no request
+        (``busy:<seconds left>``). A person's action is never retried behind their back."""
         from vaf.core.app_link import settings
         if not self.set_up():
             self.last_error = "not_set_up"
+            return None
+        left = self._admin_hold_until - self._clock()
+        if left > 0:
+            self.last_error = f"busy:{int(math.ceil(left))}"
             return None
         base = str(settings().get("relay_api_base") or "").rstrip("/")
         try:
             async with self._http_factory() as http:
                 call = http.post if method == "POST" else http.delete
-                return await call(f"{base}{path}", headers={"Authorization": f"Bearer {_secret()}"},
-                                  **kwargs)
+                response = await call(f"{base}{path}",
+                                      headers={"Authorization": f"Bearer {_secret()}"}, **kwargs)
         except Exception as exc:
             self.last_error = f"unreachable:{type(exc).__name__}"
             return None
+        if response.status_code in (429, 503):
+            wait = _retry_after(response, 60 if response.status_code == 429 else 30)
+            self._admin_hold_until = self._clock() + wait
+            self.last_error = f"busy:{int(math.ceil(wait))}"
+            return None
+        return response
 
     async def rotate(self, *, username: str = "") -> bool:
         from vaf.core.channel_secrets import set_channel_secret
@@ -846,19 +910,33 @@ class RelayConnector:
 # Why an admin action on the relay did not happen, in three kinds a person can act on: the
 # terminal, the route and the web UI word the same classification instead of each parsing
 # `last_error` again.
-FAILURE_REASONS = ("not_set_up", "unreachable", "refused")
+FAILURE_REASONS = ("not_set_up", "unreachable", "busy", "refused")
 
 
 def failure_reason(code: str) -> str:
     """The kind of an admin action's failure from the connector's `last_error`:
     ``not_set_up`` (no instance or no secret here), ``unreachable`` (the call never reached
-    the relay) or ``refused`` (the relay answered, and not with success)."""
+    the relay), ``busy`` (the relay asked to wait, ``busy:<seconds>``) or ``refused`` (the
+    relay answered, and not with success)."""
     code = str(code or "")
     if code == "not_set_up":
         return "not_set_up"
     if code.startswith("unreachable"):
         return "unreachable"
+    if code.startswith("busy:"):
+        return "busy"
     return "refused"
+
+
+def busy_seconds(code: str) -> Optional[int]:
+    """The seconds to wait a ``busy:<seconds>`` failure names, or None."""
+    code = str(code or "")
+    if not code.startswith("busy:"):
+        return None
+    try:
+        return max(1, int(code.split(":", 1)[1]))
+    except ValueError:
+        return None
 
 
 def admin_failure(code: str) -> str:
@@ -868,8 +946,11 @@ def admin_failure(code: str) -> str:
         return "No relay is set up on this machine (`vaf relay status`)."
     if reason == "unreachable":
         return "The relay could not be reached; nothing was changed."
-    return (f"The relay refused it ({code}); nothing was changed. Try again later, or check "
-            "`vaf relay status`.")
+    if reason == "busy":
+        return (f"The Veyllo relay is busy; nothing was changed. Try again in "
+                f"{busy_seconds(code) or 60} seconds.")
+    return ("The relay refused it; nothing was changed. Try again later, or check "
+            f"`vaf relay status` (relay answer: {code}).")
 
 
 class _Refused(Exception):
@@ -883,20 +964,45 @@ def _default_http():
     return httpx.AsyncClient(timeout=15.0, follow_redirects=False)
 
 
-def _default_ws_connect(url: str, headers: Dict[str, str], address: Optional[str] = None):
-    """The relay's WebSocket at the checked address, TLS against the URL's name. NAMED
-    BOUNDARY: behind a site proxy (``binding.system_proxy_for``) the proxy resolves the name,
-    as for every egress, and the address is not pinned."""
+def _relay_connect_class():
+    """websockets' ``connect`` that follows a redirect of the relay only to the same scheme,
+    host and port. Its own rule refuses a cross-origin redirect only while the address is
+    pinned; behind a site proxy nothing is pinned, and the relay could otherwise move the
+    connection to any other host."""
     from websockets.asyncio.client import connect
+    from websockets.exceptions import SecurityError
+    from websockets.uri import parse_uri
 
+    class _RelayConnect(connect):
+        def process_redirect(self, exc):
+            target = super().process_redirect(exc)
+            if isinstance(target, str):
+                old, new = parse_uri(self.uri), parse_uri(target)
+                if (old.secure, old.host, old.port) != (new.secure, new.host, new.port):
+                    return SecurityError(f"the relay redirected to another origin: {new.host}")
+            return target
+    return _RelayConnect
+
+
+def _default_ws_connect(url: str, headers: Dict[str, str], address: Optional[str] = None):
+    """The relay's WebSocket at the checked address, TLS against the URL's name. The proxy is
+    decided here once (``binding.system_proxy_for``) and handed to websockets explicitly, so
+    websockets does not decide it a second time from the environment. NAMED BOUNDARY: behind
+    a site proxy the proxy resolves the name, as for every egress, and the address is not
+    pinned. A redirect is followed only to the relay's own origin."""
     from vaf.network.binding import system_proxy_for
     parts = urlsplit(url)
-    pinned = {}
-    if address and not system_proxy_for("https", parts.hostname or ""):
-        pinned = {"host": address, "port": parts.port or 443, "server_hostname": parts.hostname,
-                  "proxy": None}
-    return connect(url, additional_headers=headers, max_size=pr.MAX_FRAME_PAYLOAD + 64,
-                   ping_interval=None, open_timeout=15, **pinned)
+    proxy = system_proxy_for("https", parts.hostname or "")
+    if proxy:
+        route: Dict[str, Any] = {"proxy": proxy}
+    elif address:
+        route = {"host": address, "port": parts.port or 443, "server_hostname": parts.hostname,
+                 "proxy": None}
+    else:
+        route = {"proxy": None}
+    return _relay_connect_class()(url, additional_headers=headers,
+                                  max_size=pr.MAX_FRAME_PAYLOAD + 64, ping_interval=None,
+                                  open_timeout=15, **route)
 
 
 _connector: Optional[RelayConnector] = None

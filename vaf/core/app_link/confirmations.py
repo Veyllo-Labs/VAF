@@ -93,9 +93,9 @@ EXPIRED = ("Your user did not confirm this in the Veyllo App within {minutes} mi
            "did NOT run.")
 EXPIRED_SEND = ("Your user did not confirm the message in the Veyllo App within {minutes} "
                 "minutes: it was NOT sent, and it still waits as a draft in VAF's web UI.")
-REFUSED_BY_APP = ("The Veyllo App on this phone cannot show confirmations yet (an app update "
+REFUSED_BY_APP = ("The Veyllo App on this device cannot show confirmations yet (an app update "
                   "brings them): '{tool}' did NOT run.")
-REFUSED_BY_APP_SEND = ("The Veyllo App on this phone cannot show confirmations yet (an app "
+REFUSED_BY_APP_SEND = ("The Veyllo App on this device cannot show confirmations yet (an app "
                        "update brings them): the message was NOT sent, and it waits as a draft "
                        "in VAF's web UI.")
 FOLLOWUPS_WAIT = ("The other message this request prepared was NOT sent either: it waits as a "
@@ -662,7 +662,7 @@ def _run_send(agent: Any, entry: Pending) -> str:
             or outbound_hold.draft_digest(draft) != entry.draft_digest:
         status = outbound_hold.status_line(draft) if draft else "the draft is gone."
         return ("Your user confirmed the message in the Veyllo App, but it had been decided in "
-                f"VAF's web UI meanwhile, and the phone sent nothing: {status}")
+                f"VAF's web UI meanwhile, and the Veyllo App sent nothing: {status}")
     role = str(getattr(agent, "_current_user_role", None) or "user")
     res = outbound_hold.send_draft(kind, num, username=entry.username,
                                    user_scope_id=entry.scope, user_role=role, wake=False,

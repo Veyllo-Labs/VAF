@@ -1,32 +1,32 @@
 {
   "ar": [
-    "لم تصل {count} رسائل أقدم إلى هذا الهاتف في الوقت المناسب. تجدها في سجل الدردشة في VAF."
+    "لم تصل {count} رسائل أقدم إلى هذا الجهاز في الوقت المناسب. تجدها في سجل الدردشة في VAF."
   ],
   "de": [
-    "{count} ältere Nachrichten haben dieses Telefon nicht rechtzeitig erreicht. Du findest sie im Chatverlauf in VAF."
+    "{count} ältere Nachrichten haben dieses Gerät nicht rechtzeitig erreicht. Du findest sie im Chatverlauf in VAF."
   ],
   "en": [
-    "{count} older messages did not reach this phone in time. They are in your chat history in VAF."
+    "{count} older messages did not reach this device in time. They are in your chat history in VAF."
   ],
   "es": [
-    "{count} mensajes anteriores no llegaron a tiempo a este teléfono. Están en tu historial de chat en VAF."
+    "{count} mensajes anteriores no llegaron a tiempo a este dispositivo. Están en tu historial de chat en VAF."
   ],
   "fr": [
-    "{count} messages plus anciens ne sont pas arrivés à temps sur ce téléphone. Ils sont dans ton historique de discussion dans VAF."
+    "{count} messages plus anciens ne sont pas arrivés à temps sur cet appareil. Ils sont dans ton historique de discussion dans VAF."
   ],
   "ja": [
     "古いメッセージ{count}件がこの端末に間に合いませんでした。VAFのチャット履歴で確認できます。"
   ],
   "ko": [
-    "이전 메시지 {count}개가 이 휴대폰에 제때 도착하지 못했습니다. VAF의 채팅 기록에서 확인할 수 있습니다."
+    "이전 메시지 {count}개가 이 기기에 제때 도착하지 못했습니다. VAF의 채팅 기록에서 확인할 수 있습니다."
   ],
   "th": [
-    "ข้อความเก่า {count} รายการส่งมาถึงโทรศัพท์เครื่องนี้ไม่ทัน ดูได้ในประวัติแชทใน VAF"
+    "ข้อความเก่า {count} รายการส่งมาถึงอุปกรณ์เครื่องนี้ไม่ทัน ดูได้ในประวัติแชทใน VAF"
   ],
   "tr": [
-    "{count} eski mesaj bu telefona zamanında ulaşmadı. VAF'taki sohbet geçmişinde duruyorlar."
+    "{count} eski mesaj bu cihaza zamanında ulaşmadı. VAF'taki sohbet geçmişinde duruyorlar."
   ],
   "zh": [
-    "有 {count} 条较早的消息未能及时送达此手机，可在 VAF 的聊天记录中查看。"
+    "有 {count} 条较早的消息未能及时送达此设备，可在 VAF 的聊天记录中查看。"
   ]
 }

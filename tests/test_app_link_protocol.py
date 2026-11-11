@@ -244,3 +244,20 @@ def test_validate_pair():
                 {"csr": base64.b64encode(b"x" * 4097).decode()}, {"csr": "!!"}, {"v": 2}):
         with pytest.raises(pr.ProtocolError):
             pr.validate_from_app({**base, **bad}, pr.PAIR_TYPES_FROM_APP)
+
+
+def test_unpair_is_a_type_from_the_app():
+    """The app removed this VAF and says so. No field is read: the device comes from the
+    session's certificate. MUTATION: drop "unpair" from `MESSAGE_TYPES_FROM_APP` - red."""
+    assert "unpair" in pr.MESSAGE_TYPES_FROM_APP
+    assert pr.validate_from_app({"t": "unpair"}) == {"t": "unpair"}
+    assert pr.validate_from_app({"t": "unpair", "device_id": "someone-else", "x": 1}) == {"t": "unpair"}
+
+
+def test_transfer_ids_are_22_characters_of_base64url():
+    """`xfer` and the `ref` of `xfer_abort`: 16 random bytes as base64url without padding."""
+    text = pr.b64url(bytes(range(16)))
+    assert len(text) == 22 and "=" not in text
+    assert pr.b64url_decode(text) == bytes(range(16))
+    with pytest.raises(ValueError):
+        pr.b64url_decode(text + "==")

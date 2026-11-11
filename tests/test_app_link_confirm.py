@@ -773,7 +773,7 @@ def test_a_tap_after_a_web_edit_sends_nothing(app_link_home, held_store):
     agent = _Runner()
     agent.tools = {"send_whatsapp": sender}
     report = confirmations.run_confirmed(agent, _confirm_task(card["id"]))
-    assert sender.calls == [] and "the phone sent nothing" in report
+    assert sender.calls == [] and "the Veyllo App sent nothing" in report
     assert _state(ref) == "held"
 
 

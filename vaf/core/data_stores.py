@@ -158,6 +158,8 @@ STORES: Tuple[Store, ...] = (
     _s("vaf", "environments", DATA, "vaf/core/environments.py", "ties volumes to their owners"),
     _s("vaf", "app_link", DATA, "vaf/core/app_link/devices.py",
        "the paired Veyllo App devices and their outboxes", sealed=("app_link/*.json",)),
+    _s("vaf", "app_link_spool", RUNTIME, "vaf/core/app_link/spool.py",
+       "files waiting for an absent Veyllo App, kept 7 days", sealed=("app_link_spool/*",)),
     # [!.]: the agent lane's dot-prefixed .run-*.tmp.json staging files (pathlib's * DOES
     # match a leading dot) are short-lived plaintext by design and swept by their own lane;
     # encrypting one mid-run would crash the browser_use reader holding it.

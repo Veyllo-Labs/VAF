@@ -58,7 +58,9 @@ two take the relay connection from each other (the relay closes the older one; e
 five minutes before it tries again, and `vaf relay status` says `replaced`). Rotate the
 secret on one of them (`vaf relay rotate`) or dissolve the relay connection on one
 ([VEYLLO_APP.md](../integrations/VEYLLO_APP.md)). A restore without the keyring leaves the
-relay instance without its secret: `vaf doctor` reports it.
+relay instance without its secret: `vaf doctor` reports it. The files kept for a device
+that was away (`~/.vaf/app_link_spool`, runtime data) are not in the backup: after a restore
+those messages reach the app as their text with the `[File: <name>]` line.
 
 **Named boundary:** the working memory under the launch directory
 (`<cwd>/.vaf/main`) is per-session scratch state that the garbage collector

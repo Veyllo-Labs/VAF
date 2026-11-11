@@ -63,6 +63,9 @@ NOTIFY_UNREACHABLE_SECONDS = 3600
 REPLACED_WAIT_SECONDS = 300
 TOO_FAST_WAIT_SECONDS = 60
 BACKOFF_MAX_SECONDS = 300
+# The longest a relay `retry-after` may hold a call: a longer value is a broken or hostile
+# answer, and an hour still keeps a busy relay from being asked again too soon.
+RETRY_AFTER_MAX_SECONDS = 3600
 _ZERO_CID = bytes(pr.CID_BYTES)
 # The hosts a relay connection may go to besides the host of `relay_api_base`: the relay
 # contract serves its WebSocket on its own name (wss://relay.veyllo.com/v1/connect/<iid>)
@@ -171,10 +174,17 @@ def _parse_expiry(value: Any, now: float) -> float:
 
 
 def _retry_after(response, default: float) -> float:
+    """The relay's ``retry-after`` in seconds, between 1 and ``RETRY_AFTER_MAX_SECONDS``;
+    ``default`` when it is missing or no finite number. Every caller adds the wait to a clock
+    and rounds it for ``busy:<seconds>``: ``inf`` or ``nan`` would hold the relay forever and
+    make that rounding raise."""
     try:
-        return max(1.0, float(response.headers.get("retry-after")))
+        wait = float(response.headers.get("retry-after"))
     except (TypeError, ValueError, AttributeError):
         return default
+    if not math.isfinite(wait):
+        return default
+    return min(RETRY_AFTER_MAX_SECONDS, max(1.0, wait))
 
 
 _ERROR_CODE = re.compile(r"[A-Za-z0-9_.-]{1,40}")

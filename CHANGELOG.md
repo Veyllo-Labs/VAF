@@ -49,6 +49,9 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **Veyllo relay: wait times are honoured.** The Veyllo relay's wait times are honoured on
   every call, and an admin action on a busy relay says how long to wait. Each push notice's
   outcome is now in VAF's log (the HTTP status and the relay's error code, nothing else).
+  A wait time that is no finite number counts as missing, and no wait is longer than an hour.
+- **Veyllo relay: websockets 15 or newer.** VAF now requires websockets 15.0 or
+  newer; with 14.x every connection to the Veyllo relay failed. `vaf update` installs it.
 
 ### Changed
 

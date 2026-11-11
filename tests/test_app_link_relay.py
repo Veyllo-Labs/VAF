@@ -779,6 +779,25 @@ def test_admin_calls_hold_after_429(app_link_home, action, path):
     assert len(http.calls) == 2
 
 
+@pytest.mark.parametrize("header,wait", [("Infinity", 60), ("1e309", 60), ("nan", 60),
+                                         ("-inf", 60), ("999999", relay.RETRY_AFTER_MAX_SECONDS)])
+def test_a_retry_after_that_is_no_finite_number_is_bounded(app_link_home, header, wait):
+    """A relay `retry-after` of Infinity, 1e309 or nan must not hold the relay forever or make
+    the rounding of `busy:<seconds>` raise. MUTATION: drop the `math.isfinite` check (or the
+    upper bound) in `_retry_after` - red."""
+    set_channel_secret("veyllo_app", "relay_secret", "vrs_old")
+    app_link_home.set_block(relay_instance_id="inst-1")
+    http = FakeHttp({"POST /v1/relay/instance": [FakeResponse(429, {}, {"retry-after": header}),
+                                                 FakeResponse(200, {"secret": "vrs_new"})]})
+    c = _connector(http)
+    assert asyncio.run(c.rotate(username="admin")) is False
+    assert c.last_error == f"busy:{wait}"
+    c.clock.now += wait - 1
+    assert asyncio.run(c.rotate(username="admin")) is False and c.last_error == "busy:1"
+    c.clock.now += 2
+    assert asyncio.run(c.rotate(username="admin")) is True
+
+
 def test_the_proxy_is_passed_explicitly(monkeypatch):
     """Behind a site proxy the connector hands websockets that proxy, so websockets does not
     decide a second time from the environment; without one it pins the checked address.
@@ -790,6 +809,35 @@ def test_the_proxy_is_passed_explicitly(monkeypatch):
     relay._default_ws_connect("wss://relay.test/v1/connect/i", {"Authorization": "x"}, "93.184.216.34")
     assert seen["proxy"] == "http://proxy.test:3128" and "host" not in seen
     assert not hasattr(relay, "ws_url_allowed")
+
+
+def _closed_port():
+    import socket
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.mark.parametrize("route", ["proxy", "pinned", "plain"])
+def test_the_installed_websockets_takes_every_dial(monkeypatch, route):
+    """A real dial, construction not intercepted: each route's keywords must reach the socket
+    and fail only on the refused port. websockets 14.x hands `proxy` on to
+    loop.create_connection, which raises TypeError before any connect (measured on 14.2); the
+    manifests floor it at 15.0. MUTATION: add an unknown keyword to the route, or pass the
+    proxy as `proxy_url` - red (TypeError)."""
+    port = _closed_port()
+    proxy = f"http://127.0.0.1:{port}" if route == "proxy" else None
+    monkeypatch.setattr("vaf.network.binding.system_proxy_for", lambda scheme, host: proxy)
+    if route == "pinned":
+        url, address = f"wss://relay.test:{port}/v1/connect/i", "127.0.0.1"
+    else:
+        url, address = f"wss://127.0.0.1:{port}/v1/connect/i", None
+
+    async def _dial():
+        async with relay._default_ws_connect(url, {"Authorization": "x"}, address):
+            pass
+    with pytest.raises(OSError):
+        asyncio.run(_dial())
 
 
 def test_a_redirect_goes_only_to_the_relays_own_origin():

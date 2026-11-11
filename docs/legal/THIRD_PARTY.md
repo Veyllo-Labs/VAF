@@ -98,7 +98,7 @@ Source: `pyproject.toml` `[project.optional-dependencies]` and `requirements.txt
 |---|---|---|
 | fastapi | >=0.109.0 | MIT |
 | uvicorn[standard] | >=0.53.0 | BSD-3-Clause |
-| websockets | >=14.0 | BSD-3-Clause |
+| websockets | >=15.0 | BSD-3-Clause |
 | pydantic | >=2.0.0 | MIT |
 
 ### mail (mail client engine, see docs/integrations/EMAIL_CLIENT.md)

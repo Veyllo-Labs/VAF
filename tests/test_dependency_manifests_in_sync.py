@@ -33,7 +33,8 @@ that satisfies the floor, so a floor below the version a behaviour needs leaves 
 installs without it: uvicorn's sans-I/O WebSocket protocol, the one the door names, makes
 a sender wait from 0.52.1 (the manifests floor uvicorn at 0.53, the first release the
 door's tests ran on), and ``websockets.connect`` is the asyncio client the proxy's relay
-calls from websockets 14.0. Only these floors are compared.
+calls from websockets 14.0; its ``proxy`` argument, which the Veyllo relay connection
+passes, exists from 15.0. Only these floors are compared.
 
 requirements.txt is two files since a server install leaves out what only a desktop
 session uses: it includes requirements-headless.txt (`-r`), the set a server installs,
@@ -382,6 +383,10 @@ def test_the_websockets_floor_has_the_client_the_relay_calls():
     (vaf/network/https_proxy.py). Up to websockets 13.1 that name is the legacy client, which
     takes extra_headers and hands an unknown keyword on to loop.create_connection, so every
     relayed socket would fail; from 14.0 it is the asyncio client. uvicorn[standard] lets
-    13.x in. MUTATION: the THIRD_PARTY.md floor back to >=12.0 - red."""
-    _assert_floor("websockets", "14.0",
-                  "websockets.connect would be the legacy client (vaf/network/https_proxy.py)")
+    13.x in. The Veyllo relay connection hands that client ``proxy`` (vaf/core/app_link/relay.py
+    _default_ws_connect), which 14.x also passes on to loop.create_connection: measured, a
+    14.2 install fails every relay dial with a TypeError. MUTATION: the THIRD_PARTY.md floor
+    back to >=12.0, or all three back to >=14.0 - red."""
+    _assert_floor("websockets", "15.0",
+                  "websockets.connect would be the legacy client (vaf/network/https_proxy.py), "
+                  "or one without the proxy argument (vaf/core/app_link/relay.py)")

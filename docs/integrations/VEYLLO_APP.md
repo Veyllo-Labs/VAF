@@ -119,7 +119,8 @@ arrive. The kept files are not in a backup.
 **Push.** When something waits for a device that is not connected, VAF waits 30 seconds (the
 app often reconnects), then asks the relay to notify it, and then at most once every five
 minutes while something still waits. When the relay answers that it is busy (429 or 503), VAF
-waits as long as the relay's `retry-after` says, on every call to the relay. Each notice's
+waits as long as the relay's `retry-after` says (at most an hour; a value that is no finite
+number counts as missing), on every call to the relay. Each notice's
 outcome is a line in VAF's log: the device id's first eight characters, the HTTP status and the
 relay's error code (`not_reachable`, `rate_limited`, `unavailable`), never the content, the
 relay member or the secret. Push needs the device to be paired with Veyllo: without Veyllo

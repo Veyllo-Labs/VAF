@@ -375,7 +375,9 @@ cards); a code it has no sentence for shows the server's text inside its "Could 
 line, and any other failure keeps the generic one. A Front Office answer logs `REPLY FAILED`
 with the code's phrase (`UndeliverableAddress.reason`) and without the address, sets its case to
 `failed` and the thread's inbox row says so (`waits_reason = "reply_failed"`, see
-[FRONT_OFFICE.md](../agents/FRONT_OFFICE.md#mail)), and a send
+[FRONT_OFFICE.md](../agents/FRONT_OFFICE.md#mail); for an answer already in the outbox the op
+executor writes that case status, so a sweep or a retried op that ends the send keeps it
+true and an `ambiguous` hand-off never claims the answer did not leave), and a send
 refused for an address is written to the app log the same way (`SendResult.refusal`), while
 the draft keeps the whole text for its card. A look-alike that IS a
 valid domain (`alice@exаmple.com`, a Cyrillic а) is delivered, not refused: the cards show what

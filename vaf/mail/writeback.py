@@ -100,6 +100,10 @@ class OpExecutor:
             # Cap BEFORE claiming so a capped op is parked without burning a claim.
             if int(op.get("attempts") or 0) >= MAX_ATTEMPTS:
                 self.store.mark_op(op["id"], "failed", error="max attempts reached")
+                if kind == "send":
+                    # Only transient refusals before the hand-off re-pend a send, so a
+                    # capped one never left.
+                    self._case_after_send(op["payload"], delivered=False)
                 stats["failed"] += 1
                 continue
             handler = getattr(self, f"_op_{kind}", None)
@@ -115,6 +119,8 @@ class OpExecutor:
             try:
                 handler(op["payload"], write_enabled)
                 self.store.mark_op(op["id"], "done", expect_state="sending")
+                if kind == "send":
+                    self._case_after_send(op["payload"], delivered=True)
                 stats["done"] += 1
             except Exception as e:
                 logger.warning("op %s (%s) failed: %s", op["id"], kind, getattr(e, "log_text", e))
@@ -127,11 +133,41 @@ class OpExecutor:
                     retry = isinstance(e, _SendRetry)
                     self.store.mark_op(op["id"], "pending" if retry else "failed",
                                        error=str(e), expect_state="sending")
+                    if not retry:
+                        self._case_after_send(op["payload"], delivered=False)
                 else:
                     self.store.mark_op(op["id"], "pending", error=str(e),
                                        expect_state="sending")
                 stats["failed"] += 1
         return stats
+
+    def _case_after_send(self, payload: Dict[str, Any], *, delivered: bool) -> None:
+        """The case of a Front Office answer follows what became of the send, on every path
+        that ends one: the immediate drain, the supervisor sweep and a parked op the person
+        re-armed (`POST /api/mail/ops/{id}/retry`). Delivered lifts a `failed` case to
+        `answered`; a send that definitely did not leave (refused, or out of attempts) sets an
+        open or answered case to `failed`, which the inbox shows as `reply_failed`. A send
+        stamped `ambiguous` (handed to the server, never confirmed) does not: the server may
+        have accepted it, so "not sent" would be a claim nobody can make; it stays parked in
+        the outbox, which says so. A held or closed case is left alone (the draft lane and the
+        person own those). Never raises: the op's own state is already written."""
+        case_id = str(payload.get("case_id") or "")
+        if not case_id or payload.get("sent_by") != "front_office":
+            return
+        try:
+            case = self.store.case_by_id(self.account_pk, case_id) or {}
+            status = str(case.get("status") or "")
+            if delivered:
+                if status == "failed":
+                    self.store.set_case_status(self.account_pk, case_id, "answered")
+                return
+            row = self.store.sent_id(self.account_pk, payload.get("message_id") or "") or {}
+            if row.get("delivery") == "ambiguous":
+                return
+            if status in ("open", "answered"):
+                self.store.set_case_status(self.account_pk, case_id, "failed")
+        except Exception as e:
+            logger.warning("case status after send not recorded: %s", e)
 
     # ── op handlers ────────────────────────────────────────────────────────
 

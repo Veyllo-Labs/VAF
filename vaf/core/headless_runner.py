@@ -242,12 +242,16 @@ def _deliver_email_reply(task, meta: dict, final_text: str) -> None:
     answer has its Sent copy, its ledger row and its delivery stamp (EMAIL_CLIENT.md,
     "Native send"). Never raises: a failure is logged and the mail stays waiting.
 
-    An answer that did not leave (the funnel refused it, or the immediate drain parked it as
-    failed) sets the case to `failed` and announces `inbox_changed`, so the thread's inbox row
-    says "your agent could not reply" (`inbox.WAITS_REPLY_FAILED`) to a person who never sees
-    the admin-only lane log. NAMED BOUNDARY: an op that fails later, in the supervisor sweep
-    after a transient first try, does not set the case: the sweep knows no case and the mail
-    package does not announce to the web; that op stays `failed` in the outbox ledger."""
+    An answer that did not leave sets the case to `failed` and announces `inbox_changed`, so
+    the thread's inbox row says "your agent could not reply" (`inbox.WAITS_REPLY_FAILED`) to a
+    person who never sees the admin-only lane log. Two writers, one per place a send can end:
+    this function for an answer that never became an op (the funnel refused it, or an error
+    before `queue_send` returned), and `writeback.OpExecutor` for every op (refused or out of
+    attempts sets `failed`, delivered lifts it, an `ambiguous` hand-off sets nothing), so the
+    immediate drain, the sweep and a re-armed op all keep the case true. Once an op exists an
+    error here says nothing about the mail, so it changes no case status. NAMED BOUNDARY: the
+    sweep does not announce `inbox_changed` (the mail package does not reach the web); the
+    inbox shows its verdict on the next load."""
     from vaf.core.email_accounts import get_account
     from vaf.core.log_helper import append_lane_log
     from vaf.mail.service import MailService, deliver_queued_sends
@@ -262,6 +266,7 @@ def _deliver_email_reply(task, meta: dict, final_text: str) -> None:
         return
     svc = None
     apk = None
+    queued = None
     case_id = str(meta.get("email_case_id") or "")
     try:
         svc = MailService(scope)
@@ -285,27 +290,22 @@ def _deliver_email_reply(task, meta: dict, final_text: str) -> None:
             svc.store.touch_case(apk, case_id, outbound=True)
             if hold:
                 svc.store.set_case_status(apk, case_id, "held")
-        delivered = failed = False
+        delivered = failed = ambiguous = False
         if not hold:
             acc = get_account(account_id, meta.get("username"), user_scope_id=scope)
             if acc:
                 deliver_queued_sends(scope, acc, meta.get("username"), account_id, service=svc)
-                state = svc.send_outcome(int(queued.get("op_id") or 0)).get("state")
-                delivered, failed = state == "done", state == "failed"
-            # Answered only once the mail really left: a queued send leaves the case as it
-            # was, and the sweep that delivers it later marks the message. A send the drain
-            # parked as failed did not leave and will not be retried: the case says so.
-            if apk is not None and case_id:
-                if delivered:
-                    svc.store.set_case_status(apk, case_id, "answered")
-                elif failed:
-                    svc.store.set_case_status(apk, case_id, "failed")
-                else:
-                    case = svc.store.case_by_id(apk, case_id) or {}
-                    if case.get("status") == "failed":
-                        # This answer is on its way: an earlier failure no longer stands.
-                        svc.store.set_case_status(apk, case_id, "open")
-        word = "HELD" if hold else ("SENT" if delivered else ("FAILED" if failed else "QUEUED"))
+                outcome = svc.send_outcome(int(queued.get("op_id") or 0))
+                delivered, failed = outcome.get("state") == "done", outcome.get("state") == "failed"
+                ambiguous = failed and outcome.get("delivery") == "ambiguous"
+            # Answered only once the mail really left. A failed or still queued send is the
+            # op executor's to record (`OpExecutor._case_after_send`): it ran the drain and
+            # knows a definite refusal from an ambiguous hand-off, and an earlier failure
+            # stands until an answer is delivered, not merely queued.
+            if delivered and apk is not None and case_id:
+                svc.store.set_case_status(apk, case_id, "answered")
+        word = "HELD" if hold else ("SENT" if delivered else ("AMBIGUOUS" if ambiguous else (
+            "FAILED" if failed else "QUEUED")))
         append_lane_log("email_inbound",
                         f"REPLY {word} pk={pk} op={queued.get('op_id')} case={case_id or '-'} to={str(pre['to'])[:3]}***",
                         always=True)
@@ -315,7 +315,9 @@ def _deliver_email_reply(task, meta: dict, final_text: str) -> None:
         from vaf.mail.service import UndeliverableAddress
         reason = e.reason if isinstance(e, UndeliverableAddress) else str(e)
         append_lane_log("email_inbound", f"REPLY FAILED pk={pk}: {reason}", always=True)
-        if svc is None or apk is None or not case_id:
+        if svc is None or apk is None or not case_id or queued is not None:
+            # With an op queued the mail's fate is the ledger's: it may be pending, sent or
+            # parked, and the op executor writes the case from that, not from this error.
             return
         try:
             svc.store.set_case_status(apk, case_id, "failed")

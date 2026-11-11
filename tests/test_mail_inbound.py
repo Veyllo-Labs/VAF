@@ -28,7 +28,7 @@ from vaf.core import contacts_store
 from vaf.core.platform import Platform
 from vaf.mail import case_token, inbound
 from vaf.mail.parser import parse_message
-from vaf.mail.service import MailService
+from vaf.mail.service import MailService, deliver_queued_sends
 from vaf.mail.store import MailStore
 
 REPO = Path(__file__).resolve().parents[1]
@@ -355,7 +355,7 @@ def test_the_runner_holds_the_answer_in_draft_mode_and_sends_it_in_send_mode(wor
         assert svc.store.get_op(sent[0]["op_id"])["payload"]["references"].split()[0] == drafts[0]["message_id"], "the root anchor rides on every later mail"
         # A send the drain parks as failed (the wire refuses) is never answered: the case
         # says `failed`, which the inbox shows on the thread. A send still queued (no account
-        # to drain it now) is on its way, so the earlier failure no longer stands.
+        # to drain it now) has not left, so the earlier failure stands until a drain delivers it.
         case2 = case_token.mint_case_id()
         svc.store.open_case(apk, case2, thread_id=thread_id, correspondent="lena@example.org")
         monkeypatch.setattr(sender, "send", lambda msg: sender.SendResult(False, "wire refused"))
@@ -366,7 +366,109 @@ def test_the_runner_holds_the_answer_in_draft_mode_and_sends_it_in_send_mode(wor
         import vaf.core.email_accounts as ea
         monkeypatch.setattr(ea, "get_account", lambda *a, **k: None)
         hr._deliver_email_reply(task, _runner_meta(pk, thread_id, case2, "send"), "Vierte Antwort")
-        assert svc.store.case_by_id(apk, case2)["status"] == "open"
+        assert svc.store.case_by_id(apk, case2)["status"] == "failed", "queued is not delivered"
+        assert thread_id in svc.reply_failed_threads()
+        # The sweep's drain delivers it: the failure is lifted there, not in the runner.
+        monkeypatch.setattr(sender, "send", lambda msg: sender.SendResult(True, "ok"))
+        deliver_queued_sends(SCOPE, _ACCOUNT_ROW, "alice", ACCOUNT, service=svc)
+        assert svc.store.case_by_id(apk, case2)["status"] == "answered"
+        assert thread_id not in svc.reply_failed_threads()
+    finally:
+        svc.store.close()
+
+
+_ACCOUNT_ROW = {"account_id": ACCOUNT, "email": ACCOUNT, "provider": "imap", "enabled": True}
+
+
+def _send_mode_case(world, monkeypatch):
+    """A Front Office case on a fresh thread and the runner pieces to answer it in send mode."""
+    from types import SimpleNamespace
+    import vaf.core.web_interface as wi
+    monkeypatch.setattr(wi, "notify_inbox_changed", lambda scope: None)
+    s, apk, fpk = _store()
+    pk = _ingest(s, apk, fpk, 1, _raw("<q@example.org>"))
+    thread_id = s.get_message(pk)["thread_id"]
+    case_id = case_token.mint_case_id()
+    s.open_case(apk, case_id, thread_id=thread_id, correspondent="lena@example.org")
+    s.close()
+    task = SimpleNamespace(session_id="email_alice_lena_example_org")
+    return task, apk, pk, thread_id, case_id
+
+
+def test_an_ambiguous_hand_off_is_not_reported_as_not_sent(world, monkeypatch):
+    """The connection dropped after the dot: the server may hold the mail, so the case does
+    not say "your agent could not reply". MUTATION: drop the `ambiguous` check in
+    `OpExecutor._case_after_send` and the case turns `failed`."""
+    from vaf.core import headless_runner as hr
+    task, apk, pk, thread_id, case_id = _send_mode_case(world, monkeypatch)
+    monkeypatch.setattr(sender, "send", lambda msg: sender.SendResult(
+        False, "ambiguous", handed_off=True, error="connection lost after DATA"))
+    hr._deliver_email_reply(task, _runner_meta(pk, thread_id, case_id, "send"), "Antwort")
+    svc = MailService(SCOPE)
+    try:
+        rows = svc.store.sent_ids_for_case(apk, case_id)
+        assert [r["delivery"] for r in rows] == ["ambiguous"]
+        assert svc.store.get_op(rows[0]["op_id"])["state"] == "failed", "parked, never re-sent"
+        assert svc.store.case_by_id(apk, case_id)["status"] == "open"
+        assert thread_id not in svc.reply_failed_threads()
+    finally:
+        svc.store.close()
+
+
+def test_a_send_that_runs_out_of_retries_marks_the_case(world, monkeypatch):
+    """A transient refusal re-pends the op; when the sweep's attempts run out the case says
+    the answer did not leave. MUTATION: drop the `_case_after_send` call in the attempt cap
+    and the case stays `open`."""
+    from vaf.core import headless_runner as hr
+    from vaf.mail import writeback
+    task, apk, pk, thread_id, case_id = _send_mode_case(world, monkeypatch)
+    monkeypatch.setattr(sender, "send", lambda msg: sender.SendResult(False, "transient", error="421 busy"))
+    hr._deliver_email_reply(task, _runner_meta(pk, thread_id, case_id, "send"), "Antwort")
+    svc = MailService(SCOPE)
+    try:
+        assert svc.store.case_by_id(apk, case_id)["status"] == "open", "a re-pended send is on its way"
+        for _ in range(writeback.MAX_ATTEMPTS + 1):
+            deliver_queued_sends(SCOPE, _ACCOUNT_ROW, "alice", ACCOUNT, service=svc)
+        assert svc.store.case_by_id(apk, case_id)["status"] == "failed"
+        assert thread_id in svc.reply_failed_threads()
+    finally:
+        svc.store.close()
+
+
+def test_a_retried_answer_that_leaves_lifts_the_failure(world, monkeypatch):
+    """The person re-arms the parked answer (`POST /api/mail/ops/{id}/retry`) and it leaves:
+    the thread no longer says the agent could not reply. MUTATION: drop the `delivered`
+    branch of `_case_after_send` and the case stays `failed`."""
+    from vaf.core import headless_runner as hr
+    task, apk, pk, thread_id, case_id = _send_mode_case(world, monkeypatch)
+    monkeypatch.setattr(sender, "send", lambda msg: sender.SendResult(False, "permanent", error="550 no"))
+    hr._deliver_email_reply(task, _runner_meta(pk, thread_id, case_id, "send"), "Antwort")
+    svc = MailService(SCOPE)
+    try:
+        assert svc.store.case_by_id(apk, case_id)["status"] == "failed"
+        op_id = svc.store.sent_ids_for_case(apk, case_id)[0]["op_id"]
+        assert svc.store.mark_op(op_id, "pending", expect_state="failed")   # the retry route's write
+        monkeypatch.setattr(sender, "send", lambda msg: sender.SendResult(True, "ok"))
+        deliver_queued_sends(SCOPE, _ACCOUNT_ROW, "alice", ACCOUNT, service=svc)
+        assert svc.store.get_op(op_id)["state"] == "done"
+        assert svc.store.case_by_id(apk, case_id)["status"] == "answered"
+        assert thread_id not in svc.reply_failed_threads()
+    finally:
+        svc.store.close()
+
+
+def test_an_error_after_the_answer_was_queued_does_not_claim_it_failed(world, monkeypatch):
+    """Once the op exists its fate is the ledger's: an error in the runner's own bookkeeping
+    says nothing about the mail. MUTATION: drop `queued is not None` from the runner's
+    exception branch and the case turns `failed` while the mail went out."""
+    from vaf.core import headless_runner as hr
+    from vaf.mail.store import MailStore
+    task, apk, pk, thread_id, case_id = _send_mode_case(world, monkeypatch)
+    monkeypatch.setattr(MailStore, "touch_case", lambda self, *a, **k: (_ for _ in ()).throw(RuntimeError("disk")))
+    hr._deliver_email_reply(task, _runner_meta(pk, thread_id, case_id, "send"), "Antwort")
+    svc = MailService(SCOPE)
+    try:
+        assert svc.store.case_by_id(apk, case_id)["status"] == "open"
     finally:
         svc.store.close()
 

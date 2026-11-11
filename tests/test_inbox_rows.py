@@ -749,6 +749,23 @@ def test_a_front_office_answer_that_did_not_leave_shows_on_its_thread(world, mon
     assert _row(f"mail:{thread}")["waits_reason"] == ""
 
 
+def test_the_mail_window_keeps_the_failure_when_the_drafts_cannot_be_read(world, monkeypatch):
+    """The two projections are read under separate guards: a draft listing that fails must not
+    hide the failed answer. MUTATION: read both under one `try` again and the thread loses
+    `reply_failed`."""
+    import asyncio
+
+    import vaf.api.mail_routes as mr
+    from vaf.mail.service import MailService
+    thread = _mail_thread(subject="Danke")
+    _front_office_answer_refused(monkeypatch, thread)
+    monkeypatch.setattr(MailService, "list_drafts",
+                        lambda self, **k: (_ for _ in ()).throw(RuntimeError("drafts unreadable")))
+    listed = asyncio.run(mr.list_threads(_user={"username": "alice", "user_scope_id": SCOPE, "role": "user"}))
+    t = next(t for t in listed["threads"] if str(t["thread_id"]) == thread)
+    assert t["waits_reason"] == "reply_failed", t
+
+
 def test_the_reply_failed_reason_yields_to_a_draft_and_to_the_persons_own_reply():
     thread = {"thread_id": 5, "unread_count": 1, "last_date_ts": NOW, "snippet": "Danke",
               "from_addr": "Lena <lena@example.com>"}

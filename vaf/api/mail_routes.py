@@ -109,14 +109,21 @@ def _with_inbox_state(threads: list, user: Dict[str, Any]) -> list:
     marks = chat_marks(user.get("username") or "", _scope_of(user), channel="mail")
     drafts: Dict[int, Dict[str, Any]] = {}
     reply_failed: set = set()
+    # Two reads, two guards: a failure of one projection must not take the other with it.
     try:
         svc = MailService(_scope_of(user))
-        for d in svc.list_drafts():
+    except Exception:
+        svc = None
+    try:
+        for d in (svc.list_drafts() if svc is not None else []):
             if d.get("thread_id") is not None:
                 drafts.setdefault(int(d["thread_id"]), d)
-        reply_failed = svc.reply_failed_threads()
     except Exception:
         drafts = {}
+    try:
+        reply_failed = svc.reply_failed_threads() if svc is not None else set()
+    except Exception:
+        reply_failed = set()
     for t in threads:
         draft = drafts.get(int(t.get("thread_id") or 0))
         state = mail_thread_state(t, marks.get(("mail", str(t.get("thread_id")))), draft=draft,

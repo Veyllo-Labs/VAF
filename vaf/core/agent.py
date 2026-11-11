@@ -11275,20 +11275,38 @@ class Agent:
             self._turn_failed = True
             return text
 
-        def _reflex_withheld_ids():
-            """The tool-call ids of the newest round before this one, refused rounds skipped,
-            that still have a result in the history; an empty set when that round ran no
-            tools. A compression retry that shrank the history opens a round of its own, and
-            a refusal of it still carries the tool step before the first refusal."""
+        def _reflex_withheld_step():
+            """The tool step a request-level reflex withholds: (indices of its tool results
+            still to withhold, index where the step ends). The step is the newest round before
+            this one, refused rounds skipped (a compression retry that shrank the history opens
+            a round of its own, and a refusal of it still carries the tool step before the first
+            refusal): the assistant message that called its tools, up to the next assistant
+            message. Anchored on that message, not on the ids alone: an earlier exchange may
+            reuse an id, and a compaction keeps copies of tool results apart from their call;
+            neither is this step. A result already withheld does not count, withholding it again
+            leaves the request as it was. ([], 0) when there is nothing to withhold."""
             ids = set()
             for _rec in reversed(self._turn_rounds[:-1]):
                 if _rec.get("round") in _refused_rounds:
                     continue
-                ids = set(_rec.get("tool_call_ids") or ())
+                ids = {str(i) for i in (_rec.get("tool_call_ids") or ())}
                 break
-            return {m.get("tool_call_id") for m in self.history
-                    if isinstance(m, dict) and m.get("role") == "tool"
-                    and m.get("tool_call_id") in ids}
+            if not ids:
+                return [], 0
+            _hist = self.history
+            _start = next((i for i in range(len(_hist) - 1, -1, -1)
+                           if isinstance(_hist[i], dict) and _hist[i].get("role") == "assistant"
+                           and any(isinstance(tc, dict) and str(tc.get("id")) in ids
+                                   for tc in (_hist[i].get("tool_calls") or ()))), None)
+            if _start is None:
+                return [], 0
+            _end = next((i for i in range(_start + 1, len(_hist))
+                         if isinstance(_hist[i], dict) and _hist[i].get("role") == "assistant"),
+                        len(_hist))
+            return [i for i in range(_start + 1, _end)
+                    if isinstance(_hist[i], dict) and _hist[i].get("role") == "tool"
+                    and str(_hist[i].get("tool_call_id")) in ids
+                    and _hist[i].get("content") != REFLEX_WITHHELD_RESULT], _end
 
         def _reflex_due(failure, streamed_text):
             """The reflex class this round's failure gets, or "" with the reason logged. Only a
@@ -11312,8 +11330,8 @@ class Agent:
                 reason = "answer text was already streamed"
             elif cls == "too_large" and not _too_large_retried:
                 reason = "the compression retry goes first"
-            elif cls in ("too_large", "content_refused") and not _reflex_withheld_ids():
-                reason = "no tool round before it"
+            elif cls in ("too_large", "content_refused") and not _reflex_withheld_step()[0]:
+                reason = "no tool results before it left to withhold"
             if reason:
                 try:
                     append_domain_log("backend", f"api_error_reflex: no {cls} ({reason})")
@@ -11674,21 +11692,17 @@ class Agent:
                             # The same history plus a note is refused the same way: the
                             # previous tool step's results are the one thing that changes.
                             # Ids, names and order stay, so every call keeps its answer.
-                            _ids = _reflex_withheld_ids()
-                            _names, _first = set(), None
-                            for _i, _m in enumerate(self.history):
-                                if (isinstance(_m, dict) and _m.get("role") == "tool"
-                                        and _m.get("tool_call_id") in _ids):
-                                    _m["content"] = REFLEX_WITHHELD_RESULT
-                                    _withheld += 1
-                                    _names.add(str(_m.get("name") or ""))
-                                    _first = _i if _first is None else _first
+                            _idxs, _end = _reflex_withheld_step()
+                            _names = set()
+                            for _i in _idxs:
+                                self.history[_i]["content"] = REFLEX_WITHHELD_RESULT
+                                _withheld += 1
+                                _names.add(str(self.history[_i].get("name") or ""))
                             # A failed tool's result is also quoted whole in the note after
                             # that step's results (_tool_error_note); it is the same material.
-                            for _m in (self.history[_first:] if _first is not None else ()):
-                                if not isinstance(_m, dict) or _m.get("role") == "assistant":
-                                    break
-                                if _m.get("role") != "system" or not isinstance(_m.get("content"), str):
+                            for _m in (self.history[_idxs[0]:_end] if _idxs else ()):
+                                if (not isinstance(_m, dict) or _m.get("role") != "system"
+                                        or not isinstance(_m.get("content"), str)):
                                     continue
                                 for _name in _names:
                                     _head, _tail = _tool_error_note_parts(_name)

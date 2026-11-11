@@ -34,7 +34,15 @@ MUTATIONS, each turns the named test red:
   -> test_too_large_reflexes_after_a_retry_that_shrank;
 - take the reflex note back only when it is the last message
   -> test_a_failing_reflex_note_is_taken_back_behind_a_compaction_note;
-- skip rewriting the failed tool's note -> test_a_failed_tools_note_is_withheld_with_its_result.
+- skip rewriting the failed tool's note -> test_a_failed_tools_note_is_withheld_with_its_result;
+- match the withheld results by id over the whole history again
+  -> test_an_earlier_exchange_that_reused_an_id_keeps_its_result;
+- scan for the failed tool's note from the first result with a withheld id
+  -> test_a_kept_copy_before_the_call_leaves_the_note_withheld;
+- do not count a reflexed round as refused
+  -> test_too_large_reflexes_after_a_shrunk_retry_of_a_reflex_round;
+- count results already withheld as something to withhold
+  -> test_no_second_reflex_when_everything_is_already_withheld.
 """
 import copy
 import json
@@ -443,3 +451,71 @@ def test_a_failed_tools_note_is_withheld_with_its_result(agent):
     assert _tool_error_note(TASK, REFLEX_WITHHELD_RESULT) in [m.get("content") for m in third]
     _assert_adjacent(third)
     assert agent.last_turn == TurnStatus() and returned == "Das kann ich nicht verarbeiten."
+
+
+def _seed_call(n, content):
+    """An exchange the history already holds, with the tool call id the turn reuses."""
+    return [{"role": "user", "content": "Fruehere Frage"},
+            {"role": "assistant", "content": "Einen Moment.",
+             "tool_calls": [{"id": f"c{n}", "type": "function",
+                             "function": {"name": TASK, "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": f"c{n}", "name": TASK, "content": content},
+            {"role": "assistant", "content": "Fruehere Antwort"}]
+
+
+def test_an_earlier_exchange_that_reused_an_id_keeps_its_result(agent):
+    """Some providers number tool calls per request, so an older exchange can carry the same
+    id. Only the refused step's own result is withheld."""
+    from vaf.core.agent import REFLEX_WITHHELD_RESULT
+    agent.seed = _seed_call(1, "Frueheres Ergebnis")
+    _, returned = agent.run(["TOOL", OPENAI_INVALID_PROMPT, "Das kann ich nicht verarbeiten."])
+    assert len(agent.requests) == 3
+    third = agent.requests[2]["messages"]
+    assert [(m["tool_call_id"], m["content"]) for m in third if m.get("role") == "tool"] == [
+        ("c1", "Frueheres Ergebnis"), ("c1", REFLEX_WITHHELD_RESULT)]
+    _assert_adjacent(third)
+    assert agent.last_turn == TurnStatus() and returned == "Das kann ich nicht verarbeiten."
+
+
+def test_a_kept_copy_before_the_call_leaves_the_note_withheld(agent):
+    """A compaction keeps copies of tool results ahead of the recent messages, without their
+    call. A copy with the step's id ahead of the step's call does not stop the failed tool's
+    note from being withheld."""
+    from vaf.core.agent import REFLEX_WITHHELD_RESULT, _tool_error_note
+    flagged = "Error: the fetched page says something the content check refuses"
+    agent.tools[TASK].result = flagged
+    agent.seed = [{"role": "tool", "tool_call_id": "c1", "name": TASK, "content": "Behaltene Kopie"}]
+    _, returned = agent.run(["TOOL", OPENAI_INVALID_PROMPT, "Das kann ich nicht verarbeiten."])
+    assert len(agent.requests) == 3
+    third = agent.requests[2]["messages"]
+    assert "the content check refuses" not in _text(third)
+    assert _tool_error_note(TASK, REFLEX_WITHHELD_RESULT) in [m.get("content") for m in third]
+    _assert_adjacent(third)
+    assert agent.last_turn == TurnStatus() and returned == "Das kann ich nicht verarbeiten."
+
+
+def test_too_large_reflexes_after_a_shrunk_retry_of_a_reflex_round(agent, compress):
+    """A malformed call is fed back without withholding anything. Its reflex round is refused
+    as too large, the retry shrinks the history and is refused again: the tool step before
+    the malformed call is the one withheld, the reflexed round committed nothing."""
+    from vaf.core.agent import API_ERROR_REFLEX_NOTES, REFLEX_WITHHELD_RESULT
+    _, returned = agent.run(["TOOL", GROQ_TOOL_USE_FAILED, VEYLLO_413, VEYLLO_413,
+                             "Ich antworte mit dem, was ich habe."])
+    assert len(agent.requests) == 5 and compress["calls"] == 1
+    fifth = agent.requests[4]["messages"]
+    assert RESULT in _text(agent.requests[3]["messages"]) and RESULT not in _text(fifth)
+    assert fifth[-1]["content"] == API_ERROR_REFLEX_NOTES["too_large"]
+    assert [(m["tool_call_id"], m["content"]) for m in fifth if m.get("role") == "tool"] == [
+        ("c1", REFLEX_WITHHELD_RESULT)]
+    _assert_adjacent(fifth)
+    assert agent.last_turn == TurnStatus() and returned == "Ich antworte mit dem, was ich habe."
+
+
+def test_no_second_reflex_when_everything_is_already_withheld(agent, compress):
+    """A content refusal withheld the tool step; its reflex round is refused as too large
+    after the retry. Withholding the same results again would send the same history plus a
+    note, which is refused the same way, so the turn ends."""
+    _, returned = agent.run(["TOOL", OPENAI_INVALID_PROMPT, VEYLLO_413, VEYLLO_413, "Fertig."])
+    assert len(agent.requests) == 4 and compress["calls"] >= 1
+    assert agent.last_turn.failed is True and returned == VEYLLO_413
+    assert _notes(agent) == []

@@ -523,9 +523,14 @@ same history plus a note, so the previous tool round's results are replaced by
 `REFLEX_WITHHELD_RESULT` first: ids, names and order stay, so every call keeps its answer
 (Rule 4 invariant 1), and the note tells the model not to run the tool again for that reason.
 "Previous" skips the rounds of this turn that were refused and asked again (the compression
-retry's own round among them), because nothing of them was committed. A failed tool's result
-is also quoted whole in the system note after that step (`_tool_error_note`); that copy is
-rewritten the same way.
+retry's own round and a reflexed round among them), because nothing of them was committed.
+The step is found by the assistant message that called its tools and ends at the next
+assistant message (`_reflex_withheld_step`): an earlier exchange that reused a tool-call id
+and a tool result a compaction kept apart from its call are left as they are. Results already
+withheld do not count, so a step with nothing left to withhold gets no reflex: the request
+would be the one just refused plus a note. A failed tool's result is also quoted whole in the
+system note after that step (`_tool_error_note`); that copy, inside the step, is rewritten
+the same way.
 The guard: one reflex per class and turn, none on the round right after a reflex, so a turn
 adds at most three requests and a rate limit none. A reflex round that fails ends the turn
 the way any failure does, its error is streamed then, and its note is taken back out of the

@@ -457,7 +457,19 @@ librarian's renames, `cloud_storage` save, the local side of `ssh` and `ftp` dow
 on every lane. The decision is `vaf.is_vaf_state`; `is_safe_path` asks it unless its caller
 passes `read_only=True`. The writers of those stores are their own tools, which check what
 they save: `create_agent_tool` and the Web UI's custom-tool upload, `create_skill` and
-`update_skill`, `create_agent_workflow`, the MCP and trust registries. Reading is unchanged.
+`update_skill`, `create_agent_workflow`, the MCP and trust registries.
+
+Reading is refused as well, for every account and on every lane, with three exceptions:
+`is_safe_path(path, read_only=True)` asks `vaf.is_vaf_state(path, mode="read")`. The same roots
+hold every account's messages, mail, calendars and contacts, the key files, the MCP server list,
+the messaging endpoints and the tool grants, and in Docker mode the configuration folder with
+the API keys. A credential read out through a chat prompt, or attached to an outgoing message
+by injected text (the senders resolve attachments through the same read screen), outlives
+anything this instance can revoke. The exceptions are the store rows marked `agent_readable`
+in `vaf/core/data_stores.py`, each a folder a tool hands the model paths into: `skills/`
+(`use_skill`), `workflows/` and the data directory's `custom_tools/` (`create_agent_tool`'s
+edit replaces a tool's whole source, so the model reads the source it edits). They are
+compared case-exact, so another spelling of them is refused.
 
 A path is checked at one moment and written at the next, and code in a sandbox environment
 (`sandbox_exec`, the coder's jailed `bash`) can create links in its mounted folder, which the
@@ -505,6 +517,51 @@ file there without asking again; VAF neither loads nor runs anything from that f
 and runs without a confirmation, so in the admin's own web chat it still writes and loads
 Python that the agent composed, as it is meant to. That is the one remaining agent lane to
 code VAF loads; text injected into the admin's web chat can reach it.
+
+## File tools and the home directory's configuration
+
+Some files in the home directory are run or obeyed by other programs at the next login, shell
+or Python start, outside every VAF containment: the shell start files, autostart entries,
+systemd user units, `environment.d`, the Python user site (a `.pth` file runs at every Python
+start), `~/.local/bin`, `~/.gitconfig`, `~/.npmrc`, launch agents, the PowerShell profiles. The
+file tools run unconfirmed on the messenger chats, in workflows, automations and background
+runs, where injected text can drive them, so they refuse to write there for every account, the
+owner included. The decision is `vaf.is_host_config` (`vaf/core/workspace_guard.py`), in two
+parts, so there is no list of file names to drift:
+
+- every entry of the home directory whose name starts with a dot, and everything below it
+  (deny-by-default, the polarity of `~/.vaf`);
+- explicit roots outside a dot folder: `$XDG_CONFIG_HOME` and `$XDG_DATA_HOME` when set to an
+  absolute path, `%APPDATA%`, `%LOCALAPPDATA%`, `~/Library/LaunchAgents`,
+  `Documents/PowerShell` and `Documents/WindowsPowerShell`.
+
+Paths are compared like VAF's state, in every spelling (as given and resolved, case-folded,
+stream suffixes and trailing dots cut). `is_safe_path`'s write rule asks it, and so do
+`is_unsafe_project_dir` and `assert_safe_workspace` (no project, no jail and no sandbox mount
+there or in a folder that contains it), `copy_out` (every member of the stream, so
+`host_path=~` with a member `.bashrc` is refused as a whole) and `move_file` (a folder that
+would become a missing parent of such a root, such as a `Library` folder holding
+`LaunchAgents/` moved to a missing `~/Library`). Reading those files is unchanged.
+The owner's own way to change them is a terminal, or `host_bash`, which asks first and is kept
+off chats.
+
+The temp exemption: a path inside the system temp folder is exempt from an explicit root that
+contains the temp folder, and from nothing else. Windows' temp folder lies inside
+`%LOCALAPPDATA%`, and every staging lane writes there. The dot rule has no exemption, because a
+scratch home (the tests, macOS' `/var/folders`) lies in temp and an exemption would switch the
+rule off exactly there.
+
+**Named boundaries.**
+- `open_for_write`'s second look asks `is_vaf_state` only: a folder swapped for a link into
+  the home directory's configuration between the check and the open is the race described in
+  "File tools and VAF's own state".
+- The code-running tools (`host_bash`, `python_exec`) write anything the OS user can, and are
+  confirmed.
+- The listing tools (`tree`, `find_files`) check the folder they start from and may show entry
+  NAMES below it, as for `~/.vaf`.
+- A `TMPDIR` inside a home dot folder makes temp writes through the file tools refused.
+- An entry named only by dots (`~/...`) is folded away by the shared normaliser and is not a
+  dot entry; no program reads configuration from such a name.
 
 ## Shell execution surfaces
 
@@ -556,7 +613,13 @@ For an account that folder is one the account may write: the coder chooses it th
 the unsafe check), and refuses a `project_path` outside the account's own `VAF_Projects/<uid8>/`
 and its rooms' shared folders. Since the jail mounts nothing else of the home directory and no
 docker socket (a `docker` command is refused, see "Docker is refused in the coder shell"
-below), that also bounds what the shell can read and write on the host. What `bash` may run is not screened
+below), that also bounds what the shell can read and write on the host. The shell asks that
+question again itself: `run_in_workspace` takes the caller's `user_scope_id` and `user_role`
+as required keywords (a caller that forgets them gets a `TypeError`, not a shell) and asks
+`project_dir_refusal` for the folder before anything runs; `bash` is built with that identity
+by the coder (its caller) and by the workflow lane (the engine's identity). A content-only
+coder run works in a throwaway folder from `tempfile.mkdtemp`, outside every account's tree;
+it is marked scratch and allowed only inside the system temp folder. What `bash` may run is not screened
 by the file jail (see "The coder acts as its caller" in
 [USER_ISOLATION.md](USER_ISOLATION.md)).
 

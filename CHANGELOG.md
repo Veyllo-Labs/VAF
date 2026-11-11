@@ -70,6 +70,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   send tools say the message is kept and whether a push notice goes out. VAF calls the paired
   device the Veyllo App everywhere.
 
+### Security
+
+- **The agent's file tools stay out of VAF's own data and your shell start files.** Reading
+  VAF's data and settings folders (messages, mail, contacts, key files, the MCP server list,
+  tool permissions, and in Docker mode the configuration folder) is now refused for every
+  account, the owner included; skills, workflows and custom tools stay readable. Writing the
+  home directory's configuration (files and folders whose name starts with a dot, such as
+  `~/.bashrc`, `~/.config` or `~/.local`, plus macOS launch agents and the Windows app-data
+  folders) is refused too; change those in a terminal, or let the agent use its host shell,
+  which asks first. A chat whose stored project folder belongs to another account no longer
+  shows or uses that folder, and the coding agent's shell and git helpers check their folder
+  against the caller on every call.
+
 ## [0.1.0a36] - 2026-11-09
 
 ### Added

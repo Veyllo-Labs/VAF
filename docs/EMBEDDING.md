@@ -1239,10 +1239,16 @@ Hard limits you must respect (they are architecture, not fine print):
   authenticated account whose identity carries no scope must be refused before you ask.
   And it does not look at the disk: ask before you check whether the file exists, or
   "not found" versus "refused" tells a caller which files exist outside its boundary.
-  Before you STORE, also ask `vaf.is_vaf_state(path)` and refuse on True, for every
-  caller, an admin included: `jail_allows` lets an admin reach everything, and VAF's own
-  state (the custom tools it runs, the MCP commands it starts, the tool grants, the skills
-  and workflows) is written by its own registries, never by a generic save. Then open the
+  Before you SERVE, also ask `vaf.is_vaf_state(path, mode="read")` and refuse on True:
+  `jail_allows` lets an admin reach everything, and VAF's state holds every account's
+  messages, mail and contacts, the key files, the MCP list and the tool grants (skills,
+  workflows and custom tools answer False, so a skill's files stay servable). Before you
+  STORE, ask `vaf.is_vaf_state(path)` and `vaf.is_host_config(path)` and refuse on True
+  for either, for every caller, an admin included: VAF's own state (the custom tools it
+  runs, the MCP commands it starts, the tool grants, the skills and workflows) is written
+  by its own registries, never by a generic save, and the home directory's configuration
+  (`~/.bashrc`, `~/.config`, the Python user site, autostart entries) runs outside any
+  containment at the next login or start. Then open the
   file with `vaf.open_for_write(path, mode)` instead of `open()`: a check and a later
   `open()` decide one thing and write another when a link sits at the name or a folder is
   swapped on the way.
@@ -2795,16 +2801,39 @@ Stable public surface (safe to build on):
   target; it neither reads nor changes the jail of the run it is called from. It is only
   the per-account half: it does not screen system folders or VAF's own data directory,
   and it does not refuse a scope-less caller (see the multi-tenant section). For VAF's own
-  data ask `vaf.is_vaf_state`.
-- `vaf.is_vaf_state(path) -> bool` - whether a path is VAF's own state or lies inside it:
-  `~/.vaf` (or `$VAF_CONFIG_DIR` in Docker mode), the platform data directory (with
-  `custom_tools/` and `mcp_servers.json`) and the config directory (with the tool grants).
-  A tool or a route that writes a file on a model's, a request's or a peer's behalf asks it
-  and refuses on True, whoever the caller is; VAF's own file tools, project checks and
-  sandbox copy-out do. Read at call time, compared by whole components in every spelling
-  (as given and resolved, case-folded, Windows' trailing dots and stream suffixes cut),
-  fail-closed: an error answers True. It answers nothing about reading. The path need not
-  exist.
+  data ask `vaf.is_vaf_state` (with `mode="read"` before serving), and before storing also
+  `vaf.is_host_config`.
+- `vaf.is_vaf_state(path, *, mode="write") -> bool` - whether a path is VAF's own state or
+  lies inside it: `~/.vaf` (or `$VAF_CONFIG_DIR` in Docker mode), the platform data
+  directory (with `custom_tools/` and `mcp_servers.json`) and the config directory (with
+  the tool grants). A tool or a route that writes a file on a model's, a request's or a
+  peer's behalf asks it and refuses on True, whoever the caller is; VAF's own file tools,
+  project checks and sandbox copy-out do. With `mode="read"` it answers whether a READ must
+  be refused: True for all of the state except the folders a tool hands a model paths into
+  (the skills, the workflows and `custom_tools/`, compared case-exact); VAF's own file tools
+  and attachment senders ask it for every read. Any other mode answers True. Read at call
+  time, compared by whole components in every spelling (as given and resolved, case-folded,
+  Windows' trailing dots and stream suffixes cut), fail-closed: an error answers True. The
+  path need not exist.
+- `vaf.is_host_config(path) -> bool` - whether a path is part of the home directory's
+  configuration, which other programs run or obey: every entry of the home directory whose
+  name starts with a dot and everything below it, plus a set `$XDG_CONFIG_HOME` or
+  `$XDG_DATA_HOME`, `%APPDATA%`, `%LOCALAPPDATA%`, `~/Library/LaunchAgents` and the
+  PowerShell profile folders. A tool or a route that writes on a model's, a request's or a
+  peer's behalf asks it beside `is_vaf_state` and refuses on True, for every caller; VAF's
+  own file tools, project and mount checks and sandbox copy-out do. A path inside the system
+  temp folder is exempt from a root that contains the temp folder (Windows' temp inside
+  `%LOCALAPPDATA%`). Same comparison as `is_vaf_state`, fail-closed. It says nothing about
+  reading.
+- `vaf.project_dir_refusal(path, *, user_scope_id, user_role=None) -> str | None` - why
+  this caller may not use a folder as a project, workspace or shell root, or None when it
+  may: the folder is not the home directory, a standard folder itself, VAF's own data, the
+  home directory's configuration or VAF's code, and it lies where the caller's file jail
+  lets it write (`jail_allows(..., mode="write")`; an admin or an empty scope reaches every
+  tree). Ask it for a folder a stored record names before you serve it or hand it to a run:
+  VAF's web workspace resolver, its queue runner and its jailed shell do, because a record
+  written earlier can name another account's folder. The role must come from the caller's
+  authenticated identity. Fail-closed: an error is a refusal.
 - `vaf.open_for_write(path, mode="wb", *, exclusive=False, encoding=None, newline=None, expect_folder=None)` /
   `vaf.WriteRefused` - the open that goes with that answer, for a file under a name a
   model, a request or a peer chose (and the `.part` beside one). It opens the folder first

@@ -70,7 +70,7 @@ from __future__ import annotations
 import re
 import shlex
 from dataclasses import dataclass, field
-from typing import List
+from typing import Iterable, List, Optional
 
 # Executables that read a script from stdin: the sink half of "fetch | shell".
 _SHELL_SINKS = frozenset({
@@ -139,6 +139,12 @@ _PYTHON_FTP_TEXT_RE = re.compile(r"\bftplib\b|['\"]\s*ftps?://", re.IGNORECASE)
 _SSH_VALUE_LETTERS = frozenset("BbcDEeFIiJLlmOoPpQRSWw")
 # How deep `bash -c "sh -c '...'"` may nest before the command is refused as unreadable.
 MAX_NESTING = 4
+# How many nested commands one top-level command may carry in all before it is refused as
+# unreadable. The depth limit alone does not bound the work: a runner's command is read at
+# every option's value position, and each such candidate that is a runner again branches
+# anew, so `uv run -a uv -a uv ... python` grew with the 4th power of its length (measured:
+# 30 options 2.4 s, 80 options over 300 s, on the gate path before anyone is asked).
+MAX_NESTED_COMMANDS = 64
 # Writes straight to a block device or formats one.
 _DEVICE_WRITERS = frozenset({"dd", "mkfs", "fdisk", "parted", "sfdisk", "shred"})
 # Reading these is a credential grab worth naming in the dialog.
@@ -402,10 +408,11 @@ def _ssh_remote_command(args: List[str]) -> str:
     return " ".join(args[i + 1:])     # args[i] is the host
 
 
-def _nested_commands(exe: str, args: List[str]) -> List[tuple]:
+def _nested_commands(exe: str, args: List[str]) -> Iterable[tuple]:
     """(where, text) for every command this one runs from TEXT it is given: "local" for
     `sh -c`, `su -c`, `eval` and the command a project runner starts (`uv run ...`, joined
-    back into one text), "remote" for `ssh host ...`."""
+    back into one text, lazily, so a caller that stops early does not pay for the rest),
+    "remote" for `ssh host ...`."""
     if exe in _COMMAND_STRING_SHELLS:
         for pos, tok in enumerate(args):
             if tok in ("-o", "+o"):           # `bash -o pipefail -c ...`: -o takes a word
@@ -425,7 +432,7 @@ def _nested_commands(exe: str, args: List[str]) -> List[tuple]:
     if exe == "ssh":
         remote = _ssh_remote_command(args)
         return [("remote", remote)] if remote.strip() else []
-    return [("local", shlex.join(cmd)) for cmd in _runner_commands(exe, args)]
+    return (("local", shlex.join(args[start:])) for start in _runner_commands(exe, args))
 
 
 def _is_ftplib(name) -> bool:
@@ -482,11 +489,12 @@ def python_code_categories(code: str, *, _depth: int = 0) -> List[str]:
     return []
 
 
-def _runner_commands(exe: str, args: List[str]) -> List[List[str]]:
-    """Every word list that may be the command a project runner starts (`uv run CMD ...`,
-    `poetry run`, `conda run -n env`, `uv tool run`); [] when `exe` is no runner. The caller
-    classifies each one like the text `bash -c` carries, so the wrapper unwrap, the shell
-    descent, the depth limit and every category reach the runner's command too.
+def _runner_commands(exe: str, args: List[str]) -> List[int]:
+    """Where in `args` each word list starts that may be the command a project runner starts
+    (`uv run CMD ...`, `poetry run`, `conda run -n env`, `uv tool run`); [] when `exe` is no
+    runner. Each such list runs to the end of `args`. The caller classifies each one like the
+    text `bash -c` carries, so the wrapper unwrap, the shell descent, the depth limit and
+    every category reach the runner's command too.
 
     A runner's words are read up to its command: its verbs (`run`, `exec`, `tool`), its
     options, and the word after an option, which may be that option's value. `--` names the
@@ -502,26 +510,30 @@ def _runner_commands(exe: str, args: List[str]) -> List[List[str]]:
     --with ssh pytest`); `uv run -q echo hi` passes. That is the safe side: the other reading
     would let `conda run --cwd /srv python -c ...` pass whenever an option is missing from a
     table, and such a table would be one more copy per runner (uv, poetry, conda, pipenv,
-    hatch, pdm) of flags that change with each release. `--` before the command lifts both."""
+    hatch, pdm) of flags that change with each release. `--` before the command lifts both
+    when no word stands in a value position before it; otherwise that word may be the
+    command and `--` its first argument (`uv run -q ssh -- host` logs in to `host`), so both
+    readings are classified. Writing the value with `=` (`uv run --with=ssh -- pytest`)
+    leaves no word in a value position."""
     if exe not in _PYTHON_RUNNERS:
         return []
-    found: List[List[str]] = []
+    found: List[int] = []
     maybe_value = False                 # the word before was an option without `=value`
     for pos, tok in enumerate(args):
         if tok == "--":
-            # The rest is the command, whatever it looks like, and every word before it
-            # belongs to the runner: a value-position word is a value, not a command.
-            return [args[pos + 1:]] if args[pos + 1:] else []
+            # The rest is the command, whatever it looks like. A value-position word before
+            # it stays a candidate: if it was the command, `--` is that command's argument.
+            return found + ([pos + 1] if pos + 1 < len(args) else [])
         if tok.startswith("-"):
             maybe_value = "=" not in tok
             continue
         if maybe_value:                 # a possible value, and a possible command
-            found.append(args[pos:])
+            found.append(pos)
             maybe_value = False
             continue
         if tok in _RUNNER_VERBS:
             continue
-        found.append(args[pos:])        # the command; its words are its data
+        found.append(pos)               # the command; its words are its data
         return found
     return found
 
@@ -579,7 +591,9 @@ def _is_protected_target(arg: str) -> bool:
     return False
 
 
-def classify_command(command: str, *, profile: str = "host", _depth: int = 0) -> CommandVerdict:
+def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
+                     _budget: Optional[List[int]] = None,
+                     _stdin_fetch: bool = False) -> CommandVerdict:
     """Classify a shell command offline. Never raises, never executes anything.
 
     profile="host"   - unsandboxed lane: refuse the catastrophic set.
@@ -587,17 +601,24 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0) ->
                        jail or hurts the machine.
     profile="remote" - runs on another machine: the host set minus the fetch into
                        a shell, which is named instead (module docstring).
+
+    `_budget` (one shared counter) caps the classifications one top-level call makes in
+    all (MAX_NESTED_COMMANDS); `_stdin_fetch` says a nested command's input is code fetched
+    from the network (`curl x | uv run bash`).
     """
     verdict = CommandVerdict()
     text = (command or "").strip()
     if not text:
         return verdict
-    if _depth > MAX_NESTING:
+    if _budget is None:
+        _budget = [MAX_NESTED_COMMANDS]
+    if _depth > MAX_NESTING or _budget[0] <= 0:
         verdict.blocked = True
         verdict.categories = ["nested_too_deep"]
         verdict.reason = ("Command contains a forbidden pattern: it "
                           + CATEGORY_REASONS["nested_too_deep"])
         return verdict
+    _budget[0] -= 1
 
     pairs = _split_segments(text)
     verdict.segments = [seg for _, seg in pairs]
@@ -617,13 +638,15 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0) ->
     nested_refusal = ""
     remote_cats: List[str] = []
 
-    pipeline_fetch = False
+    pipeline_fetch = _stdin_fetch
     for connector, seg in pairs:
         # Only a pipe continues a pipeline. `curl x > f; python parse.py` is a
         # download followed by a separate, human-visible command - the block is
-        # reserved for the unreviewable direct pipe into an interpreter.
+        # reserved for the unreviewable direct pipe into an interpreter. A segment
+        # outside a pipe reads this command's own input, fetched code when a fetch
+        # pipes into the runner or shell that carries it.
         if connector != "pipe":
-            pipeline_fetch = False
+            pipeline_fetch = _stdin_fetch
         toks = _tokens(seg)
         if not toks:
             continue
@@ -631,11 +654,20 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0) ->
         args = toks[exe_at + 1:] if exe_at >= 0 else []
         low = seg.lower()
 
+        # A local nested command's output is this segment's output: fetched or remote
+        # content when it fetches (`uv run curl x | bash`). Applied after this segment's own
+        # sink check, so `bash -c 'curl x'` alone is no pipe into a shell.
+        nested_fetch = False
         for where, inner in _nested_commands(exe, args):
-            sub = classify_command(inner, profile="remote" if where == "remote" else profile,
-                                   _depth=_depth + 1)
-            target = remote_cats if where == "remote" else cats
+            local = where != "remote"
+            sub = classify_command(inner, profile=profile if local else "remote",
+                                   _depth=_depth + 1, _budget=_budget,
+                                   _stdin_fetch=pipeline_fetch and local)
+            target = cats if local else remote_cats
             target.extend(c for c in sub.categories if c not in target)
+            if local and ("network_fetch" in sub.categories
+                          or "remote_login" in sub.categories):
+                nested_fetch = True
             if sub.blocked and not nested_refusal:
                 nested_refusal = sub.reason
 
@@ -657,6 +689,8 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0) ->
             pipeline_fetch = True
         if exe in _SHELL_SINKS and pipeline_fetch and "pipe_to_shell" not in cats:
             cats.append("pipe_to_shell")
+        if nested_fetch:
+            pipeline_fetch = True
 
         is_device_writer = exe in _DEVICE_WRITERS or exe.startswith("mkfs")
         if is_device_writer or _DEVICE_TARGET_RE.search(low) or _REDIRECT_DEVICE_RE.search(low):

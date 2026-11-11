@@ -246,7 +246,10 @@ The `python_exec` tool runs code directly on your host system. It is:
   what follows it is refused in its own right (`conda run -n py --no-capture-output echo
   python -c 'import ftplib'`; `uv run -q echo hi` passes), and a value that is itself a
   refused program's name is refused as one (`uv run --with ssh pytest`). That is the safe
-  side, and `--` before the command lifts both. Named boundary: the check reads the
+  side. `--` before the command lifts both when no word stands in a value position before
+  it; after one, that word may be the command and `--` its argument (`uv run -q ssh -- host`
+  logs in to `host`), so both readings are classified, and a value written with `=`
+  (`uv run --with=ssh -- pytest`) leaves no such word. Named boundary: the check reads the
   code it is given; code built at runtime (`"ftp" + "lib"`, a string assembled before exec), a
   script file, a heredoc fed to the interpreter, or an interpreter under another name or in a
   container is not seen, as a shell script's content is not read. The control for host code
@@ -788,7 +791,13 @@ ordinary work while `rm  -rf  /` is not. It also classifies the command a comman
 `bash -c '...'`, `su -c '...'`, `eval ...` and the command a project runner starts
 (`uv run ...`, `poetry run ...`) with the lane's own profile, and `ssh host '...'`
 with the `remote` profile (the catastrophic core, while an installer piped into a shell is
-named rather than refused, because that is how a server is commonly set up). A wrapper's
+named rather than refused, because that is how a server is commonly set up). A pipe reaches
+through a carried command at both ends: `curl ... | uv run bash` and `uv run curl ... | bash`
+are a fetch piped into a shell like the same pipe without the runner. One command may carry
+at most `MAX_NESTED_COMMANDS` nested commands in all, beyond which it is refused like one
+nested too deep: a runner's command is read at every option's value position, and without
+that bound a few hundred characters of `uv run -a uv -a uv ...` held the gate for minutes
+before anyone was asked. A wrapper's
 option values are stepped over (`sudo -u root rm -rf /` is judged as `rm -rf /`), and a
 command nested more than `MAX_NESTING` deep is refused. Before this, ten of ten measured
 wrapped forms passed. The verdict carries its categories, which the confirmation dialog
@@ -843,7 +852,8 @@ was asked about, never over a messaging channel, a regular
 account only when its allowlist names it, the local side under the account's write jail. For
 `ftp` the server is filled in again at the call, so a stored host changed while the question
 was open (a second chat's `store_credential`) or after a standing grant is refused instead of
-reached, and a first contact is remembered only after a first-contact question, so a server
+reached, also when both servers were confirmed before and so neither raised a question (the
+tool's `call_subject`, handed as `_call_subject`), and a first contact is remembered only after a first-contact question, so a server
 forgotten in the last moment is refused by the connection itself. Its
 own: the certificate is checked (an authority's, or the fingerprint remembered at the first
 connection), the address a server names for passive transfers is not followed, cloud metadata

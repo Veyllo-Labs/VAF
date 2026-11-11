@@ -592,6 +592,44 @@ def test_a_host_changed_after_a_standing_grant_is_refused(lab, monkeypatch):
     assert calls == []
 
 
+@pytest.mark.parametrize("when", ["asked", "standing"])
+def test_a_host_moved_between_two_confirmed_servers_is_refused(lab, monkeypatch, when):
+    """h1 and h2 are both confirmed, so neither raises a question of its own and the two
+    questions compare equal (""). The stored host moved from h1 to h2 while the person read
+    the dialog, or after a standing "always", and the call (an upload, a delete) went to h2.
+    MUTATION: drop the subject from the comparison in changed_since_asked - red (both);
+    do not hand `_call_subject` from the funnel - red (both)."""
+    from vaf.core.tool_dispatch import ToolCallHooks
+    tmp, root, server = lab
+    if when == "standing":
+        monkeypatch.setattr("vaf.core.trust.get_tool_policy",
+                            lambda n, user_scope_id=None: "allow")
+    plain = "ftp://$FTP_USER@$FTP_HOST:$FTP_PORT"
+    _store_server(server, host="h1.example")
+    for host in ("h1.example", "h2.example"):
+        ftp._remember(ftp.parse_server(f"ftp://alice@{host}:{server.port}"), ALICE, "none", "")
+    calls = _record_connect(monkeypatch)
+    asked = []
+
+    def decide(name, reason, choices=None):
+        asked.append(reason)
+        return "allow_once"
+
+    def before_dispatch(name, tool_args):
+        _store("FTP_HOST", "h2.example")       # a second chat, between the gate and the run
+        return None
+
+    out = _caller(decide, hooks=ToolCallHooks(before_dispatch=before_dispatch)).execute(
+        "ftp", {"server": plain, "action": "delete", "remote_path": "world/level.dat"})
+    assert (asked == []) is (when == "standing"), asked
+    assert "changed after the user was asked" in out, out
+    assert calls == [], "nothing may connect"
+    # Nothing changed: the same call goes through to the server it named.
+    _store("FTP_HOST", "h1.example")
+    _caller(decide).execute("ftp", {"server": plain, "action": "list"})
+    assert [name for name, _ in calls] == [f"ftp://h1.example:{server.port}"], calls
+
+
 def test_an_answered_first_connection_still_connects_and_a_known_one_is_not_confirmed(
         lab, monkeypatch):
     """The ordinary path is unchanged: asked, answered once, nothing changed - it connects and

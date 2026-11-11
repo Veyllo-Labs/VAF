@@ -162,13 +162,14 @@ def assign_declared_identity(tool: Any, args: dict, *, user_scope_id: str | None
     return args
 
 
-def _asks_its_own_question(tool: Any) -> bool:
-    """True when the tool overrides BaseTool.ask_reason, i.e. may put a question of its own.
-    Only such a tool is handed `_call_question`: one that never asks has nothing to compare,
-    and a `run` that lists its parameters must not receive a key it never declared."""
+def _overrides(tool: Any, method: str) -> bool:
+    """True when the tool overrides BaseTool's `method` (ask_reason: it may put a question of
+    its own; call_subject: it names what a yes covers). Only such a tool is handed
+    `_call_question` / `_call_subject`: one that never asks has nothing to compare, and a
+    `run` that lists its parameters must not receive a key it never declared."""
     from vaf.tools.base import BaseTool
-    own = getattr(type(tool), "ask_reason", None)
-    return callable(own) and own is not BaseTool.ask_reason
+    own = getattr(type(tool), method, None)
+    return callable(own) and own is not getattr(BaseTool, method, None)
 
 
 def repair_arguments(tool: Any, args: dict, *, tool_name: str,
@@ -1571,10 +1572,16 @@ class ToolCaller:
         # The tool's own question as it was put (or would have been, "" for none), handed to
         # the tool as `_call_question`; None when it was not consulted (an authorizer allow).
         asked: str | None = None
+        # What a yes to this call covers (BaseTool.call_subject), taken at the same moment and
+        # handed as `_call_subject`: a server resolved from stored names that needs no
+        # question of its own may still change before run.
+        subject: str | None = None
         if verdict.decision != "allow" and tool is not None:
             # The tool's own say about THIS call (BaseTool.ask_reason), e.g. a first contact.
             own_reason = self._tool_ask_reason(tool, args)
             asked = own_reason
+            if _overrides(tool, "call_subject"):
+                subject = self._tool_call_subject(tool, args)
             if own_reason:
                 # Joined, never replacing: an authorizer's ask() is the application's reason
                 # and the person must still read it.
@@ -1614,7 +1621,8 @@ class ToolCaller:
                                    "args": self._preview(name, args)})
         started = time.monotonic()
         try:
-            result = self._dispatch(name, tool, args, confirmed=confirmed, asked=asked)
+            result = self._dispatch(name, tool, args, confirmed=confirmed, asked=asked,
+                                    subject=subject)
         except Exception as exc:                                  # noqa: BLE001
             result = f"Tool Error: {exc}"
 
@@ -1653,6 +1661,15 @@ class ToolCaller:
             user_scope_id=self.user_scope_id, username=self.username,
             user_role=self.user_role, source=self.source, session_id=self.session_id,
         ))
+
+    def _tool_call_subject(self, tool, args) -> str:
+        """BaseTool.call_subject for this call, as a string. Fail-closed: a hook that raises
+        gives "", which no subject computed in run equals, so the call is refused there."""
+        try:
+            return str(tool.call_subject(dict(args or {}), user_scope_id=self.user_scope_id,
+                                         username=self.username) or "")
+        except Exception:                                         # noqa: BLE001
+            return ""
 
     def _tool_ask_reason(self, tool, args) -> str:
         """BaseTool.ask_reason for this call, as a string ("" for none). Fail-closed: a hook
@@ -1779,7 +1796,7 @@ class ToolCaller:
             return serializable
 
     def _dispatch(self, name, tool, args, confirmed: bool = False,
-                  asked: str | None = None):
+                  asked: str | None = None, subject: str | None = None):
         if tool is None:
             # The prefix is contract; the correction after it is what turns the refusal
             # into a retry the model can get right (see unknown_tool_hint).
@@ -1807,11 +1824,13 @@ class ToolCaller:
             # ASSIGNED like an identity key, never defaulted: the model's own
             # `_call_confirmed: true` must not be what a tool trusts.
             tool_args["_call_confirmed"] = bool(confirmed)
-            if _asks_its_own_question(tool):
+            if _overrides(tool, "ask_reason"):
                 # What the person was asked, so the tool can check that what it is about to
                 # use is still what that question named (BaseTool.changed_since_asked).
                 # Assigned for the same reason, and only to a tool with its own question.
                 tool_args["_call_question"] = asked
+                if _overrides(tool, "call_subject"):
+                    tool_args["_call_subject"] = subject
         if callable(self.hooks.before_dispatch):
             refusal = self.hooks.before_dispatch(name, tool_args)
             if refusal is not None and errors:

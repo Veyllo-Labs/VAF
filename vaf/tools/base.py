@@ -151,11 +151,26 @@ class BaseTool(ABC):
         use and refuses through `changed_since_asked` when it differs."""
         return None
 
-    def changed_since_asked(self, kwargs: Dict[str, Any], now: Optional[str]) -> Optional[str]:
+    def call_subject(self, args: Dict[str, Any], *, user_scope_id: Optional[str] = None,
+                     username: Optional[str] = None) -> Optional[str]:
+        """What a yes to THIS call is a yes to, as a text, or None. Override it only next to
+        ask_reason, for a call whose target is filled in from stored values: a question that
+        is not put (a server already confirmed) has no text to compare, so a stored value
+        changed between the gate and `run` would send the call elsewhere unnoticed. The funnel
+        takes it at the moment it consults ask_reason (same arguments and identity) and hands
+        it as `_call_subject` ("" when the hook raised, None when not consulted); `run`
+        passes its own, from the values it is about to use, to `changed_since_asked`."""
+        return None
+
+    def changed_since_asked(self, kwargs: Dict[str, Any], now: Optional[str],
+                            subject: Optional[str] = None) -> Optional[str]:
         """A refusal when the question this call would raise NOW differs from the one the
-        funnel put (`_call_question`), else None. `now` is ask_reason's answer computed from
-        the values `run` is about to use. None also when nothing was asked to compare with
-        (`_call_question` absent or None: a direct call, or an authorizer's allow()).
+        funnel put (`_call_question`), or what it covers NOW (`subject`, call_subject's answer
+        from the same values) differs from `_call_subject`, else None. `now` is ask_reason's
+        answer computed from the values `run` is about to use. None also when nothing was
+        asked to compare with (`_call_question` absent or None: a direct call, or an
+        authorizer's allow()), and no subject is compared when `_call_subject` is absent or
+        None.
 
         Deliberate: strict equality of the text, so a server that became confirmed meanwhile
         is refused once too; the retry then passes without a question. Without this, an
@@ -164,7 +179,10 @@ class BaseTool(ABC):
         contact. The refusal names no value: the question may hold what a stored name
         resolved to, and this text goes to the model."""
         asked = kwargs.get("_call_question")
-        if asked is None or (now or "") == str(asked):
+        if asked is None:
+            return None
+        before = kwargs.get("_call_subject")
+        if (now or "") == str(asked) and (before is None or (subject or "") == str(before)):
             return None
         return ("Error: what this call would reach changed after the user was asked about it "
                 "(a stored value, or a confirmed server, changed in between). Nothing was "

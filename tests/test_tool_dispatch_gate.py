@@ -591,6 +591,48 @@ def test_the_question_the_person_answered_travels_to_the_call(trust):
     assert tool.question is None and tool.confirmed is True
 
 
+def test_what_a_yes_covers_travels_to_the_call(trust):
+    """`_call_subject` is the tool's call_subject taken when the funnel consulted it, so a
+    target that needs no question (a confirmed server) is still bound to the run. Fail-closed:
+    a hook that raises hands "", which no real subject equals. Assigned, never the model's.
+    MUTATION: do not assign the key - red; return None instead of "" when the hook raises -
+    red; compute it only when ask_reason had a question - red (the known server)."""
+    trust["policy"] = "allow"
+    probe = _probe_tool()
+
+    class _Subject(type(probe)):
+        def call_subject(self, args, *, user_scope_id=None, username=None):
+            if args.get("server") == "boom":
+                raise ValueError("unreadable")
+            return f"{args.get('server')}@{user_scope_id}"
+
+        def run(self, **kwargs):
+            self.subject = kwargs.get("_call_subject", _ABSENT)
+            return super().run(**kwargs)
+
+    tool = _Subject()
+    caller = _funnel(tool, [])
+    assert caller.execute("remote_probe", {"server": "known",
+                                           "_call_subject": "forged"}) == "RAN"
+    assert tool.subject == "known@ab12cd34" and tool.question == ""
+    assert caller.execute("remote_probe", {"server": "boom"}) == "RAN"
+    assert tool.subject == ""
+    allowed = _funnel(tool, [], authorize=lambda req: req.allow())
+    assert allowed.execute("remote_probe", {"server": "new"}) == "RAN"
+    assert tool.subject is None
+
+
+def test_changed_since_asked_compares_the_subject_too():
+    """MUTATION: drop the subject from the comparison - red."""
+    from vaf.tools.base import BaseTool
+    check = BaseTool.changed_since_asked
+    assert check(None, {"_call_question": "", "_call_subject": "h1"}, None, "h1") is None
+    assert check(None, {"_call_question": "", "_call_subject": "h1"}, None, "h2")
+    assert check(None, {"_call_question": ""}, None, "h2") is None
+    assert check(None, {"_call_question": None, "_call_subject": "h1"}, None, "h2") is None
+    assert check(None, {"_call_question": "q", "_call_subject": "h1"}, "q", "h1") is None
+
+
 def test_a_tool_without_its_own_question_gets_no_call_question(trust):
     """python_exec, and an embedder's tool whose run lists its parameters, declare
     accepts_call_confirmation without a question of their own: no extra key for them."""
@@ -611,3 +653,4 @@ def test_a_tool_without_its_own_question_gets_no_call_question(trust):
     tool = _Plain()
     assert _funnel(tool, []).execute("plain_probe", {}) == "RAN"
     assert "_call_confirmed" in tool.seen and "_call_question" not in tool.seen
+    assert "_call_subject" not in tool.seen

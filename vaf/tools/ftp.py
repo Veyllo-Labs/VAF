@@ -14,7 +14,8 @@ transfers); this module is the tool's contract around it, the same one as the ss
   question that the password and the files cross the network readable. The call goes only
   to the server the person was asked about: `run` fills in `$NAME` again and builds the same
   question, and a stored value changed or a server forgotten since then is refused
-  (`BaseTool.changed_since_asked`).
+  (`BaseTool.changed_since_asked`). The server itself is bound too (`call_subject`), so a
+  stored host moved between two servers confirmed earlier, which ask nothing, is refused.
 - Not over messaging channels, and a regular account gets it only when its allowlist names it
   (`account_opt_in`).
 - The password is never an argument: `login_credential` NAMES a credential the person stored
@@ -141,6 +142,18 @@ class FtpTool(BaseTool):
         except Exception:
             return f"The server '{raw}' could not be checked, so this call is put to you."
 
+    def call_subject(self, args: Dict[str, Any], *, user_scope_id: Optional[str] = None,
+                     username: Optional[str] = None) -> Optional[str]:
+        """The server a yes covers (scheme, host and port), also one confirmed earlier: two
+        confirmed servers ask nothing, so only this tells `_run` that a stored host moved
+        from one to the other after the gate. Raises for a server that cannot be read; the
+        funnel then hands "" and `_run` refuses."""
+        from vaf.core import ftp
+        raw = (args.get("server") or args.get("host") or args.get("target")
+               or args.get("destination"))
+        text, _ = self._expand(raw, user_scope_id, username)
+        return ftp.parse_server(text).name
+
     @staticmethod
     def _question(written, target, used, user_scope_id) -> Optional[str]:
         """The first-connection question for `target`, or None for a server this account
@@ -227,7 +240,8 @@ class FtpTool(BaseTool):
 
         # Filled in again here, so a stored value or the list of confirmed servers may have
         # changed since the question: the call goes only where the person was asked about.
-        changed = self.changed_since_asked(kwargs, self._question(written, target, used, scope))
+        changed = self.changed_since_asked(kwargs, self._question(written, target, used, scope),
+                                           target.name)
         if changed:
             return changed
         if not ftp.is_known(target, scope) and not kwargs.get("_call_confirmed"):

@@ -1383,9 +1383,16 @@ again from the very values you are about to use and call
 `self.changed_since_asked(kwargs, now)`: it returns a refusal text (naming no
 value) when the two differ, else None, and None as well when there was nothing to
 compare. VAF's `ssh` and `ftp` tools do this, so an answer to "first connection
-to h1" never sends the call to h2. A tool without its own `ask_reason` does not
-receive the key, so a `run` that lists its parameters is not handed one it never
-declared.
+to h1" never sends the call to h2. A question that is not put has no text to
+compare: when the target is filled in from stored values and two targets ask
+nothing (both confirmed), also override `call_subject(args, *, user_scope_id,
+username)` to return what a yes covers (VAF's `ftp` returns the resolved server).
+The funnel takes it when it consults `ask_reason` and hands it as `_call_subject`
+(`""` when the hook raised, so the call is refused), and `run` passes its own as
+the third argument, `self.changed_since_asked(kwargs, now, subject)`. A tool
+without its own `ask_reason` does not receive either key, nor one without
+`call_subject` the second, so a `run` that lists its parameters is not handed one
+it never declared.
 
 **A tool that is not part of "everything".** `account_opt_in = True` keeps a
 tool away from a regular account unless the account's allowlist NAMES it; a

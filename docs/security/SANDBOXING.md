@@ -237,7 +237,11 @@ The `python_exec` tool runs code directly on your host system. It is:
   tool, before its trust check, so a stored "always" does not run it either. The same check
   (`python_code_categories` in `vaf/core/command_policy.py`) judges `python -c CODE` and
   `python -m ftplib` in `host_bash`, also under `pypy`, a free-threaded `python3.13t`, and a
-  runner such as `uv run`, `poetry run` or `conda run`. Named boundary: the check reads the
+  runner such as `uv run`, `poetry run` or `conda run`. A runner's option table is not kept,
+  so the word after any runner option counts as that option's possible value: after an
+  option without one (`conda run -n py --no-capture-output echo python -c 'import ftplib'`)
+  a harmless command is refused too. That is the safe side, and `--` before the command
+  lifts it. Named boundary: the check reads the
   code it is given; code built at runtime (`"ftp" + "lib"`, a string assembled before exec), a
   script file, a heredoc fed to the interpreter, or an interpreter under another name or in a
   container is not seen, as a shell script's content is not read. The control for host code

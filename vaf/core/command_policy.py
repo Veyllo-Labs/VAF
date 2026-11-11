@@ -485,7 +485,16 @@ def _python_invocations(exe: str, args: List[str]) -> List[List[str]]:
     interpreter-shaped word there is a candidate, because the value can look like an
     interpreter too (`conda run -n py python -c ...`); after an option that takes no value
     the same word is the command. The first other word is the command, and what follows it
-    is that command's data (`uv run printf '%s' python -c ...` prints, it starts nothing)."""
+    is that command's data (`uv run printf '%s' python -c ...` prints, it starts nothing).
+
+    Named boundary: which options take a value is not known here, so the word after ANY
+    option is read as a possible value. After an option without one, a harmless command
+    is then skipped and an interpreter in its data is taken for the command
+    (`conda run -n py --no-capture-output echo python -c 'import ftplib'` is refused). That
+    is the safe side: the other reading would let `conda run --cwd /srv python -c ...` pass
+    whenever an option is missing from a table. Such a table would be one more copy per
+    runner (uv, poetry, conda, pipenv, hatch, pdm) of flags that change with each release.
+    `--` before the command names it explicitly, and the refusal is lifted."""
     if _PYTHON_EXE_RE.match(exe):
         return [args]
     if exe not in _PYTHON_RUNNERS:

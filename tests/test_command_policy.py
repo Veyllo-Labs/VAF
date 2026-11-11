@@ -328,6 +328,21 @@ def test_words_after_a_runners_command_are_that_commands_data(cmd):
     assert "ftp_transfer" not in classify_command(cmd, profile="host").categories, cmd
 
 
+@pytest.mark.parametrize("cmd, refused", [
+    ("conda run -n py --no-capture-output echo python -c 'import ftplib'", True),
+    ("uv run -q printf python -c 'import ftplib'", True),
+    ("conda run -n py --no-capture-output -- echo python -c 'import ftplib'", False),
+])
+def test_the_word_after_any_runner_option_is_read_as_its_possible_value(cmd, refused):
+    """Named boundary in _python_invocations: no per-runner table says which options take a
+    value, so after a flag without one the harmless command is skipped and the interpreter in
+    its data is refused; `--` names the command and lifts it. Pinned so a table of flags
+    without values is not added half-complete, which would let `conda run --cwd DIR python`
+    through for every option it misses.
+    MUTATION: treat an option as never taking a value - red (the first two)."""
+    assert ("ftp_transfer" in classify_command(cmd, profile="host").categories) is refused, cmd
+
+
 @pytest.mark.parametrize("code", [
     "from importlib import import_module as im\nim('ftplib')",
     "getattr(__builtins__, '__import__')('ftplib')",

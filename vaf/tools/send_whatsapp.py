@@ -118,7 +118,15 @@ class SendWhatsAppTool(BaseTool):
                 )
             if front_office:
                 owner_jid = get_whatsapp_chat_jid(user_scope_id, username)
-                if not owner_jid or _phone_digits_canonical(owner_jid) != _phone_digits_canonical(chat_jid):
+                # The same JID, or the same non-empty number. A LID (and a group) canonicalises
+                # to "", so comparing digits alone would let every LID-mapped number pass as
+                # the owner whenever the owner's own endpoint is a LID.
+                owner_digits = _phone_digits_canonical(owner_jid or "")
+                same_owner = bool(owner_jid) and (
+                    owner_jid == chat_jid
+                    or (bool(owner_digits) and owner_digits == _phone_digits_canonical(chat_jid))
+                )
+                if not same_owner:
                     return (
                         "[TOOL BLOCKED] You are handling a contact's message: send_whatsapp reaches only the "
                         "account owner here. Leave to_phone empty to notify them. Your reply to the contact "

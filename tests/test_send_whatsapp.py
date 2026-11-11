@@ -139,3 +139,31 @@ def test_in_front_office_the_owner_back_channel_goes_through_and_nobody_else_is_
     assert tool.run(message="hi", to_phone="+491700000099", username="admin", user_scope_id="scope-1",
                     _agent=SimpleNamespace(_front_office_mode=False)) == "Message sent via WhatsApp."
     assert sent[-1] == "491700000099@s.whatsapp.net"
+
+
+def test_in_front_office_a_lid_owner_does_not_open_every_other_lid(monkeypatch):
+    """A LID canonicalises to no number at all, so with the owner reached at a LID a digits-only
+    comparison let every other LID-mapped number pass as the owner. MUTATION: compare only
+    `_phone_digits_canonical(owner) != _phone_digits_canonical(target)` again and the third
+    party below is messaged."""
+    import functools
+    from types import SimpleNamespace
+
+    from vaf.core import contacts_store
+
+    lid_map = {"111@lid": "+4917611111111", "222@lid": "+4917622222222"}
+    monkeypatch.setattr(contacts_store, "whatsapp_send_jid",
+                        functools.partial(contacts_store.whatsapp_send_jid, lid_map=lid_map))
+    sent = []
+    _front_office_stubs(monkeypatch, sent)
+    monkeypatch.setattr("vaf.core.messaging_connections.get_whatsapp_chat_jid",
+                        lambda user_scope_id, username: "111@lid")
+    agent = SimpleNamespace(_front_office_mode=True)
+    tool = SendWhatsAppTool()
+    blocked = tool.run(message="hi", to_phone="+4917622222222", username="admin",
+                       user_scope_id="scope-1", _agent=agent)
+    assert blocked.startswith("[TOOL BLOCKED]") and sent == []
+    # The owner's own number, reached at the owner's LID, is still the owner notification.
+    assert tool.run(message="hi", to_phone="+4917611111111", username="admin",
+                    user_scope_id="scope-1", _agent=agent) == "Message sent via WhatsApp."
+    assert sent == ["111@lid"]

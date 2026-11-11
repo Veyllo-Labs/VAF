@@ -29,7 +29,12 @@ MUTATIONS, each turns the named test red:
   -> test_too_large_takes_the_compression_retry_first; drop that condition alone
   -> test_too_large_with_the_retry_unused_gets_no_reflex; feed only the chunk-time class
   -> test_too_large_reflexes_once_the_retry_does_not_shrink;
-- drop the answer-text condition -> test_no_reflex_after_answer_text.
+- drop the answer-text condition -> test_no_reflex_after_answer_text;
+- read the tool round as `_turn_rounds[-2]` again
+  -> test_too_large_reflexes_after_a_retry_that_shrank;
+- take the reflex note back only when it is the last message
+  -> test_a_failing_reflex_note_is_taken_back_behind_a_compaction_note;
+- skip rewriting the failed tool's note -> test_a_failed_tools_note_is_withheld_with_its_result.
 """
 import copy
 import json
@@ -137,10 +142,11 @@ class _Install(vaf.BaseTool):
 
     def __init__(self):
         self.calls = []
+        self.result = RESULT
 
     def run(self, **kwargs):
         self.calls.append(kwargs)
-        return RESULT
+        return self.result
 
 
 class _Callback:
@@ -323,7 +329,7 @@ def test_a_content_refusal_without_a_tool_round_ends_the_turn(agent):
 def compress(agent, monkeypatch):
     """The forced compression, faked: `shrinks` decides whether it drops the old exchange
     seeded at the first request. Every forced call is counted."""
-    state = {"shrinks": True, "calls": 0}
+    state = {"shrinks": True, "calls": 0, "tail_note": False}
     agent.seed = [{"role": "user", "content": "Alte Frage"},
                   {"role": "assistant", "content": "Alte Antwort"}]
 
@@ -331,6 +337,9 @@ def compress(agent, monkeypatch):
         if not force:
             return False          # the turn-start check: below the budget
         state["calls"] += 1
+        if state["tail_note"]:
+            # A compaction that leaves a note of its own last, after the reflex note.
+            agent.history.append({"role": "system", "content": "[Earlier messages summarised.]"})
         old = [m for m in agent.history if m.get("content") in ("Alte Frage", "Alte Antwort")]
         if not (state["shrinks"] and old):
             return False
@@ -392,3 +401,45 @@ def test_thinking_before_the_refusal_stays_visible(agent):
     assert len(agent.requests) == 2 and agent.last_turn == TurnStatus()
     assert "Ich rufe das Werkzeug." in cb.text and "[API Error" not in cb.text
     assert cb.clears == [] and returned == "Fertig."
+
+
+def test_too_large_reflexes_after_a_retry_that_shrank(agent, compress):
+    """The compression retry opens a round of its own. When that round is refused too, the
+    tool step before the first refusal is still the one to withhold."""
+    from vaf.core.agent import API_ERROR_REFLEX_NOTES, REFLEX_WITHHELD_RESULT
+    _, returned = agent.run(["TOOL", VEYLLO_413, VEYLLO_413, "Ich antworte mit dem, was ich habe."])
+    assert len(agent.requests) == 4 and compress["calls"] == 1
+    third, fourth = agent.requests[2]["messages"], agent.requests[3]["messages"]
+    assert RESULT in _text(third) and "Alte Frage" not in _text(third)
+    assert fourth[-1]["content"] == API_ERROR_REFLEX_NOTES["too_large"]
+    assert [(m["tool_call_id"], m["content"]) for m in fourth if m.get("role") == "tool"] == [
+        ("c1", REFLEX_WITHHELD_RESULT)]
+    _assert_adjacent(fourth)
+    assert agent.last_turn == TurnStatus() and returned == "Ich antworte mit dem, was ich habe."
+
+
+def test_a_failing_reflex_note_is_taken_back_behind_a_compaction_note(agent, compress):
+    """The refusal of the reflex round compresses the chat for the next turn, and the
+    compaction may leave a note after the reflex note; the reflex note goes all the same."""
+    compress["shrinks"], compress["tail_note"] = False, True
+    _, returned = agent.run(["TOOL", VEYLLO_413, VEYLLO_413, "Fertig."])
+    assert len(agent.requests) == 3
+    assert agent.last_turn.failed is True and returned == VEYLLO_413
+    assert agent.history[-1]["content"] == "[Earlier messages summarised.]"
+    assert _notes(agent) == []
+
+
+def test_a_failed_tools_note_is_withheld_with_its_result(agent):
+    """A tool whose result is an error gets a system note that quotes the result whole. A
+    content refusal withholds that copy too, or the next request carries the same material."""
+    from vaf.core.agent import REFLEX_WITHHELD_RESULT, _tool_error_note
+    flagged = "Error: the fetched page says something the content check refuses"
+    agent.tools[TASK].result = flagged
+    _, returned = agent.run(["TOOL", OPENAI_INVALID_PROMPT, "Das kann ich nicht verarbeiten."])
+    assert len(agent.requests) == 3
+    second, third = agent.requests[1]["messages"], agent.requests[2]["messages"]
+    assert _tool_error_note(TASK, flagged) in [m.get("content") for m in second]
+    assert "the content check refuses" not in _text(third)
+    assert _tool_error_note(TASK, REFLEX_WITHHELD_RESULT) in [m.get("content") for m in third]
+    _assert_adjacent(third)
+    assert agent.last_turn == TurnStatus() and returned == "Das kann ich nicht verarbeiten."

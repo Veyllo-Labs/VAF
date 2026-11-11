@@ -1538,6 +1538,22 @@ API_ERROR_REFLEX_NOTES = {
 REFLEX_WITHHELD_RESULT = (
     "[Result withheld: this tool ran, but the AI provider refused the request that carried "
     "its result. Do not run it again for that reason.]")
+
+
+def _tool_error_note_parts(name: str) -> tuple:
+    """The text around the result in the note that makes the model report a failed tool."""
+    return (f"[!] CRITICAL: The tool '{name}' FAILED with error: ",
+            f"\n\nDO NOT call '{name}' again. DO NOT retry.\n"
+            f"You MUST inform the user about this error immediately. Do not think - just report the error.")
+
+
+def _tool_error_note(name: str, result) -> str:
+    """The system note after a tool whose result is an error. It quotes the whole result, so
+    a reflex that withholds the tool message rewrites this copy too (same parts)."""
+    head, tail = _tool_error_note_parts(name)
+    return f"{head}{result}{tail}"
+
+
 _REFLEX_LABELS = {"malformed_call": "malformed tool call",
                   "content_refused": "content check",
                   "too_large": "request too large"}
@@ -10506,12 +10522,13 @@ class Agent:
     ):
         """Run one full turn: routing, LLM/tool loop, guardrails, persistence.
 
-        The REAL answer is streamed via stream_callback and lands in
-        history[-1]; the return value is a status (the "..." placeholder or a
-        tool summary on normal completion, None when no backend is loaded,
-        meaningful strings for workflow results / errors / stop / loop
-        protection). Full return contract and parameter semantics:
-        docs/CORE_AGENT.md. The vaf.Agent facade wraps this correctly.
+        The answer is streamed via stream_callback and returned: the turn's
+        answers, joined, reasoning stripped. A status comes back only when the
+        loop ended with no answer (the "..." placeholder or a tool summary),
+        None when no backend is loaded, and meaningful strings for workflow
+        results / errors / stop / loop protection; a failed turn returns its
+        failure text and sets last_turn.failed. Full return contract and
+        parameter semantics: docs/CORE_AGENT.md.
 
         raw_user_input: the user's message BEFORE lane enrichment (workspace
         preamble, front-office block, ...). Used only for ROUTING decisions
@@ -11178,6 +11195,10 @@ class Agent:
         _reflexed_classes: set = set()
         _reflex_next_round = 0
         _reflex_note = None       # the note appended, so a failing reflex round takes it back
+        # Rounds of this turn that the provider refused and that were asked again (the
+        # compression retry, a reflex): nothing of them was committed, so the tool step a
+        # later refusal withholds is the newest round before them.
+        _refused_rounds: set = set()
         MAX_EMPTY_RETRIES = 10  # Allow up to 10 attempts before hard stop
         # Loop-protection counter for blocked redundant tool calls (per user turn). Kept SEPARATE from
         # empty_retry_count so a redundant block never climbs into the empty-response abort.
@@ -11241,9 +11262,13 @@ class Agent:
             when `streamed`: a host takes it off the stream it stored and sends, and a note
             that never reached the stream is in neither."""
             # A reflex round that fails too leaves its note behind otherwise: it is the
-            # engine's, and the turn commits nothing of its failure.
-            if _reflex_note is not None and self.history and self.history[-1] is _reflex_note:
-                self.history.pop()
+            # engine's, and the turn commits nothing of its failure. Found by identity, not
+            # as the last message: a compression in between may have added a note after it.
+            if _reflex_note is not None:
+                for _i in range(len(self.history) - 1, -1, -1):
+                    if self.history[_i] is _reflex_note:
+                        del self.history[_i]
+                        break
             self._turn_failure = str(text or "") if streamed else ""
             if kept_turn_answers and _last_kept_is_final:
                 return _join_turn_answers(kept_turn_answers[:-1], kept_turn_answers[-1])
@@ -11251,11 +11276,16 @@ class Agent:
             return text
 
         def _reflex_withheld_ids():
-            """The previous round's tool-call ids that still have a result in the history, or
-            an empty set when the previous round of this turn ran no tools."""
-            if len(self._turn_rounds) < 2:
-                return set()
-            ids = set(self._turn_rounds[-2].get("tool_call_ids") or ())
+            """The tool-call ids of the newest round before this one, refused rounds skipped,
+            that still have a result in the history; an empty set when that round ran no
+            tools. A compression retry that shrank the history opens a round of its own, and
+            a refusal of it still carries the tool step before the first refusal."""
+            ids = set()
+            for _rec in reversed(self._turn_rounds[:-1]):
+                if _rec.get("round") in _refused_rounds:
+                    continue
+                ids = set(_rec.get("tool_call_ids") or ())
+                break
             return {m.get("tool_call_id") for m in self.history
                     if isinstance(m, dict) and m.get("role") == "tool"
                     and m.get("tool_call_id") in ids}
@@ -11628,6 +11658,7 @@ class Agent:
                         if len(self.history) < _before:
                             append_domain_log("backend", f"too large: history compressed (limit "
                                                          f"{_cap} tokens), the round is asked again")
+                            _refused_rounds.add(_round_no)
                             continue
                     # The API-error reflex: a refusal the model can act on, not streamed, is
                     # answered by a fixed note and one more round instead of ending the turn.
@@ -11644,15 +11675,31 @@ class Agent:
                             # previous tool step's results are the one thing that changes.
                             # Ids, names and order stay, so every call keeps its answer.
                             _ids = _reflex_withheld_ids()
-                            for _m in self.history:
+                            _names, _first = set(), None
+                            for _i, _m in enumerate(self.history):
                                 if (isinstance(_m, dict) and _m.get("role") == "tool"
                                         and _m.get("tool_call_id") in _ids):
                                     _m["content"] = REFLEX_WITHHELD_RESULT
                                     _withheld += 1
+                                    _names.add(str(_m.get("name") or ""))
+                                    _first = _i if _first is None else _first
+                            # A failed tool's result is also quoted whole in the note after
+                            # that step's results (_tool_error_note); it is the same material.
+                            for _m in (self.history[_first:] if _first is not None else ()):
+                                if not isinstance(_m, dict) or _m.get("role") == "assistant":
+                                    break
+                                if _m.get("role") != "system" or not isinstance(_m.get("content"), str):
+                                    continue
+                                for _name in _names:
+                                    _head, _tail = _tool_error_note_parts(_name)
+                                    if _m["content"].startswith(_head) and _m["content"].endswith(_tail):
+                                        _m["content"] = _tool_error_note(_name, REFLEX_WITHHELD_RESULT)
+                                        break
                         _reflex_note = {"role": "system", "content": API_ERROR_REFLEX_NOTES[_reflex_cls]}
                         self.history.append(_reflex_note)
                         _reflexed_classes.add(_reflex_cls)
                         _reflex_next_round = _round_no + 1
+                        _refused_rounds.add(_round_no)
                         try:
                             append_domain_log("backend", f"api_error_reflex: class={_reflex_cls} "
                                                          f"round={_round_no} withheld={_withheld}")
@@ -13389,11 +13436,7 @@ class Agent:
                         # "insufficient tool messages following tool_calls".
                         _post_tc_messages.append({
                             "role": "system",
-                            "content": (
-                                f"[!] CRITICAL: The tool '{function_name}' FAILED with error: {result}\n\n"
-                                f"DO NOT call '{function_name}' again. DO NOT retry.\n"
-                                f"You MUST inform the user about this error immediately. Do not think - just report the error."
-                            )
+                            "content": _tool_error_note(function_name, result),
                         })
                     
                     # Context Management: Check after each tool response to prevent overflow

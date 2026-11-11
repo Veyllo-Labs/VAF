@@ -161,7 +161,10 @@ the answer and returns it:
   (`[ASYNC_ACK]...`), and handled degradations (`[SYSTEM_LOG_ONLY]...`).
 - A provider's own failure is not a return value: the backend yields it as a content
   chunk, `[API Error from <provider>: <raw answer>]`, so it reaches `stream_callback`
-  and the stored answer, also after text an earlier round streamed. The `[Error] ...`
+  and the stored answer, also after text an earlier round streamed. The exception is a
+  refusal the API-error reflex answers (below): its chunk is not streamed, a System
+  status line is logged instead, and the chunk reaches the stream only when the reflex
+  round fails too. The `[Error] ...`
   statuses above are streamed as well. `vaf.is_error_reply(text)` recognises both
   shapes; ask it of the accumulated stream before the text goes to anybody who must
   not read internals (the raw answer can carry a masked key, a path, an id).

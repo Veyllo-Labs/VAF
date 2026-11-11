@@ -482,7 +482,9 @@ chat is with. So the model also does not know a failure happened: asked "what we
 it sees its request with no answer after it and usually answers that request again, which
 is what "try again" needs. The one exception is the API-error reflex below: for a refusal
 the model can act on, it is told within the turn, with a fixed note that quotes nothing of
-the provider's text. The person's screen shows the error. Every host that stores
+the provider's text, and the person's screen shows a System status line in place of the
+error (the error is shown only when that round fails too). For every other failure the
+person's screen shows the error. Every host that stores
 the streamed text for a transcript (the queue runner's chat lane and its sub-agent result
 drain, the interactive CLI and the TUI) stores it as one message, the way it was shown, and
 builds that copy and its mark with `stored_turn_copy(stream, agent.last_turn, clean)` (a
@@ -505,7 +507,7 @@ text of its round (thinking may have streamed; it stays where it is) is sorted b
 |---|---|---|
 | `malformed_call` | the provider refused the tool call the model generated: Groq's `tool_use_failed` / `failed_generation` (also routed by OpenRouter), Gemini's `MALFORMED_FUNCTION_CALL`, a tool name that was not offered | always (once) |
 | `content_refused` | the provider's content check: `content_filter`, `content_policy_violation`, OpenAI's `invalid_prompt` | only right after a tool round, whose results are withheld |
-| `too_large` | `request_too_large` (the same test as the compression retry above) | only after a tool round, whose results are withheld, and only once the compression retry is spent or did not shrink the history |
+| `too_large` | `request_too_large` (the same test as the compression retry above) | only after a tool round, whose results are withheld, and only once the compression retry is spent (also when its own round, on the shrunk history, is refused again) or did not shrink the history |
 
 Only a client error (`APIBackendManager._classify_failure`) can get a class. A rate limit, a
 timeout, the network, a server error and every unknown failure (the 402 quota refusal is
@@ -517,12 +519,17 @@ match no marker. The provider's text is not streamed for a class: the history ge
 note per class (`API_ERROR_REFLEX_NOTES`), which quotes nothing of it, a System status line
 names the class, and the round is asked again as a new round (`round_start`, no stream
 clear). A request-level refusal (too large, content check) would be refused again for the
-same history plus a note, so the previous round's tool results are replaced by
+same history plus a note, so the previous tool round's results are replaced by
 `REFLEX_WITHHELD_RESULT` first: ids, names and order stay, so every call keeps its answer
 (Rule 4 invariant 1), and the note tells the model not to run the tool again for that reason.
+"Previous" skips the rounds of this turn that were refused and asked again (the compression
+retry's own round among them), because nothing of them was committed. A failed tool's result
+is also quoted whole in the system note after that step (`_tool_error_note`); that copy is
+rewritten the same way.
 The guard: one reflex per class and turn, none on the round right after a reflex, so a turn
 adds at most three requests and a rate limit none. A reflex round that fails ends the turn
-the way any failure does, and its note is taken back out of the history; withheld results
+the way any failure does, its error is streamed then, and its note is taken back out of the
+history (found by identity, wherever a compression left it); withheld results
 stay withheld, as the compression after a 413 stays. Every decision is logged in the backend
 log (`api_error_reflex: class=...` or `api_error_reflex: no <class> (<reason>)`).
 Named boundaries: the `[Error] ...` chunks, the exception path, the non-stream fallback and

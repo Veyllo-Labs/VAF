@@ -774,10 +774,10 @@ mailbox and shown next to its sample count.
   the state is unknown, so the badge keeps its meaning. The inbox's mail rows carry
   the same summary as `verification`.
 - The phishing scorer (`mail_utils._phishing_score`) reads the row's `auth`: an
-  own-domain spoof or a DMARC failure adds 5, a Reply-To mismatch 2, a lookalike
-  domain 3; and the trusted-sender-domain bypass applies only to a row whose verdict
-  is `verified` (or carries none): a trusted domain that did not authenticate is
-  exactly the mail a spoofer sends.
+  own-domain spoof or a DMARC failure adds 5, a Reply-To mismatch 2; and the
+  trusted-sender-domain bypass applies only to a row whose verdict is `verified` (or
+  carries none): a trusted domain that did not authenticate is exactly the mail a
+  spoofer sends. Look-alike domains are not scored (see the filter's reach below).
 - The inbox (`vaf/core/inbox.py`): a bounce, a read receipt, an auto-reply, a list
   message or a null reverse-path is bulk mail whatever its label (a header fact
   outranks the tab, the way the Junk folder does), the kind `bulk` keeps the person's
@@ -907,10 +907,17 @@ through only split-horizon names the local resolver does not know.
   `email_agent_phishing_filter_enabled` / `_score_threshold` /
   `_trusted_sender_domains` (all admin-only).
 
-  The scorer also reads the row's stored verdict (`auth`, see "Verification and
-  cases"): an own-domain spoof or a DMARC failure, a Reply-To mismatch and a
-  lookalike domain raise the score, and the trusted-domain bypass applies only to a
-  verified row.
+  What the scorer reads, with its points: the provider's spam category 10, an
+  `xn--` From domain 3 (`punycode_domain`), social-engineering words 2, an executive
+  name on free mail 3, a phishing pattern 1, and from the row's stored verdict
+  (`auth`, see "Verification and cases") an own-domain spoof 5, a DMARC failure 5
+  and a Reply-To mismatch 2. The trusted-domain bypass applies only to a verified
+  row. NAMED BOUNDARY: look-alike domains are not scored. The `xn--` rule sees only
+  the A-label form, so the same internationalised sender written in U-labels scores
+  0, and a mixed-script domain (`pаypal.com` with a Cyrillic а) scores 0; nothing in
+  the tree tells a confusable from a legitimate IDN, and marking every non-ASCII
+  domain would hide every such sender at the default threshold. The cards mark such
+  addresses (`vaf/core/shown_text.py`); the scorer does not.
   Know the reach of this filter before relying on it, because it is narrower than
   "the agent is protected from mail": it runs at the two LIST call sites
   (the mail lane of `inbox`, `find_mail`) and drops whole messages there. `read_mail` does not

@@ -180,9 +180,9 @@ def _phishing_score(message: dict) -> tuple[int, List[str]]:
     if "reply_to_mismatch" in flags:
         score += 2
         reasons.append("reply_to_mismatch")
-    if "lookalike" in flags:
-        score += 3
-        reasons.append("lookalike_domain")
+    # Deliberately no look-alike signal: `vaf/mail/authenticity.py` produces none, and the
+    # only marking in the tree (`shown_text.mail_address`) marks every character outside
+    # ASCII, which would score every internationalised sender at the default threshold.
     return score, reasons
 
 

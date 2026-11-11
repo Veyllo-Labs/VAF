@@ -258,3 +258,34 @@ def test_an_older_device_list_without_spool_still_loads(app_link_home):
     state["spool"] = ["not", "a", "dict"]
     data_files.write_json_atomic(devices._path(), state)
     assert devices._load()["spool"] == {}
+
+
+def test_a_file_no_device_takes_evicts_nothing(app_link_home, tmp_path, monkeypatch):
+    """The account's last device stops standing while the eleventh file is being staged: that
+    file goes with its bytes, and the ten files still pending for the device stay. MUTATION:
+    record the spool in `outbox_publish` without checking that a device row took an entry -
+    red (the oldest pending file is evicted and replays as its text line)."""
+    device = paired_device(SCOPE_A)
+    for i in range(spool.FILES_PER_ACCOUNT):
+        bridge.deliver(SCOPE_A, "alice", f"file {i}", str(_file(tmp_path, f"f{i}.txt", b"%d" % i)))
+        time.sleep(0.002)
+    pending = set(devices.spool_ids())
+    stage, stands = spool.stage, devices.row_stands
+    staged = {}
+
+    def _stage(message_id, path):
+        staged["id"] = message_id
+        record = stage(message_id, path)
+        monkeypatch.setattr(devices, "row_stands", lambda *a, **k: False)
+        return record
+    monkeypatch.setattr(spool, "stage", _stage)
+    bridge.deliver(SCOPE_A, "alice", "late", str(_file(tmp_path, "late.txt", b"late")))
+    monkeypatch.setattr(spool, "stage", stage)
+    monkeypatch.setattr(devices, "row_stands", stands)
+    assert set(devices.spool_ids()) == pending
+    assert staged["id"] not in pending and not _blob(staged["id"]).exists()
+    assert devices.outbox_publish(SCOPE_A, [], "m-none") == []
+    client, _pipe, _row = link(SCOPE_A, device=device)
+    msgs = client.of("msg")
+    assert [m["text"] for m in msgs] == [f"file {i}" for i in range(spool.FILES_PER_ACCOUNT)]
+    assert all(m.get("attachments") for m in msgs)

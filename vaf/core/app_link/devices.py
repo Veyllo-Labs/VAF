@@ -319,13 +319,18 @@ def outbox_publish(user_scope_id: Any, device_ids: List[str], message_id: str, *
     the list in between would otherwise see the entry without its file and send the text
     line only, and a ``collect`` would see the file without its entries and drop it. The
     account's oldest file records beyond ``keep`` go; their ids are returned so their bytes
-    go too."""
+    go too. When no device row takes an entry (the last target was removed or stopped
+    standing while the file was being staged), nothing is written: the file is not recorded,
+    so it cannot push out another message's pending file, and its own id is returned so its
+    staged bytes go."""
     ids = {str(d) for d in device_ids}
     with _locked():
         state = _load()
-        for row in state["devices"]:
-            if row["device_id"] in ids:
-                _outbox_append(row, message_id, ts)
+        rows = [row for row in state["devices"] if row["device_id"] in ids]
+        if not rows:
+            return [str(message_id)] if spool else []
+        for row in rows:
+            _outbox_append(row, message_id, ts)
         evicted = _spool_record(state, user_scope_id, message_id, spool, keep) if spool else []
         _save(state)
         return evicted

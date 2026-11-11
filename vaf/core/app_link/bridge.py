@@ -781,7 +781,8 @@ def _store_out(scope: str, username: str, message_id: str, text: str, *,
     ack (spool.py): its bytes are written first, and its record goes into the device list in
     the same write as the outbox entries, so a device reconnecting meanwhile never replays
     the message without its file. A file that cannot be kept changes nothing else; the
-    message then replays as its text line."""
+    message then replays as its text line. A file no device takes an entry for (the last one
+    stopped standing meanwhile) is not kept and evicts nothing."""
     from vaf.core.app_link import spool
     from vaf.core.channel_message_store import append_message
     append_message(username=username, chat_id=devices.chat_key(scope), body=text, direction="out",

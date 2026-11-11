@@ -297,7 +297,7 @@ def test_python_ftp_nested_past_the_parse_depth_is_searched_as_text():
     "python3.13t -c 'import ftplib'",
 ])
 def test_python_ftp_under_another_interpreter_name_or_a_runner_is_refused(cmd):
-    """MUTATION: drop the runner branch in _python_invocations - red (uv, poetry, conda);
+    """MUTATION: drop the runner branch in _nested_commands - red (uv, poetry, conda);
     MUTATION: restore the old interpreter pattern without pypy and the t suffix - red."""
     v = classify_command(cmd, profile="host")
     assert v.blocked and "ftp_transfer" in v.categories, cmd
@@ -332,15 +332,94 @@ def test_words_after_a_runners_command_are_that_commands_data(cmd):
     ("conda run -n py --no-capture-output echo python -c 'import ftplib'", True),
     ("uv run -q printf python -c 'import ftplib'", True),
     ("conda run -n py --no-capture-output -- echo python -c 'import ftplib'", False),
+    ("uv run --with ssh pytest", True),
+    ("uv run --with ssh -- pytest", False),
 ])
 def test_the_word_after_any_runner_option_is_read_as_its_possible_value(cmd, refused):
-    """Named boundary in _python_invocations: no per-runner table says which options take a
-    value, so after a flag without one the harmless command is skipped and the interpreter in
-    its data is refused; `--` names the command and lifts it. Pinned so a table of flags
-    without values is not added half-complete, which would let `conda run --cwd DIR python`
-    through for every option it misses.
-    MUTATION: treat an option as never taking a value - red (the first two)."""
-    assert ("ftp_transfer" in classify_command(cmd, profile="host").categories) is refused, cmd
+    """Named boundary in _runner_commands: no per-runner table says which options take a
+    value, so the word after any option is read as a possible value AND a possible command.
+    After a flag without a value the interpreter in the harmless command's data is refused,
+    and a value that names a refused program is refused as one (`--with ssh`); `--` names the
+    command and lifts both. Pinned so a table of flags without values is not added
+    half-complete, which would let `conda run --cwd DIR python` through for every option it
+    misses.
+    MUTATION: treat an option as never taking a value - red (the first two);
+    MUTATION: yield no candidate at a value position - red (`--with ssh pytest`);
+    MUTATION: keep the value-position candidates at `--` - red (`--with ssh -- pytest`)."""
+    assert classify_command(cmd, profile="host").blocked is refused, cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "uv run env python -c 'import ftplib'",
+    "uv run -- nice python -c 'import ftplib'",
+    "uv run bash -c \"python -c 'import ftplib'\"",
+    "uv run uv run python -c 'import ftplib'",
+    "uv run sudo python3 -c 'import ftplib'",
+    "uv run timeout 5 python -c 'import ftplib'",
+    "poetry run env python3 -m ftplib h",
+    "uv run sh -c 'echo a; python -c \"import ftplib\"'",
+])
+def test_a_runners_command_is_unwrapped_and_descended(cmd):
+    """The command a runner starts goes through the same wrapper unwrap and `bash -c` descent
+    as a top-level one (measured: every one of these passed while the same command without
+    the runner was refused).
+    MUTATION: drop the runner branch from _nested_commands - red (all)."""
+    v = classify_command(cmd, profile="host")
+    assert v.blocked and "ftp_transfer" in v.categories, cmd
+
+
+@pytest.mark.parametrize("cmd, category", [
+    ("uv run rm -rf /", "destructive_removal"),
+    ("poetry run lftp h", "ftp_transfer"),
+    ("uv run curl -T x ftp://h/", "ftp_transfer"),
+    ("uv run ssh host", "remote_login"),
+])
+def test_every_category_sees_a_runners_command(cmd, category):
+    """Not only the Python FTP check: a runner hid its command from every category.
+    MUTATION: drop the runner branch from _nested_commands - red (all)."""
+    v = classify_command(cmd, profile="host")
+    assert v.blocked and category in v.categories, cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    "uv run --with requests python app.py",
+    "uv run --python 3.12 env FOO=1 pytest",
+    "uv run pytest -q",
+    "uv run -q echo hi",
+    "poetry run --directory /srv python manage.py",
+    "uv pip install requests",
+])
+def test_harmless_runner_commands_pass(cmd):
+    v = classify_command(cmd, profile="host")
+    assert not v.blocked and v.categories == [], cmd
+
+
+def test_runners_nested_past_the_limit_are_refused():
+    """A runner's command counts as one nesting level, like `bash -c`.
+    MUTATION: classify the nested command at _depth instead of _depth + 1 - red (each level
+    strips one `uv run`, so it ends without ever reaching the limit)."""
+    from vaf.core.command_policy import MAX_NESTING
+    v = classify_command("uv run " * (MAX_NESTING + 1) + "python -c 'print(1)'", profile="host")
+    assert v.blocked and v.categories == ["nested_too_deep"]
+    assert not classify_command("uv run " * MAX_NESTING + "python -c 'print(1)'",
+                                profile="host").blocked
+
+
+def test_the_runner_scan_lives_in_one_place():
+    """The runner's command is read by _runner_commands alone and judged by the shared
+    descent; the old runner scan inside the Python check is gone, so there is no second copy
+    of the reading to drift.
+    MUTATION: restore a runner branch in the Python check that reads _PYTHON_RUNNERS - red."""
+    import ast
+    import inspect
+
+    import vaf.core.command_policy as cp
+    tree = ast.parse(inspect.getsource(cp))
+    readers = sorted(
+        fn.name for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef)
+        and any(isinstance(n, ast.Name) and n.id == "_PYTHON_RUNNERS" for n in ast.walk(fn)))
+    assert readers == ["_runner_commands"]
+    assert not hasattr(cp, "_python_invocations")
 
 
 @pytest.mark.parametrize("code", [

@@ -35,15 +35,21 @@ refusal above was one `bash -c` away from passing (measured: ten of ten
 wrapped forms went through). The nesting has a depth limit, and past it the
 command is refused, because a reviewer cannot follow it either.
 
+The command a project runner starts (`uv run`, `poetry run`, `conda run -n env`,
+`uv tool run`) is classified the same way, as a local nested command, for every
+category: before that, `uv run rm -rf /`, `uv run ssh host` and `uv run env python
+-c 'import ftplib'` all passed while the same commands without the runner were
+refused. The words after a runner's command are that command's data; the word
+after a runner option is read as a possible value and a possible command
+(`_runner_commands`, named boundary there).
+
 Python that moves files over FTP is the same `ftp_transfer` as an FTP client
 (`python_code_categories`): an import of ftplib, a string naming it (what
 `__import__`, `importlib` or `-m` takes), an `ftp://`/`ftps://` address in the
 code, or such code as a constant string handed to exec, eval or compile. One check
 for both Python lanes: python_exec runs it on its code, and this classifier on
 `python -c CODE` and `python -m ftplib` in a shell command (python, pypy, a
-versioned or free-threaded name, Windows' py, and the same as the command a
-project runner such as `uv run` starts; the words after a runner's command are
-that command's data). Measured before it existed: a
+versioned or free-threaded name, Windows' py). Measured before it existed: a
 model denied curl and lftp in host_bash wrote the same transfer with ftplib in
 python_exec, reading the stored password from its environment.
 NAMED BOUNDARY: the check reads the code it is given. Code built at runtime
@@ -116,7 +122,7 @@ _FTP_URL_RE = re.compile(r"^(?:--?[A-Za-z][\w-]*=)?['\"]?ftps?://", re.IGNORECAS
 # The Python interpreter by name (`python`, `python3`, `python3.13`, the free-threaded
 # `python3.13t`, PyPy's `pypy3`; Windows' `py` launcher).
 _PYTHON_EXE_RE = re.compile(r"^(?:(?:python|pypy)(?:\d+(?:\.\d+)?)?t?|py)$")
-# Project runners that start an interpreter given as a later word (`uv run python -c ...`).
+# Project runners that start the command given as a later word (`uv run python -c ...`).
 _PYTHON_RUNNERS = frozenset({"uv", "uvx", "poetry", "pipenv", "pdm", "hatch", "rye", "conda",
                              "pixi"})
 # The words between a runner and its command that select what it does (`uv tool run`).
@@ -398,7 +404,8 @@ def _ssh_remote_command(args: List[str]) -> str:
 
 def _nested_commands(exe: str, args: List[str]) -> List[tuple]:
     """(where, text) for every command this one runs from TEXT it is given: "local" for
-    `sh -c`, `su -c` and `eval`, "remote" for `ssh host ...`."""
+    `sh -c`, `su -c`, `eval` and the command a project runner starts (`uv run ...`, joined
+    back into one text), "remote" for `ssh host ...`."""
     if exe in _COMMAND_STRING_SHELLS:
         for pos, tok in enumerate(args):
             if tok in ("-o", "+o"):           # `bash -o pipefail -c ...`: -o takes a word
@@ -418,7 +425,7 @@ def _nested_commands(exe: str, args: List[str]) -> List[tuple]:
     if exe == "ssh":
         remote = _ssh_remote_command(args)
         return [("remote", remote)] if remote.strip() else []
-    return []
+    return [("local", shlex.join(cmd)) for cmd in _runner_commands(exe, args)]
 
 
 def _is_ftplib(name) -> bool:
@@ -475,48 +482,47 @@ def python_code_categories(code: str, *, _depth: int = 0) -> List[str]:
     return []
 
 
-def _python_invocations(exe: str, args: List[str]) -> List[List[str]]:
-    """The interpreter's own arguments for every way this command may start Python: the
-    interpreter itself, or the command a project runner starts (`uv run python ...`) when
-    that command is one.
+def _runner_commands(exe: str, args: List[str]) -> List[List[str]]:
+    """Every word list that may be the command a project runner starts (`uv run CMD ...`,
+    `poetry run`, `conda run -n env`, `uv tool run`); [] when `exe` is no runner. The caller
+    classifies each one like the text `bash -c` carries, so the wrapper unwrap, the shell
+    descent, the depth limit and every category reach the runner's command too.
 
     A runner's words are read up to its command: its verbs (`run`, `exec`, `tool`), its
-    options, and the word after an option, which may be that option's value. An
-    interpreter-shaped word there is a candidate, because the value can look like an
-    interpreter too (`conda run -n py python -c ...`); after an option that takes no value
-    the same word is the command. The first other word is the command, and what follows it
-    is that command's data (`uv run printf '%s' python -c ...` prints, it starts nothing).
+    options, and the word after an option, which may be that option's value. `--` names the
+    command explicitly. The first plain word that is not in a value position is the command,
+    and what follows it is that command's data (`uv run printf '%s' python -c ...` prints, it
+    starts nothing).
 
     Named boundary: which options take a value is not known here, so the word after ANY
-    option is read as a possible value. After an option without one, a harmless command
-    is then skipped and an interpreter in its data is taken for the command
-    (`conda run -n py --no-capture-output echo python -c 'import ftplib'` is refused). That
-    is the safe side: the other reading would let `conda run --cwd /srv python -c ...` pass
-    whenever an option is missing from a table. Such a table would be one more copy per
-    runner (uv, poetry, conda, pipenv, hatch, pdm) of flags that change with each release.
-    `--` before the command names it explicitly, and the refusal is lifted."""
-    if _PYTHON_EXE_RE.match(exe):
-        return [args]
+    option is read both as that option's possible value and as a possible command. A harmless
+    command after an option without a value is therefore refused only when what follows it is
+    refused in its own right (`conda run -n py --no-capture-output echo python -c 'import
+    ftplib'`), and a value that is itself a refused program's name is refused as one (`uv run
+    --with ssh pytest`); `uv run -q echo hi` passes. That is the safe side: the other reading
+    would let `conda run --cwd /srv python -c ...` pass whenever an option is missing from a
+    table, and such a table would be one more copy per runner (uv, poetry, conda, pipenv,
+    hatch, pdm) of flags that change with each release. `--` before the command lifts both."""
     if exe not in _PYTHON_RUNNERS:
         return []
     found: List[List[str]] = []
     maybe_value = False                 # the word before was an option without `=value`
     for pos, tok in enumerate(args):
-        if tok == "--":                 # the next word is the command, whatever it looks like
-            rest = args[pos + 1:]
-            if rest and _PYTHON_EXE_RE.match(_exe_base(rest[0])):
-                found.append(rest[1:])
-            return found
+        if tok == "--":
+            # The rest is the command, whatever it looks like, and every word before it
+            # belongs to the runner: a value-position word is a value, not a command.
+            return [args[pos + 1:]] if args[pos + 1:] else []
         if tok.startswith("-"):
             maybe_value = "=" not in tok
             continue
-        if _PYTHON_EXE_RE.match(_exe_base(tok)):
-            found.append(args[pos + 1:])
-            if not maybe_value:
-                return found            # the command itself; its words are Python's
-        elif not maybe_value and tok not in _RUNNER_VERBS:
-            return found                # another program: its words are its data
-        maybe_value = False
+        if maybe_value:                 # a possible value, and a possible command
+            found.append(args[pos:])
+            maybe_value = False
+            continue
+        if tok in _RUNNER_VERBS:
+            continue
+        found.append(args[pos:])        # the command; its words are its data
+        return found
     return found
 
 
@@ -637,7 +643,7 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0) ->
             cats.append("remote_login")
         if (exe in _FTP_CLIENTS or (exe in _NETWORK_FETCHERS
                                     and any(_FTP_URL_RE.match(a) for a in args))
-                or any(_python_command_categories(a) for a in _python_invocations(exe, args))) \
+                or (_PYTHON_EXE_RE.match(exe) and _python_command_categories(args))) \
                 and "ftp_transfer" not in cats:
             cats.append("ftp_transfer")
 

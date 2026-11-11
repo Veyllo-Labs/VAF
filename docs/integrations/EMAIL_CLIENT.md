@@ -149,8 +149,20 @@ Deliberately deferred, listed so nobody looks for them in the code:
   the SMTP conversation is driven step by step for honest hand-off
   classification). A `handed_off` flag flips at the DATA command: a failure before
   it is transient/permanent, at or after it is ambiguous (parked, never re-sent).
-  The stored Sent bytes are sent verbatim, so the delivered Message-ID is
-  byte-identical to the local copy and replies join the same thread. Every lane
+  Every answer of the server is read, because smtplib's `mail()`, `rcpt()` and
+  `data()` return a refusal instead of raising it: a refused MAIL FROM is transient
+  (4xx) or permanent (5xx); any refused recipient stops the whole mail before DATA
+  (RSET, nothing sent, the error names each refused address with its code;
+  permanent when any refusal is 5xx, transient when all are 4xx), because the
+  outbox has no "partly delivered" state to show; a refused DATA command or a final
+  answer other than 250 after the dot is the server's definite "no", 4xx transient
+  and 5xx permanent, and the ledger stamps it `failed`, never `sent`. Only a
+  disconnect or timeout after DATA stays ambiguous.
+  The stored Sent bytes are sent with their content verbatim, so the delivered
+  Message-ID is byte-identical to the local copy and replies join the same thread;
+  only the line ends change on the wire, to CRLF (RFC 5321 2.3.8, `_wire_bytes`),
+  because a server hardened against SMTP smuggling refuses a bare LF in DATA. The
+  stored bytes and the Sent APPEND keep their own line ends. Every lane
   queues through `MailService.queue_send` (the one send funnel): the compose
   window with its undo window, the agent's `send_mail`, `reply_mail` and
   `forward_mail` tools with no delay and an immediate drain

@@ -53,11 +53,11 @@ MUTATIONS, each turns the named test red:
 """
 import base64
 import os
-import socket
 import threading
 import time
 
 import pytest
+from mail_smtp_stub import SmtpStub, verb_lines
 
 import vaf.mail.crypto as mail_crypto
 from vaf.core.shown_text import mail_address
@@ -246,73 +246,12 @@ def test_the_card_bracket_is_the_delivered_domain():
 # ---------------------------------------------------------------- the wire
 
 
-class _Stub:
-    """A one-connection SMTP server on 127.0.0.1 that records every line it reads."""
-
-    def __init__(self, smtputf8: bool):
-        self.smtputf8, self.lines = smtputf8, []
-        self.sock = socket.socket()
-        self.sock.bind(("127.0.0.1", 0))
-        self.sock.listen(1)
-        self.sock.settimeout(10)
-        self.port = self.sock.getsockname()[1]
-        self.thread = threading.Thread(target=self._run, daemon=True)
-        self.thread.start()
-
-    def _run(self):
-        try:
-            conn, _ = self.sock.accept()
-        except OSError:
-            return
-        conn.settimeout(10)
-        f = conn.makefile("rb")
-        try:
-            conn.sendall(b"220 stub\r\n")
-            while True:
-                line = f.readline()
-                if not line:
-                    break
-                self.lines.append(line)
-                up = line.upper()
-                if up.startswith(b"EHLO"):
-                    conn.sendall(b"250-stub\r\n250-8BITMIME\r\n"
-                                 + (b"250-SMTPUTF8\r\n" if self.smtputf8 else b"")
-                                 + b"250 AUTH PLAIN\r\n")
-                elif up.startswith(b"AUTH"):
-                    conn.sendall(b"235 ok\r\n")
-                elif up.startswith(b"DATA"):
-                    conn.sendall(b"354 go\r\n")
-                    while True:
-                        body = f.readline()
-                        self.lines.append(body)
-                        if body in (b".\r\n", b""):
-                            break
-                    conn.sendall(b"250 queued\r\n")
-                elif up.startswith(b"QUIT"):
-                    conn.sendall(b"221 bye\r\n")
-                    break
-                else:
-                    conn.sendall(b"250 ok\r\n")
-        except OSError:
-            pass
-        finally:
-            f.close()
-            conn.close()
-
-    def close(self):
-        self.sock.close()
-        self.thread.join(timeout=5)
-
-    def command(self, verb: bytes):
-        return [line for line in self.lines if line.upper().startswith(verb)]
-
-
 @pytest.fixture()
 def stub(monkeypatch):
     made = []
 
-    def make(smtputf8: bool) -> _Stub:
-        s = _Stub(smtputf8)
+    def make(smtputf8: bool) -> SmtpStub:
+        s = SmtpStub(smtputf8)
         made.append(s)
         return s
 
@@ -342,19 +281,8 @@ def _send(svc, port, to, cc="", bcc="", own=OWN, case_id=""):
 
 
 
-def _verb_lines(stub, verb):
-    """The ``verb`` commands (MAIL, RCPT) with the part up to the first colon lowercased:
-    smtplib writes "mail FROM:" and "rcpt TO:" on older Pythons (3.12 on CI) and "mail from:"
-    and "rcpt to:" on 3.13; the arguments after the colon stay exactly as sent."""
-    out = []
-    for line in stub.command(verb):
-        head, sep, rest = line.partition(b":")
-        out.append(head.lower() + sep + rest)
-    return out
-
-
 def _mail_lines(stub):
-    return _verb_lines(stub, b"MAIL")
+    return verb_lines(stub, b"MAIL")
 
 
 def test_stub_with_smtputf8_delivers(svc, stub):
@@ -365,7 +293,7 @@ def test_stub_with_smtputf8_delivers(svc, stub):
         account=_account(s.port), raw_bytes=raw, to=f"Иван <{EAI}>", bcc="b@example.org"))
     assert res.ok and res.classification == "ok" and res.smtputf8 is True, res
     assert _mail_lines(s) == [b"mail from:<bob@example.com> SMTPUTF8 BODY=8BITMIME\r\n"]
-    assert _verb_lines(s, b"RCPT") == [f"rcpt to:<{EAI_ENVELOPE}>\r\n".encode(),
+    assert verb_lines(s, b"RCPT") == [f"rcpt to:<{EAI_ENVELOPE}>\r\n".encode(),
                                   b"rcpt to:<b@example.org>\r\n"]
     data = b"".join(s.lines[s.lines.index(s.command(b"DATA")[0]) + 1:])
     assert f"To: Иван <{EAI}>".encode() in data
@@ -377,7 +305,7 @@ def test_an_ascii_local_part_needs_no_smtputf8(svc, stub):
     out, outcome = _send(svc, s.port, "Jürgen <jm@bücher.de>")
     assert outcome["state"] == "done", outcome
     assert _mail_lines(s) == [b"mail from:<bob@example.com>\r\n"]
-    assert _verb_lines(s, b"RCPT") == [b"rcpt to:<jm@xn--bcher-kva.de>\r\n"]
+    assert verb_lines(s, b"RCPT") == [b"rcpt to:<jm@xn--bcher-kva.de>\r\n"]
     assert all(line.isascii() for line in s.lines)
 
 

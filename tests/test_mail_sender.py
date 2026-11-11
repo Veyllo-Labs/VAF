@@ -38,9 +38,11 @@ class FakeSMTP:
         if self.fail_at == "auth" and self.exc:
             raise self.exc
     def has_extn(self, name): return False
-    def mail(self, sender, options=()): self._maybe(("mail", sender))
-    def rcpt(self, r): self.rcpts.append(r); self._maybe("rcpt")
-    def data(self, msg): self.data_sent = msg; self._maybe("data")
+    # smtplib returns (code, text) from these three and never raises on a refusal.
+    def mail(self, sender, options=()): self._maybe(("mail", sender)); return (250, b"ok")
+    def rcpt(self, r): self.rcpts.append(r); self._maybe("rcpt"); return (250, b"ok")
+    def data(self, msg): self.data_sent = msg; self._maybe("data"); return (250, b"ok")
+    def rset(self): self.calls.append("rset")
     def quit(self): self.calls.append("quit")
 
 

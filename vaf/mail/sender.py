@@ -26,6 +26,21 @@ to retry) or permanent (5xx auth/recipient reject). A failure AT OR AFTER hand-o
 is 'ambiguous' - the server may already have accepted the mail - so the outbox
 parks it and never re-sends.
 
+Every SMTP answer is read, the way `smtplib.SMTP.sendmail` reads them: `mail()`, `rcpt()`
+and `data()` RETURN their code and never raise on a refusal, so ignoring the return value
+reports a refused mail as sent. A refused MAIL FROM is transient for 4xx and permanent for
+5xx. Any refused recipient stops the whole mail before DATA (RSET, nothing sent): the result
+has no "partly delivered" state the outbox or a card could show, so the mail fails until the
+address is fixed, permanent when any refusal is 5xx, transient when all are 4xx. A refusal of
+the DATA command itself (no 354) and a final answer other than 250 after the dot are a
+definite "no" from the server, so neither is ambiguous: 4xx is transient, 5xx permanent, with
+handed_off False. Only a disconnect or timeout after DATA stays ambiguous.
+
+Line ends: the wire carries CRLF (RFC 5321 2.3.8). smtplib sends `bytes` as given and the
+compat32 serialiser writes bare LF, which servers hardened against SMTP smuggling refuse
+outright. Only the wire form changes (`_wire_bytes`); the stored bytes, the Sent copy and the
+Message-ID stay as they were, and ops queued with LF bytes are covered too.
+
 TLS is always verified (ssl.create_default_context, never disableable) and the
 SMTP host passes the shared SSRF guard, exactly like the IMAP client.
 
@@ -120,11 +135,29 @@ def _envelope(msg: OutgoingMessage) -> List[str]:
 
 
 def _wire_bytes(raw: bytes) -> bytes:
-    """The delivered message never carries a Bcc header (Bcc recipients ride the
-    SMTP envelope only). Strip it once here."""
+    """The bytes handed to DATA. The delivered message never carries a Bcc header (Bcc
+    recipients ride the SMTP envelope only); strip it once here. Every line ends in CRLF
+    (RFC 5321 2.3.8): smtplib sends bytes unchanged, the message's own compat32 policy
+    writes bare LF, and a server hardened against SMTP smuggling refuses bare LF in DATA.
+    The same policy, only its line separator changed, so headers are not refolded and the
+    Message-ID stays byte-identical to the stored copy, which keeps its own line ends."""
     m = message_from_bytes(raw)
     del m["Bcc"]
-    return m.as_bytes()
+    return m.as_bytes(policy=m.policy.clone(linesep="\r\n"))
+
+
+def _refused_rcpts_result(refused: List[tuple]) -> SendResult:
+    """No DATA after any refused recipient: transient only when every refusal is 4xx."""
+    cls = "transient" if all(400 <= c < 500 for _, c, _ in refused) else "permanent"
+    named = "; ".join(f"{r}: {c} {_text(t)}" for r, c, t in refused)
+    return SendResult(False, cls, handed_off=False,
+                      error=f"server refused recipient(s), nothing was sent: {named}")
+
+
+def _text(resp: Any) -> str:
+    if isinstance(resp, bytes):
+        return resp.decode("utf-8", "replace")
+    return str(resp)
 
 
 def _smtp_target(acc: Dict[str, Any]) -> tuple:
@@ -230,19 +263,37 @@ def _smtp_conversation(msg: OutgoingMessage, provider: str, host: str, port: int
         if international:
             # The pair the standard library's own send_message passes for such a mail; with
             # SMTPUTF8 smtplib writes the commands in UTF-8 instead of ASCII.
-            conn.mail(mail_from, ["SMTPUTF8", "BODY=8BITMIME"])
+            code, resp = conn.mail(mail_from, ["SMTPUTF8", "BODY=8BITMIME"])
         else:
-            conn.mail(mail_from)
+            code, resp = conn.mail(mail_from)
+        if code != 250:
+            raise smtplib.SMTPSenderRefused(code, resp, mail_from)
+        refused = []
         for rcpt in rcpts:
-            conn.rcpt(rcpt)
+            code, resp = conn.rcpt(rcpt)
+            if code not in (250, 251):
+                refused.append((rcpt, int(code), resp))
+        if refused:
+            try:
+                conn.rset()
+            except Exception:
+                pass
+            return _refused_rcpts_result(refused)
         handed_off = True
-        conn.data(wire)
+        try:
+            code, resp = conn.data(wire)
+        except smtplib.SMTPDataError as e:
+            # Raised only when the DATA command itself is not answered with 354, before a
+            # byte of the message went out: a definite refusal, not an ambiguous hand-off.
+            code, resp = int(e.smtp_code), e.smtp_error
+        if code != 250:
+            return SendResult(False, "transient" if 400 <= int(code) < 500 else "permanent",
+                              handed_off=False,
+                              error=f"server refused the message: {code} {_text(resp)}")
         return SendResult(True, "ok", handed_off=True)
 
     except smtplib.SMTPAuthenticationError as e:
         return SendResult(False, "permanent", handed_off=handed_off, error=f"SMTP auth failed: {e}")
-    except smtplib.SMTPRecipientsRefused as e:
-        return SendResult(False, "permanent", handed_off=handed_off, error=str(e))
     except smtplib.SMTPResponseException as e:
         cls = "ambiguous" if handed_off else ("transient" if 400 <= int(e.smtp_code) < 500 else "permanent")
         return SendResult(False, cls, handed_off=handed_off, error=str(e))

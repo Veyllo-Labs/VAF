@@ -7,8 +7,9 @@ them: ``~/.vaf/app_link_spool/<message id>.bin``, written through the encrypted 
 that was away got a file's message as its ``[File: <name>]`` line only.
 
 Only the bytes live here. Each file's record (account, name, type, size, SHA-256, time) is in
-the sealed device list (devices.py, ``spool``), under the same file lock as the outboxes it
-belongs to. Every file ``bridge.deliver`` sends is spooled, also when every device is
+the sealed device list (devices.py, ``spool``), written in the same write as the outbox entries
+of its message (``devices.outbox_publish``): the bytes are written first, so a replay never sees
+a message without its file and ``collect`` never sees a file without its entries. Every file ``bridge.deliver`` sends is spooled, also when every device is
 connected, because a device that drops before its ``ack`` would lose it otherwise.
 
 Limits: ``FILES_PER_ACCOUNT`` files per account (the oldest goes, its message replays as its
@@ -32,7 +33,7 @@ import os
 import time
 import uuid
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from vaf.core.app_link import devices
 from vaf.core.app_link import protocol as pr
@@ -41,8 +42,8 @@ logger = logging.getLogger(__name__)
 
 FILES_PER_ACCOUNT = 10
 FILE_SENDS_PER_DEVICE = 3
-# A blob is written before its record; one without a record younger than this may be a put
-# still on its way, so the sweep leaves it.
+# A blob is written before its record; one without a record younger than this may be a
+# message still being stored (``stage``), so the sweep leaves it.
 ORPHAN_GRACE_SECONDS = 300
 
 
@@ -72,30 +73,29 @@ def _unlink(message_id: str) -> None:
         logger.debug("app link: a spooled file could not be removed", exc_info=True)
 
 
-def put(user_scope_id, message_id: str, path) -> bool:
-    """Keep the file of message ``message_id`` for the account's devices. False (and nothing
-    kept) when it cannot be read, is empty or larger than the protocol takes, or cannot be
-    written; that message then replays as its text line."""
+def stage(message_id: str, path) -> Optional[Dict[str, Any]]:
+    """Write the bytes of message ``message_id``'s file and return its record, which the
+    caller stores together with the message's outbox entries (devices.outbox_publish), so
+    no replay sees the one without the other. None (and nothing kept) when the file cannot
+    be read, is empty or larger than the protocol takes, or cannot be written; that message
+    then replays as its text line. A blob whose record never comes is an orphan ``collect``
+    removes after ``ORPHAN_GRACE_SECONDS``."""
     blob = _blob(message_id)
     if blob is None:
-        return False
+        return None
     try:
         data = Path(path).read_bytes()
         if not 1 <= len(data) <= pr.MAX_FILE_BYTES:
-            return False
+            return None
         from vaf.core import data_files
         data_files.write_bytes_atomic(blob, data)
-        name = os.path.basename(str(path))
-        meta = {"name": name, "mime": mimetypes.guess_type(name)[0] or "application/octet-stream",
-                "size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "ts": time.time()}
-        evicted = devices.spool_add(user_scope_id, message_id, meta, FILES_PER_ACCOUNT)
     except Exception:
         logger.debug("app link: a file could not be spooled", exc_info=True)
         _unlink(message_id)
-        return False
-    for old in evicted:
-        _unlink(old)
-    return True
+        return None
+    name = os.path.basename(str(path))
+    return {"name": name, "mime": mimetypes.guess_type(name)[0] or "application/octet-stream",
+            "size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "ts": time.time()}
 
 
 def read(message_id: str) -> Optional[bytes]:

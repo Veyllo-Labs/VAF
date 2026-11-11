@@ -774,17 +774,26 @@ def standing_devices(user_scope_id: Any) -> List[Dict[str, Any]]:
     return [r for r in devices.for_scope(scope) if devices.row_stands(r)] if scope else []
 
 
-def _store_out(scope: str, username: str, message_id: str, text: str, *, document: bool = False,
-               device_id: Optional[str] = None) -> None:
-    """Stored once; an outbox entry for every standing device, or for ``device_id`` only."""
+def _store_out(scope: str, username: str, message_id: str, text: str, *,
+               attach: Optional[str] = None, device_id: Optional[str] = None) -> None:
+    """Stored once; an outbox entry for every standing device, or for ``device_id`` only.
+    A message with a file keeps that file for a device that is away or drops before its
+    ack (spool.py): its bytes are written first, and its record goes into the device list in
+    the same write as the outbox entries, so a device reconnecting meanwhile never replays
+    the message without its file. A file that cannot be kept changes nothing else; the
+    message then replays as its text line."""
+    from vaf.core.app_link import spool
     from vaf.core.channel_message_store import append_message
     append_message(username=username, chat_id=devices.chat_key(scope), body=text, direction="out",
-                   message_id=message_id, content_type="document" if document else "text",
+                   message_id=message_id, content_type="document" if attach else "text",
                    channel=CHANNEL, user_scope_id=scope)
-    now = time.time()
-    for row in standing_devices(scope):
-        if device_id is None or row["device_id"] == device_id:
-            devices.outbox_add(row["device_id"], message_id, ts=now)
+    record = spool.stage(message_id, attach) if attach else None
+    targets = [row["device_id"] for row in standing_devices(scope)
+               if device_id is None or row["device_id"] == device_id]
+    evicted = devices.outbox_publish(scope, targets, message_id, ts=time.time(), spool=record,
+                                     keep=spool.FILES_PER_ACCOUNT)
+    if evicted:
+        spool.drop(evicted)
 
 
 def finish_reply(meta: Dict[str, Any], final_text: str) -> bool:
@@ -846,12 +855,7 @@ def deliver(user_scope_id: Any, username: Optional[str], text: str,
     body = text
     if attach:
         body = (text + "\n" if text else "") + f"[File: {os.path.basename(attach)}]"
-    _store_out(scope, str(username or rows[0].get("username") or ""), mid, body, document=bool(attach))
-    if attach:
-        # Kept for a device that is away or drops before its ack; a failure changes nothing
-        # else, the message then replays as its text line.
-        from vaf.core.app_link import spool
-        spool.put(scope, mid, attach)
+    _store_out(scope, str(username or rows[0].get("username") or ""), mid, body, attach=attach)
     chat = devices.chat_session_id(scope)
     message: Dict[str, Any] = {"t": "msg", "id": mid, "chat": chat, "text": text}
     xfer = None

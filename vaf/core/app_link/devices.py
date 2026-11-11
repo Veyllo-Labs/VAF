@@ -297,16 +297,38 @@ def set_caps(device_id: str, caps: List[str]) -> None:
     _update(device_id, _change)
 
 
+def _outbox_append(row: Dict[str, Any], message_id: str, ts: Optional[float]) -> None:
+    box = [e for e in row.get("outbox") or [] if e.get("id") != message_id]
+    box.append({"id": str(message_id), "ts": float(ts if ts is not None else time.time())})
+    overflow = len(box) - OUTBOX_MAX
+    if overflow > 0:
+        box = box[overflow:]
+        row["outbox_dropped"] = int(row.get("outbox_dropped") or 0) + overflow
+    row["outbox"] = box
+
+
 def outbox_add(device_id: str, message_id: str, ts: Optional[float] = None) -> None:
-    def _change(row):
-        box = [e for e in row.get("outbox") or [] if e.get("id") != message_id]
-        box.append({"id": str(message_id), "ts": float(ts if ts is not None else time.time())})
-        overflow = len(box) - OUTBOX_MAX
-        if overflow > 0:
-            box = box[overflow:]
-            row["outbox_dropped"] = int(row.get("outbox_dropped") or 0) + overflow
-        row["outbox"] = box
-    _update(device_id, _change)
+    _update(device_id, lambda row: _outbox_append(row, message_id, ts))
+
+
+def outbox_publish(user_scope_id: Any, device_ids: List[str], message_id: str, *,
+                   ts: Optional[float] = None, spool: Optional[Dict[str, Any]] = None,
+                   keep: int = 0) -> List[str]:
+    """A stored message's outbox entry for each of ``device_ids`` and, for a message carrying
+    a file, that file's record (``spool``), in ONE write of the device list. A replay reading
+    the list in between would otherwise see the entry without its file and send the text
+    line only, and a ``collect`` would see the file without its entries and drop it. The
+    account's oldest file records beyond ``keep`` go; their ids are returned so their bytes
+    go too."""
+    ids = {str(d) for d in device_ids}
+    with _locked():
+        state = _load()
+        for row in state["devices"]:
+            if row["device_id"] in ids:
+                _outbox_append(row, message_id, ts)
+        evicted = _spool_record(state, user_scope_id, message_id, spool, keep) if spool else []
+        _save(state)
+        return evicted
 
 
 def outbox_ack(device_id: str, message_id: str) -> bool:
@@ -347,21 +369,19 @@ def outbox_file_sent(device_id: str, message_id: str) -> int:
 
 # ── the records of spooled files (the bytes: spool.py) ────────────────────────
 
-def spool_add(user_scope_id: Any, message_id: str, meta: Dict[str, Any], keep: int) -> List[str]:
-    """Record a spooled file of the account. The account's oldest records beyond ``keep`` go;
-    their ids are returned so their bytes go too. Another account's records are untouched."""
+def _spool_record(state: Dict[str, Any], user_scope_id: Any, message_id: str,
+                  meta: Dict[str, Any], keep: int) -> List[str]:
+    """Record a spooled file of the account in ``state``. The account's oldest records beyond
+    ``keep`` go; their ids are returned. Another account's records are untouched."""
     scope = _scope(user_scope_id)
-    with _locked():
-        state = _load()
-        spool = state["spool"]
-        spool[str(message_id)] = dict(meta, scope=scope)
-        mine = sorted((float(v.get("ts") or 0), k) for k, v in spool.items()
-                      if _scope(v.get("scope")) == scope)
-        evicted = [k for _ts, k in mine[:max(0, len(mine) - max(0, int(keep)))]]
-        for key in evicted:
-            spool.pop(key, None)
-        _save(state)
-        return evicted
+    spool = state["spool"]
+    spool[str(message_id)] = dict(meta, scope=scope)
+    mine = sorted((float(v.get("ts") or 0), k) for k, v in spool.items()
+                  if _scope(v.get("scope")) == scope)
+    evicted = [k for _ts, k in mine[:max(0, len(mine) - max(0, int(keep)))]]
+    for key in evicted:
+        spool.pop(key, None)
+    return evicted
 
 
 def spool_get(message_id: str) -> Optional[Dict[str, Any]]:

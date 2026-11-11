@@ -156,7 +156,7 @@ def test_seven_days_and_orphans_are_collected(app_link_home, tmp_path):
     assert spool.collect(time.time() + 8 * 86400) == 1 and not _blob(mid).exists()
     stray = _blob("0f8fad5b-d9cb-469f-a165-70867728950e")
     stray.write_bytes(b"no record")
-    assert spool.collect() == 0, "a blob younger than the grace may be a put on its way"
+    assert spool.collect() == 0, "a blob younger than the grace may be a message still being stored"
     import os
     old = time.time() - spool.ORPHAN_GRACE_SECONDS - 5
     os.utime(stray, (old, old))
@@ -176,10 +176,10 @@ def test_a_damaged_blob_falls_back_to_the_marker(app_link_home, tmp_path):
 
 
 def test_an_entry_without_a_record_replays_as_before(app_link_home, tmp_path, monkeypatch):
-    """From before this change, after a restore, or after a failed put: the text line, exactly.
-    MUTATION: always strip the marker (send the stripped text without a record) - red."""
+    """From before this change, after a restore, or after a failed stage: the text line,
+    exactly. MUTATION: always strip the marker (send the stripped text without a record) - red."""
     device = paired_device(SCOPE_A)
-    monkeypatch.setattr(spool, "put", lambda *a, **k: False)
+    monkeypatch.setattr(spool, "stage", lambda *a, **k: None)
     bridge.deliver(SCOPE_A, "alice", "see", str(_file(tmp_path)))
     assert devices._load()["spool"] == {}
     client, _pipe, _row = link(SCOPE_A, device=device)
@@ -201,6 +201,51 @@ def test_a_connected_device_gets_the_file_live_and_the_spool_too(app_link_home, 
     again, _p2, _ = link(SCOPE_A, device=device, peer="10.0.0.7", connection="c7")
     assert again.of("msg")[0]["id"] == mid and again.of("msg")[0]["attachments"]
     assert b"".join(c.data for c in again.chunks) == b"live"
+
+
+def test_a_device_reconnecting_while_the_file_is_kept_still_gets_it(app_link_home, tmp_path,
+                                                                     monkeypatch):
+    """A device that connects, takes its replay, acks it and drops again while the file's
+    bytes are still being written must not end up with the text line only: the message and
+    its file become visible to a replay in one write. MUTATION: publish the outbox entries
+    in `_store_out` before staging the file (record added afterwards) - red."""
+    from vaf.core import data_files
+    device = paired_device(SCOPE_A)
+    write = data_files.write_bytes_atomic
+    during = {}
+
+    def _write(path, data, *a, **k):
+        if spool._dir() in getattr(path, "parents", ()) and "client" not in during:
+            client, pipe, _row = link(SCOPE_A, device=device, peer="10.0.0.8", connection="c8")
+            during["client"] = client
+            for msg in client.of("msg"):
+                client.send({"t": "ack", "id": msg["id"]})
+            pipe.session.close("dropped", bye=False)
+        return write(path, data, *a, **k)
+    monkeypatch.setattr(data_files, "write_bytes_atomic", _write)
+    assert bridge.deliver(SCOPE_A, "alice", "see", str(_file(tmp_path, data=b"raced"))) is True
+    assert during["client"].of("msg") == [], "nothing to replay before the message is published"
+    monkeypatch.setattr(data_files, "write_bytes_atomic", write)
+    spool.collect()
+    again, _p2, _ = link(SCOPE_A, device=device, peer="10.0.0.9", connection="c9")
+    assert _file_msgs(again) and b"".join(c.data for c in again.chunks) == b"raced"
+
+
+def test_collect_never_sees_a_file_without_its_entries(app_link_home, tmp_path, monkeypatch):
+    """The file's record and the outbox entries are one write of the device list.
+    MUTATION: save the record in `outbox_publish` before the entries (two writes) - red."""
+    paired_device(SCOPE_A)
+    saves = []
+    save = devices._save
+
+    def _save(state):
+        saves.append({k: dict(v) for k, v in state["spool"].items()})
+        held = {e["id"] for d in state["devices"] for e in d.get("outbox") or []}
+        assert set(state["spool"]) <= held, "a file record without its outbox entry"
+        save(state)
+    monkeypatch.setattr(devices, "_save", _save)
+    bridge.deliver(SCOPE_A, "alice", "see", str(_file(tmp_path, data=b"x")))
+    assert any(saves), "the record was written"
 
 
 def test_an_older_device_list_without_spool_still_loads(app_link_home):

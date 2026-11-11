@@ -797,7 +797,9 @@ are a fetch piped into a shell like the same pipe without the runner. One comman
 at most `MAX_NESTED_COMMANDS` nested commands in all, beyond which it is refused like one
 nested too deep: a runner's command is read at every option's value position, and without
 that bound a few hundred characters of `uv run -a uv -a uv ...` held the gate for minutes
-before anyone was asked. A wrapper's
+before anyone was asked. Every reading counts, one refused for depth too, and the readings
+stop once the bound is spent, so the work grows linearly with the command's length (12 KB of
+runner options: 39 s before, 0.08 s after). A wrapper's
 option values are stepped over (`sudo -u root rm -rf /` is judged as `rm -rf /`), and a
 command nested more than `MAX_NESTING` deep is refused. Before this, ten of ten measured
 wrapped forms passed. The verdict carries its categories, which the confirmation dialog

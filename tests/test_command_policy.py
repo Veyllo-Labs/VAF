@@ -451,6 +451,45 @@ def test_a_command_of_many_runner_options_is_classified_in_bounded_time():
     assert v.blocked and "nested_too_deep" in v.categories
 
 
+def test_a_long_runner_command_stays_linear_at_the_depth_limit():
+    """A call refused at the depth limit spends from the budget too. When it cost nothing, a
+    runner at the depth limit tried every value position, each joined back into text, so the
+    work grew with the square of the length (measured: 2000 options, 12 KB, 39 s).
+    MUTATION: spend the budget only after the depth check - red (the timer)."""
+    import time
+
+    cmd = "uv run " + "-a uv " * 2000 + "python -c 1"
+    started = time.monotonic()
+    v = classify_command(cmd, profile="host")
+    assert time.monotonic() - started < 1.0
+    assert v.blocked and "nested_too_deep" in v.categories
+
+
+@pytest.mark.parametrize("cmd", [
+    "uv run " + "-a value " * 3000 + "echo ok",
+    "uv run " + "-a uv " * 3000 + "python -c 1",
+], ids=["plain-values", "runner-values"])
+def test_the_candidates_stop_once_the_budget_is_spent(monkeypatch, cmd):
+    """Once the budget is spent the refusal stands, and the rest of a runner's value
+    positions are not joined back into text one by one: each join costs the length of the
+    command, so going on made the work quadratic. Counted rather than timed, so a slow
+    machine cannot hide it. MUTATION: drop the break out of the candidate loop - red."""
+    from vaf.core import command_policy
+    from vaf.core.command_policy import MAX_NESTED_COMMANDS
+
+    joins = []
+    real_join = command_policy.shlex.join
+
+    def counting_join(words):
+        joins.append(1)
+        return real_join(words)
+
+    monkeypatch.setattr(command_policy.shlex, "join", counting_join)
+    v = classify_command(cmd, profile="host")
+    assert v.blocked and "nested_too_deep" in v.categories
+    assert len(joins) <= MAX_NESTED_COMMANDS, len(joins)
+
+
 def test_many_nested_commands_are_refused_once_the_budget_is_spent():
     """The budget refuses a command that carries more nested commands than anyone reviews,
     also when none of them is deep. MUTATION: never refuse on an empty budget - red."""

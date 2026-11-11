@@ -612,13 +612,16 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
         return verdict
     if _budget is None:
         _budget = [MAX_NESTED_COMMANDS]
-    if _depth > MAX_NESTING or _budget[0] <= 0:
+    # Every call spends from the budget, a refused one too: a refusal that cost nothing
+    # let a runner at the depth limit try each of its value positions, each one joined
+    # back into text, which made the work quadratic in the command's length.
+    _budget[0] -= 1
+    if _depth > MAX_NESTING or _budget[0] < 0:
         verdict.blocked = True
         verdict.categories = ["nested_too_deep"]
         verdict.reason = ("Command contains a forbidden pattern: it "
                           + CATEGORY_REASONS["nested_too_deep"])
         return verdict
-    _budget[0] -= 1
 
     pairs = _split_segments(text)
     verdict.segments = [seg for _, seg in pairs]
@@ -670,6 +673,10 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0,
                 nested_fetch = True
             if sub.blocked and not nested_refusal:
                 nested_refusal = sub.reason
+            # The budget is spent and this refusal is recorded: the remaining candidates
+            # would each be refused the same way, after being joined back into text.
+            if _budget[0] < 0:
+                break
 
         if exe in _REMOTE_LOGINS and "remote_login" not in cats:
             cats.append("remote_login")

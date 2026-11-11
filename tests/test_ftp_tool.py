@@ -449,6 +449,25 @@ def test_a_password_that_starts_with_the_login_is_masked_whole(lab, monkeypatch)
     assert "[VAF_SECRET_BOB_PASS]" in out and "/srv/ftp/<stored login>123" in out, out
 
 
+def test_an_error_masks_a_password_shorter_than_the_scrub_minimum(lab, monkeypatch):
+    """Settings stores a value of any length, and the scrub leaves one under 4 characters, so
+    a server reply quoting a stored password `Q7z` reached the answer unmasked.
+    MUTATION: skip a value in `secrets` under user_secrets.MIN_SCRUB_LENGTH in
+    _hide_stored_parts - red."""
+    from vaf.core import user_secrets
+    tmp, root, server = lab
+    user_secrets.set_secret("SHORT_PASS", "Q7z", user_scope_id=ALICE)
+
+    def _refuse(target, *, password=None, **kw):
+        raise ftp.FtpError(f"530 password {password} rejected")
+
+    monkeypatch.setattr(ftp, "connect", _refuse)
+    out = _tool(server, server=f"ftps://alice@127.0.0.1:{server.port}",
+                login_credential="SHORT_PASS", _call_confirmed=True)
+    assert "Q7z" not in out, out
+    assert "530 password [VAF_SECRET_SHORT_PASS] rejected" in out, out
+
+
 @pytest.mark.parametrize("operation, raised", [
     ("list_dir", lambda user: ftp.FtpError(f"550 /srv/ftp/{user}2: no access")),
     ("list_dir", lambda user: OSError(f"550 /srv/ftp/{user}2: no access")),

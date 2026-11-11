@@ -310,11 +310,14 @@ class FtpTool(BaseTool):
         """`text` with every stored value this call used masked: the target's host, login
         and port wherever they came from a stored value (whatever their length, also inside
         a longer word such as a folder `/srv/ftp/bob123`), and each complete value in
-        `secrets` (the password, a stored whole server) as `user_secrets.scrub` would.
+        `secrets` (the password, a stored whole server), also one shorter than
+        `user_secrets.MIN_SCRUB_LENGTH`.
 
         An error renders these parts (the server's name, `write ftp://<login>@...`, a server
-        reply quoting the home folder), and the scrub leaves a value under 4 characters (a
-        login `bob`, a port `990`) and any part of a value that holds the whole server.
+        reply quoting the home folder or the password), and the scrub leaves a value under 4
+        characters (a login `bob`, a port `990`, a password `abc` stored in Settings, which
+        takes any length) and any part of a value that holds the whole server. That minimum
+        protects a whole command output from being wrecked; this text is one short error.
 
         One pass over the ORIGINAL text, not one replacement after another: a part masked
         first inside a longer value (a login `bob` inside the password `bob-secret-123`)
@@ -325,7 +328,6 @@ class FtpTool(BaseTool):
         side of that trade."""
         import re
 
-        from vaf.core import user_secrets
         found = []                    # (start, end, label); parts first, so a tie keeps theirs
         parts = [(target.host, "<stored host>"), (target.user, "<stored login>"),
                  (str(target.port), "<stored port>")]
@@ -335,7 +337,7 @@ class FtpTool(BaseTool):
                 for m in re.finditer("(?=" + re.escape(part) + ")", text, re.IGNORECASE):
                     found.append((m.start(), m.start() + len(part), label))
         for var, value in (secrets or {}).items():
-            if value and len(value) >= user_secrets.MIN_SCRUB_LENGTH:
+            if value:
                 for m in re.finditer("(?=" + re.escape(value) + ")", text):
                     found.append((m.start(), m.start() + len(value), f"[{var}]"))
         if not found:

@@ -141,7 +141,8 @@ its NAME (`login_credential`).
   value, also one shorter than the 4 characters the general scrub needs and also inside a
   longer word (a folder `/srv/ftp/bob123` for the login `bob`). The password and the parts
   are masked together, so a login that is also the start of the password cannot leave the
-  rest of the password readable. The first connection
+  rest of the password readable, and a password of any length is masked in an error, also
+  one shorter than 4 characters stored in Settings. The first connection
   asks with the real host and port (the agent can store a value under any name itself, so the
   person sees where the password goes); the login and the password stay names. Where nobody
   can be asked, the agent reads only that the call needs the person, not that question. A

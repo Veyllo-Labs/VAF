@@ -409,11 +409,10 @@ class Agent:
 
         Why we also capture the stream
         ------------------------------
-        ``chat_step`` returns a cleaned copy of the raw turn text, but for
-        reasoning models (e.g. DeepSeek) the visible answer is streamed while the
-        return value collapses to a placeholder ("..."). So we accumulate the
-        stream and, when the direct return is empty/degenerate, fall back to the
-        reasoning-stripped streamed text. For non-reasoning models the two agree.
+        ``chat_step`` returns the turn's answers, reasoning stripped. A loop that
+        ended with no answer returns a placeholder ("...") although text may have
+        streamed, so we accumulate the stream and, when the direct return is
+        empty/degenerate, fall back to the reasoning-stripped streamed text.
         A failure that a later round streamed after the answer (``last_turn.failure``)
         is taken off that fallback, so the return value is the answer either way.
         """

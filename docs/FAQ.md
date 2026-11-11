@@ -41,9 +41,12 @@ create one instance per parallel conversation. For async callers there is
 engine). See the concurrency contract in [CORE_AGENT.md](CORE_AGENT.md).
 
 **Why did `chat_step()` return `"..."` instead of the answer?**
-That is its contract: the return value is a status, the real answer arrives
-via the stream callback and `history[-1]`. Use the `vaf.Agent` facade (its
-`run()` handles this) or read the return contract in
+`chat_step()` returns the turn's answer (every answer of the turn, joined, reasoning
+stripped). `"..."`, or a `Tool '<name>' finished: ...` line, comes back only when the
+loop ended with no answer at all; a failed turn returns its failure text and sets
+`last_turn.failed`. The stream callback carries everything that was shown, narration
+before a tool call included. The `vaf.Agent` facade's `run()` falls back to the cleaned
+stream for a bare `"..."`. The full return contract is in
 [CORE_AGENT.md](CORE_AGENT.md).
 
 **VAF writes log files into my venv/site-packages. How do I stop that?**

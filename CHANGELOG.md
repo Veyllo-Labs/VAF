@@ -28,7 +28,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   plain-text answer. For embedders: `CoreAgent.chat_step` returns the turn's answer instead
   of `...`, and `Agent.run()` returns the answers alone, without the narration streamed
   before a tool call.
-- **A round with only tool calls no longer sends a second request to the provider.**
+- **A round with only tool calls no longer pays for a second request.** When the model
+  answered with tool calls alone, the same request was sent to the provider once more
+  without streaming, which cost a second paid request and could put the tool call's raw
+  JSON into the chat as text.
 
 ## [0.1.0a36] - 2026-11-09
 

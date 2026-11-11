@@ -4154,11 +4154,10 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 # instruction prompt as a real user message (it would clear the
                                 # pending-question latch). Ended on EVERY exit path (Rule 4.5).
                                 try:
-                                    # The return is a status, not the answer (CORE_AGENT.md,
-                                    # "Return contract": "..." on a normal completion). The answer
-                                    # is the stream; its stored copy below (_drain_turn_copy,
-                                    # reasoning and leaked tool calls removed) is what the chat
-                                    # shows and what the messenger is sent.
+                                    # The return is not used: what the chat shows and what the
+                                    # messenger is sent is the stream as it was shown, through
+                                    # its stored copy below (_drain_turn_copy, reasoning and
+                                    # leaked tool calls removed), the same copy every lane keeps.
                                     agent.chat_step(
                                         user_input=instruction_prompt,
                                         stream_callback=webui_stream_callback,

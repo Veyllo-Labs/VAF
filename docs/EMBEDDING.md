@@ -1432,9 +1432,11 @@ is engine-internal, not on the facade; the tool, `vaf ssh` and the settings rout
 are its only callers.
 
 **Files on a web space** are VAF's `ftp` tool (`vaf/core/ftp.py`, Python's ftplib):
-FTPS unless `ftp://` is written, each account's own list of confirmed servers, a
-certificate trusted through an authority or by the fingerprint remembered at the
-first connection, the password a stored credential's NAME. Built from the same
+it lists, uploads, downloads, deletes, reads part of a file and stats one; FTPS unless
+`ftp://` is written, each account's own list of confirmed servers, a certificate
+trusted through an authority or by the fingerprint remembered at the first
+connection, the password a stored credential's NAME, and host, login and port may be
+stored credentials too (`$NAME` inside `server`). Built from the same
 contract as `ssh` and nothing else. NAMED BOUNDARY, the same as ssh's: `vaf.core.ftp`
 is engine-internal; the tool, `vaf ftp` and the settings route are its only callers.
 

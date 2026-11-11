@@ -37,9 +37,9 @@ def lab(tmp_path, monkeypatch):
         yield tmp_path, root, server
 
 
-def _tool(server, **kw):
+def _tool(stub, **kw):
     from vaf.tools.ftp import FtpTool
-    args = {"server": f"ftps://alice@127.0.0.1:{server.port}", "user_scope_id": ALICE,
+    args = {"server": f"ftps://alice@127.0.0.1:{stub.port}", "user_scope_id": ALICE,
             "username": "alice", "user_role": "user", "login_credential": "FTP_PASS"}
     args.update(kw)
     return FtpTool().run(**args)
@@ -263,3 +263,104 @@ def test_a_remembered_server_is_removed_only_on_the_second_click():
     for loc in ("en", "de", "ja", "zh", "ko", "th", "tr"):
         cat = json.loads((root / "web" / "messages" / f"{loc}.json").read_text(encoding="utf-8"))
         assert cat["ftp"]["confirmForget"] and cat["ssh"]["confirmForget"], loc
+
+
+# -- a server from stored credentials, read and stat ------------------------------------
+
+def _store_server(server, host="127.0.0.1"):
+    from vaf.core import user_secrets
+    for name, value in (("FTP_HOST", host), ("FTP_PORT", str(server.port)),
+                        ("FTP_USER", "alice")):
+        user_secrets.set_secret(name, value, user_scope_id=ALICE)
+
+
+NAMED = "ftps://$FTP_USER@$FTP_HOST:$FTP_PORT"
+
+
+def test_the_server_can_come_from_stored_credentials(lab):
+    """The live chat had host, port and login stored and wrote them as names; the tool took the
+    text literally. MUTATION: drop the expansion env from secrets_env - red: the port and
+    127.0.0.1 come back in the not-confirmed error."""
+    tmp, root, server = lab
+    (root / "world").mkdir()
+    (root / "world" / "level.dat").write_bytes(b"x" * 10)
+    _store_server(server)
+    refused = _tool(server, server=NAMED, action="list")
+    assert refused.startswith("Error:") and "[VAF_SECRET_FTP_HOST]" in refused
+    out = _tool(server, server=NAMED, action="list", _call_confirmed=True)
+    assert out.startswith(f"[FTP {NAMED}]") and "world" in out and out.endswith("OK"), out
+    listed = _tool(server, server=NAMED, action="list", remote_path="world")
+    assert "level.dat" in listed
+    for text in (refused, out, listed):
+        for value in ("127.0.0.1", str(server.port), "alice", PASSWORD):
+            assert value not in text, (value, text)
+    # Confirmed under the resolved name, as a server written out would be.
+    assert ftp.is_known(ftp.parse_server(f"ftps://x@127.0.0.1:{server.port}"), ALICE)
+
+
+def test_a_server_written_with_names_is_asked_once_and_shows_where(lab):
+    """The question names where the password goes (the agent can store any value under a name
+    itself), never the login or the password. MUTATION: parse the raw server in ask_reason -
+    red (a confirmed server is asked again); build the question from the raw text - red (the
+    host is missing)."""
+    from vaf.tools.ftp import FtpTool
+    tmp, root, server = lab
+    _store_server(server)
+    t = FtpTool()
+    new = t.ask_reason({"server": NAMED}, user_scope_id=ALICE, username="alice")
+    assert new.startswith(f"First connection to ftps://127.0.0.1:{server.port}"), new
+    assert "FTP_HOST" in new and "certificate" in new
+    assert "alice" not in new.replace("$FTP_USER", "") and PASSWORD not in new
+    unknown = t.ask_reason({"server": "ftps://u@$NOT_STORED"}, user_scope_id=ALICE)
+    assert "could not be checked" in unknown
+    _tool(server, server=NAMED, _call_confirmed=True)
+    assert t.ask_reason({"server": NAMED}, user_scope_id=ALICE, username="alice") is None
+    plain = t.ask_reason({"server": "ftp://$FTP_USER@$FTP_HOST:$FTP_PORT"}, user_scope_id=ALICE)
+    assert f"127.0.0.1:{server.port}" in plain and "WITHOUT encryption" in plain
+
+
+def test_every_answer_is_scrubbed(lab, monkeypatch):
+    """A stored value that breaks the server text is quoted by the parse error, and a fault
+    that is no FtpError used to reach the dispatcher raw. MUTATION: drop the scrub in run - red;
+    drop the connect except branch - red (no [FTP ...] header)."""
+    tmp, root, server = lab
+    from vaf.core import user_secrets
+    user_secrets.set_secret("FTP_HOST", "bad host value", user_scope_id=ALICE)
+    out = _tool(server, server="ftps://alice@$FTP_HOST", _call_confirmed=True)
+    assert out.startswith("Error:") and "bad host value" not in out
+    assert "[VAF_SECRET_FTP_HOST]" in out
+    missing = _tool(server, server="ftps://alice@$FTP_NOWHERE", _call_confirmed=True)
+    assert "no stored credential is named FTP_NOWHERE" in missing
+    _store_server(server)
+
+    def _boom(target, **kw):
+        raise ValueError(f"unexpected answer from {target.host}:{target.port}")
+
+    monkeypatch.setattr(ftp, "connect", _boom)
+    out = _tool(server, server=NAMED, _call_confirmed=True)
+    assert out.startswith(f"[FTP {NAMED}] Error: unexpected answer"), out
+    assert "127.0.0.1" not in out and str(server.port) not in out
+
+
+def test_read_and_stat_through_the_tool(lab):
+    """MUTATION: drop "read" from the enum check - red."""
+    from vaf.tools.ftp import FtpTool
+    tmp, root, server = lab
+    (root / "logs").mkdir()
+    log = b"".join(b"line %05d\n" % i for i in range(10000))     # 110000 bytes
+    (root / "logs" / "latest.log").write_bytes(log)
+    (root / "logs" / "world.bin").write_bytes(b"\0\1\2" * 100)
+    _tool(server, _call_confirmed=True)
+    out = _tool(server, action="read", remote_path="logs/latest.log", offset=-22)
+    assert f"Bytes {len(log) - 22}-{len(log) - 1} of {len(log)}:" in out
+    assert out.endswith("line 09998\nline 09999\n\nOK"), out
+    capped = _tool(server, action="read", remote_path="logs/latest.log", max_bytes=999999)
+    assert "Bytes 0-65535 of" in capped
+    assert "Binary content (300 bytes); use download." in _tool(
+        server, action="read", remote_path="logs/world.bin")
+    assert f"file, {len(log)} bytes, modified " in _tool(server, action="stat",
+                                                         remote_path="logs/latest.log")
+    assert "\nfolder" in _tool(server, action="stat", remote_path="logs")
+    assert "needs remote_path" in _tool(server, action="read")
+    assert "whole numbers" in _tool(server, action="read", remote_path="x", offset="end")
+    assert set(FtpTool.parameters["properties"]["action"]["enum"]) >= {"read", "stat"}

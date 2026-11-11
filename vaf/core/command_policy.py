@@ -35,6 +35,18 @@ refusal above was one `bash -c` away from passing (measured: ten of ten
 wrapped forms went through). The nesting has a depth limit, and past it the
 command is refused, because a reviewer cannot follow it either.
 
+Python that moves files over FTP is the same `ftp_transfer` as an FTP client
+(`python_code_categories`): ftplib, `__import__`/`importlib` of it, or an
+`ftp://`/`ftps://` address in the code. One check for both Python lanes:
+python_exec runs it on its code, and this classifier on `python -c CODE` and
+`python -m ftplib` in a shell command. Measured before it existed: a model
+denied curl and lftp in host_bash wrote the same transfer with ftplib in
+python_exec, reading the stored password from its environment.
+NAMED BOUNDARY: the check reads the code it is given. Code built at runtime
+(`"ftp" + "lib"`), a script file, or a heredoc or stdin fed to the interpreter is
+not seen, exactly as a shell script's content is not read. It points at the right
+tool; the control for host code stays the confirmation and the account opt-in.
+
 This module lives in vaf/core, not next to the tools, because the confirmation
 gate (vaf/core/tool_dispatch.py) renders the verdict: vaf/core importing
 vaf/tools would point the dependency the wrong way round.
@@ -95,6 +107,12 @@ _REMOTE_LOGINS = frozenset({"ssh", "scp", "sftp"})
 _FTP_CLIENTS = frozenset({"ftp", "lftp", "ncftp", "ncftpput", "ncftpget", "tnftp", "pftp"})
 # The address alone, or as an option's value (`--url=ftp://...`).
 _FTP_URL_RE = re.compile(r"^(?:--?[A-Za-z][\w-]*=)?['\"]?ftps?://", re.IGNORECASE)
+# The Python interpreter by name (`python`, `python3`, `python3.13`; Windows' `py` launcher).
+_PYTHON_EXE_RE = re.compile(r"^(?:python(?:\d+(?:\.\d+)?)?|py)$")
+# Python's short options that take a value besides -c and -m.
+_PYTHON_VALUE_LETTERS = frozenset("WX")
+# Code that does not parse is searched as text: the module name, or a quoted ftp:// address.
+_PYTHON_FTP_TEXT_RE = re.compile(r"\bftplib\b|['\"]\s*ftps?://", re.IGNORECASE)
 # ssh's single-letter options that take a value (ssh(1) synopsis).
 _SSH_VALUE_LETTERS = frozenset("BbcDEeFIiJLlmOoPpQRSWw")
 # How deep `bash -c "sh -c '...'"` may nest before the command is refused as unreadable.
@@ -388,6 +406,71 @@ def _nested_commands(exe: str, args: List[str]) -> List[tuple]:
     return []
 
 
+def _is_ftplib(name) -> bool:
+    return isinstance(name, str) and name.split(".", 1)[0] == "ftplib"
+
+
+def python_code_categories(code: str) -> List[str]:
+    """["ftp_transfer"] when Python `code` moves files over FTP, else []. Read from the syntax
+    tree, so a comment naming ftplib does not count: an import of ftplib (also `from ftplib
+    import ...`), `__import__("ftplib")` or `importlib.import_module("ftplib")`, or a string
+    that starts with ftp:// or ftps:// (urllib's FTP, an f-string's literal part). Code that
+    does not parse is searched as text. Never raises."""
+    import ast
+    text = str(code or "")
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return ["ftp_transfer"] if _PYTHON_FTP_TEXT_RE.search(text) else []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            hit = any(_is_ftplib(alias.name) for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            hit = _is_ftplib(node.module)
+        elif isinstance(node, ast.Call):
+            fn = node.func
+            called = fn.id if isinstance(fn, ast.Name) else (
+                fn.attr if isinstance(fn, ast.Attribute) else "")
+            hit = (called in ("__import__", "import_module") and bool(node.args)
+                   and isinstance(node.args[0], ast.Constant) and _is_ftplib(node.args[0].value))
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            hit = node.value.lstrip().lower().startswith(("ftp://", "ftps://"))
+        else:
+            hit = False
+        if hit:
+            return ["ftp_transfer"]
+    return []
+
+
+def _python_command_categories(args: List[str]) -> List[str]:
+    """What `python [options] -c CODE` or `python -m MODULE` does, judged like python_exec's
+    code: `-c` as its own word, at the end of a short cluster (`-Ic CODE`) or with the code in
+    the same word (`-cCODE`); `-m ftplib` is ftplib's own command-line client. A script file
+    is not read (module docstring)."""
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok == "--" or tok == "-" or not tok.startswith("-"):
+            return []                       # a script file, stdin, or the end of the options
+        if tok.startswith("--"):
+            i += 2 if tok == "--check-hash-based-pycs" else 1
+            continue
+        letters = tok[1:]
+        step = 1
+        for pos, letter in enumerate(letters):
+            rest = letters[pos + 1:]
+            if letter in ("c", "m"):
+                value = rest if rest else (args[i + 1] if i + 1 < len(args) else "")
+                if letter == "c":
+                    return python_code_categories(value)
+                return ["ftp_transfer"] if _is_ftplib(value) else []
+            if letter in _PYTHON_VALUE_LETTERS:
+                step = 1 if rest else 2
+                break
+        i += step
+    return []
+
+
 def _is_protected_target(arg: str) -> bool:
     """True when a recursive delete would hit a system or home root."""
     a = arg.strip().strip("'\"").rstrip("/") or "/"
@@ -469,7 +552,8 @@ def classify_command(command: str, *, profile: str = "host", _depth: int = 0) ->
         if exe in _REMOTE_LOGINS and "remote_login" not in cats:
             cats.append("remote_login")
         if (exe in _FTP_CLIENTS or (exe in _NETWORK_FETCHERS
-                                    and any(_FTP_URL_RE.match(a) for a in args))) \
+                                    and any(_FTP_URL_RE.match(a) for a in args))
+                or (_PYTHON_EXE_RE.match(exe) and _python_command_categories(args))) \
                 and "ftp_transfer" not in cats:
             cats.append("ftp_transfer")
 

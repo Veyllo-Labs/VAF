@@ -55,7 +55,8 @@ class PythonExecTool(BaseTool):
         "Only use when you need host filesystem/network access. "
         "Requires explicit user approval. Prefer 'python_sandbox' for safe execution. "
         "NEVER use this to write files — use write_file/document_writer instead. "
-        "Large strings (HTML, code) will cause 'EOF when reading a line' errors via -c."
+        "Large strings (HTML, code) will cause 'EOF when reading a line' errors via -c. "
+        "FTP (ftplib, an ftp:// address) is refused here: use the ftp tool."
     )
 
     parameters = {
@@ -95,7 +96,18 @@ class PythonExecTool(BaseTool):
 
         if not code:
             return "[ERROR] python_exec: missing code"
-        
+
+        # Before the trust check, so a stored "always" does not run it either: FTP from here
+        # asks nobody about a new server, checks no certificate, and reads the stored password
+        # out of its environment (measured: the model did exactly that once host_bash refused
+        # curl). The same check host_bash applies to `python -c` (vaf/core/command_policy.py).
+        from vaf.core.command_policy import python_code_categories
+        if "ftp_transfer" in python_code_categories(code):
+            return ("[BLOCKED] python_exec: this code moves files over FTP (ftplib or an ftp:// "
+                    "address). Use the ftp tool: it asks before a new server, checks the "
+                    "certificate, and takes stored credentials by name (login_credential, and "
+                    "$NAME inside server).")
+
         # Its own check, on top of the gate, because some lanes run tools without one (a
         # workflow step): a stored "always" for this person, their grant for the chat this
         # call belongs to, or their "only this time" for THIS call - which the funnel hands

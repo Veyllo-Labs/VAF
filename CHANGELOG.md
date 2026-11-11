@@ -20,6 +20,11 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   reply because of a malformed tool call or its content check, the agent is now told once,
   without the provider's raw message, and tries again. Rate limits, login and server errors
   are never sent back to the model.
+- **FTP reads part of a file and shows its size and date, and the server can come from your
+  stored credentials.** The `ftp` tool reads a slice of a file on the server (the end of a big
+  log, without downloading it) and shows a file's size and modification time. When you stored
+  the host, login or port as credentials, your agent writes `ftp://$FTP_USER@$FTP_HOST:$FTP_PORT`
+  and VAF fills them in; the first connection still asks you and shows the server.
 
 ### Fixed
 
@@ -32,6 +37,10 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   answered with tool calls alone, the same request was sent to the provider once more
   without streaming, which cost a second paid request and could put the tool call's raw
   JSON into the chat as text.
+- **FTP from Python no longer goes around the ftp tool.** Code run on this computer with
+  `python_exec`, or `python -c` in a shell command, that uses ftplib or an `ftp://` address is
+  refused and pointed at the `ftp` tool, which asks before a new server and checks its
+  certificate. A server name the server sends in an older encoding is now reported as such.
 
 ## [0.1.0a36] - 2026-11-09
 

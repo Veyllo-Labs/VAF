@@ -36,6 +36,11 @@ What this does instead, on Python's own ftplib:
 - Transfers are bounded (500 MB, the bound ssh and download_file keep), folder uploads leave
   out links (one could point outside the folder) and `.git` and `.vaf`, and Stop ends a
   transfer between blocks (`bounded_run.cancel_check`).
+- `read` takes part of a file without writing anything to disk (the end of a big log: SIZE,
+  then REST to start there, at most 64 KB), and `stat` gives type, size and modification time
+  (MLST, or SIZE and MDTM on a server without it).
+- A host or login still carrying `$` is refused with its cause: it is the NAME of a stored
+  credential, which only the ftp tool fills in (vaf/core/user_secrets.py, `expand`).
 
 NAMED BOUNDARIES:
 - The first connection trusts the server the person confirms; comparing the fingerprint with
@@ -48,6 +53,12 @@ NAMED BOUNDARIES:
 - No mirroring with deletion: an upload adds and overwrites, `delete` removes one file.
 - Engine-internal, not on the facade, like vaf/core/ssh.py: the ftp tool, `vaf ftp` and the
   settings route are its only callers.
+- Names travel as UTF-8, ftplib's default (an upload, listing and download of `Ordner ü/Grüße
+  ä.txt` round-trip). A server that keeps names in another encoding is reported as such, not
+  converted, and no `OPTS UTF8 ON` is sent: no hoster was measured to need either.
+- One timeout per socket operation (60 s), and the tool's deadline for the whole call. A
+  separate connect timeout was not built: connect, login and a listing measured under 100 ms
+  on a live hoster's server.
 """
 from __future__ import annotations
 
@@ -60,6 +71,7 @@ import re
 import socket
 import ssl
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -69,6 +81,7 @@ TIMEOUT_SECONDS = 60                     # each socket operation, not the whole 
 MAX_TRANSFER_BYTES = 500 * 1024 * 1024   # the same bound ssh and download_file keep
 SERVERS_FILE = "servers.json"
 FOLDER_SKIP = (".git", ".vaf")           # never part of what gets deployed
+MAX_READ_BYTES = 64 * 1024               # one `read`: a slice for the model, not a download
 
 _USER_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._@+-]{0,127}$")
 _HOST_RE = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$")
@@ -77,6 +90,27 @@ _IPV6_RE = re.compile(r"^[0-9A-Fa-f:.]{2,45}$")
 
 class FtpError(Exception):
     """Refused or impossible; the message is written for the model and the person."""
+
+
+_NOT_UTF8 = ("the server sent a file name or answer that is not UTF-8 (it keeps names in an "
+             "older encoding); VAF reads FTP names as UTF-8")
+
+
+@contextmanager
+def _names_as_utf8():
+    """ftplib reads the control and listing streams as strict UTF-8: a name in another
+    encoding raised a bare codec error. Also a decorator (one wrapper for every operation)."""
+    try:
+        yield
+    except UnicodeDecodeError:
+        raise FtpError(_NOT_UTF8) from None
+
+
+def _unreachable(e: BaseException) -> FtpError:
+    """The FtpError for a connection that failed before or during the login."""
+    if isinstance(e, UnicodeDecodeError):
+        return FtpError(_NOT_UTF8)
+    return FtpError(f"the server could not be reached: {e}")
 
 
 @dataclass(frozen=True)
@@ -124,6 +158,13 @@ def parse_server(text: Any) -> Target:
         raise FtpError(f"'{text}' carries a path: name the server alone, the folder separately")
     user, _, rest = raw.rpartition("@")
     user = user or "anonymous"
+    # Before the host check: "not a host name" hid the cause when the model wrote a stored
+    # credential's name ($FTP_HOST) where the value belongs.
+    for part, what in ((user, "login"), (rest, "host name")):
+        if "$" in part:
+            raise FtpError(f"'{part}' is the name of a stored credential, not a {what}: the ftp "
+                           "tool fills in $NAME for a credential the user stored; elsewhere "
+                           "(deploy_to) write the server out")
     port_text = ""
     if rest.startswith("["):
         m = re.match(r"^\[([^\]]+)\](?::(\d+))?$", rest)
@@ -291,9 +332,9 @@ def connect(target: Target, *, user_scope_id: Optional[str], password: Optional[
         except ftplib.error_perm as e:
             ftp.close()
             raise FtpError(f"login refused: {e}") from None
-        except (OSError, EOFError, ftplib.Error) as e:
+        except (OSError, EOFError, ftplib.Error, UnicodeDecodeError) as e:
             ftp.close()
-            raise FtpError(f"the server could not be reached: {e}") from None
+            raise _unreachable(e) from None
         if first:
             _remember(target, user_scope_id, "none", "")
         return Session(ftp, target, first_contact=first, trust="none")
@@ -329,9 +370,9 @@ def connect(target: Target, *, user_scope_id: Optional[str], password: Optional[
             raise FtpError(f"the server does not offer encryption (AUTH TLS: {e}). If it is "
                            f"plain FTP, write ftp://{target.user}@... and the user is told "
                            "that the password then crosses the network readable") from None
-        except (OSError, EOFError, ftplib.Error) as e:
+        except (OSError, EOFError, ftplib.Error, UnicodeDecodeError) as e:
             ftp.close()
-            raise FtpError(f"the server could not be reached: {e}") from None
+            raise _unreachable(e) from None
         fp = _fingerprint(ftp)
         if mode == "pinned" and pinned and fp != pinned:
             ftp.close()
@@ -346,9 +387,9 @@ def connect(target: Target, *, user_scope_id: Optional[str], password: Optional[
         except ftplib.error_perm as e:
             ftp.close()
             raise FtpError(f"login refused: {e}") from None
-        except (OSError, EOFError, ftplib.Error) as e:
+        except (OSError, EOFError, ftplib.Error, UnicodeDecodeError) as e:
             ftp.close()
-            raise FtpError(f"the server could not be reached: {e}") from None
+            raise _unreachable(e) from None
         session = Session(ftp, target, first_contact=first, trust=mode, fingerprint=fp)
         if first:
             _remember(target, user_scope_id, mode, fp if mode == "pinned" else "")
@@ -400,6 +441,7 @@ def _stop_check(check_stop: Optional[Callable[[], bool]]) -> Callable[[], bool]:
     return cancel_check()
 
 
+@_names_as_utf8()
 def list_dir(session: Session, path: str = ".") -> List[str]:
     """One line per entry: `d name` for a folder, `- name  <size>` for a file. MLSD where the
     server has it, the server's own LIST lines otherwise."""
@@ -437,6 +479,7 @@ def _ensure_dirs(ftp: ftplib.FTP, folder: str) -> None:
                 raise
 
 
+@_names_as_utf8()
 def upload(session: Session, local: Path, remote: str, *,
            check_stop: Optional[Callable[[], bool]] = None,
            limit: int = MAX_TRANSFER_BYTES) -> Dict[str, int]:
@@ -488,6 +531,7 @@ def upload(session: Session, local: Path, remote: str, *,
     return {"files": 1, "bytes": seen["bytes"]}
 
 
+@_names_as_utf8()
 def download(session: Session, remote: str, local: Path, *,
              check_stop: Optional[Callable[[], bool]] = None,
              limit: int = MAX_TRANSFER_BYTES) -> int:
@@ -521,6 +565,138 @@ def download(session: Session, remote: str, local: Path, *,
     return seen["bytes"]
 
 
+@_names_as_utf8()
 def delete(session: Session, remote: str) -> None:
     """One file. A folder is refused by the server itself (DELE removes files only)."""
     session.ftp.delete(remote)
+
+
+# ── a look at one file without downloading it ─────────────────────────────────
+
+# The answers of a server that does not have a command: 500 unknown, 501 its arguments not
+# understood, 502 not implemented, 504 not for this argument. A missing file is 550.
+_NOT_IMPLEMENTED = ("500", "501", "502", "504")
+
+
+def _code(e: BaseException) -> str:
+    return str(e)[:3]
+
+
+def _utc(stamp: str) -> Optional[str]:
+    """`YYYYMMDDHHMMSS[.sss]` (MLST's modify fact, MDTM's answer) as a readable UTC time."""
+    digits = stamp.strip().split(".", 1)[0]
+    if len(digits) != 14 or not digits.isdigit():
+        return None
+    return (f"{digits[0:4]}-{digits[4:6]}-{digits[6:8]} "
+            f"{digits[8:10]}:{digits[10:12]}:{digits[12:14]} UTC")
+
+
+def _size(ftp: ftplib.FTP, remote: str) -> Optional[int]:
+    """SIZE in binary mode (vsftpd refuses it in ASCII mode), or None when the server does
+    not tell."""
+    try:
+        ftp.voidcmd("TYPE I")
+        return ftp.size(remote)
+    except (ftplib.error_perm, ftplib.error_reply, ValueError):
+        return None
+
+
+@_names_as_utf8()
+def stat(session: Session, remote: str) -> Dict[str, Any]:
+    """{"type": "file"|"folder", "size": int|None, "modified": "YYYY-MM-DD HH:MM:SS UTC"|None}
+    of one remote path: MLST where the server has it, SIZE and MDTM otherwise."""
+    missing = FtpError(f"{remote} was not found, or it is a folder (list shows a folder)")
+    ftp = session.ftp
+    try:
+        answer = ftp.sendcmd(f"MLST {remote}")
+    except ftplib.error_perm as e:
+        if _code(e) == "550":
+            raise missing from None
+        if _code(e) not in _NOT_IMPLEMENTED:
+            raise
+        answer = ""
+    # The facts line is the one indented by a space: ` type=file;size=12;modify=...; name`.
+    for line in answer.splitlines():
+        if not line.startswith(" "):
+            continue
+        facts = {}
+        for fact in line.strip().split(" ", 1)[0].split(";"):
+            key, _, value = fact.partition("=")
+            if key:
+                facts[key.strip().lower()] = value.strip()
+        kind = facts.get("type", "").lower()
+        size = facts.get("size", "")
+        return {"type": "folder" if kind in ("dir", "cdir", "pdir") else "file",
+                "size": int(size) if size.isdigit() else None,
+                "modified": _utc(facts.get("modify", ""))}
+    size = _size(ftp, remote)
+    try:
+        modified = _utc(ftp.sendcmd(f"MDTM {remote}")[4:])
+    except (ftplib.error_perm, ftplib.error_reply):
+        modified = None
+    if size is None and modified is None:
+        raise missing
+    return {"type": "file", "size": size, "modified": modified}
+
+
+class _Enough(Exception):
+    pass
+
+
+@_names_as_utf8()
+def read(session: Session, remote: str, *, offset: int = 0, max_bytes: int = 8000,
+         check_stop: Optional[Callable[[], bool]] = None) -> Dict[str, Any]:
+    """At most `max_bytes` (clamped to MAX_READ_BYTES) of `remote` from byte `offset`; a
+    negative offset counts from the end (-20000: the last 20 KB). Nothing is written to disk.
+    Returns {"data": bytes, "start": int, "size": int|None}."""
+    stop = _stop_check(check_stop)
+    limit = min(max(1, int(max_bytes)), MAX_READ_BYTES)
+    ftp = session.ftp
+    size = _size(ftp, remote)
+    offset = int(offset)
+    if offset < 0:
+        if size is None:
+            raise FtpError("the server does not tell the file size (SIZE), so a read from the "
+                           "end is not possible; give a positive offset")
+        start = max(0, size + offset)
+    else:
+        start = offset
+    if size is not None and start >= size:
+        return {"data": b"", "start": start, "size": size}
+    chunks: List[bytes] = []
+    seen = {"bytes": 0}
+
+    def _collect(chunk: bytes) -> None:
+        take = chunk[:limit - seen["bytes"]]
+        chunks.append(take)
+        seen["bytes"] += len(take)
+        if seen["bytes"] >= limit:
+            raise _Enough()
+        if stop():
+            raise _Stopped()
+
+    try:
+        ftp.retrbinary(f"RETR {remote}", _collect, rest=start if start > 0 else None)
+    except _Enough:
+        # The data connection is closed; the server still answers the RETR (226, or 426 for
+        # the cut). Read it so the session stays usable, briefly, and whatever it says.
+        try:
+            ftp.sock.settimeout(5)
+            ftp.voidresp()
+        except Exception:
+            pass
+        finally:
+            try:
+                ftp.sock.settimeout(ftp.timeout)
+            except Exception:
+                pass
+    except _Stopped:
+        raise FtpError("stopped: the user asked to stop") from None
+    except ftplib.error_perm as e:
+        # REST is sent before RETR, so a "not implemented" answer here is the REST: RETR
+        # itself is in every server, and its own refusals are 550 and the like.
+        if start > 0 and _code(e) in _NOT_IMPLEMENTED:
+            raise FtpError("the server cannot start a transfer in the middle of a file (REST); "
+                           "download it instead") from None
+        raise
+    return {"data": b"".join(chunks), "start": start, "size": size}

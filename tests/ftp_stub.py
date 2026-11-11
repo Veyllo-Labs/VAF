@@ -3,10 +3,13 @@
 # Additional permissions and terms under AGPL Section 7: see LICENSING.md
 """A small FTP/FTPS server for the tests of vaf/core/ftp.py, from the standard library.
 
-Enough of RFC 959/4217 for ftplib's client: AUTH TLS, PBSZ, PROT, USER/PASS, TYPE, PASV,
-STOR, RETR, MLSD, LIST, MKD, DELE, PWD, QUIT. Files live in a real folder. One client at a
-time, which is all a test needs. `pasv_host` is the address the PASV answer NAMES - a test
-sets it to one nobody listens on, to see that the client ignores it.
+Enough of RFC 959/4217/3659 for ftplib's client: AUTH TLS, PBSZ, PROT, USER/PASS, TYPE, PASV,
+STOR, RETR, REST, SIZE, MDTM, MLST, MLSD, LIST, MKD, DELE, PWD, QUIT. Files live in a real
+folder. One client at a time, which is all a test needs. `pasv_host` is the address the PASV
+answer NAMES - a test sets it to one nobody listens on, to see that the client ignores it.
+`rest`, `size` and `mlst_single` switch REST, SIZE and MLST off (answered 502/500, as a server
+without them does); `listing_extra` is raw bytes appended to every LIST and MLSD answer (a
+name in another encoding). Names go over the wire as UTF-8.
 
 Certificates come from `cryptography` (already a dependency of VAF): `make_ca()` and
 `make_cert()` build a test authority and leaf certificates signed by it or by themselves;
@@ -103,13 +106,20 @@ class FtpStub:
 
     def __init__(self, root: Path, *, cert: Optional[Path] = None, user: str = "alice",
                  password: str = "s3cret-pass", pasv_host: str = "127.0.0.1",
-                 mlsd: bool = True):
+                 mlsd: bool = True, rest: bool = True, size: bool = True,
+                 mlst_single: bool = True, listing_extra: bytes = b""):
         self.root = Path(root)
         self.cert = cert
         self.user = user
         self.password = password
         self.pasv_host = pasv_host
         self.mlsd = mlsd
+        self.rest = rest
+        self.size = size
+        self.mlst_single = mlst_single
+        self.listing_extra = listing_extra
+        #: Every command with its argument (PASS hidden), for a test that checks what was sent.
+        self.lines: List[str] = []
         self.commands: List[str] = []
         self.connections = 0
         self._ctx = None
@@ -170,7 +180,7 @@ class FtpStub:
 
     def _session(self, conn: socket.socket):
         state = {"tls": False, "prot": False, "user": None, "logged": False, "cwd": "/",
-                 "pasv": None}
+                 "pasv": None, "rest": 0}
         f = conn.makefile("rb")
 
         def send(line: str):
@@ -181,10 +191,11 @@ class FtpStub:
             raw = f.readline()
             if not raw:
                 return
-            line = raw.decode().rstrip("\r\n")
+            line = raw.decode("utf-8").rstrip("\r\n")
             cmd, _, arg = line.partition(" ")
             cmd = cmd.upper()
             self.commands.append(cmd if cmd != "PASS" else "PASS ***")
+            self.lines.append(line if cmd != "PASS" else "PASS ***")
             if cmd == "AUTH" and self._ctx is not None and arg.upper() == "TLS":
                 send("234 AUTH TLS ok")
                 conn = self._ctx.wrap_socket(conn, server_side=True)
@@ -233,6 +244,36 @@ class FtpStub:
                 else:
                     path.mkdir()
                     send(f'257 "{arg}" created')
+            elif cmd == "REST" and self.rest:
+                if not arg.isdigit():
+                    send("501 a byte position please")
+                else:
+                    state["rest"] = int(arg)
+                    send(f"350 Restarting at {arg}")
+            elif cmd == "SIZE" and self.size:
+                path = self._safe(state["cwd"], arg)
+                if path is not None and path.is_file():
+                    send(f"213 {path.stat().st_size}")
+                else:
+                    send("550 no such file")
+            elif cmd == "MDTM":
+                path = self._safe(state["cwd"], arg)
+                if path is not None and path.is_file():
+                    send(f"213 {self._stamp(path)}")
+                else:
+                    send("550 no such file")
+            elif cmd == "MLST" and self.mlst_single:
+                path = self._safe(state["cwd"], arg or ".")
+                if path is None or not path.exists():
+                    send("550 no such file or folder")
+                else:
+                    kind = "dir" if path.is_dir() else "file"
+                    size = path.stat().st_size if path.is_file() else 0
+                    send(f"250-Listing {arg}")
+                    send(f" type={kind};size={size};modify={self._stamp(path)}; {arg}")
+                    send("250 End")
+            elif cmd == "MLST":
+                send("500 unknown command")
             elif cmd == "DELE":
                 path = self._path(state["cwd"], arg)
                 if path.is_file():
@@ -248,8 +289,20 @@ class FtpStub:
             else:
                 send("502 not implemented")
 
+    def _safe(self, cwd: str, arg: str) -> Optional[Path]:
+        try:
+            return self._path(cwd, arg)
+        except PermissionError:
+            return None
+
+    @staticmethod
+    def _stamp(path: Path) -> str:
+        when = datetime.datetime.fromtimestamp(path.stat().st_mtime, datetime.timezone.utc)
+        return when.strftime("%Y%m%d%H%M%S")
+
     def _transfer(self, cmd, arg, state, send):
         listener = state.pop("pasv", None)
+        start, state["rest"] = state["rest"], 0
         if listener is None:
             send("425 use PASV first")
             return
@@ -282,23 +335,28 @@ class FtpStub:
                             break
                         out.write(chunk)
             elif cmd == "RETR":
-                data.sendall(path.read_bytes())
+                data.sendall(path.read_bytes()[start:])
             elif cmd == "MLSD":
                 lines = []
                 for entry in sorted(path.iterdir()):
                     kind = "dir" if entry.is_dir() else "file"
                     size = entry.stat().st_size if entry.is_file() else 0
                     lines.append(f"type={kind};size={size}; {entry.name}\r\n")
-                data.sendall("".join(lines).encode())
+                data.sendall("".join(lines).encode("utf-8") + self.listing_extra)
             else:
                 lines = [f"{'d' if e.is_dir() else '-'}rw-r--r-- 1 u g {e.stat().st_size} "
                          f"Jan 1 00:00 {e.name}\r\n" for e in sorted(path.iterdir())]
-                data.sendall("".join(lines).encode())
+                data.sendall("".join(lines).encode("utf-8") + self.listing_extra)
             if isinstance(data, ssl.SSLSocket):
                 try:
                     data = data.unwrap()
                 except (OSError, ssl.SSLError):
                     pass
+        except OSError:
+            # The client closed the data connection early (a read that had enough): the
+            # transfer was cut, and the control connection carries on.
+            send("426 transfer aborted")
+            return
         finally:
             try:
                 data.close()

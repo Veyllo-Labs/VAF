@@ -16,9 +16,17 @@ transfers); this module is the tool's contract around it, the same one as the ss
   (`account_opt_in`).
 - The password is never an argument: `login_credential` NAMES a credential the person stored
   (vaf/core/user_secrets.py), and its value is taken out of everything the tool returns.
+- A stored host, login or port is written `$NAME` inside `server`
+  (`ftp://$FTP_USER@$FTP_HOST:$FTP_PORT`) and filled in here (`user_secrets.expand`); the values
+  are taken out of every answer too. The first-connection question names the resolved host and
+  port: the agent can store a value under any name itself (store_credential), so consent given
+  on names alone could send the password to a host it planted.
+- `read` takes part of a file (the end of a big log) without downloading it, `stat` its size
+  and modification time.
 - `upload` takes a folder as well (a built site): its files land INSIDE remote_path, without
   links and without .git and .vaf, within 500 MB.
-- `host_bash` refuses ftp clients and curl/wget with an ftp:// address and points here
+- `host_bash` refuses ftp clients and curl/wget with an ftp:// address, and python_exec and
+  `python -c` refuse ftplib and ftp:// addresses, all pointing here
   (vaf/core/command_policy.py, ftp_transfer).
 - The coder uses this tool only in a run started with deploy_to=ftps://..., pinned to that
   one server and folder (vaf/tools/coder.py, _deploy_refusal).
@@ -26,12 +34,14 @@ transfers); this module is the tool's contract around it, the same one as the ss
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from vaf.tools.base import BaseTool
 
 _OUT_LIMIT = 8000
 MAX_TIMEOUT_SECONDS = 600
+ACTIONS = ("list", "upload", "download", "delete", "read", "stat")
+READ_DEFAULT_BYTES = 8000
 
 
 class FtpTool(BaseTool):
@@ -54,8 +64,12 @@ class FtpTool(BaseTool):
         "action='list' shows remote_path (default the login folder); 'upload' copies local_path "
         "(a file to remote_path, or a folder INTO remote_path, e.g. a built site) there; "
         "'download' copies remote_path here (default: this chat's workspace); 'delete' removes "
-        "one file there. `server` is ftps://user@host[:port] (encrypted, the default when the "
-        "scheme is left out) or ftp://user@host for a server without encryption. Pass "
+        "one file there; 'read' returns part of a file without downloading it (offset, "
+        "max_bytes; a negative offset counts from the end, e.g. -20000 for the end of a big "
+        "log); 'stat' gives a file's size and modification time. `server` is "
+        "ftps://user@host[:port] (encrypted, the default when the scheme is left out) or "
+        "ftp://user@host for a server without encryption; a host, login or port the user "
+        "stored as a credential is written $NAME: ftp://$FTP_USER@$FTP_HOST:$FTP_PORT. Pass "
         "login_credential: the NAME of a credential the user stored (store the password with "
         "store_credential first, never put it anywhere else). The first connection to a server "
         "asks the user. Use this instead of curl, lftp or ftp in host_bash. Building something "
@@ -67,15 +81,23 @@ class FtpTool(BaseTool):
     parameters = {
         "type": "object",
         "properties": {
-            "action": {"type": "string", "enum": ["list", "upload", "download", "delete"],
-                       "description": "What to do (default list)."},
+            "action": {"type": "string", "enum": list(ACTIONS),
+                       "description": "What to do (default list). read: part of a file, e.g. "
+                                      "the end of a big log, without downloading it; stat: "
+                                      "size and modification time."},
             "server": {"type": "string",
                        "description": "ftps://user@host[:port], or ftp://user@host for a server "
-                                      "without encryption."},
+                                      "without encryption. A stored host, login or port: "
+                                      "ftp://$FTP_USER@$FTP_HOST:$FTP_PORT."},
             "remote_path": {"type": "string",
-                            "description": "The folder to list, the file to download or delete, "
-                                           "the file an upload becomes, or the folder an "
-                                           "uploaded folder lands in."},
+                            "description": "The folder to list, the file to download, delete, "
+                                           "read or stat, the file an upload becomes, or the "
+                                           "folder an uploaded folder lands in."},
+            "offset": {"type": "integer", "default": 0,
+                       "description": "For read: the byte to start at; negative counts from "
+                                      "the end (-20000: the last 20 KB)."},
+            "max_bytes": {"type": "integer", "default": READ_DEFAULT_BYTES,
+                          "description": "For read: how many bytes at most (up to 65536)."},
             "local_path": {"type": "string",
                            "description": "For upload: the file or folder here. For download: "
                                           "the file here."},
@@ -103,19 +125,48 @@ class FtpTool(BaseTool):
         raw = (args.get("server") or args.get("host") or args.get("target")
                or args.get("destination"))
         try:
-            target = ftp.parse_server(raw)
+            text, used = self._expand(raw, user_scope_id, username)
+            target = ftp.parse_server(text)
             if ftp.is_known(target, user_scope_id):
                 return None
         except Exception:
             return f"The server '{raw}' could not be checked, so this call is put to you."
+        if used:
+            # The resolved scheme, host and port, never the login or a password: the person
+            # must see where the password goes, not only which names were written.
+            names = ", ".join(sorted(n[len("VAF_SECRET_"):] for n in used))
+            where = f"{target.name} (written {raw}; {names} filled in from stored credentials)"
+        else:
+            where = str(target)
         if not target.tls:
-            return (f"First connection to {target}, WITHOUT encryption: the password and the "
+            return (f"First connection to {where}, WITHOUT encryption: the password and the "
                     "files cross the network readable. Only if the server offers nothing else.")
-        return (f"First connection to {target}: its certificate is checked and remembered for "
+        return (f"First connection to {where}: its certificate is checked and remembered for "
                 "this account, and a different one later is refused.")
+
+    @staticmethod
+    def _expand(raw, user_scope_id, username) -> Tuple[str, Dict[str, str]]:
+        """The server text with every `$NAME` filled in, and the env of the stored names it
+        used. Raises ValueError for a name this person has not stored."""
+        from vaf.core import user_secrets
+        text = str(raw or "").strip()
+        if "$" not in text:
+            return text, {}
+        return user_secrets.expand(text, user_scope_id=user_scope_id, username=username)
 
     # ── the call ──────────────────────────────────────────────────────────────
     def run(self, **kwargs) -> str:
+        from vaf.core import user_secrets
+        # Every stored value this call used (the server's parts, the password) is taken out of
+        # EVERY answer, also an error raised before the transfer or one nobody foresaw.
+        secrets_env: Dict[str, str] = {}
+        try:
+            out = self._run(kwargs, secrets_env)
+        except Exception as e:      # noqa: BLE001 - scrubbed here, never raw to the dispatcher
+            out = f"Error: {e}"
+        return user_secrets.scrub(out, secrets_env)
+
+    def _run(self, kwargs: Dict[str, Any], secrets_env: Dict[str, str]) -> str:
         from vaf.core import ftp, user_secrets
         from vaf.core.bounded_run import cancel_check
         from vaf.tools.ssh import transfer_local_path
@@ -123,17 +174,28 @@ class FtpTool(BaseTool):
         scope = kwargs.get("user_scope_id")
         username = kwargs.get("username")
         action = str(kwargs.get("action") or "list").strip().lower()
-        if action not in ("list", "upload", "download", "delete"):
-            return f"Error: unknown action {action!r} (list, upload, download, delete)."
+        if action not in ACTIONS:
+            return f"Error: unknown action {action!r} ({', '.join(ACTIONS)})."
+        written = str(kwargs.get("server") or "").strip()
         try:
-            target = ftp.parse_server(kwargs.get("server"))
+            expanded, used = self._expand(written, scope, username)
+        except ValueError as e:
+            return (f"Error: server: {e}. A stored host, login or port is written $NAME, NAME "
+                    "being a credential the user stored (store_credential, or Settings, "
+                    "Connections, Credentials for commands).")
+        # Registered before parsing: a parse error quotes the filled-in text.
+        secrets_env.update(used)
+        try:
+            target = ftp.parse_server(expanded)
         except ftp.FtpError as e:
             return f"Error: {e}."
+        # The server as written when it came from stored names: its values stay out of the
+        # answer, as the password does.
+        shown = written if used else str(target)
         if not ftp.is_known(target, scope) and not kwargs.get("_call_confirmed"):
             return (f"Error: {target} is a server this account has not connected to yet. The "
                     "first connection must be confirmed by the user in the app; ask them.")
 
-        secrets_env: Dict[str, str] = {}
         password: Optional[str] = None
         name = kwargs.get("login_credential")
         if name:
@@ -148,8 +210,13 @@ class FtpTool(BaseTool):
             secrets_env[env_name] = password = found[env_name]
 
         remote = str(kwargs.get("remote_path") or "").strip()
-        if action in ("upload", "download", "delete") and not remote:
+        if action in ("upload", "download", "delete", "read", "stat") and not remote:
             return f"Error: action '{action}' needs remote_path."
+        try:
+            offset = int(kwargs.get("offset") or 0)
+            max_bytes = int(kwargs.get("max_bytes") or READ_DEFAULT_BYTES)
+        except (TypeError, ValueError):
+            return "Error: offset and max_bytes are whole numbers of bytes."
         local = None
         if action in ("upload", "download"):
             try:
@@ -171,15 +238,14 @@ class FtpTool(BaseTool):
         def _stop() -> bool:
             return stopped() or time.monotonic() > deadline
 
-        def _clean(text: str) -> str:
-            return user_secrets.scrub(text, secrets_env)
-
-        lines = [f"[FTP {target}]"]
+        lines = [f"[FTP {shown}]"]
         try:
             session = ftp.connect(target, user_scope_id=scope, password=password,
                                   confirmed=bool(kwargs.get("_call_confirmed")))
         except ftp.FtpError as e:
-            return _clean(f"[FTP {target}] {e}.")
+            return f"[FTP {shown}] {e}."
+        except Exception as e:      # noqa: BLE001 - a fault outside ftplib's own errors
+            return f"[FTP {shown}] Error: {e}"
         try:
             if session.first_contact:
                 lines.append(self._first_contact_line(session))
@@ -199,19 +265,43 @@ class FtpTool(BaseTool):
             elif action == "download":
                 n = ftp.download(session, remote, local, check_stop=_stop)
                 lines.append(f"Downloaded {n} bytes to {local}.")
+            elif action == "read":
+                lines.append(self._read_text(ftp.read(session, remote, offset=offset,
+                                                      max_bytes=max_bytes, check_stop=_stop)))
+            elif action == "stat":
+                lines.append(self._stat_line(ftp.stat(session, remote)))
             else:
                 ftp.delete(session, remote)
                 lines.append(f"Deleted {remote}.")
         except ftp.FtpError as e:
             lines.append(f"Error: {e}.")
-            return _clean("\n".join(lines))
+            return "\n".join(lines)
         except Exception as e:      # the server's own refusal (550 ...), a dropped connection
             lines.append(f"Error: {e}")
-            return _clean("\n".join(lines))
+            return "\n".join(lines)
         finally:
             ftp.close(session)
         lines.append("OK")
-        return _clean("\n".join(lines))
+        return "\n".join(lines)
+
+    @staticmethod
+    def _read_text(result: Dict[str, Any]) -> str:
+        data, start, size = result["data"], result["start"], result["size"]
+        total = "unknown" if size is None else str(size)
+        if not data:
+            return f"No bytes from {start} on (the file has {total} bytes)."
+        head = f"Bytes {start}-{start + len(data) - 1} of {total}:"
+        if b"\0" in data:
+            return f"{head}\nBinary content ({len(data)} bytes); use download."
+        return f"{head}\n{data.decode('utf-8', errors='replace')}"
+
+    @staticmethod
+    def _stat_line(info: Dict[str, Any]) -> str:
+        when = f", modified {info['modified']}" if info.get("modified") else ""
+        if info.get("type") == "folder":
+            return f"folder{when}"
+        size = "size unknown" if info.get("size") is None else f"{info['size']} bytes"
+        return f"file, {size}{when}"
 
     @staticmethod
     def _first_contact_line(session) -> str:

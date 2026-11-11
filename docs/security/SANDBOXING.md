@@ -230,6 +230,14 @@ The `python_exec` tool runs code directly on your host system. It is:
 - Shows clear warnings when used
 - Never run from a messaging channel in the chat, also with `channel_tools_unrestricted` on
   (it needs a person, like `host_bash`, see "Shell execution surfaces" below)
+- Refuses code that moves files over FTP (an import of ftplib, `__import__` or
+  `importlib.import_module` of it, an `ftp://` or `ftps://` address) and points at the `ftp`
+  tool, before its trust check, so a stored "always" does not run it either. The same check
+  (`python_code_categories` in `vaf/core/command_policy.py`) judges `python -c CODE` and
+  `python -m ftplib` in `host_bash`. Named boundary: the check reads the code it is given; code
+  built at runtime (`"ftp" + "lib"`), a script file, or a heredoc fed to the interpreter is not
+  seen, as a shell script's content is not read. The control for host code stays the
+  confirmation and the account opt-in.
 
 Use this only when you need host filesystem/network access and trust the code source.
 
@@ -731,8 +739,9 @@ Pinned in `tests/test_ssh.py` (a fake `ssh` on PATH and the real `ssh-keygen`).
 
 ### `ftp` - files on a web space (`vaf/tools/ftp.py`)
 
-Lists, uploads (a file or a folder), downloads and deletes over FTPS, or plain FTP when
-written `ftp://` (`vaf/core/ftp.py`, Python's ftplib). The controls are the `ssh` tool's:
+Lists, uploads (a file or a folder), downloads, deletes, reads part of a file and stats one
+over FTPS, or plain FTP when written `ftp://` (`vaf/core/ftp.py`, Python's ftplib); a stored
+host, login or port is written `$NAME` in `server` and filled in by the tool. The controls are the `ssh` tool's:
 confirmed in the chat, a trusted folder does not silence it, the first connection to a server
 is always asked and refused where nobody is asked, never over a messaging channel, a regular
 account only when its allowlist names it, the local side under the account's write jail. Its
@@ -740,8 +749,9 @@ own: the certificate is checked (an authority's, or the fingerprint remembered a
 connection), the address a server names for passive transfers is not followed, cloud metadata
 addresses are refused, and `host_bash` refuses the FTP clients (`ftp`, `lftp`, `ncftp`,
 `ncftpput`, `ncftpget`, `tnftp`, `pftp`) and `curl`/`wget` with an `ftp://` or `ftps://` address
-(`ftp_transfer` in `vaf/core/command_policy.py`) and points here; the coder's `bash` in a sandbox
-environment refuses the same. Pinned
+(`ftp_transfer` in `vaf/core/command_policy.py`) and points here; so do `python_exec` and
+`python -c` / `python -m ftplib` in `host_bash` for Python's ftplib or an `ftp://` address in
+the code; the coder's `bash` in a sandbox environment refuses the same. Pinned
 in `tests/test_ftp_core.py` and `tests/test_ftp_tool.py`, against a small FTPS server from the
 standard library (`tests/ftp_stub.py`).
 

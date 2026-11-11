@@ -59,7 +59,10 @@ without echo). The agent sees only the names and writes `$VAF_SECRET_<NAME>` int
 `host_bash` command or `os.environ["VAF_SECRET_<NAME>"]` into `python_exec` code; the tool
 hands the command exactly the variables it names and removes their values from the output
 before the model reads it. A value is never shown again, only replaced or deleted. Per
-person, in `user_secrets.enc` (envelope-encrypted).
+person, in `user_secrets.enc` (envelope-encrypted). The removal recognises a value only whole:
+code that takes a value apart (splits a host at its dots, prints the first letters of a login)
+prints the parts unrecognised, so the agent is told never to take a value apart, and the `ftp`
+tool takes a stored host, login or port itself (below).
 
 The person can also simply hand a credential to the agent in the chat - in the browser, the
 terminal or over Telegram ("FTP: user xy, password ..."). The agent stores each value at once
@@ -124,9 +127,23 @@ stores the password with `store_credential` and passes only its NAME (`login_cre
 
 Many web spaces offer FTP and nothing else. The `ftp` tool (`vaf/tools/ftp.py`, built on
 `vaf/core/ftp.py` and Python's own ftplib) lists a folder there, uploads a file or a whole
-folder (a built site), downloads a file and deletes one. The person says "my web space is
-web123@ftp.example.org, the password is ..."; the agent stores the password with
-`store_credential` and passes only its NAME (`login_credential`).
+folder (a built site), downloads a file and deletes one, reads part of a file and shows a
+file's size and modification time. The person says "my web space is web123@ftp.example.org,
+the password is ..."; the agent stores the password with `store_credential` and passes only
+its NAME (`login_credential`).
+
+- **The server from stored credentials.** When the host, login or port are stored as
+  credentials too, the agent writes them by name: `ftp://$FTP_USER@$FTP_HOST:$FTP_PORT`
+  (also `${FTP_HOST}` or `$VAF_SECRET_FTP_HOST`). VAF fills in the values, and they are taken
+  out of every answer like the password. The first connection asks with the real host and port
+  (the agent can store a value under any name itself, so the person sees where the password
+  goes); the login and the password stay names. A name nobody stored is refused with that
+  cause, and `deploy_to` takes the server only written out.
+- **Read and stat without downloading.** `read` returns part of a file, at most 64 KB: a
+  negative offset counts from the end (`offset=-20000`, the last 20 KB of a big log), and the
+  server starts the transfer there (SIZE, then REST). `stat` shows a file's size and
+  modification time (MLST, or SIZE and MDTM). A server without SIZE or REST gets a message
+  saying which one is missing.
 
 - **Encrypted unless written otherwise.** `ftps://user@host` (explicit TLS, the data channel
   encrypted too) is the default, also when the scheme is left out. `ftp://user@host` is
@@ -146,7 +163,8 @@ web123@ftp.example.org, the password is ..."; the agent stores the password with
   Telegram, WhatsApp or Discord, and a regular account gets it only when its tool allowlist
   names it. `host_bash` refuses the FTP clients (`ftp`, `lftp`, the `ncftp` tools) and
   `curl`/`wget` with an `ftp://` or `ftps://` address and points at this tool: those carry the password on the command line, ask nobody
-  about a new server and notice no changed certificate.
+  about a new server and notice no changed certificate. Python's ftplib is refused the same
+  way, in `python_exec` and as `python -c` or `python -m ftplib` in `host_bash`.
 - **The coder deploys to a web space too.** `coding_agent(deploy_to="ftps://user@host/folder")`
   gives the coder the `ftp` tool for that one web space and folder (no `ssh` in such a run),
   under the same rules as the SSH deploy above: only when the person asked, only to a server
@@ -159,7 +177,10 @@ web123@ftp.example.org, the password is ..."; the agent stores the password with
 - **Named boundaries.** The first connection trusts the server the person confirms (compare
   the fingerprint with the hoster's panel if you can). Implicit FTPS (port 990) is not
   offered; every hoster measured offers explicit TLS on port 21. An upload adds and
-  overwrites; there is no mirroring that deletes on the server.
+  overwrites; there is no mirroring that deletes on the server. File names travel as UTF-8
+  (`Ordner ü/Grüße ä.txt` works); a server that keeps names in an older encoding is reported
+  as such, not converted. There is no automatic fall back from FTPS to plain FTP: an attacker
+  on the way could force it by hiding the server's TLS offer.
 
 ### Developer
 

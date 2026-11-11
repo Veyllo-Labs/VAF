@@ -307,3 +307,146 @@ def test_a_folder_upload_never_enters_a_linked_folder(session):
     assert walk_without_links(site) == [("index.html", False)]
     assert ftp.upload(s, site, "w")["files"] == 1
     assert not (root / "w" / "keys").exists()
+
+
+# ── a stored credential's name in the server text ─────────────────────────────
+
+def test_a_dollar_in_the_server_names_its_cause():
+    """The model wrote `ftp://$VAF_SECRET_FTP_USER@$VAF_SECRET_FTP_HOST:...` in a live chat and
+    got "not a host name or address", which hid the cause. MUTATION: delete the `$` check in
+    parse_server - red: the message falls back to "not a host name"."""
+    for text in ("ftp://$X@$Y:21", "ftps://$VAF_SECRET_FTP_USER@ftp.example.org",
+                 "alice@$FTP_HOST", "ftp://u@${FTP_HOST}"):
+        with pytest.raises(ftp.FtpError) as caught:
+            ftp.parse_server(text)
+        message = str(caught.value)
+        assert "stored credential" in message and "fills in $NAME" in message, text
+        assert "not a host name or address" not in message, text
+    # The coder's deploy_to takes the server only as written out, and says so.
+    from vaf.tools import coder
+    target, err = coder._ftp_deploy_target("ftps://$FTP_USER@$FTP_HOST/htdocs", "s")
+    assert target is None and "deploy_to" in err and "stored credential" in err
+
+
+# ── read and stat ─────────────────────────────────────────────────────────────
+
+def _stub_session(lab, **options):
+    tmp, root = lab
+    server = FtpStub(root, cert=make_cert(tmp, "leaf"), **options).__enter__()
+    s = ftp.connect(_target(server), user_scope_id=ALICE, password=PASSWORD, confirmed=True)
+    return server, s
+
+
+def _done(server, s):
+    ftp.close(s)
+    server.__exit__(None, None, None)
+
+
+def test_read_from_the_end_and_at_an_offset(lab):
+    """The tail of a big log without downloading it: SIZE, then REST at size - N.
+    MUTATION: call retrbinary without `rest` - red (the bytes come from the start);
+    MUTATION: drop the MAX_READ_BYTES clamp - red (a 1 MB read returns more than 64 KB)."""
+    tmp, root = lab
+    body = bytes(range(256)) * 400                       # 102400 bytes, every offset distinct
+    (root / "server.log").write_bytes(body)
+    server, s = _stub_session(lab)
+    try:
+        tail = ftp.read(s, "server.log", offset=-1000, max_bytes=5000)
+        assert tail == {"data": body[-1000:], "start": len(body) - 1000, "size": len(body)}
+        assert f"REST {len(body) - 1000}" in server.lines
+        middle = ftp.read(s, "server.log", offset=300, max_bytes=50)
+        assert middle["data"] == body[300:350] and middle["start"] == 300
+        # The same session still works after a read that stopped early.
+        assert ftp.stat(s, "server.log")["size"] == len(body)
+        (root / "big.log").write_bytes(b"a" * (1024 * 1024))
+        big = ftp.read(s, "big.log", max_bytes=10 ** 6)
+        assert len(big["data"]) == ftp.MAX_READ_BYTES == 65536
+        # From the start: no REST at all; past the end: nothing, without a transfer.
+        before = len(server.lines)
+        assert ftp.read(s, "server.log", max_bytes=10)["data"] == body[:10]
+        assert not any(line.startswith("REST") for line in server.lines[before:])
+        assert ftp.read(s, "server.log", offset=len(body) + 5)["data"] == b""
+    finally:
+        _done(server, s)
+
+
+def test_read_without_rest_or_size_says_why(lab):
+    """MUTATION: drop the REST mapping - red (a bare 502 comes back); drop the SIZE check for a
+    negative offset - red."""
+    tmp, root = lab
+    (root / "a.log").write_bytes(b"x" * 5000)
+    server, s = _stub_session(lab, rest=False)
+    try:
+        with pytest.raises(ftp.FtpError, match=r"middle of a file \(REST\); download it instead"):
+            ftp.read(s, "a.log", offset=100)
+        assert ftp.read(s, "a.log", max_bytes=3)["data"] == b"xxx"      # from 0 needs no REST
+    finally:
+        _done(server, s)
+    server, s = _stub_session(lab, size=False)
+    try:
+        with pytest.raises(ftp.FtpError, match=r"does not tell the file size \(SIZE\)"):
+            ftp.read(s, "a.log", offset=-10)
+        assert ftp.read(s, "a.log", offset=4990)["data"] == b"x" * 10
+    finally:
+        _done(server, s)
+
+
+def test_stat_by_mlst_and_by_size_and_mdtm(lab):
+    """MUTATION: skip the SIZE+MDTM fallback - red (a server without MLST errors)."""
+    import os
+    tmp, root = lab
+    (root / "site").mkdir()
+    (root / "site" / "index.html").write_bytes(b"<h1>hi</h1>")
+    os.utime(root / "site" / "index.html", (1700000000, 1700000000))
+    expected = {"type": "file", "size": 11, "modified": "2023-11-14 22:13:20 UTC"}
+    server, s = _stub_session(lab)
+    try:
+        assert ftp.stat(s, "site/index.html") == expected
+        assert "MLST" in server.commands and "MDTM" not in server.commands
+        assert ftp.stat(s, "site")["type"] == "folder"
+        with pytest.raises(ftp.FtpError, match="was not found, or it is a folder"):
+            ftp.stat(s, "site/missing.html")
+    finally:
+        _done(server, s)
+    server, s = _stub_session(lab, mlst_single=False)
+    try:
+        assert ftp.stat(s, "site/index.html") == expected
+        assert {"SIZE", "MDTM"} <= set(server.commands)
+        with pytest.raises(ftp.FtpError, match="was not found, or it is a folder"):
+            ftp.stat(s, "site/missing.html")
+    finally:
+        _done(server, s)
+
+
+# ── names that are not ASCII ──────────────────────────────────────────────────
+
+def test_non_ascii_names_round_trip(session):
+    """MUTATION: construct the client with encoding="latin-1" - red (the stub reads UTF-8)."""
+    tmp, root, server, s = session
+    src = tmp / "local.txt"
+    src.write_bytes("Grüße aus dem Ordner\n".encode("utf-8"))
+    remote = "Ordner ü/Grüße ä.txt"
+    assert ftp.upload(s, src, remote)["bytes"] == src.stat().st_size
+    assert (root / "Ordner ü" / "Grüße ä.txt").read_bytes() == src.read_bytes()
+    assert any("Grüße ä.txt" in line for line in ftp.list_dir(s, "Ordner ü"))
+    back = tmp / "back.txt"
+    assert ftp.download(s, remote, back) == src.stat().st_size
+    assert back.read_bytes() == src.read_bytes()
+    assert ftp.read(s, remote, offset=-7)["data"] == src.read_bytes()[-7:]
+    assert ftp.stat(s, remote)["size"] == src.stat().st_size
+
+
+def test_a_non_utf8_listing_names_the_encoding(lab):
+    """A server keeping names in Latin-1 sends `caf\\xe9.txt`; ftplib raised a bare codec error.
+    MUTATION: remove the UnicodeDecodeError mapping - red (the raw codec text comes back)."""
+    tmp, root = lab
+    (root / "a.txt").write_text("a")
+    extra = b"type=file;size=1; caf\xe9.txt\r\n"
+    for mlsd in (True, False):
+        server, s = _stub_session(lab, mlsd=mlsd, listing_extra=extra)
+        try:
+            with pytest.raises(ftp.FtpError, match="not UTF-8") as caught:
+                ftp.list_dir(s, ".")
+            assert "codec" not in str(caught.value)
+        finally:
+            _done(server, s)

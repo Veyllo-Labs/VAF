@@ -223,3 +223,43 @@ def test_a_windows_executable_is_judged_by_its_name_without_exe():
         v = classify_command(cmd, profile="host")
         assert v.blocked and cat in v.categories, cmd
     assert not classify_command("python.exe --version", profile="host").blocked
+
+
+@pytest.mark.parametrize("cmd", [
+    'python3 -c "import ftplib"',
+    """python3.13 -c "from ftplib import FTP_TLS; FTP_TLS('h')" """,
+    'python3 -Ic "import ftplib"',
+    "python3 -cimport\\ ftplib",
+    "python3 -m ftplib h",
+    """python -W ignore -c "import urllib.request as u; u.urlopen('ftp://h/x')" """,
+    """sudo -u web python3 -c "__import__('ftplib')" """,
+    """bash -c 'python3 -c "import ftplib"'""",
+    'C:/Python313/python.exe -c "import ftplib"',
+])
+def test_python_ftp_in_a_shell_command_is_refused(cmd):
+    """The same FTP-from-Python check python_exec runs, on `python -c` and `python -m ftplib`
+    in a shell command. MUTATION: delete the python branch in classify_command - red."""
+    v = classify_command(cmd, profile="host")
+    assert v.blocked and "ftp_transfer" in v.categories, cmd
+    assert "ftp tool" in v.reason, cmd
+
+
+@pytest.mark.parametrize("cmd", [
+    'python3 -c "print(1)"',
+    "python3 -c '# ftplib is not used here\nprint(1)'",
+    "python3 build.py --mirror ftplib",       # a script's own arguments are not code
+    "python3 -m http.server 8000",
+    "python3 --version",
+])
+def test_python_without_ftp_is_not_refused(cmd):
+    assert "ftp_transfer" not in classify_command(cmd, profile="host").categories, cmd
+
+
+def test_the_sandbox_environment_lane_refuses_python_ftp_too():
+    """bash in a sandbox environment refuses ftp_transfer by the host profile's categories, so
+    the Python forms reach it with no edit there. MUTATION: delete the python branch - red."""
+    from vaf.tools.bash import BashTool
+    tool = BashTool(environment=object())
+    for cmd in ('python3 -c "import ftplib"', "python3 -m ftplib example.org"):
+        out = tool._run_in_environment(cmd, None, 30, None, {})
+        assert out.startswith("Error:") and "upload onto another machine" in out, cmd

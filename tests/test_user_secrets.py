@@ -116,10 +116,81 @@ def test_a_background_command_log_is_read_back_scrubbed(monkeypatch, tmp_path):
 
 
 def test_the_model_reads_names_only():
+    """MUTATION: revert the sentence on `$NAME` in ftp's server - red."""
     us.set_secret("FTP_PASSWORD", VALUE, user_scope_id=TENANT)
     note = us.prompt_note(user_scope_id=TENANT)
     assert "$VAF_SECRET_FTP_PASSWORD" in note and VALUE not in note
     assert "VAF_SECRET_FTP_PASSWORD" not in us.prompt_note(user_scope_id=OTHER)
+    # A stored host, login or port goes into ftp's server by name, and a value is never taken
+    # apart (measured: a host printed split at its dots got past the scrub).
+    assert "`$NAME` for a stored host, login or port inside ftp's server" in note
+    assert "take apart" in note
+
+
+def test_expand_fills_in_this_persons_values_once():
+    """MUTATION: read the whole blob instead of `_own` - red (the other account's value);
+    expand until nothing changes - red (the `$` inside a value gets expanded too)."""
+    us.set_secret("FTP_HOST", "ftp.example.org", user_scope_id=TENANT)
+    us.set_secret("FTP_USER", "web123", user_scope_id=TENANT)
+    us.set_secret("FTP_PASS", "pa$FTP_HOST-word", user_scope_id=TENANT)
+    us.set_secret("ONLY_OTHER", "not-yours-1", user_scope_id=OTHER)
+    for written in ("$FTP_HOST", "${FTP_HOST}", "$VAF_SECRET_FTP_HOST", "${VAF_SECRET_FTP_HOST}",
+                    "$ftp_host"):
+        text, env = us.expand(f"ftp://u@{written}:21", user_scope_id=TENANT)
+        assert text == "ftp://u@ftp.example.org:21", written
+        assert env == {"VAF_SECRET_FTP_HOST": "ftp.example.org"}, written
+    text, env = us.expand("$FTP_USER@$FTP_HOST", user_scope_id=TENANT)
+    assert text == "web123@ftp.example.org" and set(env) == {"VAF_SECRET_FTP_USER",
+                                                             "VAF_SECRET_FTP_HOST"}
+    # One pass: the `$FTP_HOST` inside the password stays as it is.
+    assert us.expand("$FTP_PASS", user_scope_id=TENANT)[0] == "pa$FTP_HOST-word"
+    with pytest.raises(ValueError, match="no stored credential is named FTP_PORT"):
+        us.expand("u@$FTP_HOST:$FTP_PORT", user_scope_id=TENANT)
+    with pytest.raises(ValueError, match="ONLY_OTHER"):
+        us.expand("$ONLY_OTHER", user_scope_id=TENANT)
+    assert us.expand("no names here", user_scope_id=TENANT) == ("no names here", {})
+
+
+def test_expand_refuses_rather_than_passing_a_name_on(monkeypatch):
+    """An unreadable store must not leave `$FTP_HOST` in the text as if it were a host.
+    MUTATION: fall back to an empty store the way env_for does - red."""
+    def _broken():
+        raise OSError("locked")
+    monkeypatch.setattr(us, "_store", _broken)
+    with pytest.raises(ValueError, match="could not be read"):
+        us.expand("$FTP_HOST", user_scope_id=TENANT)
+
+
+@pytest.mark.parametrize("code", [
+    "import ftplib\nftplib.FTP('h')",
+    "from ftplib import FTP",
+    "import ftplib as f",
+    "m = __import__('ftplib')",
+    "import importlib\nimportlib.import_module('ftplib')",
+    "import urllib.request\nurllib.request.urlopen('ftp://h/x')",
+    "h = 'x'\nprint(f'FTPS://{h}/x')",
+])
+def test_python_exec_hands_ftp_to_the_ftp_tool(monkeypatch, code):
+    """Measured live: refused curl in host_bash, the model wrote the transfer with ftplib in
+    python_exec and read the stored password from its environment. Refused before the trust
+    check, so a stored "always" does not run it either. MUTATION: move the check after the
+    trust check, or delete it - red (the process starts)."""
+    import vaf.tools.python_exec as pe
+    from vaf.core import processes
+    started = []
+    monkeypatch.setattr(pe, "get_tool_policy", lambda name, scope=None: "allow")
+    monkeypatch.setattr(processes, "run_foreground", lambda *a, **k: started.append(a))
+    out = pe.PythonExecTool().run(code=code, user_scope_id=TENANT)
+    assert out.startswith("[BLOCKED] python_exec") and "ftp tool" in out, out
+    assert started == []
+
+
+def test_python_exec_runs_code_that_only_mentions_ftplib(monkeypatch):
+    import vaf.tools.python_exec as pe
+    monkeypatch.setattr(pe, "get_tool_policy", lambda name, scope=None: "allow")
+    code = '# no ftplib here\n"""nor ftplib here"""\nprint(6 * 7)'
+    out = pe.PythonExecTool().run(code=code, user_scope_id=TENANT)
+    assert "42" in out and "BLOCKED" not in out, out
 
 
 def test_the_routes_never_return_a_value():

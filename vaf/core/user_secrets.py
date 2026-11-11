@@ -42,17 +42,25 @@ NAMED BOUNDARIES:
 - The same store keeps an account's INTERNAL values under namespaces of their own
   (`account_value`): the SSH key's passphrase (vaf/core/ssh.py). They are never listed by
   `names`, never handed to a command by `env_for`, and never shown.
+- `scrub` recognises a value only WHOLE. Code that slices, splits or encodes a value prints it
+  unrecognised; measured live: a stored FTP host printed split at its dots, and the first three
+  characters of a login. No output filter can follow every transformation. What stops it is the
+  prompt rule ("never print, repeat or take apart the value"), the confirmation of the code, and
+  the ftp tool filling in a stored host, login or port itself (`expand`), which leaves no reason
+  to take them apart.
 """
 from __future__ import annotations
 
 import re
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 ENV_PREFIX = "VAF_SECRET_"
 _NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,62}$")
 _REFERENCE_RE = re.compile(r"VAF_SECRET_([A-Z0-9_]+)")
+# `$NAME`, `${NAME}`, `$VAF_SECRET_NAME` or `${VAF_SECRET_NAME}` inside a text a tool fills in.
+_EXPAND_RE = re.compile(r"\$(?:\{([A-Za-z][A-Za-z0-9_]*)\}|([A-Za-z][A-Za-z0-9_]*))")
 #: A value shorter than this is not scrubbed from output: replacing every "abc" in a build
 #: log would wreck the log and protect nothing.
 MIN_SCRUB_LENGTH = 4
@@ -184,6 +192,38 @@ def env_for(text, *, user_scope_id=None, username=None) -> Dict[str, str]:
     return {ENV_PREFIX + n: own[n] for n in sorted(wanted) if n in own}
 
 
+def expand(text, *, user_scope_id=None, username=None) -> Tuple[str, Dict[str, str]]:
+    """`text` with every `$NAME` (also `${NAME}`, `$VAF_SECRET_NAME`) replaced by the value this
+    person stored under NAME, and the env of exactly the names used (`env_for`'s shape, so it
+    feeds `scrub`). For a tool that takes a stored value INSIDE an argument (the ftp tool's
+    `server`), where no command's environment is there to read it.
+
+    One pass: a `$` that comes from a value is never expanded again. Raises ValueError naming a
+    name this person has not stored, and when the store cannot be read: unlike `env_for`, an
+    unresolved name must not travel on as literal text."""
+    raw = str(text or "")
+    if "$" not in raw:
+        return raw, {}
+    try:
+        own = _own(_store().load(), user_scope_id, username)
+    except Exception:
+        raise ValueError("the stored credentials could not be read") from None
+    used: Dict[str, str] = {}
+
+    def _value(match) -> str:
+        written = match.group(1) or match.group(2)
+        try:
+            stored = normalize_name(written)
+        except ValueError:
+            raise ValueError(f"'${written}' is not a credential name") from None
+        if stored not in own:
+            raise ValueError(f"no stored credential is named {stored}")
+        used[ENV_PREFIX + stored] = own[stored]
+        return own[stored]
+
+    return _EXPAND_RE.sub(_value, raw), used
+
+
 def scrub(text, env: Optional[Dict[str, str]]) -> str:
     """`text` with every handed-over value replaced by its variable's name."""
     out = str(text or "")
@@ -206,7 +246,9 @@ def prompt_note(*, user_scope_id=None, username=None, can_store: bool = False) -
         parts.append("**Stored credentials:** the user keeps these for your commands: " + listed
                      + ". Use them by name - `$VAF_SECRET_<NAME>` in host_bash, "
                      "`os.environ[\"VAF_SECRET_<NAME>\"]` in python_exec, the bare NAME as "
-                     "login_credential in ssh and ftp - and never print or repeat the value.")
+                     "login_credential in ssh and ftp, `$NAME` for a stored host, login or "
+                     "port inside ftp's server - and never print, repeat or take apart "
+                     "the value.")
     if can_store:
         parts.append("**A password, token or login the user gives you:** store each value with "
                      "store_credential (a NAME like FTP_PASS) as your FIRST step - before a plan, "

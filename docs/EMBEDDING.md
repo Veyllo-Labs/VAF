@@ -2818,12 +2818,12 @@ Stable public surface (safe to build on):
 - `vaf.is_host_config(path) -> bool` - whether a path is part of the home directory's
   configuration, which other programs run or obey: every entry of the home directory whose
   name starts with a dot and everything below it, plus a set `$XDG_CONFIG_HOME` or
-  `$XDG_DATA_HOME`, `%APPDATA%`, `%LOCALAPPDATA%`, `~/Library/LaunchAgents` and the
-  PowerShell profile folders. A tool or a route that writes on a model's, a request's or a
+  `$XDG_DATA_HOME`, `%APPDATA%`, `%LOCALAPPDATA%`, `~/Library/LaunchAgents`,
+  `~/Library/Python` and the PowerShell profile folders. A tool or a route that writes on a model's, a request's or a
   peer's behalf asks it beside `is_vaf_state` and refuses on True, for every caller; VAF's
   own file tools, project and mount checks and sandbox copy-out do. A path inside the system
   temp folder is exempt from a root that contains the temp folder (Windows' temp inside
-  `%LOCALAPPDATA%`). Same comparison as `is_vaf_state`, fail-closed. It says nothing about
+  `%LOCALAPPDATA%`), as long as it stays in temp when resolved. Same comparison as `is_vaf_state`, fail-closed. It says nothing about
   reading.
 - `vaf.project_dir_refusal(path, *, user_scope_id, user_role=None) -> str | None` - why
   this caller may not use a folder as a project, workspace or shell root, or None when it
@@ -2838,8 +2838,8 @@ Stable public surface (safe to build on):
   `vaf.WriteRefused` - the open that goes with that answer, for a file under a name a
   model, a request or a peer chose (and the `.part` beside one). It opens the folder first
   and the file relative to it, refuses a link as the last component instead of following
-  it, asks `is_vaf_state` again on the folder's real path (the kernel's answer for the open
-  handle), writes only a regular file (a pipe or a device is refused without blocking) and
+  it, asks `is_vaf_state` and `is_host_config` again on the folder's real path (the kernel's
+  answer for the open handle), writes only a regular file (a pipe or a device is refused without blocking) and
   truncates an existing file only after all of that, so a refusal changes nothing. `mode` is
   `"w"` or `"wb"`; `exclusive=True` refuses an existing file. `WriteRefused` is a
   `PermissionError`, so code that already reports an `OSError` of its open reports this one
@@ -2847,7 +2847,8 @@ Stable public surface (safe to build on):
   Code in a sandbox environment creates links in its mounted folder, and the host sees them
   as ordinary entries, which is why VAF's own writers use this and not `open()`. On Windows
   (no `O_NOFOLLOW`, no open relative to a folder handle) a link swapped in between the
-  check and the open is followed for that one open; a file it creates in VAF's state is
+  check and the open is followed for that one open; a file it creates in VAF's state (or in
+  the home directory's configuration) is
   removed again only while the link is still there at the second look, which resolves the
   path, not the opened file (a link into VAF's state removed again before it lets the write
   land there, with or without `expect_folder`). That removal is best effort: an error of it

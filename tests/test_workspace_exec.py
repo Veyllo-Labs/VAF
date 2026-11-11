@@ -254,17 +254,27 @@ def test_bash_asks_the_folder_against_its_bound_identity(accounts):
     assert len(accounts.ran) == 1
 
 
-def test_the_workflow_lane_builds_bash_with_the_engines_identity():
-    """The engine assigns bash's base_dir; the shell must know whose run it is.
-    MUTATION: construct BashTool() without identity in Agent._try_workflow - red."""
-    import inspect
-
-    from vaf.core.agent import Agent
-    src = inspect.getsource(Agent._try_workflow)
-    assert 'BashTool(owner_scope=_wf_ident.get("user_scope_id"),' in src
-    assert 'owner_role=_wf_ident.get("user_role"))' in src
-    assert "**_wf_ident" in src
-    assert "BashTool()" not in src
+def test_every_workflow_lane_runs_bash_as_the_engines_identity(accounts):
+    """The runners build their tools bare (workflow_primitives: the saved-template executor,
+    the @workflow subprocess, the workflow builder) and seven lanes construct an engine; the
+    engine binds bash to the run's identity, so a folder of another account is refused.
+    MUTATION: return ``tools`` unchanged from _bind_shell_owner - red."""
+    from vaf.workflows.engine import WorkflowEngine
+    from vaf.workflows.tool_overlay import workflow_primitives
+    tools = workflow_primitives()
+    primitive = tools["bash"]
+    assert primitive.owner_scope is None and primitive.owner_role is None
+    engine = WorkflowEngine(tools, user_scope_id=_A, user_role="user")
+    shell = engine.tools["bash"]
+    out = shell.run(command="touch marker", base_dir=str(accounts.b_proj))
+    assert "outside the folders this account may write" in out
+    assert accounts.ran == []
+    shell.run(command="ls", base_dir=str(accounts.a_proj))
+    assert len(accounts.ran) == 1
+    # The registry's own instance is never changed (a live agent may share it).
+    assert primitive.owner_scope is None and tools["bash"] is primitive
+    # A run with no identity keeps the tool as it was.
+    assert WorkflowEngine(tools).tools["bash"] is primitive
 
 
 @pytest.mark.skipif(not _HAS_BWRAP, reason="bubblewrap not available")

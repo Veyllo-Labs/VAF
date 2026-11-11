@@ -139,6 +139,15 @@ def test_the_branch_without_directory_handles_truncates_nothing_it_refuses(lab, 
         return False if len(asked) == 1 else real_state(p)
 
     monkeypatch.setattr(ds, "is_vaf_state", is_vaf_state)
+    # The data directory lies in $XDG_DATA_HOME, which the host rule refuses as well.
+    import vaf.core.workspace_guard as wg
+    real_host, asked_host = wg.is_host_config, []
+
+    def is_host_config(p):
+        asked_host.append(p)
+        return False if len(asked_host) == 1 else real_host(p)
+
+    monkeypatch.setattr(wg, "is_host_config", is_host_config)
     with pytest.raises(WriteRefused):
         open_for_write(link, "wb")
     _untouched(lab)
@@ -165,6 +174,54 @@ def test_the_folder_that_is_really_opened_is_asked(lab):
     with pytest.raises(WriteRefused, match="lands in VAF's own data"):
         path_jail._open_in_folder(str(swapped), "evil.py", flags, str(swapped / "evil.py"))
     _untouched(lab)
+
+
+def test_a_direct_path_into_the_home_configuration_is_refused(lab):
+    """MUTATION: drop the is_host_config question from path_jail._protected - red."""
+    for target in (lab.home / ".bashrc", lab.home / ".config" / "autostart" / "x.desktop"):
+        with pytest.raises(WriteRefused, match="home directory's configuration"):
+            open_for_write(target, "wb")
+        assert not target.exists()
+
+
+def test_the_opened_folder_in_the_home_configuration_is_refused(lab):
+    """The race of the test above, into the home directory's configuration: a project folder
+    swapped for a link to ~/.config/autostart after the caller's check.
+
+    MUTATION: drop the is_host_config question from path_jail._protected - red."""
+    if not path_jail._DIR_FD:
+        pytest.skip("this host has no directory handles (the Windows branch)")
+    autostart = lab.home / ".config" / "autostart"
+    autostart.mkdir(parents=True)
+    swapped = _link(lab.ws / "sub", autostart)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+    with pytest.raises(WriteRefused, match="lands in the home directory's configuration"):
+        path_jail._open_in_folder(str(swapped), "x.desktop", flags, str(swapped / "x.desktop"))
+    assert list(autostart.iterdir()) == []
+
+
+def test_the_branch_without_directory_handles_removes_a_file_in_the_home_configuration(
+        lab, monkeypatch):
+    """The Windows branch asks the real path again after its open, and a file it created in
+    the home directory's configuration through a folder swapped in after the first check is
+    removed again. The first check is taken out of the way to stand for that swap.
+
+    MUTATION: ask only is_vaf_state after the open in _open_without_dir_fd - red."""
+    monkeypatch.setattr(path_jail, "_DIR_FD", False)
+    autostart = lab.home / ".config" / "autostart"
+    autostart.mkdir(parents=True)
+    swapped = _link(lab.ws / "sub", autostart)
+    import vaf.core.workspace_guard as wg
+    real_host, asked = wg.is_host_config, []
+
+    def is_host_config(p):
+        asked.append(p)
+        return False if len(asked) == 1 else real_host(p)
+
+    monkeypatch.setattr(wg, "is_host_config", is_host_config)
+    with pytest.raises(WriteRefused, match="home directory's configuration"):
+        open_for_write(swapped / "x.desktop", "wb")
+    assert list(autostart.iterdir()) == []
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="no FIFOs on this host")

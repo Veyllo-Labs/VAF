@@ -48,7 +48,8 @@ profiles). Two parts, so there is no list of file names to drift:
   (deny-by-default, the same polarity as ``~/.vaf``);
 - explicit roots that hold configuration outside a dot folder: ``$XDG_CONFIG_HOME`` and
   ``$XDG_DATA_HOME`` when set to an absolute path, ``%APPDATA%`` and ``%LOCALAPPDATA%``,
-  ``~/Library/LaunchAgents`` and ``Documents/PowerShell`` / ``Documents/WindowsPowerShell``.
+  ``~/Library/LaunchAgents``, ``~/Library/Python`` (the user site of a macOS framework
+  build) and ``Documents/PowerShell`` / ``Documents/WindowsPowerShell``.
 
 The file tools refuse writes there (``vaf.tools.filesystem.is_safe_path``), a project or a
 mount there is unsafe, and the sandbox copy-out refuses members that would land there.
@@ -64,7 +65,11 @@ makes temp writes through the file tools refused.
 An entry named only by dots (``~/...``) is folded away by the shared normaliser and is not
 a dot entry; no program reads configuration from such a name. The rule answers for a path
 at the moment it is asked; a folder swapped for a link afterwards is the race
-`vaf.core.path_jail.open_for_write` narrows for VAF's own state.
+`vaf.core.path_jail.open_for_write` narrows for VAF's own state and for this rule alike (it
+asks both on the real path of the folder it opened). ``write_file`` and ``edit_file`` do not
+open through it: they rename a temporary file into place, and a folder swapped for a link
+between the check and the rename carries the rename with it, the window named for VAF's own
+state in `vaf.core.data_stores.is_vaf_state`.
 """
 
 from __future__ import annotations
@@ -216,6 +221,9 @@ def _explicit_host_config_roots() -> list:
         if value and pm.isabs(value):
             out.append(value)
     out.append(pm.join(home, "Library", "LaunchAgents"))
+    # The Python user site of a macOS framework build (site.USER_BASE is
+    # ~/Library/Python/X.Y): a .pth file there runs at every Python start.
+    out.append(pm.join(home, "Library", "Python"))
     for docs in [pm.join(home, "Documents")] + _documents_dirs():
         out.append(pm.join(docs, "PowerShell"))
         out.append(pm.join(docs, "WindowsPowerShell"))
@@ -251,14 +259,14 @@ def is_host_config(path) -> bool:
     """Whether ``path`` is part of the home directory's configuration, which other programs
     run or obey: an entry of the home directory whose name starts with a dot, or anything
     below one, or a path inside one of the explicit roots (``$XDG_CONFIG_HOME``,
-    ``$XDG_DATA_HOME``, ``%APPDATA%``, ``%LOCALAPPDATA%``, ``~/Library/LaunchAgents``, the
-    PowerShell profile folders). The module docstring says why and names the boundaries.
+    ``$XDG_DATA_HOME``, ``%APPDATA%``, ``%LOCALAPPDATA%``, ``~/Library/LaunchAgents``,
+    ``~/Library/Python``, the PowerShell profile folders). The module docstring says why and names the boundaries.
 
     Compared component by component in every spelling (as given and resolved, case-folded,
     stream suffixes and trailing dots cut) by the normaliser `is_vaf_state` uses, for the
     path and for the home directory. A path inside the system temp folder is exempt from an
     explicit root that contains the temp folder (Windows' temp inside ``%LOCALAPPDATA%``),
-    never from the dot rule. Fail-closed: any error answers True."""
+    never from the dot rule, and only when it stays in temp resolved as well. Fail-closed: any error answers True."""
     try:
         mine = _spelled([path])
         for home in _spelled([_home()]):
@@ -271,7 +279,10 @@ def is_host_config(path) -> bool:
             if not any(_inside(parts, root) for parts in mine):
                 continue
             # The temp folder inside this root is where staging lanes write, not configuration.
-            if any(_inside(t, root) and _inside(parts, t) for parts in mine for t in temps):
+            # Exempt only when EVERY spelling inside the root stays in such a temp folder: a
+            # link in temp that resolves elsewhere in the root is judged by its target.
+            if all(any(_inside(t, root) and _inside(parts, t) for t in temps)
+                   for parts in mine if _inside(parts, root)):
                 continue
             return True
         return False

@@ -441,22 +441,26 @@ def _exact_parts(spelled: str) -> Tuple[str, ...]:
 
 def is_agent_readable_state(path: Any) -> bool:
     """Whether ``path`` equals or lies inside the folder of a row marked ``agent_readable``
-    (``roots()[row.root] / row.pattern``). Both spellings, as given and resolved, of the path
-    and of each row folder, compared case-exact (`_exact_parts`). Any error answers False,
-    which makes `is_vaf_state` refuse the read."""
+    (``roots()[row.root] / row.pattern``). Both spellings, as given and resolved, of each row
+    folder, compared case-exact (`_exact_parts`); EVERY spelling of the path, as given and
+    resolved, must lie in one of them. A link inside a readable folder that points at a key
+    file is readable by its given spelling only, and its target is not, so it is refused.
+    Any error answers False, which makes `is_vaf_state` refuse the read."""
     try:
         named = roots()
         raw = _pathmod.expanduser(os.fspath(path))
         mine = {_exact_parts(s) for s in (_pathmod.abspath(raw), _pathmod.realpath(raw))}
+        wants = []
         for row in STORES:
             if not row.agent_readable:
                 continue
             folder = os.fspath(named[row.root] / row.pattern)
             for spelled in (_pathmod.abspath(folder), _pathmod.realpath(folder)):
                 want = _exact_parts(spelled)
-                if want and any(parts[:len(want)] == want for parts in mine):
-                    return True
-        return False
+                if want:
+                    wants.append(want)
+        return bool(mine) and all(
+            any(parts[:len(want)] == want for want in wants) for parts in mine)
     except Exception:
         return False
 

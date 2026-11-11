@@ -477,7 +477,7 @@ host sees as ordinary entries: a link at the name a tool is about to write, or a
 swapped for a link in between. So every tool that writes a file under a name a model chose
 opens it with `vaf.open_for_write`: the folder is opened first, a link as the last component
 is refused instead of followed, the folder's real path (the kernel's answer for the open
-handle) is asked `is_vaf_state` again, and only a regular file is written (a pipe is refused
+handle) is asked `is_vaf_state` and `is_host_config` again, and only a regular file is written (a pipe is refused
 without blocking). That covers `download_file` and the `.part` files of the `ssh` and `ftp`
 downloads, `document_writer`, `document_agent` and `research_agent` (text, Markdown and Word),
 `render_check`'s screenshot, and the coder's own writes into its project (the `PARTIAL_` backup,
@@ -532,8 +532,8 @@ parts, so there is no list of file names to drift:
 - every entry of the home directory whose name starts with a dot, and everything below it
   (deny-by-default, the polarity of `~/.vaf`);
 - explicit roots outside a dot folder: `$XDG_CONFIG_HOME` and `$XDG_DATA_HOME` when set to an
-  absolute path, `%APPDATA%`, `%LOCALAPPDATA%`, `~/Library/LaunchAgents`,
-  `Documents/PowerShell` and `Documents/WindowsPowerShell`.
+  absolute path, `%APPDATA%`, `%LOCALAPPDATA%`, `~/Library/LaunchAgents`, `~/Library/Python`
+  (the Python user site of a macOS framework build), `Documents/PowerShell` and `Documents/WindowsPowerShell`.
 
 Paths are compared like VAF's state, in every spelling (as given and resolved, case-folded,
 stream suffixes and trailing dots cut). `is_safe_path`'s write rule asks it, and so do
@@ -546,15 +546,21 @@ The owner's own way to change them is a terminal, or `host_bash`, which asks fir
 off chats.
 
 The temp exemption: a path inside the system temp folder is exempt from an explicit root that
-contains the temp folder, and from nothing else. Windows' temp folder lies inside
-`%LOCALAPPDATA%`, and every staging lane writes there. The dot rule has no exemption, because a
+contains the temp folder, and from nothing else, and only while the path stays in temp
+resolved (a link in temp to elsewhere in `%LOCALAPPDATA%` is judged by its target). Windows'
+temp folder lies inside `%LOCALAPPDATA%`, and every staging lane writes there. The dot rule has no exemption, because a
 scratch home (the tests, macOS' `/var/folders`) lies in temp and an exemption would switch the
 rule off exactly there.
 
 **Named boundaries.**
-- `open_for_write`'s second look asks `is_vaf_state` only: a folder swapped for a link into
-  the home directory's configuration between the check and the open is the race described in
-  "File tools and VAF's own state".
+- `open_for_write` asks `is_host_config` beside `is_vaf_state`, for the path as given and
+  for the real path of the folder it opened, so a folder swapped for a link into the home
+  directory's configuration before the open is refused. `write_file` and `edit_file` do not
+  open through it: they write a temporary file beside the target and rename it into place,
+  and a folder swapped for a link between the check and the rename carries the rename with
+  it. That is the same window described for VAF's own state in "File tools and VAF's own
+  state"; it needs a process running at the same moment that can change the folder (a
+  sandbox environment's code in its mounted project).
 - The code-running tools (`host_bash`, `python_exec`) write anything the OS user can, and are
   confirmed.
 - The listing tools (`tree`, `find_files`) check the folder they start from and may show entry
@@ -617,7 +623,10 @@ below), that also bounds what the shell can read and write on the host. The shel
 question again itself: `run_in_workspace` takes the caller's `user_scope_id` and `user_role`
 as required keywords (a caller that forgets them gets a `TypeError`, not a shell) and asks
 `project_dir_refusal` for the folder before anything runs; `bash` is built with that identity
-by the coder (its caller) and by the workflow lane (the engine's identity). A content-only
+by the coder (its caller), and `WorkflowEngine` binds a copy of the `bash` in its tool set
+to the run's identity, so every workflow lane (the chat lane, the saved-template executor, the
+`@workflow` subprocess, the workflow builder, automations, resumed runs) asks for the person
+who started it; a run with no identity is the machine owner's. A content-only
 coder run works in a throwaway folder from `tempfile.mkdtemp`, outside every account's tree;
 it is marked scratch and allowed only inside the system temp folder. What `bash` may run is not screened
 by the file jail (see "The coder acts as its caller" in

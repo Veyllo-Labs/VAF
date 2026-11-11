@@ -81,7 +81,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   folders) is refused too; change those in a terminal, or let the agent use its host shell,
   which asks first. A chat whose stored project folder belongs to another account no longer
   shows or uses that folder, and the coding agent's shell and git helpers check their folder
-  against the caller on every call.
+  against the caller on every call. The shell a workflow step runs does the same, for the
+  person who started the workflow, in every way a workflow is started.
 
 ## [0.1.0a36] - 2026-11-09
 

@@ -219,6 +219,20 @@ def _fd_path(fd: int, fallback: str) -> str:
     return real
 
 
+def _protected(path) -> str:
+    """What ``path`` would write into that no writer of a chosen name may touch, or "":
+    VAF's own state (`vaf.core.data_stores.is_vaf_state`) or the home directory's
+    configuration (`vaf.core.workspace_guard.is_host_config`), which runs outside every
+    containment at the next login, shell or Python start."""
+    from vaf.core.data_stores import is_vaf_state
+    from vaf.core.workspace_guard import is_host_config
+    if is_vaf_state(path):
+        return "VAF's own data"
+    if is_host_config(path):
+        return "the home directory's configuration"
+    return ""
+
+
 def open_for_write(path, mode: str = "wb", *, exclusive: bool = False,
                    encoding: Optional[str] = None, newline: Optional[str] = None,
                    expect_folder=None):
@@ -236,7 +250,8 @@ def open_for_write(path, mode: str = "wb", *, exclusive: bool = False,
     - The last component is opened with ``O_NOFOLLOW``: a link there is refused, never
       followed (an existing link is not replaced either; delete it first).
     - The folder's real path (the kernel's, from the handle) plus the name must not be VAF's
-      own state (`vaf.core.data_stores.is_vaf_state`), and neither may the path as given.
+      own state (`vaf.core.data_stores.is_vaf_state`) or the home directory's configuration
+      (`vaf.core.workspace_guard.is_host_config`), and neither may the path as given.
     - Only a regular file is written; a pipe or a device is refused without blocking.
     - An existing file is truncated only after all of that, so a refusal changes nothing.
 
@@ -272,15 +287,15 @@ def open_for_write(path, mode: str = "wb", *, exclusive: bool = False,
     name of the same file and is not seen on any platform; making one needs a process on the
     host with access to both folders (a sandbox environment cannot link to a file outside its
     mount)."""
-    from vaf.core.data_stores import is_vaf_state
     if mode not in ("w", "wb"):
         raise ValueError(f"open_for_write writes ('w' or 'wb'), not {mode!r}")
     raw = os.path.abspath(os.path.expanduser(os.fspath(path)))
     parent, name = os.path.split(raw)
     if not name:
         raise WriteRefused(f"refusing to write {raw}: it names a folder, not a file")
-    if is_vaf_state(raw):
-        raise WriteRefused(f"refusing to write {raw}: it is VAF's own data; choose another folder")
+    what = _protected(raw)
+    if what:
+        raise WriteRefused(f"refusing to write {raw}: it is {what}; choose another folder")
     flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0)
     if exclusive:
         flags |= os.O_EXCL
@@ -314,7 +329,6 @@ def _folder_moved(raw: str, real: str, expected: str) -> "WriteRefused":
 
 def _open_in_folder(parent: str, name: str, flags: int, raw: str,
                     expected: Optional[str] = None) -> int:
-    from vaf.core.data_stores import is_vaf_state
     import errno
     try:
         dfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0))
@@ -325,8 +339,9 @@ def _open_in_folder(parent: str, name: str, flags: int, raw: str,
         if expected is not None and os.path.normcase(real_dir) != expected:
             raise _folder_moved(raw, real_dir, expected)
         real = os.path.join(real_dir, name)
-        if is_vaf_state(real):
-            raise WriteRefused(f"refusing to write {raw}: it lands in VAF's own data ({real}); "
+        what = _protected(real)
+        if what:
+            raise WriteRefused(f"refusing to write {raw}: it lands in {what} ({real}); "
                                "choose another folder")
         try:
             return os.open(name, flags, 0o666, dir_fd=dfd)
@@ -376,7 +391,6 @@ def discard_written(path, fileobj) -> bool:
 
 def _open_without_dir_fd(raw: str, flags: int, expected: Optional[str] = None) -> int:
     """The Windows branch (see the named boundary in `open_for_write`)."""
-    from vaf.core.data_stores import is_vaf_state
     if os.path.islink(raw):
         raise WriteRefused(f"refusing to write {raw}: it is a link")
     if expected is not None:
@@ -393,7 +407,7 @@ def _open_without_dir_fd(raw: str, flags: int, expected: Optional[str] = None) -
     real = os.path.realpath(raw)
     moved = (expected is not None
              and os.path.normcase(os.path.dirname(real)) != expected)
-    if os.path.islink(raw) or is_vaf_state(real) or moved:
+    if os.path.islink(raw) or _protected(real) or moved:
         try:
             if created and os.path.samestat(os.fstat(fd), os.stat(real)):
                 os.close(fd)
@@ -404,6 +418,6 @@ def _open_without_dir_fd(raw: str, flags: int, expected: Optional[str] = None) -
         finally:
             if fd >= 0:
                 os.close(fd)
-        raise WriteRefused(f"refusing to write {raw}: it lands in VAF's own data or is a link; "
-                           "choose another folder")
+        raise WriteRefused(f"refusing to write {raw}: it lands in VAF's own data or the home "
+                           "directory's configuration, or is a link; choose another folder")
     return fd

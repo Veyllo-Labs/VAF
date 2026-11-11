@@ -158,12 +158,36 @@ def test_another_spelling_of_a_readable_folder_is_refused(roots, cased):
     assert is_safe_path(str(path), read_only=True)[0] is False
 
 
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need a privilege on Windows")
+def test_a_link_in_a_readable_folder_to_a_key_file_is_refused(roots):
+    """The readable exception holds only when the path stays readable resolved: a link in
+    ``custom_tools/`` to the data directory's key file is refused by the public question
+    itself, not only by is_safe_path's second look at the target. A link to another
+    readable folder stays readable.
+
+    MUTATION: accept the path when ANY of its spellings is readable (any instead of all in
+    is_agent_readable_state) - red."""
+    tools = roots.data / "custom_tools"
+    tools.mkdir(parents=True)
+    key = roots.data / "data_keys.key.json"
+    key.write_text("{}")
+    (tools / "key").symlink_to(key)
+    assert data_stores.is_agent_readable_state(tools / "key") is False
+    assert is_vaf_state(tools / "key", mode="read") is True
+    skill = roots.vaf / "skills" / "demo"
+    skill.mkdir(parents=True)
+    (skill / "reference.md").write_text("x")
+    (tools / "ref.md").symlink_to(skill / "reference.md")
+    assert is_vaf_state(tools / "ref.md", mode="read") is False
+
+
 # -- 2. writes of the home directory's configuration ----------------------------------------
 
 HOST_CONFIG = [
     ".bashrc", ".profile", ".config/autostart/x.desktop", ".config/systemd/user/x.service",
     ".local/bin/x", ".local/lib/python3.13/site-packages/x.pth", ".gitconfig",
-    "Library/LaunchAgents/x.plist", "Documents/PowerShell/profile.ps1",
+    "Library/LaunchAgents/x.plist", "Library/Python/3.13/lib/python/site-packages/x.pth",
+    "Documents/PowerShell/profile.ps1",
     "Documents/WindowsPowerShell/profile.ps1",
 ]
 
@@ -225,6 +249,28 @@ def test_an_explicit_root_outside_home_is_refused(roots, monkeypatch, var, insid
     assert is_host_config(root / inside) is True
     assert is_safe_path(str(root / inside))[0] is False
     assert is_host_config(roots.tmp / "elsewhere-neighbour" / "x") is False
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need a privilege on Windows")
+def test_a_link_in_temp_to_elsewhere_in_its_root_is_refused(roots, monkeypatch):
+    """Windows' layout on this host: the temp folder inside a configuration root. A path in
+    temp is exempt only while it stays in temp resolved; a link there into the root's
+    Programs folder is judged by its target.
+
+    MUTATION: exempt a path when ANY of its spellings is in temp (any instead of all in
+    is_host_config) - red."""
+    local = roots.tmp / "localappdata"
+    temp = local / "Temp"
+    programs = local / "Programs"
+    temp.mkdir(parents=True)
+    programs.mkdir()
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    monkeypatch.setattr(workspace_guard, "_temp_roots", lambda: [str(temp)])
+    (temp / "link").symlink_to(programs)
+    assert is_host_config(temp / "link" / "x.exe") is True
+    assert is_safe_path(str(temp / "link" / "x.exe"))[0] is False
+    (temp / "upload").mkdir()
+    assert is_host_config(temp / "upload" / "a.pdf") is False
 
 
 def test_a_relative_xdg_value_is_ignored(roots, monkeypatch):

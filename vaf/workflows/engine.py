@@ -479,6 +479,34 @@ def remove_temp_intermediates(project_path: str, *, keep_files=(), final_output=
     return deleted
 
 
+def _bind_shell_owner(tools: Dict[str, Any], user_scope_id: Optional[str],
+                      user_role: Optional[str]) -> Dict[str, Any]:
+    """The tool set with its ``bash`` bound to the run's identity.
+
+    The engine assigns bash's ``base_dir`` (_inject_workflow_paths), and the jailed shell
+    asks that folder against the identity bound at the tool's construction
+    (BashTool.owner_scope/owner_role -> run_in_workspace -> project_dir_refusal). Every
+    runner builds its bash without one (workflow_primitives constructs each tool bare,
+    and seven lanes construct an engine), so the binding happens HERE, once, where the
+    identity is known. A run with no identity (the machine owner's unscoped run) leaves
+    the tool as it was. The tool is copied, never changed in place: a registry overlaid
+    from a live agent may share its instance with other callers.
+    """
+    shell = tools.get("bash") if isinstance(tools, dict) else None
+    if shell is None or not hasattr(shell, "owner_scope"):
+        return tools
+    if not user_scope_id and not user_role:
+        return tools
+    if (getattr(shell, "owner_scope", None) == user_scope_id
+            and getattr(shell, "owner_role", None) == user_role):
+        return tools
+    import copy
+    bound = copy.copy(shell)
+    bound.owner_scope = user_scope_id
+    bound.owner_role = user_role
+    return {**tools, "bash": bound}
+
+
 def identity_for_engine(user_scope_id: Optional[str] = None, username: Optional[str] = None,
                         *, user_role: Optional[str] = None,
                         session_id: Optional[str] = None) -> Dict[str, Any]:
@@ -739,7 +767,7 @@ class WorkflowEngine:
                 non-spawn steps. A callable cannot cross a process boundary, so the
                 workflow CLI subprocess lane runs without one.
         """
-        self.tools = tools
+        self.tools = _bind_shell_owner(tools, user_scope_id, user_role)
         self.callback = callback or (lambda *args: None)
         self.user_scope_id = user_scope_id
         # Resolved from the SCOPE when no name was passed, never substituted: a literal here

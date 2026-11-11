@@ -36,13 +36,25 @@ class _SendRetry(RuntimeError):
     raises a plain RuntimeError and is parked, never re-sent."""
 
 
-class _SendRefused(RuntimeError):
+class _SendFailed(RuntimeError):
+    """A send that ended without delivery, raised by _op_send and parked by process().
+    `handed_off` is the sender's own verdict that the mail reached the server's DATA phase
+    and was never confirmed (`ambiguous`): carried on the exception, so the case after the
+    send does not depend on the ledger write that stamps the same verdict, which is
+    best-effort and may itself have failed."""
+
+    def __init__(self, text: str, *, handed_off: bool = False):
+        super().__init__(text)
+        self.handed_off = handed_off
+
+
+class _SendRefused(_SendFailed):
     """A send refused for an address (`SendResult.refusal`). Its text names the address and
     goes to the card through the op's error; `log_text` is the refusal without it, for the
     app log, where a Front Office answer's address is the remote sender's."""
 
-    def __init__(self, text: str, log_text: str):
-        super().__init__(text)
+    def __init__(self, text: str, log_text: str, *, handed_off: bool = False):
+        super().__init__(text, handed_off=handed_off)
         self.log_text = log_text
 
 
@@ -118,10 +130,6 @@ class OpExecutor:
                 continue
             try:
                 handler(op["payload"], write_enabled)
-                self.store.mark_op(op["id"], "done", expect_state="sending")
-                if kind == "send":
-                    self._case_after_send(op["payload"], delivered=True)
-                stats["done"] += 1
             except Exception as e:
                 logger.warning("op %s (%s) failed: %s", op["id"], kind, getattr(e, "log_text", e))
                 if kind == "send":
@@ -134,20 +142,34 @@ class OpExecutor:
                     self.store.mark_op(op["id"], "pending" if retry else "failed",
                                        error=str(e), expect_state="sending")
                     if not retry:
-                        self._case_after_send(op["payload"], delivered=False)
+                        self._case_after_send(op["payload"], delivered=False,
+                                              handed_off=bool(getattr(e, "handed_off", False)))
                 else:
                     self.store.mark_op(op["id"], "pending", error=str(e),
                                        expect_state="sending")
                 stats["failed"] += 1
+                continue
+            # The handler returned: for a send the mail left, so nothing below may take the
+            # failure path. A failed state write leaves the op in 'sending', where
+            # reclaim_stale_ops parks a send (never re-sent) and re-arms an idempotent kind.
+            try:
+                self.store.mark_op(op["id"], "done", expect_state="sending")
+            except Exception as e:
+                logger.warning("op %s (%s) ran but its state was not recorded: %s", op["id"], kind, e)
+            if kind == "send":
+                self._case_after_send(op["payload"], delivered=True)
+            stats["done"] += 1
         return stats
 
-    def _case_after_send(self, payload: Dict[str, Any], *, delivered: bool) -> None:
+    def _case_after_send(self, payload: Dict[str, Any], *, delivered: bool,
+                         handed_off: bool = False) -> None:
         """The case of a Front Office answer follows what became of the send, on every path
         that ends one: the immediate drain, the supervisor sweep and a parked op the person
-        re-armed (`POST /api/mail/ops/{id}/retry`). Delivered lifts a `failed` case to
-        `answered`; a send that definitely did not leave (refused, or out of attempts) sets an
+        re-armed (`POST /api/mail/ops/{id}/retry`). Delivered sets an `open` or `failed` case
+        to `answered` (a transient first try leaves it `open` until the sweep delivers); a send that definitely did not leave (refused, or out of attempts) sets an
         open or answered case to `failed`, which the inbox shows as `reply_failed`. A send
-        stamped `ambiguous` (handed to the server, never confirmed) does not: the server may
+        handed to the server and never confirmed (`handed_off` from the sender's verdict, or
+        the ledger's `ambiguous` stamp of an earlier attempt) does not: the server may
         have accepted it, so "not sent" would be a claim nobody can make; it stays parked in
         the outbox, which says so. A held or closed case is left alone (the draft lane and the
         person own those). Never raises: the op's own state is already written."""
@@ -158,8 +180,10 @@ class OpExecutor:
             case = self.store.case_by_id(self.account_pk, case_id) or {}
             status = str(case.get("status") or "")
             if delivered:
-                if status == "failed":
+                if status in ("open", "failed"):
                     self.store.set_case_status(self.account_pk, case_id, "answered")
+                return
+            if handed_off:
                 return
             row = self.store.sent_id(self.account_pk, payload.get("message_id") or "") or {}
             if row.get("delivery") == "ambiguous":
@@ -290,8 +314,10 @@ class OpExecutor:
                 pass
             if res.refusal:
                 from vaf.mail.addressing import REFUSAL_REASON
-                raise _SendRefused(res.error or "", f"address refused: {REFUSAL_REASON[res.refusal]}")
-            raise RuntimeError(res.error or f"send failed ({res.classification})")
+                raise _SendRefused(res.error or "", f"address refused: {REFUSAL_REASON[res.refusal]}",
+                                   handed_off=bool(res.handed_off))
+            raise _SendFailed(res.error or f"send failed ({res.classification})",
+                              handed_off=bool(res.handed_off))
         # Everything after a successful send is best-effort and MUST NOT raise
         # out of the handler - otherwise process() would treat the (already
         # delivered) mail as failed and, without an atomic claim, re-send it.

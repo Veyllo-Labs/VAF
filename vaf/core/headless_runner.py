@@ -247,7 +247,7 @@ def _deliver_email_reply(task, meta: dict, final_text: str) -> None:
     person who never sees the admin-only lane log. Two writers, one per place a send can end:
     this function for an answer that never became an op (the funnel refused it, or an error
     before `queue_send` returned), and `writeback.OpExecutor` for every op (refused or out of
-    attempts sets `failed`, delivered lifts it, an `ambiguous` hand-off sets nothing), so the
+    attempts sets `failed`, delivered sets `answered`, an `ambiguous` hand-off sets nothing), so the
     immediate drain, the sweep and a re-armed op all keep the case true. Once an op exists an
     error here says nothing about the mail, so it changes no case status. NAMED BOUNDARY: the
     sweep does not announce `inbox_changed` (the mail package does not reach the web); the

@@ -435,6 +435,83 @@ def test_a_send_that_runs_out_of_retries_marks_the_case(world, monkeypatch):
         svc.store.close()
 
 
+def test_an_answer_the_sweep_delivers_after_a_transient_first_try_is_answered(world, monkeypatch):
+    """A transient refusal re-pends the op and the case stays `open`; when a later sweep
+    delivers it, the case is `answered` as it would be after the immediate drain. MUTATION:
+    lift only a `failed` case on delivery and the case stays `open`."""
+    from vaf.core import headless_runner as hr
+    task, apk, pk, thread_id, case_id = _send_mode_case(world, monkeypatch)
+    monkeypatch.setattr(sender, "send", lambda msg: sender.SendResult(False, "transient", error="421 busy"))
+    hr._deliver_email_reply(task, _runner_meta(pk, thread_id, case_id, "send"), "Antwort")
+    svc = MailService(SCOPE)
+    try:
+        assert svc.store.case_by_id(apk, case_id)["status"] == "open"
+        monkeypatch.setattr(sender, "send", lambda msg: sender.SendResult(True, "ok"))
+        deliver_queued_sends(SCOPE, _ACCOUNT_ROW, "alice", ACCOUNT, service=svc)
+        assert svc.store.sent_ids_for_case(apk, case_id)[0]["delivery"] == "sent"
+        assert svc.store.case_by_id(apk, case_id)["status"] == "answered"
+    finally:
+        svc.store.close()
+
+
+def test_an_ambiguous_hand_off_stays_ambiguous_when_its_stamp_cannot_be_written(world, monkeypatch):
+    """The sender says the mail reached DATA and was never confirmed, and the ledger write that
+    stamps `ambiguous` fails: the case still does not claim the answer did not leave. MUTATION:
+    drop the `handed_off` return in `OpExecutor._case_after_send` and the case turns `failed`."""
+    from vaf.core import headless_runner as hr
+    from vaf.mail.store import MailStore
+    task, apk, pk, thread_id, case_id = _send_mode_case(world, monkeypatch)
+    monkeypatch.setattr(sender, "send", lambda msg: sender.SendResult(
+        False, "ambiguous", handed_off=True, error="connection lost after DATA"))
+    real = MailStore.mark_sent_delivery
+
+    def stamp(self, account_pk, message_id, delivery):
+        if delivery == "ambiguous":
+            raise RuntimeError("disk")
+        return real(self, account_pk, message_id, delivery)
+
+    monkeypatch.setattr(MailStore, "mark_sent_delivery", stamp)
+    hr._deliver_email_reply(task, _runner_meta(pk, thread_id, case_id, "send"), "Antwort")
+    svc = MailService(SCOPE)
+    try:
+        rows = svc.store.sent_ids_for_case(apk, case_id)
+        assert rows[0]["delivery"] != "ambiguous", "the stamp really was not written"
+        assert svc.store.get_op(rows[0]["op_id"])["state"] == "failed", "parked, never re-sent"
+        assert svc.store.case_by_id(apk, case_id)["status"] == "open"
+        assert thread_id not in svc.reply_failed_threads()
+    finally:
+        svc.store.close()
+
+
+def test_a_delivered_answer_whose_op_state_cannot_be_written_is_not_a_failure(world, monkeypatch):
+    """The mail left and the ledger says `sent`, but writing the op's `done` fails: that is
+    bookkeeping, not the delivery, so the case is `answered` and the op is never re-armed for
+    a second send. MUTATION: put the `done` write back inside the handler's try and the case
+    turns `failed`."""
+    from vaf.core import headless_runner as hr
+    from vaf.mail.store import MailStore
+    task, apk, pk, thread_id, case_id = _send_mode_case(world, monkeypatch)
+    monkeypatch.setattr(sender, "send", lambda msg: sender.SendResult(True, "ok"))
+    real = MailStore.mark_op
+
+    def mark(self, op_id, state, *a, **k):
+        if state == "done":
+            raise RuntimeError("disk")
+        return real(self, op_id, state, *a, **k)
+
+    monkeypatch.setattr(MailStore, "mark_op", mark)
+    hr._deliver_email_reply(task, _runner_meta(pk, thread_id, case_id, "send"), "Antwort")
+    svc = MailService(SCOPE)
+    try:
+        rows = svc.store.sent_ids_for_case(apk, case_id)
+        assert rows[0]["delivery"] == "sent"
+        assert svc.store.get_op(rows[0]["op_id"])["state"] == "sending", "left for the reclaim to park"
+        assert svc.store.case_by_id(apk, case_id)["status"] == "answered"
+        assert thread_id not in svc.reply_failed_threads()
+    finally:
+        svc.store.close()
+
+
 def test_a_retried_answer_that_leaves_lifts_the_failure(world, monkeypatch):
     """The person re-arms the parked answer (`POST /api/mail/ops/{id}/retry`) and it leaves:
     the thread no longer says the agent could not reply. MUTATION: drop the `delivered`

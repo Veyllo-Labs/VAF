@@ -56,11 +56,6 @@ def _normalize_chat_id(chat_id: str) -> str:
     return whatsapp_store_key(chat_id) or chat_id.strip()
 
 
-def _normalize_phone(phone: str) -> str:
-    """Normalize phone to digits only for comparison."""
-    return "".join(c for c in (phone or "") if c.isdigit())
-
-
 def get_current_vaf_user(request: Request) -> Dict[str, str]:
     """Return user_scope_id and username for the current request."""
     user = getattr(request.state, "user", None)
@@ -1057,14 +1052,15 @@ async def get_whatsapp_avatar(request: Request, chat_id: str):
     none (privacy setting) or the bridge is down; the bridge caches both answers for a day."""
     import asyncio
     from fastapi.responses import Response
-    from vaf.api.whatsapp_bridge import _e164_to_jid, get_avatar, is_bridge_running
+    from vaf.api.whatsapp_bridge import get_avatar, is_bridge_running
+    from vaf.core.contacts_store import whatsapp_send_jid
 
     cid = (chat_id or "").strip()
     if not cid:
         raise HTTPException(status_code=400, detail="chat_id required")
     user_info = get_current_vaf_user(request)
     username = user_info["username"]
-    chat_jid = cid if "@" in cid else _e164_to_jid(cid)
+    chat_jid = cid if "@" in cid else whatsapp_send_jid(cid)
     if not chat_jid:
         raise HTTPException(status_code=404, detail="no picture")
     # A cached answer needs no bridge; only a first lookup does.
@@ -1109,7 +1105,8 @@ async def load_older_whatsapp_messages(request: Request, body: OlderMessagesRequ
     """Ask WhatsApp for older messages of one chat (on-demand history sync) and report how
     many the store holds before and after. The pane reloads from the store afterwards."""
     import asyncio
-    from vaf.api.whatsapp_bridge import _e164_to_jid, fetch_older_messages, is_bridge_running
+    from vaf.api.whatsapp_bridge import fetch_older_messages, is_bridge_running
+    from vaf.core.contacts_store import whatsapp_send_jid
 
     cid = (body.chat_id or "").strip()
     if not cid:
@@ -1117,7 +1114,7 @@ async def load_older_whatsapp_messages(request: Request, body: OlderMessagesRequ
     if not is_bridge_running():
         raise HTTPException(status_code=503, detail="WhatsApp bridge not running.")
     user_info = get_current_vaf_user(request)
-    chat_jid = cid if "@" in cid else _e164_to_jid(cid)
+    chat_jid = cid if "@" in cid else whatsapp_send_jid(cid)
     if not chat_jid:
         raise HTTPException(status_code=400, detail="chat_id is not a phone number or chat address")
     result = await asyncio.to_thread(
@@ -1264,7 +1261,9 @@ async def add_whitelist_entry(request: Request, body: WhitelistAddRequest):
     # number would recreate the "chat with yourself" model this bridge no longer supports.
     from vaf.core.whatsapp_auth import get_linked_phone
     linked_phone = get_linked_phone(vaf_username)
-    if linked_phone and _normalize_phone(phone) == _normalize_phone(linked_phone):
+    from vaf.core.contacts_store import phone_digits_canonical
+    phone_key = phone_digits_canonical(phone)
+    if linked_phone and phone_key and phone_key == phone_digits_canonical(linked_phone):
         raise HTTPException(
             status_code=400,
             detail="This is the agent's own linked number. Register the number you chat from, not the one you scanned the QR code with.",
@@ -1482,7 +1481,8 @@ async def send_whatsapp_message(request: Request, body: SendRequest):
     starts talking to someone nobody allowed."""
     import asyncio
 
-    from vaf.api.whatsapp_bridge import _e164_to_jid, is_bridge_running, send_whatsapp_with_confirmation
+    from vaf.api.whatsapp_bridge import is_bridge_running, send_whatsapp_with_confirmation
+    from vaf.core.contacts_store import whatsapp_send_jid
 
     cid = (body.chat_id or "").strip()
     text = (body.text or "").strip()
@@ -1494,7 +1494,7 @@ async def send_whatsapp_message(request: Request, body: SendRequest):
         raise HTTPException(status_code=413, detail="message too long")
     if not is_bridge_running():
         raise HTTPException(status_code=503, detail="WhatsApp bridge not running.")
-    chat_jid = cid if "@" in cid else _e164_to_jid(cid)
+    chat_jid = cid if "@" in cid else whatsapp_send_jid(cid)
     if not chat_jid:
         raise HTTPException(status_code=400, detail="chat_id is not a phone number or chat address")
     user_info = get_current_vaf_user(request)

@@ -1326,6 +1326,39 @@ def _lid_keys_for_digits(digit_keys: List[str], lid_map: Optional[Dict[str, Any]
     return out
 
 
+def whatsapp_send_jid(value: str, *, lid_map: Optional[Dict[str, Any]] = None) -> str:
+    """The JID a WhatsApp send to this number goes to, or "" when the number is unusable.
+    The ONE number path of every outbound WhatsApp lane: the agent's `send_whatsapp`, the
+    dashboard routes, the bridge's name pass and the registered main-user number.
+
+    `shown_text.phone_digits` first (only ASCII digits, a leading ``+`` and the separators
+    the cards drop), then `phone_digits_canonical` (the contact book's reading: ``0176 ...``
+    and ``0049 176 ...`` become ``49176...``), then 7 to 15 digits, then a LID from the
+    persisted ``lid_to_e164`` map by EXACT canonical number (`_lid_keys_for_digits`), else
+    ``<digits>@s.whatsapp.net``. Measured on the copies this replaced: they kept every
+    character whose ``isdigit()`` is true (an Arabic-Indic seven landed in the JID), joined
+    the digits around text (``+491761234567 ext 99`` dialled ``49176123456799``), sent
+    ``0176 1234567`` to ``01761234567`` or ``1761234567`` (no WhatsApp ID starts with 0 and
+    the second is another number), and matched the LID map by suffix in both directions, so
+    ``+34917612345`` reached the LID of ``+4917612345``.
+
+    NAMED BOUNDARY: the inbound readers (`whatsapp_bridge._jid_to_e164`,
+    `whatsapp_routes._jid_to_phone`, and the session key from `whatsapp_bridge._normalize_phone`)
+    stay as they are. They read JIDs WhatsApp sends, which are ASCII digits by protocol, and
+    rewriting the session key would split every existing chat session in two."""
+    from vaf.core.shown_text import phone_digits
+    plain = phone_digits(value)
+    if plain is None:
+        return ""
+    digits = phone_digits_canonical(plain)
+    if not digits or len(digits) < 7 or len(digits) > 15:
+        return ""
+    lids = _lid_keys_for_digits([digits], lid_map)
+    if lids:
+        return lids[0]
+    return f"{digits}@s.whatsapp.net"
+
+
 def contact_endpoints(
     contact: Dict[str, Any],
     *,

@@ -89,9 +89,9 @@ class SendWhatsAppTool(BaseTool):
             from vaf.core.messaging_connections import get_whatsapp_chat_jid
             from vaf.api.whatsapp_bridge import (
                 send_whatsapp_with_confirmation,
-                _e164_to_jid,
                 _phone_digits_canonical,
             )
+            from vaf.core.contacts_store import whatsapp_send_jid
         except ImportError as e:
             return f"WhatsApp send unavailable: {e}"
 
@@ -110,7 +110,7 @@ class SendWhatsAppTool(BaseTool):
                     "scripts are refused. Use E.164 format (e.g. +491761234567). Get the contact's "
                     "whatsapp_phone from get_contact(name='...') when the user asks to send to a contact."
                 )
-            chat_jid = _e164_to_jid(to_phone)
+            chat_jid = whatsapp_send_jid(to_phone)
             if not chat_jid:
                 return (
                     "Invalid phone number for to_phone. Use E.164 format (e.g. +491761234567). "

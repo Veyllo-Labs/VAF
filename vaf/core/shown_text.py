@@ -32,12 +32,15 @@ the address ``x@evil.test``).
   For every domain strict IDNA2008 accepts, this bracket equals the A-labels the mail is
   delivered to (`vaf.mail.addressing.envelope_address`), so the card names the domain the mail
   goes to; a domain IDNA2008 refuses still gets its bracket here, and the funnel refuses it.
-- `phone_number`: what the WhatsApp lane dials, marked. Measured on
-  `whatsapp_bridge._normalize_phone`: it keeps every character whose ``isdigit()`` is true,
-  so an Arabic-Indic seven, full-width digits or a superscript two land in the JID, and
-  ``+491761234567 ext 99`` dials a different number than the one read. Only a leading ``+``
-  and the ASCII digits are kept, the separators the lane drops are dropped, and everything
-  else is marked where it stands. `phone_digits` is the matching refusal test.
+- `phone_number`: what the WhatsApp lane dials, marked. Measured on the conversion the lane
+  used before `contacts_store.whatsapp_send_jid`: it kept every character whose ``isdigit()``
+  is true, so an Arabic-Indic seven, full-width digits or a superscript two landed in the JID,
+  and ``+491761234567 ext 99`` dialled a different number than the one read. Only a leading
+  ``+`` and the ASCII digits are kept, the separators the lane drops are dropped, and
+  everything else is marked where it stands. A number the lane reads in another form (a
+  trunk zero read as Germany, a ``00`` prefix) gets the dialled form in square brackets
+  beside it (``01761234567 [+491761234567]``), the same pattern as the punycode bracket on an
+  address. `phone_digits` is the matching refusal test.
 
 ON A TERMINAL the marks are written as ``<U+XXXX>`` (`ascii_marks`): measured, with
 ``PYTHONIOENCODING=cp1252`` both ``print("⟨")`` and Rich raise ``UnicodeEncodeError``, so a
@@ -217,8 +220,11 @@ def _phone_body(raw: Any) -> str:
 def phone_number(raw: Any) -> Shown:
     """What the WhatsApp lane dials, marked: one leading ``+`` and the ASCII digits kept, the
     separators ``space - . / ( )`` dropped as the lane drops them, every other character
-    marked where it stands."""
+    marked where it stands. When the lane reads the number in another form
+    (`contacts_store.phone_digits_canonical`: a trunk zero as Germany, a ``00`` prefix
+    dropped), that form follows in square brackets, so the card names the number dialled."""
     text = _phone_body(raw)
+    plain = phone_digits(text)
     out: List[str] = []
     if text.startswith("+"):
         out.append("+")
@@ -228,6 +234,11 @@ def phone_number(raw: Any) -> Shown:
             out.append(char)
         elif char not in _PHONE_SEPARATORS:
             out.append(escaped(char))
+    if plain is not None:
+        from vaf.core.contacts_store import phone_digits_canonical
+        dialled = phone_digits_canonical(plain)
+        if dialled and dialled != plain.lstrip("+"):
+            out.append(f" [+{dialled}]")
     return Shown("".join(out))
 
 
@@ -236,7 +247,7 @@ def phone_digits(raw: Any) -> Optional[str]:
     but an optional leading ``+``, ASCII digits and the separators ``space - . / ( )``, or no
     digit at all: a letter, a digit of another script, a no-break space, a zero-width or
     direction character and a ``+`` inside the number are all refused. The length rule stays
-    with the lane (`whatsapp_bridge._e164_to_jid`)."""
+    with the lane (`contacts_store.whatsapp_send_jid`)."""
     text = _phone_body(raw)
     plus = text.startswith("+")
     body = text[1:] if plus else text

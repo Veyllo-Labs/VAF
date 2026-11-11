@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from vaf.core.config import Config, is_admin_account, is_local_admin_lane  # noqa: F401 (is_local_admin_lane re-exported)
 from vaf.core.platform import Platform
 from vaf.core.channel_secrets import channel_secret, has_channel_secret
+from vaf.core.contacts_store import whatsapp_send_jid
 
 # ── Channel registry ─────────────────────────────────────────────────────────
 # Declared once in vaf/core/channels.py; these names stay importable from here for the
@@ -546,20 +547,12 @@ def get_whatsapp_chat_jid_from_whitelist(
         if scope_str and str(entry.get("user_scope_id")) == scope_str:
             phone = entry.get("phone_number")
             if phone:
-                return _e164_to_jid(str(phone))
+                return whatsapp_send_jid(str(phone)) or None
         if entry.get("vaf_username") == vaf_username:
             phone = entry.get("phone_number")
             if phone:
-                return _e164_to_jid(str(phone))
+                return whatsapp_send_jid(str(phone)) or None
     return None
-
-
-def _e164_to_jid(phone: str) -> str:
-    """Convert E.164 phone number to WhatsApp JID (e.g. 49123456789@s.whatsapp.net)."""
-    digits = "".join(c for c in phone if c.isdigit())
-    if digits.startswith("0"):
-        digits = digits[1:]
-    return f"{digits}@s.whatsapp.net"
 
 
 def get_whatsapp_chat_jid(

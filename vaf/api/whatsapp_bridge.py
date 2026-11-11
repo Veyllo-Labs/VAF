@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from vaf.core.config import Config
+from vaf.core.contacts_store import whatsapp_send_jid
 from vaf.core.channel_ingress_policy import evaluate_ingress, should_log_unauthorized
 from vaf.core.messaging_connections import front_office_open
 from vaf.core.messaging_connections import (
@@ -604,7 +605,10 @@ def _jid_to_e164(jid: str) -> str:
 
 
 def _normalize_phone(phone: str) -> str:
-    """Normalize phone to digits only for comparison."""
+    """Digits only, for the inbound session key of a resolved sender. Deliberately not the
+    send path (that is `contacts_store.whatsapp_send_jid`): it reads JIDs WhatsApp sends,
+    ASCII digits by protocol, and a different rule here would re-key every existing chat
+    session."""
     return "".join(c for c in (phone or "") if c.isdigit())
 
 
@@ -637,26 +641,6 @@ def _to_e164_display(phone_or_jid: str) -> str:
         return ""
     from vaf.core.contacts_store import whatsapp_store_key
     return whatsapp_store_key(phone_or_jid) or ""
-
-
-def _e164_to_jid(phone: str) -> str:
-    """Convert E.164 or phone string to WhatsApp JID.
-    Prefers @lid JID when the number is found in lid_to_e164 config map (LID-migrated accounts).
-    Falls back to <digits>@s.whatsapp.net."""
-    digits = _normalize_phone(phone or "")
-    if not digits or len(digits) < 7 or len(digits) > 15:
-        return ""
-    # Check lid_to_e164 map: some accounts (privacy-migrated) must be addressed by @lid JID
-    try:
-        _wc = Config.get("whatsapp_config") or {}
-        _lid_map = (_wc.get("lid_to_e164") or {}) if isinstance(_wc, dict) else {}
-        for _lid, _e164 in _lid_map.items():
-            _e164_digits = "".join(c for c in str(_e164) if c.isdigit())
-            if _e164_digits and (_e164_digits.endswith(digits) or digits.endswith(_e164_digits)):
-                return _lid  # Use @lid JID for this contact
-    except Exception:
-        pass
-    return f"{digits}@s.whatsapp.net"
 
 
 def _append_chat_activity(chat_id: str, user_scope_id: Any, direction: str = "in") -> None:
@@ -2609,7 +2593,7 @@ def _fetch_names_per_chat(username: str, user_scope_id: Optional[str]) -> int:
         chat_id = str(row.get("chat_id") or "").strip()
         if not chat_id:
             continue
-        jid = chat_id if "@" in chat_id else _e164_to_jid(chat_id)
+        jid = chat_id if "@" in chat_id else whatsapp_send_jid(chat_id)
         if not jid or not (jid.endswith("@s.whatsapp.net") or jid.endswith("@lid")):
             continue
         try:

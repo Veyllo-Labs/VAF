@@ -102,10 +102,13 @@ def test_no_in_place_merge_survives_in_the_source():
     assert AGENT_SRC.count("self._splice_memory_block(") == 3
 
 
-def test_the_empty_response_retry_forwards_the_memory_context():
-    """The nuclear retry re-enters chat_step; without this it drops the whole block."""
-    retry = re.search(
-        r"NUCLEAR OPTION.*?return self\.chat_step\((.*?)\)", AGENT_SRC, re.DOTALL
-    )
-    assert retry, "the empty-response retry moved - re-point this guard"
-    assert "memory_context=memory_context" in retry.group(1)
+def test_a_chat_step_reentry_forwards_the_memory_context():
+    """A turn that re-enters chat_step drops the whole memory block unless it forwards it.
+    The one re-entry there was (an unreachable post-loop retry) is gone; any new one must
+    forward the block."""
+    for start in (m.end() for m in re.finditer(r"self\.chat_step\(", AGENT_SRC)):
+        depth, end = 1, start
+        while depth:
+            depth += {"(": 1, ")": -1}.get(AGENT_SRC[end], 0)
+            end += 1
+        assert "memory_context=memory_context" in AGENT_SRC[start:end], AGENT_SRC[start:end]

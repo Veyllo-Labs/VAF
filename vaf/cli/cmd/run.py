@@ -896,11 +896,15 @@ def prompt_once(prompt: str, output_format: str = "text", session: str = None,
         agent.set_event_sink(ndjson_emit)
         ndjson_emit({"type": "start"})
     
+    # text and json print the turn's answer, the return value, once at the end. They still
+    # hand chat_step a silent callback: without one it prints every raw chunk itself, think
+    # blocks included, so the answer came twice and the json object was not alone on stdout.
+    if fmt == "stream-json":
+        callback = lambda s: ndjson_emit({"type": "text_delta", "text": s})  # noqa: E731
+    else:
+        callback = lambda s: None  # noqa: E731
     try:
-        result_text = agent.chat_step(
-            prompt,
-            stream_callback=(lambda s: ndjson_emit({"type": "text_delta", "text": s})) if fmt == "stream-json" else None,
-        )
+        result_text = agent.chat_step(prompt, stream_callback=callback)
 
         if fmt == "text":
             if result_text:

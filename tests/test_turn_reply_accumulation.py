@@ -102,9 +102,12 @@ def test_the_final_append_feeds_the_accumulator():
 
 
 def test_the_return_builds_the_reply_from_the_accumulator():
+    """MUTATION: delete the kept-answers return after chat_step's loop - red. The behaviour is
+    pinned in tests/test_chat_step_return.py; this guards the expression itself."""
     src = _agent_source()
-    assert "return _join_turn_answers(kept_turn_answers, self._clean_reasoning(full_response))" in src, (
-        "chat_step returns the last round alone again")
+    tail = src[src.index('"chat_step_break_reached"'):]
+    assert ("if kept_turn_answers:\n            return _join_turn_answers(kept_turn_answers[:-1], "
+            "kept_turn_answers[-1])") in tail, "chat_step returns the last round alone again"
 
 
 def test_every_buffer_clear_restores_the_kept_answers():

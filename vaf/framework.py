@@ -434,8 +434,8 @@ class Agent:
             self._bind_identity(core)
         result = core.chat_step(prompt, stream_callback=_sink)
         result = result.strip() if isinstance(result, str) else ""
-        # A bare ellipsis (or empty) is the core's placeholder when the real
-        # answer was streamed instead of returned: prefer the streamed answer.
+        # A bare ellipsis (or empty) is the core's status for a loop that ended
+        # with no answer: whatever streamed is then the best text there is.
         if result and not set(result) <= {".", "…"}:
             return result
 

@@ -93,7 +93,8 @@ agent.run("Explain async/await.", on_token=lambda s: print(s, end="", flush=True
 
 `on_token` receives text deltas as they arrive. For reasoning models the deltas
 may include the model's `<think>...</think>` block; the value returned by `run()`
-is always the cleaned final answer. A turn's failure reaches `on_token` too;
+is always the cleaned final answer: every answer of the turn, without the narration the
+model streamed before a tool call ("I will check..."). A turn's failure reaches `on_token` too;
 `agent.last_turn` says whether one did (see "A complete example, with error handling").
 
 One turn can be several generations: an answer, a tool call, another answer, or a
@@ -511,7 +512,12 @@ That text is not part of the conversation. The history keeps your message and no
 answer, so the next `run()` neither shows the model the failure (it would repeat it as
 its own words when asked what happened) nor does `save_session()` store it. The same holds
 for a loop-protection stop (`vaf.markers.LOOP_PROTECTION`): its note can name your daily
-API spend and a config key. When the turn had already answered in an earlier round (the
+API spend and a config key. One kind of failure is told to the model within the turn: a
+refusal it can act on (a malformed tool call, a content check, or a too-large request right
+after a tool step) gets a fixed note, never the provider's text, and one more round; the
+results of that tool step are withheld for a content or size refusal. A rate limit, a
+login, quota or server error, or the network never are, and the note is taken out again if
+that round fails too. When the turn had already answered in an earlier round (the
 pending-task auto-continue) and a later round failed or was stopped, `run()` returns that
 answer: a provider failure then reached `on_token` only, a stop note nothing.
 

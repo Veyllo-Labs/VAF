@@ -69,3 +69,53 @@ def test_the_one_implementation_binds_the_local_admin():
 
     src = inspect.getsource(run_mod.prompt_once)
     assert "_make_cli_agent(verbose=False, host_audio=False)" in src
+
+
+@pytest.fixture
+def fake_cli_agent(monkeypatch, tmp_path):
+    """`prompt_once` on a real Agent whose provider streams a think block and an answer."""
+    import vaf.cli.ui as ui_mod
+    from vaf.core.agent import Agent
+    from vaf.core.platform import Platform
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(Platform, "data_dir", staticmethod(lambda: tmp_path / "data"))
+    monkeypatch.setenv("VAF_NONINTERACTIVE", "1")
+    # The machine formats silence the UI by assigning to the class: restored after the test.
+    for name in ("event", "error", "warning", "success", "info"):
+        monkeypatch.setattr(ui_mod.UI, name, getattr(ui_mod.UI, name))
+    monkeypatch.setattr(run_mod, "_cleanup_before_exit", lambda: None)
+    a = Agent(register_signals=False, run_kind="chat",
+              config_overrides={"provider": "deepseek", "api_key_deepseek": "sk-test"})
+    monkeypatch.setattr(a, "_try_workflow", lambda *x, **k: None)
+    monkeypatch.setattr(a, "_route_tools", lambda text: [])
+
+    def provider(messages=None, **kw):
+        if not kw.get("tools"):
+            yield "ok"
+            return
+        yield "<think>hm</think>"
+        yield "Die Antwort ist 42."
+    a.api_backend.chat_completion = provider
+    monkeypatch.setattr(run_mod, "_make_cli_agent", lambda verbose=False, host_audio=False: a)
+    return a
+
+
+def test_json_output_is_one_object_with_the_answer(fake_cli_agent, capsys):
+    """MEASURED BEFORE THE FIX: `<think>hm</think>Die Antwort ist 42.{"ok": true, "output":
+    "..."}`. MUTATION: hand chat_step no callback again - red."""
+    import json
+
+    import typer
+    with pytest.raises(typer.Exit):
+        run_mod.prompt_once("Was ist die Antwort?", "json")
+    out = capsys.readouterr().out.strip()
+    assert json.loads(out) == {"ok": True, "output": "Die Antwort ist 42."}
+
+
+def test_text_output_prints_the_answer_once(fake_cli_agent, capsys):
+    import typer
+    with pytest.raises(typer.Exit):
+        run_mod.prompt_once("Was ist die Antwort?", "text")
+    out = capsys.readouterr().out
+    assert out.count("Die Antwort ist 42.") == 1 and "<think>" not in out

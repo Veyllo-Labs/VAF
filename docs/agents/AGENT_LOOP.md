@@ -93,8 +93,8 @@ user input
     ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ 11. FINALIZE                                                │
-│    compress turn · append answer · host TTS (opt-in) ·      │
-│    _clean_reasoning() → return                              │
+│    compress turn · append answer ·                          │
+│    _clean_reasoning() → return the turn's joined answers    │
 └─────────────────────────────────────────────────────────────┘
     │
     ▼
@@ -189,7 +189,7 @@ grep the symbol names to find them.
 | 8 | Tool dispatch. What the answer advises (`ToolCallOutcome.advised_tools`) is added to the turn's tool set, never to the history, and put back after the two mid-turn narrowings (see [TOOL_ROUTER_ARCHITECTURE.md](TOOL_ROUTER_ARCHITECTURE.md#a-tool-result-that-advises-a-tool)) | `execute_tool`, `_take_tool_advice`, `_pin_advised_tools`, `_anti_spin_step` |
 | 9 | Empty-response recovery + final-answer validation (an EMPTY reply only; a reply the provider cut off at the output limit has content, so this phase passes it through and the turn ends there. The provider's `finish_reason` is recorded as `cut=` in `logs/usage_*.log` and acted on nowhere) | `_final_answer_probe` decides what counts as an answer - closed AND unclosed `<think>` blocks are thinking, not answer (an unclosed one once passed as the reply and suppressed the retry) - then `_validate_final_answer` |
 | 10 | Pending-task auto-continue (a continuation round APPENDS to the turn's reply, never replaces it: every answer that passed validation and reached the final history append is collected in `kept_turn_answers`, `_join_turn_answers` builds the returned reply from all of them, and every clear of the web stream buffer is handed them (`_clear_stream_buffer`: a callback's `clear(keep)`, or for a `clear()` without an argument the clear plus the kept text as one chunk, see `stream_callback` in [CORE_AGENT.md](../CORE_AGENT.md)), so the stored answer keeps what the user was already shown; the bubbles keep it because each round is shown in its own (see "Generation rounds" below). Live incident: a 2259-character deliverable was displaced by a 227-character auto-continue confirmation, on the return value AND on screen. The clear itself runs before the round that follows a tool round, keyed on the completed round (`_tool_round_completed`), never on `history[-1]` being a tool result: a deferred error nudge, an anti-spin or no-progress note, a limit reminder or a compaction trim all put something else last, and every such round used to stack into the buffer - which is both the web bubble and the answer the session stores, so a reloaded chat showed seven rounds' think blocks as plain text) | `_reply_needs_user`, `_task_stuck_step` |
-| 11 | Finalize (compress / append / TTS / clean) | `summarize_tool_turn`, `_clean_reasoning` |
+| 11 | Finalize (compress / append / clean). The return value is the turn's validated answers, joined (`_join_turn_answers` over `kept_turn_answers`, the same value the failure closure returns for a turn that answered); only a loop that ended with no kept answer returns a status (`"..."`, or a tool-finished line). The final answer is not spoken on the host speakers: only the thinking fillers are | `summarize_tool_turn`, `_clean_reasoning`, `_join_turn_answers` |
 
 ### Step 6b - tool calls the model wrote as text
 
@@ -233,9 +233,11 @@ dispatches one call per loop iteration and re-prompts after each result, so a ba
 asked for again rather than lost - the main agent's turn ends after its fallback, which is why
 it takes everything.
 
-Host-speaker TTS (final answer, thinking fillers, answer chime) only fires for agents
+Host-speaker TTS (the thinking fillers, `_speak_filler`) only fires for agents
 constructed with `host_audio=True`, which is exclusively the interactive CLI
-(`_make_cli_agent`). Headless queue turns, automations, thinking runs, `vaf run -p`,
+(`_make_cli_agent`). The final answer and the answer chime are not spoken on the host: the
+code that did it sat after a check that never let it run, and it was removed with that
+check. `_speak` and its gate (`tests/test_host_speech_gate.py`) stay for when it comes back. Headless queue turns, automations, thinking runs, `vaf run -p`,
 and embedders are fail-closed silent on the host; browser TTS is a
 separate frontend-pulled lane (`message_complete` -> `speak` WebSocket command) and
 is not affected by this gate.
@@ -308,6 +310,7 @@ The rule, the measurements and the named boundaries are in
 | `_plan_gate_blocks` | gate bounces before proceeding anyway. Workflow launches (`execute_workflow`, `create_agent_workflow` with steps) are never bounced: the call itself IS the plan the gate demands, so the gate SEEDS working memory's plan from the call (template id + variables, or the steps list) and allows it - a bounce here cost a weak model the thread (live incident: bounce, plan set, workflow forgotten, manual steps). Launch calls without a usable plan payload (e.g. `action='list'`) still bounce normally |
 | `_anti_spin_streak` | consecutive bookkeeping-only calls before tools are disabled for a turn. The forced text turn explicitly FORBIDS claiming results (an earlier wording said "state your result" - with tools off, a weak model answered by fabricating one, live incident). Two sibling self-poisoning guards close the same loop end to end: the working-memory NOTE FIREWALL (`_working_memory_note_gate`) refuses outcome/progress-claiming notes ("Workflow wurde erfolgreich gestartet", "Web-Suche: läuft") while no non-bookkeeping tool has run this turn - a model that narrates fiction into its notes gets that fiction re-injected as trusted context next generation and then coherently reports work it never did; and RESULT GROUNDING gained a deterministic rule: a final reply asserting tool outcomes after a bookkeeping-only turn is UNGROUNDED without consulting the LLM judge (which had waved exactly this case through). Working-memory note timestamps are now rendered in the user's timezone (they were UTC, misdating the model's own recent actions) |
 | `_nonprogress_streak` | consecutive read-only/verify-only tool turns (`list_*`/`read_*`/`get_*`, `list_automations`, `read_automation`, …; NOT `web_search`/`memory_search`, which are genuine gathering) before a nudge then a forced text answer - catches a "verify forever" loop where the work is already done; any mutating/producing tool resets it (`nonprogress_max_turns`, default 6) |
+| `_reflexed_classes`, `_reflex_next_round` | the API-error reflex (see "A turn that produces no answer"): at most one per refusal class and turn, and none on the round right after a reflex, so a turn adds at most three provider requests for it, and none for a rate limit, a login, quota or server error, or the network |
 | `_model_health_retried` | the model-health re-run: at most ONE per turn, and its forced generation is one generation (the next round is `auto` again), so a turn the score sends back can always end with a text answer |
 | `redundant_block_count` | repeated identical tool calls before a nudge. Three layers share it: (a) the adjacent check against the newest tool message (failure retry + immediate repetition; streamed-call lane), and in one CROSS-LANE filter that runs after EVERY parsing lane (streamed AND the XML/JSON/paren/recovery fallbacks - the in-loop-only version was bypassed by fallback-parsed batches, live incident with `streaming_tools=0`) and before the assistant tool_calls message is built: (b) a WINDOWED exact-duplicate check for pure lookups (`_find_redundant_read_call`): an identical read call that already SUCCEEDED this turn is refused with a pointer to its result, unless a mutating tool succeeded in between (fail-open), and (c) an in-batch dedupe that silently drops an exact (name, args) duplicate WITHIN one model response (for a send tool that hole meant a double-send) |
 | wall-clock backstop | a generous per-turn deadline (`chat_step_wall_clock_seconds`, default **3600s = 1h**) checked at each tool-turn boundary; independent of tool count or provider speed, it is the last-resort stop for a true infinite/zombie loop and never aborts legitimate long work (the no-progress guard + per-tool timeouts stop the common case far earlier). The 75-turn cap is a secondary guard. |
@@ -323,13 +326,14 @@ config keys are in [CONFIG_SCHEMA.md](../setup/CONFIG_SCHEMA.md) (the `*_gate_*`
 
 One pass of the main loop is one generation, one provider call: a **round**. A turn has one
 round per tool step, and a guard that sends a reply back adds one (the model-health re-run,
-a result-grounding correction, the empty-response retry, the pending-task auto-continue). The
-stream does not say where one ends, so the engine marks it, for every lane:
+a result-grounding correction, the empty-response retry, the pending-task auto-continue, the
+too-large retry and the API-error reflex). The stream does not say where one ends, so the
+engine marks it, for every lane:
 
 - **Opened at the loop top**, after the stop check and the per-round resets and BEFORE the
   post-tool clear: a record `{"round", "tool_call_ids", "answer"}` is appended to
-  `_turn_rounds` (step state, reset with `_turn_failed`; the internal fresh retry
-  `auto_retry` keeps counting, it is the same turn) and `round_start` is emitted on the event
+  `_turn_rounds` (step state, reset with `_turn_failed`; a call with `auto_retry=True`
+  keeps counting, it is the same turn) and `round_start` is emitted on the event
   sink. Before the clear, because a host that keeps one display segment per round must have
   switched to the new, empty segment when the clear arrives.
 - **Tool ids** at the tool-call commit, the `self.history.append(msg)` of the assistant
@@ -476,7 +480,9 @@ engine's, not something the model said: in the next turn's context the model wou
 provider's raw answer, a masked key or the owner's spend as its own words, to whoever the
 chat is with. So the model also does not know a failure happened: asked "what went wrong?",
 it sees its request with no answer after it and usually answers that request again, which
-is what "try again" needs. The person's screen shows the error. Every host that stores
+is what "try again" needs. The one exception is the API-error reflex below: for a refusal
+the model can act on, it is told within the turn, with a fixed note that quotes nothing of
+the provider's text. The person's screen shows the error. Every host that stores
 the streamed text for a transcript (the queue runner's chat lane and its sub-agent result
 drain, the interactive CLI and the TUI) stores it as one message, the way it was shown, and
 builds that copy and its mark with `stored_turn_copy(stream, agent.last_turn, clean)` (a
@@ -490,6 +496,40 @@ turn with a fixed sentence, and a turn that answered first with that answer
 (FRONT_OFFICE.md); a room turn that failed posts nothing into its room. Guard:
 `tests/test_failed_turn_context.py`.
 
+**The API-error reflex.** A few provider refusals are about what the model produced, and the
+model can act on them. On the API lane, a provider failure that arrives before any answer
+text of its round (thinking may have streamed; it stays where it is) is sorted by
+`api_error_reflex_class` (`vaf/core/agent.py`), fail-closed:
+
+| Class | Provider wording it recognises | Fed back when |
+|---|---|---|
+| `malformed_call` | the provider refused the tool call the model generated: Groq's `tool_use_failed` / `failed_generation` (also routed by OpenRouter), Gemini's `MALFORMED_FUNCTION_CALL`, a tool name that was not offered | always (once) |
+| `content_refused` | the provider's content check: `content_filter`, `content_policy_violation`, OpenAI's `invalid_prompt` | only right after a tool round, whose results are withheld |
+| `too_large` | `request_too_large` (the same test as the compression retry above) | only after a tool round, whose results are withheld, and only once the compression retry is spent or did not shrink the history |
+
+Only a client error (`APIBackendManager._classify_failure`) can get a class. A rate limit, a
+timeout, the network, a server error and every unknown failure (the 402 quota refusal is
+one) never do, and neither does a 401, 402, 403 or 404, a key, quota or permission refusal,
+or a refused request parameter (`unsupported_parameter`): a note cannot change the account,
+and the parameters are the engine's request shape, which the backend heals itself for the
+measured cases. Engine faults such as an unanswered tool call or an invalid tool schema
+match no marker. The provider's text is not streamed for a class: the history gets one fixed
+note per class (`API_ERROR_REFLEX_NOTES`), which quotes nothing of it, a System status line
+names the class, and the round is asked again as a new round (`round_start`, no stream
+clear). A request-level refusal (too large, content check) would be refused again for the
+same history plus a note, so the previous round's tool results are replaced by
+`REFLEX_WITHHELD_RESULT` first: ids, names and order stay, so every call keeps its answer
+(Rule 4 invariant 1), and the note tells the model not to run the tool again for that reason.
+The guard: one reflex per class and turn, none on the round right after a reflex, so a turn
+adds at most three requests and a rate limit none. A reflex round that fails ends the turn
+the way any failure does, and its note is taken back out of the history; withheld results
+stay withheld, as the compression after a 413 stays. Every decision is logged in the backend
+log (`api_error_reflex: class=...` or `api_error_reflex: no <class> (<reason>)`).
+Named boundaries: the `[Error] ...` chunks, the exception path, the non-stream fallback and
+the local server lane never reflex (the server lane has its own 400 recovery); the coder,
+librarian, browser agent, voice and composer loops have their own model calls and no
+measured need. Guard: `tests/test_api_error_reflex.py`.
+
 Named boundary: other failure and stop returns end a turn early and keep the old shape
 (`_turn_failed` stays unset). The user's stop (`[Generation stopped by user]` at the top of
 a round, between tools, after a tool round, and mid-stream, where the partial answer is
@@ -502,5 +542,5 @@ retries), so only the local lane can, and the text names no internals. When the 
 with no answer at all, the closing fallbacks return a status (`"..."`, a tool-finished line
 quoting the start of the last tool result). The queue runner sends what streamed instead, or
 its own `[Error] No response was produced`; the facade's `run()` swaps only a bare `"..."`
-for the stream and passes a tool-finished line on. The "failed to generate a final answer"
-note is committed. None of them is a backend failure or a loop-protection stop.
+for the stream and passes a tool-finished line on. None of them is a backend failure or a
+loop-protection stop.

@@ -138,14 +138,16 @@ does, a registry would be speculative. The number is recorded here so the decisi
 starts from a measurement rather than a hunch.
 
 **Return contract - read this before using the value.** `chat_step` streams
-the real answer; the return value is a status:
+the answer and returns it:
 
-- On a normal completion it returns the placeholder `"..."` or a
-  check-mark-prefixed `"Tool '<name>' finished: ..."` summary - **not** the
-  answer text. Take
-  the answer from `stream_callback` (accumulate the deltas) or from
-  `agent.history[-1]["content"]` afterwards. The facade's `run()` does exactly
-  this and returns the cleaned text.
+- On a normal completion it returns the turn's answer, reasoning stripped: every
+  answer of the turn that passed the final-answer path, joined with a blank line
+  (the pending-task auto-continue can add a second). Narration before a tool call
+  ("I will check...") is streamed but is not part of it. Only a loop that ended
+  with no answer at all returns a status: the placeholder `"..."`, or a
+  check-mark-prefixed `"Tool '<name>' finished: ..."` line when it ended on a tool
+  result. The facade's `run()` returns the same answer and falls back to the
+  cleaned stream for a bare `"..."`.
 - `None` means no backend (call `load_model()` / fix the provider), a local
   server error, or an inference exception.
 - Meaningful strings are returned for: workflow results, errors
@@ -172,7 +174,13 @@ the real answer; the return value is a status:
   whose newest kept reply was still under correction (a guard flagged it) fails.
   `last_turn.failure` holds the failure text when it was streamed (a backend failure); a
   loop-protection note and the local server's statuses are never streamed, and leave it
-  empty. The model never reads that text as its own words in a later turn. A caller that
+  empty. The model never reads that text as its own words in a later turn. The one
+  thing the model is told is the API-error reflex: a refusal it can act on (a malformed
+  tool call, a content check or a too-large request after a tool step) gets a fixed note
+  and one more round within the turn, never the provider's text; when that round fails
+  too, the note is taken out of the history again. The previous tool step's results,
+  replaced for a content or size refusal by a fixed "result withheld" sentence, stay that
+  way (docs/agents/AGENT_LOOP.md, "A turn that produces no answer"). A caller that
   stores the streamed text apart from the history builds its copy and the metadata to
   store it with through `vaf.stored_turn_copy(stream, agent.last_turn, clean)`: the answer
   and the failure are cleaned apart with the caller's own cleanup (None keeps the stream),

@@ -33,7 +33,7 @@ from vaf.core.log_helper import append_domain_log, get_dated_log_path, log_timel
 from vaf.core.system_prompt import SystemPromptManager
 from vaf.core.last_interaction import get_last_interaction
 from vaf.core.text_match import compile_de, contains_any, fold, fold_all
-from vaf.core.completion import is_failure_chunk
+from vaf.core.completion import is_failure_chunk, strip_think_blocks
 from vaf.core.subagent_spawn import delegated_task as _delegated_task, spawn_ledger as _spawn_ledger
 from vaf.core.tool_dispatch import (
     ToolCallHooks as _ToolCallHooks,
@@ -1480,6 +1480,92 @@ def request_too_large(failure_text: str) -> bool:
     text = str(failure_text or "").lower()
     return ("request_too_large" in text or "error code: 413" in text
             or "context_length_exceeded" in text or "maximum context length" in text)
+
+
+# The API-error reflex: a provider refusal the MODEL can act on goes back to it once, as a
+# fixed note, instead of ending the turn. Everything else ends the turn as before.
+#
+# Never fed back, whatever the wording: the request's credentials, account and permissions
+# (a note cannot change them, and the real 401 carries a masked key), a missing model, and the
+# request parameters, which are the engine's request shape (the backend heals the measured
+# cases itself: allowed_tools, reasoning_effort, the output cap).
+_REFLEX_NEVER_MARKERS = (
+    "error code: 401", "error code: 402", "error code: 403", "error code: 404",
+    "invalid_api_key", "insufficient_quota", "permission",
+    "unsupported_parameter", "unsupported parameter",
+)
+# The provider refused the tool call the model generated.
+_REFLEX_MALFORMED_CALL_MARKERS = (
+    "tool_use_failed", "failed_generation",       # Groq, also when routed by OpenRouter
+    "failed to call a function",                  # Groq's message text
+    "malformed_function_call",                    # Gemini finish reason
+    "tool call validation failed",                # Groq strict tool schema
+    "not in request.tools",                       # Groq: a tool name that was not offered
+    "attempted to call tool",                     # Groq: the same, older wording
+)
+# The provider's content check refused the request.
+_REFLEX_CONTENT_REFUSED_MARKERS = (
+    "content_policy_violation",                   # OpenAI images, Azure
+    "content_filter",                             # Azure OpenAI
+    "content management policy",                  # Azure OpenAI message text
+    "invalid_prompt",                             # OpenAI reasoning models
+    "flagged as potentially violating",           # OpenAI message text
+    "usage policy",                               # OpenAI message text
+    "safety system",                              # OpenAI message text
+)
+
+# What the model reads instead of the provider's text, one fixed sentence per class. None of
+# them quotes the provider: its raw answer can carry a masked key, an id or the spend, and the
+# model would repeat it as its own words (docs/agents/AGENT_LOOP.md, "A turn that produces no
+# answer").
+API_ERROR_REFLEX_NOTES = {
+    "malformed_call": (
+        "[System note: the AI provider refused your last reply because a tool call in it was "
+        "malformed. Nothing of that reply ran or was kept. Call only the tools you were "
+        "offered, with a valid JSON object as arguments, or answer in text.]"),
+    "content_refused": (
+        "[System note: the AI provider's content check refused the last request. Nothing of "
+        "your last reply ran or was kept. The results of the previous tool step were "
+        "withheld. Continue without quoting the withheld material, or tell the person that "
+        "this content cannot be processed.]"),
+    "too_large": (
+        "[System note: the AI provider refused the last request as too large. Nothing of your "
+        "last reply ran or was kept. The results of the previous tool step were withheld. "
+        "Work with what you have, fetch less at a time, or answer now.]"),
+}
+# A request-level refusal is answered again for the same history, so the previous tool
+# step's results are what changes: they are replaced by this, ids and order kept.
+REFLEX_WITHHELD_RESULT = (
+    "[Result withheld: this tool ran, but the AI provider refused the request that carried "
+    "its result. Do not run it again for that reason.]")
+_REFLEX_LABELS = {"malformed_call": "malformed tool call",
+                  "content_refused": "content check",
+                  "too_large": "request too large"}
+
+
+def api_error_reflex_class(failure_text: str) -> str:
+    """Which reflex class a backend failure belongs to: ``"too_large"``, ``"malformed_call"``,
+    ``"content_refused"``, or ``""`` for a failure that never goes back to the model.
+
+    Fail-closed: only a client error (``APIBackendManager._classify_failure``) carrying a
+    known marker is a class. Rate limits, timeouts, connection and server errors and every
+    unknown failure (the 402 quota refusal among them) are ``""``: a note cannot fix them, and
+    the backend already waits on the transient ones."""
+    from vaf.core.api_backend import APIBackendManager
+    text = str(failure_text or "")
+    if request_too_large(text):
+        return "too_large"
+    if APIBackendManager._classify_failure(text) != "client_error":
+        return ""
+    low = text.lower()
+    if any(m in low for m in _REFLEX_NEVER_MARKERS):
+        return ""
+    if any(m in low for m in _REFLEX_MALFORMED_CALL_MARKERS):
+        return "malformed_call"
+    if any(m in low for m in _REFLEX_CONTENT_REFUSED_MARKERS):
+        return "content_refused"
+    return ""
+
 
 class Agent:
     """The VAF engine: one instance = one conversation over one LLM backend.
@@ -10479,9 +10565,9 @@ class Agent:
         # One record per generation of this turn (one provider call, one pass of the loop
         # below): {"round", "tool_call_ids", "answer"}. The loop opens it and emits
         # `round_start`, the tool-call commit fills in the ids, the final-answer path sets
-        # `answer`. Hosts read it through `last_turn.rounds`. Kept across the fresh-retry
-        # recursion (`auto_retry`), which is the same turn to the host, so the numbers a
-        # host has seen stay unique within the turn.
+        # `answer`. Hosts read it through `last_turn.rounds`. Kept across a re-entry with
+        # `auto_retry=True`, which is the same turn to the host, so the numbers a host has
+        # seen stay unique within the turn.
         if not (auto_retry and isinstance(getattr(self, "_turn_rounds", None), list)):
             self._turn_rounds = []
         # Forced-resolution node (thinking-mode decision tree): when the caller forces a tool call, also
@@ -11086,6 +11172,12 @@ class Agent:
         # the history is compressed and the same round is asked again, so the person does not
         # have to send the message again. One, never more: a second refusal ends the turn.
         _too_large_retried = False
+        # The API-error reflex (api_error_reflex_class): a refusal the model can act on goes
+        # back to it as a fixed note. At most once per class and turn, and never for the
+        # round right after a reflex, so the worst case is three extra requests per turn.
+        _reflexed_classes: set = set()
+        _reflex_next_round = 0
+        _reflex_note = None       # the note appended, so a failing reflex round takes it back
         MAX_EMPTY_RETRIES = 10  # Allow up to 10 attempts before hard stop
         # Loop-protection counter for blocked redundant tool calls (per user turn). Kept SEPARATE from
         # empty_retry_count so a redundant block never climbs into the empty-response abort.
@@ -11102,7 +11194,6 @@ class Agent:
         full_response = ""
         full_content = ""
         full_reasoning = ""
-        clean_content = ""
         # Validated final answers of THIS turn, in order. The per-round reset
         # below wipes the buffers on every loop re-entry, and the auto-continue
         # re-enters after an answer was already validated and committed - this
@@ -11149,11 +11240,57 @@ class Agent:
             correction that belonged under it never came. `_turn_failure` holds the text only
             when `streamed`: a host takes it off the stream it stored and sends, and a note
             that never reached the stream is in neither."""
+            # A reflex round that fails too leaves its note behind otherwise: it is the
+            # engine's, and the turn commits nothing of its failure.
+            if _reflex_note is not None and self.history and self.history[-1] is _reflex_note:
+                self.history.pop()
             self._turn_failure = str(text or "") if streamed else ""
             if kept_turn_answers and _last_kept_is_final:
                 return _join_turn_answers(kept_turn_answers[:-1], kept_turn_answers[-1])
             self._turn_failed = True
             return text
+
+        def _reflex_withheld_ids():
+            """The previous round's tool-call ids that still have a result in the history, or
+            an empty set when the previous round of this turn ran no tools."""
+            if len(self._turn_rounds) < 2:
+                return set()
+            ids = set(self._turn_rounds[-2].get("tool_call_ids") or ())
+            return {m.get("tool_call_id") for m in self.history
+                    if isinstance(m, dict) and m.get("role") == "tool"
+                    and m.get("tool_call_id") in ids}
+
+        def _reflex_due(failure, streamed_text):
+            """The reflex class this round's failure gets, or "" with the reason logged. Only a
+            provider's own failure chunk, one reflex per class and turn, none on the round
+            right after a reflex, and none once answer text reached the person this round
+            (thinking may have streamed; it stays visible and is never retracted). A
+            request-level refusal (too large, content check) is the same request again plus a
+            note, so it is fed back only after a tool round whose results can be withheld,
+            and a too-large one only once the shipped compression retry is spent."""
+            if not is_failure_chunk(failure):
+                return ""
+            cls = api_error_reflex_class(failure)
+            if not cls:
+                return ""
+            reason = ""
+            if cls in _reflexed_classes:
+                reason = "already used in this turn"
+            elif _round_no == _reflex_next_round:
+                reason = "this round is a reflex round"
+            elif strip_think_blocks(streamed_text or "").strip():
+                reason = "answer text was already streamed"
+            elif cls == "too_large" and not _too_large_retried:
+                reason = "the compression retry goes first"
+            elif cls in ("too_large", "content_refused") and not _reflex_withheld_ids():
+                reason = "no tool round before it"
+            if reason:
+                try:
+                    append_domain_log("backend", f"api_error_reflex: no {cls} ({reason})")
+                except Exception:
+                    pass
+                return ""
+            return cls
 
         # True from the moment a tool round finished until the next round starts
         # streaming. The post-tool buffer clear below keys on THIS, not on the
@@ -11222,6 +11359,9 @@ class Agent:
             # "[API Error from ...]" chunk or the backend's own "[Error] ..." chunk. A round
             # carrying one ends the turn before anything of it is committed (below).
             _round_failure = ""
+            # The reflex class a failure chunk got at chunk time (_reflex_due): the round
+            # stops there without streaming the provider's text.
+            _reflex_pending = ""
 
             streaming_tools = {}
             tool_calls_detected = []
@@ -11405,6 +11545,11 @@ class Agent:
                                 if (not full_response and not _too_large_retried
                                         and request_too_large(chunk)):
                                     break
+                                # A refusal the model can act on, before any answer text:
+                                # not shown either, the model is told with a fixed note.
+                                _reflex_pending = _reflex_due(chunk, full_response)
+                                if _reflex_pending:
+                                    break
                             full_response += chunk
                             
                             # DEBUG: Log content chunk (consolidated in backend.log)
@@ -11430,10 +11575,15 @@ class Agent:
                             # Also populate full_content for downstream checks
                             full_content += chunk
 
-                    # Fallback: Some API streams emit no content (tool-only or SDK quirk)
+                    # Fallback: Some API streams emit no content (SDK quirk)
                     # Ensure WebUI still receives a response when streaming yields nothing.
                     # Not after a backend failure: asking the same backend again repeats it.
-                    if not full_response and not tool_calls_detected and not _round_failure:
+                    # Not after streamed tool calls either: the accumulator is moved into
+                    # tool_calls_detected only below, and a round that streamed nothing but
+                    # tool-call frames paid for a second, non-streamed request whose JSON
+                    # frames reached the person as text.
+                    if (not full_response and not tool_calls_detected and not tool_call_accumulator
+                            and not _round_failure):
                         try:
                             fallback_chunks = list(self.api_backend.chat_completion(
                                 messages=prepared_messages,
@@ -11479,6 +11629,47 @@ class Agent:
                             append_domain_log("backend", f"too large: history compressed (limit "
                                                          f"{_cap} tokens), the round is asked again")
                             continue
+                    # The API-error reflex: a refusal the model can act on, not streamed, is
+                    # answered by a fixed note and one more round instead of ending the turn.
+                    # Nothing of the failed round was committed, so the history ends in the
+                    # user message, complete tool results or a note, and no tool call is
+                    # pending (Rule 4 invariant 1).
+                    _reflex_cls = ""
+                    if _round_failure and _round_failure not in full_response:
+                        _reflex_cls = _reflex_pending or _reflex_due(_round_failure, full_response)
+                    if _reflex_cls:
+                        _withheld = 0
+                        if _reflex_cls in ("too_large", "content_refused"):
+                            # The same history plus a note is refused the same way: the
+                            # previous tool step's results are the one thing that changes.
+                            # Ids, names and order stay, so every call keeps its answer.
+                            _ids = _reflex_withheld_ids()
+                            for _m in self.history:
+                                if (isinstance(_m, dict) and _m.get("role") == "tool"
+                                        and _m.get("tool_call_id") in _ids):
+                                    _m["content"] = REFLEX_WITHHELD_RESULT
+                                    _withheld += 1
+                        _reflex_note = {"role": "system", "content": API_ERROR_REFLEX_NOTES[_reflex_cls]}
+                        self.history.append(_reflex_note)
+                        _reflexed_classes.add(_reflex_cls)
+                        _reflex_next_round = _round_no + 1
+                        try:
+                            append_domain_log("backend", f"api_error_reflex: class={_reflex_cls} "
+                                                         f"round={_round_no} withheld={_withheld}")
+                        except Exception:
+                            pass
+                        _event = (f"The provider refused the request ({_REFLEX_LABELS[_reflex_cls]}); "
+                                  f"asking the model once more...")
+                        UI.event("System", _event, style="warning")
+                        if _emit_to_web_ui():
+                            try:
+                                from vaf.core.web_interface import get_web_interface
+                                from vaf.core.subagent_ipc import get_current_session_id
+                                get_web_interface().log(_event, level="warning", source="System",
+                                                        session_id=get_current_session_id())
+                            except Exception:
+                                pass
+                        continue
                     if _round_failure:
                         if stream_callback and _round_failure not in full_response:
                             stream_callback(_round_failure)
@@ -13929,100 +14120,21 @@ class Agent:
                 pass
             break
 
-        # Emergency Fallback: If we exhausted retries and STILL have no answer
-        if not clean_content:
-             # Check if we have a tool result immediately preceding this "silent" thought block
-             last_msg = self.history[-1] if self.history else {}
-             prev_msg = self.history[-2] if len(self.history) > 1 else {}
-             
-             # Case 1: Loop ended with Tool Output -> Model Silent
-             if last_msg.get('role') == 'tool':
-                 res = f"✅ Tool '{last_msg.get('name')}' finished: {last_msg.get('content')[:100]}..."
-                 # Do not speak tool-status via TTS (user requested no "tool X / model provided no commentary")
-                 return res
-                 
-             # Case 2: Loop ended with Assistant Thought -> Model Silent (Previous was tool)
-             if last_msg.get('role') == 'assistant' and prev_msg.get('role') == 'tool':
-                  res = f"✅ Tool '{prev_msg.get('name')}' finished. (Model provided no commentary)"
-                  # Do not speak tool-status via TTS (user requested no "tool X / model provided no commentary")
-                  return res
+        # The turn's reply: every validated final answer of this turn, joined (the same
+        # value _end_turn_without_answer returns for a turn that answered). The newest kept
+        # entry is the last round's cleaned answer when the loop broke after it.
+        if kept_turn_answers:
+            return _join_turn_answers(kept_turn_answers[:-1], kept_turn_answers[-1])
 
-             # No TTS for generic fallback either (avoid "...")
-             return "..."
-        
-        # Final empty check - the same probe the in-loop check asks. This was a
-        # hand copy of the strip chain that never stripped think PROSE (only the
-        # tags), so a think-only response passed as an answer here even after the
-        # in-loop check learned better - the exact drift the probe's wiring test
-        # pins against. Own threshold kept: < 3 was always stricter than the
-        # in-loop >= 2.
-        temp_final = _final_answer_probe(full_response)
-        is_final_empty = len(temp_final) < 3
-
-        # Skip final empty check during compaction (short NO_REPLY/MEMORY: replies are expected)
-        if is_final_empty and not tool_calls_detected and not getattr(self, "_compaction_in_progress", False):
-             
-             if not auto_retry:
-                 # NUCLEAR OPTION: Rollback and Try Fresh
-                 UI.event("System", "Response loop detected. Cleaning context and retrying fresh...", style="warning")
-                 target_len = history_snapshot_len 
-                 self.history = self.history[:target_len]
-                 return self.chat_step(
-                     user_input=user_input,
-                     stream_callback=stream_callback,
-                     auto_retry=True,
-                     skip_input=skip_input,
-                     # Forward the retrieved context: without it the retry silently runs
-                     # with an EMPTY memory block, so the one turn that already struggled
-                     # answers with less than the attempt before it.
-                     memory_context=memory_context,
-                     thinking_mode=thinking_mode,
-                 )
-                 
-             fallback_msg = "\n\n*(System: The agent processed the request but failed to generate a final answer. Please see the thought trace above.)*"
-             if stream_callback: stream_callback(f"[gold]{fallback_msg}[/gold]")
-             self.history.append({"role": "assistant", "content": fallback_msg}) 
-             self._speak(fallback_msg)
-             return fallback_msg
-
-        # ═══════════════════════════════════════════════════════════════
-        # TEXT-TO-SPEECH INTEGRATION
-        # ═══════════════════════════════════════════════════════════════
-        # CRITICAL: Use full_content (pure answer) if available to skip reasoning!
-        tts_source = full_content if full_content.strip() else full_response
-        
-        # Play "answer ready" sound before TTS starts (after thinking is complete)
-        if tts_source.strip() and self._host_audio_allowed:  # host-speaker opt-in only
-            try:
-                from vaf.core.speech import get_speech_manager
-                sm = get_speech_manager()
-                sm.play_answer_ready_sound()
-            except Exception:
-                pass  # Silently fail - sound is optional
-        
-        try:
-            append_domain_log("backend", "before_speak")
-        except Exception:
-            pass
-        self._speak(tts_source)
-        try:
-            append_domain_log("backend", "after_speak")
-        except Exception:
-            pass
-
-        try:
-            append_domain_log("backend", f"chat_step_complete response_len={len(full_response)}")
-        except Exception:
-            pass
-
-        # The final LLM call of the turn - and for a turn without tools the
-        # ONLY one - is billed here; the boundary block above never runs then.
-
-        # The reply is every validated final answer of this turn, not the last
-        # round alone. The comment that stood here claimed the history made loss
-        # impossible ("we don't lose information") - true for the history, false
-        # for the reply the user was given.
-        return _join_turn_answers(kept_turn_answers, self._clean_reasoning(full_response))
+        # The loop ended without any kept answer: a status, never the model's words. A loop
+        # that ended on a tool result says which tool finished; neither is spoken.
+        last_msg = self.history[-1] if self.history else {}
+        prev_msg = self.history[-2] if len(self.history) > 1 else {}
+        if last_msg.get('role') == 'tool':
+            return f"✅ Tool '{last_msg.get('name')}' finished: {str(last_msg.get('content'))[:100]}..."
+        if last_msg.get('role') == 'assistant' and prev_msg.get('role') == 'tool':
+            return f"✅ Tool '{prev_msg.get('name')}' finished. (Model provided no commentary)"
+        return "..."
 
     def _dispatch_session_id(self):
         """Which session this dispatch belongs to. Contextvar FIRST, attribute second.

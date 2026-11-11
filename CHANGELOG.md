@@ -16,6 +16,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 - **DeepSeek reads images.** With `deepseek-flash` as the model, VAF now sends images to
   DeepSeek itself instead of needing a separate vision provider. `deepseek-v4-pro` and
   `deepseek-auto` still cannot read images; choose a vision provider for them as before.
+- **The agent learns of an AI provider refusal it can fix.** When the provider refuses a
+  reply because of a malformed tool call or its content check, the agent is now told once,
+  without the provider's raw message, and tries again. Rate limits, login and server errors
+  are never sent back to the model.
+
+### Fixed
+
+- **`vaf prompt` prints the answer.** `--output-format json` and `text` printed `...` (and
+  the raw stream before it) instead of the answer, and an agent room now receives an agent's
+  plain-text answer. For embedders: `CoreAgent.chat_step` returns the turn's answer instead
+  of `...`, and `Agent.run()` returns the answers alone, without the narration streamed
+  before a tool call.
+- **A round with only tool calls no longer sends a second request to the provider.**
 
 ## [0.1.0a36] - 2026-11-09
 

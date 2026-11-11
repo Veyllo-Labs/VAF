@@ -188,6 +188,24 @@ def test_a_device_that_connected_resets_the_probe(app_link_home):
     assert tool.run(**kwargs).startswith(phone_tasks.STILL_NOT_REACHABLE)
 
 
+def test_a_session_that_cannot_send_counts_as_a_probe(app_link_home, monkeypatch):
+    """A session still registered while its socket dies refuses the send; the repeat must
+    still end the turn. MUTATION: `return NOT_REACHABLE` on a failed send - red."""
+    _link = link(SCOPE_A)  # a connected row for pick_device
+
+    class _Dying:
+        closed = False
+
+        def send_json(self, _msg):
+            return False
+    monkeypatch.setattr(bridge, "session_for", lambda _did: _Dying())
+    kwargs = dict(user_scope_id=SCOPE_A, username="alice", instruction="x", chat_session_id="s1")
+    assert phone_tasks.run_task(**kwargs) == phone_tasks.NOT_REACHABLE
+    second = phone_tasks.run_task(**kwargs)
+    assert second.startswith(phone_tasks.STILL_NOT_REACHABLE), second
+    assert phone_tasks.closing_of(second)
+
+
 def test_the_repeat_window_ends(app_link_home, monkeypatch):
     paired_device(SCOPE_A)
     kwargs = dict(user_scope_id=SCOPE_A, username="alice", instruction="x", chat_session_id="s1")

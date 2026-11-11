@@ -68,7 +68,7 @@ def test_the_scan_sees_the_tool_texts():
 
 
 def test_no_tool_text_or_answer_calls_the_device_a_phone():
-    found = [f"{p.relative_to(ROOT)}:{line}: {text[:80]!r}"
+    found = [f"{p.relative_to(ROOT).as_posix()}:{line}: {text[:80]!r}"
              for p in _CODE for line, text in _strings(p) if _hits(text)]
     assert not found, "say Veyllo App (or device):\n" + "\n".join(found)
 

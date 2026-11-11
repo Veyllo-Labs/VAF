@@ -180,7 +180,9 @@ def run_task(user_scope_id: Any, username: str, instruction: str, *, context: st
         _pending[pending.id] = pending
     try:
         if not session.send_json(task):
-            return NOT_REACHABLE
+            # A session whose socket is already dying counts as an absent app too, so a
+            # repeat within the window still ends the turn.
+            return _not_reachable(scope, username, chat_session_id)
         with _lock:
             _unreachable.pop((scope, str(chat_session_id or "")), None)
         deadline = time.monotonic() + int(timeout_s)

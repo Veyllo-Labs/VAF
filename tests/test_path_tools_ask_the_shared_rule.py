@@ -133,6 +133,9 @@ def _registry_names():
 
 _REGISTRY_NAMES = _registry_names()
 
+# The constructors a schema literal may wrap a constant in. Nothing with an effect.
+_PURE_BUILTINS = {"list": list, "tuple": tuple, "dict": dict, "sorted": sorted}
+
 
 def _module_constants(tree):
     """Module-level literal assignments, so `name = TOOL_NAME` can be resolved.
@@ -181,12 +184,16 @@ def _tool_classes():
                         value = consts[body.value.id]
                     else:
                         # A literal built from the channel registry (the inbox tool's channel
-                        # enum is ["all", *CHAT_CHANNELS, ...]): the registry is pure data,
-                        # so it is as readable as a literal. Anything else stays unreadable
-                        # and the guard below reports it instead of losing it.
+                        # enum is ["all", *CHAT_CHANNELS, ...]) or from the module's own
+                        # constants (the ftp tool's enum is list(ACTIONS), its default
+                        # READ_DEFAULT_BYTES): both are pure data, so they are as readable as
+                        # a literal. A schema that names a constant inside the dict, not as
+                        # the whole value, used to drop the class here. Anything else stays
+                        # unreadable and the guard below reports it instead of losing it.
                         try:
                             value = eval(compile(ast.Expression(body.value), f.name, "eval"),  # noqa: S307
-                                         {"__builtins__": {}}, _REGISTRY_NAMES)
+                                         {"__builtins__": _PURE_BUILTINS},
+                                         {**_REGISTRY_NAMES, **consts})
                         except Exception:
                             continue
                 if body.targets[0].id == "name":

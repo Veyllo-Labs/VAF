@@ -554,6 +554,9 @@ export default function InboxWindow({ isOpen, onClose, version, onOpenInChannel,
                                     {noteReason === 'owner_asked' && (
                                         <span className="self-center mt-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1 rounded-full text-center">{t('ownerAsked')}</span>
                                     )}
+                                    {noteReason === 'reply_failed' && (
+                                        <span className="self-center mt-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1 rounded-full text-center">{t('replyFailed', { name: selected.name || selected.id })}</span>
+                                    )}
                                     {noteReason === 'invitation' && (
                                         <span className="self-center mt-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1 rounded-full text-center">{t('invitation')}</span>
                                     )}

@@ -52,9 +52,19 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   A wait time that is no finite number counts as missing, and no wait is longer than an hour.
 - **Veyllo relay: websockets 15 or newer.** VAF now requires websockets 15.0 or
   newer; with 14.x every connection to the Veyllo relay failed. `vaf update` installs it.
+- **Mail reaches strict servers, and a refusal is no longer reported as sent.** VAF now sends
+  mail with standard CRLF line endings, which servers hardened against SMTP smuggling require.
+  When a server refuses the sender, a recipient or the message, the mail shows as failed
+  instead of sent; a mail with one refused recipient goes to nobody until the address is fixed.
+  WhatsApp messages to a number written as 0176 ... or 0049 ... now reach that number. A
+  number is never matched to another contact by its last digits, and the confirmation card
+  shows the number that is dialled. When your agent could not send its answer to an e-mail,
+  the inbox now says so on that conversation.
 
 ### Changed
 
+- **The phishing filter's documentation now lists what it really scores.** Look-alike domains
+  were never scored; the dead rule that claimed to is gone.
 - **Veyllo App: no more probing an app that is not connected.** When the Veyllo App is not
   connected, your agent asks it at most twice per turn and then tells you to open the app; its
   send tools say the message is kept and whether a push notice goes out. VAF calls the paired

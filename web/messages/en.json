@@ -1203,7 +1203,8 @@
       "agentAnswered": "Agent answered",
       "done": "Done",
       "couldNotLoad": "The dashboard could not be loaded.",
-      "waitsDraft": "Your agent prepared an answer; it waits for your approval."
+      "waitsDraft": "Your agent prepared an answer; it waits for your approval.",
+      "waitsReplyFailed": "Your agent could not reply; the answer was not sent."
     },
     "whatsappDashboard": {
       "title": "WhatsApp",
@@ -3270,6 +3271,7 @@
     "writeDraft": "Write a draft",
     "ownerAsked": "The agent asked you a question about this chat; the person is waiting.",
     "unanswered": "The last message came from {name}, still unanswered.",
+    "replyFailed": "Your agent could not reply to {name}; the answer did not go out. Please reply yourself.",
     "invitation": "This room waits for your answer to the invitation.",
     "members": "{count, plural, one {# agent} other {# agents}}",
     "messagesCount": "{count, plural, one {# message} other {# messages}}",

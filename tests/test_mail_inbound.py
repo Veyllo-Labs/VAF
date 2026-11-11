@@ -353,13 +353,16 @@ def test_the_runner_holds_the_answer_in_draft_mode_and_sends_it_in_send_mode(wor
         sent = [r for r in svc.store.sent_ids_for_case(apk, case_id) if r["delivery"] == "sent"]
         assert len(sent) == 1 and svc.store.get_message(pk)["answered_at"]
         assert svc.store.get_op(sent[0]["op_id"])["payload"]["references"].split()[0] == drafts[0]["message_id"], "the root anchor rides on every later mail"
-        # A send that does not leave (the wire refuses) leaves the case as it was, and so
-        # does a missing account: answered means the mail left.
+        # A send the drain parks as failed (the wire refuses) is never answered: the case
+        # says `failed`, which the inbox shows on the thread. A send still queued (no account
+        # to drain it now) is on its way, so the earlier failure no longer stands.
         case2 = case_token.mint_case_id()
         svc.store.open_case(apk, case2, thread_id=thread_id, correspondent="lena@example.org")
         monkeypatch.setattr(sender, "send", lambda msg: sender.SendResult(False, "wire refused"))
+        signals.clear()
         hr._deliver_email_reply(task, _runner_meta(pk, thread_id, case2, "send"), "Dritte Antwort")
-        assert svc.store.case_by_id(apk, case2)["status"] == "open", "answered only once the mail left"
+        assert svc.store.case_by_id(apk, case2)["status"] == "failed", "answered only once the mail left"
+        assert signals == [SCOPE]
         import vaf.core.email_accounts as ea
         monkeypatch.setattr(ea, "get_account", lambda *a, **k: None)
         hr._deliver_email_reply(task, _runner_meta(pk, thread_id, case2, "send"), "Vierte Antwort")

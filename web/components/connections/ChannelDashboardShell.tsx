@@ -130,10 +130,13 @@ export function UnreadPill({ count }: { count?: number }) {
     return <span className={UNREAD_PILL} title={t('unreadCount', { count })}>{count}</span>;
 }
 
-/** "Waits for you": the last word is the other side's and nobody answered, or the agent asked the person about this chat. */
+/** "Waits for you": the last word is the other side's and nobody answered, the agent asked the person about this chat, or the agent's answer did not go out. */
 export function WaitsChip({ reason }: { reason?: string }) {
     const t = useTranslations('settings.channelDashboard');
-    const title = reason === 'owner_asked' ? t('waitsOwnerAsked') : reason === 'draft' ? t('waitsDraft') : undefined;
+    const title = reason === 'owner_asked' ? t('waitsOwnerAsked')
+        : reason === 'draft' ? t('waitsDraft')
+        : reason === 'reply_failed' ? t('waitsReplyFailed')
+        : undefined;
     return <span className={WAITS_CHIP} title={title}>{t('waitsForYou')}</span>;
 }
 

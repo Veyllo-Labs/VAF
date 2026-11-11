@@ -143,3 +143,23 @@ def test_the_seven_catalogues_carry_the_chip_keys_with_the_same_arguments():
         for key, args in keys.items():
             assert key in block, (p.name, key)
             assert set(re.findall(r"\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?=[},])", block[key])) == args, (p.name, key)
+
+
+def test_a_reply_that_did_not_go_out_has_its_words_everywhere():
+    """`reply_failed` (vaf/core/inbox.py WAITS_REPLY_FAILED): the chip's title in the shell
+    (inbox and mail window) and the note line in the inbox, in all seven catalogues.
+    MUTATION: delete either key from one catalogue, or the branch from either component."""
+    import json
+    assert "reason === 'reply_failed' ? t('waitsReplyFailed')" in _read(SHELL)
+    inbox = _read(WEB / "components" / "inbox" / "InboxWindow.tsx")
+    assert "noteReason === 'reply_failed'" in inbox
+    assert "t('replyFailed', { name: selected.name || selected.id })" in inbox
+    for p in sorted((WEB / "messages").glob("*.json")):
+        data = json.loads(_read(p))
+        chip = data["settings"]["channelDashboard"]["waitsReplyFailed"]
+        note = data["inbox"]["replyFailed"]
+        assert chip and set(re.findall(r"\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}", chip)) == set(), p.name
+        assert set(re.findall(r"\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}", note)) == {"name"}, p.name
+        assert "\u2014" not in chip + note, p.name
+        if p.name == "de.json":
+            assert "Handy" not in chip + note and "phone" not in (chip + note).lower(), p.name

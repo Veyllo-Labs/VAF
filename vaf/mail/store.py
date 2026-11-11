@@ -987,7 +987,9 @@ class MailStore:
 
     # ── cases (schema v2): the conversations the agent answers in ───────────
 
-    _CASE_STATUSES = ("open", "held", "answered", "closed")
+    # `failed`: the agent's answer did not leave (headless_runner._deliver_email_reply); the
+    # inbox shows it on the thread (inbox.WAITS_REPLY_FAILED), a later answer overwrites it.
+    _CASE_STATUSES = ("open", "held", "answered", "closed", "failed")
 
     def open_case(self, account_pk: int, case_id: str, *, thread_id: Optional[int] = None,
                   correspondent: str = "", contact_id: str = "", subject_norm: str = "",

@@ -108,15 +108,19 @@ def _with_inbox_state(threads: list, user: Dict[str, Any]) -> list:
     from vaf.mail.service import MailService
     marks = chat_marks(user.get("username") or "", _scope_of(user), channel="mail")
     drafts: Dict[int, Dict[str, Any]] = {}
+    reply_failed: set = set()
     try:
-        for d in MailService(_scope_of(user)).list_drafts():
+        svc = MailService(_scope_of(user))
+        for d in svc.list_drafts():
             if d.get("thread_id") is not None:
                 drafts.setdefault(int(d["thread_id"]), d)
+        reply_failed = svc.reply_failed_threads()
     except Exception:
         drafts = {}
     for t in threads:
         draft = drafts.get(int(t.get("thread_id") or 0))
-        state = mail_thread_state(t, marks.get(("mail", str(t.get("thread_id")))), draft=draft)
+        state = mail_thread_state(t, marks.get(("mail", str(t.get("thread_id")))), draft=draft,
+                                  reply_failed=int(t.get("thread_id") or 0) in reply_failed)
         for k in ("waits", "waits_reason", "done", "answered_by_agent"):
             t[k] = state[k]
         t["draft"] = ({"op_id": draft["op_id"], "to": draft.get("to") or "", "subject": draft.get("subject") or "",

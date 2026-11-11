@@ -696,3 +696,69 @@ def test_an_open_whatsapp_channel_answers_nobody_while_the_bridge_forwards_nothi
     root = Path(__file__).resolve().parents[1] / "vaf"
     readers = [p for p in root.rglob("*.py") if '.get("inbound_to_agent"' in p.read_text(encoding="utf-8")]
     assert [p.name for p in readers] == ["messaging_connections.py"], readers
+
+
+def _front_office_answer_refused(monkeypatch, thread: str):
+    """A Front Office answer to the thread's sender that the send funnel refuses (a domain
+    IDNA2008 refuses): the real runner, the real MailService and store, the real refusal."""
+    import vaf.core.headless_runner as hr
+    import vaf.core.log_helper as log_helper
+    import vaf.core.web_interface as wi
+    from vaf.mail import case_token
+    from vaf.mail.service import MailService
+    s = MailStore(SCOPE)
+    apk = s.account_pk("alice@example.com")
+    case_id = case_token.mint_case_id()
+    s.open_case(apk, case_id, thread_id=int(thread), correspondent="lena@example.com")
+    s.close()
+    monkeypatch.setattr(MailService, "reply_prefill",
+                        lambda self, pk: {"to": "alice@ｅxample.com", "subject": "Re: Vertrag Q4", "body": ""})
+    lines, signals = [], []
+    monkeypatch.setattr(log_helper, "append_lane_log", lambda lane, text, **k: lines.append(text))
+    monkeypatch.setattr(wi, "notify_inbox_changed", lambda scope: signals.append(scope))
+    hr._deliver_email_reply(None, {"email_message_pk": 1, "email_account_id": "alice@example.com",
+                                   "user_scope_id": SCOPE, "username": "alice", "email_case_id": case_id,
+                                   "email_thread_id": int(thread)}, "Antwort")
+    return case_id, lines, signals
+
+
+def test_a_front_office_answer_that_did_not_leave_shows_on_its_thread(world, monkeypatch):
+    """MUTATIONS: drop the `set_case_status(..., "failed")` in the runner's refusal branch, drop
+    `reply_failed=` in `_mail_rows` or in `mail_routes._with_inbox_state` (each one assert goes
+    red), drop `unread > 0` in `mail_thread_state` (the read thread keeps the reason)."""
+    import asyncio
+
+    import vaf.api.mail_routes as mr
+    thread = _mail_thread(subject="Danke")
+    case_id, lines, signals = _front_office_answer_refused(monkeypatch, thread)
+    assert any("REPLY FAILED" in line for line in lines), lines
+    s = MailStore(SCOPE)
+    assert s.case_by_id(s.account_pk("alice@example.com"), case_id)["status"] == "failed"
+    s.close()
+    assert signals == [SCOPE], "the inbox is told to re-read"
+    row = _row(f"mail:{thread}")
+    assert row["waits"] is True and row["waits_reason"] == "reply_failed", row
+    listed = asyncio.run(mr.list_threads(_user={"username": "alice", "user_scope_id": SCOPE, "role": "user"}))
+    t = next(t for t in listed["threads"] if str(t["thread_id"]) == thread)
+    assert t["waits"] is True and t["waits_reason"] == "reply_failed", t
+    # Reading the thread lifts it, as every reason but a held draft.
+    s = MailStore(SCOPE)
+    root = s._conn().execute("SELECT id FROM messages WHERE thread_id=?", (int(thread),)).fetchone()[0]
+    s.set_local_flags(int(root), add=["\\Seen"], remove=())
+    s.close()
+    assert _row(f"mail:{thread}")["waits_reason"] == ""
+
+
+def test_the_reply_failed_reason_yields_to_a_draft_and_to_the_persons_own_reply():
+    thread = {"thread_id": 5, "unread_count": 1, "last_date_ts": NOW, "snippet": "Danke",
+              "from_addr": "Lena <lena@example.com>"}
+    state = inbox.mail_thread_state(thread, None, waits_threshold_value=0.6, reply_failed=True)
+    assert state["waits"] is True and state["waits_reason"] == inbox.WAITS_REPLY_FAILED == "reply_failed"
+    assert inbox.mail_thread_state(thread, None, waits_threshold_value=0.6, reply_failed=False)["waits"] is False, \
+        "a thank-you does not wait by its text; the reason is what makes it wait"
+    drafted = inbox.mail_thread_state(thread, None, reply_failed=True, draft={"op_id": 1})
+    assert drafted["waits_reason"] == "draft"
+    mine = inbox.mail_thread_state(dict(thread, newest_special_use="\\Sent"), None, reply_failed=True)
+    assert mine["done"] is True and mine["waits"] is False
+    read = inbox.mail_thread_state(dict(thread, unread_count=0), None, reply_failed=True)
+    assert read["waits"] is False and read["waits_reason"] == ""

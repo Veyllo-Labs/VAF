@@ -13,7 +13,7 @@ authenticated attachment endpoint. The UI must still render the result inside
 a sandboxed iframe with CSP script-src 'none' (defense in layers)."""
 import logging
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from vaf.mail.addressing import UndeliverableAddress  # noqa: F401  (the funnel's refusal, imported from here)
 from vaf.mail.parser import parse_message
@@ -890,6 +890,16 @@ class MailService:
         if not op or op.get("kind") != "send":
             return None
         return self.chat_draft(op)
+
+    def reply_failed_threads(self) -> Set[int]:
+        """The threads whose Front Office answer did not leave (case status `failed`, set by
+        `headless_runner._deliver_email_reply`): the one reader both inbox projections use
+        (`inbox._mail_rows`, `mail_routes._with_inbox_state`), so the two never disagree."""
+        out: Set[int] = set()
+        for case in self.store.list_cases(status="failed", limit=2000):
+            if case.get("thread_id") is not None:
+                out.add(int(case["thread_id"]))
+        return out
 
     def list_drafts(self, *, account_id: Optional[str] = None, thread_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """Held answers awaiting approval: op id, account, thread, every recipient (to, cc,

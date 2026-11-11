@@ -373,7 +373,9 @@ shown `address`, and the compose window says the refusal in the reader's languag
 (`mailV2.compose.refused.<code>`, the address marked and in its own `<bdi>` as on the draft
 cards); a code it has no sentence for shows the server's text inside its "Could not be sent"
 line, and any other failure keeps the generic one. A Front Office answer logs `REPLY FAILED`
-with the code's phrase (`UndeliverableAddress.reason`) and without the address, and a send
+with the code's phrase (`UndeliverableAddress.reason`) and without the address, sets its case to
+`failed` and the thread's inbox row says so (`waits_reason = "reply_failed"`, see
+[FRONT_OFFICE.md](../agents/FRONT_OFFICE.md#mail)), and a send
 refused for an address is written to the app log the same way (`SendResult.refusal`), while
 the draft keeps the whole text for its card. A look-alike that IS a
 valid domain (`alice@exаmple.com`, a Cyrillic а) is delivered, not refused: the cards show what

@@ -39,6 +39,7 @@ WAITS_UNANSWERED = "unanswered"
 WAITS_OWNER_ASKED = "owner_asked"
 WAITS_INVITATION = "invitation"
 WAITS_DRAFT = "draft"   # mail: the agent's answer is held in the outbox for the person's approval
+WAITS_REPLY_FAILED = "reply_failed"   # mail: the agent's Front Office answer did not leave
 
 # Whether an inbound message asks for an answer is decided from its text alone, no model
 # (see reply_expectation): a score from 0 to 1, and the configured threshold turns it into
@@ -581,7 +582,8 @@ def chat_mode(channel: str, chat_id: str, *, owners: Set[str], contacts: Set[str
 
 def mail_thread_state(thread: Dict[str, Any], mark: Optional[Dict[str, Any]], *,
                       waits_threshold_value: Optional[float] = None,
-                      draft: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                      draft: Optional[Dict[str, Any]] = None,
+                      reply_failed: bool = False) -> Dict[str, Any]:
     """A mail thread's state: unread is IMAP's count, the last word was ours when the newest
     message sits in the Sent folder, and the thread waits when it is not done, still unread
     (opening it marks its messages read, and a read thread is the person's to answer or
@@ -589,7 +591,13 @@ def mail_thread_state(thread: Dict[str, Any], mark: Optional[Dict[str, Any]], *,
     somebody who reads answers (`is_automated_sender`: no-reply, notifications,
     newsletters, status pages and non-primary Gmail categories never wait), and its text
     asks for an answer (the newest message's snippet through `reply_expectation`, as a chat
-    message would be)."""
+    message would be).
+
+    `reply_failed` (the thread's Front Office case is `failed`: the agent's answer did not
+    leave) makes an unread thread that is not done wait with `WAITS_REPLY_FAILED`, whatever
+    its text says, because the correspondent was promised nothing and the person was told
+    nothing. Reading lifts it like every reason but the draft; the person's own reply (the
+    newest message in Sent) or a done mark makes the thread done; a held draft wins."""
     newest_in_sent = str(thread.get("newest_special_use") or "").lower() == "\\sent"
     # The newest message alone: an older reply in the thread says nothing about the mail
     # that arrived after it.
@@ -606,6 +614,8 @@ def mail_thread_state(thread: Dict[str, Any], mark: Optional[Dict[str, Any]], *,
              and not is_automated_sender(thread.get("from_addr") or "", thread.get("category"))
              and expects_answer(thread.get("snippet") or thread.get("subject") or "", waits_threshold_value))
     reason = WAITS_UNANSWERED if waits else ""
+    if reply_failed and not done and unread > 0:
+        waits, reason = True, WAITS_REPLY_FAILED
     if draft:
         # A held answer waits for the person whatever the rest says: reading the thread does
         # not approve it, and a done mark does not discard it.
@@ -782,6 +792,10 @@ def _mail_rows(username: Optional[str], user_scope_id: Optional[str], *, limit: 
                 drafts.setdefault(str(d["thread_id"]), d)
     except Exception:
         drafts = {}
+    try:
+        reply_failed = svc.reply_failed_threads()
+    except Exception:
+        reply_failed = set()
     rows: List[Dict[str, Any]] = []
     # The store hands out 200 threads a page. With bulk mail hidden the lane pages on
     # until it holds `limit` primary threads (or the store runs dry, at most five pages),
@@ -806,7 +820,8 @@ def _mail_rows(username: Optional[str], user_scope_id: Optional[str], *, limit: 
                 primary += 1
             thread_id = str(t.get("thread_id"))
             draft = drafts.get(thread_id)
-            state = mail_thread_state(t, marks.get(("mail", thread_id)), waits_threshold_value=threshold, draft=draft)
+            state = mail_thread_state(t, marks.get(("mail", thread_id)), waits_threshold_value=threshold, draft=draft,
+                                      reply_failed=int(t.get("thread_id") or 0) in reply_failed)
             rows.append({
                 "key": f"mail:{thread_id}",
                 "channel": "mail",

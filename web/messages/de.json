@@ -1203,7 +1203,8 @@
       "agentAnswered": "Agent hat geantwortet",
       "done": "Erledigt",
       "couldNotLoad": "Das Dashboard konnte nicht geladen werden.",
-      "waitsDraft": "Dein Agent hat eine Antwort vorbereitet; sie wartet auf deine Freigabe."
+      "waitsDraft": "Dein Agent hat eine Antwort vorbereitet; sie wartet auf deine Freigabe.",
+      "waitsReplyFailed": "Dein Agent konnte nicht antworten; die Antwort wurde nicht gesendet."
     },
     "whatsappDashboard": {
       "title": "WhatsApp",
@@ -3270,6 +3271,7 @@
     "writeDraft": "Entwurf schreiben",
     "ownerAsked": "Der Agent hat dir zu diesem Chat eine Frage gestellt; die Person wartet.",
     "unanswered": "Die letzte Nachricht kam von {name}, noch ohne Antwort.",
+    "replyFailed": "Dein Agent konnte {name} nicht antworten, die Antwort ging nicht raus. Antworte bitte selbst.",
     "invitation": "Dieser Raum wartet auf deine Antwort auf die Einladung.",
     "members": "{count, plural, one {# Agent} other {# Agenten}}",
     "messagesCount": "{count, plural, one {# Nachricht} other {# Nachrichten}}",

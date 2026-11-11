@@ -85,3 +85,22 @@ def test_an_unknown_channel_or_view_is_refused_instead_of_silently_widened(world
     result = CliRunner().invoke(inbox_cmd.app, ["list", "--json", "--view", "sideways"])
     assert result.exit_code == 1 and "sideways" in result.output and "waits" in result.output, result.output
     assert CliRunner().invoke(inbox_cmd.app, ["list", "--json", "--channel", "whatsapp", "--view", "waits"]).exit_code == 0
+
+
+def test_a_reply_that_did_not_go_out_is_named_in_the_table(world, monkeypatch):
+    """The terminal prints the reason word as the inbox gives it, `reply_failed` included.
+    MUTATION: map an unknown reason to "" in the CLI's row printer."""
+    from vaf.core import inbox as inbox_mod
+    real = inbox_mod.list_conversations
+
+    def _with_failed(*a, **kw):
+        result = real(*a, **kw)
+        row = dict(result["rows"][0], channel="mail", id="5", name="Lena", waits=True,
+                   waits_reason="reply_failed", mode="mail", key="mail:5")
+        return dict(result, rows=[row])
+
+    monkeypatch.setattr(inbox_mod, "list_conversations", _with_failed)
+    monkeypatch.setenv("COLUMNS", "200")
+    result = CliRunner().invoke(inbox_cmd.app, ["list"])
+    assert result.exit_code == 0, result.output
+    assert "reply_failed" in result.output and "Lena" in result.output

@@ -1203,7 +1203,8 @@
       "agentAnswered": "Ajan yanıtladı",
       "done": "Tamamlandı",
       "couldNotLoad": "Pano yüklenemedi.",
-      "waitsDraft": "Ajanın bir yanıt hazırladı; onayını bekliyor."
+      "waitsDraft": "Ajanın bir yanıt hazırladı; onayını bekliyor.",
+      "waitsReplyFailed": "Ajanın yanıt veremedi; yanıt gönderilmedi."
     },
     "whatsappDashboard": {
       "title": "WhatsApp",
@@ -3270,6 +3271,7 @@
     "writeDraft": "Taslak yaz",
     "ownerAsked": "Ajan bu sohbet hakkında sana bir soru sordu; karşı taraf bekliyor.",
     "unanswered": "Son mesaj {name} tarafından geldi, henüz yanıtlanmadı.",
+    "replyFailed": "Ajanın {name} kişisine yanıt veremedi, yanıt gönderilmedi. Lütfen kendin yanıtla.",
     "invitation": "Bu oda, davete vereceğin yanıtı bekliyor.",
     "members": "{count} ajan",
     "messagesCount": "{count} mesaj",

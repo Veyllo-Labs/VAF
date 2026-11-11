@@ -240,7 +240,14 @@ def _deliver_email_reply(task, meta: dict, final_text: str) -> None:
     quoted original under the answer; held for the owner's approval in draft mode,
     delivered at once in send mode. Never a send tool, never a direct SMTP call, so every
     answer has its Sent copy, its ledger row and its delivery stamp (EMAIL_CLIENT.md,
-    "Native send"). Never raises: a failure is logged and the mail stays waiting."""
+    "Native send"). Never raises: a failure is logged and the mail stays waiting.
+
+    An answer that did not leave (the funnel refused it, or the immediate drain parked it as
+    failed) sets the case to `failed` and announces `inbox_changed`, so the thread's inbox row
+    says "your agent could not reply" (`inbox.WAITS_REPLY_FAILED`) to a person who never sees
+    the admin-only lane log. NAMED BOUNDARY: an op that fails later, in the supervisor sweep
+    after a transient first try, does not set the case: the sweep knows no case and the mail
+    package does not announce to the web; that op stays `failed` in the outbox ledger."""
     from vaf.core.email_accounts import get_account
     from vaf.core.log_helper import append_lane_log
     from vaf.mail.service import MailService, deliver_queued_sends
@@ -253,6 +260,9 @@ def _deliver_email_reply(task, meta: dict, final_text: str) -> None:
     if not out:
         append_lane_log("email_inbound", f"REPLY EMPTY after sanitize pk={pk} session={task.session_id!r}", always=True)
         return
+    svc = None
+    apk = None
+    case_id = str(meta.get("email_case_id") or "")
     try:
         svc = MailService(scope)
         pre = svc.reply_prefill(int(pk))
@@ -260,7 +270,6 @@ def _deliver_email_reply(task, meta: dict, final_text: str) -> None:
             append_lane_log("email_inbound", f"REPLY SKIP no recipients pk={pk}", always=True)
             return
         apk = svc.store.account_pk(account_id)
-        case_id = str(meta.get("email_case_id") or "")
         root_anchor = ""
         if apk is not None and case_id:
             earlier = svc.store.sent_ids_for_case(apk, case_id)
@@ -276,18 +285,29 @@ def _deliver_email_reply(task, meta: dict, final_text: str) -> None:
             svc.store.touch_case(apk, case_id, outbound=True)
             if hold:
                 svc.store.set_case_status(apk, case_id, "held")
-        delivered = False
+        delivered = failed = False
         if not hold:
             acc = get_account(account_id, meta.get("username"), user_scope_id=scope)
             if acc:
                 deliver_queued_sends(scope, acc, meta.get("username"), account_id, service=svc)
-                delivered = svc.send_outcome(int(queued.get("op_id") or 0)).get("state") == "done"
-            # Answered only once the mail really left: a queued or failed send leaves the
-            # case as it was, and the sweep that delivers it later marks the message.
-            if delivered and apk is not None and case_id:
-                svc.store.set_case_status(apk, case_id, "answered")
+                state = svc.send_outcome(int(queued.get("op_id") or 0)).get("state")
+                delivered, failed = state == "done", state == "failed"
+            # Answered only once the mail really left: a queued send leaves the case as it
+            # was, and the sweep that delivers it later marks the message. A send the drain
+            # parked as failed did not leave and will not be retried: the case says so.
+            if apk is not None and case_id:
+                if delivered:
+                    svc.store.set_case_status(apk, case_id, "answered")
+                elif failed:
+                    svc.store.set_case_status(apk, case_id, "failed")
+                else:
+                    case = svc.store.case_by_id(apk, case_id) or {}
+                    if case.get("status") == "failed":
+                        # This answer is on its way: an earlier failure no longer stands.
+                        svc.store.set_case_status(apk, case_id, "open")
+        word = "HELD" if hold else ("SENT" if delivered else ("FAILED" if failed else "QUEUED"))
         append_lane_log("email_inbound",
-                        f"REPLY {'HELD' if hold else ('SENT' if delivered else 'QUEUED')} pk={pk} op={queued.get('op_id')} case={case_id or '-'} to={str(pre['to'])[:3]}***",
+                        f"REPLY {word} pk={pk} op={queued.get('op_id')} case={case_id or '-'} to={str(pre['to'])[:3]}***",
                         always=True)
     except Exception as e:
         # The refusal's text carries the sender's whole address; the lane log masks addresses
@@ -295,7 +315,12 @@ def _deliver_email_reply(task, meta: dict, final_text: str) -> None:
         from vaf.mail.service import UndeliverableAddress
         reason = e.reason if isinstance(e, UndeliverableAddress) else str(e)
         append_lane_log("email_inbound", f"REPLY FAILED pk={pk}: {reason}", always=True)
-        return
+        if svc is None or apk is None or not case_id:
+            return
+        try:
+            svc.store.set_case_status(apk, case_id, "failed")
+        except Exception:
+            return
     try:
         from vaf.core.web_interface import notify_inbox_changed
         notify_inbox_changed(scope)

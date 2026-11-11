@@ -1203,7 +1203,8 @@
       "agentAnswered": "智能体已回复",
       "done": "已完成",
       "couldNotLoad": "无法加载仪表板。",
-      "waitsDraft": "你的智能体准备了一封回复，正在等待你的批准。"
+      "waitsDraft": "你的智能体准备了一封回复，正在等待你的批准。",
+      "waitsReplyFailed": "你的智能体未能回复，回复没有发出。"
     },
     "whatsappDashboard": {
       "title": "WhatsApp",
@@ -3270,6 +3271,7 @@
     "writeDraft": "写草稿",
     "ownerAsked": "智能体就此聊天向你提了一个问题，对方正在等待。",
     "unanswered": "最后一条消息来自 {name}，尚未回复。",
+    "replyFailed": "你的智能体未能回复 {name}，回复没有发出。请你亲自回复。",
     "invitation": "此房间在等待你对邀请的答复。",
     "members": "{count} 个智能体",
     "messagesCount": "{count} 条消息",

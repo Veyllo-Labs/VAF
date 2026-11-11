@@ -634,9 +634,9 @@ def is_safe_path(path, *, read_only=False):
         # new folder there is protected the day it is added. The state check above already
         # answered for ~/.vaf itself; this screen also covers the .vaf folders outside the
         # state roots. The only exceptions are the store rows marked agent_readable
-        # (vaf.core.data_stores: skills/ and workflows/), compared case-exact in both
-        # spellings, so a differently cased spelling of them is refused rather than let
-        # through. Case-folded here, because macOS and Windows open ~/.VAF as ~/.vaf.
+        # (vaf.core.data_stores: skills/ and workflows/), compared case-exact in every
+        # spelling that lies inside VAF's state, so a differently cased spelling of them is
+        # refused rather than let through. Case-folded here, because macOS and Windows open ~/.VAF as ~/.vaf.
         if ".vaf" in (c.casefold() for c in components):
             from vaf.core.data_stores import is_agent_readable_state
             if not is_agent_readable_state(abs_path):

@@ -442,14 +442,23 @@ def _exact_parts(spelled: str) -> Tuple[str, ...]:
 def is_agent_readable_state(path: Any) -> bool:
     """Whether ``path`` equals or lies inside the folder of a row marked ``agent_readable``
     (``roots()[row.root] / row.pattern``). Both spellings, as given and resolved, of each row
-    folder, compared case-exact (`_exact_parts`); EVERY spelling of the path, as given and
-    resolved, must lie in one of them. A link inside a readable folder that points at a key
-    file is readable by its given spelling only, and its target is not, so it is refused.
-    Any error answers False, which makes `is_vaf_state` refuse the read."""
+    folder, compared case-exact (`_exact_parts`). Of the path's two spellings, as given and
+    resolved, every one that lies inside a state root (compared like `is_vaf_state`) must lie
+    in one of those folders, and at least one must lie inside a state root. A link inside a
+    readable folder that points at a key file is readable by its given spelling only, and its
+    target is state that is not, so it is refused. A skill folder linked to a folder outside
+    VAF (``~/.vaf/skills/foo -> /ext/foo``) stays readable: its resolved spelling is no state
+    at all, and a read of it is judged by the caller's own rules for that path. Any error
+    answers False, which makes `is_vaf_state` refuse the read."""
     try:
         named = roots()
         raw = _pathmod.expanduser(os.fspath(path))
-        mine = {_exact_parts(s) for s in (_pathmod.abspath(raw), _pathmod.realpath(raw))}
+        state = _state_root_spellings()
+        mine = set()
+        for spelled in (_pathmod.abspath(raw), _pathmod.realpath(raw)):
+            folded = _norm_parts(spelled)
+            if any(folded[:len(root)] == root for root in state):
+                mine.add(_exact_parts(spelled))
         wants = []
         for row in STORES:
             if not row.agent_readable:

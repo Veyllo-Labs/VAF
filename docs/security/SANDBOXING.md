@@ -469,7 +469,10 @@ anything this instance can revoke. The exceptions are the store rows marked `age
 in `vaf/core/data_stores.py`, each a folder a tool hands the model paths into: `skills/`
 (`use_skill`), `workflows/` and the data directory's `custom_tools/` (`create_agent_tool`'s
 edit replaces a tool's whole source, so the model reads the source it edits). They are
-compared case-exact, so another spelling of them is refused.
+compared case-exact, so another spelling of them is refused. A path is judged in both its
+spellings, as given and resolved, and every spelling that lies inside VAF's state must lie in
+one of those folders: a link in `custom_tools/` to a key file is refused, while a skill folder
+linked to a folder outside VAF stays readable, because its resolved spelling is no state.
 
 A path is checked at one moment and written at the next, and code in a sandbox environment
 (`sandbox_exec`, the coder's jailed `bash`) can create links in its mounted folder, which the

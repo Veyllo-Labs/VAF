@@ -181,6 +181,31 @@ def test_a_link_in_a_readable_folder_to_a_key_file_is_refused(roots):
     assert is_vaf_state(tools / "ref.md", mode="read") is False
 
 
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need a privilege on Windows")
+def test_a_skill_folder_linked_outside_vaf_stays_readable(roots):
+    """A skill folder that is a link to a folder outside VAF (a layout the skill loader
+    lists bundled files of) is read through the paths use_skill hands out. Its resolved
+    spelling is no state at all, so only the given spelling has to be readable; a plain
+    skill beside it reads as before.
+
+    MUTATION: require every spelling of the path, not only those inside a state root, to
+    lie in a readable folder (the round-1 rule) - red."""
+    ext = roots.tmp / "ext" / "foo"
+    ext.mkdir(parents=True)
+    (ext / "SKILL.md").write_text("x")
+    skills = roots.vaf / "skills"
+    skills.mkdir(parents=True)
+    (skills / "foo").symlink_to(ext, target_is_directory=True)
+    (skills / "plain").mkdir()
+    (skills / "plain" / "SKILL.md").write_text("x")
+    for name in ("foo", "plain"):
+        target = skills / name / "SKILL.md"
+        assert data_stores.is_agent_readable_state(target) is True, name
+        assert is_vaf_state(target, mode="read") is False, name
+        ok, verdict = is_safe_path(str(target), read_only=True)
+        assert ok, (name, verdict)
+
+
 # -- 2. writes of the home directory's configuration ----------------------------------------
 
 HOST_CONFIG = [

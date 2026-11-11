@@ -1307,7 +1307,9 @@ def _chat_project_paths(session_mgr, session_id) -> _ProjectPaths:
     (session.project_path); [ACTIVE PROJECT] is the most recently created or edited project
     (runtime_state["last_project_path"]). A chat whose recorded folder is unsafe (a home
     directory, recorded before the project-dir guard existed) gets none of it, or the agent
-    keeps sending the coder back there. A chat whose files were written in-process never got
+    keeps sending the coder back there. Nor does one whose recorded folder lies outside the
+    chat owner's own tree (`project_dir_refusal` for the owner), so no other account's
+    folder or VAF.md reaches the turn. A chat whose files were written in-process never got
     project_path anchored (the setter lived only in the subprocess HTTP path), so the
     workspace is derived from THIS chat's id when its folder exists, never from the
     process-global pointer. Sessions from before session.project_path keep their last
@@ -1319,10 +1321,19 @@ def _chat_project_paths(session_mgr, session_id) -> _ProjectPaths:
         session = session_mgr.load(session_id, restore_state=False, repoint=False)
         workspace = getattr(session, "project_path", "") or ""
         last_proj = (getattr(session, "runtime_state", None) or {}).get("last_project_path") or ""
-        from vaf.core.workspace_guard import is_unsafe_project_dir
-        if last_proj and is_unsafe_project_dir(last_proj):
+        # Asked for the chat's OWNER, both halves: unsafe, or outside the owner's own tree
+        # (a record written before the coder asked the account half can name another
+        # account's folder, whose VAF.md would then be read into this chat's prompt).
+        from vaf.core.workspace_guard import project_dir_refusal
+        owner = _session_owner_identity(getattr(session, "metadata", None))
+
+        def _refused(folder: str) -> bool:
+            return project_dir_refusal(folder, user_scope_id=owner.scope,
+                                       user_role=owner.role) is not None
+
+        if last_proj and _refused(last_proj):
             last_proj = ""
-        if workspace and is_unsafe_project_dir(workspace):
+        if workspace and _refused(workspace):
             workspace = ""
         if not workspace:
             try:

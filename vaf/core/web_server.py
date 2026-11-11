@@ -3293,7 +3293,8 @@ def _resolve_session_workspace(session_id: str, request: Request, create: bool =
     create/browse/delete inside another user's workspace (audit finding,
     fbf9250..HEAD range). Admin is detected role-aware, like the WS gate.
     Prefers the stable workspace anchor, falls back to the most recently used
-    project. Unsafe dirs (home, ~/.vaf, ...) are never exposed.
+    project. Unsafe dirs (home, ~/.vaf, ...) and folders outside the caller's
+    own tree (project_dir_refusal) are never exposed.
 
     create: when True and no existing workspace folder is found for an
     otherwise valid/owned session, create the (empty) per-chat folder. Used
@@ -3326,40 +3327,48 @@ def _resolve_session_workspace(session_id: str, request: Request, create: bool =
         return ""
     # Root = the CHAT's own folder (VAF_Projects/<uid8>/<session_id>), which can
     # hold several project folders. Fall back to the per-project path for
-    # legacy sessions created before per-chat folders existed.
+    # legacy sessions created before per-chat folders existed, then to the most
+    # recently used project. Each candidate must be a folder THIS caller may use
+    # as a project (project_dir_refusal: not unsafe, inside the caller's own tree
+    # unless the caller is an admin); a refused one is skipped. The stored records
+    # can name another account's folder (written before the coder asked the
+    # account half), so the chat falls through to its own folder, or to none.
+    # Nothing is rewritten: this stays a read.
     import re as _re_ws
+    from vaf.core.workspace_guard import project_dir_refusal
     _sid_folder = _re_ws.sub(r'[^a-zA-Z0-9_-]', '', str(session_id))[:32]
-    path = ""
+
+    def _usable(candidate: str) -> bool:
+        try:
+            return bool(candidate) and os.path.isdir(candidate) and project_dir_refusal(
+                candidate, user_scope_id=user_scope_id, user_role=role) is None
+        except Exception:
+            return False
+
     try:
         from vaf.core.session import get_session_workspace_dir
         _ws = get_session_workspace_dir(session_id)
-        if _ws:
-            path = str(_ws)
+        if _ws and _usable(str(_ws)):
+            return str(_ws)
     except Exception:
-        path = ""
-    if not path:
-        path = getattr(sess, "project_path", "") or ""
-        if path and os.path.isdir(path) and _sid_folder and os.path.basename(os.path.dirname(path)) == _sid_folder:
-            path = os.path.dirname(path)
-    if not path or not os.path.isdir(path):
-        path = (getattr(sess, "runtime_state", None) or {}).get("last_project_path", "") or ""
-    if (not path or not os.path.isdir(path)) and create:
+        pass
+    path = getattr(sess, "project_path", "") or ""
+    if path and os.path.isdir(path) and _sid_folder and os.path.basename(os.path.dirname(path)) == _sid_folder:
+        path = os.path.dirname(path)
+    if _usable(path):
+        return path
+    path = (getattr(sess, "runtime_state", None) or {}).get("last_project_path", "") or ""
+    if _usable(path):
+        return path
+    if create:
         try:
             from vaf.core.session import get_session_workspace_dir as _gwd_create
             _created = _gwd_create(session_id, create=True)
-            if _created:
-                path = str(_created)
+            if _created and _usable(str(_created)):
+                return str(_created)
         except Exception:
             pass
-    if not path or not os.path.isdir(path):
-        return ""
-    try:
-        from vaf.core.workspace_guard import is_unsafe_project_dir
-        if is_unsafe_project_dir(path):
-            return ""
-    except Exception:
-        return ""
-    return path
+    return ""
 
 
 def _resolve_workspace_subdir(root: str, subpath: str) -> str:

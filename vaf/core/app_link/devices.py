@@ -319,11 +319,19 @@ def outbox_publish(user_scope_id: Any, device_ids: List[str], message_id: str, *
     the list in between would otherwise see the entry without its file and send the text
     line only, and a ``collect`` would see the file without its entries and drop it. The
     account's oldest file records beyond ``keep`` go; their ids are returned so their bytes
-    go too. When no device row takes an entry (the last target was removed or stopped
-    standing while the file was being staged), nothing is written: the file is not recorded,
-    so it cannot push out another message's pending file, and its own id is returned so its
-    staged bytes go."""
-    ids = {str(d) for d in device_ids}
+    go too. A target that no longer stands (``row_stands``: its account revoked or gone, the
+    account's Veyllo App lane switched off, unused too long) takes no entry, with or without
+    a file, the same rule the caller used to pick its targets; it is asked again here, so
+    that holds whatever ran between the caller's choice and this write. It is asked right
+    before the lock and not under it: it reads
+    the account directory, a store query, which the device-list lock must not wait on. The
+    window that remains is the lock acquisition itself; a row removed in it is caught under
+    the lock. When no device row takes an entry, nothing is written: the file is not
+    recorded, so it cannot push out another message's pending file, and its own id is
+    returned so its staged bytes go."""
+    wanted = {str(d) for d in device_ids}
+    ids = {row["device_id"] for row in all_devices()
+           if row["device_id"] in wanted and row_stands(row)} if wanted else set()
     with _locked():
         state = _load()
         rows = [row for row in state["devices"] if row["device_id"] in ids]

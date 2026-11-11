@@ -10,6 +10,7 @@ message after the device's `welcome`, within per-account and per-device limits.
 """
 import hashlib
 import time
+import uuid
 
 import pytest
 
@@ -289,3 +290,28 @@ def test_a_file_no_device_takes_evicts_nothing(app_link_home, tmp_path, monkeypa
     msgs = client.of("msg")
     assert [m["text"] for m in msgs] == [f"file {i}" for i in range(spool.FILES_PER_ACCOUNT)]
     assert all(m.get("attachments") for m in msgs)
+
+
+def test_a_target_that_stopped_standing_after_selection_takes_nothing(app_link_home, tmp_path,
+                                                                      monkeypatch):
+    """The device was chosen while it stood and stops standing before the write (its account's
+    lane switched off, say): the publication writes no entry and no record, returns the new
+    message's id so its staged bytes go, and evicts none of the ten files still pending; a
+    text message gets no entry either. MUTATION: drop the `row_stands` filter in
+    `outbox_publish` - red (the oldest pending file is evicted and an entry is written)."""
+    device_id = paired_device(SCOPE_A)[0]["device_id"]
+    for i in range(spool.FILES_PER_ACCOUNT):
+        bridge.deliver(SCOPE_A, "alice", f"file {i}", str(_file(tmp_path, f"f{i}.txt", b"%d" % i)))
+        time.sleep(0.002)
+    pending = set(devices.spool_ids())
+    targets = [row["device_id"] for row in bridge.standing_devices(SCOPE_A)]
+    assert targets == [device_id]
+    late, text = str(uuid.uuid4()), str(uuid.uuid4())
+    record = spool.stage(late, str(_file(tmp_path, "late.txt", b"late")))
+    before = [e["id"] for e in devices.get(device_id)["outbox"]]
+    monkeypatch.setattr(devices, "row_stands", lambda *a, **k: False)
+    assert devices.outbox_publish(SCOPE_A, targets, late, spool=record,
+                                  keep=spool.FILES_PER_ACCOUNT) == [late]
+    assert devices.outbox_publish(SCOPE_A, targets, text) == []
+    assert set(devices.spool_ids()) == pending
+    assert [e["id"] for e in devices.get(device_id)["outbox"]] == before

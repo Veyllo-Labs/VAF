@@ -1356,7 +1356,11 @@ asks the person even under a stored "always", a chat grant or the admin's
 hands-off switch, and offers only "this time" and "cancel". It is asked before
 argument repair and identity assignment, so it gets the raw arguments and the
 identity as keywords; answer fail-closed, and a hook that raises counts as a
-reason to ask. When your authorizer asks as well, the person reads both reasons. Where nobody is asked (a workflow step), the call arrives with
+reason to ask. When your authorizer asks as well, the person reads both reasons. Your
+reason is written for the PERSON: where nobody can be asked (`interactive=False`), the
+refusal the model reads quotes your authorizer's reason but not the tool's, and says only
+that the tool puts this call to the person, so a question may name what the model must not
+see (VAF's ftp tool shows the address a stored credential resolves to). Where nobody is asked (a workflow step), the call arrives with
 `_call_confirmed = False` for a tool that declared `accepts_call_confirmation`,
 which is how such a tool refuses on its own.
 

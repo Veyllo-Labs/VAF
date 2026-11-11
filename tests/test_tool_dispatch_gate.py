@@ -531,3 +531,28 @@ def test_the_tools_own_reason_joins_an_authorizers_instead_of_replacing_it(trust
     assert caller.execute("remote_probe", {"server": "new"}) == "RAN"
     reason = asked[0][0]
     assert "the admin reviews every host call" in reason and "first connection" in reason
+
+
+def test_where_nobody_can_be_asked_the_model_does_not_read_the_tools_question(trust):
+    """A tool's own question is the person's: it may name what a stored credential resolves
+    to (the ftp tool's first connection). A lane that cannot ask returned it to the model
+    whole. MUTATION: pass model_reason=None from the funnel - red (the question comes back);
+    use `reason` in the non-interactive refusal - red."""
+    from vaf.core.tool_dispatch import OWN_QUESTION_FOR_MODEL, ToolCaller
+    tool = _probe_tool()
+    caller = ToolCaller({tool.name: tool}, interactive=False, user_scope_id="ab12cd34",
+                        username="alice", session_id=CHAT)
+    out = caller.execute("remote_probe", {"server": "new"})
+    assert out.startswith("[ERROR] Tool 'remote_probe' requires confirmation"), out
+    assert "first connection" not in out and OWN_QUESTION_FOR_MODEL in out
+    assert tool.confirmed is None, "nothing was dispatched"
+    # An application's ask() is its own text for the model, and stays.
+    caller = ToolCaller({tool.name: tool}, interactive=False, user_scope_id="ab12cd34",
+                        username="alice", session_id=CHAT,
+                        authorize=lambda req: req.ask("the admin reviews every host call"))
+    out = caller.execute("remote_probe", {"server": "new"})
+    assert "the admin reviews every host call" in out and "first connection" not in out
+    # The person still reads the tool's question where someone is asked.
+    asked = []
+    assert _funnel(tool, asked).execute("remote_probe", {"server": "new"}) == "RAN"
+    assert asked[0][0] == "first connection"

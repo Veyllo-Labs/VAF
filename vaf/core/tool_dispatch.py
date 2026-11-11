@@ -354,6 +354,11 @@ def _bypass_reason(user_role: str | None, user_scope_id: str | None) -> str | No
         return None
 
 
+# What a refusal tells the model in place of a tool's own ask_reason, where nobody can be asked.
+OWN_QUESTION_FOR_MODEL = ("the tool itself puts this call to the person, for example a server "
+                          "nobody confirmed yet")
+
+
 def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
                               trust_dir, interactive: bool,
                               decide=None, emit=None, on_gate_required=None,
@@ -362,7 +367,8 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
                               user_role: str | None = None,
                               session_id: str | None = None,
                               offer_standing: bool = True,
-                              trust_folder: bool = True) -> str | None:
+                              trust_folder: bool = True,
+                              model_reason: str | None = None) -> str | None:
     """Decide whether a confirmation-gated tool may run.
 
     Returns ``None`` when it may proceed, or the string to hand back to the model. Never
@@ -427,6 +433,11 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
     answer to ONE question: a surface that can show a dialog late or twice (a second browser
     tab, a reconnect) must send the id back, so a stale "always" from an old dialog cannot
     approve a later, different command.
+
+    ``model_reason`` is what the refusal says where nobody can be asked
+    (``interactive=False``), in place of ``reason``; None repeats ``reason``. The two differ
+    when the question is written for the person and names something the model must not read:
+    a tool's own ``ask_reason`` may show the address a stored credential resolves to.
     """
     from vaf.core.trust import (get_tool_policy, grant_tool_for_chat, has_chat_grant,
                                 is_trusted_dir, mark_trusted_dir, set_tool_policy)
@@ -494,7 +505,8 @@ def resolve_confirmation_gate(tool_name: str, *, reason: str, args: dict | None,
                 "Re-run interactively, or allow the tool always in the app.")
         if not offer_standing:
             _how = "Re-run interactively: this call must be confirmed by the person."
-        return (f"[ERROR] Tool '{tool_name}' requires confirmation ({reason}). "
+        _why = reason if model_reason is None else model_reason
+        return (f"[ERROR] Tool '{tool_name}' requires confirmation ({_why}). "
                 f"{_how}")
 
     # decide(tool_name, reason): the reason is what a terminal prompt shows the person, and
@@ -1546,6 +1558,7 @@ class ToolCaller:
 
         forced_ask = verdict.decision == "ask"
         ask_reason = verdict.reason if forced_ask else ""
+        model_reason = ask_reason
         if verdict.decision != "allow" and tool is not None:
             # The tool's own say about THIS call (BaseTool.ask_reason), e.g. a first contact.
             own_reason = self._tool_ask_reason(tool, args)
@@ -1553,6 +1566,12 @@ class ToolCaller:
                 # Joined, never replacing: an authorizer's ask() is the application's reason
                 # and the person must still read it.
                 ask_reason = f"{ask_reason} {own_reason}" if ask_reason else own_reason
+                # The tool's question is the PERSON's: where nobody can be asked, the model
+                # reads only that the tool asks. Measured: the ftp tool's first-connection
+                # question names the address stored credentials resolve to, and a lane that
+                # cannot ask returned it to the model whole.
+                model_reason = (f"{model_reason} {OWN_QUESTION_FOR_MODEL}" if model_reason
+                                else OWN_QUESTION_FOR_MODEL)
                 forced_ask = True
         needs_gate = (decision.requires_confirmation or forced_ask) and verdict.decision != "allow"
         # Whether THIS call was confirmed - by a person at the gate, or by the application's
@@ -1572,6 +1591,7 @@ class ToolCaller:
                 session_id=self.session_id, interactive=self.interactive,
                 decide=self.decide, emit=self.on_event,
                 on_gate_required=self.on_gate_required,
+                model_reason=(model_reason if forced_ask else None),
             )
             if refusal is not None:
                 return ToolCallOutcome(refusal, False)

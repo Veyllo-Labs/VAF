@@ -360,9 +360,9 @@ owner with that chat's source; a result that names no chat stays pending (Result
 outbound sanitizer chain as normal headless replies (`_prepare_channel_outbound`: think-strip,
 tool-JSON strip, workflow-async strip, internal-phrase net, untagged-CoT prefix guard) and carry
 the summary the chat shows: the drain's stored copy of the streamed turn (`stored_turn_copy`),
-because `chat_step` returns a status, not the answer ([CORE_AGENT.md](../CORE_AGENT.md), Return
-contract); a reply a guard retracted is cleared from that copy as in the chat lane, and the
-stream, the stored copy and the messenger all address the chat the turn was bound to. When
+the stream as the chat showed it, with reasoning and leaked tool-call JSON removed
+(`_clean_drain_text`); a reply a guard retracted is cleared from that copy as in the chat
+lane, and the stream, the stored copy and the messenger all address the chat the turn was bound to. When
 sanitization empties the summary, a deterministic localized fallback (head + result excerpt)
 is sent instead - never a noise placeholder, never a skipped send (the drain owns delivery).
 The WebUI/session lane is exempt from the new guard: the browser already streamed the

@@ -294,15 +294,17 @@ def test_the_verdict_sums_phases_and_names_the_test():
              + ["t.py::a (teardown)\t127.0.0.1:8001\t0.5\n"] * 2
              + ["t.py::b (call)\t127.0.0.1:5432\t2.0\n"] * 29 + ["t.py::b (call)\t127.0.0.1:5432\t1.0\n"]
              + ["after t.py::c\t127.0.0.1:8001\t2.0\n"] * 40
+             + ["t.py::d (call)\t127.0.0.1:9222\t2.0\n"]
              + ["cut short\n"])
     report, offenders = verdict(lines, budget=60.0)
     assert offenders == [
         "after t.py::c would wait 80.0 s on a Windows runner (40 refused connects to 8001)",
         "t.py::a would wait 61.0 s on a Windows runner (32 refused connects to 5432, 8001)",
     ]
-    assert report[0] == "  102 refused local connects, 200.0 s on a Windows runner"
-    assert report[1] == "  by port: 5432: 60, 8001: 42"
-    assert "t.py::b would wait 59.0 s" in report[-1]
+    assert report[0] == "  103 refused local connects, 202.0 s on a Windows runner"
+    assert report[1] == "  by port: 5432: 60, 8001: 42, 9222: 1"
+    assert "t.py::d would wait 2.0 s on a Windows runner (1 refused connect to 9222)" in report[-1]
+    assert "t.py::b would wait 59.0 s" in report[-2]
     assert verdict([], budget=60.0) == (["  0 refused local connects, 0.0 s on a Windows runner"], [])
 
 

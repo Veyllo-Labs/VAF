@@ -104,11 +104,13 @@ locally, in the time the suite already takes:
                   test whose total exceeds the budget (60 s) fails the run and
                   is named. Sleeping would reproduce the wait itself, at its
                   price: with the account store's outage memory reverted, the
-                  tray and app-link files alone made 10047 refused connects,
-                  19937 s (5.5 hours) of waiting, one test 7296 s. Counted, the
-                  same run takes the minute it took before, and the axis names
-                  that test. The instance is order dependent: the account
-                  directory resolver is registered when vaf.main is imported,
+                  tray and app-link files alone made 10036 refused connects,
+                  19914 s (5.5 hours) of waiting, one test 7296 s. Counted,
+                  that run took 115 s here and failed with 53 tests named,
+                  that one first; on the fixed code the same files took 65 to
+                  86 s with the axis and without it (three runs each). The
+                  instance is order dependent: the account directory resolver
+                  is registered when vaf.main is imported,
                   so the app-link files run alone made no database connect at
                   all, and after a file that imports vaf.main every send asked
                   the absent store twice. Counted are blocking socket connect
@@ -455,7 +457,8 @@ def _refusal_verdict(lines, budget=_REFUSAL_BUDGET_S):
 
     def _line(key):
         return (f"{key} would wait {seconds[key]:.1f} s on a Windows runner "
-                f"({counts[key]} refused connects to {', '.join(sorted(ports[key], key=_port_key))})")
+                f"({counts[key]} refused connect{'' if counts[key] == 1 else 's'} to "
+                f"{', '.join(sorted(ports[key], key=_port_key))})")
 
     report = [f"  {total_n} refused local connects, {total_s:.1f} s on a Windows runner"]
     if total_n:

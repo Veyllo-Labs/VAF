@@ -633,6 +633,23 @@ def test_changed_since_asked_compares_the_subject_too():
     assert check(None, {"_call_question": "q", "_call_subject": "h1"}, "q", "h1") is None
 
 
+@pytest.mark.parametrize("kwargs, may_take_a_new_server", [
+    ({"_call_confirmed": True, "_call_question": "First connection to h"}, True),
+    ({"_call_confirmed": True}, True),                          # a direct call
+    ({"_call_confirmed": True, "_call_question": None}, True),  # an authorizer's allow()
+    ({"_call_confirmed": True, "_call_question": ""}, False),   # nothing of its own was asked
+    ({"_call_confirmed": False, "_call_question": "First connection to h"}, False),
+    ({}, False),
+])
+def test_first_contact_confirmed_needs_the_tools_own_question(kwargs, may_take_a_new_server):
+    """What a tool hands its engine as `confirmed`: a yes to a known server's call is no yes to
+    a first contact, so a server forgotten after the gate is refused by the engine.
+    MUTATION: `asked is None or asked is not None` - red (the "" row);
+    MUTATION: ignore `_call_confirmed` - red (the unconfirmed rows)."""
+    from vaf.tools.base import BaseTool
+    assert BaseTool.first_contact_confirmed(None, kwargs) is may_take_a_new_server
+
+
 def test_a_tool_without_its_own_question_gets_no_call_question(trust):
     """python_exec, and an embedder's tool whose run lists its parameters, declare
     accepts_call_confirmation without a question of their own: no extra key for them."""

@@ -188,6 +188,21 @@ class BaseTool(ABC):
                 "(a stored value, or a confirmed server, changed in between). Nothing was "
                 "done. Call again, and the user is asked about what it uses now.")
 
+    def first_contact_confirmed(self, kwargs: Dict[str, Any]) -> bool:
+        """Whether this call may make a FIRST contact (take a server it has never seen): hand
+        the answer to the engine that would otherwise accept a new server, so one forgotten
+        between `run`'s own checks and the connection is refused there instead of trusted.
+
+        True when the call was confirmed (`_call_confirmed`) AND
+        - the question put was this tool's own (`_call_question` non-empty), or
+        - no question of the tool's was consulted (`_call_question` absent or None: a direct
+          call, or an authorizer's allow()).
+        False when nothing of the tool's own was asked (`_call_question` is "": the server was
+        known when the funnel looked, so a yes covered the call, not a first contact), and
+        whenever the call is not confirmed (a workflow step, the coder)."""
+        asked = kwargs.get("_call_question")
+        return bool(kwargs.get("_call_confirmed")) and (asked is None or bool(asked))
+
     # Set to True when a call of this tool hands the next move to the person, so the chat
     # turn ENDS after it: the agent loop answers every other call of the round, makes no
     # further model call, and the turn's answer is turn_closing(). A question with options is

@@ -76,7 +76,9 @@ if lines and lines[0].split(" ", 1)[1].strip() != server_key:
     done(255, err="@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\nHost key verification failed.\n")
 if not lines:
     if opts.get("StrictHostKeyChecking") != "accept-new":
-        done(255, err="Host key verification failed.\n")
+        # OpenSSH's own words under strict checking (sshconnect.c).
+        done(255, err="No ED25519 host key is known for " + name
+             + " and you have requested strict checking.\nHost key verification failed.\n")
     with open(kh, "a") as f:
         f.write(name + " " + server_key + "\n")
     added = "Warning: Permanently added '" + name + "' (ED25519) to the list of known hosts.\n"
@@ -257,9 +259,14 @@ def test_the_command_line_keeps_the_owners_setup_out_and_survives_odd_paths(lab)
     argv = ssh.build_argv(t, "uptime", user_scope_id=ALICE, password_login=False)
     joined = " ".join(argv)
     for option in ("-F none", "IdentitiesOnly=yes", "IdentityAgent=none",
-                   "StrictHostKeyChecking=accept-new", "PasswordAuthentication=no",
+                   "StrictHostKeyChecking=yes", "PasswordAuthentication=no",
                    "KbdInteractiveAuthentication=no"):
         assert option in joined, option
+    # Only a confirmed first contact may take a new key; the default is the closed one.
+    # MUTATION: default confirmed=True in build_argv - red.
+    assert "StrictHostKeyChecking=accept-new" not in joined
+    assert "StrictHostKeyChecking=accept-new" in ssh.build_argv(
+        t, "uptime", user_scope_id=ALICE, password_login=False, confirmed=True)
     assert argv[-2:] == ["--", "uptime"] and argv[-3] == "tester@127.0.0.1"
     kh = next(a for a in argv if a.startswith("UserKnownHostsFile="))
     assert kh.startswith('UserKnownHostsFile="') and "100%%" in kh, kh
@@ -513,6 +520,88 @@ def test_an_answered_first_connection_still_runs(lab):
                                     "login_credential": "SERVER_PASS"})
     assert len(asked) == 1 and "First connection" in asked[0]
     assert "through-the-funnel" in out and "First connection" in out, out
+    assert "StrictHostKeyChecking=accept-new" in lab.calls()[-1]["argv"]
+
+
+def test_the_engine_refuses_an_unconfirmed_first_contact_before_anything_runs(lab):
+    """`confirmed` is required, and without it a server the account does not know is refused
+    before the key, the passphrase or ssh are touched.
+    MUTATION: drop the engine's check at the top of run - red (ssh runs)."""
+    import inspect
+
+    from vaf.core import ssh
+    param = inspect.signature(ssh.run).parameters["confirmed"]
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY
+    assert param.default is inspect.Parameter.empty, "a caller could take a server by omission"
+    target = ssh.parse_server("tester@127.0.0.1:2222")
+    with pytest.raises(ssh.SshError, match="not connected to yet"):
+        ssh.run(target, "true", user_scope_id=ALICE, confirmed=False, password=PASSWORD)
+    assert lab.calls() == []
+    assert ssh.public_key(ALICE) is None, "the key was made for a call that was refused"
+
+
+@pytest.mark.parametrize("confirmed_flag", [True, False])
+def test_a_server_forgotten_while_the_call_starts_is_refused_by_openssh(lab, monkeypatch,
+                                                                        confirmed_flag):
+    """The server was known when the funnel and `run` looked (`_call_question` ""), and was
+    forgotten after those checks, inside the start of ssh, while the server shows a new key.
+    Before, the call ran with accept-new: the new key was taken and the report said nothing
+    of a first connection. Now only a confirmed FIRST contact may take a key, so OpenSSH
+    refuses it, and the report does not call a forgotten server a DIFFERENT key.
+    MUTATION: always accept-new in build_argv - red (the call reaches the server);
+    MUTATION: pass `_call_confirmed` straight through as `confirmed` - red (the confirmed row);
+    MUTATION: let host_key_changed win over not_confirmed - red (DIFFERENT key)."""
+    import subprocess as sp
+
+    from vaf.core import ssh
+    _tool(command="true", login_credential="SERVER_PASS", _call_confirmed=True)
+    before = len(lab.calls())
+    lab.rekey()
+    real_popen = sp.Popen
+
+    def forgetting_popen(argv, *a, **k):
+        # At the start of ssh itself, after every check: put the real Popen back first, the
+        # forget runs ssh-keygen through it.
+        if argv and argv[0] == "ssh":
+            monkeypatch.setattr(ssh.subprocess, "Popen", real_popen)
+            assert ssh.forget_host("[127.0.0.1]:2222", ALICE)
+        return real_popen(argv, *a, **k)
+
+    monkeypatch.setattr(ssh.subprocess, "Popen", forgetting_popen)
+    out = _tool(command="echo reached", login_credential="SERVER_PASS",
+                _call_confirmed=confirmed_flag, _call_question="")
+    assert out.startswith("[SSH") and "REFUSED" in out, out
+    assert "removed from this account's confirmed servers" in out, out
+    assert "DIFFERENT key" not in out and "reached" not in out, out
+    call = lab.calls()[before]
+    assert "StrictHostKeyChecking=yes" in call["argv"]
+    target = ssh.parse_server("tester@127.0.0.1:2222")
+    assert not ssh.is_known(target, ALICE), "the new key was taken into the account's list"
+
+
+def test_the_engine_reports_a_forgotten_server_as_not_confirmed_not_as_a_changed_key(
+        lab, monkeypatch):
+    """OpenSSH answers a server missing from the list with "Host key verification failed"
+    too; read as a changed key, the person was told to suspect someone in between.
+    MUTATION: let host_key_changed ignore not_confirmed - red."""
+    import subprocess as sp
+
+    from vaf.core import ssh
+    _tool(command="true", login_credential="SERVER_PASS", _call_confirmed=True)
+    real_popen = sp.Popen
+
+    def forgetting_popen(argv, *a, **k):
+        if argv and argv[0] == "ssh":
+            monkeypatch.setattr(ssh.subprocess, "Popen", real_popen)
+            assert ssh.forget_host("[127.0.0.1]:2222", ALICE)
+        return real_popen(argv, *a, **k)
+
+    monkeypatch.setattr(ssh.subprocess, "Popen", forgetting_popen)
+    target = ssh.parse_server("tester@127.0.0.1:2222")
+    result = ssh.run(target, "echo reached", user_scope_id=ALICE, confirmed=False,
+                     password=PASSWORD)
+    assert result.returncode == 255 and "reached" not in result.stdout
+    assert result.not_confirmed and not result.host_key_changed and not result.first_contact
 
 
 def test_the_contract_the_policy_reads():

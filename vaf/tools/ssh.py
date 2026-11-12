@@ -12,11 +12,9 @@ line); this module is the tool's contract around it:
   where nobody is asked (a workflow step) it is refused (`accepts_call_confirmation`), so an
   unattended run only reaches servers a person confirmed. The call goes only to the server
   the person was asked about: `run` builds the same question again, and a server forgotten
-  since then is refused (`BaseTool.changed_since_asked`).
-  NAMED BOUNDARY: between that check and OpenSSH reading the account's known_hosts, a forget
-  lands in a window of milliseconds inside one call; OpenSSH then takes the key as new
-  (`accept-new`), because the ssh engine has no `confirmed` to refuse it with, unlike the ftp
-  one. It needs the person's own forget at that exact instant.
+  since then is refused (`BaseTool.changed_since_asked`). One forgotten after that check, while
+  the call starts, is refused by the engine: only a call confirmed as a first contact
+  (`BaseTool.first_contact_confirmed`) lets OpenSSH take a new key.
 - Not over messaging channels: dangerous and restricted with "channel", which the policy
   refuses there before any admin lift (vaf/core/tool_contract.py, section 1a).
 - A regular account gets it only when its allowlist names it (`account_opt_in`).
@@ -253,7 +251,8 @@ class SshTool(BaseTool):
             return f"Error: unknown action {action!r} (run, upload, download, install_key)."
 
         try:
-            result = ssh.run(target, command, user_scope_id=scope, password=password,
+            result = ssh.run(target, command, user_scope_id=scope,
+                             confirmed=self.first_contact_confirmed(kwargs), password=password,
                              stdin=stdin, timeout=kwargs.get("timeout") or 120,
                              stdout_path=stdout_path)
         except ssh.SshError as e:
@@ -315,6 +314,12 @@ class SshTool(BaseTool):
                 clip_middle, *, uploaded_files: Optional[int] = None) -> str:
         from vaf.core import ssh, user_secrets
         lines = [f"[SSH {target}]"]
+        if result.not_confirmed:
+            if stdout_path is not None:
+                stdout_path.unlink(missing_ok=True)
+            return (f"[SSH {target}] REFUSED: this server was removed from this account's "
+                    "confirmed servers while the call started; nothing ran. Call again, and the "
+                    "user is asked about the first connection.")
         if result.first_contact:
             lines.append(f"First connection: the server's key {result.fingerprint} is now "
                          "remembered for this account.")

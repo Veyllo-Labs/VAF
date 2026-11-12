@@ -23,9 +23,13 @@ What this does instead:
   methods are off, so a server cannot ask for anything), a password login turns the key off.
   A server's own prompt therefore can never be answered with the key's passphrase.
 - `-F none` reads no `~/.ssh/config`, `IdentityAgent=none` offers no agent key,
-  `IdentitiesOnly` offers no other key, and `StrictHostKeyChecking=accept-new` takes a new
-  server's key into THIS account's list and refuses a changed one. Whether a server is new is
-  known before the call (`is_known`), which is what lets the tool ask the person first.
+  `IdentitiesOnly` offers no other key, and THIS account's own list is the only known_hosts.
+  A call the person confirmed as a first contact (`run(confirmed=True)`) runs with
+  `StrictHostKeyChecking=accept-new`, which takes a new server's key into that list and
+  refuses a changed one; every other call runs with `StrictHostKeyChecking=yes`, so OpenSSH
+  itself refuses a server missing from the list, also one forgotten in the moment between
+  the tool's check and the connection. Whether a server is new is known before the call
+  (`is_known`), which is what lets the tool ask the person first.
 - The command is argv, never a shell line on this side, and the remote command follows `--`:
   measured, `ssh -G -F none localhost -oProxyCommand=echo` still takes an option placed after
   the host.
@@ -364,15 +368,17 @@ def _option_path(path: Path) -> str:
 
 
 def build_argv(target: Target, remote_command: str, *, user_scope_id: Optional[str],
-               password_login: bool) -> List[str]:
-    """The whole OpenSSH command line for one call. The remote command follows `--`."""
+               password_login: bool, confirmed: bool = False) -> List[str]:
+    """The whole OpenSSH command line for one call. The remote command follows `--`. Only a
+    `confirmed` first contact may take a new server's key (`accept-new`); without it the
+    default is the closed one, `yes`."""
     folder = account_dir(user_scope_id)
     argv = ["ssh", "-F", "none", "-T",
             "-o", "BatchMode=no",
             "-o", "IdentitiesOnly=yes",
             "-o", "IdentityAgent=none",
             "-o", f"UserKnownHostsFile={_option_path(folder / KNOWN_HOSTS_FILE)}",
-            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "StrictHostKeyChecking=" + ("accept-new" if confirmed else "yes"),
             "-o", "ConnectTimeout=15",
             "-o", "ServerAliveInterval=30",
             "-o", "ServerAliveCountMax=4",
@@ -426,19 +432,30 @@ class Result:
     fingerprint: str = ""
     host_key_changed: bool = False
     auth_failed: bool = False
+    # Refused by OpenSSH because the server is not in the list and the call was not confirmed
+    # as a first contact (it was forgotten after the caller's check).
+    not_confirmed: bool = False
     bytes_out: int = 0
 
 
 def run(target: Target, remote_command: str, *, user_scope_id: Optional[str],
-        password: Optional[str] = None, stdin: Any = None, timeout: float = 120,
-        stdout_path: Optional[Path] = None, max_bytes: int = MAX_TRANSFER_BYTES) -> Result:
+        confirmed: bool, password: Optional[str] = None, stdin: Any = None,
+        timeout: float = 120, stdout_path: Optional[Path] = None,
+        max_bytes: int = MAX_TRANSFER_BYTES) -> Result:
     """Run `remote_command` on `target` as this account. Never raises for what happens on the
     other machine; SshError only for what could not even be started.
 
+    `confirmed` says the person confirmed this call as a FIRST contact (the tool's
+    `first_contact_confirmed`); required, so no caller takes a new server by leaving it out.
+    Without it a server this account does not know is refused before anything runs, and one
+    forgotten after that check is refused by OpenSSH (`not_confirmed`).
     `password` makes it a password login (the key stays out); without it the account's key is
     used. `stdin` is bytes (a sudo password line) or a binary file (an upload), streamed.
     With `stdout_path` the output is written there (a download) and bounded by `max_bytes`."""
     require_openssh()
+    if not confirmed and not is_known(target, user_scope_id):
+        raise SshError(f"{target} is a server this account has not connected to yet; the "
+                       "first connection must be confirmed by the user in the app")
     if not password:
         ensure_identity(user_scope_id)
         passphrase = _passphrase(user_scope_id)
@@ -449,7 +466,7 @@ def run(target: Target, remote_command: str, *, user_scope_id: Optional[str],
     else:
         env = _env(password=password)
     argv = build_argv(target, remote_command, user_scope_id=user_scope_id,
-                      password_login=bool(password))
+                      password_login=bool(password), confirmed=confirmed)
     was_known = is_known(target, user_scope_id)
     timeout = max(float(MIN_TIMEOUT_SECONDS), min(float(timeout or 120), float(MAX_TIMEOUT_SECONDS)))
 
@@ -551,8 +568,15 @@ def run(target: Target, remote_command: str, *, user_scope_id: Optional[str],
                     stdout=b"".join(out_chunks).decode("utf-8", errors="replace"),
                     stderr=stderr, timed_out=state["timed_out"],
                     too_large=state["too_large"], bytes_out=written)
-    result.host_key_changed = ("REMOTE HOST IDENTIFICATION HAS CHANGED" in stderr
-                               or (was_known and "Host key verification failed" in stderr))
+    # OpenSSH's text for a server missing from the list under strict checking (sshconnect.c:
+    # "No %s host key is known for %.200s and you have requested strict checking."). Before
+    # the changed-key reading: a server forgotten after was_known was read fails with "Host
+    # key verification failed" too, and is no DIFFERENT key.
+    result.not_confirmed = (not confirmed and result.returncode == 255
+                            and "you have requested strict checking" in stderr)
+    result.host_key_changed = not result.not_confirmed and (
+        "REMOTE HOST IDENTIFICATION HAS CHANGED" in stderr
+        or (was_known and "Host key verification failed" in stderr))
     result.auth_failed = result.returncode == 255 and "Permission denied" in stderr
     if not was_known and is_known(target, user_scope_id):
         result.first_contact = True

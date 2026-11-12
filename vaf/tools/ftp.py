@@ -295,10 +295,8 @@ class FtpTool(BaseTool):
             # A first contact is remembered only after a first-contact question (proven the
             # same above) or an application's allow(): a known server forgotten between the
             # check above and the login is then refused by connect, not taken as confirmed.
-            asked = kwargs.get("_call_question")
             session = ftp.connect(target, user_scope_id=scope, password=password,
-                                  confirmed=bool(kwargs.get("_call_confirmed"))
-                                  and (asked is None or bool(asked)))
+                                  confirmed=self.first_contact_confirmed(kwargs))
         except ftp.FtpError as e:
             return f"[FTP {shown}] {_hide(str(e))}."
         except Exception as e:      # noqa: BLE001 - a fault outside ftplib's own errors

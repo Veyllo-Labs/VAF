@@ -496,7 +496,8 @@ def test_the_ssh_download_does_not_write_through_a_link(lab, monkeypatch):
     _link(lab.ws / "r.json.part", lab.manifest)
     with pytest.raises(ssh.SshError, match="cannot be written"):
         ssh.run(ssh.Target(user="tester", host="example.org"), "cat r.json",
-                user_scope_id=None, password="pw", stdout_path=lab.ws / "r.json.part")
+                user_scope_id=None, confirmed=False, password="pw",
+                stdout_path=lab.ws / "r.json.part")
     assert started == []
     _untouched(lab)
 

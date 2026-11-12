@@ -34,7 +34,8 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
 
 - **Coming back to a busy chat shows it as you left it.** The running answer, its steps, the
   specialist's window and its files are there when you switch back, after a reconnect (you stay
-  in your chat) and after a reload (the chat shows a loading state for a moment first).
+  in your chat unless it no longer exists) and after a reload (the chat shows a loading state
+  for a moment first).
   The file buttons under an answer (the files the agent wrote) no longer disappear, and while
   you switch between chats, what you type stays with its chat (a reload empties the box, as
   before). The browser no longer keeps your chat messages in its storage. File buttons of

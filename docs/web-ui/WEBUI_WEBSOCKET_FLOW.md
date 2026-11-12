@@ -74,7 +74,7 @@ directly and never passes through the proxy at all. **A new socket is tested ove
 ## Connection Sequence (Happy Path)
 
 1. WebUI opens its WebSocket. Any HTTPS page, and an HTTP page on port 80 or with no explicit port in its URL, dials its own origin (`/ws`): it came through a proxy, and the integrated one relays `/ws` itself. Asking the server instead would name the port the proxy bound, which is not the port the browser dialled once a port forward, a NAT or a load balancer sits in between (measured: a page on a forwarded `:18443` dialled `:8443` and never connected). Every other page asks `/api/network/ws-config`: `ws://<host>:<local_network_port>/ws` when TLS is off (8001 unless that key says otherwise), and plain `ws://127.0.0.1:8005/ws` for the local desktop (which loads `http://127.0.0.1:3000` and cannot use the proxy's self-signed cert). Pinned by `tests/test_ws_config.py`.
-2. Backend sends `session_list` and then `history_update` (auto-load latest session, marked `autoLoad: true`) followed by that chat's `live_replay`. A page that already shows a chat (a reconnect) ignores the auto-loaded one and sends `load_session` for its own chat.
+2. Backend sends `auth_state` first, before anything else on that connection (`{authenticated, accountId, username, role}`; `accountId` is the account the ownership checks use: the token's scope, or the local admin's on the tokenless localhost lane), then `session_list` and then `history_update` (auto-load latest session, marked `autoLoad: true`) followed by that chat's `live_replay`. A page that already shows a chat (a reconnect) ignores the auto-loaded one and sends `load_session` for its own chat.
 3. Frontend sets `currentSessionId` and starts sending `chat` messages with session ID.
 4. Backend queues the task with metadata (`origin_channel`, `task_class`, `enqueue_session_id`).
 5. Headless agent processes and streams `agent_message_update`.
@@ -212,15 +212,19 @@ Key rules:
     other turn event), `file_created` (per path and turn) and the turn's end
     (`message_complete` or `generation_stopped`, kept and replayed: a turn that ended but is
     not stored yet is drawn as ended, quietly). The group lives until the turn LEAVES THE
-    QUEUE: every `task_done` of a web turn goes through the runner's queue wrapper
+    QUEUE: every `task_done` of a chat turn (web and messenger alike, never a system command)
+    goes through the runner's queue wrapper
     (`_TurnEndingQueue` in `headless_runner.py`), which calls
     `WebInterfaceManager.turn_left_queue(session, turn)` first, on the normal end (after the
     save) and on every other exit (a revoked account, a failed load, a refused, dropped or
-    stopped turn); only then do the turn's entries and prompt go. A stream event of a turn
-    that was queued after the one on record drops what the earlier turn left behind (one that
-    died without leaving the queue cleanly); an event of an older turn id never moves the turn
-    (an async coder announces its files with its own, earlier turn id while the next turn
-    runs), and only the running turn's prompt is kept alive by the turn's events. Next to it, the prompt of each queued or running web turn,
+    stopped turn); only then do that turn's entries and prompt go, never those of the turn
+    queued after it (an image upload it announced meanwhile stays). A stream event names the
+    turn that runs now: a turn that left the queue never becomes current again (an async coder
+    announces its files with its own, earlier turn id while the next turn runs, the drain its
+    summary between turns), and any other new id takes over from the turn on record (one that
+    died without leaving cleanly), whether or not it recorded a prompt (messenger turns,
+    automations and wakes record none). Only the running turn's prompt is kept alive by the
+    turn's events. Next to it, the prompt of each queued or running web turn,
     by turn id (`set_prompt` after `tq.add`, as typed, without the editor block; the
     regenerate re-ask too), at most 20 per chat. `generation_stopped` drops the queued ones;
     the runner also stores the turn id on the person's message (`metadata["turn_id"]`), so a
@@ -615,11 +619,13 @@ Key rules:
   for 1.5 s while the restored content lays itself out (`bottomPinUntilRef`; a touch ends
   it). A replayed `message_complete` (a turn that ended and is not stored yet) plays no
   sound, reads nothing aloud and fires no reaction. Not in `crossSessionAllowed`: it is
-  addressed to the open chat. After a reconnect the page asks for its own chat again; if the
-  server refuses (`error`: the chat was deleted, or the tab's connection now belongs to
-  another account), the page takes the chat the server auto-loaded. When the reconnected
-  account differs from the one the page showed chats to (`/api/auth/me`), the page also
-  drops its kept transcripts, the composer drafts and the workflow panel stored in the tab.
+  addressed to the open chat. After a reconnect the page first reads the connection's
+  `auth_state` (always its first frame): when its `accountId` differs from the one of this
+  page load's first connect, or is missing after one that had it, the page reloads before
+  it applies any other frame (`web/lib/socketAccount.ts`), so nothing of one account's chats,
+  drafts or viewers stays on screen for another. With the same account it asks for its own
+  chat again; if the server refuses (`error`: the chat was deleted meanwhile), the page takes
+  the chat the server auto-loaded.
   A chat turn stored per generation round (its answer's metadata carries `rounds`, see
   `agent_message_update` below) is projected the way it streamed (`_history_projection`):
   one assistant entry per round with text, carrying `round` and `roundAnswer`, each followed

@@ -1472,7 +1472,10 @@ title, page errors (uncaught exceptions), console output, failed network
 requests (HTTP 400+), the rendered text, and a screenshot saved into the chat
 workspace (inspect it with `analyze_image` when layout matters). It exists for
 the build-run-inspect-fix loop: write a page, render it, read what actually
-happened, fix, render again.
+happened, fix, render again. The screenshot is announced with
+`purpose="check"` and the id of the tool call that took it, so the chat shows
+it inside that step (or in the turn's screenshot strip) and not as an
+attachment of the answer; `sandbox_preview` saves through the same method.
 
 Two callers, one implementation (`vaf/core/browser_render.py`):
 

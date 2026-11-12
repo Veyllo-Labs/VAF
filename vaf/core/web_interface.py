@@ -50,6 +50,22 @@ def _current_turn_id() -> Optional[str]:
         return None
 
 
+def _current_tool_call_id() -> Optional[str]:
+    """The tool call (step of the turn) this emit belongs to, or None. Never raises."""
+    try:
+        from vaf.core.subagent_ipc import get_current_tool_call_id
+        return get_current_tool_call_id()
+    except Exception:
+        return None
+
+
+# Why a created file exists, when it is not a result for the person. One value:
+# "check", a picture a tool took to check its own work (render_check, sandbox_preview);
+# the chat shows it inside its step instead of as an attachment. A closed set, so an
+# unknown value is dropped and its file stays an ordinary attachment, never hidden.
+FILE_PURPOSES = frozenset({"check"})
+
+
 def _post_to_parent(data: dict) -> None:
     """POST one event to the main process's /api/subagent/stream (used from sub-agent subprocesses,
     which have no local WebSocket clients of their own)."""
@@ -1348,7 +1364,7 @@ def notify_inbox_changed(user_scope_id: Optional[str] = None) -> None:
 
 
 def notify_file_created(session_id: Optional[str], file_path, title: Optional[str] = None,
-                        turn_id: Optional[str] = None) -> None:
+                        turn_id: Optional[str] = None, purpose: Optional[str] = None) -> None:
     """
     Notify the Web UI that a file was created so it shows a download/open link.
     Works from main process (WebSocket) and from subprocess (HTTP POST fallback).
@@ -1359,6 +1375,11 @@ def notify_file_created(session_id: Optional[str], file_path, title: Optional[st
     announced BEFORE that turn starts (an image attached to the message being
     sent). Without it the browser had to guess "the newest answer that exists
     right now" - which, while a tool is running, is still the PREVIOUS answer.
+
+    `toolId` names the step (tool call) that produced the file, from
+    `tool_call_context` or `VAF_TOOL_CALL_ID` in a child. `purpose` says why the file
+    exists when it is not a result for the person; only `FILE_PURPOSES` pass, anything
+    else is dropped so the file stays an attachment.
     """
     if not session_id or not file_path:
         return
@@ -1369,7 +1390,10 @@ def notify_file_created(session_id: Optional[str], file_path, title: Optional[st
         "filePath": resolved,
         "title": title or Path(file_path).name,
         "turnId": turn_id or _current_turn_id(),
+        "toolId": _current_tool_call_id(),
     }
+    if purpose in FILE_PURPOSES:
+        payload["purpose"] = purpose
     wi = get_web_interface()
     if getattr(wi, "_server_loop", None):
         # In-process path: the /api/workflow/update endpoint (which anchors the

@@ -224,7 +224,8 @@ class RenderCheckTool(BaseTool):
                 f.write(base64.b64decode(b64))
             try:
                 from vaf.core.web_interface import notify_file_created
-                notify_file_created(session_id, path)
+                # A check picture: the chat shows it in this step, not as an attachment.
+                notify_file_created(session_id, path, purpose="check")
             except Exception:
                 pass
             # The absolute path, so it names the same file in every lane: the coder resolves

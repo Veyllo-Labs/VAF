@@ -177,10 +177,14 @@ def test_sandbox_preview_reports_like_render_check(mgr, monkeypatch, tmp_path):
     monkeypatch.setattr(ipc, "get_current_session_id", lambda: "chat-1")
     monkeypatch.setattr(session_mod, "get_session_workspace_dir", lambda sid, create=False, **kw: tmp_path)
     chips = []
-    monkeypatch.setattr(wi, "notify_file_created", lambda sid, path, title=None: chips.append(path))
+    purposes = []
+    monkeypatch.setattr(wi, "notify_file_created", lambda sid, path, title=None, purpose=None: (
+        chips.append(path), purposes.append(purpose)))
     out = SandboxPreviewTool().run(environment="0a1b2c3d", target="http://localhost:8000/",
                                    user_scope_id="s")
     assert "Rendered: http://localhost:8000/" in out and "Title: My App" in out
     assert "Uncaught Error" in out and "Failed requests: not measured in this mode" in out
     [png] = list(tmp_path.glob("render_check_*.png"))
     assert png.read_bytes() == PNG and chips == [str(png)]
+    # A check picture, drawn in its step and not as an attachment (render_check's own method).
+    assert purposes == ["check"]

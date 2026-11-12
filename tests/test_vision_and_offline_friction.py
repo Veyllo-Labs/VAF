@@ -75,7 +75,8 @@ def test_render_check_names_its_screenshot_by_its_full_path(monkeypatch, tmp_pat
                         lambda sid, create=False, **kw: tmp_path)
     import vaf.core.web_interface as wi
     chips = []
-    monkeypatch.setattr(wi, "notify_file_created", lambda sid, path, title=None: chips.append(path))
+    monkeypatch.setattr(wi, "notify_file_created",
+                        lambda sid, path, title=None, purpose=None: chips.append(path))
     tool = RenderCheckTool.__new__(RenderCheckTool)
     note = tool._save_screenshot("aGVsbG8=")
     second = tool._save_screenshot("aGVsbG8=", "png")

@@ -3893,6 +3893,15 @@ Thumbs.db
                     _sub_env["VAF_TURN_ID"] = _turn_id
             except Exception:
                 pass
+            # The step crosses it as well: the child's check screenshots belong to the
+            # coding_agent call that started it, and the chat shows them in that step.
+            try:
+                from vaf.core.subagent_ipc import get_current_tool_call_id
+                _tool_call_id = get_current_tool_call_id()
+                if _tool_call_id:
+                    _sub_env["VAF_TOOL_CALL_ID"] = _tool_call_id
+            except Exception:
+                pass
 
             # The caller's identity crosses the boundary as DATA (librarian pattern). A
             # scope UUID and a role string - never a secret; what may enter a child's

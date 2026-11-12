@@ -2683,6 +2683,19 @@ turn (a spawned coder) is still addressed correctly. Skipping it is not an
 error - events simply carry `None` and your UI has to fall back to arrival
 order, which is the bug this exists to remove.
 
+One level finer than the turn is the STEP. The agent loop declares the id of
+the tool call it is running (`vaf.core.subagent_ipc.tool_call_context`, read
+back with `get_current_tool_call_id`, carried into a spawned coder as
+`VAF_TOOL_CALL_ID`), and `notify_file_created` stamps it as `toolId`. If your
+own tool takes pictures to check its own work, announce them with
+`notify_file_created(session_id, path, purpose="check")`: the web UI then
+draws them inside that tool's step instead of as attachments of the answer.
+`purpose` is a closed set (`vaf.core.web_interface.FILE_PURPOSES`, only
+`"check"` today); an unknown value is dropped and the file stays an ordinary
+attachment, so a typo can never hide a file. A tool that leaves `purpose` out
+keeps today's behaviour. If you drive tools from your own loop instead of
+`Agent`, wrap each call in `tool_call_context(call_id)` to get the same link.
+
 ### More extension points
 
 Beyond tools, the product loads three other user-extensible artifact kinds -

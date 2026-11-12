@@ -574,7 +574,7 @@ Every spawner goes through `vaf.core.subagent_spawn.spawn_subagent(agent_type, t
 ...)`: IPC task creation, child env as data (never the parent's `os.environ`), one
 platform-escaping implementation, the `[SUBAGENT_ASYNC:<task_id>:<agent_type>]`
 marker, and `cancel_task` on a failed spawn. Agent-specific behavior stays at the
-call site as DATA (extra env like the coder's `VAF_TURN_ID`/`VAF_ALLOWED_TOOLS`,
+call site as DATA (extra env like the coder's `VAF_TURN_ID`/`VAF_TOOL_CALL_ID`/`VAF_ALLOWED_TOOLS`,
 extra argv like `--project-path`, or `payload=` for a machine-readable spec that
 must stay off the OS command line). Five tools used to carry this block copy-pasted;
 the sixth consumer (the learn agent) is what proved the primitive's shape.

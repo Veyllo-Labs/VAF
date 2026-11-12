@@ -13089,7 +13089,8 @@ class Agent:
                                     # Show full message without truncation
                                     UI.event("( OO) Agent Chat", f"( OO) Main Agent → (OO ) Coding Agent: {tool_args_str}", style="green")
                             # No spinner, just run. The tool will print its own updates.
-                            _outcome, _spawned = self._execute_tool_and_spawns(function_name, arguments)
+                            _outcome, _spawned = self._execute_tool_and_spawns(
+                                function_name, arguments, tool_call_id=tc.get('id'))
                             result = _outcome.result
                         else:
                             # IMPORTANT: Some tools require interactive confirmation (trust gate).
@@ -13097,7 +13098,8 @@ class Agent:
                             # So for risky/gated tools, run WITHOUT the status spinner.
                             from vaf.core.trust import should_gate_tool
                             if should_gate_tool(function_name):
-                                _outcome, _spawned = self._execute_tool_and_spawns(function_name, arguments)
+                                _outcome, _spawned = self._execute_tool_and_spawns(
+                                    function_name, arguments, tool_call_id=tc.get('id'))
                                 result = _outcome.result
                             else:
                                 # Standard Tool Spinner
@@ -13106,7 +13108,7 @@ class Agent:
                                     spinner="dots"
                                 ):
                                     _outcome, _spawned = self._execute_tool_and_spawns(
-                                        function_name, arguments)
+                                        function_name, arguments, tool_call_id=tc.get('id'))
                                 result = _outcome.result
                     except Exception as e:
                         error_msg = f"Error executing tool: {e}"
@@ -14365,10 +14367,14 @@ class Agent:
         self._take_tool_advice(name, outcome.advised_tools)
         return outcome
 
-    def _execute_tool_and_spawns(self, name, args):
+    def _execute_tool_and_spawns(self, name, args, tool_call_id=None):
         """One call of a chat turn: its ``ToolCallOutcome`` and the sub-agent tasks it started
-        (``spawn_ledger``). Only those tasks' markers are this call's delegation."""
-        with _spawn_ledger() as spawned:
+        (``spawn_ledger``). Only those tasks' markers are this call's delegation.
+
+        ``tool_call_id`` is declared for the call (``tool_call_context``), so what the tool
+        announces (a check screenshot) names the step that produced it."""
+        from vaf.core.subagent_ipc import tool_call_context
+        with _spawn_ledger() as spawned, tool_call_context(tool_call_id):
             outcome = self._execute_tool_outcome(name, args)
         return outcome, frozenset(spawned)
 

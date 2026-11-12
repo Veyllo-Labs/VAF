@@ -1296,6 +1296,11 @@ _turn_ctx: "contextvars.ContextVar[Any]" = contextvars.ContextVar(
     "vaf_current_turn_id", default=_UNSET
 )
 
+# Which TOOL CALL (step of the turn) this context serves; see `tool_call_context`.
+_tool_call_ctx: "contextvars.ContextVar[Any]" = contextvars.ContextVar(
+    "vaf_current_tool_call_id", default=_UNSET
+)
+
 # Which ROOM asked for this context's work, when one did. A worker spawned from
 # a room turn finishes long after that turn, and its result is delivered by a
 # plain session turn that knows nothing of the room - measured live: the coder
@@ -1513,6 +1518,44 @@ def get_current_turn_id() -> Optional[str]:
         return v
     tid = (os.environ.get("VAF_TURN_ID") or "").strip()
     return tid or None
+
+
+@contextmanager
+def tool_call_context(tool_call_id: Optional[str]):
+    """Serve the body as tool call `tool_call_id`, then restore the previous value exactly,
+    including "never told" (the token reset, as in `session_context`).
+
+    A turn says WHICH exchange, a tool call says WHICH step of it. A picture a tool takes
+    to check its own work belongs to the step that took it, and the browser can only put
+    it there when the event names that step; the call id is otherwise known only to the
+    agent loop that dispatched the call. `None` is a declaration: this body serves no
+    tool call, so a parent's id read from the environment does not apply.
+    """
+    token = _tool_call_ctx.set(str(tool_call_id) if tool_call_id else None)
+    try:
+        yield
+    finally:
+        try:
+            _tool_call_ctx.reset(token)
+        except Exception:
+            pass
+
+
+def get_current_tool_call_id() -> Optional[str]:
+    """The tool call this run serves, or `None`. Context first, process boundary second.
+
+    The env fallback is the child case, as for the turn: the async coder runs in a
+    subprocess, and the pictures it takes belong to the `coding_agent` step that started
+    it, which crosses the fork as `VAF_TOOL_CALL_ID`. Never raises.
+    """
+    try:
+        v = _tool_call_ctx.get()
+    except Exception:
+        v = _UNSET
+    if v is not _UNSET:
+        return v
+    cid = (os.environ.get("VAF_TOOL_CALL_ID") or "").strip()
+    return cid or None
 
 
 @contextmanager

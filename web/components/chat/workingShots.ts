@@ -46,7 +46,7 @@ export function stepToolIds(actions: { kind: string; msg: { toolId?: string } }[
     return actions.filter(a => a.kind === 'tool').map(a => a.msg.toolId || '').filter(id => id !== '');
 }
 
-export function splitTurnFiles(chips: FileChip[], stepToolIds: string[], expanded: boolean): TurnFiles {
+export function splitTurnFiles(chips: FileChip[], stepIds: string[], expanded: boolean): TurnFiles {
     const files: FileChip[] = [];
     const shots: FileChip[] = [];
     for (const c of chips) (isWorkingShot(c) ? shots : files).push(c);
@@ -54,7 +54,7 @@ export function splitTurnFiles(chips: FileChip[], stepToolIds: string[], expande
     // "constructor" or "__proto__" must be a key like any other, not an inherited member.
     const byStep: Record<string, FileChip[]> = Object.create(null);
     if (!expanded) return { files, byStep, strip: shots };
-    const steps = new Set(stepToolIds.filter(id => !!id));
+    const steps = new Set(stepIds.filter(id => !!id));
     const strip: FileChip[] = [];
     for (const s of shots) {
         if (s.toolId && steps.has(s.toolId)) (byStep[s.toolId] ||= []).push(s);
@@ -63,7 +63,9 @@ export function splitTurnFiles(chips: FileChip[], stepToolIds: string[], expande
     return { files, byStep, strip };
 }
 
-/** The check pictures of one step, or none. An own key only, for the reason above. */
+/** The check pictures of one step, or none. Two guards: an own key only (an inherited member is
+ *  not this step's, even when it is an array), and only an array (an own key may still hold
+ *  something else). Each has a case only it catches, pinned in the tests. */
 export function stepShots(byStep: Record<string, FileChip[]>, toolId: string | undefined): FileChip[] {
     if (!toolId || !Object.prototype.hasOwnProperty.call(byStep, toolId)) return [];
     const shots = byStep[toolId];

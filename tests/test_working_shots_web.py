@@ -24,7 +24,9 @@ MUTATIONS, each turns the named test red:
 - keep tool steps without an id, or take 'say' steps -> test_step_tool_ids;
 - swap atStart and atEnd in edgeMask -> test_edge_mask;
 - a plain {} for byStep -> test_provider_ids_are_plain_keys (__proto__);
-- read byStep[id] without the own-key check -> test_provider_ids_are_plain_keys (constructor);
+- read byStep[id] without the own-key check -> test_step_lookup_guards_each_catch_their_own_case (inherited array);
+- drop the Array.isArray check in stepShots -> test_step_lookup_guards_each_catch_their_own_case (own non-array);
+- drop both guards -> test_provider_ids_are_plain_keys (constructor) as well;
 - snap the row again, or a scroll padding inside the fade -> test_keyboard_focus_clears_the_fade.
 """
 import json
@@ -64,6 +66,26 @@ def _call(fn, *args):
         "process.stdout.write(JSON.stringify(r === undefined ? null : r));"
     )
     out = subprocess.run(["node", "-e", script, str(_TS), str(MODULE), json.dumps([fn, list(args)])],
+                         capture_output=True, text=True, check=True).stdout
+    return json.loads(out)
+
+
+def _eval(expr):
+    """Evaluate a JS expression against the module's exports (`x`), for inputs JSON cannot
+    carry, such as an object with a prototype of its own."""
+    if shutil.which("node") is None or not _TS.is_dir():
+        pytest.skip("node or web/node_modules/typescript is not installed")
+    script = (
+        "const ts = require(process.argv[1]);"
+        "const fs = require('fs');"
+        "const src = fs.readFileSync(process.argv[2], 'utf8');"
+        "const js = ts.transpileModule(src, {compilerOptions: {module: ts.ModuleKind.CommonJS,"
+        " target: ts.ScriptTarget.ES2019}}).outputText;"
+        "const m = {exports: {}}; new Function('module', 'exports', js)(m, m.exports);"
+        "const r = new Function('x', 'return (' + process.argv[3] + ');')(m.exports);"
+        "process.stdout.write(JSON.stringify(r === undefined ? null : r));"
+    )
+    out = subprocess.run(["node", "-e", script, str(_TS), str(MODULE), expr],
                          capture_output=True, text=True, check=True).stdout
     return json.loads(out)
 
@@ -213,11 +235,25 @@ def test_provider_ids_are_plain_keys():
     out = _call("splitTurnFiles", odd, ["__proto__", "constructor", "hasOwnProperty"], True)
     assert out["byStep"] == {"__proto__": [odd[0]], "constructor": [odd[1]], "hasOwnProperty": [odd[2]]}
     assert out["strip"] == []
-    # A step with such an id and no pictures finds nothing (the page's lookup).
+    # A step with such an id and no pictures finds nothing (the page's lookup). Every
+    # Object.prototype member is a function, so EITHER guard of stepShots alone already
+    # answers [] here; these lines pin the behaviour, not one guard.
     for name in ("constructor", "hasOwnProperty", "isPrototypeOf", "toString"):
         assert _call("stepShots", {"c1": [odd[0]]}, name) == []
     assert _call("stepShots", {"c1": [odd[0]]}, "c1") == [odd[0]]
     assert _call("stepShots", {"c1": [odd[0]]}, None) == []
+
+
+def test_step_lookup_guards_each_catch_their_own_case():
+    """stepShots has two guards, and each has a case only it catches.
+
+    The own-key check: an INHERITED member that is an array. Array.isArray would accept it,
+    so a map that ever gains a prototype (a plain `{}` again, a spread from a class) would
+    hand one step's pictures to every step whose id names that member.
+    The array check: an OWN key whose value is not an array; the own-key check accepts it."""
+    inherited = _eval("x.stepShots(Object.create({ c9: [{ path: '/ws/a.jpg', name: 'a.jpg' }] }), 'c9')")
+    assert inherited == [], "an inherited array is not this step's pictures"
+    assert _eval("x.stepShots({ c1: 'not a list' }, 'c1')") == [], "an own non-array value is no list of pictures"
 
 
 def test_keyboard_focus_clears_the_fade():

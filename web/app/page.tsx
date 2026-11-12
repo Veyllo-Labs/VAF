@@ -2538,7 +2538,7 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                             mine
                                 ? "bg-gray-900 text-white dark:bg-[#e6e6e6] dark:text-[#181818]"
                                 : "bg-gray-200 text-gray-700 dark:bg-[#2a2a2a] dark:text-[#c8c8c8]")}>
-                            {(label || '?').slice(0, 2)}
+                            {appRoom && mine ? <User size={15} /> : (label || '?').slice(0, 2)}
                         </div>
                         )}
                         <div className="min-w-0 flex-1">
@@ -2667,7 +2667,7 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                 return (
                 <div key={p.key} className="flex gap-3 py-2 room-msg-enter opacity-50">
                     <div className="w-8 h-8 rounded-full shrink-0 flex items-center justify-center text-[11px] font-medium mt-0.5 bg-gray-900 text-white dark:bg-[#e6e6e6] dark:text-[#181818]">
-                        {(meLabel || '?').slice(0, 2)}
+                        {appRoom ? <User size={15} /> : (meLabel || '?').slice(0, 2)}
                     </div>
                     <div className="min-w-0 flex-1">
                         <div className="flex items-baseline gap-2 flex-wrap">

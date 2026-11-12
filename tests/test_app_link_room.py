@@ -451,6 +451,11 @@ def test_app_msg_equal_to_room_line_is_stored(runner_world, monkeypatch):
     world = _run_app_turn(monkeypatch, runner_world, "Morgen frei?")
     users = [m for m in world.stored["messages"] if m["role"] == "user"]
     assert [u.get("kind") for u in users] == [agent_origin.APP_ROOM_OUT_KIND, None]
+    # VAF's agent read the room line in its turn, as the person's words to the app's agent:
+    # role user, labelled, and never as its own.
+    turn = [call for call in world.seen if any(m["role"] == "system" for m in call)][0]
+    labelled = agent_origin.APP_ROOM_OUT_LABEL + "\nMorgen frei?"
+    assert [m["role"] for m in turn if m.get("content") == labelled] == ["user"]
 
 
 # ── user_phone in the room ────────────────────────────────────────────────────

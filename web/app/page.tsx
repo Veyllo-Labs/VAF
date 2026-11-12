@@ -39,7 +39,7 @@ import InboxWindow from '@/components/inbox/InboxWindow';
 import { TurnDrafts, UnplacedDrafts, isWaitingDraft, type HeldSendRow } from '@/components/outbox/HeldSendCard';
 import { useChatDrafts } from '@/components/outbox/useChatDrafts';
 import {
-    APP_ROOM_ID, APP_ROOM_TITLE, ROOM_SEND_IDLE, beginSend, clearAfterSend, deliveryOf, emptyKey,
+    APP_ROOM_ID, APP_ROOM_TITLE, ROOM_SEND_IDLE, SEND_TIMEOUT_MS, beginSend, clearAfterSend, deliveryOf, emptyKey,
     isAppRoom, lineTextKey, placeholderKey, refusalKey, roomOpenCommand, roomStillListed,
     showUnreadDot, toKey, type RoomSend,
 } from '@/components/chat/appRoom';
@@ -2199,7 +2199,7 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
     /** The Veyllo App room's words: the person's own name, the line under the header, "to
      *  <name>" and the delivery state of a line to the app's agent. Set only for that room. */
     appRoom?: { you: string; line: string; to: (peer: string, name: string) => string;
-        delivery: (state: string, reason?: string, device?: string, resent?: boolean) => { text: string; resend: boolean };
+        delivery: (state: string, reason?: string, device?: string, resent?: boolean) => { text: string; resend: boolean; quiet: boolean };
         lineText: (code?: string, seconds?: number) => string | null;
         sendAgain: string; onSendAgain: (text: string, lineId: string) => void; sending: boolean;
         empty: string; confirmed: string };
@@ -2603,7 +2603,7 @@ function RoomConversation({ view, onMembers, closedNote, membersTitle, timeForma
                                 const d = appRoom.delivery(m.state, m.reason, m.device, m.resent);
                                 return (
                                     <div data-delivery={m.state} className={cn("text-[10px] mt-0.5 flex items-center gap-2",
-                                        m.state === 'not_delivered' ? "text-amber-600 dark:text-amber-400"
+                                        m.state === 'not_delivered' && !d.quiet ? "text-amber-600 dark:text-amber-400"
                                             : "text-gray-400 dark:text-[#7a7a7a]")}>
                                         <span>{d.text}</span>
                                         {d.resend && (
@@ -4078,7 +4078,7 @@ function VAFDashboardContent() {
         to: (peer: string, name: string) => tMain(toKey(peer), { name }),
         delivery: (state: string, reason?: string, device?: string, resent?: boolean) => {
             const d = deliveryOf(state, reason, roomView.room.appRoom?.devices, device, resent);
-            return { text: tMain(d.key, d.values || {}), resend: d.resend };
+            return { text: tMain(d.key, d.values || {}), resend: d.resend, quiet: !!d.quiet };
         },
         lineText: (code?: string, seconds?: number) => {
             const key = lineTextKey(code);
@@ -5166,9 +5166,13 @@ function VAFDashboardContent() {
         setAppRoomSending(next);
         setAppRoomError('');
         const sentFrom = roomViewRef.current?.room.roomId ?? null;
+        // A request that never answers ends after SEND_TIMEOUT_MS with the failure sentence;
+        // the text stays in the box.
+        const abort = new AbortController();
+        const timer = setTimeout(() => abort.abort(), SEND_TIMEOUT_MS);
         try {
             const res = await fetch(`${getApiBase()}/api/app-link/room`, {
-                method: 'POST', credentials: 'include',
+                method: 'POST', credentials: 'include', signal: abort.signal,
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text: next.text, ...(next.resendOf ? { resend_of: next.resendOf } : {}) }),
             });
@@ -5179,12 +5183,16 @@ function VAFDashboardContent() {
             }
             setInput(prev => (clearAfterSend(sentFrom, roomViewRef.current?.room.roomId ?? null, text, prev)
                 ? '' : prev));
-            // The new line is where the view goes once the room answers.
-            pendingScrollRestore.current = 'bottom';
+            // The new line is where the view goes once the room answers, while the room is
+            // still what is on screen (another chat must not jump to its bottom).
+            if (roomViewRef.current?.room.roomId === APP_ROOM_ID) {
+                pendingScrollRestore.current = 'bottom';
+            }
             wsSocketRef.current?.send(JSON.stringify(roomOpenCommand(APP_ROOM_ID)));
         } catch {
             setAppRoomError('failed');
         } finally {
+            clearTimeout(timer);
             appRoomSendRef.current = ROOM_SEND_IDLE;
             setAppRoomSending(ROOM_SEND_IDLE);
         }
@@ -8137,7 +8145,7 @@ function VAFDashboardContent() {
             // intent; see its comment for why both halves are needed.
             requestAnimationFrame(() => setChatScroll(containerRef.current?.scrollHeight ?? 0));
         }
-    }, [messages, loading, roomView?.messages.length, appRoomDrafts.length, dockHeight]);
+    }, [messages, loading, roomView?.messages.length, appRoomDrafts.length, dockHeight, appRoomSending.busy]);
 
     // Run the prompt navigator's parked jump once the widened window has been
     // committed and laid out. Parked rather than timed: the previous version
@@ -8211,7 +8219,7 @@ function VAFDashboardContent() {
         // The Veyllo App room's waiting drafts end its transcript and arrive after it, and its
         // notice grows the dock: a view that was at the bottom follows both, or the last card
         // opens behind the composer or under the notice.
-        const sig = `${messages.length}:${String(last?.content ?? '').length}:${roomView?.messages.length ?? 0}:${appRoomDrafts.length}:${dockHeight}`;
+        const sig = `${messages.length}:${String(last?.content ?? '').length}:${roomView?.messages.length ?? 0}:${appRoomDrafts.length}:${dockHeight}:${appRoomSending.busy}`;
         if (sig === _chatSigRef.current) return false;
         _chatSigRef.current = sig;
         return true;

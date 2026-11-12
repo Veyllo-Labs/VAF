@@ -927,7 +927,7 @@ def test_a_room_scrolls_with_the_chat_s_own_autoscroll():
     assert anchor_at > branch_end, "the scroll anchor is inside the chat branch again"
 
     # and the effect fires for a room's messages too
-    assert "}, [messages, loading, roomView?.messages.length, appRoomDrafts.length, dockHeight]);" in source, (
+    assert "}, [messages, loading, roomView?.messages.length, appRoomDrafts.length, dockHeight, appRoomSending.busy]);" in source, (
         "new room messages do not trigger the scroll")
 
 

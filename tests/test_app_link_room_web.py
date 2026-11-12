@@ -106,7 +106,8 @@ def test_every_key_the_rules_name_is_in_every_catalogue():
         " ...['turn_failed','declined','unavailable','timeout','failed','cancelled','disconnected',"
         "'file_refused'].map(m.lineTextKey), m.placeholderKey(true), m.placeholderKey(false),"
         " m.toKey('person'), m.toKey('vaf_agent'), m.refusalKey('text_only'),"
-        " ...['timer','process','draft'].map(m.lineTextKey), m.emptyKey(true), m.emptyKey(false)]"))
+        " ...['timer','process','draft'].map(m.lineTextKey), m.emptyKey(true), m.emptyKey(false),"
+        " m.refusalKey('already_sent_again'), m.deliveryOf('x', '', 1, '', true).key]"))
     assert len(keys) >= 25
     for lang in LANGS:
         main = json.loads((ROOT / "web" / "messages" / f"{lang}.json").read_text(
@@ -123,10 +124,24 @@ def test_one_send_at_a_time():
     assert _call("m.beginSend(m.ROOM_SEND_IDLE, '   ')") is None
 
 
-def test_a_line_sent_again_offers_no_second_resend():
-    """MUTATION: ignore `resent` - red."""
-    assert _call("m.deliveryOf('not_delivered', 'removed', 1, '', true)")["resend"] is False
+def test_a_line_sent_again_offers_no_second_resend_and_reads_quietly():
+    """MUTATION: ignore `resent` - red; MUTATION: keep the amber "not delivered" for it - red."""
+    assert _call("m.deliveryOf('not_delivered', 'removed', 1, '', true)") == {
+        "key": "appRoomSentAgain", "resend": False, "quiet": True}
     assert _call("m.deliveryOf('not_delivered', 'removed', 1, '', false)")["resend"] is True
+    assert _call("m.refusalKey('already_sent_again')") == "appRoomAlreadySentAgain"
+
+
+@pytest.mark.parametrize("lang, marker", [("ja", "空白"), ("zh", "空格"), ("ko", "띄어"),
+                                          ("th", "เว้นวรรค")])
+def test_scripts_without_spaces_are_told_to_put_one_after_the_name(lang, marker):
+    """"@Mia你好" is no mention of Mia: where a script is written without spaces, the empty
+    room and the hint say to put a space after the name. MUTATION: drop the clause from one
+    of the texts - red."""
+    main = json.loads((ROOT / "web" / "messages" / f"{lang}.json").read_text(
+        encoding="utf-8"))["main"]
+    for key in ("appRoomEmpty", "appRoomEmptyAgentOnly", "appRoomPlaceholder"):
+        assert marker in main[key], (lang, key)
 
 
 def test_wake_notes_and_the_empty_room_are_worded():

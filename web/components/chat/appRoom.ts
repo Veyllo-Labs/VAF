@@ -41,6 +41,7 @@ export function refusalKey(code: string): string {
         case 'no_device': return 'appRoomNoDevice';
         case 'rate_limited': return 'appRoomRateLimited';
         case 'text_only': return 'appRoomTextOnly';
+        case 'already_sent_again': return 'appRoomAlreadySentAgain';
         default: return 'appRoomFailed';
     }
 }
@@ -58,10 +59,11 @@ export const toKey = (peer: string) => (peer === 'person' ? 'appRoomToYou' : 'ap
 /** The catalogue key of how a line to the agent in the Veyllo App stands, and whether the
  *  person is offered to send it again (only a line that will not arrive any more). */
 export function deliveryOf(state: string, reason?: string, devices?: number, device?: string,
-    resent?: boolean): { key: string; values?: Record<string, string>; resend: boolean } {
-    const d = deliveryState(state, reason, devices, device);
-    // A line the person already sent again offers no second resend.
-    return resent ? { ...d, resend: false } : d;
+    resent?: boolean): { key: string; values?: Record<string, string>; resend: boolean; quiet?: boolean } {
+    // A line the person already sent again offers no second resend and is no longer a
+    // warning: it reads, quietly, that it was sent again.
+    if (resent) return { key: 'appRoomSentAgain', resend: false, quiet: true };
+    return deliveryState(state, reason, devices, device);
 }
 
 function deliveryState(state: string, reason?: string, devices?: number, device?: string):
@@ -112,6 +114,10 @@ export function beginSend(current: RoomSend, text: string, resendOf?: string | n
     if (current.busy || !text.trim()) return null;
     return { busy: true, text: text.trim(), resendOf: resendOf || null };
 }
+
+/** How long a line may be on its way before the composer gives up on it (the request is
+ *  aborted, the text stays, the general failure sentence shows). */
+export const SEND_TIMEOUT_MS = 30000;
 
 /** Whether the composer is cleared when a line was taken: only while the view it was written in
  *  is still the one on screen and the box still holds that line. Typing the same words in

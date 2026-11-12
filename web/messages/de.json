@@ -252,6 +252,8 @@
     "roomCloseConfirm": "Raum löschen",
     "roomCloseCancel": "Abbrechen",
     "roomSending": "wird gesendet…",
+    "appRoomAlreadySentAgain": "Diese Nachricht wurde schon noch einmal gesendet.",
+    "appRoomSentAgain": "unten noch einmal gesendet",
     "appRoomWakeDraft": "Ein Entwurf wurde gesendet",
     "appRoomWakeProcess": "Ein Hintergrundbefehl ist fertig",
     "appRoomWakeTimer": "Ein Timer ist abgelaufen",

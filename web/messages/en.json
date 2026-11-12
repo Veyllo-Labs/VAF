@@ -252,6 +252,8 @@
     "roomCloseConfirm": "Delete room",
     "roomCloseCancel": "Cancel",
     "roomSending": "sending…",
+    "appRoomAlreadySentAgain": "This message was already sent again.",
+    "appRoomSentAgain": "sent again below",
     "appRoomWakeDraft": "A draft was sent",
     "appRoomWakeProcess": "A background command finished",
     "appRoomWakeTimer": "A timer fired",

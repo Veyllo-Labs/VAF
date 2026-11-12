@@ -158,9 +158,9 @@ def test_the_drafts_of_both_sessions_show_and_pin_the_view():
     assert "useChatDrafts(getApiBase(), appRoomSessions[1] || '', heldVersion)" in PAGE
     assert "[...appRoomChatDrafts.rows, ...appRoomAskDrafts.rows]" in PAGE
     assert "<UnplacedDrafts rows={appRoomDrafts}" in PAGE
-    assert "}, [messages, loading, roomView?.messages.length, appRoomDrafts.length, dockHeight]);" in PAGE
+    assert "}, [messages, loading, roomView?.messages.length, appRoomDrafts.length, dockHeight, appRoomSending.busy]);" in PAGE
     grew = _between(PAGE, "const _chatGrew = () => {", "\n    };")
-    assert ":${appRoomDrafts.length}:${dockHeight}`;" in grew
+    assert ":${appRoomDrafts.length}:${dockHeight}:${appRoomSending.busy}`;" in grew
 
 
 def test_the_inbox_opens_the_room_by_the_registry_name():
@@ -194,3 +194,15 @@ def test_a_dropped_file_is_refused_in_the_room():
     guard = drop.index("if (roomViewRef.current?.room.roomKind === 'veyllo_app') {")
     assert "setAppRoomError('text_only');" in drop
     assert guard < drop.index("addFilesAsAttachments(files)")
+
+
+def test_a_send_gives_up_after_its_timeout_and_scrolls_only_the_room():
+    """MUTATION: drop the abort signal, or set the scroll target whatever is on screen - red."""
+    sender = _between(PAGE, "const sendToAppRoom = async (text: string, resendOf?: string) => {",
+                      "\n    };")
+    assert "const timer = setTimeout(() => abort.abort(), SEND_TIMEOUT_MS);" in sender
+    assert "signal: abort.signal," in sender and "clearTimeout(timer);" in sender
+    assert ("if (roomViewRef.current?.room.roomId === APP_ROOM_ID) {\n"
+            "                pendingScrollRestore.current = 'bottom';") in sender
+    view = _between(PAGE, "function RoomConversation(", "function VAFDashboardContent(")
+    assert "m.state === 'not_delivered' && !d.quiet ?" in view

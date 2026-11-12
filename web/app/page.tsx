@@ -6485,22 +6485,6 @@ function VAFDashboardContent() {
                     // every attempt to leave the room bounced straight back.
                     {
                         const rid = data.room?.roomId;
-                        if (rid === APP_ROOM_ID) {
-                            const lines: RoomMessage[] = data.messages || [];
-                            // A send that gave up asks whether its line arrived anyway.
-                            appRoomListenersRef.current.forEach(cb => cb(lines));
-                            // A line the notice was shown for that turns up later: clear the
-                            // box and the notice while the box still holds exactly its text.
-                            const late = appRoomLateRef.current;
-                            if (late) {
-                                const verdict = lateLine(lines, late.lineId, late.text, inputValueRef.current || '');
-                                if (verdict !== 'wait') appRoomLateRef.current = null;
-                                if (verdict === 'clear') {
-                                    setInput('');
-                                    setAppRoomError('');
-                                }
-                            }
-                        }
                         const wanted = (roomViewRef.current && roomViewRef.current.room.roomId === rid)
                             || pendingRoomOpenRef.current === rid;
                         if (wanted) {
@@ -6516,6 +6500,22 @@ function VAFDashboardContent() {
                             const texts = new Set((data.messages || []).map((m: RoomMessage) => (m.text || '').trim()));
                             setPendingRoomSays(prev => prev.filter(p =>
                                 p.roomId === rid && Date.now() - p.ts < 30000 && !texts.has(p.text.trim())));
+                        }
+                        if (rid === APP_ROOM_ID) {
+                            const lines: RoomMessage[] = data.messages || [];
+                            // A send that gave up asks whether its line arrived anyway.
+                            appRoomListenersRef.current.forEach(cb => cb(lines));
+                            // A line the notice was shown for that turns up later: clear the
+                            // box and the notice while the box still holds exactly its text.
+                            const late = appRoomLateRef.current;
+                            if (late) {
+                                const verdict = lateLine(lines, late.lineId, late.text, inputValueRef.current || '');
+                                if (verdict !== 'wait') appRoomLateRef.current = null;
+                                if (verdict === 'clear') {
+                                    setInput('');
+                                    setAppRoomError('');
+                                }
+                            }
                         }
                     }
                 }

@@ -172,6 +172,9 @@ a client through it today, and uvicorn servers in tests may run on it, so it
 is not hidden here); connect() called on the C base class _socket.socket
 directly; and a literal address of one of this machine's own network
 interfaces, through which a live app bound to all interfaces stays reachable.
+A name the hosts file maps to loopback past its first megabyte is judged
+remote, so it is dialed and not refused: on a listed service port it would
+reach a live app.
 The budget is per test; the whole-suite total is reported, not judged, since
 it grows with every test. The whole-suite figure is the "Slow refusal" summary
 that stage 7 of scripts/ci_check.sh prints on every run; no figure for it is
@@ -346,9 +349,14 @@ if _refusal_log and _os.name != "nt":
         try:
             with open(_os.environ.get("VAF_HOSTILE_HOSTS_FILE") or "/etc/hosts",
                       encoding="utf-8", errors="replace") as hosts:
-                text = hosts.read(_HOSTS_READ_LIMIT)
+                text = hosts.read(_HOSTS_READ_LIMIT + 1)
         except OSError:
             text = ""
+        if len(text) > _HOSTS_READ_LIMIT:
+            # The limit fell inside a record: "127.0.0.1 api" cut from api.internal
+            # would put a name here that the file never defines.
+            text = text[:_HOSTS_READ_LIMIT]
+            text = text[:text.rfind("\\n") + 1]
         for row in text.splitlines():
             fields = row.split("#", 1)[0].split()
             try:

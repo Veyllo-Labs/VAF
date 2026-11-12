@@ -384,6 +384,41 @@ print(hosts in opened)
     assert stdout.split() == ["False", "True"]
 
 
+@needs_counter
+def test_a_name_cut_by_the_read_limit_is_not_local(tmp_path):
+    """When the read limit of the hosts file falls inside a record, the cut record is
+    dropped: "127.0.0.1 api" cut from api.internal must not make "api" local, while the
+    complete rows before it still count.
+    MUTATION: keep the text up to the limit as it is - red ("api" is force-refused)."""
+    limit = _module()._BLOCKER.split("_HOSTS_READ_LIMIT = ", 1)[1].split("\n", 1)[0]
+    limit = eval(limit, {})        # the literal expression in the snippet, e.g. 1 << 20
+    head = "127.0.0.1 vaf-before.example\n"
+    cut = "127.0.0.1 api"
+    room = limit - len(head) - len(cut)
+    padding = ("#" + "x" * 98 + "\n") * (room // 100)
+    padding += "#" + "x" * (room - len(padding) - 2) + "\n"
+    hosts = tmp_path / "hosts"
+    hosts.write_text(head + padding + cut + ".internal\n", encoding="utf-8", newline="\n")
+    assert len(head + padding + cut) == limit
+    stdout, lines = _refusal_run(tmp_path, VAF_HOSTILE_HOSTS_FILE=str(hosts), pre=r"""
+os.environ["VAF_HOSTILE_REFUSE_PORTS"] = "80"
+
+
+def _refuse_all(self, address):
+    raise ConnectionRefusedError(errno.ECONNREFUSED, "stand-in refusal")
+
+
+socket.socket.connect = _refuse_all
+""", post=r"""
+print(reason(socket.socket(), ("api", 80)))
+print(reason(socket.socket(), ("vaf-before.example", 80)))
+""")
+    cut_reason, before_reason = stdout.splitlines()
+    assert cut_reason.endswith("stand-in refusal")
+    assert "never dialed" in before_reason
+    assert [addr for _who, addr, _cost in lines] == ["vaf-before.example:80"]
+
+
 def test_on_windows_the_axis_installs_nothing(tmp_path):
     """A Windows host pays the real wait, so the generated sitecustomize installs no
     counter there and writes no log; main() then judges an empty log, which passes.

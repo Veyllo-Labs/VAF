@@ -446,12 +446,36 @@ def test_another_account_on_a_reconnect_reloads_the_page():
     assert verdict(None, None) == "same"
 
 
+
+def test_a_socket_without_a_baseline_reloads_once():
+    """The page load's first socket closed before its auth_state: a later socket has nothing to
+    compare with and reloads once; after that reload (the flag survives it) it adopts, and the
+    flag never holds back a reload for a real change of account.
+    MUTATION: adopt on any socket without a baseline - red; ignore the flag (loop) - red."""
+    ctx = lambda first_socket, flag: json.dumps({"firstSocket": first_socket, "reloadedForMissingBaseline": flag})
+    run = lambda first, incoming, c: _run(SOCKET, f"m.connectAccount({first}, {json.dumps(incoming)}, {c})")
+    assert run("undefined", "bob", ctx(True, False)) == "adopt"       # first socket, hello came
+    assert run("undefined", "bob", ctx(False, False)) == "reload"     # first socket closed early
+    assert run("undefined", "bob", ctx(False, True)) == "adopt"       # after that one reload
+    assert run(json.dumps("bob"), "bob", ctx(False, True)) == "same"
+    assert run(json.dumps("bob"), "alice", ctx(False, True)) == "reload"   # the flag holds nothing back
+
+
 def test_the_page_decides_before_any_other_frame():
     src = _page()
     onmsg = _between(src, "socket.onmessage = (event) => {", "socket.onclose")
     assert onmsg.index("if (reloadingRef.current) return;") < onmsg.index("handleFrame(data);")
-    assert onmsg.index("connectAccount(firstAccountRef.current, data.accountId)") < onmsg.index("handleFrame(data);")
+    assert onmsg.index("connectAccount(firstAccountRef.current, data.accountId,") < onmsg.index("handleFrame(data);")
     assert "window.location.reload();" in onmsg
+    # Before the reload: the screen is hidden at once, and the tab's stored workflow panel goes
+    # (a reload keeps sessionStorage). MUTATION: drop either - red.
+    reload_at = onmsg.index("window.location.reload();")
+    assert onmsg.index("document.documentElement.style.visibility = 'hidden';") < reload_at
+    assert onmsg.index("forgetWorkflowState();") < reload_at
+    # The one reload without a baseline is marked; an adopted account clears the mark.
+    assert "sessionStorage.setItem(MISSING_BASELINE_RELOAD_KEY, '1')" in onmsg
+    assert "sessionStorage.removeItem(MISSING_BASELINE_RELOAD_KEY)" in onmsg
+    assert "{ firstSocket, reloadedForMissingBaseline: reloadedOnce }" in onmsg
     # The check this replaces is gone: no /api/auth/me on reconnect, no pending state.
     for gone in ("accountCheckRef", "deferredReaskRef", "settle(", "forgetAccountState"):
         assert gone not in src, gone

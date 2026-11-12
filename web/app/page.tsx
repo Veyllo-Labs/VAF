@@ -25,7 +25,7 @@ import { downloadText } from '@/lib/download';
 import { type NativeDocxDocument, flattenNativeDocxText, replaceTextInNativeDocx } from '@/lib/docxNative';
 import type { EditorFileInfo } from '@/lib/editorFile';
 import { cacheChat, purgeLegacySessionCache } from '@/lib/sessionCache';
-import { connectAccount } from '@/lib/socketAccount';
+import { connectAccount, MISSING_BASELINE_RELOAD_KEY } from '@/lib/socketAccount';
 import { historyMessage, entryActivity, keepCachedOrphan, ComposerDrafts, LiveHistoryHold, planReplay, closesOwnWorkflow } from '@/components/chat/liveView';
 import SettingsModal, { type SettingsModalProps } from '@/components/SettingsModal';
 import { AgentAvatar, SPECIALIST_SKIN, SUBAGENT_ACCENT, type AvatarMode, type SubAgentKind } from '@/components/AgentAvatar';
@@ -4954,6 +4954,8 @@ function VAFDashboardContent() {
     // of another account reloads the page (web/lib/socketAccount.ts); the frames that arrive
     // until the reload are not applied.
     const firstAccountRef = useRef<string | null | undefined>(undefined);
+    // How many chat sockets this page load opened: only the first may set the baseline.
+    const socketCountRef = useRef(0);
     const reloadingRef = useRef(false);
     const sessionsRef = useRef<Session[]>([]);
     useEffect(() => {
@@ -5206,6 +5208,8 @@ function VAFDashboardContent() {
             const wsUrl = (base ? base + '/ws' : '/ws');
             const socket = new WebSocket(wsUrl);
             wsSocketRef.current = socket;
+            socketCountRef.current += 1;
+            const firstSocket = socketCountRef.current === 1;
             let opened = false;
             socket.onopen = () => {
             opened = true;
@@ -7710,14 +7714,28 @@ function VAFDashboardContent() {
             // The connection's first frame says whose it is. Another account than this page
             // load's first connect: reload before anything else of this socket is applied.
             if (data?.type === 'auth_state') {
-                const verdict = connectAccount(firstAccountRef.current, data.accountId);
+                let reloadedOnce = false;
+                try { reloadedOnce = sessionStorage.getItem(MISSING_BASELINE_RELOAD_KEY) === '1'; } catch { /* blocked */ }
+                const noBaseline = firstAccountRef.current === undefined;
+                const verdict = connectAccount(firstAccountRef.current, data.accountId,
+                    { firstSocket, reloadedForMissingBaseline: reloadedOnce });
                 if (verdict === 'reload') {
                     reloadingRef.current = true;
+                    // The one reload for a socket without a baseline is marked, so it cannot repeat.
+                    if (noBaseline) {
+                        try { sessionStorage.setItem(MISSING_BASELINE_RELOAD_KEY, '1'); } catch { /* blocked */ }
+                    }
+                    // Nothing of the first account stays drawn or stored for the next document:
+                    // the screen is hidden at once (no React round trip), and the workflow panel
+                    // the tab keeps in sessionStorage (a reload keeps sessionStorage) goes.
+                    document.documentElement.style.visibility = 'hidden';
+                    forgetWorkflowState();
                     window.location.reload();
                     return;
                 }
                 if (verdict === 'adopt') {
                     firstAccountRef.current = typeof data.accountId === 'string' && data.accountId ? data.accountId : null;
+                    try { sessionStorage.removeItem(MISSING_BASELINE_RELOAD_KEY); } catch { /* blocked */ }
                 }
                 return;
             }

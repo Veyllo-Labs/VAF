@@ -13,14 +13,32 @@
  * belongs to the first account, and a reload is the one way to drop all of it at once instead
  * of clearing state by hand, piece by piece. Both answers come from the same source (the
  * socket), so a reload cannot loop: after it, the new account is the first one.
+ *
+ * One more case: the page load's first socket closed before its `auth_state` arrived, so
+ * there is no account to compare a later socket with, and the account may have changed in
+ * between. Such a later socket reloads the page once; a flag in sessionStorage (it survives
+ * the reload) keeps that from repeating, and every adopted account clears it, so it never
+ * holds back a reload for a real change of account.
  */
 
 export type ConnectVerdict = 'adopt' | 'same' | 'reload';
 
-/** `first`: the account of this page load's first connect, `undefined` before it. */
-export function connectAccount(first: string | null | undefined,
-                               incoming: unknown): ConnectVerdict {
+export type ConnectContext = {
+    /** This is the first socket this page load opened. */
+    firstSocket: boolean;
+    /** This tab already reloaded once because a socket came without a baseline. */
+    reloadedForMissingBaseline: boolean;
+};
+
+/** The sessionStorage key of that one reload. */
+export const MISSING_BASELINE_RELOAD_KEY = 'vaf_socket_baseline_reload';
+
+/** `first`: the account of this page load's first `auth_state`, `undefined` before one came. */
+export function connectAccount(first: string | null | undefined, incoming: unknown,
+                               ctx: ConnectContext = { firstSocket: true, reloadedForMissingBaseline: false }): ConnectVerdict {
     const id = typeof incoming === 'string' && incoming ? incoming : null;
-    if (first === undefined) return 'adopt';
+    if (first === undefined) {
+        return (ctx.firstSocket || ctx.reloadedForMissingBaseline) ? 'adopt' : 'reload';
+    }
     return id === first ? 'same' : 'reload';
 }

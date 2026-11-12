@@ -187,8 +187,9 @@ export const useWorkflowStore = create<WorkflowState>()(
 );
 
 /**
- * Forget the workflow panel this tab keeps in sessionStorage (its steps and console lines):
- * on sign-out and when the tab's connection belongs to another account. Never throws.
+ * Forget the workflow panel this tab keeps in sessionStorage (its steps, results and console
+ * lines): at sign-out, when the app finds its session ended, when the sign-in page opens, and
+ * right before the page reloads because its socket reconnected as another account. Never throws.
  */
 export function forgetWorkflowState(): void {
   try {

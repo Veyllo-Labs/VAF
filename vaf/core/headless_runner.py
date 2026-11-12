@@ -3388,6 +3388,11 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                                 # bridge supplied one) so a later inbound edit/delete event can find
                                 # and patch exactly this turn. Purely additive; ignored elsewhere.
                                 _user_meta = dict(_img_meta) if _img_meta else {}
+                                # The turn's id on the person's message too: the live record keeps
+                                # the prompt until the turn leaves the queue, and a view built in
+                                # between recognises the stored copy by it.
+                                if getattr(task, "turn_id", None):
+                                    _user_meta[TURN_ID_KEY] = str(task.turn_id)
                                 _chan_msg_id = (task.metadata or {}).get("channel_message_id")
                                 if _chan_msg_id:
                                     _user_meta["channel_message_id"] = str(_chan_msg_id)
@@ -3704,6 +3709,12 @@ def run_headless_agent(worker_id: int = 1, total_workers: int = 1):
                         from datetime import datetime as _dt
                         with open(get_dated_log_path("queue", "log"), "a", encoding="utf-8") as f:
                             f.write(f"{_dt.now().isoformat()} QUEUE_DONE session_id={task.session_id} (chat)\n")
+                except Exception:
+                    pass
+                # The turn leaves the queue: what it showed is stored now (or never will be),
+                # so its live record goes (vaf/core/live_view.py).
+                try:
+                    get_web_interface().turn_left_queue(task.session_id, getattr(task, "turn_id", None))
                 except Exception:
                     pass
                 tq.task_done()

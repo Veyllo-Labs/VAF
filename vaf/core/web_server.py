@@ -1493,19 +1493,37 @@ def _session_activity(session_id) -> dict:
             "chatWait": _session_chat_wait(sid)}
 
 
-def _unstored_prompts(prompts: list, stored: list) -> list:
-    """The prompts of running or queued turns that the stored transcript does not have yet.
-    The runner writes a turn's prompt with its answer, so between that save and the turn's
-    `message_complete` a prompt is in both; the stored copy wins."""
-    out = []
-    for prompt in prompts or []:
-        content = str(prompt.get("content") or "")
-        ts = str(prompt.get("timestamp") or "")
-        if any(m.get("role") == "user" and str(m.get("content") or "") == content
-               and str(m.get("timestamp") or "") >= ts for m in stored):
-            continue
-        out.append(prompt)
+def _stored_turn_ids(loaded) -> set:
+    """The turn ids the stored transcript carries (`TURN_ID_KEY` on the person's message and on
+    the answer)."""
+    out = set()
+    for msg in getattr(loaded, "messages", None) or []:
+        meta = (msg.get("metadata") if isinstance(msg, dict) else getattr(msg, "metadata", None)) or {}
+        if isinstance(meta, dict) and meta.get(TURN_ID_KEY):
+            out.add(str(meta[TURN_ID_KEY]))
     return out
+
+
+def _unstored_prompts(prompts: list, loaded) -> list:
+    """The prompts of running or queued turns that the stored transcript does not have yet.
+    The record keeps a prompt until its turn leaves the queue, which is after the runner saved
+    it, so for a moment a prompt is in both; the stored copy wins. Matched by turn id, never by
+    text: two identical questions queued in a row are two turns."""
+    stored = _stored_turn_ids(loaded)
+    return [p for p in prompts or [] if str(p.get("turnId") or "") not in stored]
+
+
+def _chat_owner(loaded) -> Optional[str]:
+    """The account that owns a chat, the rule every ownership reader applies: its recorded
+    scope, and a scopeless legacy chat is the local admin's."""
+    scope = (getattr(loaded, "metadata", None) or {}).get("user_scope_id")
+    if scope is not None:
+        return str(scope)
+    try:
+        from vaf.core.config import get_local_admin_scope_id
+        return str(get_local_admin_scope_id())
+    except Exception:
+        return None
 
 
 def _live_history_update(loaded, sid: str, **extra) -> dict:
@@ -1515,23 +1533,27 @@ def _live_history_update(loaded, sid: str, **extra) -> dict:
     events the `live_replay` sent right after it brings (`_send_live_view`)."""
     activity = _session_activity(sid)
     messages = _history_projection(loaded, sid)
-    snap = manager.live_view.snapshot(sid, active=bool(activity.get("isActive")))
-    messages.extend(_unstored_prompts(snap["prompts"], messages))
+    snap = manager.live_view.snapshot(sid, active=bool(activity.get("isActive")),
+                                      owner=_chat_owner(loaded))
+    messages.extend(_unstored_prompts(snap["prompts"], loaded))
     return {"type": "history_update", "messages": messages, "sessionId": sid,
             **activity, "live": bool(snap["turn"]), **extra}
 
 
-async def _send_live_view(websocket, sid: str) -> None:
+async def _send_live_view(websocket, sid: str, loaded) -> None:
     """Send the chat's live record as one `live_replay` frame, after its `history_update`:
     always exactly one, empty when nothing is on record, so the page can draw a running chat's
     transcript and its live events together instead of guessing whether more is coming.
 
     Only ever called for a connection that already passed the chat's ownership gate (or opens
-    its own newest chat) and is subscribed to it. The record is read right before the send,
+    its own newest chat) and is subscribed to it, and with the chat's current owner, so a
+    record kept for another account is never sent. The record is read right before the send,
     with no await in between: an event recorded earlier is in the frame, and an event recorded
-    later is sent to this subscribed connection after the frame, so nothing is lost and no
-    older state lands after a newer one. A turn the queue says is over is not replayed."""
-    snap = manager.live_view.snapshot(sid, active=_session_is_active(sid))
+    later goes to this subscribed connection by its own send, so no event is lost. Its own send
+    can still reach the connection before this frame (another coroutine's send interleaves), so
+    the page may see a live event and then an older value of the same entry; the next event of
+    that entry corrects it. A turn the queue says is over is not replayed."""
+    snap = manager.live_view.snapshot(sid, active=_session_is_active(sid), owner=_chat_owner(loaded))
     await websocket.send_json({"type": "live_replay", "sessionId": sid, "events": snap["events"]})
 
 
@@ -1573,8 +1595,6 @@ def _refresh_after_forget(session_id=None, transcript_scrubbed=False, **_):
     except Exception:
         return
     sid = str(session_id)
-    # The in-flight prompt is kept as typed; the replaced value must not come back with it.
-    manager.live_view.drop_prompt(sid)
     _send_to_chat_viewers(sid, {"type": "context_checkpoint", "session_id": sid})
     _send_to_chat_viewers(sid, {
         "type": "history_update",
@@ -5324,7 +5344,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
             # `autoLoad`: the server picked this chat. A browser that already shows another
             # one (a reconnect) asks for its own chat again instead of being moved here.
             await websocket.send_json(_live_history_update(loaded, sid, autoLoad=True))
-            await _send_live_view(websocket, sid)
+            await _send_live_view(websocket, sid, loaded)
             artifact_payload = _build_artifact_payload(loaded, sid)
             if artifact_payload:
                 await websocket.send_json(artifact_payload)
@@ -5884,7 +5904,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                         _history_frame = _live_history_update(loaded, sid)
                         frontend_messages = _history_frame["messages"]
                         await websocket.send_json(_history_frame)
-                        await _send_live_view(websocket, sid)
+                        await _send_live_view(websocket, sid, loaded)
                         artifact_payload = _build_artifact_payload(loaded, sid)
                         if artifact_payload:
                             await websocket.send_json(artifact_payload)
@@ -7137,8 +7157,10 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                        "timestamp": _dt_prompt.now().isoformat()}
                             if attached_images:
                                 _prompt["images"] = _projected_images(attached_images)
-                            manager.live_view.set_prompt(str(session_id),
-                                                         getattr(_task, "turn_id", None), _prompt)
+                            manager.live_view.set_prompt(
+                                str(session_id), getattr(_task, "turn_id", None), _prompt,
+                                owner=(manager._session_owner_scope(str(session_id))
+                                       or (str(user_scope_id) if user_scope_id else None)))
                         except Exception as _lp_err:
                             log("WebServer", f"live prompt not recorded: {_lp_err}")
                         if attached_images:
@@ -9986,7 +10008,7 @@ async def websocket_endpoint(websocket: WebSocket, token: Optional[str] = Query(
                                                                           session_id))
                     # The question is not stored until the turn ends, like a typed one.
                     manager.live_view.set_prompt(str(session_id), getattr(_regen_task, "turn_id", None),
-                                                 _regen_ask)
+                                                 _regen_ask, owner=_chat_owner(_loaded_regen))
                     log("WebServer", f"Regenerate requested for session {session_id}")
 
                 elif type == "browser_interactive_start":

@@ -6,7 +6,7 @@
 Before, a file chip lived only in the browser that received the `file_created` event: a chat
 switch to an idle chat or a reload rebuilt the messages from the server, which had no files,
 and the chips were gone. Now both notify paths record the file on the session
-(`runtime_state["created_files"]`, with F-295's `purpose` and `toolId`), the stored answer
+(`runtime_state["created_files"]`, with the `purpose` and `toolId` fields of the file event), the stored answer
 carries its turn id, and `_history_projection` puts each file on the last entry of its turn.
 """
 import asyncio

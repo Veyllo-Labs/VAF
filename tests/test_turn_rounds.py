@@ -572,6 +572,14 @@ def test_runner_stores_the_turn_id_on_the_answer(runner_world, monkeypatch):
     answer = [m for m in run.stored["messages"] if m["role"] == "assistant"][-1]
     assert answer["content"] == "Erledigt."
     assert answer["metadata"][TURN_ID_KEY] == run.task.turn_id
+    # The person's message names the turn too, and the live record is told when the turn has
+    # left the queue (after message_complete; the save lies between the two).
+    asked = [m for m in run.stored["messages"] if m["role"] == "user"][-1]
+    assert asked["metadata"][TURN_ID_KEY] == run.task.turn_id
+    names = [name for name, _, _ in run.web.events]
+    left = [args for name, args, _ in run.web.events if name == "turn_left_queue"]
+    assert left == [(run.task.session_id, run.task.turn_id)]
+    assert names.index("turn_left_queue") > max(i for i, n in enumerate(names) if n == "emit_message_complete")
 
 
 def test_runner_stores_a_corrected_turn_whole(runner_world, monkeypatch):

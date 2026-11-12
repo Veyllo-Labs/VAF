@@ -30,7 +30,9 @@ The sinks, in the order a value reaches them:
 - the debug logs of the last two days (`scrub_recent_logs`);
 - whatever a lane registered with `add_listener`: the terminal's input history, the
   word-suggestion corpus, the Telegram bridge (which tries to delete the person's message there), the
-  web chat (which drops its cached copy).
+  web chat (which drops its cached copy), and the chat's live record (`vaf/core/live_view.py`,
+  the streamed text, tool results, worker lines and the queued prompt a browser is shown when it
+  opens the chat again), which is scrubbed at once and scrubs every later event of the chat.
 
 NAMED BOUNDARIES - where the value stays, stated so nobody promises more:
 - the model provider received the turn;

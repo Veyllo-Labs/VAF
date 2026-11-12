@@ -72,9 +72,12 @@ def test_a_chat_left_behind_is_still_recorded_and_only_for_itself():
     recorded = [e["type"] for e in m.live_view.snapshot("A", active=True)["events"]]
     assert recorded == list(LIVE_TYPES)
     assert m.live_view.snapshot("B", active=True)["events"] == []
-    # The terminal event takes the owner lane, and is recorded there too: the turn is over.
+    # The terminal event takes the owner lane, and is recorded there too: the turn is over,
+    # and stays on record until the runner says it left the queue (it is stored then).
     asyncio.run(m.broadcast_to_session_and_owner("A", None, {"type": "message_complete",
                                                               "turnId": "t1"}))
+    assert [e["type"] for e in m.live_view.snapshot("A", active=True)["events"]][-1] == "message_complete"
+    m.turn_left_queue("A", "t1")
     assert [e["type"] for e in m.live_view.snapshot("A", active=True)["events"]] == [
         "coder_state", "subagent_update"]
 
@@ -187,7 +190,9 @@ def world(monkeypatch, tmp_path):
     monkeypatch.setattr(permissions, "account_standing_async", _unknown)
     monkeypatch.setattr(crypto, "get_jwt_secret", lambda: "s" * 32)
     monkeypatch.setattr(tq_mod, "enqueue_system_command", lambda command, **k: None)
-    monkeypatch.setattr(server.manager, "live_view", LiveViewLedger())
+    owners = {OLDER: BOB, SID: BOB}
+    monkeypatch.setattr(server.manager, "live_view",
+                        LiveViewLedger(owner_of=lambda sid: owners.get(sid)))
     return server
 
 
@@ -253,7 +258,7 @@ def test_load_session_sends_history_then_one_replay(world, _fresh_queue):
     task = _busy(_fresh_queue, OLDER)
     server.manager.live_view.set_prompt(OLDER, task.turn_id,
                                         {"role": "user", "content": "what now?",
-                                         "timestamp": "2999-01-01T00:00:00"})
+                                         "timestamp": "2999-01-01T00:00:00"}, owner=BOB)
     _record(server, OLDER)
     with _connect(server, BOB, "bob") as ws:
         _replay_of(ws, SID)                       # the auto-load of the newest chat
@@ -265,7 +270,8 @@ def test_load_session_sends_history_then_one_replay(world, _fresh_queue):
         history, replay = mine
         assert history["live"] is True and history["isActive"] is True
         assert history["messages"][-1] == {"role": "user", "content": "what now?",
-                                           "timestamp": "2999-01-01T00:00:00"}
+                                           "timestamp": "2999-01-01T00:00:00",
+                                           "turnId": task.turn_id}
         assert [e["type"] for e in replay["events"]] == list(LIVE_TYPES)
         assert all(e["sessionId"] == OLDER for e in replay["events"])
 
@@ -356,10 +362,63 @@ def test_a_running_turns_prompt_is_kept_as_typed(world, _fresh_queue):
 def test_deleting_or_hiding_a_chat_forgets_its_record():
     """Source pin: the record goes with the chat."""
     from pathlib import Path
-    src = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "web_server.py").read_bytes().decode()
+    src = (Path(__file__).resolve().parents[1] / "vaf" / "core" / "web_server.py").read_text(encoding="utf-8")
     delete = src[src.index('elif type == "delete_session":'):src.index('elif type == "hide_session":')]
     hide = src[src.index('elif type == "hide_session":'):src.index('elif type == "new_session":')]
     assert "manager.live_view.forget(sid)" in delete
     assert "manager.live_view.forget(sid)" in hide
+    # A forgotten credential is replaced in the record (the listener), and the forget repaint
+    # no longer drops every queued prompt of the chat.
     forget = src[src.index("def _refresh_after_forget("):src.index("def _send_to_chat_viewers(")]
-    assert "drop_prompt(sid)" in forget
+    assert "drop_prompt" not in forget
+
+
+def test_the_record_is_a_forget_sink(monkeypatch):
+    """A value the agent stores mid-turn (forget_secrets.forget) leaves the record at once, and a
+    later event of the chat is scrubbed on write. MUTATION: no forget listener - red."""
+    from vaf.core import forget_secrets
+    monkeypatch.setattr(forget_secrets, "_by_session", {})
+    m = _fresh_manager()
+    secret = "ftp-pass-0123456789"
+    m.live_view.set_prompt("A", "t1", {"role": "user", "content": f"the password is {secret}"},
+                           owner="bob")
+    m.record_live("A", {"type": "tool_update", "subType": "end", "toolId": "c1", "data": secret})
+    forget_secrets.forget({"FTP_PASS": secret}, session_id="A")
+    m.record_live("A", {"type": "agent_message_update", "content": f"stored {secret}", "turnId": "t1"})
+    out = json.dumps(m.live_view.snapshot("A", active=True, owner="bob"))
+    assert secret not in out and out.count("[FTP_PASS]") == 3
+
+
+def test_an_ended_turn_not_yet_stored_is_shown_ended(world, _fresh_queue):
+    """The runner sends message_complete and saves the chat later; the queue still says busy
+    in between. A chat opened in that window shows the prompt, the answer and the end.
+    MUTATION: clear the turn on message_complete again - red."""
+    server = world
+    task = _busy(_fresh_queue, OLDER)
+    led = server.manager.live_view
+    led.set_prompt(OLDER, task.turn_id, {"role": "user", "content": "the question"}, owner=BOB)
+    led.record(OLDER, {"type": "agent_message_update", "content": "the answer", "round": 1,
+                       "turnId": task.turn_id, "sessionId": OLDER})
+    led.record(OLDER, {"type": "message_complete", "content": "the answer",
+                       "turnId": task.turn_id, "sessionId": OLDER})
+    with _connect(server, BOB, "bob") as ws:
+        _replay_of(ws, SID)
+        _send(ws, {"type": "load_session", "id": OLDER})
+        frames = _replay_of(ws, OLDER)
+        history = [f for f in frames if f.get("type") == "history_update"
+                   and f.get("sessionId") == OLDER][-1]
+        assert history["messages"][-1]["content"] == "the question"
+        assert [e["type"] for e in frames[-1]["events"]] == ["agent_message_update", "message_complete"]
+
+
+def test_a_stored_prompt_is_recognised_by_its_turn_not_its_text():
+    """Two identical questions queued in a row are two turns: the stored first one must not
+    hide the second. MUTATION: match by text again - red."""
+    import vaf.core.web_server as server
+    from vaf.core.session import TURN_ID_KEY, Message, Session
+    s = Session(id="x", name="x")
+    s.messages = [Message(role="user", content="again?", metadata={TURN_ID_KEY: "t1"}),
+                  Message(role="assistant", content="yes", metadata={TURN_ID_KEY: "t1"})]
+    prompts = [{"role": "user", "content": "again?", "turnId": "t1"},
+               {"role": "user", "content": "again?", "turnId": "t2"}]
+    assert server._unstored_prompts(prompts, s) == [prompts[1]]

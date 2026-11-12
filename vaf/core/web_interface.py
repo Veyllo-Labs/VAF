@@ -162,8 +162,15 @@ class WebInterfaceManager:
         self._gate_lock = threading.RLock()
         # What each chat is doing right now, for a browser that comes back to it: every
         # session-scoped event is recorded where it is delivered (vaf/core/live_view.py).
+        # The record is stamped with the chat's owner when it is created, and a forgotten
+        # credential is replaced in it like in every other place the chat is kept.
         from vaf.core.live_view import LiveViewLedger
-        self.live_view = LiveViewLedger()
+        self.live_view = LiveViewLedger(owner_of=self._session_owner_scope)
+        try:
+            from vaf.core.forget_secrets import add_listener as _add_forget_listener
+            _add_forget_listener(self._forget_in_live_view)
+        except Exception:
+            pass
 
     def open_gate(self, session_id: str, payload: Optional[dict] = None) -> str:
         """Open the confirmation a session is about to be asked, and return its id.
@@ -501,6 +508,25 @@ class WebInterfaceManager:
         except Exception as exc:
             _diag_log(f"[LIVE_VIEW] record failed type={message.get('type')} err={exc}")
 
+    def _forget_in_live_view(self, env=None, session_id=None, transcript_scrubbed=False, **_):
+        """forget_secrets listener: the chat's live record is one more place the chat is kept.
+        Called with the values when the agent stores a credential mid-turn, and with
+        `transcript_scrubbed` after a save replaced them (then the chat's remembered values)."""
+        if not session_id:
+            return
+        if not env:
+            from vaf.core.forget_secrets import session_env
+            env = session_env(session_id)
+        self.live_view.scrub(session_id, env or {})
+
+    def turn_left_queue(self, session_id: Optional[str], turn_id: Optional[str]) -> None:
+        """The runner is done with this turn (right before `task_done`): its live record goes,
+        because the stored transcript has it now. Never raises."""
+        try:
+            self.live_view.turn_left_queue(session_id, turn_id)
+        except Exception as exc:
+            _diag_log(f"[LIVE_VIEW] turn_left_queue failed err={exc}")
+
     def session_event_coroutine(self, session_id: str, data: dict):
         """The coroutine that delivers one session-scoped event.
 
@@ -648,7 +674,9 @@ class WebInterfaceManager:
             "toolId": tool_id,
             "name": tool_name,
             "data": data,
-            "timestamp": __import__("datetime").datetime.now().isoformat()
+            "timestamp": __import__("datetime").datetime.now().isoformat(),
+            # Which exchange the step belongs to, like every other turn event.
+            "turnId": _current_turn_id(),
         }
         if aborted:
             payload["aborted"] = aborted

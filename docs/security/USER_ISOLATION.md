@@ -1086,6 +1086,14 @@ Where VAF reaches an account on Telegram (`messaging_endpoints.json`, `by_scope`
   ever decides it, and a turn is queued with that row's scope and username.
 - **One chat per account**, `veyllo_app_<key>` with a random key minted once, so no scope id
   reaches the Veyllo App; every device of the account shares it.
+- **The Veyllo App room is the account's own** (`vaf/core/app_link/room.py`). Its row is listed
+  only for an account with a paired device of its own; `open_app_room` and
+  `POST /api/app-link/room` take no account and no device: the account is the connection's or
+  the sign-in's, the device the room picks among that account's own. The room's pushes
+  (`app_room_changed`) go to that account's connections only. An admin reads another
+  account's two sessions only by the existing transcript rule; there is no room view of
+  another account and no way to write to its devices. Its row id (`app:veyllo_app`) names no
+  session, and the session gate refuses it for everyone.
 - **Pairing is the account's own**: the window opens with the account's own 2FA code, no
   route takes another account's id, and the device exists only after the account confirmed
   its fingerprint in the web UI.

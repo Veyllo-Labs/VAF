@@ -133,7 +133,9 @@ connected it says so at once and nothing is sent or kept for later. Asked a seco
 same chat within five minutes with still no device connected, the turn ends there: you read
 that your Veyllo App is not connected and that you should open it, in your language, and your
 agent makes no further call. Its answer reaches your agent marked as data the app reported,
-never as instructions. The Veyllo App asks you itself before sensitive actions.
+never as instructions. The Veyllo App asks you itself before sensitive actions. A task that was
+sent and how it ended are lines of the [Veyllo App room](#the-veyllo-app-room), whatever chat
+asked for it; a task that was not sent leaves nothing there.
 
 **Tools in the app chat** follow the rules of every messaging channel
 (`vaf/core/tool_contract.py`, `evaluate_tool_policy`), because protocol v1 has no confirmation
@@ -218,7 +220,7 @@ differences (`vaf/core/app_link/bridge.py`, `vaf/core/agent_origin.py`):
   - **No answer within 10 minutes** answers the request that it did not run; a message still
     waits as a draft in the web UI.
   - **A decision in the web UI** settles the card: a message you send, discard or edit in the
-    web UI's Veyllo App chat answers the request with what became of it, within seconds, and a
+    web UI's Veyllo App room ([below](#the-veyllo-app-room)) answers the request with what became of it, within seconds, and a
     later tap in the Veyllo App is told it is decided. One decision wins: a draft leaves at
     most once, and the Veyllo App never sends a draft that was edited after its card went out.
   - **Cancel** of the request in the Veyllo App drops the card (and the message).
@@ -308,11 +310,113 @@ differences (`vaf/core/app_link/bridge.py`, `vaf/core/agent_origin.py`):
   model, so with Veyllo's models in the app, what VAF answers goes to Veyllo, even when VAF
   itself runs fully local.
 
+## The Veyllo App room
+
+Once a Veyllo App is paired, the chat list starts with **Veyllo App**, drawn with the app's
+symbol: one conversation of three parties, you, your VAF agent and the agent in your Veyllo
+App. It shows everything the three wrote to each other: your messages from the app and your
+agent's answers, the requests of the app's agent and your agent's answers to them, the tasks
+your agent handed the app with their results, the lines you wrote to the app's agent on VAF
+and what it wrote back, and the "Confirmed in the Veyllo App" line of a confirmation card.
+It stays there while a device is paired, also with the Veyllo App switched off for your
+account; it is your account's only, and another account never sees it.
+
+**One line, one addressee.** Every line has exactly one addressee, and only the addressee
+answers it:
+
+| A line | Addressee | Who answers | Model calls on VAF |
+|---|---|---|---|
+| You on VAF, with no leading mention | the agent in your Veyllo App | that agent, with a line into the room | none |
+| You on VAF, starting with `@` and your agent's name (or `@VAF`) | your VAF agent | your VAF agent, in your app chat; the app's agent stays quiet | one turn |
+| You in the Veyllo App | your VAF agent | your VAF agent, as today; the app's agent stays quiet | one turn |
+| The app's agent writes into the room | you | nobody; your VAF agent reads it at its next turn | none |
+| The app's agent asks your agent (`agent_ask`) | your VAF agent | your VAF agent, as described above | one turn |
+| Your agent hands the app a task (`user_phone`) | the agent in your Veyllo App | that agent, with the task's result | none on VAF |
+
+There is no chooser: what you write on VAF goes to the app's agent unless it starts with `@`
+and your agent's name, the same leading-mention rule as in an agent room ("frag @VAF" in the
+middle of a line still goes to the app's agent). The composer says so.
+
+**What "your agent is in the room" means.** Your VAF agent reads every room line at its next
+turn in your app chat, where your own turns run: a line you wrote to the app's agent after a
+label that says it was not addressed to it, a line of the app's agent inside a fence that says
+it is that agent's text and data, and nothing of a task line (the chat that ran the task holds
+its call and result). It speaks when it is named, when you write to it from the app, or when
+the app's agent asks it, and in any of those turns it may hand the app a task by itself
+(`user_phone`, no new tool); the task and its result appear in the room. A line addressed to
+somebody else never wakes it, also when that line names it, so a quiet room costs no model
+call, with an API provider and with the local model. Its replies reach the app as they always
+do; nothing is sent twice. What the app's agent wrote into the room is not learned into your
+memories by the chat's compaction.
+
+**Delivery.** A line to the app's agent goes to ONE device: the one that announced the room
+and was used most recently. It is kept in that device's queue until the device confirms it,
+up to seven days, with the push notice of any other message while the device is away. Under
+the line the room shows **delivered** (the device confirmed it), **waiting for the Veyllo
+App** (still queued) or **not delivered** (the device was removed meanwhile). A second device
+of the account does not get the line.
+
+**An older Veyllo App.** A Veyllo App that does not announce the room keeps working as it is.
+The room shows what exists without it, and writing to the app's agent is refused with the
+sentence that a newer Veyllo App is needed; a line to your VAF agent (`@` and its name) still
+works and its answer reaches the older app as an ordinary reply. An app that answers a room
+line with "unknown type" is treated as an older app until it announces the room again.
+
+**Where it lives.** The room has no store of its own. Its record is the two sessions that
+already exist, your app chat (`veyllo_app_<key>`) and the app agent's requests
+(`veyllo_app_<key>_agent`); new room lines are added to the app chat, and the room is a
+read-only projection over both (`vaf/core/app_link/room.py`). Drafts waiting in either session
+show at the end of the room. The inbox opens a Veyllo App conversation here. In the terminal,
+the session panel shows the room as a read-only replay, and `vaf devices say "<text>"` writes
+into it through the running VAF.
+
+### The room messages, for the Veyllo App
+
+The link protocol stays version 1; everything here is additive, and an app without it keeps
+working unchanged.
+
+- **The rule for the app's side.** The app's agent answers only a `room_msg` with
+  `"to": "app_agent"` and a `task`. It does NOT answer on its own: a `room_msg` with
+  `"to": "vaf_agent"` (or any other value), a message the person types in the app to VAF's agent
+  (the app's own `msg`), VAF's replies (`delta`/`done`) and messages (`msg`), and VAF's answers to
+  the app's own `agent_ask`. It may read all of them as context. A `task` and its `task_result`
+  are the two agents working together on purpose, not a second answer to the person's line.
+- **Announcing support.** The app adds `"room"` to `caps` in `hello` (or a later `caps`). VAF
+  announces `"room": true` in `welcome`; without it (an older VAF) the app does not send
+  `room_say`.
+- **VAF to the app: `room_msg`**, a line the person wrote on VAF:
+  `{"t": "room_msg", "id": "<uuid>", "text": "<1..65536 characters>", "ts": <Unix seconds>,
+  "from": "person", "to": "app_agent" | "vaf_agent"}`. `"app_agent"`: give it to the app's agent
+  as its user's words; it answers with `room_say`. `"vaf_agent"`: show it, do not answer; VAF's
+  agent's answer arrives as `delta`/`done` to every device. The app acknowledges with
+  `{"t": "ack", "id": "<id>"}` once it is stored, acknowledges a repeat again and shows it once.
+  Only one device of the account gets a given `room_msg`.
+- **The app to VAF: `room_say`**, the app's agent writes into the room:
+  `{"t": "room_say", "id": "<uuid chosen by the app>", "text": "<1..65536 characters, not blank>",
+  "reply_to": "<optional: the room_msg id it answers>"}`. No attachments in this version
+  (`{"t": "error", "code": "bad_field", "ref": "attachments"}`). VAF answers `ack` once stored; a
+  repeated id (within 24 hours, or already stored) is acknowledged again and stored once.
+  Errors carry the id in `ref`: `rate_limited` (shared with the device's 30 messages per minute;
+  retry later with the same id), `refused` (the Veyllo App is off for the account; do not retry
+  before the next `welcome`), `bad_field` (do not retry). It never starts a turn of VAF's agent,
+  also when it names that agent: the app's agent asks VAF's agent with `agent_ask`.
+- **While the app is away.** VAF keeps a `room_msg` in the device's queue in order with the
+  device's other messages, sends the push notice when the device is paired through the relay,
+  and replays it after `welcome` with its original `id`, `text`, `ts`, `from` and `to`. The app
+  keeps its own unsent `room_say` and sends it again with the same `id`.
+- **An app that does not know `room_msg`** answers
+  `{"t": "error", "code": "unknown_type", "ref": "room_msg"}`; VAF then sends it no `room_msg`
+  until a later `hello` announces the room, and drops the room lines waiting for it.
+- **Names.** The room is called "Veyllo App"; the app's agent appears as "Veyllo App", VAF's
+  agent under its own name.
+
 ## Cost
 
 The relay is billed to the app user's Veyllo account, not by VAF: per message in each
 direction, also for the messages VAF sends by itself (reminders, automations, sub-agent
-results), and per direction for a task for the Veyllo App. The user's subscription pays
+results), and per direction for a task for the Veyllo App. A line written in the Veyllo App room
+is a message like any other: a line to the app's agent and the app agent's line into the room
+are billed per direction, and a quiet room costs nothing. The user's subscription pays
 first, then their credit. The direct way is free. The prices are on veyllo.app
 (`https://veyllo.app/relay#prices`, under `/<locale>/` for the other languages). The window
 links that page instead of quoting amounts, which an installed VAF could not keep current.

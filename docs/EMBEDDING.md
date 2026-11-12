@@ -590,7 +590,11 @@ with `vaf.stored_turn_copy` and hand a model only what `vaf.model_text` returns 
 message: None for a failed turn, the answer without its failure for a turn that answered
 first, the text otherwise (a user message VAF stored with `kind="app_agent"`, a request of
 the agent in the user's Veyllo App, comes back inside the fence that marks it as that agent's
-text). The stored copy keeps the whole stream, failure included, so
+text). The lines of the Veyllo App room in an app chat read the same way: `kind="app_room_out"`
+(the person wrote it to the agent in their Veyllo App) after a label that says it was not
+addressed to VAF's agent, `kind="app_room_in"` (that agent wrote it into the room) inside its
+own fence, and `kind="app_task"`/`"app_task_result"` (a task VAF's agent handed the app, and
+how it ended) not at all: None. The stored copy keeps the whole stream, failure included, so
 your record shows what happened. VAF's own runner and terminal store their transcripts
 exactly this way. With `agent` from the example above, and `reply` standing for however
 your application answers the person (`run()` can still raise; wrap it as that example

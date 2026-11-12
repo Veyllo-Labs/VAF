@@ -1121,6 +1121,17 @@ over the wire the text stays text (the table that resolves a name lives on the h
 `to` is inside what the peer signs), and addressing one member from another machine is
 `--to <peer>`.
 
+The parse of the leading mention itself is `leading_mention(text)` in `vaf/core/a2a/room.py`
+(the first word after a leading "@", without a trailing `,`, `:` or `;`);
+`Room.address_from_mention` resolves that name against the members. The Veyllo App room
+(`vaf/core/app_link/room.py`, [VEYLLO_APP.md](../integrations/VEYLLO_APP.md#the-veyllo-app-room))
+uses the same parse to tell a line for the VAF agent from a line for the agent in the Veyllo
+App. That room is deliberately NOT an agent room: seating the app's agent as a member would
+put its requests under the wake rules of this protocol instead of the limits of its own
+`agent_ask` lane, put the person's app chat turns under room-turn binding, and add a third
+store of lines that already live in two sessions. Its record is those two sessions and a
+read-only projection; it reuses the room VIEW of the web UI, not the room store.
+
 ## Autonomy is granted locally, never received
 
 A peer records in its OWN member file how far its local owner has authorised it to act on

@@ -84,6 +84,10 @@ Singleton pattern manager that:
 - **Delete Sessions**: Remove unwanted sessions
 - **Auto-Save**: Sessions persist automatically
 - **Session List**: Displays recent sessions for the current user only (filtered by `user_scope_id`). Every session command (load, chat, delete, rename, hide, artifact edit) verifies ownership before acting; other users' sessions are not accessible. Legacy sessions with no recorded scope are admin-only when acting on them.
+- **The connect auto-load takes the first CONVERSATION** of the list
+  (`vaf.core.session.first_conversation_id`), never the Veyllo App room or an agent room,
+  whose rows name no session; the browser's own picks filter the same rows out
+  (`conversationsOnly`).
 - **Thinking mode:** When the agent runs in the background (idle thinking), its output is appended to your main chat session (user-scoped default, e.g. `web-default-<scope>`) so you see it in the same conversation. Legacy thinking-only sessions are hidden from the sidebar. The message input stays available so you can reply. See [Thinking-Mode.md](../agents/Thinking-Mode.md).
 
 ### 2b. Agent Rooms in the Sidebar
@@ -436,6 +440,34 @@ address and every file name whole (its `To` and `Preview` columns fold instead o
 marks in the `To` column as plain ASCII `<U+0430>`, and the preview in plain ASCII marks only
 where the console cannot print it: a Windows console encodes cp1252 and cannot print the
 brackets or a Cyrillic word.
+
+### 2b-2. The Veyllo App room
+
+Once a Veyllo App is paired with the account, the sidebar starts with **Veyllo App**, drawn
+with the app's symbol (`Smartphone`), a green dot while a device is connected and the count
+of new lines; it stands above the agent rooms and the conversations
+(`SessionManager.list_ui`, row kind `app_room`, id `app:veyllo_app`, which names no session:
+delete, rename and hide refuse it). It is one conversation of three parties, the person, the
+agent in their Veyllo App and the VAF agent; its rules are in
+[VEYLLO_APP.md](../integrations/VEYLLO_APP.md#the-veyllo-app-room).
+
+- **The room view, in its Veyllo App mode.** Clicking the row sends `open_app_room` and the
+  answer is a `room_transcript` with `room.roomKind = "veyllo_app"`, drawn by the same room
+  view as an agent room and polled the same way. Each line shows its speaker (the person in
+  their own words, the VAF agent with its living avatar, the app's agent with the app's symbol
+  on a sky accent) and "to <name>"; under a line to the app's agent its delivery state
+  (delivered, waiting for the Veyllo App, not delivered); a confirmation from a card stands as
+  one centred line. What the room does not have stays hidden: member chips, the member panel,
+  reactions, the shared folder, the task board, votes and the typing signal of a keypress.
+- **The composer has no chooser.** It posts the line (`POST /api/app-link/room`) and the server
+  decides the addressee: the app's agent, or the VAF agent when the line starts with `@` and its
+  name. `@` completes only the VAF agent's name. The box clears when the line was taken; a
+  refusal keeps the text and says why above the box (an older Veyllo App, the Veyllo App off,
+  no device), and the older-app sentence stands there as long as no device announces the room.
+- **Drafts.** The drafts waiting in either of the room's two sessions (the app chat and the
+  app agent's requests) show at the end of the room, as the unplaced drafts of a chat do.
+- **Signals.** `app_room_changed` refetches the list (the row's count) and an open room view.
+- **The inbox** opens a Veyllo App conversation in this room instead of Settings.
 
 ### 2c. The Inbox Window
 

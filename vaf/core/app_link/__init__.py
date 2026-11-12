@@ -17,7 +17,9 @@ The pieces, bottom up:
 - ``bridge``: the link manager: live sessions, the turn feed into ``TaskQueue`` in process,
   streamed replies, the per-device outbox.
 - ``relay``: the connector to the relay, idle unless a relay QR is live or a device uses it.
-- ``phone_tasks``: tasks for the phone (the ``user_phone`` tool).
+- ``phone_tasks``: tasks for the Veyllo App (the ``user_phone`` tool).
+- ``room``: the Veyllo App room, one conversation of the person, the app's agent and VAF's
+  agent over the app chat and the request session (``room_msg``, ``room_say``).
 
 Security comes from the inner TLS: the relay and the network see ciphertext, and nothing
 here opens a socket to this machine or calls ``/api/*`` (a static guard holds that).

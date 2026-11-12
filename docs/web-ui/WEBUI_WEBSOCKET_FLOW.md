@@ -74,7 +74,7 @@ directly and never passes through the proxy at all. **A new socket is tested ove
 ## Connection Sequence (Happy Path)
 
 1. WebUI opens its WebSocket. Any HTTPS page, and an HTTP page on port 80 or with no explicit port in its URL, dials its own origin (`/ws`): it came through a proxy, and the integrated one relays `/ws` itself. Asking the server instead would name the port the proxy bound, which is not the port the browser dialled once a port forward, a NAT or a load balancer sits in between (measured: a page on a forwarded `:18443` dialled `:8443` and never connected). Every other page asks `/api/network/ws-config`: `ws://<host>:<local_network_port>/ws` when TLS is off (8001 unless that key says otherwise), and plain `ws://127.0.0.1:8005/ws` for the local desktop (which loads `http://127.0.0.1:3000` and cannot use the proxy's self-signed cert). Pinned by `tests/test_ws_config.py`.
-2. Backend sends `auth_state` first, before anything else on that connection (`{authenticated, accountId, username, role}`; `accountId` is the account the ownership checks use: the token's scope, or the local admin's on the tokenless localhost lane), then `session_list` and then `history_update` (auto-load latest session, marked `autoLoad: true`) followed by that chat's `live_replay`. A page that already shows a chat (a reconnect) ignores the auto-loaded one and sends `load_session` for its own chat.
+2. Backend sends `auth_state` first, before anything else on that connection (`{authenticated, accountId, username, role}`; `accountId` is the account the ownership checks use: the token's scope, or the local admin's on the tokenless localhost lane), then `session_list` and then `history_update` (auto-load latest session, marked `autoLoad: true`; the first CONVERSATION of the list, `first_conversation_id`, never the Veyllo App room's row or an agent room's, which name no session) followed by that chat's `live_replay`. A page that already shows a chat (a reconnect) ignores the auto-loaded one and sends `load_session` for its own chat.
 3. Frontend sets `currentSessionId` and starts sending `chat` messages with session ID.
 4. Backend queues the task with metadata (`origin_channel`, `task_class`, `enqueue_session_id`).
 5. Headless agent processes and streams `agent_message_update`.
@@ -286,7 +286,7 @@ Key rules:
   was computed before the chat frame reached the queue); the send-time ref is zeroed
   on every session switch, so a stale flag can never survive a switch-back.
 - WebUI enqueue path rejects implicit fallback into messenger sessions (`telegram_*`, `discord_*`, `whatsapp_*`) when `sessionId` is missing, to prevent cross-channel routing.
-- **Server-side ownership gate:** Beyond frontend `sessionId` filtering, the backend enforces ownership before the first side effect of every session command - `chat` (before subscribing to the session stream), `load_session`, `delete_session`, `rename_session`, `hide_session`, `artifact_edit`, and `regenerate_last_reply` (which deletes stored messages, so it takes the strict form of the gate: a session that does not exist is refused rather than allowed through). The caller must own the session (`metadata.user_scope_id` matches) or be admin (connection role `admin` or local-admin scope); a session with no recorded scope is admin-only. An id that cannot name a session file (a path separator, `.` or `..`, a leading dot, a control character, a drive prefix, surrounding spaces; `check_session_id`) is refused for everyone, and for an id with no file yet a non-admin passes only with an id the server hands out (a minted `<colour><6 digits>` or their own default chat), so the first message cannot claim a channel chat's id or a variant of someone else's. On denial the server sends `{"type":"error","message":"Access denied"}` and continues the receive loop (it does not close the socket). This is stricter than `session_list` visibility, which still shows no-scope sessions to all users.
+- **Server-side ownership gate:** The Veyllo App room's row id (`app:veyllo_app`) names no session and is refused for everyone, the admin included (`is_app_row_id`). Beyond frontend `sessionId` filtering, the backend enforces ownership before the first side effect of every session command - `chat` (before subscribing to the session stream), `load_session`, `delete_session`, `rename_session`, `hide_session`, `artifact_edit`, and `regenerate_last_reply` (which deletes stored messages, so it takes the strict form of the gate: a session that does not exist is refused rather than allowed through). The caller must own the session (`metadata.user_scope_id` matches) or be admin (connection role `admin` or local-admin scope); a session with no recorded scope is admin-only. An id that cannot name a session file (a path separator, `.` or `..`, a leading dot, a control character, a drive prefix, surrounding spaces; `check_session_id`) is refused for everyone, and for an id with no file yet a non-admin passes only with an id the server hands out (a minted `<colour><6 digits>` or their own default chat), so the first message cannot claim a channel chat's id or a variant of someone else's. On denial the server sends `{"type":"error","message":"Access denied"}` and continues the receive loop (it does not close the socket). This is stricter than `session_list` visibility, which still shows no-scope sessions to all users.
 
 ## Message Types
 
@@ -366,6 +366,19 @@ Key rules:
   probe, cookie transfer) in an executor. See
   [BROWSER_AGENT.md](../agents/BROWSER_AGENT.md#interactive-browser-driving-the-sandbox-by-hand).
 
+- `open_app_room` (no fields): asks for the Veyllo App room of the connection's own account
+  (`vaf/core/app_link/room.py` `view`). It names no room and no account, so it cannot ask for
+  another account's room; with no paired device it answers `error`. The answer is a
+  `room_transcript` with `room.roomKind = "veyllo_app"`, `room.id = room.roomId =
+  "app:veyllo_app"`, the three peers (`person`, `vaf_agent`, `app_agent`) in `members_list`,
+  `me = "person"`, `agentPeer = "vaf_agent"`, `typing` holding the VAF agent while a turn of
+  either of the room's sessions runs, `canManage`/`canInvite` false, no tasks, votes,
+  invitations or read positions, and `room.appRoom = { devices, connected, canWrite, reason,
+  agentName, sessions }`. Each message adds `toLabel` and, for a line to the app's agent,
+  `state` (`delivered`, `waiting`, `not_delivered`). Opening marks the room as read. The page
+  stores `data.room` whole, so `appRoom` reaches the view without a field list. The 3-second
+  poll sends `open_app_room` again while that room is open.
+
 - `open_room` (`{ room_id }`): asks for one agent room's transcript. A room is NOT a
   session and deliberately does not travel through `load_session`: `Session.save()`
   rewrites the whole message list, which with N writers is the lost update the room
@@ -441,6 +454,12 @@ Key rules:
   `room_transcript`, where the chip appears under its message.
 
 ### Server → Client
+
+- `app_room_changed` (no payload): the user's Veyllo App room changed (a line written on VAF,
+  a line of the app's agent, a delivery, a task of the VAF agent). Sent to that account's
+  connections only (`push_update_to_user`, `vaf/core/app_link/room.py`). A signal, not the
+  room: the browser answers with `get_sessions` (the row's count) and, while the room is open,
+  `open_app_room`.
 
 - `rooms_changed` (no payload): the user's room list changed outside a socket command
   (the agent opened or joined a room in a tool call). A signal, not the list: the browser
@@ -573,7 +592,10 @@ Key rules:
   means the question could not be answered for this connection and nothing is changed.
 - **Live call (voice agent):** client sends `voice_call_start` / `voice_call_turn` / `voice_call_end` / `voice_call_speak`; server answers `voice_call_reply` / `voice_call_error` / `speaker_enroll_tts`, and sends `voice_call_wait` (`{ resource, position, eta_ms, waited_ms }`) while a turn or its TTS waits in a speech queue. `voice_call_error` with `error: "busy"` (plus `resource`, `reason`, `waited_ms`, `text`, `audio`) is the honest busy; `voice_call_reply.tts_busy` marks a reply sent without audio (no TTS slot, or no audio within the line's budget). These are read by `VoiceCallLayer.tsx` on its own listener, not through `page.tsx`. Enrollment uses the `speaker_enroll_*` / `speaker_profile_*` family. Payloads, guards and the delegation protocol are documented in [VOICE_AGENT.md](../agents/VOICE_AGENT.md). With `voice_semantic_endpoint_enabled` on, the client additionally streams `voice_call_chunk` (16 kHz mono int16 PCM, base64, ~100 ms frames, ~43 kB/s while actively listening, never while muted) and `voice_call_reset` (mute toggled - drop server stream state); the server may push `voice_turn_end {reason}` proposing the endpoint, which triggers the same stop the browser's silence timer would - the timer always remains the fallback. `voice_call_turn` and `voice_call_reply` carry a `timings` object (per-stage latency in ms: browser `endpoint_wait`/`encode`, server `gate`/`stt`/`speaker`/`policy`/`llm`/`tts`).
 
-- `session_list`: available sessions
+- `session_list`: available sessions. The Veyllo App room's row comes first while a device is
+  paired: `{ id: "app:veyllo_app", kind: "app_room", title: "Veyllo App", unread, appRoom:
+  { devices, connected, canWrite, reason } }` (`session_list_payload`); a chat row keeps its
+  six keys.
 - `session_delete_result`: the answer to `delete_session` / `hide_session`. `{ id, deleted, needsConfirm }`. `needsConfirm: true` means the server refused because the chat is not untouched and nobody confirmed - the browser opens the delete dialog and asks again with `confirmed: true`. `deleted: true` means it is gone (a successful archive counts, the file moved) and the browser switches away from it. Both false means nothing was removed. Addressed by `id`, deliberately NOT `sessionId`: the cross-session filter above drops events stamped with a session that is not the open one, and the chat being deleted usually is not.
 - `history_update`: session history (also sets active session). `isActive` answers "is a
   turn running or queued in THIS chat" and is read from the queue

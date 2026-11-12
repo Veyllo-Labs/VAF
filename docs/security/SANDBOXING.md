@@ -239,27 +239,29 @@ The `python_exec` tool runs code directly on your host system. It is:
   `python -m ftplib` in `host_bash`, also under `pypy`, a free-threaded `python3.13t`, and
   behind a wrapper, a shell or a runner. The command a project runner starts (`uv run`,
   `poetry run`, `conda run` ...) or a package runner starts (`npx`, `bunx`, and after their
-  verb `npm exec`, `pnpm dlx`, `pnpm exec`, `yarn dlx`, `bun x`, `pipx run`) is classified
+  verb `npm exec`, `pnpm dlx`, `pnpm exec`, `yarn dlx`, `bun x`, `bun exec`, `pipx run`) is
+  classified
   like one `bash -c` carries, for every category, so `uv run env python -c ...`,
   `uv run bash -c "python -c ..."`, `uv run rm -rf /` and `npx rm -rf /` are refused like the
   same commands without the runner. A package runner's other subcommands (`npm install`,
   `npm run build`, `pipx install x`) start nothing here, and a shell string it is handed
-  (`npx -c 'rm -rf /'`, `npm exec -c '...'`) is read as a shell command. Named boundary:
-  `deno`, `cargo run`, `go run`, `nix run`, `mise exec` and `direnv exec` are not read as
-  runners, and the package script `npm run X` or `yarn X` starts is a file, not read like a
-  shell script's content. A runner's option table is not kept, so the word after any runner option is read both as that option's value
-  and as the command. A harmless command after such an option is therefore refused only when
-  what follows it is refused in its own right (`conda run -n py --no-capture-output echo
-  python -c 'import ftplib'`; `uv run -q echo hi` passes), and a value that is itself a
-  refused program's name is refused as one (`uv run --with ssh pytest`). That is the safe
-  side. `--` before the command lifts both when no word stands in a value position before
-  it; after one, that word may be the command and `--` its argument (`uv run -q ssh -- host`
-  logs in to `host`), so both readings are classified, and a value written with `=`
-  (`uv run --with=ssh -- pytest`) leaves no such word. Named boundary: the check reads the
-  code it is given; code built at runtime (`"ftp" + "lib"`, a string assembled before exec), a
-  script file, a heredoc fed to the interpreter, or an interpreter under another name or in a
-  container is not seen, as a shell script's content is not read. The control for host code
-  stays the confirmation and the account opt-in.
+  (`npx -c 'rm -rf /'`, `npx --call='...'`, `npx -c'...'`, `npm exec -c '...'`,
+  `bun exec '...'`) is read as a shell command. Named boundary: `deno`, `cargo run`,
+  `go run`, `nix run`, `mise exec` and `direnv exec` are not read as runners, and the
+  package script `npm run X` or `yarn X` starts is a file, not read like a shell script's
+  content. A runner's option table is not kept, so the word after any runner option is read
+  both as that option's value and as the command. A harmless command after such an option is
+  therefore refused only when what follows it is refused in its own right (`conda run -n py
+  --no-capture-output echo python -c 'import ftplib'`; `uv run -q echo hi` passes), and a
+  value that is itself a refused program's name is refused as one (`uv run --with ssh
+  pytest`). That is the safe side. `--` before the command lifts both when no word stands in a
+  value position before it; after one, that word may be the command and `--` its argument (`uv
+  run -q ssh -- host` logs in to `host`), so both readings are classified, and a value written
+  with `=` (`uv run --with=ssh -- pytest`) leaves no such word. Named boundary: the check
+  reads the code it is given; code built at runtime (`"ftp" + "lib"`, a string assembled
+  before exec), a script file, a heredoc fed to the interpreter, or an interpreter under
+  another name or in a container is not seen, as a shell script's content is not read. The
+  control for host code stays the confirmation and the account opt-in.
 
 Use this only when you need host filesystem/network access and trust the code source.
 
@@ -803,21 +805,39 @@ into a shell is named rather than refused, because that is how a server is commo
 up). A substitution stays part of the command it stands in, so a substitution in the
 program word is `opaque_command` wherever that word stands: after a wrapper, a `VAR=`
 prefix or a runner (`env $(echo rm) -rf /`, `uv run $(echo rm) -rf /`), inside quotes or
-in part of the name (`"$(echo rm)"`, `/usr/bin/$(echo rm)`), and in a text a shell parses
-again (`eval "$(conda shell.bash hook)"`, `bash -c "$(curl ...)"`, refused on the remote
-lane too; write `conda run ...`, or the readable `curl ... | sh` that the remote profile
-names). A literal program behind a substitution passes
-(`"$(git rev-parse --show-toplevel)/scripts/build.sh"`), and so does a substitution in an
-argument, an option's value or a `VAR=` prefix (`sudo -u $(whoami) ls`, `X=$(date) make`);
-`$((...))` is arithmetic, only its own substitutions are read. A pipe reaches through a
-carried command at both ends: `curl ... | uv run bash` and `uv run curl ... | bash` are a
-fetch piped into a shell like the same pipe without the runner, and so are
-`curl ... | (bash)`, `curl ... | echo $(bash)`, `curl ... | tee $(mktemp) | bash` and
-`bash <(curl ...)` or `source <(curl ...)`. Every reading, the command itself included,
-spends one of `MAX_NESTED_COMMANDS` (64), so one command carries at most 63 nested commands
-in all, a substitution counting as one, beyond which it is refused like one nested too deep
-(100 KB of substitutions: at most 0.1 s, 65 readings, measured): a runner's command is read
-at every option's value position, and without
+in part of the name (`"$(echo rm)"`, `/usr/bin/$(echo rm)`). So is shell text another
+command prints: `eval "$(...)"`, `bash -c "$(curl ...)"` (refused on the remote lane too),
+and a shell or interpreter whose script is a process substitution (`source <(...)`,
+`. <(...)`, `bash < <(...)`); sourcing a file stays as it was. The refusal names the way
+out: the program written out after running the substitution on its own, a runner option's
+value written with `=` (`--with=$(cat r)`), `set -a; source .env; set +a; make` for a
+.env file, the tool's own direct form (`conda run -n ENV ...`, `pyenv exec ...`,
+`direnv exec . ...`, `opam exec -- ...`, `ssh-agent bash -c '...'`), or the output saved
+to a file, read, then run (`curl -fsSL -o install.sh URL`, then `bash install.sh`; on a
+server the readable `curl ... | sh`, which the remote profile warns about). A literal
+program behind a substitution passes (`"$(git rev-parse --show-toplevel)/scripts/build.sh"`),
+and so does a substitution in an argument, an option's value or a `VAR=` prefix
+(`sudo -u $(whoami) ls`, `X=$(date) make`). `$((...))` is arithmetic only where bash reads
+it so, when the parenthesis after `$(` closes right before the outer one (`$((1+2))`); its
+own substitutions are still read (`$(( $(cmd) ))`). Any other `$((cmd) ...)` is a command
+substitution holding a subshell, and bash runs it (`echo $((rm -rf /) )`); one left open
+is read both ways. `case` inside a substitution is not read and refuses the command (its
+pattern's `)` would close the substitution early), and a recursive delete whose target
+comes from a substitution is judged by the literal part in front of it (`/$(...)`,
+`"$HOME/$(...)"`, and a quoted `"$(...)"` that names one unreadable path, are refused).
+A pipe reaches through a carried command at both ends: `curl ... | uv run bash` and
+`uv run curl ... | bash` are a fetch piped into a shell like the same pipe without the
+runner, and so are `curl ... | (bash)`, `curl ... | echo $(bash)`,
+`curl ... | tee $(mktemp) | bash`, `curl ... | tee >(bash)`, `curl ... > >(bash)`,
+`bash <<< "$(curl ...)"` and `bash <(curl ...)` or `source <(curl ...)`. Every reading, the
+command itself included, spends one of `MAX_NESTED_COMMANDS` (64), so one command carries
+at most 63 nested readings in all, each reading counting as one (`$(( $(x) ))` is two),
+beyond which it is refused as carrying more nested commands than anyone can review. A
+runner's candidates, each the rest of the command joined back into text, may add up to the
+command's own length plus 64 KB, and a `$((` left open, read both ways, is charged the same;
+past that the command is refused the same way (measured, single process: every shape at
+most 0.5 s at 100 KB and 3.7 s at 1 MB, where `npx --x y ...` took 10 s and 78 s before): a
+runner's command is read at every option's value position, and without
 that bound a few hundred characters of `uv run -a uv -a uv ...` held the gate for minutes
 before anyone was asked. Every reading counts, one refused for depth too, and the readings
 stop once the bound is spent, for the whole command and not per segment, so the nested
@@ -857,8 +877,13 @@ after the host). The controls:
    about to use, and a server forgotten in between (another tab, `vaf ssh forget`, also
    after a standing grant) is refused (`BaseTool.changed_since_asked`). A call the person
    did not confirm as a first connection runs with `StrictHostKeyChecking=yes`
-   (`BaseTool.first_contact_confirmed`), so a server forgotten between that check and the
-   connection is refused by OpenSSH itself, and the next call asks again.
+   (`BaseTool.first_contact_confirmed`), and only the account's own list counts
+   (`GlobalKnownHostsFile=/dev/null`), so a server forgotten between that check and the
+   connection is refused by OpenSSH itself, and the next call asks again. The tool says
+   "nothing ran" only when that is certain: OpenSSH's own line names the server as unknown
+   and it is still missing from the list. A changed key is read from OpenSSH's own lines
+   first, under `accept-new` and `yes` alike, and a remote command that merely prints such
+   words and exits 255 is reported as it ran.
 3. **Never over a messaging channel** (dangerous and restricted with `"channel"`, see 3 in
    the `host_bash` section), and **a regular account only when its allowlist names it**
    (`account_opt_in`).

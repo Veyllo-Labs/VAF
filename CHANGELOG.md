@@ -115,23 +115,41 @@ To update an installed VAF, run `vaf update` (on Windows, from the install folde
   number is never matched to another contact by its last digits, and the confirmation card
   shows the number that is dialled. When your agent could not send its answer to an e-mail,
   the inbox now says so on that conversation.
-- **The command check reads npx, pipx and command substitutions.** A command started by
-  `npx`, `bunx`, `pipx run`, `npm exec`, `pnpm dlx`, `yarn dlx` or `bun x` is checked like one
-  started by `uv run`, so `npx rm -rf /` is refused like `rm -rf /`; `npm install`,
-  `npm run build` and `pipx install` are unchanged. A command whose program name comes from
-  `$(...)` is now refused also after `env`, `sudo` or a runner (`env $(echo rm) -rf /`), and
-  a download handed to a shell through `(...)`, `$(...)` or `<(...)` is refused like
-  `curl ... | bash`. Newly refused because the approved text does not show what runs:
-  `eval "$(conda shell.bash hook)"` (write `conda run -n ENV ...` instead),
-  `eval "$(pyenv init -)"`, `bash -c "$(curl -fsSL URL)"` (on this computer write
-  `curl -fsSL -o install.sh URL` and then `bash install.sh`; on a server through the `ssh`
-  tool the readable `curl -fsSL URL | bash`, which that tool allows and names), and
-  `uv run --with $(cat FILE) ...` (write `--with=$(cat FILE)`). `echo 'a; $(x)'`, a
-  quoted text that was refused by mistake, now passes.
+- **The command check reads npx and pipx like uv run.** A command started by `npx`, `bunx`,
+  `pipx run`, `npm exec`, `pnpm dlx`, `yarn dlx`, `bun x` or `bun exec` is checked like the
+  same command on its own, so `npx rm -rf /` is refused like `rm -rf /`. `npm install`,
+  `npm run build` and `pipx install` are unchanged.
+- **A download handed to a shell in a roundabout way is refused like `curl ... | bash`:**
+  through `(...)`, `$(...)`, `<(...)`, `>(...)` or `<<<`, for example
+  `bash <(curl ...)` or `curl ... | tee >(bash)`.
+- **Commands whose program comes from another command's output are refused.** The check
+  cannot see which program would run, so these forms are now refused, and the message says
+  what to write instead:
+  - instead of `eval "$(conda shell.bash hook)"` write `conda run -n ENV python app.py`
+  - instead of `eval "$(pyenv init -)"` write `pyenv exec python app.py`
+  - instead of `eval "$(ssh-agent -s)"` write `ssh-agent bash -c 'ssh-add && git pull'`
+  - instead of `eval "$(direnv hook bash)"` write `direnv exec . make`
+  - instead of `eval $(opam env)` write `opam exec -- dune build`
+  - instead of `eval "$(brew shellenv)"` run `brew shellenv` once and write the lines it
+    prints, for example `export PATH="/opt/homebrew/bin:$PATH"`
+  - instead of `source <(kubectl completion bash)` (or any `source <(...)` and `. <(...)`)
+    save the output to a file and source the file: `kubectl completion bash > /tmp/k.sh`,
+    then `source /tmp/k.sh`
+  - instead of `env $(cat .env | xargs) make` write `set -a; source .env; set +a; make`
+  - instead of `sudo $(which pip) install x` run `which pip` first and write the path:
+    `sudo /usr/bin/pip install x`; the same for `nohup $(which python) app.py &`
+  - instead of `"$(which python3)" -m pytest` write `python3 -m pytest`
+  - instead of `./scripts/$(whoami).sh` run `whoami` first and write the name:
+    `./scripts/alice.sh`
+  - instead of `uv run --with $(cat FILE) pytest` write `uv run --with=$(cat FILE) pytest`
+  - instead of `bash -c "$(curl -fsSL URL)"` download first and run the file:
+    `curl -fsSL -o install.sh URL`, then `bash install.sh`. On a server, through the `ssh`
+    tool, `curl -fsSL URL | bash` is allowed, and the tool warns about it.
+- **A text in single quotes is no longer refused by mistake.** `echo 'a; $(x)'` passes.
 - **An SSH server removed while a call starts is refused instead of trusted with a new key.**
   Only a first connection you confirmed may remember a server's key; a server removed from
   your confirmed servers at that moment is refused, nothing runs, and the next call asks you
-  again.
+  again. Only your account's own list of servers counts, never the computer's shared one.
 
 ### Changed
 

@@ -342,10 +342,11 @@ answers it:
 | Your agent hands the app a task (`user_phone`) | the agent in your Veyllo App | that agent, with the task's result | none on VAF |
 
 There is no chooser: what you write on VAF goes to the app's agent unless it starts with `@`
-and the handle of your agent's name (its first run of letters and digits: "Mia" for "Mia Lisa"
-or "Mia.", "Dr" for "Dr. Mia") or `@VAF`, followed by the end of the line or anything that is
-not a letter or digit ("@Mia." and "@Mia：" name Mia, "@Miami" does not), the same leading-mention rule as
-in an agent room ("frag @VAF" in the middle of a line still goes to the app's agent). The
+and the handle of your agent's name (the first word of the name without trailing punctuation:
+"Mia" for "Mia Lisa" or "Mia.", "Dr" for "Dr. Mia", "O'Neil" for "O'Neil") or `@VAF`: the
+first word after "@" counts, whole or without trailing punctuation, in any case form ("@Mia.",
+"@mia?", "@MIA, hi" name Mia; "@Miami" does not; in a script written without spaces put a
+space after the name: "@Mia 你好"), the same leading-mention rule as in an agent room ("frag @VAF" in the middle of a line still goes to the app's agent). The
 composer's hint names that word, and `@` completes it.
 
 **What "your agent is in the room" means.** Your VAF agent reads every room line at its next

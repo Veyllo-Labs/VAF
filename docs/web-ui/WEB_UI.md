@@ -476,7 +476,7 @@ agent in their Veyllo App and the VAF agent; its rules are in
   `web/components/chat/appRoom.ts`, run in node by `tests/test_app_link_room_web.py`.
 - **The composer has no chooser.** It posts the line (`POST /api/app-link/room`) and the server
   decides the addressee: the app's agent, or the VAF agent when the line starts with `@` and the
-  handle (the first run of letters and digits of the agent's name). `@` completes only that
+  handle (the first word of the agent's name without trailing punctuation). `@` completes only that
   handle, and the hint names it;
   while no line can reach the app's agent the hint offers only the handle. The box clears when
   the line was taken, and only in the view it was written in; a refusal keeps the text and says

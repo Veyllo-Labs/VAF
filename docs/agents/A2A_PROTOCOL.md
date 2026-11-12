@@ -1121,15 +1121,20 @@ over the wire the text stays text (the table that resolves a name lives on the h
 `to` is inside what the peer signs), and addressing one member from another machine is
 `--to <peer>`.
 
-The parse of the leading mention itself is `leading_mention(text)` in `vaf/core/a2a/room.py`
-(the run after a leading "@" of letters and digits of any script, with "-", "_" and "." inside
-it, ending at the first other character and without a trailing "-", "_" or ".": "@Bob.",
-"@Bob?", "@Bob：" and "@Bob's" all name Bob, "@Bobby" does not);
-`Room.address_from_mention` resolves that name against the members. The Veyllo App room
+The rule for the leading mention lives in `vaf/core/a2a/room.py`, one function for every
+room: `resolve_mention(text, known)` takes the first whitespace-delimited word after a leading
+"@" and asks `known` for it in three forms, longest first: the whole word ("@O'Brien",
+"@C++", "@a2a:bob"), the word without a trailing `,`, `:` or `;` (the rule before), and the word
+without any trailing punctuation or symbol of any script and a trailing "'s" (`trim_name`:
+"@Bob.", "@Bob?", "@Bob's idea"). Names are compared NFC-normalised and case-folded
+(`fold_name`: "@STRASSE" names "Straße"); combining marks stay with their letter ("@राम"). A
+letter of a script written without spaces continues the word, so "@Mia你好" names nobody and
+the person puts a space after the name. `Room.address_from_mention` asks it with the member
+table (`peer_by_display`); every name that resolved before still resolves the same way
+(`tests/test_app_link_room.py`, a differential against the earlier parse). The Veyllo App room
 (`vaf/core/app_link/room.py`, [VEYLLO_APP.md](../integrations/VEYLLO_APP.md#the-veyllo-app-room))
-uses the same rule for the one name it listens for (`mentions_at_start`, the agent's handle
-or "VAF" followed by anything that is not a letter or digit) to tell a line for the VAF agent
-from a line for the agent in the Veyllo App. That room is deliberately NOT an agent room: seating the app's agent as a member would
+asks the same function with the two names it listens for, the agent's handle and "VAF", to
+tell a line for the VAF agent from a line for the agent in the Veyllo App. That room is deliberately NOT an agent room: seating the app's agent as a member would
 put its requests under the wake rules of this protocol instead of the limits of its own
 `agent_ask` lane, put the person's app chat turns under room-turn binding, and add a third
 store of lines that already live in two sessions. Its record is those two sessions and a
